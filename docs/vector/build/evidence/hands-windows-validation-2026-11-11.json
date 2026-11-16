@@ -1,0 +1,1008 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-windows-validation-continuation",
+  "observedAtUtc": "2026-11-12T06:18:42+00:00",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands",
+  "parentRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
+  "hosted": {
+    "full": {
+      "run": 42764300309,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42764300309",
+      "conclusion": "failure",
+      "checkoutRevision": "546257bc928d6babb275b04be63388e6f154d75c",
+      "headRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
+      "matchingSourceTree": "cf830294f27819c3851ac039e0d59e034ff80c92",
+      "ordinaryRegression": "All16 engine shards, Linux/Windows unit and E2E jobs, and desktop Node engine bundle passed.",
+      "windows": {
+        "job": 129657344650,
+        "x64AndArm64Compilation": "passed",
+        "x64NativeUnitVersionProbes": "passed",
+        "core": {
+          "passed": 30,
+          "skipped": 1,
+          "failed": 0
+        },
+        "isolated": {
+          "passed": 34,
+          "skipped": 10,
+          "failed": 2
+        },
+        "stop": {
+          "ok": false,
+          "reason": "proof_changed",
+          "stage": "window-current",
+          "cause": "driver_failure",
+          "exitCode": 1
+        }
+      },
+      "windowsArm64Runtime": {
+        "job": 129664171875,
+        "conclusion": "skipped"
+      },
+      "macMatrix": {
+        "job": 129662052557,
+        "conclusion": "skipped"
+      },
+      "macBuild": {
+        "job": 129657344630,
+        "conclusion": "success",
+        "qualification": "Build/required grant-free checks passed; native Stop/capture prerequisite exit77 may be an explicit skip, optional failures permit continuation. Interactive native success not certified from metadata."
+      }
+    },
+    "diagnostic": {
+      "run": 42764373615,
+      "job": 129657368869,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42764373615",
+      "conclusion": "failure",
+      "headRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
+      "x64NativeUnitVersionProbes": "passed",
+      "core": {
+        "passed": 30,
+        "skipped": 1,
+        "failed": 0
+      },
+      "isolated": {
+        "passed": 34,
+        "skipped": 10,
+        "failed": 2
+      },
+      "stop": {
+        "ok": false,
+        "reason": "native_failure",
+        "stage": "stop-belongs",
+        "cause": "core_failure:no_ui_tree",
+        "exitCode": 1
+      }
+    },
+    "capture": {
+      "scenario": "capture-color-patch",
+      "result": "failed",
+      "stage": "capture-window-item-full-cancelled-setup-lt25-rpc-ge50",
+      "nativeCode": "capture_unavailable",
+      "qualification": "Full50ms CreateForWindow ticket expired/cancelled; setup<25ms, RPC>=50ms. No safe fix or root cause proven. No warmup/retry/deadline relaxation applied."
+    },
+    "qualification": "Official job logs and API metadata inspected. Artifact archives not yet locally verified. Optional failed/skipped scenarios are not passes. Smoke-driver proof failure does not establish failure of ordinary app Stop."
+  },
+  "candidate": {
+    "scope": "Historical source candidate at parentRevision601c17d0, retained for chronology; current execution and next candidate are recorded in movementProbeHostedOutcome and independentVmProbeCandidate.",
+    "membership": "Smoke-only fresh root and bounded metadata ancestry inside one original50ms actor call; full root and selected security retained. Ordinary hit/belongs unchanged.",
+    "diagnostics": "19 closed first-failure buckets only on initial pre-arm window proof; unchanged final authority/deadline checks.",
+    "nativeTests": "8 additional membership test groups; execution pending hosted CI."
+  },
+  "localChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 ./scripts/computer-overlay-smoke-source.test.ts",
+      "exitCode": 0,
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 4.74
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 ./scripts/computer-overlay-smoke-report.test.ts",
+      "exitCode": 0,
+      "passed": 40,
+      "failed": 0,
+      "assertions": 24737,
+      "seconds": 1.438
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
+      "exitCode": 0
+    }
+  ],
+  "localLimits": "Serial individual provider-free tests and package typecheck only. No native compile/test, owner input/capture/clipboard, Electron, Playwright or OS permission changes.",
+  "pending": "Independent-VM run 43165063805 at b286accd completed with failure: baseline and fresh MOVE probe both miss the authenticated matching DOWN receipt. Each passed core 30/0/1; baseline isolated 36/0/11 includes three required fresh worker reads without a stability guarantee. Probe isolated checks were not run by design. Native groups for the reviewed opt-in low32 metadata diagnostic remain pending. Older655 Windows installer failed in the PS5 Authenticode observer; Linux success is metadata only and Mac remained active at the last audit. Final packaged x64/ARM64 proof, live PS5 observer, real-device, signing/notarization and publication gates remain open. W9 proposal 20202293 awaits owner decision; production is unchanged. Hands remains unreleased.",
+  "styleFollowUp": {
+    "parentRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "sourceEvidence": {
+      "electron": "42.11.4",
+      "implementation": "https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.cc#L1229-L1253",
+      "layeredDefault": "https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.h#L309",
+      "fact": "SetIgnoreMouseEvents(false) clears TRANSPARENT and LAYERED, restoring LAYERED only after explicit SetOpacity/SetLayered. The paused production banner becomes clickable and does not call setOpacity.",
+      "correction": "Smoke Stop style proof accepts either LAYERED state; retains NOACTIVATE, rejects TRANSPARENT and all CAPTION bits. No real rendering or opacity change; production click-through overlay guard unchanged.",
+      "qualification": "Source-confirmed mismatch; attribution of the observed runtime rejection requires the new native result."
+    },
+    "tests": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 ./scripts/computer-overlay-smoke-report.test.ts",
+        "passed": 40,
+        "failed": 0,
+        "assertions": 24740,
+        "seconds": 0.46,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174,
+        "seconds": 1.86,
+        "exitCode": 0
+      },
+      {
+        "native": "Actual pure style helper regression covers16 flag combinations, both legitimate layering states with unrelated bits, and partial caption flags; execution pending hosted CI."
+      }
+    ],
+    "unchangedOrdinaryNativeBodies": {
+      "comparison": "601c17d0 to9ad84b3e/current source, normalized LF; identical extracted ordinary functions",
+      "hitSha256": "7a69ee1a61007704814aef58eaa16429054aff1eff610bb84dde730ce3e70c04",
+      "belongsSha256": "9cd50497df5ef8c2f8a16d3a4a7c0b4fe2ba82f5cbfb281afe8d90ae1996f063"
+    }
+  },
+  "packagingPreconditionFollowUp": {
+    "failedRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "run": 43083263709,
+    "job": 130742381047,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43083263709/job/130742381047",
+    "scope": "Explicit unsigned artifacts-only dry_run on hands. No signing/publication/tag creation.",
+    "failedCheck": {
+      "package": "cloud",
+      "passed": 147,
+      "failed": 1,
+      "assertions": 821,
+      "seconds": 3.52,
+      "exitCode": 1
+    },
+    "cause": "Codium workflow-compliance test expected --isolate directly in app manifest test:unit string. Main-integrated app now delegates to Node launcher, whose real Bun argv still uses --isolate.",
+    "repair": "Bind exact manifest wrapper to actual launcher isolate/preload argv and actual Bun per-file invocation; preserve every picker/browser/e2e/desktop assertion. Convert existing test file URL via fileURLToPath for Windows. No production runner or active Codium branch changed.",
+    "localChecks": [
+      {
+        "command": "packages/cloud: bun --no-env-file test --timeout 30000 ./src/workflow-compliance.test.ts --test-name-pattern \"each picked file runs from the package\"",
+        "passed": 1,
+        "filtered": 21,
+        "failed": 0,
+        "assertions": 15,
+        "seconds": 0.111,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/app: node --test ./scripts/test-unit.test.mjs",
+        "passed": 11,
+        "failed": 0,
+        "seconds": 0.1752191,
+        "exitCode": 0,
+        "scope": "Actual launcher behavior through its injected synthetic process seam; no real Bun child, desktop operation or provider call."
+      },
+      {
+        "command": "packages/cloud: bun --no-env-file run typecheck",
+        "exitCode": 0
+      }
+    ],
+    "qualification": "Does not turn the failed old packaging run green; a new exact-source packaging run is needed. Other old-run outcomes remain pending until collected."
+  },
+  "desktopRoutingFixtureFollowUp": {
+    "failedRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "run": 43083263709,
+    "job": 130742381175,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43083263709/job/130742381175",
+    "failedCase": "egress-filter.test.ts: Chromium billing routing expected cancelled for removed model_topup flag; actual canonical behavior was closed.",
+    "contractEvidence": [
+      "billing-navigation.ts handles current model_plan outcomes, defaults unknown account returns to closed.",
+      "billing-navigation.test.ts explicitly covers model_plan=cancelled -> cancelled and model_topup=cancelled -> closed.",
+      "api/_lib/model-plan-account.ts constructs current checkout and upgrade cancellation redirects with model_plan=cancelled.",
+      "api/model-plans/topup.ts returns410 MODEL_TOPUP_REMOVED."
+    ],
+    "repair": "One synthetic input URL now uses the current model_plan=cancelled flag. Existing completed/cancelled/browser expectations, cancellation replies, subframe behavior and no-log assertions unchanged. No production billing/egress code changed.",
+    "localChecks": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./src/main/egress-filter.test.ts",
+        "passed": 64,
+        "failed": 0,
+        "assertions": 118,
+        "seconds": 0.646,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./src/main/billing-navigation.test.ts",
+        "passed": 6,
+        "failed": 0,
+        "assertions": 47,
+        "seconds": 0.05,
+        "exitCode": 0
+      }
+    ],
+    "qualification": "The failed old packaging run remains failed; current-source preview is still required."
+  },
+  "membershipCandidateHostedOutcome": {
+    "headRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "run": 43082767608,
+    "job": 130741686369,
+    "conclusion": "failure",
+    "nativeBuildUnitVersionProbes": "passed",
+    "requiredProtocolLifecycle": {
+      "passed": 30,
+      "skipped": 1,
+      "failed": 0
+    },
+    "stagedBuild": "passed",
+    "isolated": {
+      "passed": 34,
+      "skipped": 10,
+      "failed": 2
+    },
+    "stop": {
+      "ok": false,
+      "reason": "proof_changed",
+      "stage": "window-current-styles",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "capture": {
+      "result": "failed",
+      "stage": "capture-window-item-full-expired-setup-lt25-rpc-ge50",
+      "nativeCode": "capture_unavailable"
+    },
+    "qualification": "Native run progressed beyond membership and other initial window predicates to the source-confirmed style mismatch. Style-corrected source is not covered by this run; repeated successful/ cancelled late CreateForWindow outcomes both remain failed50ms acceptance."
+  },
+  "styleCandidateHostedOutcome": {
+    "headRevision": "68fcb2fe4eb5206314d65ac9967cb50369b6e359",
+    "run": 43086114357,
+    "job": 130751803266,
+    "conclusion": "failure",
+    "buildUnitVersionProbes": "passed",
+    "requiredProtocolLifecycle": {
+      "passed": 30,
+      "skipped": 1,
+      "failed": 0
+    },
+    "stagedBuild": "passed",
+    "isolated": {
+      "passed": 34,
+      "failed": 2,
+      "skipped": 10
+    },
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "observe-down",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "Passed the corrected style and unchanged final freshness checks and reached accepted insertion, but matching guardian DOWN confirmation failed. Insertion is not proof of target delivery or a passing Stop. Coarse receipt could mean transport failure or a negative ledger reply.",
+    "capture": {
+      "result": "failed",
+      "stage": "capture-window-item-full-expired-setup-lt25-rpc-ge50",
+      "nativeCode": "capture_unavailable"
+    }
+  },
+  "earlierPackagingDisposition": {
+    "run": 43083263709,
+    "revision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "action": "Cancelled old unsigned artifacts-only run after two explained failing preconditions and completed native core coverage; no installers/publication credit.",
+    "windowsArm64": {
+      "job": 130752315043,
+      "conclusion": "success",
+      "actualUnitVersionProbes": "passed",
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "skipped": "privileged:disabled",
+      "qualification": "Official job log inspected; correct9ad checkout, restored artifact verification and native ARM64 checks. Not current-source packaging or isolated/input/capture evidence; local archive verification not claimed."
+    },
+    "macMatrices": [
+      {
+        "job": 130750747128,
+        "host": "macos-15-intel",
+        "conclusion": "success"
+      },
+      {
+        "job": 130750747211,
+        "host": "macos-26",
+        "conclusion": "success"
+      }
+    ],
+    "qualification": "Required grant-free native/build evidence only; privileged/granted behavior not established."
+  },
+  "guardianCandidate": {
+    "parentRevision": "ed70d6e99f4e8a00f24be295d0a3f54308fbb177",
+    "sourceDefect": "IoWatch reused a bare deadline across transfers. A timer could snapshot a reply deadline, pause, then cancel successor I/O after that deadline had been cleared/replaced.",
+    "repair": "Actual InputIoDeadlineFence binds generation+deadline. Arm/retire and eligibility plus actual CancelSynchronousIo share one private metadata lock. Stale snapshots cannot cancel successor reads; repeated current expiry/close cancellation remains. RAII retires failure paths, and success retires before unchanged final acceptance check.",
+    "unchanged": "Original absolute50ms control/confirmation bounds, first-partial100ms framing bound, tag/descriptor matching, actual-DOWN release authority and cleanup. Same watcher-thread count; no retry or deadline renewal.",
+    "diagnostics": "Smoke-only optional shared atomic; synchronous caller-local request/lock/budget/admission/write/read/reply reason published on observed return. Nine closed failed-confirmation stages; no event/key/tag/ID content, new IPC/native queries or timer/hook/retirement writes. None/confirmed never reclassify failure as success.",
+    "nativeTests": "Seven actual-fence regression groups plus closed stage mapping test; hosted execution pending.",
+    "localChecks": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+        "passed": 41,
+        "failed": 0,
+        "assertions": 26203,
+        "seconds": 0.948,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174,
+        "seconds": 4.1,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file run typecheck",
+        "exitCode": 0
+      }
+    ],
+    "qualification": "Source race corrected; not yet established as cause of observed native DOWN failure. New hosted native result required. Capture50ms policy remains unchanged; owner design decision pending."
+  },
+  "guardianCandidateHostedOutcome": {
+    "headRevision": "b19bcf67f775a9711f2a9bd436d142504d7cdbc9",
+    "run": 43091454762,
+    "job": 130772485755,
+    "conclusion": "failure",
+    "nativeBuildUnitVersionProbes": "passed",
+    "requiredProtocolLifecycle": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "stagedBuild": "passed",
+    "isolated": {
+      "passed": 35,
+      "failed": 0,
+      "skipped": 11
+    },
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative",
+      "cause": "driver_failure"
+    },
+    "qualification": "Guardian exchange returned an authenticated negative ledger reply; not transport failure. Real matching DOWN proof still absent. Cold capture succeeded once at unchanged source; prior failures remain and no stable capture fix is claimed."
+  },
+  "b19ArtifactsPreview": {
+    "headRevision": "b19bcf67f775a9711f2a9bd436d142504d7cdbc9",
+    "run": 43091462774,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091462774",
+    "conclusion": "failure",
+    "inputs": {
+      "ref": "hands",
+      "tag": "v1.99.112",
+      "prerelease": false,
+      "dry_run": true,
+      "allow_unsigned": true
+    },
+    "applicationTestsAndTypes": "All application test and typecheck jobs passed; inspected API job conclusions. No final installer credit.",
+    "artifactFailures": {
+      "macBuildJob": 130775141101,
+      "desktopSmokeJob": 130775914692,
+      "arm64ReportJob": 130781393553,
+      "observed": "Official logs: artifact Create/Finalize/GetSignedArtifactURL requests repeatedly returned HTML instead of JSON. No production change justified by these transport failures."
+    },
+    "arm64Core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1,
+      "qualification": "Actual native unit/version/probes and core passed; job failed preserving report. Not packaged or privileged proof."
+    },
+    "publication": "Skipped. No release, signing, version change or tag created."
+  },
+  "isolatedCaptureCandidate": {
+    "parentRevision": "b19bcf67f775a9711f2a9bd436d142504d7cdbc9",
+    "ownerApproval": "Implement the isolated capture redesign. Explicit session approval revises W3 cold setup50ms limit only for process-isolated factory/CreateForWindow within the original750ms native acquisition deadline.",
+    "boundary": "One immutable QPC deadline starts before parent launch/auth/mapping/D3D/IPC setup; includes actual worker exit, cleanup, copy and final native postflight. Existing public10s encode/receipt/transport and epoch/policy gates unchanged. Input/UIA/StartCapture retain50ms.",
+    "implementation": "One-shot exact same-image child, authenticated immediate parent and wait-only witness, read-only fixed request map, exact inherited handles, atomic creation into private kill-on-close job, independent watchdogs, full target hash, nonce/extent/version binding, actual normal exit required before pixel access. Reject cancellation, stale authority, changed frame and late cleanup. No cache/replay/retry/warmup/inline fallback.",
+    "tests": "13 new native protocol/auth/binding/CLI/deadline groups registered in existing capture suite; not executed locally. Two source wiring regressions cover native and publication fences.",
+    "guardianDiagnostics": "Three closed negative reply buckets distinguish echoed zero/short/full observation budget; no new IPC/query/timer or receipt authority.",
+    "review": "Two independent read-only source/security/build reviews found no confirmed blocker. Native compilation/runtime still required.",
+    "localChecks": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+        "passed": 43,
+        "failed": 0,
+        "assertions": 26735,
+        "seconds": 2.04,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174,
+        "seconds": 2.93,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-helper-selftest.test.ts",
+        "passed": 48,
+        "failed": 0,
+        "assertions": 1021,
+        "seconds": 1.249,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file run typecheck",
+        "exitCode": 0
+      }
+    ],
+    "qualification": "Source candidate only; no native execution or cold timing acceptance established."
+  },
+  "buildFixturePortabilityFollowUp": {
+    "revisionUnderTest": "39d36ca3700fdb65a4761fc25dca2e0b1a2eb637 plus test-only correction",
+    "initialResult": {
+      "passed": 18,
+      "failed": 1,
+      "assertions": 180,
+      "exitCode": 1
+    },
+    "cause": "Injected universal Mac build test selected main.swift with a POSIX-only suffix; Windows compiler fixture paths have native separators. No real native compiler invoked.",
+    "repair": "Select main.swift with existing path.basename; retain exact expected absolute source path and all build/hash/lock assertions. Production builder unchanged.",
+    "localCheck": {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/build-computer-helper.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 237,
+      "seconds": 2.69,
+      "exitCode": 0
+    }
+  },
+  "workerFirstNativeBuild": {
+    "revision": "39d36ca3700fdb65a4761fc25dca2e0b1a2eb637",
+    "run": 43144573475,
+    "job": 130941181412,
+    "result": "failed",
+    "command": "Build only the x64 native diagnostic artifacts",
+    "observed": "C++ compiled including capture_worker.cpp and capture_worker_protocol.cpp; linker LNK1181 could not open kernelbase.lib for helper/caller/target. Native runtime tests not run.",
+    "repair": "Remove newly added unavailable Kernelbase import library. Existing WindowsApp.lib umbrella covers documented Windows10 handle API; actual CompareObjectHandles equality/authentication requirement unchanged.",
+    "reference": "https://learn.microsoft.com/en-us/uwp/win32-and-com/win32-apis",
+    "qualification": "New exact-source native linker/runtime result required."
+  },
+  "workerLinkedNativeOutcome": {
+    "headRevision": "51e8f63dfda2bc8616e4a94f730649cd168aca5a",
+    "run": 43146189453,
+    "job": 130944827745,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146189453/job/130944827745",
+    "conclusion": "failure",
+    "x64BuildLinkNativeUnitsVersionProbes": "passed",
+    "toolchain": {
+      "MSVC": "14.51.36231",
+      "WindowsSDK": "10.0.26100.0",
+      "Node": "24.22.2"
+    },
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 35,
+      "failed": 0,
+      "skipped": 11
+    },
+    "verifiedIsolatedReport": {
+      "artifact": 13912267619,
+      "archiveDigest": "sha256:39d9973742bdb64d7d1f2a105a4a002691da485e1675c9ba93655c2c822f20cb",
+      "archiveDigestMatchedAPI": true,
+      "capture-color-patch": "passed",
+      "capture-affinity-exclusion": "passed",
+      "stale-capture-refusal": "skipped:input_detection_unavailable"
+    },
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative-full-budget",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "All registered native unit tests passed on this hosted run; capture color/affinity passed. Passing capture reports omit the read route, so actual forced isolated-worker execution is not yet proven. Insertion plus full-budget authenticated negative reply still does not establish matching DOWN. RawInput readiness skips are a distinct mechanism and cannot turn Stop into a skip.",
+    "verifiedOverlayArchive": {
+      "artifact": 13911949699,
+      "archiveDigest": "sha256:299e636d052feba9b035c7ae6a9382d3d6fe8ace189a1b5c1f9ebf06b58b3ef3",
+      "archiveDigestMatchedAPI": true,
+      "overlaySourceDigest": "a626f965202f511129f7dbfc4cc25f7f3ae3ceba574db5972d52c73a2cea8b61",
+      "helperVersion": "1.0.15"
+    }
+  },
+  "workerFullPRScope": {
+    "headRevision": "51e8f63dfda2bc8616e4a94f730649cd168aca5a",
+    "run": 43146183368,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146183368",
+    "conclusion": "failure",
+    "ordinary": "All16 engine shards, Linux/Windows units and E2E, actual Node desktop engine bundle passed (API job conclusions).",
+    "helper": "Linux overlay/controller, desktop Electron journey and Mac build passed. Windows native Stop failed; native ARM64 runtime and separate Mac matrix skipped.",
+    "qualification": "Job metadata inspected; not yet a local raw-archive audit of the fullPR, and overall run is failed."
+  },
+  "supersededWorkerPreview": {
+    "run": 43145208543,
+    "revision": "a6006691d0f6f61dd6f19529972ddb0ba397fa69",
+    "disposition": "Cancelled our own queued artifacts-only preview after39d build proved the same native inputs had an unavailable Kernelbase import. No package or release credit."
+  },
+  "guardianHookDiagnosticCandidate": {
+    "parentRevision": "51e8f63dfda2bc8616e4a94f730649cd168aca5a",
+    "scope": "Optional smoke diagnostics only. Private VIG2 fixed80byte packet uses byte43 for strict closed opt-in/result metadata; external helper protocol unchanged.",
+    "evidence": "Per opted-in ticket, matching own-tag injected MOVE/UP/refusedDOWN only, plus existing hook pump timestamp progress during negative DOWN wait. No physical/foreign events or raw tag/key/coordinate/flag content. No callback means no matching own injected callback recorded, not global absence.",
+    "boundaries": "Same observed() queries, input RPC count, receipt bool, nonce/tag/sequence/release matching, absolute budgets and cleanup. New phases only classify full>0 original-budget negative replies; zero/short stages preserved.",
+    "tests": "8 additional pure native groups and expanded actual private codec/request/reply self-test; no local native execution. Independent read-only review found no concrete blocker."
+  },
+  "forcedWorkerRuntimeCandidate": {
+    "nativeCheck": "capture-isolated-window-worker",
+    "catalogIndex": 15,
+    "cleanupIndex": 14,
+    "proof": "Fresh validated synthetic target/window, actual capture/session policy, production CaptureBackend.read with isolate_window=true, original currentness/deadline, actual BGRA patch validation and fresh postflight. No screen fallback, warmup, retry or input-detector gate.",
+    "qualification": "New exact-source hosted runtime proof required; existing color checks alone do not prove worker execution."
+  },
+  "latestLocalCandidateChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+      "passed": 43,
+      "failed": 0,
+      "assertions": 27535,
+      "seconds": 0.308,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-helper-selftest.test.ts",
+      "passed": 48,
+      "failed": 0,
+      "assertions": 1021,
+      "seconds": 0.722,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 1.209,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
+      "exitCode": 0
+    },
+    {
+      "command": "prettier --check touched TypeScript catalogs",
+      "exitCode": 0
+    }
+  ],
+  "forcedWorkerFirstRuntimeOutcome": {
+    "revision": "655ac0e69bba1b9af459b5f7a1c5791cff397218",
+    "run": 43154307054,
+    "job": 130972535343,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154307054/job/130972535343",
+    "conclusion": "failure",
+    "buildUnitsVersionProbes": "passed",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 33,
+      "failed": 5,
+      "skipped": 10
+    },
+    "report": {
+      "artifact": 13915772721,
+      "archiveDigest": "sha256:18d0e4e41d08be36d500f4c246cd6204c8f34c86d484c018fbf6f3267f1806c5",
+      "archiveDigestMatchedAPI": true
+    },
+    "failedChecks": [
+      {
+        "name": "privileged",
+        "reason": "native-check-failed"
+      },
+      {
+        "name": "privileged.capture-color-patch",
+        "reason": "native_operation_failed",
+        "stage": "capture-enumeration-deadline",
+        "nativeCode": "changed"
+      },
+      {
+        "name": "privileged.capture-affinity-exclusion",
+        "reason": "native_operation_failed",
+        "stage": "capture-window-worker-wait",
+        "nativeCode": "capture_unavailable"
+      },
+      {
+        "name": "privileged.capture-isolated-window-worker",
+        "reason": "native_operation_failed",
+        "stage": "capture-window-worker-wait",
+        "nativeCode": "capture_unavailable"
+      },
+      {
+        "name": "fixture-cleanup",
+        "reason": "cleanup-failed"
+      }
+    ],
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "Job/API continuation or step success is not equivalent to passing optional native assertions. Actual report failures control this record. Hook pump stamp progressed, but no matching own-tag injected callback was recorded; missing injected flag is not yet distinguished. Native cleanup14 did not fail; wrapper fixture removal did. No environment skip, capture stability, worker acceptance or Stop success claimed."
+  },
+  "captureFailureCheckpointCandidate": {
+    "parentRevision": "655ac0e69bba1b9af459b5f7a1c5791cff397218",
+    "scope": "Child publishes only closed checkpoint enum into aligned private outputphase word using InterlockedExchange. Parent reads only that atomic metadata on exception during original wait/exit phases while its map remains valid; strict pure whitelist rejects other phases/ranges.",
+    "unchanged": "No pixel/header acceptance, actual-exit requirement, deadline, authority, target binding, nonce, retries, warmup or inline fallback changed. Normal output replaces hint with canonical complete/failed header.",
+    "tests": "One additional pure native group; source regression verifies exception-only wiring and actual-exit/pixel fences. Independent read-only review found no blocker. Native units subsequently passed at9ec38ce4 and8570aedb; their passing forced-worker cases do not establish the cause of prior wait failures."
+  },
+  "unflaggedOwnTagCandidate": {
+    "scope": "Exact full64-bit own tag + valid matching opted-in descriptor (or ownMOVE interval) may record missing injected flag as enum7 metadata. Original injected receipt predicate, DOWN/UP/order/cleanup authority unchanged. Values8/255 rejected.",
+    "tests": "Three additional pure native groups and expanded actual private protocol codec checks; reviewed after duplicate enum correction. Native units subsequently passed at9ec38ce4 and8570aedb; the own-tag-unflagged category was not observed in either baseline Stop result."
+  },
+  "fixtureCleanupCandidate": {
+    "sourceFinding": "ParentWatch requests termination on expiry but cannot wait past original acquisition ticket to accept work. Timers join, yet Windows process/image release is asynchronous; wrapper immediately removed its owned verified temporary root. This supports a race, not proof which lock caused the observed failure.",
+    "repair": "Node fs.rm maxRetries5/retryDelay100 in fixture close/setup-failure cleanup only; persistent errors still throw. No capture/input/test replay or native deadline extension.",
+    "reference": "Installed @types/node fs.RmOptions documents transient EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM retries and linear backoff."
+  },
+  "checkpointCandidateLocalChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+      "passed": 44,
+      "failed": 0,
+      "assertions": 27704,
+      "seconds": 0.296,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-helper-selftest.test.ts",
+      "passed": 48,
+      "failed": 0,
+      "assertions": 1025,
+      "seconds": 0.639,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 1.165,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
+      "exitCode": 0
+    }
+  ],
+  "checkpointNativeOutcome": {
+    "revision": "9ec38ce4ea787a0dc30f1f892645481de8fc2ddb",
+    "run": 43158104253,
+    "job": 130982781017,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43158104253/job/130982781017",
+    "conclusion": "failure",
+    "buildUnitsVersionProbes": "passed",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 36,
+      "failed": 0,
+      "skipped": 11
+    },
+    "report": {
+      "artifact": 13916978195,
+      "archiveDigest": "sha256:f54c39d190b4f1afe062c280a517999370cde4a75b5c92a99960e1708d81203c",
+      "archiveDigestMatchedAPI": true
+    },
+    "forcedIsolatedWindowWorker": "passed",
+    "wrapperCleanup": "passed",
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "One actual forced worker/pixel/deadline execution passed; no stable timing guarantee from one sample. Previous native failures retained. Exact own-tag unflagged category was not observed; absence of matching own callbacks does not establish global hook or host limitation."
+  },
+  "movementProbeCandidate": {
+    "parentRevision": "9ec38ce4ea787a0dc30f1f892645481de8fc2ddb",
+    "status": "Executed at8570aedb; baseline failed and the separate movement probe skipped. Historical candidate description retained; next layout is independentVmProbeCandidate.",
+    "scope": "Never-shipped finite Windows driver only. Absent/0 mode preserves baseline; strict1 adds exactly one guarded MOVE after reservation and before original refresh/prepared50ms. Reject every other mode. Closed normalized flag crosses each existing sanitized environment boundary.",
+    "target": "One sampled different pixel within the independently observed actual Stop rectangle; bounded pure selection and cloned1x1 request repeat exact WindowFromPoint ownership/currentness. Original Stop geometry and DOWN/actual receipt/retirement remain unchanged.",
+    "pipeline": "Original mandatory baseline step explicitly0; only after its failure a separately labelled second invocation uses1, separate log with every line MOVE-PROBE-ONLY prefixed. Continued diagnostic cannot clear original failed step and has no release outputs. Probe-assisted success is not unmodified native Stop proof.",
+    "tests": "Four new native pure groups for strict mode/stages and bounded different-point selection; independent read-only reviews found no blocker. No local native operation."
+  },
+  "freshWorkerRepeatabilityCandidate": {
+    "nativeCheck": "capture-isolated-window-worker",
+    "requiredAcquisitions": 3,
+    "rule": "Each acquisition uses a fresh target observation, process, nonce, device and original deadline; all3 required. Any exception fails the case immediately, with no catch/retry/warmup/fallback between acquisitions.",
+    "hostedOutcome": "All3 passed at8570aedb in run43162088502; no stability guarantee or skipped-input proof."
+  },
+  "probeCandidateLocalChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+      "passed": 45,
+      "failed": 0,
+      "assertions": 28050,
+      "seconds": 0.272,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 1.155,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-workflow.test.ts",
+      "passed": 27,
+      "failed": 3,
+      "assertions": 1436,
+      "exitCode": 1,
+      "qualification": "Two full attempts selected Windows System32 WSL bash; /bin/bash unavailable. Proposed standard GitBash path did not exist. Three existing shell-validation cases failed before script execution; no test skip or expectation weakened. LinuxCI full-file execution required."
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-workflow.test.ts --test-name-pattern \"a movement probe is a separate failure-only diagnostic\"",
+      "passed": 1,
+      "filtered": 29,
+      "failed": 0,
+      "assertions": 21,
+      "seconds": 0.221,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
+      "exitCode": 0
+    }
+  ],
+  "movementProbeHostedOutcome": {
+    "revision": "8570aedbc84944fd9d03e77d721217edd8610615",
+    "run": 43162088502,
+    "job": 130996325266,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43162088502/job/130996325266",
+    "buildUnitsVersionProbes": "passed",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 36,
+      "failed": 0,
+      "skipped": 11
+    },
+    "report": {
+      "artifact": 13918588958,
+      "archiveBytes": 822,
+      "archiveDigest": "sha256:d37c779f22e59ee7b7629799748cd37b6ab1dd2648194c65313bd3d769f2af56",
+      "archiveDigestMatchedAPI": true,
+      "verification": "Root verified report archive and logs."
+    },
+    "forcedIsolatedWindowWorker": {
+      "status": "passed",
+      "requiredFreshAcquisitions": 3,
+      "allRequired": true
+    },
+    "baselineStop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "movementProbeOnly": {
+      "ok": false,
+      "skipped": true,
+      "reason": "physical_input",
+      "exitCode": 77,
+      "qualification": "Separate MOVE-PROBE-ONLY invocation; no callback cause, baseline replacement or release credit follows from this skip."
+    },
+    "qualification": "All3 independently required fresh worker acquisitions passed; no stable timing guarantee, skipped-input proof or diagnosis of previous failures. Baseline Stop remains failed and earlier results remain scoped to their original source."
+  },
+  "independentVmProbeCandidate": {
+    "parentRevision": "8570aedbc84944fd9d03e77d721217edd8610615",
+    "status": "Executed at b286accd in completed failed run 43165063805; baseline and fresh probe both fail the matching DOWN receipt. See independentVmNativeOutcome.",
+    "scope": "Run mandatory baseline and diagnostic-only movement probe in independent matrix VMs. Only the probe VM skips the preceding isolated input self-test to avoid contamination; baseline checks remain mandatory.",
+    "unchanged": "Actual DOWN receipt, target/authority/freshness predicates, native input/UIA/capture deadlines and release/cleanup authority. No diagnostic result replaces baseline or supplies release proof.",
+    "localChecks": {
+      "workflowRouting": { "passed": 3, "filtered": 27, "failed": 0, "assertions": 530 },
+      "desktopTypecheckExitCode": 0,
+      "prettierSelectedFilesExitCode": 0,
+      "qualification": "Provider-free source checks only. Earlier three full-file Bash failures remain recorded; later native matrix outcome is recorded separately."
+    }
+  },
+  "olderPreviewLatestAudit": {
+    "run": 43154306544,
+    "revision": "655ac0e69bba1b9af459b5f7a1c5791cff397218",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544",
+    "auditAtUtc": "2026-11-12T06:13:00+00:00",
+    "aggregateStatus": "unfinished; known Windows installer failure",
+    "conclusion": null,
+    "jobCountsAtAudit": {
+      "success": 28,
+      "failure": 1,
+      "skipped": 3,
+      "active": 1
+    },
+    "finalInstallers": [
+      {
+        "job": 130997275856,
+        "name": "Windows desktop apps",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "job": 130997275864,
+        "name": "macOS desktop apps",
+        "status": "in_progress",
+        "observedStep": "Packaging x64 app"
+      },
+      {
+        "job": 130997275944,
+        "name": "Linux desktop apps",
+        "status": "completed",
+        "conclusion": "success",
+        "qualification": "API metadata only; package archive verification not claimed."
+      }
+    ],
+    "finalArm64PackagedVerifier": {
+      "job": 131007920315,
+      "name": "Verify the final ARM64 helper and actual packed Main pins",
+      "conclusion": "skipped",
+      "qualification": "Upstream Windows installer failed; no final packaged ARM64 proof."
+    },
+    "otherSkips": ["desktop-e2e-linux", "overlay-linux"],
+    "windowsFailure": {
+      "evidence": "Official job log inspected by root.",
+      "explicitUnsignedPowerShell7HelperChecks": "Both passed without exception.",
+      "failedOperation": "Full x64 package verifier: Windows PowerShell5 Authenticode observer",
+      "source": "packages/desktop/scripts/verify-computer-helper-windows.ts:417",
+      "message": "The Windows helper Authenticode status could not be observed.",
+      "exitCode": 1,
+      "qualification": "Generic nonzero/output-bound observer failure. Exact underlying cause and actual Authenticode result are unobserved; no raw stderr retained. Native actual signature, source pins or full package-verifier pass not claimed."
+    },
+    "qualification": "Older655 exact-source preview only. Windows failed; Mac remains active, Linux success is metadata only, final ARM64 verifier skipped. No final cross-platform or newer8570 package success claimed."
+  },
+  "authenticodeObserverCompatibilityCandidate": {
+    "status": "Reviewed candidate passed 20 local tests / 131 assertions and types; signer reuse is being prepared. No live PS5/package fix is proven.",
+    "scope": "Windows PowerShell5 Authenticode observer compatibility only; existing strict output and package verification predicates remain required.",
+    "qualification": "The generic old-run observer failure does not establish its exact cause. Actual PS5 observer and full package-path validation remain required.",
+    "localChecks": {
+      "observerTests": {
+        "passed": 20,
+        "failed": 0,
+        "assertions": 131
+      },
+      "typecheckExitCode": 0
+    }
+  },
+  "independentVmNativeRunPending": {
+    "revision": "b286accdd5c4b95c1689286b4234d4d109ef0309",
+    "run": 43165063805,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805",
+    "baselineJob": 131006042604,
+    "probeJob": 131006042630,
+    "status": "Completed with failure; pending-state chronology remains in earlier docs. Actual results are in independentVmNativeOutcome."
+  },
+  "w9DesignProposal": {
+    "revision": "20202293",
+    "status": "pushed; owner decision pending",
+    "productionCode": "unchanged",
+    "qualification": "Reviewable design proposal only, not implemented or passed."
+  },
+  "independentVmNativeOutcome": {
+    "revision": "b286accdd5c4b95c1689286b4234d4d109ef0309",
+    "run": 43165063805,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805",
+    "conclusion": "failure",
+    "baseline": {
+      "job": 131006042604,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "passed": 36,
+        "failed": 0,
+        "skipped": 11
+      },
+      "report": {
+        "artifact": 13920132497,
+        "archiveBytes": 822,
+        "archiveDigest": "sha256:6ed101e07a9b8bf2e30744e1f1b6cc9349450cf753a4a46750491c8066d5c0e0",
+        "archiveDigestMatchedAPI": true,
+        "verification": "Root verified report and logs."
+      },
+      "forcedWorkerRequiredFreshReads": 3,
+      "forcedWorkerStatus": "passed",
+      "stop": {
+        "ok": false,
+        "reason": "input_post_failed",
+        "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+        "cause": "driver_failure",
+        "exitCode": 1
+      }
+    },
+    "probe": {
+      "job": 131006042630,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "status": "not_run",
+        "reason": "By design: independent diagnostic probe omits preceding isolated input self-test."
+      },
+      "artifact": {
+        "id": 13919749208,
+        "archiveBytes": 5070,
+        "archiveDigest": "sha256:215f869a29050675d620c353c4195bda5317638240f9d8d8dab2ed26a2c3fcb8",
+        "archiveDigestMatchedAPI": true,
+        "verification": "Root verified probe evidence and logs."
+      },
+      "manifest": {
+        "helperVersion": "1.0.15",
+        "sourceDigest": "6427bb52babfff44c120c46b72f1b802491603bee2bb4bc7b3beb0f316d94927"
+      },
+      "moveProbeOnlyStop": {
+        "ok": false,
+        "reason": "input_post_failed",
+        "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+        "cause": "driver_failure",
+        "exitCode": 1,
+        "physicalInputSkip": false
+      },
+      "sourceDerivedInference": "Reaching guardian observation requires an accepted guarded MOVE, whose native path includes actual GetCursorPos readback. This supports cursor-path success, not a full-tag receipt, global hook absence or proven marker truncation."
+    },
+    "qualification": "The fresh-VM probe removes the earlier physical_input skip but still fails the receipt. There is no baseline replacement, skipped-isolated credit, root-cause claim or release credit. Three worker reads passed without a stability guarantee."
+  },
+  "signatureObserverFinalLocalChecks": {
+    "verifier": { "passed": 21, "failed": 0, "assertions": 151 },
+    "signer": { "passed": 9, "failed": 0, "assertions": 80 },
+    "focusedWorkflow": { "passed": 4, "failed": 0, "filtered": 27, "assertions": 543 },
+    "desktopTypecheckExitCode": 0,
+    "selectedFormattingExitCode": 0,
+    "hostedActualObserver": "New required native-diagnostic step observes the actual built unsigned helper through the same hidden PowerShell observer; not run at this checkpoint.",
+    "qualification": "Provider-free source/injected checks only. Existing five-second verifier and ten-second signer observation bounds and filtered signer environment retained. No actual signing or native signature observation ran locally. Earlier full-file Bash failures remain recorded."
+  },
+  "low32MarkerDiagnosticCandidate": {
+    "status": "Reviewed opt-in metadata-only next diagnostic; not a demonstrated fix or authority change.",
+    "predicate": "Injected callback, observed upper32 zero, own upper32 nonzero, matching nonzero lower32 and a valid matching opted descriptor or opted mouse MOVE interval. A weak boolean only; stronger full-tag evidence outranks it.",
+    "unchanged": "Original full64 injected DOWN/UP/order/release-debt predicate and all timing/cleanup authority.",
+    "privateResult": 8,
+    "rejectedPrivateResults": [9, 255],
+    "stageCatalogSize": 172,
+    "nativeGroups": {
+      "added": 4,
+      "status": "not_run; hosted execution pending"
+    },
+    "localChecks": {
+      "report": {
+        "passed": 45,
+        "failed": 0,
+        "assertions": 28211
+      },
+      "source": {
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174
+      }
+    },
+    "qualification": "The fresh-VM result justifies investigating marker correlation, but does not prove truncation. Another injector can correlate; this candidate never identifies owned input or creates receipt/release authority."
+  }
+}

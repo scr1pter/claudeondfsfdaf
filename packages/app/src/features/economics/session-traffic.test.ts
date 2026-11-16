@@ -20,7 +20,6 @@ import { createSessionEconomics } from "./session-economics"
 
 const directory = "/repo"
 const model = { providerID: "openai", modelID: "gpt-6.1" }
-
 afterEach(() => {
   vi.clearAllTimers()
   vi.useRealTimers()

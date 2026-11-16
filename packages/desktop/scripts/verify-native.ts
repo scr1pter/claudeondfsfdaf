@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises"
+import { lstat, readdir, readFile, realpath } from "node:fs/promises"
 import path from "node:path"
 
 // Runs from electron-builder's afterPack under Node, so it uses node: APIs only.
@@ -16,7 +16,13 @@ export function requiredNativePackages(platform: NativePlatform, arch: string) {
 
 export type NativePlatform = "darwin" | "win32" | "linux"
 
-export async function verifyNativeModules(resources: string, platform: NativePlatform, arch: string) {
+export async function verifyNativeModules(
+  resources: string,
+  platform: NativePlatform,
+  arch: string,
+  options: { skipComputerHelper?: boolean } = {},
+) {
+  if (!options.skipComputerHelper) await verifyNativeComputerHelper(resources, platform, arch)
   const root = path.join(resources, "app.asar.unpacked", "node_modules")
   const binaries = await nativeBinaries(root)
   const problems = (
@@ -42,6 +48,36 @@ export async function verifyNativeModules(resources: string, platform: NativePla
       ...problems.map((problem) => `  - ${problem}`),
     ].join("\n"),
   )
+}
+
+/** Checks the actual package layout before launch; final signature and manifest checks run separately. */
+export async function verifyNativeComputerHelper(resources: string, platform: NativePlatform, arch: string) {
+  if (platform === "linux") return
+  if (arch !== "x64" && arch !== "arm64") throw new Error("The packaged computer helper architecture is unsupported.")
+  const root = await realpath(platform === "darwin" ? path.dirname(resources) : resources)
+  const file = path.join(
+    root,
+    platform === "darwin" ? "Helpers/VectorComputer.app/Contents/MacOS/VectorComputer" : "computer/vector-computer.exe",
+  )
+  const metadata = await lstat(file).catch(() => undefined)
+  if (
+    !metadata?.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.size < 64 ||
+    metadata.size > 64 * 1024 * 1024 ||
+    (await realpath(file)) !== file
+  )
+    throw new Error("The packaged computer helper is missing or is not a bounded regular file at its required location.")
+  const bytes = await readFile(file)
+  if (
+    platform === "darwin"
+      ? bytes.readUInt32LE(0) !== 0xfeedfacf && bytes.readUInt32BE(0) !== 0xcafebabe
+      : bytes.readUInt16LE(0) !== 0x5a4d
+  )
+    throw new Error("The packaged computer helper has an invalid executable format for its platform.")
+  const found = binaryArchitectures(bytes)
+  if (!found.includes(arch))
+    throw new Error(`The packaged computer helper is built for ${found.join(", ") || "an unknown CPU"}, not ${arch}.`)
 }
 
 async function nativeBinaries(directory: string): Promise<string[]> {

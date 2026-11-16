@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "image": "sha256:f726ac173d7f71113c2c4594e474ed8619356971ea1ca3266599a6d010f091b7",
+  "accountTokensInjected": false,
+  "realEngine": true,
+  "realGitAndSqlite": true,
+  "scriptedProvider": true,
+  "productionIsolation": false,
+  "modelCalls": 2,
+  "toolCalls": 1,
+  "sessionId": "ses_e4307746dffeh3XEYatGuERTBa",
+  "savedMessages": 3,
+  "snapshotDigest": "02034db56388eee04e3b9266323221a337dc81511f1845160ff62cb5aaaa42f8",
+  "files": [".gitattributes", "README.md", "cloud-proof.txt", "delete-me.txt", "script.sh"],
+  "checks": [
+    "actual-model-tool-write",
+    "persisted-chat",
+    "pause-readonly-diff",
+    "edit-add-delete-mode-no-final-newline",
+    "hostile-git-config-not-executed",
+    "engine-restart",
+    "restored-history",
+    "restored-repository"
+  ],
+  "engineBuild": {
+    "schemaVersion": 1,
+    "sourceRevision": "2412a2c04d296bc8bac76d12b9c2011a00640887",
+    "preview": false,
+    "catalogSha256": "784309673addec6790370607fa73cdeb6d7cede19a2406b7c39d20de2183aaf3",
+    "engineSha256": "ec4717adf60aa1b8169b1ee82f253a58dd283b2750362343896cc7962b20f831",
+    "workerSha256": "05c466ad53733552fa81dbd23b9f9c5b7506525e6e5a46bdc5ea552fa83803f0",
+    "platform": "linux",
+    "arch": "x64",
+    "runtimePackages": ["jsonc-parser", "@lydell/node-pty", "@lydell/node-pty-linux-x64"]
+  },
+  "recordedAt": "2026-11-08T21:05:11.687353+00:00",
+  "reviewedSourceRevision": "b258a726be0e451f3805a55246fce579a1e55297"
+}

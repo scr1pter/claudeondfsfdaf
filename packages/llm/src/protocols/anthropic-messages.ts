@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 import { Route } from "../route/client"
 import { Auth } from "../route/auth"
 import { Endpoint } from "../route/endpoint"
-import { Framing } from "../route/framing"
+import { HttpTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
@@ -24,6 +24,8 @@ import * as Cache from "./utils/cache"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { AnthropicComputer } from "./utils/anthropic-computer"
+import { AnthropicContext } from "./utils/anthropic-context"
 
 const ADAPTER = "anthropic-messages"
 export const DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
@@ -67,6 +69,7 @@ const AnthropicToolUseBlock = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   input: Schema.Unknown,
+  toolset_name: Schema.optional(Schema.Literal("computer")),
   cache_control: Schema.optional(AnthropicCacheControl),
 })
 type AnthropicToolUseBlock = Schema.Schema.Type<typeof AnthropicToolUseBlock>
@@ -111,6 +114,7 @@ const AnthropicToolResultContent = Schema.Union([AnthropicTextBlock, AnthropicIm
 const AnthropicToolResultBlock = Schema.Struct({
   type: Schema.tag("tool_result"),
   tool_use_id: Schema.String,
+  toolset_name: Schema.optional(Schema.Literal("computer")),
   content: Schema.Union([Schema.String, Schema.Array(AnthropicToolResultContent)]),
   is_error: Schema.optional(Schema.Boolean),
   cache_control: Schema.optional(AnthropicCacheControl),
@@ -135,12 +139,19 @@ const AnthropicMessage = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("role"))
 type AnthropicMessage = Schema.Schema.Type<typeof AnthropicMessage>
 
-const AnthropicTool = Schema.Struct({
-  name: Schema.String,
-  description: Schema.String,
-  input_schema: JsonObject,
-  cache_control: Schema.optional(AnthropicCacheControl),
-})
+const AnthropicTool = Schema.Union([
+  Schema.Struct({
+    name: Schema.String,
+    description: Schema.String,
+    input_schema: JsonObject,
+    cache_control: Schema.optional(AnthropicCacheControl),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("computer_toolset_20260801"),
+    configs: Schema.Struct({ zoom: Schema.Struct({ enabled: Schema.Literal(true) }) }),
+    cache_control: Schema.optional(AnthropicCacheControl),
+  }),
+])
 type AnthropicTool = Schema.Schema.Type<typeof AnthropicTool>
 
 const AnthropicToolChoice = Schema.Union([
@@ -166,6 +177,7 @@ const AnthropicBodyFields = {
   top_k: Schema.optional(Schema.Number),
   stop_sequences: optionalArray(Schema.String),
   thinking: Schema.optional(AnthropicThinking),
+  context_management: Schema.optional(AnthropicContext.Body),
 }
 const AnthropicMessagesBody = Schema.Struct(AnthropicBodyFields)
 export type AnthropicMessagesBody = Schema.Schema.Type<typeof AnthropicMessagesBody>
@@ -182,6 +194,7 @@ const AnthropicStreamBlock = Schema.Struct({
   type: Schema.String,
   id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
+  toolset_name: Schema.optional(Schema.String),
   text: Schema.optional(Schema.String),
   thinking: Schema.optional(Schema.String),
   signature: Schema.optional(Schema.String),
@@ -258,12 +271,15 @@ const signatureFromMetadata = (metadata: ProviderMetadata | undefined): string |
   return typeof anthropic.signature === "string" ? anthropic.signature : undefined
 }
 
-const lowerTool = (breakpoints: Cache.Breakpoints, tool: ToolDefinition, inputSchema: JsonSchema): AnthropicTool => ({
-  name: tool.name,
-  description: tool.description,
-  input_schema: inputSchema,
-  cache_control: cacheControl(breakpoints, tool.cache),
-})
+const lowerTool = (breakpoints: Cache.Breakpoints, tool: ToolDefinition, inputSchema: JsonSchema): AnthropicTool =>
+  tool.native === "computer"
+    ? { type: "computer_toolset_20260801", configs: { zoom: { enabled: true } } }
+    : {
+        name: tool.name,
+        description: tool.description,
+        input_schema: inputSchema,
+        cache_control: cacheControl(breakpoints, tool.cache),
+      }
 
 const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>
   ProviderShared.matchToolChoice("Anthropic Messages", toolChoice, {
@@ -273,12 +289,16 @@ const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>
     tool: (name) => ({ type: "tool" as const, name }),
   })
 
-const lowerToolCall = (part: ToolCallPart): AnthropicToolUseBlock => ({
-  type: "tool_use",
-  id: part.id,
-  name: part.name,
-  input: part.input,
-})
+const lowerToolCall = (part: ToolCallPart): AnthropicToolUseBlock => {
+  const computer = AnthropicComputer.call(part)
+  return {
+    type: "tool_use",
+    id: part.id,
+    name: computer?.member ?? part.name,
+    input: computer?.input ?? part.input,
+    ...(computer ? { toolset_name: "computer" as const } : {}),
+  }
+}
 
 const lowerServerToolCall = (part: ToolCallPart): AnthropicServerToolUseBlock => ({
   type: "server_tool_use",
@@ -404,6 +424,12 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
   breakpoints: Cache.Breakpoints,
 ) {
   const messages: AnthropicMessage[] = []
+  // Results synthesized after cancellation may have no metadata or current tool definition.
+  const computerCalls = new Set(
+    request.messages.flatMap((message) =>
+      message.content.flatMap((part) => (part.type === "tool-call" && AnthropicComputer.call(part) ? [part.id] : [])),
+    ),
+  )
 
   for (const [index, message] of request.messages.entries()) {
     if (message.role === "system") {
@@ -474,11 +500,16 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
     for (const part of message.content) {
       if (!ProviderShared.supportsContent(part, ["tool-result"]))
         return yield* ProviderShared.unsupportedContent("Anthropic Messages", "tool", ["tool-result"])
+      const computer = computerCalls.has(part.id) || part.providerMetadata?.anthropic?.toolset_name === "computer"
+      const blocks = computer
+        ? yield* Effect.forEach(AnthropicComputer.content(part), lowerToolResultContentItem)
+        : yield* lowerToolResultContent(part)
       content.push({
         type: "tool_result",
         tool_use_id: part.id,
-        content: yield* lowerToolResultContent(part),
-        is_error: part.result.type === "error" ? true : undefined,
+        ...(computer ? { toolset_name: "computer" as const } : {}),
+        content: blocks,
+        is_error: part.result.type === "error" || (computer && AnthropicComputer.failed(part)) ? true : undefined,
         cache_control: cacheControl(breakpoints, part.cache),
       })
     }
@@ -549,6 +580,7 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
     top_k: generation?.topK,
     stop_sequences: generation?.stop,
     thinking: yield* lowerThinking(request),
+    context_management: yield* AnthropicContext.lower(request),
   }
 })
 
@@ -661,17 +693,27 @@ const onContentBlockStart = (state: ParserState, event: AnthropicEvent): StepRes
   if ((block.type === "tool_use" || block.type === "server_tool_use") && event.index !== undefined) {
     const events: LLMEvent[] = []
     const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
+    const computer = block.type === "tool_use" && block.toolset_name === "computer"
+    const name = computer ? "computer" : (block.name ?? "")
+    const providerMetadata = computer
+      ? anthropicMetadata({
+          toolset_name: "computer",
+          member: block.name,
+          input: block.input === undefined ? {} : block.input,
+        })
+      : undefined
     return [
       {
         ...state,
         lifecycle,
         tools: ToolStream.start(state.tools, event.index, {
           id: block.id ?? String(event.index),
-          name: block.name ?? "",
+          name,
           providerExecuted: block.type === "server_tool_use",
+          providerMetadata,
         }),
       },
-      [...events, LLMEvent.toolInputStart({ id: block.id ?? String(event.index), name: block.name ?? "" })],
+      [...events, LLMEvent.toolInputStart({ id: block.id ?? String(event.index), name, providerMetadata })],
     ]
   }
 
@@ -767,7 +809,10 @@ const onContentBlockStop = Effect.fn("AnthropicMessages.onContentBlockStop")(fun
   if (event.index === undefined) return [state, NO_EVENTS] satisfies StepResult
   const result = yield* ToolStream.finish(ADAPTER, state.tools, event.index)
   const events: LLMEvent[] = []
-  const resultEvents = result.events ?? []
+  const pending = state.tools[event.index]
+  const resultEvents = yield* Effect.forEach(result.events ?? [], (item) =>
+    AnthropicComputer.event(item, pending?.input === ""),
+  )
   const lifecycle = resultEvents.length
     ? Lifecycle.stepStart(state.lifecycle, events)
     : Lifecycle.reasoningEnd(
@@ -842,13 +887,21 @@ export const protocol = Protocol.make({
   },
 })
 
+const transport = HttpTransport.sseJson.with<AnthropicMessagesBody>()
+
 export const route = Route.make({
   id: ADAPTER,
   provider: "anthropic",
   protocol,
   endpoint: Endpoint.path(PATH, { baseURL: DEFAULT_BASE_URL }),
   auth: Auth.none,
-  framing: Framing.sse,
+  transport: {
+    ...transport,
+    prepare: (input) =>
+      transport.prepare(
+        input.body.context_management ? { ...input, request: AnthropicContext.withBeta(input.request) } : input,
+      ),
+  },
   headers: () => ({ "anthropic-version": "2023-06-01" }),
 })
 

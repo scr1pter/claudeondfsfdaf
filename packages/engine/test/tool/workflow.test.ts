@@ -6,6 +6,7 @@ import { Agent } from "@/agent/agent"
 import { WorkflowMarkers } from "@/orchestration/constants"
 import { WorkflowRuns } from "@/orchestration/runs"
 import GUIDE from "@/orchestration/guide.txt"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { SessionID, MessageID } from "@/session/schema"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
@@ -34,7 +35,7 @@ const ctx = (extra?: Tool.Context["extra"]): Tool.Context => ({
   metadata: () => Effect.void,
   ask: () => Effect.die(new Error("Only the run service may ask for workflow approval")),
 })
-const fixture = Effect.fnUntraced(function* () {
+const fixture = Effect.fnUntraced(function* (connect = false) {
   const validations: Parameters<WorkflowRuns.Interface["validate"]>[0][] = []
   const launches: Parameters<WorkflowRuns.Interface["launch"]>[0][] = []
   let tasks = 0
@@ -47,6 +48,7 @@ const fixture = Effect.fnUntraced(function* () {
     Effect.flatMap(Tool.init),
     Effect.provide(
       Layer.mergeAll(
+        RuntimeFlags.layer({ experimentalConnect: connect }),
         Layer.mock(WorkflowRuns.Service, {
           validate: (request) =>
             Effect.sync(() => {
@@ -117,6 +119,20 @@ describe("workflow tool parameters and guide", () => {
       expect(specifications).toEqual(examples.map((example) => example.spec))
       expect(specifications).toHaveLength(3)
       for (const value of specifications) expect(WorkflowSpec.parse(value).ok).toBe(true)
+      expect(f.validations).toEqual([])
+      expect(f.launches).toEqual([])
+      expect(f.tasks()).toBe(0)
+      expect(result.output).not.toContain("Connected stage syntax")
+      expect(result.output).not.toContain("connect_model")
+    }),
+  )
+
+  it.effect("only the explicit connected flag adds the held connected-stage guide", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(true)
+      const result = yield* f.tool.execute({ action: "guide" }, ctx())
+      expect(result.output).toContain("Connected stage syntax is reserved but execution is unavailable")
+      expect(result.output).toContain("connect_model")
       expect(f.validations).toEqual([])
       expect(f.launches).toEqual([])
       expect(f.tasks()).toBe(0)

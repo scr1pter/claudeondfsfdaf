@@ -118,6 +118,35 @@ beforeAll(() => {
       const url = new URL(request.url)
       const body = (await request.json().catch(() => ({}))) as Body
       server.hits.push({ path: url.pathname, body })
+      if (url.pathname.endsWith("/responses"))
+        return sse([
+          {
+            type: "response.created",
+            sequence_number: 1,
+            response: { id: "resp_choice", created_at: 1, model: "gpt-5.2", service_tier: null },
+          },
+          {
+            type: "response.completed",
+            sequence_number: 2,
+            response: {
+              incomplete_details: null,
+              service_tier: null,
+              usage: {
+                input_tokens: 1,
+                input_tokens_details: { cached_tokens: 0 },
+                output_tokens: 0,
+                output_tokens_details: { reasoning_tokens: 0 },
+              },
+            },
+          },
+        ])
+      if (url.pathname.endsWith(":streamGenerateContent"))
+        return sse([
+          {
+            candidates: [{ content: { role: "model", parts: [{ text: "4" }] }, finishReason: "STOP", index: 0 }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+          },
+        ])
       if (!url.pathname.endsWith("/messages"))
         return Response.json({ error: { message: "not served by this fake" } }, { status: 400 })
       // Titles and other helper requests get a plain answer; only the run's own steps follow the script.
@@ -213,7 +242,12 @@ const schema = {
 }
 
 describe("structured output: the tool choice each provider is sent", () => {
-  const it = testEffect(AppNodeBuilder.build(LayerNode.group([LLM.node, Provider.node])))
+  const it = testEffect(
+    AppNodeBuilder.build(
+      LayerNode.group([LLM.node, Provider.node, Session.node, Database.node, EventV2Bridge.node, SessionProjector.node]),
+      [[Database.node, Database.layerFromPath(":memory:")]],
+    ),
+  )
 
   // One step of a json_schema request, as the run loop sends it: the call required, and what was sent reported back.
   const send = Effect.fn("test.send")(function* (input: {
@@ -223,7 +257,8 @@ describe("structured output: the tool choice each provider is sent", () => {
     thinking?: false
   }) {
     const model = yield* Provider.use.getModel(ProviderV2.ID.make(input.providerID), ModelV2.ID.make(input.modelID))
-    const sessionID = SessionID.make("session-structured-choice")
+    const sessions = yield* Session.Service
+    const sessionID = (yield* sessions.create({ title: "Structured output fixture" })).id
     const agent = {
       name: "build",
       mode: "primary",
@@ -258,7 +293,7 @@ describe("structured output: the tool choice each provider is sent", () => {
           chose: (choice) => chose.push(choice),
           ...(input.thinking === false ? { thinking: false as const } : {}),
         })
-        .pipe(Stream.runDrain, Effect.exit),
+        .pipe(Stream.runDrain),
     )
     return { body: server.hits.at(-1)!.body, chose }
   })
@@ -348,6 +383,7 @@ describe("structured output in the run loop", () => {
   const mcp = Layer.succeed(
     MCP.Service,
     MCP.Service.of({
+      snapshot: () => Effect.succeed({}),
       status: () => Effect.succeed({}),
       clients: () => Effect.succeed({}),
       instructions: () => Effect.succeed([]),

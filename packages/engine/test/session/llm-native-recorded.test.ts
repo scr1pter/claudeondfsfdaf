@@ -26,6 +26,14 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { LayerNodePlatform } from "@vectordevai/core/effect/app-node-platform"
+import { Database } from "@vectordevai/core/database/database"
+import { ProjectTable } from "@vectordevai/core/project/sql"
+import { SessionTable } from "@vectordevai/core/session/sql"
+import { SessionProjector } from "@vectordevai/core/session/projector"
+import { AbsolutePath } from "@vectordevai/core/schema"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { InstanceRef } from "@/effect/instance-ref"
+import { eq } from "drizzle-orm"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "../fixtures/recordings")
 const owned = "vector-native-recorded-test-registration"
@@ -236,11 +244,15 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
         redactor: HttpRecorderInternal.Redactor.make(redact),
       })
     : HttpRecorder.http(scenario.cassette, { directory: FIXTURES_DIR, metadata, redact })
-  return AppNodeBuilder.build(LayerNode.group([Provider.node, LLM.node]), [
-    [LayerNodePlatform.requestExecutor, RequestExecutor.layer.pipe(Layer.provide(recordedHttp))],
-    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalNativeLlm: true })],
-    ...(auth ? ([[Auth.node, auth]] as const) : []),
-  ])
+  return AppNodeBuilder.build(
+    LayerNode.group([Provider.node, LLM.node, Database.node, EventV2Bridge.node, SessionProjector.node]),
+    [
+      [Database.node, Database.layerFromPath(":memory:")],
+      [LayerNodePlatform.requestExecutor, RequestExecutor.layer.pipe(Layer.provide(recordedHttp))],
+      [RuntimeFlags.node, RuntimeFlags.layer({ experimentalNativeLlm: true })],
+      ...(auth ? ([[Auth.node, auth]] as const) : []),
+    ],
+  )
 }
 
 const writeConfig = (directory: string, scenario: RecordedScenario, model: ModelCatalog.Provider["models"][string]) =>
@@ -256,6 +268,32 @@ const collect = (input: LLM.StreamInput) =>
     const llm = yield* LLM.Service
     return Array.from(yield* llm.stream(input).pipe(Stream.runCollect))
   })
+
+const ordinarySession = Effect.fnUntraced(function* (sessionID: SessionID) {
+  const database = yield* Database.Service
+  if (yield* database.db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
+    return
+  const instance = yield* InstanceRef
+  if (!instance) return yield* Effect.die("InstanceRef not provided")
+  yield* database.db
+    .insert(ProjectTable)
+    .values({ id: instance.project.id, worktree: AbsolutePath.make(instance.worktree), sandboxes: [] })
+    .onConflictDoNothing()
+    .run()
+  const events = yield* EventV2Bridge.Service
+  yield* events.publish(SessionV1.Event.Created, {
+    sessionID,
+    info: SessionV1.SessionInfo.make({
+      id: sessionID,
+      projectID: instance.project.id,
+      directory: instance.directory,
+      slug: "native-recorded-fixture",
+      title: "Native recorded fixture",
+      version: "test",
+      time: { created: 1, updated: 1 },
+    }),
+  })
+})
 
 const WEATHER_RESULT = { temperature: 22, condition: "sunny" } as const
 const WEATHER_SYSTEM =
@@ -305,6 +343,7 @@ const driveToolLoop = (scenario: RecordedScenario) =>
 
     const stableID = scenario.stableID ?? scenario.providerID
     const sessionID = SessionID.make(`session-recorded-${stableID}-loop`)
+    yield* ordinarySession(sessionID)
     const modelID = ModelV2.ID.make(model.id)
     const agent = {
       name: "test",

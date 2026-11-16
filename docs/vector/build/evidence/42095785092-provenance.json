@@ -1,0 +1,321 @@
+{
+  "run": 42095785092,
+  "head": "03688ad45210c57006f174ed38bfca8ac6e72b00",
+  "job": 127485332202,
+  "jobName": "macOS Electron overlay/controller diagnostic (no release evidence)",
+  "jobConclusion": "success",
+  "evidenceSource": "closed job-log receipts; this diagnostic run publishes no artifacts",
+  "baselineVerification": [
+    {
+      "time": "2026-11-05T19:39:00.6654710Z",
+      "role": "source",
+      "result": "failed",
+      "code": 1,
+      "reason": "exit"
+    },
+    {
+      "time": "2026-11-05T19:39:00.8490580Z",
+      "role": "copy",
+      "result": "failed",
+      "code": 1,
+      "reason": "exit"
+    }
+  ],
+  "rootOnlyTrial": {
+    "mode": "fresh-linker-template-bundle",
+    "sealVerified": true,
+    "strictAllArchitecturesVerified": true,
+    "deepStrictVerified": false,
+    "deepFailure": "missing-nested-resource-seal",
+    "ownedFrameworksSubcomponentObserved": true
+  },
+  "freshC4Trial": {
+    "mode": "c4-deep-ad-hoc",
+    "sourceBytesUnchanged": true,
+    "nestedBytePolicy": "re-signed-not-preserved",
+    "nestedBytesChanged": true,
+    "profileSha256": "16b05c93e71cebb2b645afa60a55a0dd29d022702d9c95c7076c7fd51e5d6a5a",
+    "profileApplied": true,
+    "finalMetadata": {
+      "identifier": "com.github.Electron",
+      "flags": 65538,
+      "runtime": "26.2.0",
+      "entitlements": "a8a40d1b00745a8b4ffada49b4f10d548e2fd2cbf685ff72785f0d95c2deb5d8"
+    },
+    "strictVerified": true,
+    "deepVerified": true,
+    "versionVerified": true,
+    "flagsHex": "0x10002",
+    "electronVersion": "42.11.4",
+    "baselineUnchanged": true,
+    "noReleaseCredit": true,
+    "profile": {
+      "path": "packages/desktop/resources/entitlements.plist",
+      "sha256": "16b05c93e71cebb2b645afa60a55a0dd29d022702d9c95c7076c7fd51e5d6a5a",
+      "sourceBytesMatch": true,
+      "localBytesMatch": true
+    },
+    "steps": [
+      {
+        "time": "2026-11-05T19:39:00.8550930Z",
+        "step": "metadata-before",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:01.2653670Z",
+        "step": "bundle-identifier",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:01.2873540Z",
+        "step": "seal-owned-copy",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:01.2997450Z",
+        "step": "strict-all-architectures",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:01.4900130Z",
+        "step": "deep-strict",
+        "result": "failed",
+        "code": 1
+      },
+      {
+        "time": "2026-11-05T19:39:02.9518150Z",
+        "step": "c4-deep-sign",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:02.9598690Z",
+        "step": "c4-strict-all-architectures",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:03.2174040Z",
+        "step": "c4-deep-strict",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:03.2231900Z",
+        "step": "c4-metadata-after",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:03.2293200Z",
+        "step": "c4-profile-json",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:03.2350290Z",
+        "step": "c4-signed-entitlements-json",
+        "result": "verified",
+        "code": 0
+      },
+      {
+        "time": "2026-11-05T19:39:04.0830250Z",
+        "step": "c4-owned-version",
+        "result": "verified",
+        "code": 0
+      }
+    ]
+  },
+  "ui": {
+    "report": {
+      "protocol": 1,
+      "platform": "darwin",
+      "electron": "42.11.4",
+      "checks": [
+        {
+          "name": "overlay-count",
+          "ok": true
+        },
+        {
+          "name": "overlay-bounds",
+          "ok": true
+        },
+        {
+          "name": "overlay-window-properties",
+          "ok": true
+        },
+        {
+          "name": "overlay-stack-level",
+          "ok": true
+        },
+        {
+          "name": "overlay-ignore-pointer",
+          "ok": true
+        },
+        {
+          "name": "overlay-workspaces",
+          "ok": true
+        },
+        {
+          "name": "overlay-content-protection",
+          "ok": false,
+          "skipped": true,
+          "reason": "not_applicable"
+        },
+        {
+          "name": "overlay-banner-copy",
+          "ok": true
+        },
+        {
+          "name": "overlay-sandbox",
+          "ok": true
+        },
+        {
+          "name": "overlay-ipc-rejected",
+          "ok": true
+        },
+        {
+          "name": "transparent-theme-switch",
+          "ok": true
+        },
+        {
+          "name": "window-all-closed",
+          "ok": true
+        },
+        {
+          "name": "focus-preserved",
+          "ok": true
+        },
+        {
+          "name": "controller-stop-cancels-helper",
+          "ok": true
+        },
+        {
+          "name": "heartbeat-loss-removes-overlays",
+          "ok": true
+        },
+        {
+          "name": "helper-crash-removes-overlays",
+          "ok": true
+        },
+        {
+          "name": "native-os-stop",
+          "ok": false,
+          "skipped": true,
+          "reason": "native_harness_unavailable"
+        },
+        {
+          "name": "native-capture-exclusion",
+          "ok": false,
+          "skipped": true,
+          "reason": "native_harness_unavailable"
+        }
+      ]
+    },
+    "counts": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 3
+    },
+    "phases": [
+      {
+        "time": "2026-11-05T19:39:04.7503540Z",
+        "phase": "boot"
+      },
+      {
+        "time": "2026-11-05T19:39:05.2547110Z",
+        "phase": "ready"
+      },
+      {
+        "time": "2026-11-05T19:39:05.2566420Z",
+        "phase": "properties"
+      },
+      {
+        "time": "2026-11-05T19:39:07.4387970Z",
+        "phase": "controller"
+      },
+      {
+        "time": "2026-11-05T19:39:13.0567770Z",
+        "phase": "cleanup"
+      },
+      {
+        "time": "2026-11-05T19:39:13.0595810Z",
+        "phase": "report"
+      }
+    ],
+    "controllerMilestones": [
+      {
+        "time": "2026-11-05T19:39:07.4388920Z",
+        "step": "underlay"
+      },
+      {
+        "time": "2026-11-05T19:39:07.5246400Z",
+        "step": "stop-acquire"
+      },
+      {
+        "time": "2026-11-05T19:39:07.9608990Z",
+        "step": "stop-check"
+      },
+      {
+        "time": "2026-11-05T19:39:07.9652830Z",
+        "step": "stop-close"
+      },
+      {
+        "time": "2026-11-05T19:39:08.0080190Z",
+        "step": "heartbeat-acquire"
+      },
+      {
+        "time": "2026-11-05T19:39:08.4801860Z",
+        "step": "heartbeat-check"
+      },
+      {
+        "time": "2026-11-05T19:39:12.1295050Z",
+        "step": "heartbeat-close"
+      },
+      {
+        "time": "2026-11-05T19:39:12.1717760Z",
+        "step": "crash-acquire"
+      },
+      {
+        "time": "2026-11-05T19:39:12.5383680Z",
+        "step": "crash-check"
+      },
+      {
+        "time": "2026-11-05T19:39:12.5616370Z",
+        "step": "crash-close"
+      },
+      {
+        "time": "2026-11-05T19:39:12.5667800Z",
+        "step": "native-acquire"
+      },
+      {
+        "time": "2026-11-05T19:39:12.9968820Z",
+        "step": "native-pause"
+      },
+      {
+        "time": "2026-11-05T19:39:13.0001410Z",
+        "step": "native-ready"
+      },
+      {
+        "time": "2026-11-05T19:39:13.0029580Z",
+        "step": "native-listener"
+      },
+      {
+        "time": "2026-11-05T19:39:13.0030220Z",
+        "step": "native-proof"
+      },
+      {
+        "time": "2026-11-05T19:39:13.0035130Z",
+        "step": "native-close"
+      }
+    ],
+    "controllerMilestoneCount": 16,
+    "exceptionReceiptCount": 0
+  },
+  "scope": "Positive owned-copy preparation and generic Electron overlay/controller evidence only. Nested code is explicitly re-signed, not preserved. Native OS Stop and capture-exclusion remain missing-harness skips. This is not measured helper14 admission, final package signing, privileged native or release approval.",
+  "releaseReady": false
+}

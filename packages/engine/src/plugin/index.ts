@@ -26,6 +26,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdapter } from "@/control-plane/adapters"
 import type { WorkspaceAdapter } from "@/control-plane/types"
@@ -120,15 +121,22 @@ function getLegacyPlugins(mod: Record<string, unknown>) {
 }
 
 async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks: Hooks[]) {
+  ProcessIsolation.assertExternalCodeAllowed()
   const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
   if (plugin) {
     await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
-    hooks.push(protectPluginOAuth(await (plugin as PluginModule).server(input, load.options), load))
+    ProcessIsolation.assertExternalCodeAllowed()
+    const loaded = await (plugin as PluginModule).server(input, load.options)
+    ProcessIsolation.assertExternalCodeAllowed()
+    hooks.push(ProcessIsolation.markExternalCode(protectPluginOAuth(loaded, load)))
     return
   }
 
   for (const server of getLegacyPlugins(load.mod)) {
-    hooks.push(protectPluginOAuth(await server(input, load.options), load))
+    ProcessIsolation.assertExternalCodeAllowed()
+    const loaded = await server(input, load.options)
+    ProcessIsolation.assertExternalCodeAllowed()
+    hooks.push(ProcessIsolation.markExternalCode(protectPluginOAuth(loaded, load)))
   }
 }
 
@@ -148,7 +156,10 @@ const layer = Layer.effect(
             hooks,
             (hook) =>
               Effect.tryPromise({
-                try: () => Promise.resolve(hook.dispose?.()),
+                try: () => {
+                  ProcessIsolation.assertExternalValueAllowed(hook)
+                  return Promise.resolve(hook.dispose?.())
+                },
                 catch: errorMessage,
               }).pipe(
                 Effect.tapError((error) => Effect.logError("plugin dispose hook failed", { error })),
@@ -268,7 +279,11 @@ const layer = Layer.effect(
         // Notify plugins of current config
         for (const hook of hooks) {
           yield* Effect.tryPromise({
-            try: () => Promise.resolve((hook as any).config?.(cfg)),
+            try: async () => {
+              ProcessIsolation.assertExternalValueAllowed(hook)
+              await (hook as any).config?.(cfg)
+              ProcessIsolation.assertExternalValueAllowed(hook)
+            },
             catch: errorMessage,
           }).pipe(
             Effect.tapError((error) => Effect.logError("plugin config hook failed", { error })),
@@ -280,6 +295,7 @@ const layer = Layer.effect(
           if (event.location?.directory !== ctx.directory) return Effect.void
           return Effect.sync(() => {
             for (const hook of hooks) {
+              ProcessIsolation.assertExternalValueAllowed(hook)
               void hook["event"]?.({ event: { id: event.id, type: event.type, properties: event.data } as any })
             }
           })
@@ -298,15 +314,21 @@ const layer = Layer.effect(
       if (!name) return output
       const s = yield* InstanceState.get(state)
       for (const hook of s.hooks) {
+        ProcessIsolation.assertExternalValueAllowed(hook)
         const fn = hook[name] as any
         if (!fn) continue
-        yield* Effect.promise(async () => fn(input, output))
+        yield* Effect.promise(async () => {
+          ProcessIsolation.assertExternalValueAllowed(hook)
+          await fn(input, output)
+          ProcessIsolation.assertExternalValueAllowed(hook)
+        })
       }
       return output
     })
 
     const list = Effect.fn("Plugin.list")(function* () {
       const s = yield* InstanceState.get(state)
+      for (const hook of s.hooks) ProcessIsolation.assertExternalValueAllowed(hook)
       return s.hooks
     })
 

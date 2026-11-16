@@ -1,3 +1,5 @@
+import type { Interface } from "./deadlines"
+
 export class ResponseStreamError extends Error {
   public override readonly name = "ProviderResponseStreamError"
 
@@ -6,7 +8,17 @@ export class ResponseStreamError extends Error {
   }
 }
 
-export function wrap(res: Response, ms: number, ctl: AbortController) {
+export function wrap(
+  res: Response,
+  ms: number,
+  ctl: AbortController,
+  deadlines: Interface = {
+    schedule: (ms, run) => {
+      const timer = setTimeout(run, ms)
+      return () => clearTimeout(timer)
+    },
+  },
+) {
   if (typeof ms !== "number" || ms <= 0) return res
   if (!res.body) return res
   if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
@@ -15,21 +27,21 @@ export function wrap(res: Response, ms: number, ctl: AbortController) {
   const body = new ReadableStream<Uint8Array>({
     async pull(ctrl) {
       const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
-        const id = setTimeout(() => {
+        const cancel = deadlines.schedule(ms, () => {
           const err = new ResponseStreamError("SSE read timed out")
           ctl.abort(err)
           // Cancellation is cleanup; its rejection must not escape or replace the primary deadline error.
           void reader.cancel(err).catch(() => undefined)
           reject(err)
-        }, ms)
+        })
 
         reader.read().then(
           (part) => {
-            clearTimeout(id)
+            cancel()
             resolve(part)
           },
           (err) => {
-            clearTimeout(id)
+            cancel()
             reject(err)
           },
         )

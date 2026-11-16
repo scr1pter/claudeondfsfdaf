@@ -3,7 +3,7 @@
 
 import { fnv1a64 } from "./fingerprint"
 import { isBinaryPath } from "./ignore"
-import type { Anchor, AnchorFailure, FocusHunk, Side, Trust } from "./types"
+import type { Anchor, AnchorFailure, Finding, FocusHunk, Side, Trust } from "./types"
 
 export interface DiffLine {
   kind: "add" | "del" | "context"
@@ -499,6 +499,27 @@ export function touched(changes: DiffFile[], path: string, line: number, radius 
   return false
 }
 
+// S3, shared by guardrail.ts's strict guardrail and citation.ts's ruleCited (VS-43), which import it from here so that
+// neither imports the other: the anchor is at the model's own lines (resolveAnchor may snap a line onto a nearby hunk,
+// which does not count), and on code the change touched. On the RIGHT side some line of it was added, or sits next to a
+// deletion (touched with no radius); the LEFT side holds only removed lines, so a LEFT anchor is on removed code.
+export function onChangedLine(anchors: DiffFile[], finding: Pick<Finding, "line" | "endLine">, anchor: Anchor) {
+  if (anchor.line < finding.line || anchor.line > (endLineOf(finding) ?? finding.line)) return false
+  if (anchor.side === "LEFT") return true
+  const start = anchor.startLine ?? anchor.line
+  return Array.from({ length: anchor.line - start + 1 }, (_, offset) => start + offset).some((line) =>
+    touched(anchors, anchor.path, line, 0),
+  )
+}
+
+// A finding's last line, as resolveAnchor reads it: only a whole number after its first line. S3 reads it, and so does
+// guardrail.ts.
+export function endLineOf(finding: Pick<Finding, "line" | "endLine">) {
+  return finding.endLine !== undefined && Number.isInteger(finding.endLine) && finding.endLine > finding.line
+    ? finding.endLine
+    : undefined
+}
+
 // Like `git patch-id`: the same change at other line numbers, or re-indented, keeps its id.
 export function patchIdOf(file: DiffFile): string {
   const parts: string[] = []
@@ -545,6 +566,75 @@ export function applyPatch(baseText: string, file: DiffFile): string | undefined
   if (!out.length) return ""
   const endsWithNewline = tail ? base.endsWithNewline : !last?.noNewline
   return out.join(eol) + (endsWithNewline ? eol : "")
+}
+
+// Why a model's fix patch is not posted as a patch (S6). "malformed": not one well-formed unified diff, a line outside
+// its hunks, or a hunk whose header counts or new start do not match its lines; "several-files" and "other-file": it
+// does not change the finding's own file in place; "hunks": more hunks than allowed; "context": a context or removed
+// line differs from head at the exact position its header names; "unchanged": applied, it changes nothing.
+export type FixPatchFailure = "malformed" | "several-files" | "other-file" | "hunks" | "context" | "unchanged"
+
+// The lines a fix patch may carry before its first hunk: git's header lines that name the file or say it was created,
+// deleted, copied or renamed, so those reach the other-file check. A mode change is not a text fix: it is malformed.
+const FIX_PREAMBLE =
+  /^(?:diff --git |index |--- |\+\+\+ |new file mode |deleted file mode |similarity index |dissimilarity index |rename from |rename to |copy from |copy to )/
+
+// Applies a model's fix patch to the head text of the finding's file (VS-27b, S6), at the exact positions its hunk
+// headers name, with no offset or fuzz. The patch's own file headers never choose the file (I-8): only bare hunks, or
+// headers naming `options.path` as a file modified in place, are taken. Every line from the first hunk on must belong
+// to a hunk, and every hunk must fill its header's counts, so text that passes is a patch `git apply` reads as it was
+// checked. Pure and browser-safe; no runner calls it before VS-27c.
+export function applyFixPatch(
+  headText: string,
+  patch: string,
+  options: { path: string; maxHunks: number },
+): { ok: true; text: string; hunks: number } | { ok: false; reason: FixPatchFailure } {
+  const files = parseUnifiedDiff(patch)
+  if (files.length > 1) return { ok: false, reason: "several-files" }
+  const file = files[0]
+  if (!file || file.binary || !file.hunks.length) return { ok: false, reason: "malformed" }
+  const lines = splitLines(patch)
+  const first = lines.findIndex((line) => HUNK_HEADER.test(line))
+  const preamble = lines.slice(0, first)
+  const body = file.patch.split("\n")
+  const rest = lines.slice(first)
+  if (
+    !preamble.every((line, index) => FIX_PREAMBLE.test(line) && pairedHeader(preamble, index)) ||
+    body.some((line, index) => rest[index] !== line) ||
+    rest.slice(body.length).some((line) => line !== "") ||
+    !wellCounted(file.hunks)
+  )
+    return { ok: false, reason: "malformed" }
+  if ((file.path !== "" && file.path !== options.path) || file.status !== "modified")
+    return { ok: false, reason: "other-file" }
+  if (file.hunks.length > options.maxHunks) return { ok: false, reason: "hunks" }
+  const text = applyPatch(headText, file)
+  if (text === undefined) return { ok: false, reason: "context" }
+  if (text === headText) return { ok: false, reason: "unchanged" }
+  return { ok: true, text, hunks: file.hunks.length }
+}
+
+// A `---` line is read as a file header only with a `+++` line after it, so a lone one could name a file the parser
+// never saw: each must come in a pair.
+function pairedHeader(preamble: readonly string[], index: number) {
+  const line = preamble[index]
+  if (line.startsWith("--- ")) return index + 1 < preamble.length && preamble[index + 1].startsWith("+++ ")
+  if (line.startsWith("+++ ")) return index > 0 && preamble[index - 1].startsWith("--- ")
+  return true
+}
+
+// Each hunk's lines fill its header's counts exactly, and its new start follows from its old start and the hunks before
+// it. readHunk stops quietly at the end of the text, so a header that promises more lines than follow would otherwise
+// read as a shorter hunk.
+function wellCounted(hunks: readonly DiffHunk[]) {
+  return hunks.every((hunk, index) => {
+    const before = hunks.slice(0, index).reduce((total, item) => total + item.newLines - item.oldLines, 0)
+    const old = hunk.lines.filter((line) => line.kind !== "add").length
+    const fresh = hunk.lines.filter((line) => line.kind !== "del").length
+    const oldFirst = hunk.oldLines === 0 ? hunk.oldStart + 1 : hunk.oldStart
+    const newFirst = hunk.newLines === 0 ? hunk.newStart + 1 : hunk.newStart
+    return old === hunk.oldLines && fresh === hunk.newLines && old + fresh > 0 && newFirst === oldFirst + before
+  })
 }
 
 // Whether `text` already is the new version at every hunk, so a checkout can be reviewed in place.

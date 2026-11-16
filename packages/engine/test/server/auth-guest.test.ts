@@ -23,6 +23,7 @@ import { SessionV2 } from "@vectordevai/core/session"
 import { ProjectV2 } from "@vectordevai/core/project"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Agent } from "@/agent/agent"
+import { ComputerAvailability } from "@/computer/availability"
 import { MCP } from "@/mcp"
 import { Project } from "@/project/project"
 import { Provider } from "@/provider/provider"
@@ -320,10 +321,13 @@ test("guest session lists and replay routes stay within canonical claims", async
     VECTOR_DISABLE_DEFAULT_PLUGINS: "1",
   })
   const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
+  // Server.listen prefers port 4096, so a pooled keep-alive socket left by this file's requests could swallow a later
+  // test's request on that port.
+  const call = (url: URL, init: RequestInit = {}) => fetch(url, { ...init, keepalive: false })
   const owner = { authorization: basic("vector", "owner-secret"), "content-type": "application/json" }
   const guest = { authorization: basic("guest", "guest-secret") }
   const create = async (workspaceID: string, directory = tmp.path, id?: SessionV2.ID) => {
-    const response = await fetch(new URL("/api/session", listener.url), {
+    const response = await call(new URL("/api/session", listener.url), {
       method: "POST",
       headers: owner,
       body: JSON.stringify({ id, location: { directory, workspaceID } }),
@@ -333,7 +337,7 @@ test("guest session lists and replay routes stay within canonical claims", async
   }
   let events: AsyncGenerator<Record<string, unknown>> | undefined
   try {
-    const eventResponse = await fetch(new URL("/api/event", listener.url), { headers: guest })
+    const eventResponse = await call(new URL("/api/event", listener.url), { headers: guest })
     expect(eventResponse.status).toBe(200)
     events = vectorEvents(eventResponse.body!)
     expect((await events.next()).value).toMatchObject({ type: "server.connected" })
@@ -344,7 +348,7 @@ test("guest session lists and replay routes stay within canonical claims", async
     const claimed = await create("wrk_allowed", other.path, claimedID)
     expect(claimed).toBe(claimedID)
     expect((await events.next()).value).toMatchObject({ location: { workspaceID: "wrk_allowed" } })
-    const list = await fetch(new URL("/api/session", listener.url), { headers: guest })
+    const list = await call(new URL("/api/session", listener.url), { headers: guest })
     expect(list.status).toBe(200)
     const ids = ((await list.json()) as { data: Array<{ id: string }> }).data.map((item) => item.id)
     expect(ids).toContain(allowed)
@@ -352,18 +356,18 @@ test("guest session lists and replay routes stay within canonical claims", async
     expect(ids).not.toContain(denied)
     expect(ids).not.toContain(escaped)
 
-    expect((await fetch(new URL(`/api/session/${allowed}`, listener.url), { headers: guest })).status).toBe(200)
-    expect((await fetch(new URL(`/api/session/${denied}`, listener.url), { headers: guest })).status).toBe(403)
-    expect((await fetch(new URL(`/api/session/${escaped}`, listener.url), { headers: guest })).status).toBe(403)
-    expect((await fetch(new URL(`/api/session/${allowed}/history`, listener.url), { headers: guest })).status).toBe(200)
-    expect((await fetch(new URL(`/api/session/${denied}/history`, listener.url), { headers: guest })).status).toBe(403)
+    expect((await call(new URL(`/api/session/${allowed}`, listener.url), { headers: guest })).status).toBe(200)
+    expect((await call(new URL(`/api/session/${denied}`, listener.url), { headers: guest })).status).toBe(403)
+    expect((await call(new URL(`/api/session/${escaped}`, listener.url), { headers: guest })).status).toBe(403)
+    expect((await call(new URL(`/api/session/${allowed}/history`, listener.url), { headers: guest })).status).toBe(200)
+    expect((await call(new URL(`/api/session/${denied}/history`, listener.url), { headers: guest })).status).toBe(403)
 
-    expect((await fetch(new URL(`/api/session/${denied}/event`, listener.url), { headers: guest })).status).toBe(403)
+    expect((await call(new URL(`/api/session/${denied}/event`, listener.url), { headers: guest })).status).toBe(403)
 
     // Creating a session under an existing ID adopts it, which must not hand a guest a session it cannot read, and a
     // guest's sessions stay in the owner's lists, so a guest cannot mark one as a hidden helper.
     const guestCreate = (body: unknown) =>
-      fetch(new URL("/api/session", listener.url), {
+      call(new URL("/api/session", listener.url), {
         method: "POST",
         headers: { ...guest, "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -385,7 +389,7 @@ test("guest session lists and replay routes stay within canonical claims", async
     const helperInfo = ((await helper.json()) as { data: { id: string; parentID?: string } }).data
     expect(helperInfo.parentID).toBe(allowed)
     expect((await guestCreate({ location, internal: "codespace.autocomplete", parentID: claimed })).status).toBe(200)
-    const helperList = await fetch(new URL("/api/session", listener.url), { headers: guest })
+    const helperList = await call(new URL("/api/session", listener.url), { headers: guest })
     expect(((await helperList.json()) as { data: Array<{ id: string }> }).data.map((item) => item.id)).not.toContain(
       helperInfo.id,
     )
@@ -395,7 +399,7 @@ test("guest session lists and replay routes stay within canonical claims", async
     Flag.VECTOR_WORKSPACE_ID = "wrk_allowed"
 
     const legacyCreate = (body: unknown) =>
-      fetch(new URL("/session", listener.url), {
+      call(new URL("/session", listener.url), {
         method: "POST",
         headers: { ...guest, "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -407,14 +411,14 @@ test("guest session lists and replay routes stay within canonical claims", async
     expect(legacyHelper.status).toBe(200)
     expect(((await legacyHelper.json()) as { parentID?: string }).parentID).toBe(allowed)
 
-    const legacyList = await fetch(new URL("/session", listener.url), { headers: guest })
+    const legacyList = await call(new URL("/session", listener.url), { headers: guest })
     expect(legacyList.status).toBe(200)
     const legacyIDs = ((await legacyList.json()) as Array<{ id: string }>).map((item) => item.id)
     expect(legacyIDs).toContain(allowed)
     expect(legacyIDs).toContain(claimed)
     expect(legacyIDs).not.toContain(escaped)
 
-    const selectedList = await fetch(new URL(`/session?directory=${encodeURIComponent(other.path)}`, listener.url), {
+    const selectedList = await call(new URL(`/session?directory=${encodeURIComponent(other.path)}`, listener.url), {
       headers: guest,
     })
     expect(selectedList.status).toBe(200)
@@ -422,11 +426,11 @@ test("guest session lists and replay routes stay within canonical claims", async
     expect(selectedIDs).toContain(allowed)
     expect(selectedIDs).not.toContain(escaped)
 
-    const status = await fetch(new URL("/session/status", listener.url), { headers: guest })
+    const status = await call(new URL("/session/status", listener.url), { headers: guest })
     expect(status.status).toBe(200)
     expect(await status.json()).not.toHaveProperty(escaped)
 
-    const allowedRead = await fetch(
+    const allowedRead = await call(
       new URL(`/session/${allowed}?directory=${encodeURIComponent(other.path)}`, listener.url),
       { headers: guest },
     )
@@ -434,12 +438,12 @@ test("guest session lists and replay routes stay within canonical claims", async
     expect(((await allowedRead.json()) as { directory: string }).directory).toBe(tmp.path)
     expect(
       (
-        await fetch(new URL(`/session/${escaped}?directory=${encodeURIComponent(other.path)}`, listener.url), {
+        await call(new URL(`/session/${escaped}?directory=${encodeURIComponent(other.path)}`, listener.url), {
           headers: guest,
         })
       ).status,
     ).toBe(403)
-    const claimedRead = await fetch(
+    const claimedRead = await call(
       new URL(`/session/${claimed}?directory=${encodeURIComponent(tmp.path)}`, listener.url),
       { headers: guest },
     )
@@ -488,23 +492,23 @@ test("guest session lists and replay routes stay within canonical claims", async
     expect(spelled).toEqual(spellings.map(([method, target]) => [method, target, 403]))
     expect(await statusOf("GET", `/SESSION/${allowed}?${scoped}`)).toBe(200)
 
-    const deniedMutation = await fetch(new URL(`/session/${escaped}`, listener.url), {
+    const deniedMutation = await call(new URL(`/session/${escaped}`, listener.url), {
       method: "PATCH",
       headers: { ...guest, "content-type": "application/json" },
       body: JSON.stringify({ title: "guest-must-not-write" }),
     })
     expect(deniedMutation.status).toBe(403)
-    const allowedMutation = await fetch(new URL(`/session/${allowed}`, listener.url), {
+    const allowedMutation = await call(new URL(`/session/${allowed}`, listener.url), {
       method: "PATCH",
       headers: { ...guest, "content-type": "application/json" },
       body: JSON.stringify({ title: "guest-can-write" }),
     })
     expect(allowedMutation.status).toBe(200)
-    const ownerRead = await fetch(new URL(`/session/${escaped}`, listener.url), { headers: owner })
+    const ownerRead = await call(new URL(`/session/${escaped}`, listener.url), { headers: owner })
     expect(ownerRead.status).toBe(200)
     expect(((await ownerRead.json()) as { title: string }).title).not.toBe("guest-must-not-write")
 
-    const claimedMutation = await fetch(new URL(`/session/${claimed}`, listener.url), {
+    const claimedMutation = await call(new URL(`/session/${claimed}`, listener.url), {
       method: "PATCH",
       headers: { ...guest, "content-type": "application/json" },
       body: JSON.stringify({ title: "explicit-session-claim" }),
@@ -1786,6 +1790,7 @@ describe("a guest's task resume and background command rows", () => {
           ),
           RuntimeFlags.layer({ backgroundSubagents: true }),
           // These unrelated experimental endpoints are never called by this test.
+          Layer.mock(ComputerAvailability.Service)({}),
           Layer.mock(Agent.Service)({}),
           Layer.mock(MCP.Service)({}),
           Layer.mock(Project.Service)({}),

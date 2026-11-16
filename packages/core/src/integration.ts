@@ -26,6 +26,7 @@ import { Credential } from "./credential"
 import { State } from "./state"
 import { EventV2 } from "./event"
 import { IntegrationConnection } from "./integration/connection"
+import { ProcessIsolation } from "./process-isolation"
 
 export const ID = Integration.ID
 export type ID = Integration.ID
@@ -86,6 +87,15 @@ export interface OAuthImplementation {
   readonly authorize: (inputs: Inputs) => Effect.Effect<OAuthAuthorization, unknown, Scope.Scope>
   readonly refresh?: (credential: Credential.OAuth) => Effect.Effect<Credential.OAuth, unknown>
   readonly label?: (credential: Credential.OAuth) => string | undefined
+}
+
+function assertImplementationAllowed(value: OAuthImplementation | undefined) {
+  if (!value) return
+  ProcessIsolation.assertExternalValueAllowed(value)
+  // State drafts may copy the registration object; the original executable functions retain their source mark.
+  ProcessIsolation.assertExternalValueAllowed(value.authorize)
+  ProcessIsolation.assertExternalValueAllowed(value.refresh)
+  ProcessIsolation.assertExternalValueAllowed(value.label)
 }
 
 export interface KeyImplementation {
@@ -343,26 +353,64 @@ export const locationLayer = Layer.effect(
 
     const settle = Effect.fnUntraced(function* (attemptID: AttemptID, exit: Exit.Exit<Credential.Value, unknown>) {
       const now = yield* Clock.currentTimeMillis
-      const result = yield* SynchronizedRef.modify(attempts, (current) => {
-        const attempt = current.get(attemptID)
-        if (!attempt || attempt.status !== "pending") return [undefined, current]
-        const terminal: TerminalAttempt = Exit.isSuccess(exit)
-          ? { status: "complete", time: attempt.time, removeAt: now + terminalRetention }
-          : { status: "failed", message: message(exit.cause), time: attempt.time, removeAt: now + terminalRetention }
-        return [attempt, new Map(current).set(attemptID, terminal)]
-      })
+      const result = yield* SynchronizedRef.modifyEffect(attempts, (current) =>
+        Effect.gen(function* () {
+          const attempt = current.get(attemptID)
+          if (!attempt || attempt.status !== "pending") return [undefined, current] as const
+          const checked = yield* Effect.sync(() => {
+            ProcessIsolation.assertExternalValueAllowed(attempt.authorization)
+            assertImplementationAllowed(
+              state.get().integrations.get(attempt.integrationID)?.implementations.get(attempt.methodID),
+            )
+          }).pipe(Effect.exit)
+          const outcome: Exit.Exit<Credential.Value, unknown> = Exit.isFailure(checked)
+            ? Exit.failCause(checked.cause)
+            : exit
+          const terminal: TerminalAttempt = Exit.isSuccess(outcome)
+            ? { status: "complete", time: attempt.time, removeAt: now + terminalRetention }
+            : {
+                status: "failed",
+                message: message(outcome.cause),
+                time: attempt.time,
+                removeAt: now + terminalRetention,
+              }
+          return [{ attempt, outcome, checked }, new Map(current).set(attemptID, terminal)] as const
+        }),
+      )
       if (!result) return
-      if (Exit.isSuccess(exit)) {
-        const implementation = state.get().integrations.get(result.integrationID)?.implementations.get(result.methodID)
-        yield* credentials.create({
-          integrationID: result.integrationID,
-          label: result.label ?? (exit.value.type === "oauth" ? implementation?.label?.(exit.value) : undefined),
-          value: exit.value,
+      yield* Effect.gen(function* () {
+        if (Exit.isFailure(result.checked)) return yield* Effect.die(Cause.squash(result.checked.cause))
+        if (!Exit.isSuccess(result.outcome)) return
+        const value = result.outcome.value
+        yield* Effect.suspend(() => {
+          ProcessIsolation.assertExternalValueAllowed(result.attempt.authorization)
+          const implementation = state
+            .get()
+            .integrations.get(result.attempt.integrationID)
+            ?.implementations.get(result.attempt.methodID)
+          assertImplementationAllowed(implementation)
+          const label = result.attempt.label ?? (value.type === "oauth" ? implementation?.label?.(value) : undefined)
+          ProcessIsolation.assertExternalValueAllowed(result.attempt.authorization)
+          assertImplementationAllowed(implementation)
+          return credentials.create({ integrationID: result.attempt.integrationID, label, value })
         })
-        yield* events.publish(Event.ConnectionUpdated, { integrationID: result.integrationID })
+        yield* events.publish(Event.ConnectionUpdated, { integrationID: result.attempt.integrationID })
         yield* events.publish(Event.Updated, {})
-      }
-      yield* close(result.scope)
+      }).pipe(
+        Effect.onExit((finished) =>
+          Exit.isFailure(finished)
+            ? SynchronizedRef.update(attempts, (current) =>
+                new Map(current).set(attemptID, {
+                  status: "failed",
+                  message: message(finished.cause),
+                  time: result.attempt.time,
+                  removeAt: now + terminalRetention,
+                }),
+              )
+            : Effect.void,
+        ),
+        Effect.ensuring(close(result.attempt.scope)),
+      )
     })
 
     const scrub = Effect.fnUntraced(function* () {
@@ -424,16 +472,28 @@ export const locationLayer = Layer.effect(
             )
           )
             return undefined
-          if (credential.value.type === "key") return credential.value
+          const saved = credential.value
+          if (saved.type === "key") return saved
           const implementation = state
             .get()
             .integrations.get(credential.integrationID)
-            ?.implementations.get(credential.value.methodID)
-          if (!implementation?.refresh) return credential.value
+            ?.implementations.get(saved.methodID)
+          assertImplementationAllowed(implementation)
+          if (!implementation?.refresh) return saved
           const now = yield* Clock.currentTimeMillis
-          if (credential.value.expires > now + Duration.toMillis(Duration.minutes(5))) return credential.value
-          const value = yield* authorize(implementation.refresh(credential.value))
-          yield* credentials.update(credential.id, { value })
+          if (saved.expires > now + Duration.toMillis(Duration.minutes(5))) return saved
+          const value = yield* authorize(
+            Effect.suspend(() => {
+              assertImplementationAllowed(implementation)
+              return implementation.refresh!(saved).pipe(
+                Effect.tap(() => Effect.sync(() => assertImplementationAllowed(implementation))),
+              )
+            }),
+          )
+          yield* Effect.suspend(() => {
+            assertImplementationAllowed(implementation)
+            return credentials.update(credential.id, { value })
+          })
           return value
         }),
         key: Effect.fn("Integration.connection.key")(function* (input) {
@@ -455,16 +515,31 @@ export const locationLayer = Layer.effect(
           if (!method) {
             return yield* Effect.die(`OAuth method not found: ${input.integrationID}/${input.methodID}`)
           }
+          assertImplementationAllowed(method)
           const attemptScope = yield* Scope.fork(scope)
-          const authorization = yield* authorize(method.authorize(input.inputs)).pipe(
+          const authorization = yield* authorize(
+            Effect.suspend(() => {
+              assertImplementationAllowed(method)
+              return method.authorize(input.inputs).pipe(
+                Effect.tap((value) =>
+                  Effect.sync(() => {
+                    assertImplementationAllowed(method)
+                    ProcessIsolation.assertExternalValueAllowed(value)
+                  }),
+                ),
+              )
+            }),
+          ).pipe(
             Scope.provide(attemptScope),
             Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(attemptScope, exit) : Effect.void)),
           )
           const id = AttemptID.create()
           const created = yield* Clock.currentTimeMillis
           const time = { created, expires: created + attemptLifetime }
-          yield* SynchronizedRef.update(attempts, (current) =>
-            new Map(current).set(id, {
+          yield* SynchronizedRef.update(attempts, (current) => {
+            assertImplementationAllowed(method)
+            ProcessIsolation.assertExternalValueAllowed(authorization)
+            return new Map(current).set(id, {
               status: "pending",
               completing: authorization.mode === "auto",
               authorization,
@@ -473,10 +548,16 @@ export const locationLayer = Layer.effect(
               label: input.label,
               scope: attemptScope,
               time,
-            }),
-          )
+            })
+          }).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(attemptScope, exit) : Effect.void)))
           if (authorization.mode === "auto") {
-            yield* authorization.callback.pipe(
+            const callback = authorization.callback
+            yield* Effect.suspend(() => {
+              ProcessIsolation.assertExternalValueAllowed(authorization)
+              assertImplementationAllowed(method)
+              return callback
+            }).pipe(
+              Effect.tap(() => Effect.sync(() => ProcessIsolation.assertExternalValueAllowed(authorization))),
               Effect.exit,
               Effect.flatMap((exit) => settle(id, exit)),
               Effect.forkIn(attemptScope, { startImmediately: true }),
@@ -529,10 +610,17 @@ export const locationLayer = Layer.effect(
             return yield* new CodeRequiredError({ attemptID: input.attemptID })
           }
           if (attempt.completing) return yield* Effect.die(`OAuth attempt already completing: ${input.attemptID}`)
-          const callback =
-            attempt.authorization.mode === "auto"
+          const callback = Effect.suspend(() => {
+            ProcessIsolation.assertExternalValueAllowed(attempt.authorization)
+            assertImplementationAllowed(
+              state.get().integrations.get(attempt.integrationID)?.implementations.get(attempt.methodID),
+            )
+            return attempt.authorization.mode === "auto"
               ? attempt.authorization.callback
               : attempt.authorization.callback(input.code as string)
+          }).pipe(
+            Effect.tap(() => Effect.sync(() => ProcessIsolation.assertExternalValueAllowed(attempt.authorization))),
+          )
           const exit = yield* authorize(callback).pipe(Effect.exit)
           yield* settle(input.attemptID, exit)
           if (Exit.isFailure(exit)) return yield* exit

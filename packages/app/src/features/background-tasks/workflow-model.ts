@@ -1,10 +1,5 @@
-import type {
-  VectorClient,
-  WorkflowIssue,
-  WorkflowPlan,
-  WorkflowPlanStage,
-  WorkflowSaved,
-} from "@vectordevai/sdk/v2/client"
+import type { VectorClient, WorkflowIssue, WorkflowSaved } from "@vectordevai/sdk/v2/client"
+import type { Workflow } from "@vectordevai/schema/workflow"
 import type { Prompt } from "@/context/prompt"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 
@@ -28,8 +23,8 @@ export const INPUT_BYTES = 8 * 1024
 // ---------------------------------------------------------------------------
 // The plan
 
-export type PlanStage = WorkflowPlanStage
-export type Plan = WorkflowPlan
+export type PlanStage = Workflow.PlanStage
+export type Plan = Workflow.Plan
 
 const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 const count = (value: unknown) =>
@@ -41,24 +36,37 @@ function readStage(value: unknown): PlanStage | undefined {
   const stage = record(value)
   if (!stage) return undefined
   const id = text(stage.id)
-  const agent = text(stage.agent)
   const items = stage.items === "dynamic" ? "dynamic" : count(stage.items)
-  if (!id || !agent || items === undefined) return undefined
-  const verify = record(stage.verify)
-  const verifier = verify && text(verify.agent)
-  const rounds = verify && count(verify.maxRounds)
-  return {
+  if (!id || items === undefined) return undefined
+  const common: Pick<PlanStage, "id" | "title" | "phase" | "items" | "serial" | "writes" | "asks"> = {
     id,
     title: text(stage.title) ?? id,
     phase: text(stage.phase) ?? "",
-    agent,
-    ...(text(stage.model) ? { model: text(stage.model) } : {}),
-    ...(text(stage.effort) ? { effort: text(stage.effort) } : {}),
-    ...(text(stage.isolation) ? { isolation: text(stage.isolation) } : {}),
     items,
     serial: stage.serial === true,
     writes: text(stage.writes) ?? "",
     asks: Array.isArray(stage.asks) ? stage.asks.filter((ask): ask is string => typeof ask === "string") : [],
+  }
+  if (stage.kind === "connect") {
+    const connection = record(stage.connect)
+    const to = text(connection?.to)
+    const action = text(connection?.action)
+    if (!to || !action || ["agent", "model", "effort", "isolation", "verify"].some((key) => stage[key] !== undefined))
+      return undefined
+    return { ...common, kind: "connect", connect: { to, action } }
+  }
+  if (stage.kind !== undefined && stage.kind !== "agent") return undefined
+  const agent = text(stage.agent)
+  if (!agent || stage.connect !== undefined) return undefined
+  const verify = record(stage.verify)
+  const verifier = verify && text(verify.agent)
+  const rounds = verify && count(verify.maxRounds)
+  return {
+    ...common,
+    agent,
+    ...(text(stage.model) ? { model: text(stage.model) } : {}),
+    ...(text(stage.effort) ? { effort: text(stage.effort) } : {}),
+    ...(text(stage.isolation) ? { isolation: text(stage.isolation) } : {}),
     ...(verifier && rounds ? { verify: { agent: verifier, maxRounds: rounds } } : {}),
   }
 }
@@ -107,6 +115,14 @@ function items(stage: PlanStage) {
 
 /** One stage: "Review each file · review · model · effort · 12 items · read only · asks: bash". */
 export function stageLine(stage: PlanStage) {
+  if (stage.kind === "connect")
+    return [
+      stage.title,
+      `${stage.connect.to}.${stage.connect.action}`,
+      items(stage),
+      stage.writes,
+      ...(stage.asks.length ? [`asks: ${stage.asks.join(", ")}`] : []),
+    ].join(" · ")
   return [
     stage.title,
     stage.agent,

@@ -1,0 +1,289 @@
+{
+  "schemaVersion": 1,
+  "kind": "windows-overlay-cold-powershell7-observer-control",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands",
+  "sourceCommit": "e4294c9f18503373c97a4df7d79a70e437cec392",
+  "run": {
+    "id": 42127314739,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-11-05T23:08:43Z",
+    "updatedAt": "2026-11-05T23:13:32Z",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42127314739"
+  },
+  "job": {
+    "id": 127594691496,
+    "name": "Windows Electron overlay/controller diagnostic (no release evidence)",
+    "status": "completed",
+    "conclusion": "success",
+    "startedAt": "2026-11-05T23:08:47Z",
+    "completedAt": "2026-11-05T23:13:31Z",
+    "steps": [
+      {
+        "number": 1,
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:08:48Z",
+        "completedAt": "2026-11-05T23:08:49Z"
+      },
+      {
+        "number": 2,
+        "name": "Reject incompatible overlay selectors before setup",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:08:49Z",
+        "completedAt": "2026-11-05T23:08:50Z"
+      },
+      {
+        "number": 3,
+        "name": "Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:08:50Z",
+        "completedAt": "2026-11-05T23:09:03Z"
+      },
+      {
+        "number": 4,
+        "name": "Setup Node",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:09:03Z",
+        "completedAt": "2026-11-05T23:09:09Z"
+      },
+      {
+        "number": 5,
+        "name": "Setup Bun",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:09:09Z",
+        "completedAt": "2026-11-05T23:09:12Z"
+      },
+      {
+        "number": 6,
+        "name": "Install frozen dependencies without lifecycle scripts",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:09:12Z",
+        "completedAt": "2026-11-05T23:13:07Z"
+      },
+      {
+        "number": 7,
+        "name": "Install the exact pinned Electron runtime",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:13:07Z",
+        "completedAt": "2026-11-05T23:13:12Z"
+      },
+      {
+        "number": 8,
+        "name": "Run real Electron overlay properties and controller lifecycle",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:13:12Z",
+        "completedAt": "2026-11-05T23:13:26Z"
+      },
+      {
+        "number": 9,
+        "name": "Preserve the bounded overlay diagnostic report",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:13:26Z",
+        "completedAt": "2026-11-05T23:13:27Z"
+      },
+      {
+        "number": 16,
+        "name": "Post Setup Bun",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:13:27Z",
+        "completedAt": "2026-11-05T23:13:27Z"
+      },
+      {
+        "number": 17,
+        "name": "Post Setup Node",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:13:27Z",
+        "completedAt": "2026-11-05T23:13:28Z"
+      },
+      {
+        "number": 18,
+        "name": "Post Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:13:28Z",
+        "completedAt": "2026-11-05T23:13:30Z"
+      },
+      {
+        "number": 19,
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:13:30Z",
+        "completedAt": "2026-11-05T23:13:30Z"
+      }
+    ]
+  },
+  "controlledChange": {
+    "summary": "Cold fixed protected PowerShell 7 observer launch; removed ineffective PowerShell 5.1 compiler preparation step.",
+    "executable": "<SystemRoot drive>\\Program Files\\PowerShell\\7\\pwsh.exe",
+    "sourceBoundEmbeddedCSharpUnchanged": true,
+    "observerDeadlineMs": 15000,
+    "globalSmokeDeadlineMs": 120000,
+    "proofAssertionsUnchanged": true,
+    "noExecutablePathFallback": true
+  },
+  "artifact": {
+    "id": 13462306275,
+    "name": "computer-overlay-win32-diagnostic-e4294c9f18503373c97a4df7d79a70e437cec392-1",
+    "sizeInBytes": 782,
+    "sha256": "sha256:8d9ec0da7009fde0993f51909ad07b42555a55080fd31cc9047179581f8e6846",
+    "expired": false,
+    "createdAt": "2026-11-05T23:13:27Z",
+    "expiresAt": "2026-11-12T23:13:26Z",
+    "workflowRun": {
+      "id": 42127314739,
+      "repository_id": 1322376900,
+      "head_repository_id": 1322376900,
+      "head_branch": "hands",
+      "head_sha": "e4294c9f18503373c97a4df7d79a70e437cec392"
+    }
+  },
+  "verification": {
+    "catalogBoundToRunAndSource": true,
+    "zipByteCountAndDigestIndependentlyVerified": true,
+    "soleMember": "computer-win32-overlay-diagnostic.log",
+    "zipPath": "/workspace/attachments/b6865498-4ed4-4046-ac52-e8096abaf082/windows-cold-ps7-42127314739.zip",
+    "zipBytes": 782,
+    "zipSha256": "8d9ec0da7009fde0993f51909ad07b42555a55080fd31cc9047179581f8e6846",
+    "rawBytes": 2644,
+    "rawSha256": "699a476170a4e785aab4a8bb873d549e1cd4942f7cf06c960937e58482e23243",
+    "rawDecode": "utf-8-sig",
+    "closedReceiptCountPerKind": 1
+  },
+  "receipts": {
+    "windowRegion": {
+      "protocol": 1,
+      "windows": 4,
+      "owned": 4,
+      "simple": 4,
+      "matched": 4,
+      "painted": 4,
+      "ok": true
+    },
+    "asar": {
+      "protocol": 1,
+      "rawRegular": true,
+      "rawBounded": true,
+      "rawBytes": 110862,
+      "rawRead": true,
+      "virtualDirectory": true,
+      "virtualRead": false
+    },
+    "checks": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 3,
+      "overlayBounds": "pass",
+      "nativeOsStop": "skipped:native_harness_unavailable",
+      "nativeCaptureExclusion": "skipped:not_applicable",
+      "overlayWorkspaces": "skipped:not_applicable"
+    },
+    "genericReport": {
+      "protocol": 1,
+      "platform": "win32",
+      "electron": "42.11.4",
+      "checks": [
+        {
+          "name": "overlay-count",
+          "ok": true
+        },
+        {
+          "name": "overlay-bounds",
+          "ok": true
+        },
+        {
+          "name": "overlay-window-properties",
+          "ok": true
+        },
+        {
+          "name": "overlay-stack-level",
+          "ok": true
+        },
+        {
+          "name": "overlay-ignore-pointer",
+          "ok": true
+        },
+        {
+          "name": "overlay-workspaces",
+          "ok": false,
+          "skipped": true,
+          "reason": "not_applicable"
+        },
+        {
+          "name": "overlay-content-protection",
+          "ok": true
+        },
+        {
+          "name": "overlay-banner-copy",
+          "ok": true
+        },
+        {
+          "name": "overlay-sandbox",
+          "ok": true
+        },
+        {
+          "name": "overlay-ipc-rejected",
+          "ok": true
+        },
+        {
+          "name": "transparent-theme-switch",
+          "ok": true
+        },
+        {
+          "name": "window-all-closed",
+          "ok": true
+        },
+        {
+          "name": "focus-preserved",
+          "ok": true
+        },
+        {
+          "name": "controller-stop-cancels-helper",
+          "ok": true
+        },
+        {
+          "name": "heartbeat-loss-removes-overlays",
+          "ok": true
+        },
+        {
+          "name": "helper-crash-removes-overlays",
+          "ok": true
+        },
+        {
+          "name": "native-os-stop",
+          "ok": false,
+          "skipped": true,
+          "reason": "native_harness_unavailable"
+        },
+        {
+          "name": "native-capture-exclusion",
+          "ok": false,
+          "skipped": true,
+          "reason": "not_applicable"
+        }
+      ]
+    }
+  },
+  "interpretation": {
+    "nativeWindowRegionProof": "pass: four own live Electron windows have SIMPLE native regions with exact expected physical extent and four logical painted extents",
+    "compilerReadiness": "cold PowerShell 7 completed the unchanged observer within the same 15-second budget",
+    "windowsPowerShell51TimeoutCause": "not established by this experiment",
+    "nativeOsStopCredit": false,
+    "releaseReadinessCredit": false
+  }
+}

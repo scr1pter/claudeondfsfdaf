@@ -1,8 +1,10 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { SubagentAvatar, subagentIdentity } from "@/features/agents/identities"
+import { DirectoryReview } from "@/features/connect/directory-review"
 import {
   agentCardDetails,
   boardColumns,
+  directoryReviewTarget,
   elapsedLabel,
   filterAgents,
   findClashes,
@@ -627,12 +629,17 @@ export function AgentDashboard(props: {
                         <div class="flex flex-col gap-2">
                           <For each={column.agents}>
                             {(item) => (
-                              <BoardCard
-                                agent={item}
-                                now={now()}
-                                groupLabel={teamLabelFor(item)}
-                                onOpen={props.onOpenAgent}
-                              />
+                              <div>
+                                <BoardCard
+                                  agent={item}
+                                  now={now()}
+                                  groupLabel={teamLabelFor(item)}
+                                  onOpen={props.onOpenAgent}
+                                />
+                                <Show when={directoryReviewTarget(item)}>
+                                  {(target) => <DirectoryReview {...target()} />}
+                                </Show>
+                              </div>
                             )}
                           </For>
                         </div>
@@ -663,12 +670,17 @@ export function AgentDashboard(props: {
                         </div>
                         <For each={column.agents}>
                           {(item) => (
-                            <ListRow
-                              agent={item}
-                              now={now()}
-                              groupLabel={teamLabelFor(item)}
-                              onOpen={props.onOpenAgent}
-                            />
+                            <div>
+                              <ListRow
+                                agent={item}
+                                now={now()}
+                                groupLabel={teamLabelFor(item)}
+                                onOpen={props.onOpenAgent}
+                              />
+                              <Show when={directoryReviewTarget(item)}>
+                                {(target) => <DirectoryReview {...target()} />}
+                              </Show>
+                            </div>
                           )}
                         </For>
                       </Show>

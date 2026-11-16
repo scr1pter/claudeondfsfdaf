@@ -2,6 +2,12 @@
 
 Vector v2 is the next release. It ships together with the desktop redesign. There is no separate 1.99.113 release.
 
+**Current source assembly (14 November):** PR #33 joins the surviving feature branches for direct integration into
+`main`, including the owner-approved historical benchmark and the archive-only legal disposition. It is awaiting
+exact-head CI and preview qualification. The earlier `v2` merge-order table below is historical; see
+[the current integration record](./main-integration-2026-11-14.md) for included source and held runtime/owner gates.
+No branch should be deleted from this assembly until its contents are verified in `main` and its last SHA is recorded.
+
 **How integration works:**
 - Every finished feature branch merges into the `v2` branch. Only Vercel previews deploy from it.
 - `main` and the live site stay as they are until v2 ships. Then `v2` merges into `main` once, and that merge publishes the site.
@@ -85,3 +91,57 @@ On 2026-11-14, with the owner's yes, these 41 branches were deleted from GitHub.
 | `tokenomics-unsettled` | `46e63cdd28d32382c14a9a1e55afbf53cf9ee18f` |
 | `tool-compose` | `1bfcc3fbbcd47692a503576aef5f8be7859e2ac5` |
 | `v2-loop-signatures` | `dae48615985f03e85c9dede9ba0b4556a3da39f2` |
+
+
+### Prepared final cleanup batch (not yet deleted)
+
+The owner requested main-only branch storage. These 42 feature-branch tips were verified against source assembly
+`2aaa4f5e28efe14c630e892146fad28239f48813`: each is an ancestor or has no unique patch under `git cherry`.
+This is a recovery registry and prepared queue, not a claim that deletion already happened. Before deletion,
+recheck each exact remote tip against the merged `main`; retain any branch that moved or has a unique patch.
+The temporary assembly branch is handled only after its final CI-qualified tip reaches `main`.
+
+| Branch | Recorded tip | Inclusion proof |
+| --- | --- | --- |
+| `agent-environment` | `fa938a090bc60f427809db5b904796594432cd7c` | ancestor |
+| `benchmark-before` | `3abfbd1c3555c8efdc4e7a26b1ac178e3488c9d6` | ancestor |
+| `build-candidate` | `dfc26ee931fb622beac46ce800e9a65dafadd915` | ancestor |
+| `build-codium` | `1bff87a46d28f582aea829e19eb232cc9c5fe0e9` | ancestor |
+| `build-complete` | `00b87034faa1e3c1604ab7160f5e5c33f3745805` | ancestor |
+| `build-connect` | `a8234d9ac34f74bb84d48bce17c0de48d4b18c38` | ancestor |
+| `build-coordination` | `41dac6f728ee67dc083950614fd143b0d45507b4` | patch-equivalent |
+| `build-everywhere` | `5053d4907383ef31a61844995215eb86a53e7845` | ancestor |
+| `build-github-ui` | `017f7144b031649967c0a1cae4f0a5be23bef34c` | ancestor |
+| `build-integrate` | `ceed2426aa546ecc7d18357ebb1058d4598b3832` | ancestor |
+| `build-isolation` | `cf34ffe29e5cd1b5fd05d5749f6ee4a418500b8d` | ancestor |
+| `build-native-shell` | `faa1fa09b697b900e6125ad316a7e961de616981` | ancestor |
+| `build-process` | `a193d18d9053f4240443415c64b9935fb2a7f8ec` | ancestor |
+| `build-scope` | `0dcd814e6ac69edefcdffb10ff4bbd95c7062398` | ancestor |
+| `build-scope-checks` | `7bbf4d88bca2302bb74940919597fe513ea00979` | ancestor |
+| `build-scope-joined` | `3bb2b2ba223ced69af19ff67465de1adee34e646` | ancestor |
+| `build-scope-owner` | `892202d4a603e7e0afc75065bb8459c2825e17c8` | ancestor |
+| `build-scope-ui` | `e00d579b3f7ffc1a62ea1f8050aadf5c266257d5` | ancestor |
+| `build-scope-wire` | `82cbb103e3c8ebf1299ce81a1197e93dbf2205a4` | ancestor |
+| `build-scope-witness` | `5d672a22898770f7b3cca865dacc36586b98d513` | ancestor |
+| `cloud-workspaces` | `d0300404e9e280891cda85122bee21bf47eb2b02` | ancestor |
+| `codium` | `1ce8f5f3012fa2b5de738dc234773e07ce226c0d` | ancestor |
+| `codium-legal` | `fd4db7f47ff1553658aff5817049e1f6dbdbb1bb` | ancestor |
+| `codium-track` | `c262f74b33fdf3b8b5faddbc24395891227878be` | patch-equivalent |
+| `connected-workspace` | `9d77e1942e596a00b4fb7739adf88466a3ba54c8` | ancestor |
+| `finish-checks` | `00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a` | patch-equivalent |
+| `hands` | `4eb9f52fdf2ee7d04a1da0bdc1f394ca9ff70dec` | ancestor |
+| `hands-diagnostics` | `ead163391a558f7a94c1fdb589b87b2c71bb1a84` | ancestor |
+| `hands-ui-check` | `24b21a02727f578fbefbd1d599f00da50b0c4237` | ancestor |
+| `native-finish` | `f141ef16e1a1306c065531ef22088f06103d143e` | ancestor |
+| `owner-setup` | `6f4a7c5bb8940bb32888677ea23247208b4c7c68` | patch-equivalent |
+| `process-finish` | `3ec7fb14b7533133e04589f754cb9041e054f26d` | ancestor |
+| `release-coordination` | `4df0956d98b4e0406d314c496a7054a0d9ecb1ae` | ancestor |
+| `v2-connect` | `0c58e7f698ccc47fd7e4c16e2dea9f6e5ea22237` | ancestor |
+| `v2-everywhere` | `40e7086143bad6bd6bc53d586f93ffae5082c55c` | ancestor |
+| `v2-hands` | `3d5a45a09f0126f77591902901adfe934ec7511f` | ancestor |
+| `v2-locks` | `06814f1df410c7105ef4f1a83dcf80d467a41611` | ancestor |
+| `v2-scope` | `76b5619f1b63038c7c2fe7bbb9edb653baacbe6f` | ancestor |
+| `v2-vector` | `5dbdcfb4669575ddb936c9d83b97d25613abfba4` | ancestor |
+| `vector-at-mention` | `c0d10fb85a0cecc8264abd0bb37693a95d93e07d` | ancestor |
+| `vector-everywhere` | `890bb072b096bf380d245321a4120ef07b12b2ea` | ancestor |
+| `vectorscope` | `bee92d8e92ab8b058814e5825e381602b87d279a` | ancestor |

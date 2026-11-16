@@ -1,0 +1,254 @@
+{
+  "run": 42043899165,
+  "head": "2b5f4ed278c4ef5e40daf1b5054e646c0d7cce5a",
+  "helperVersion": "1.0.12",
+  "macBuild": {
+    "job": 127301741569,
+    "reproducibleShippingBytes": true,
+    "enforcedLockPassed": true,
+    "unsignedFixtureFailure": "bundle-build; Unexpected reading file for shared Hands source; reproduced and repaired d1b5d4df"
+  },
+  "hosts": [
+    {
+      "host": "macos-15-intel",
+      "job": 127309705988,
+      "artifact": 13425521903,
+      "zipBytes": 2057,
+      "zipSha256": "301aca178e27251f1a5a4a6ebae378811d5de904000ee9bf2a2072a85551ee26",
+      "reports": {
+        "computer-darwin-matrix-privileged.json": {
+          "code": 1,
+          "counts": {
+            "passed": 30,
+            "failed": 2,
+            "skipped": 0
+          },
+          "nonPassing": [
+            {
+              "name": "unit",
+              "status": "failed",
+              "reason": "wall-deadline"
+            },
+            {
+              "name": "privileged",
+              "status": "failed",
+              "reason": "required-core-check-failed"
+            }
+          ]
+        },
+        "computer-darwin-matrix.json": {
+          "code": 0,
+          "counts": {
+            "passed": 31,
+            "failed": 0,
+            "skipped": 1
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            }
+          ]
+        },
+        "computer-darwin-matrix.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "complete",
+          "spawned": true,
+          "exitObserved": true,
+          "closeObserved": true,
+          "signaled": false,
+          "stdoutBytes": 36,
+          "stderrBytes": 2309,
+          "elapsedMs": 29948,
+          "exitAfterMs": 29948,
+          "closeAfterMs": 29948,
+          "sample": {
+            "status": "deadline",
+            "suites": [],
+            "waits": []
+          },
+          "progress": {
+            "entered": true,
+            "passed": 24,
+            "complete": true,
+            "invalid": false
+          }
+        },
+        "computer-darwin-matrix-privileged.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "wall-deadline",
+          "spawned": true,
+          "exitObserved": false,
+          "closeObserved": false,
+          "signaled": false,
+          "stdoutBytes": 0,
+          "stderrBytes": 1588,
+          "elapsedMs": 30001,
+          "sample": {
+            "status": "deadline",
+            "suites": [],
+            "waits": []
+          },
+          "progress": {
+            "entered": true,
+            "passed": 16,
+            "active": "runInputTests",
+            "complete": false,
+            "invalid": false
+          }
+        }
+      }
+    },
+    {
+      "host": "macos-26",
+      "job": 127309706005,
+      "artifact": 13424686554,
+      "zipBytes": 2263,
+      "zipSha256": "1237e8752ce1bc86d49d5d5effa4219cae4d73c3bf04fc2ea246a036f23df12f",
+      "reports": {
+        "computer-darwin-matrix-privileged.json": {
+          "code": 0,
+          "counts": {
+            "passed": 33,
+            "failed": 0,
+            "skipped": 13
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "native-skip"
+            },
+            {
+              "name": "privileged.capture-color-patch",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.capture-overlay-exclusion",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.ax-counter-increment",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.ax-value-set-and-readback",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.secure-field-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.tagged-click-increments",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.stale-capture-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-ax-without-pointer-or-focus",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-selection-insertion",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.helper-tagged-escape-ignored",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.foreign-escape-stops",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.owned-input-release",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            }
+          ]
+        },
+        "computer-darwin-matrix-privileged.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "complete",
+          "spawned": true,
+          "exitObserved": true,
+          "closeObserved": true,
+          "signaled": false,
+          "stdoutBytes": 36,
+          "stderrBytes": 2309,
+          "elapsedMs": 13663,
+          "exitAfterMs": 13662,
+          "closeAfterMs": 13663,
+          "sample": {
+            "status": "target-exited",
+            "suites": [],
+            "waits": []
+          },
+          "progress": {
+            "entered": true,
+            "passed": 24,
+            "complete": true,
+            "invalid": false
+          }
+        },
+        "computer-darwin-matrix.json": {
+          "code": 0,
+          "counts": {
+            "passed": 31,
+            "failed": 0,
+            "skipped": 1
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            }
+          ]
+        },
+        "computer-darwin-matrix.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "complete",
+          "spawned": true,
+          "exitObserved": true,
+          "closeObserved": true,
+          "signaled": false,
+          "stdoutBytes": 36,
+          "stderrBytes": 2309,
+          "elapsedMs": 10485,
+          "exitAfterMs": 10484,
+          "closeAfterMs": 10485,
+          "sample": {
+            "status": "target-exited",
+            "suites": [],
+            "waits": []
+          },
+          "progress": {
+            "entered": true,
+            "passed": 24,
+            "complete": true,
+            "invalid": false
+          }
+        }
+      }
+    }
+  ],
+  "intelConclusion": "required24-suite unit completes at29948ms; isolated rerun hits original30000ms wall deadline after16 suites with runInputTests active; standalone diagnostic success does not erase that failure",
+  "windowsConclusion": "actual input.expected-refusal remains unresolved; closed subtest/refusal diagnostics prepared",
+  "releaseReady": false
+}

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { REVIEW_ACTIONS, TASK_MENTIONS, mentionsFrom, routeGithubEvent } from "../../src/cli/cmd/github.route"
 
 const alice = { login: "alice", type: "User" }
@@ -117,8 +118,31 @@ describe("routeGithubEvent", () => {
     expect(routeGithubEvent(issueComment("/bot review"), ["/bot"])).toMatchObject({ job: "review" })
   })
 
+  test("a mention counts only as a word of its own, and never inside inline code", () => {
+    for (const body of ["/vectorize this", "src/vs/x", "`/vector review`", "a/vector fix", "/vector-bot review"])
+      expect({ body, job: routeGithubEvent(issueComment(body)).job }).toEqual({ body, job: "none" })
+    for (const body of ["(/vector fix)", "/vector, fix this", "/VECTOR Fix"])
+      expect({ body, route: routeGithubEvent(issueComment(body)) }).toEqual({ body, route: { job: "task" } })
+  })
+
+  test("the App handle routes the same verbs once MENTIONS names it, and @vector alone is not it", () => {
+    const mentions = mentionsFrom("@Vector-Fixture,/vector,/vs")
+    expect(mentions).toEqual(["@vector-fixture", "/vector", "/vs"])
+    expect(routeGithubEvent(issueComment("@vector-fixture review"), mentions)).toMatchObject({ job: "review", pr: 7 })
+    expect(routeGithubEvent(issueComment("@vector-fixture review full"), mentions)).toMatchObject({ full: true })
+    expect(routeGithubEvent(issueComment("@vector-fixture pause"), mentions)).toMatchObject({
+      job: "control",
+      kind: "pause",
+    })
+    expect(routeGithubEvent(issueComment("@Vector-Fixture fix the build"), mentions)).toEqual({ job: "task" })
+    expect(routeGithubEvent(issueComment("@vector-fixture-bot review"), mentions).job).toBe("none")
+    expect(routeGithubEvent(issueComment("@vector review"), mentions).job).toBe("none")
+    expect(routeGithubEvent(issueComment("@vector-fixture review")).job).toBe("none")
+  })
+
   test("mentionsFrom reads a comma-separated MENTIONS value", () => {
-    expect(mentionsFrom(undefined)).toEqual(["/vectorscope", "/vs", "/vector", "/vx"])
+    expect(TASK_MENTIONS).toEqual(GithubAgents.mentions())
+    expect(mentionsFrom(undefined)).toEqual(GithubAgents.mentions())
     expect(mentionsFrom("", TASK_MENTIONS)).toEqual(TASK_MENTIONS)
     expect(mentionsFrom(" /Bot , /x ,")).toEqual(["/bot", "/x"])
   })

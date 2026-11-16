@@ -1,0 +1,47 @@
+{
+  "run": 42122705692,
+  "head": "16b16b6b6c5de610c2357df5388903e941053c47",
+  "attempt": 1,
+  "job": 127578906095,
+  "jobName": "macOS Electron overlay/controller diagnostic (no release evidence)",
+  "jobConclusion": "success",
+  "helperSourceVersion": "1.0.15",
+  "enforcedMacLockVersionAtSource": "1.0.14",
+  "electron": "42.11.4",
+  "asarCapability": {
+    "observedAt": "2026-11-05T22:41:15.7056350Z",
+    "protocol": 1,
+    "rawRegular": true,
+    "rawBounded": true,
+    "rawBytes": 110862,
+    "rawRead": true,
+    "virtualDirectory": true,
+    "virtualRead": false
+  },
+  "genericReport": {
+    "passed": 15,
+    "failed": 0,
+    "skipped": 3,
+    "nonPassing": [
+      {
+        "name": "overlay-content-protection",
+        "status": "skipped",
+        "reason": "not_applicable"
+      },
+      {
+        "name": "native-os-stop",
+        "status": "skipped",
+        "reason": "native_harness_unavailable"
+      },
+      {
+        "name": "native-capture-exclusion",
+        "status": "skipped",
+        "reason": "native_harness_unavailable"
+      }
+    ],
+    "controllerMilestones": 16,
+    "exceptionReceipts": 0
+  },
+  "scope": "Actual pinned Electron main imported original-fs and observed its own fixed default_app.asar as a positive bounded physical file, while the virtual fs view reported a directory and rejected reading it. Generic properties/controller checks passed. No source-bound staged native-driver admission, native Stop/capture, OS grant, helper15 reproducibility/lock admission, or release proof is established by this diagnostic.",
+  "releaseReady": false
+}

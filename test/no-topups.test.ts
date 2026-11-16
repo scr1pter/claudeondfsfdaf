@@ -294,10 +294,12 @@ test("the check catches a top-up offer and leaves the allowed phrases alone", ()
     "Codium sells no top-ups.",
     "Match the Codium account's dashboard auto top-up threshold.",
     "Keep automatic top-ups off.",
+    "OpenRouter credits, automatic top-ups and the management key belong to the owner.",
     "answers JSON 410 MODEL_TOPUP_REMOVED",
     "purchased: { bought: false },",
     "desktopUpdaterMetadataFiles",
     "Legacy top-up links and intents never select a product or trigger checkout.",
+    "Removed variables still name legacy top-up prices; do not configure them.",
   ])
     expect(caught(text)).toBe(false)
   // A file allowed for one reason is still checked line by line once it leaves the list.

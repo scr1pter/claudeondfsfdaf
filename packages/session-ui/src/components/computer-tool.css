@@ -1,0 +1,143 @@
+[data-component="computer-run"] {
+  [data-slot="computer-run-trigger"] {
+    width: 100%;
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: default;
+
+    [data-slot="computer-run-title"] {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    [data-slot="collapsible-arrow"] {
+      color: var(--icon-weaker);
+      cursor: pointer;
+    }
+  }
+
+  [data-slot="computer-run-peek"] {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 6px 0 0 24px;
+  }
+
+  [data-slot="computer-run-thumb"] {
+    flex-shrink: 0;
+    width: 160px;
+    height: 100px;
+    padding: 0;
+    border: 0.5px solid var(--border-weak-base);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset-base);
+    overflow: hidden;
+    cursor: zoom-in;
+
+    img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+  }
+
+  [data-slot="computer-run-last"] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-base);
+
+    [data-slot="computer-run-step-status"] {
+      margin-left: 6px;
+    }
+  }
+
+  /* A step that failed, may not have run, or was stopped never reads like one that ran. */
+  [data-slot="computer-run-last"],
+  [data-slot="computer-run-step-label"] {
+    &[data-state="failed"],
+    &[data-state="unconfirmed"],
+    &[data-state="stopped"] {
+      color: var(--text-weak);
+    }
+
+    &[data-state="failed"] [data-slot="computer-run-step-status"] {
+      color: var(--icon-critical-base);
+    }
+  }
+
+  [data-slot="computer-run-steps"] {
+    margin: 0;
+    padding: 4px 0 0 24px;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  [data-slot="computer-run-step"] {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  [data-slot="computer-run-step-label"] {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text-base);
+    overflow-wrap: anywhere;
+  }
+
+  [data-slot="computer-run-step-status"] {
+    font-size: 12px;
+  }
+
+  [data-slot="computer-run-view"] {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-interactive-base);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  [data-slot="computer-run-removed"] {
+    font-size: 12px;
+    color: var(--text-weak);
+    font-style: italic;
+  }
+
+  [data-slot="computer-run-note"] {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* The violet ring over a preview, in the screenshot's own frame pixels (INV-R10). */
+[data-slot="computer-ring"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+
+  circle {
+    fill: none;
+    stroke: var(--vx-purple, #8b5cf6);
+    stroke-width: 3px;
+    vector-effect: non-scaling-stroke;
+  }
+}

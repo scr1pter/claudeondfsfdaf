@@ -15,6 +15,11 @@ on:
         required: true
         default: false
         type: boolean
+      dry_run:
+        description: "Artifacts-only unsigned preview from the authorized hands branch"
+        required: false
+        default: false
+        type: boolean
       allow_unsigned:
         description: "Allow an explicitly approved unsigned release"
         required: true
@@ -33,6 +38,10 @@ env:
   NODE_OPTIONS: --max-old-space-size=6144
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
   RELEASE_PRERELEASE: ${{ inputs.prerelease || false }}
+  RELEASE_DRY_RUN: ${{ inputs.dry_run || false }}
+  VECTOR_CHANNEL: ${{ inputs.prerelease && 'beta' || 'prod' }}
+  VECTOR_PRODUCT_NAME: ${{ inputs.prerelease && 'Vector Beta' || 'Vector' }}
+  HELPER_ARTIFACT_SUFFIX: ${{ inputs.tag || github.ref_name }}${{ inputs.prerelease && '-beta' || '' }}
 
 jobs:
   prepare:
@@ -54,8 +63,20 @@ jobs:
       - name: Validate tag, version, and release notes
         env:
           TAG: ${{ env.RELEASE_TAG }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          REQUESTED_UNSIGNED: ${{ inputs.allow_unsigned || false }}
+          PRERELEASE: ${{ env.RELEASE_PRERELEASE }}
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
         run: |
           set -euo pipefail
+          # HANDS_DRY_RUN_GUARD_BEGIN
+          if [ "$DRY_RUN" = "true" ]; then
+            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$GITHUB_REF" != "refs/heads/hands" ] || [ "$REQUESTED_UNSIGNED" != "true" ] || [ "$PRERELEASE" = "true" ] || [ -z "$GITHUB_REPOSITORY" ] || [ "$EVENT_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+              echo "An artifacts-only preview requires same-repository workflow_dispatch on hands with explicit allow_unsigned and the stable channel."
+              exit 1
+            fi
+          fi
+          # HANDS_DRY_RUN_GUARD_END
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
             echo "Release tag must use vMAJOR.MINOR.PATCH; received $TAG"
             exit 1
@@ -84,23 +105,26 @@ jobs:
             exit 1
           }
 
-          tag_commit=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk 'NR == 1 { print $1 }')
-          if [ -z "$tag_commit" ]; then
-            tag_commit=$(git ls-remote --tags origin "refs/tags/$TAG" | awk 'NR == 1 { print $1 }')
+          if [ "$DRY_RUN" != "true" ]; then
+            tag_commit=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk 'NR == 1 { print $1 }')
+            if [ -z "$tag_commit" ]; then
+              tag_commit=$(git ls-remote --tags origin "refs/tags/$TAG" | awk 'NR == 1 { print $1 }')
+            fi
+            source_commit=$(git rev-parse HEAD)
+            if [ -n "$tag_commit" ] && [ "$tag_commit" != "$source_commit" ]; then
+              echo "Release tag $TAG resolves to $tag_commit, but this workflow is building $source_commit."
+              echo "Run the workflow from the exact release tag before publishing."
+              exit 1
+            fi
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            git merge-base --is-ancestor "$source_commit" origin/main || {
+              echo "Release source $source_commit must be part of protected main."
+              exit 1
+            }
           fi
-          source_commit=$(git rev-parse HEAD)
-          if [ -n "$tag_commit" ] && [ "$tag_commit" != "$source_commit" ]; then
-            echo "Release tag $TAG resolves to $tag_commit, but this workflow is building $source_commit."
-            echo "Run the workflow from the exact release tag before publishing."
-            exit 1
-          fi
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$source_commit" origin/main || {
-            echo "Release source $source_commit must be part of protected main."
-            exit 1
-          }
 
       - name: Require protected release environment
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -143,6 +167,18 @@ jobs:
       - name: Verify exact standalone CLI required by WSL
         run: bun packages/cloud/src/verify-required-cli.ts
 
+      - name: Require the access re-ask caveat after a measured helper change
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+          REQUESTED_UNSIGNED: ${{ inputs.allow_unsigned || false }}
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
+        run: |
+          set -euo pipefail
+          changed=false
+          previous=$(git describe --tags --match 'v[0-9]*' --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [ -z "$previous" ] || ! git diff --quiet "$previous" HEAD -- packages/desktop/native/computer-helper/macos/identity.lock.json; then changed=true; fi
+          bun --no-env-file packages/desktop/scripts/release-caveat.ts --tag "$TAG" --lock-changed "$changed" --hands-preview "$RELEASE_DRY_RUN"
+
       - name: Resolve the release signing policy
         id: release-policy
         env:
@@ -162,6 +198,11 @@ jobs:
             exit 1
           }
 
+          if [ "$RELEASE_DRY_RUN" = "true" ]; then
+            echo "unsigned=true" >> "$GITHUB_OUTPUT"
+            echo "Artifacts-only unsigned preview: publishing and production signing are disabled." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           version="${TAG#v}"
           allowlisted=false
           if jq -e --arg version "$version" '.unsignedVersions | index($version) != null' packages/desktop/release-policy.json >/dev/null; then
@@ -188,6 +229,21 @@ jobs:
             echo "::warning::Vector $version will be published without Apple notarization or Windows Authenticode signing."
             echo "### Unsigned release approved for Vector $version" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  computer-helper:
+    name: Build or restore the tested immutable computer helpers
+    needs: prepare
+    uses: ./.github/workflows/computer-helper.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      artifact-suffix: ${{ inputs.tag || github.ref_name }}
+      helper-channel: ${{ inputs.prerelease && 'beta' || 'prod' }}
+      reuse-artifacts: true
+      full-desktop-e2e: false
+      privileged-required: false
+      isolated-desktop: false
 
   catalog:
     name: Prepare one immutable release catalog
@@ -297,24 +353,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      VECTOR_WINDOWS_PUBLISHER_NAME: ${{ secrets.VECTOR_WINDOWS_PUBLISHER_NAME }}
-      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+      CSC_LINK: ${{ !inputs.dry_run && secrets.CSC_LINK || '' }}
+      CSC_KEY_PASSWORD: ${{ !inputs.dry_run && secrets.CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ !inputs.dry_run && secrets.APPLE_ID || '' }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ !inputs.dry_run && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ !inputs.dry_run && secrets.APPLE_TEAM_ID || '' }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT || '' }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || '' }}
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE || '' }}
+      AZURE_CLIENT_ID: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_ID || '' }}
+      AZURE_TENANT_ID: ${{ !inputs.dry_run && secrets.AZURE_TENANT_ID || '' }}
+      AZURE_CLIENT_SECRET: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_SECRET || '' }}
+      VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT: ${{ !inputs.dry_run && vars.VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT || '' }}
+      VECTOR_WINDOWS_PUBLISHER_NAME: ${{ !inputs.dry_run && secrets.VECTOR_WINDOWS_PUBLISHER_NAME || '' }}
+      BLOB_READ_WRITE_TOKEN: ${{ !inputs.dry_run && secrets.BLOB_READ_WRITE_TOKEN || '' }}
       RELEASE_UNSIGNED: ${{ needs.prepare.outputs.unsigned }}
     steps:
       - name: Require signing, notarization, and feed credentials
         run: |
           set -euo pipefail
+          if [ "$RELEASE_DRY_RUN" = "true" ]; then exit 0; fi
           required=(BLOB_READ_WRITE_TOKEN)
           if [ "$RELEASE_UNSIGNED" != "true" ]; then
             required+=(
@@ -330,6 +388,7 @@ jobs:
               AZURE_TENANT_ID
               AZURE_CLIENT_SECRET
               VECTOR_WINDOWS_PUBLISHER_NAME
+              VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT
             )
           fi
           missing=()
@@ -477,7 +536,7 @@ jobs:
       - name: Build release surface
         working-directory: packages/${{ matrix.package }}
         env:
-          VECTOR_CHANNEL: prod
+          VECTOR_CHANNEL: ${{ env.VECTOR_CHANNEL }}
         run: ${{ matrix.command }}
       # The desktop runs the engine bundle in Electron's utility process, which is Node, while every engine test runs
       # on Bun. Boot the bundle this build just made under Node and send one prompt through a Read tool call, so a
@@ -514,12 +573,14 @@ jobs:
       - typecheck
       - test
       - build
+      - computer-helper
     runs-on: macos-15
     timeout-minutes: 90
     outputs:
       artifact_digest: ${{ steps.platform-artifact.outputs.artifact-digest }}
     permissions:
       contents: read
+      actions: read
     env:
       VECTOR_RELEASE_CATALOG_PATH: ${{ github.workspace }}/release-catalog/api.json
       VECTOR_RELEASE_CATALOG_SHA256: ${{ needs.catalog.outputs.sha256 }}
@@ -544,13 +605,38 @@ jobs:
           version=$(node -p 'require("./packages/desktop/package.json").version')
           echo "VECTOR_VERSION=$version" >> "$GITHUB_ENV"
 
+      - name: Restore the exact tested macOS helper source artifact
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun --no-env-file packages/desktop/scripts/computer-helper-artifact.ts --mode darwin-source --suffix "$HELPER_ARTIFACT_SUFFIX" --destination packages/desktop/native/out/darwin --required
+
+      - name: Verify the prebuilt macOS helper source, bytes, signature and measured cdhash
+        timeout-minutes: 4
+        working-directory: packages/desktop
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: |
+          set -euo pipefail
+          codesign --verify --strict --all-architectures native/out/darwin/VectorComputer.app
+          helper_args=(--platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin)
+          if [ "$VECTOR_CHANNEL" = prod ]; then helper_args+=(--check-lock); fi
+          bun --no-env-file scripts/build-computer-helper.ts "${helper_args[@]}"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          const lock = JSON.parse(readFileSync("native/computer-helper/macos/identity.lock.json", "utf8"))
+          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
+          if (lock.enforce !== true || lock.helperVersion !== manifest.helperVersion || lock.toolchain !== manifest.toolchain)
+            throw new Error("The channel helper does not match the measured production version and toolchain.")
+          NODE
+
       - name: Require Apple signing and notarization credentials
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ !inputs.dry_run && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ !inputs.dry_run && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ !inputs.dry_run && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ !inputs.dry_run && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ !inputs.dry_run && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
           if [ "$RELEASE_UNSIGNED" = "true" ]; then
@@ -573,21 +659,23 @@ jobs:
 
       - name: Build desktop app
         env:
-          VECTOR_CHANNEL: prod
+          VECTOR_CHANNEL: ${{ env.VECTOR_CHANNEL }}
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
         run: bun run --cwd packages/desktop build
 
       - name: Package signed and notarized arm64 app
         env:
-          VECTOR_CHANNEL: prod
+          VECTOR_CHANNEL: ${{ env.VECTOR_CHANNEL }}
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
           VECTOR_SIGN_MAC: true
           VECTOR_NOTARIZE: true
           VECTOR_SIGN_DMG: true
           VECTOR_ALLOW_UNSIGNED_RELEASE: ${{ needs.prepare.outputs.unsigned }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ !inputs.dry_run && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ !inputs.dry_run && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ !inputs.dry_run && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ !inputs.dry_run && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ !inputs.dry_run && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
           if [ "$RELEASE_UNSIGNED" = "true" ]; then
@@ -618,16 +706,17 @@ jobs:
 
       - name: Package signed and notarized x64 app
         env:
-          VECTOR_CHANNEL: prod
+          VECTOR_CHANNEL: ${{ env.VECTOR_CHANNEL }}
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
           VECTOR_SIGN_MAC: true
           VECTOR_NOTARIZE: true
           VECTOR_SIGN_DMG: true
           VECTOR_ALLOW_UNSIGNED_RELEASE: ${{ needs.prepare.outputs.unsigned }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ !inputs.dry_run && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ !inputs.dry_run && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ !inputs.dry_run && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ !inputs.dry_run && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ !inputs.dry_run && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
           if [ "$RELEASE_UNSIGNED" = "true" ]; then
@@ -660,19 +749,37 @@ jobs:
       # signed and launched fine — only the updater was dead.
       # verify:package also runs script/artifact-audit.ts over each .app before upload.
       - name: Verify packaged apps can reach the update feed and pass the byte audit
+        env:
+          VECTOR_SIGN_MAC: ${{ needs.prepare.outputs.unsigned != 'true' && 'true' || 'false' }}
         run: bun run --cwd packages/desktop verify:package
+
+      - name: Verify each final macOS computer helper
+        run: |
+          set -euo pipefail
+          signing=developer-id
+          if [ "$RELEASE_UNSIGNED" = "true" ]; then signing=adhoc; fi
+          app_list=$(mktemp)
+          trap 'rm -f "$app_list"' EXIT
+          find packages/desktop/dist -type d -name "$VECTOR_PRODUCT_NAME.app" -prune -print > "$app_list"
+          test -s "$app_list"
+          while IFS= read -r app; do
+            bun --no-env-file packages/desktop/scripts/verify-computer-helper.ts --app "$app" --channel "$VECTOR_CHANNEL" --expect-signing "$signing"
+            codesign --verify --strict --all-architectures "$app/Contents/Helpers/VectorComputer.app"
+            if [ "$signing" = "developer-id" ]; then spctl --assess --type execute --verbose=4 "$app/Contents/Helpers/VectorComputer.app"; fi
+          done < "$app_list"
 
       - name: Verify app notarization and artifact signatures
         run: |
           set -euo pipefail
           app_list=$(mktemp)
-          find packages/desktop/dist -type d -name Vector.app -prune -print > "$app_list"
+          find packages/desktop/dist -type d -name "$VECTOR_PRODUCT_NAME.app" -prune -print > "$app_list"
           test -s "$app_list" || {
-            echo "No packaged Vector.app was found"
+            echo "No packaged channel app was found"
             exit 1
           }
           while IFS= read -r app; do
             codesign --verify --deep --strict --verbose=4 "$app"
+            codesign --verify --strict --all-architectures "$app/Contents/Helpers/VectorComputer.app"
             if [ "$RELEASE_UNSIGNED" = "true" ]; then
               codesign -dv --verbose=4 "$app" 2>&1 | grep -Fq "Signature=adhoc"
             else
@@ -726,12 +833,16 @@ jobs:
       - typecheck
       - test
       - build
+      - computer-helper
     runs-on: windows-2025
     timeout-minutes: 60
     outputs:
       artifact_digest: ${{ steps.platform-artifact.outputs.artifact-digest }}
+      helper_arm64_artifact_id: ${{ steps.arm-package.outputs.artifact-id || steps.arm-restore.outputs.artifact_ids }}
+      helper_arm64_artifact_digest: ${{ steps.arm-package.outputs.artifact-digest || steps.arm-restore.outputs.artifact_digests }}
     permissions:
       contents: read
+      actions: read
     env:
       VECTOR_RELEASE_CATALOG_PATH: ${{ github.workspace }}/release-catalog/api.json
       VECTOR_RELEASE_CATALOG_SHA256: ${{ needs.catalog.outputs.sha256 }}
@@ -757,16 +868,36 @@ jobs:
           version=$(node -p 'require("./packages/desktop/package.json").version')
           echo "VECTOR_VERSION=$version" >> "$GITHUB_ENV"
 
+      - name: Restore the exact tested native Windows helper source
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun --no-env-file packages/desktop/scripts/computer-helper-artifact.ts --mode win32-source --suffix $env:HELPER_ARTIFACT_SUFFIX --destination packages/desktop/native/out/win32-source --required
+          if ($LASTEXITCODE -ne 0) { throw "Tested Windows helper restoration failed." }
+
+      - name: Restore final Windows helper bytes from an earlier attempt
+        id: helper-final
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun --no-env-file packages/desktop/scripts/computer-helper-artifact.ts --mode win32-final --suffix $env:HELPER_ARTIFACT_SUFFIX --destination packages/desktop/native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Final Windows helper restoration failed." }
+
       - name: Require Windows signing credentials
         shell: pwsh
         env:
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          VECTOR_WINDOWS_PUBLISHER_NAME: ${{ secrets.VECTOR_WINDOWS_PUBLISHER_NAME }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT || '' }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || '' }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE || '' }}
+          AZURE_CLIENT_ID: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_TENANT_ID: ${{ !inputs.dry_run && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_SECRET || '' }}
+          VECTOR_WINDOWS_PUBLISHER_NAME: ${{ !inputs.dry_run && secrets.VECTOR_WINDOWS_PUBLISHER_NAME || '' }}
+          VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT: ${{ !inputs.dry_run && vars.VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT || '' }}
         run: |
           if ($env:RELEASE_UNSIGNED -eq "true") {
             Write-Host "Skipping Windows signing for this explicitly approved unsigned release."
@@ -779,30 +910,75 @@ jobs:
             "AZURE_CLIENT_ID",
             "AZURE_TENANT_ID",
             "AZURE_CLIENT_SECRET",
-            "VECTOR_WINDOWS_PUBLISHER_NAME"
+            "VECTOR_WINDOWS_PUBLISHER_NAME",
+            "VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT"
           )
           $missing = @($required | Where-Object { -not (Get-Item "env:$_" -ErrorAction SilentlyContinue).Value })
           if ($missing.Count -gt 0) {
             throw "Production Windows releases require: $($missing -join ', ')"
           }
 
+      - name: Sign or verify both final helper copies before compiling Main pins
+        shell: pwsh
+        timeout-minutes: 8
+        env:
+          VECTOR_ALLOW_UNSIGNED_RELEASE: ${{ needs.prepare.outputs.unsigned }}
+          VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT: ${{ !inputs.dry_run && vars.VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT || '' }}
+          RESTORED_FINAL: ${{ steps.helper-final.outputs.restored }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT || '' }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || '' }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE || '' }}
+          AZURE_CLIENT_ID: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_TENANT_ID: ${{ !inputs.dry_run && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_SECRET || '' }}
+        run: |
+          $arguments = @("--no-env-file", "packages/desktop/scripts/computer-helper-sign-windows.ts", "--source", "packages/desktop/native/out/win32-source", "--output", "packages/desktop/native/out/win32", "--channel", $env:VECTOR_CHANNEL)
+          if ($env:RELEASE_UNSIGNED -eq "true") { $arguments += @("--expect-signing", "unsigned") }
+          else { $arguments += @("--expect-signing", "authenticode", "--publisher", $env:VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT) }
+          if ($env:RESTORED_FINAL -eq "true") { $arguments += "--restored" }
+          $pins = & bun @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Final Windows helper signing/verification failed." }
+          $map = $pins | ConvertFrom-Json
+          if ($map.x64 -notmatch '^[a-f0-9]{64}$' -or $map.arm64 -notmatch '^[a-f0-9]{64}$') { throw "The final Windows helper pin map is invalid." }
+          "VECTOR_COMPUTER_HELPER_SHA256=$($map | ConvertTo-Json -Compress)" >> $env:GITHUB_ENV
+
+      - name: Archive final Windows helper bytes once
+        if: steps.helper-final.outputs.restored != 'true'
+        shell: pwsh
+        run: |
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32-final.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C packages/desktop/native/out/win32 x64 arm64
+          if ($LASTEXITCODE -ne 0) { throw "Final Windows helper archive failed." }
+      - name: Preserve immutable final Windows helper bytes
+        if: steps.helper-final.outputs.restored != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-final-${{ env.HELPER_ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/computer-helper-win32-final.tar
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
       - name: Build desktop app
         shell: pwsh
-        run: $env:VECTOR_CHANNEL="prod"; bun run --cwd packages/desktop build
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: bun run --cwd packages/desktop build
 
       - name: Package signed installer
         shell: pwsh
         env:
-          VECTOR_CHANNEL: prod
+          VECTOR_CHANNEL: ${{ env.VECTOR_CHANNEL }}
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
           VECTOR_REQUIRE_WINDOWS_SIGNING: true
           VECTOR_ALLOW_UNSIGNED_RELEASE: ${{ needs.prepare.outputs.unsigned }}
-          VECTOR_WINDOWS_PUBLISHER_NAME: ${{ secrets.VECTOR_WINDOWS_PUBLISHER_NAME }}
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          VECTOR_WINDOWS_PUBLISHER_NAME: ${{ !inputs.dry_run && secrets.VECTOR_WINDOWS_PUBLISHER_NAME || '' }}
+          VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT: ${{ !inputs.dry_run && vars.VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT || '' }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT || '' }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || '' }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ !inputs.dry_run && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE || '' }}
+          AZURE_CLIENT_ID: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_TENANT_ID: ${{ !inputs.dry_run && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ !inputs.dry_run && secrets.AZURE_CLIENT_SECRET || '' }}
         run: |
           if ($env:RELEASE_UNSIGNED -eq "true") {
             $env:VECTOR_REQUIRE_WINDOWS_SIGNING = "false"
@@ -855,6 +1031,54 @@ jobs:
             throw "latest.yml does not reference the arm64 installer"
           }
 
+      - name: Verify both packaged helper signatures and the x64 final package
+        shell: pwsh
+        env:
+          VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT: ${{ !inputs.dry_run && vars.VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT || '' }}
+        run: |
+          foreach ($directory in @("win-unpacked", "win-arm64-unpacked")) {
+            $file = "packages/desktop/dist/$directory/resources/computer/vector-computer.exe"
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($env:RELEASE_UNSIGNED -eq "true") {
+              if ($signature.Status -ne "NotSigned") { throw "The unsigned helper has an unexpected signature." }
+            } elseif ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -cne $env:VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT) { throw "The helper does not match its configured full certificate subject." }
+          }
+          $arguments = @("--no-env-file", "packages/desktop/scripts/verify-computer-helper.ts", "--win", "packages/desktop/dist/win-unpacked", "--arch", "x64", "--channel", $env:VECTOR_CHANNEL)
+          if ($env:RELEASE_UNSIGNED -eq "true") { $arguments += @("--expect-signing", "unsigned") }
+          else { $arguments += @("--expect-signing", "authenticode", "--publisher", $env:VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT) }
+          & bun @arguments
+          if ($LASTEXITCODE -ne 0) { throw "The final x64 helper package verification failed." }
+
+      - name: Restore an earlier ARM64 packaged proof without replacing its bytes
+        id: arm-restore
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun --no-env-file packages/desktop/scripts/computer-helper-artifact.ts --mode arm64-package --suffix $env:HELPER_ARTIFACT_SUFFIX --destination "$env:RUNNER_TEMP/vector-arm64-prior"
+          if ($LASTEXITCODE -ne 0) { throw "The earlier ARM64 package proof could not be restored." }
+          if (Test-Path "$env:RUNNER_TEMP/vector-arm64-prior") {
+            foreach ($file in @("resources/app.asar", "resources/computer/computer-helper.json", "resources/computer/vector-computer.exe")) {
+              if ((Get-FileHash -Algorithm SHA256 "packages/desktop/dist/win-arm64-unpacked/$file").Hash -ne (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/vector-arm64-prior/$file").Hash) { throw "The ARM64 packaged proof changed across attempts." }
+            }
+          }
+      - name: Archive the exact final ARM64 Main and helper bytes
+        if: steps.arm-restore.outputs.restored != 'true'
+        shell: pwsh
+        run: |
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32-arm64-package.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C packages/desktop/dist/win-arm64-unpacked resources/app.asar resources/computer
+          if ($LASTEXITCODE -ne 0) { throw "The final ARM64 package proof archive failed." }
+      - name: Preserve the immutable final ARM64 package proof
+        id: arm-package
+        if: steps.arm-restore.outputs.restored != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-arm64-package-${{ env.HELPER_ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/computer-helper-win32-arm64-package.tar
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
       - name: Preserve verified Windows assets
         id: platform-artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -871,6 +1095,46 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  windows-arm64-helper:
+    name: Verify the final ARM64 helper and actual packed Main pins
+    needs: [prepare, windows]
+    runs-on: windows-11-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      RELEASE_UNSIGNED: ${{ needs.prepare.outputs.unsigned }}
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun without dependency lifecycle scripts
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile --ignore-scripts
+      - name: Restore the exact final ARM64 package proof by run, id and digest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROOF_ID: ${{ needs.windows.outputs.helper_arm64_artifact_id }}
+          PROOF_DIGEST: ${{ needs.windows.outputs.helper_arm64_artifact_digest }}
+        run: |
+          if (-not $env:PROOF_ID -or -not $env:PROOF_DIGEST) { throw "The Windows package did not provide an immutable ARM64 proof identity." }
+          bun --no-env-file packages/desktop/scripts/computer-helper-artifact.ts --mode arm64-package --suffix $env:HELPER_ARTIFACT_SUFFIX --destination "$env:RUNNER_TEMP/vector-arm64-package" --required --expected-id $env:PROOF_ID --expected-digest $env:PROOF_DIGEST
+          if ($LASTEXITCODE -ne 0) { throw "The final ARM64 package proof does not match this release run." }
+      - name: Verify ARM64 helper pins, signature, source, version and packaged self-test on ARM64
+        shell: pwsh
+        env:
+          VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT: ${{ !inputs.dry_run && vars.VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT || '' }}
+        run: |
+          $arguments = @("--no-env-file", "packages/desktop/scripts/verify-computer-helper.ts", "--win", "$env:RUNNER_TEMP/vector-arm64-package", "--arch", "arm64", "--channel", $env:VECTOR_CHANNEL)
+          if ($env:RELEASE_UNSIGNED -eq "true") { $arguments += @("--expect-signing", "unsigned") }
+          else { $arguments += @("--expect-signing", "authenticode", "--publisher", $env:VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT) }
+          & bun @arguments
+          if ($LASTEXITCODE -ne 0) { throw "The final ARM64 helper package verification failed." }
 
   linux:
     name: Linux desktop apps
@@ -905,11 +1169,11 @@ jobs:
           echo "VECTOR_VERSION=$version" >> "$GITHUB_ENV"
       - name: Build desktop app
         env:
-          VECTOR_CHANNEL: prod
+          VECTOR_CHANNEL: ${{ env.VECTOR_CHANNEL }}
         run: bun run --cwd packages/desktop build
       - name: Package AppImage
         env:
-          VECTOR_CHANNEL: prod
+          VECTOR_CHANNEL: ${{ env.VECTOR_CHANNEL }}
         run: |
           for attempt in 1 2 3; do
             bun run --cwd packages/desktop package -- --linux AppImage --x64 --arm64 --publish never && exit 0
@@ -920,6 +1184,8 @@ jobs:
       - name: Verify Linux artifacts
         run: |
           set -euo pipefail
+          test ! -e packages/desktop/dist/linux-unpacked/resources/computer
+          test ! -e packages/desktop/dist/linux-arm64-unpacked/resources/computer
           bun packages/desktop/scripts/verify-notices.ts linux packages/desktop/dist/linux-unpacked packages/desktop/dist/linux-arm64-unpacked
           test -s packages/desktop/dist/vector-desktop-${VECTOR_VERSION}-linux-x86_64.AppImage
           test -s packages/desktop/dist/vector-desktop-${VECTOR_VERSION}-linux-arm64.AppImage
@@ -944,12 +1210,14 @@ jobs:
           retention-days: 14
 
   release:
+    if: ${{ !inputs.dry_run }}
     name: Publish release and update feeds
     needs:
       - catalog
       - mac
       - prepare
       - windows
+      - windows-arm64-helper
       - linux
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -1069,7 +1337,7 @@ jobs:
 
       - name: Publish Vector model catalog beside installers
         env:
-          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          BLOB_READ_WRITE_TOKEN: ${{ !inputs.dry_run && secrets.BLOB_READ_WRITE_TOKEN || '' }}
           TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
@@ -1080,7 +1348,7 @@ jobs:
 
       - name: Stage Vector download and update artifacts
         env:
-          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          BLOB_READ_WRITE_TOKEN: ${{ !inputs.dry_run && secrets.BLOB_READ_WRITE_TOKEN || '' }}
           TAG: ${{ env.RELEASE_TAG }}
           PRERELEASE: ${{ env.RELEASE_PRERELEASE }}
         run: |
@@ -1566,7 +1834,7 @@ jobs:
 
       - name: Commit Vector download and update pointers
         env:
-          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          BLOB_READ_WRITE_TOKEN: ${{ !inputs.dry_run && secrets.BLOB_READ_WRITE_TOKEN || '' }}
           TAG: ${{ env.RELEASE_TAG }}
           PRERELEASE: ${{ env.RELEASE_PRERELEASE }}
         run: |

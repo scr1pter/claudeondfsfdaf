@@ -52,3 +52,21 @@ test("an omitted or unknown workflow pattern cannot grant broad approval", () =>
     expect(PermissionPolicy.canAlwaysApprove("workflow", ["*"], patterns)).toBe(false)
   }
 })
+
+// The user's own terminals and other sessions' (an ssh session to production, say) are never answered by auto-accept
+// or Full access, though the user may still allow one terminal always. The agent's own terminals are unchanged.
+test("auto-accept never answers a terminal the agent did not open, nor a terminal outside the sandbox", () => {
+  for (const permission of [PermissionPolicy.TERMINAL, PermissionPolicy.TERMINAL_INPUT]) {
+    const other = [`${PermissionPolicy.TERMINAL_OTHER}pty_x`]
+    expect(PermissionPolicy.canAutoApprove(permission, other, other)).toBe(false)
+    expect(PermissionPolicy.canAlwaysApprove(permission, other, other)).toBe(true)
+    const own = [`${PermissionPolicy.TERMINAL_OWN}pty_x`]
+    expect(PermissionPolicy.canAutoApprove(permission, own, own)).toBe(true)
+    expect(PermissionPolicy.canAlwaysApprove(permission, own, own)).toBe(true)
+  }
+  // An other: pattern means nothing for other permissions.
+  expect(PermissionPolicy.canAutoApprove("bash", ["other:x"], ["other:x"])).toBe(true)
+  const platform = [process.platform]
+  expect(PermissionPolicy.canAutoApprove(PermissionPolicy.TERMINAL_UNSANDBOXED, platform, platform)).toBe(false)
+  expect(PermissionPolicy.canAlwaysApprove(PermissionPolicy.TERMINAL_UNSANDBOXED, platform, platform)).toBe(false)
+})

@@ -1,0 +1,261 @@
+{
+  "run": 42125718778,
+  "head": "9e1ec121485c4a05af68e73a2912f80dd1193e14",
+  "branch": "hands",
+  "attempt": 1,
+  "workflowConclusion": "failure",
+  "job": {
+    "id": 127589271305,
+    "name": "Windows Electron overlay/controller diagnostic (no release evidence)",
+    "status": "completed",
+    "conclusion": "failure",
+    "startedAt": "2026-11-05T22:57:01Z",
+    "completedAt": "2026-11-05T23:01:56Z"
+  },
+  "steps": [
+    {
+      "number": 1,
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:57:01Z",
+      "completedAt": "2026-11-05T22:57:02Z"
+    },
+    {
+      "number": 2,
+      "name": "Reject incompatible overlay selectors before setup",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:57:02Z",
+      "completedAt": "2026-11-05T22:57:03Z"
+    },
+    {
+      "number": 3,
+      "name": "Checkout repository",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:57:03Z",
+      "completedAt": "2026-11-05T22:57:15Z"
+    },
+    {
+      "number": 4,
+      "name": "Setup Node",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:57:15Z",
+      "completedAt": "2026-11-05T22:57:23Z"
+    },
+    {
+      "number": 5,
+      "name": "Setup Bun",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:57:23Z",
+      "completedAt": "2026-11-05T22:57:26Z"
+    },
+    {
+      "number": 6,
+      "name": "Install frozen dependencies without lifecycle scripts",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:57:26Z",
+      "completedAt": "2026-11-05T23:01:14Z"
+    },
+    {
+      "number": 7,
+      "name": "Install the exact pinned Electron runtime",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T23:01:14Z",
+      "completedAt": "2026-11-05T23:01:19Z"
+    },
+    {
+      "number": 8,
+      "name": "Prepare the Windows PowerShell C# compiler",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T23:01:19Z",
+      "completedAt": "2026-11-05T23:01:28Z"
+    },
+    {
+      "number": 9,
+      "name": "Run real Electron overlay properties and controller lifecycle",
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-11-05T23:01:28Z",
+      "completedAt": "2026-11-05T23:01:52Z"
+    },
+    {
+      "number": 10,
+      "name": "Preserve the bounded overlay diagnostic report",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T23:01:52Z",
+      "completedAt": "2026-11-05T23:01:53Z"
+    },
+    {
+      "number": 18,
+      "name": "Post Setup Bun",
+      "status": "completed",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-05T23:01:53Z",
+      "completedAt": "2026-11-05T23:01:53Z"
+    },
+    {
+      "number": 19,
+      "name": "Post Setup Node",
+      "status": "completed",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-05T23:01:53Z",
+      "completedAt": "2026-11-05T23:01:53Z"
+    },
+    {
+      "number": 20,
+      "name": "Post Checkout repository",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T23:01:53Z",
+      "completedAt": "2026-11-05T23:01:55Z"
+    },
+    {
+      "number": 21,
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T23:01:55Z",
+      "completedAt": "2026-11-05T23:01:55Z"
+    }
+  ],
+  "artifact": {
+    "id": 13460422482,
+    "name": "computer-overlay-win32-diagnostic-9e1ec121485c4a05af68e73a2912f80dd1193e14-1",
+    "apiZipBytes": 1034,
+    "apiZipSha256": "51149ab60ce3566a15d058403f1051c39c05bf296d92ca7714d04c5404a7aa8a",
+    "artifactRun": 42125718778,
+    "artifactHead": "9e1ec121485c4a05af68e73a2912f80dd1193e14",
+    "createdAt": "2026-11-05T23:01:53Z",
+    "expiresAt": "2026-11-12T23:01:53Z",
+    "zipDigestMatchesApi": true,
+    "zipBytes": 1034,
+    "rawFile": "computer-win32-overlay-diagnostic.log",
+    "rawBytes": 4277,
+    "rawSha256": "2d62f2966979f822348c1e50242f9994cb5a817a085b3889c84324cadb272e76",
+    "rawEncoding": "utf-8-sig"
+  },
+  "region": {
+    "protocol": 1,
+    "windows": 4,
+    "owned": 0,
+    "simple": 0,
+    "matched": 0,
+    "painted": 4,
+    "ok": false,
+    "reason": "deadline_compile"
+  },
+  "asar": {
+    "protocol": 1,
+    "rawRegular": true,
+    "rawBounded": true,
+    "rawBytes": 110862,
+    "rawRead": true,
+    "virtualDirectory": true,
+    "virtualRead": false
+  },
+  "genericElectron": {
+    "counts": {
+      "passed": 14,
+      "failed": 1,
+      "skipped": 3
+    },
+    "checks": [
+      {
+        "name": "overlay-count",
+        "ok": true
+      },
+      {
+        "name": "overlay-bounds",
+        "ok": false,
+        "reason": "assertion_failed"
+      },
+      {
+        "name": "overlay-window-properties",
+        "ok": true
+      },
+      {
+        "name": "overlay-stack-level",
+        "ok": true
+      },
+      {
+        "name": "overlay-ignore-pointer",
+        "ok": true
+      },
+      {
+        "name": "overlay-workspaces",
+        "ok": false,
+        "skipped": true,
+        "reason": "not_applicable"
+      },
+      {
+        "name": "overlay-content-protection",
+        "ok": true
+      },
+      {
+        "name": "overlay-banner-copy",
+        "ok": true
+      },
+      {
+        "name": "overlay-sandbox",
+        "ok": true
+      },
+      {
+        "name": "overlay-ipc-rejected",
+        "ok": true
+      },
+      {
+        "name": "transparent-theme-switch",
+        "ok": true
+      },
+      {
+        "name": "window-all-closed",
+        "ok": true
+      },
+      {
+        "name": "focus-preserved",
+        "ok": true
+      },
+      {
+        "name": "controller-stop-cancels-helper",
+        "ok": true
+      },
+      {
+        "name": "heartbeat-loss-removes-overlays",
+        "ok": true
+      },
+      {
+        "name": "helper-crash-removes-overlays",
+        "ok": true
+      },
+      {
+        "name": "native-os-stop",
+        "ok": false,
+        "skipped": true,
+        "reason": "native_harness_unavailable"
+      },
+      {
+        "name": "native-capture-exclusion",
+        "ok": false,
+        "skipped": true,
+        "reason": "not_applicable"
+      }
+    ]
+  },
+  "interpretation": {
+    "compilerPreparation": "The fixed Windows PowerShell 5.1 compiler warm-up succeeded in its separate bounded CI step.",
+    "observer": "The actual observer reached the compile marker and exceeded its unchanged 15-second deadline before Add-Type returned; input, held-parent and native region stages were not reached.",
+    "logicalLayout": "The four rendered glow rectangles matched the requested logical dimensions. No native region ownership, simplicity or visible extent was established.",
+    "asar": "The raw filesystem read the physical 110862-byte own default_app.asar; Electron normal filesystem presented it as a virtual directory.",
+    "cause": "Warm-up did not resolve the compile-stage timeout. The underlying compilation delay is unproven; no deadline or proof rules were changed."
+  },
+  "scope": "Fast stock Windows Electron diagnostic only. Other 14 generic checks pass; exact bounds proof remains an actual failure. Native Stop is unavailable without the finite native harness, and Windows native capture exclusion/workspaces remain explicitly inapplicable. No native region, privileged input/capture, final package, matrix or release approval is established.",
+  "releaseReady": false
+}

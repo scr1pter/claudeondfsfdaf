@@ -12,7 +12,8 @@ import type {
   Todo,
 } from "@vectordevai/sdk/v2/client"
 import { batch } from "solid-js"
-import { createStore, produce, reconcile } from "solid-js/store"
+import { createStore, produce, reconcile, unwrap } from "solid-js/store"
+import { ComputerScreenshotHistory } from "@/features/computer/screenshot-history"
 import { diffs as cleanDiffs, message as cleanMessage } from "@/utils/diffs"
 import { sessionNotFoundError } from "@/utils/server-errors"
 import { rootSession } from "@/utils/session-route"
@@ -26,6 +27,9 @@ const historyMessagePageSize = 200
 const sessionInfoLimit = 2_048
 const emptyIDs: ReadonlySet<string> = new Set()
 const ANCESTOR_REFRESH_MS = 400
+// Screenshot deletions a page fetched before them must still apply. Deletions are hourly at most, plus task ends and
+// Delete all, so a page older than this many of them is treated as predating every deletion.
+const REMOVALS_KEPT = 32
 
 // Events that settle model spend on their session: a finished step (v1 part or V2 event), ancillary model work, or a
 // compaction summary.
@@ -171,6 +175,15 @@ export function createServerSession(client: VectorClient, options?: { retry?: ty
   const orphanParts = new Map<string, Set<string>>()
   const removedMessages = new Map<string, Set<string>>()
   const deltaBases = new Map<string, { base: string; sessionID: string }>()
+  // Screenshot deletions in order (D23). A message page fetched before one of them applies it before it lands.
+  const removals: { seq: number; removal: ComputerScreenshotHistory.Removal }[] = []
+  let removalSeq = 0
+  const removalsSince = (seq: number): ComputerScreenshotHistory.Removal[] => {
+    if (seq === removalSeq) return []
+    const first = removals[0]
+    if (!first || first.seq > seq + 1) return [{ all: true }]
+    return removals.filter((item) => item.seq > seq).map((item) => item.removal)
+  }
   const deleteMessageParts = (
     cache: { part: Record<string, Part[] | undefined>; part_text_accum_delta: Record<string, string | undefined> },
     messageID: string,
@@ -607,9 +620,24 @@ export function createServerSession(client: VectorClient, options?: { retry?: ty
     messageLoads.set(sessionID, load)
     setMeta("loading", sessionID, true)
     let applied = false
+    const removalsSeen = removalSeq
     await fetchMessages(sessionID, limit, before, () => resetMessageLoad(sessionID, load))
-      .then((page) => {
+      .then((fetched) => {
         if (generations.get(sessionID) !== active) return
+        // The page may have been read before a screenshot deletion finished; it must not bring those screenshots back.
+        const removed = removalsSince(removalsSeen)
+        const created = removed.length
+          ? new Map(fetched.session.map((item) => [item.id, item.time.created]))
+          : undefined
+        const page = created
+          ? {
+              ...fetched,
+              part: fetched.part.map((item) => ({
+                id: item.id,
+                part: ComputerScreenshotHistory.apply(item.part, removed, created.get(item.id)),
+              })),
+            }
+          : fetched
         const first = page.session.reduce<Message | undefined>(
           (oldest, message) => (!oldest || cmpMessage(message, oldest) < 0 ? message : oldest),
           undefined,
@@ -651,6 +679,44 @@ export function createServerSession(client: VectorClient, options?: { retry?: ty
           : loadMessages(sessionID, options?.messageLimit ?? meta.limit[sessionID] ?? initialMessagePageSize),
       ])
     })
+  }
+
+  /**
+   * Desktop main deleted computer screenshots (D23). The engine never republishes the parts it changed, so this copy
+   * changes them the same way at once, keeping each removal marker, and every conversation it touched is read again
+   * once any read already under way has finished. Returns the conversations it touched.
+   */
+  const removeComputerScreenshots = (removal: ComputerScreenshotHistory.Removal) => {
+    removalSeq++
+    removals.push({ seq: removalSeq, removal })
+    if (removals.length > REMOVALS_KEPT) removals.shift()
+    const created = new Map<string, number>()
+    for (const messages of Object.values(data.message))
+      for (const message of messages ?? []) created.set(message.id, message.time.created)
+    const sessions = new Set<string>()
+    batch(() => {
+      for (const [messageID, parts] of Object.entries(data.part)) {
+        if (!parts) continue
+        const current = unwrap(parts)
+        const next = ComputerScreenshotHistory.apply(current, [removal], created.get(messageID))
+        let changed = false
+        next.forEach((part, index) => {
+          if (part === current[index]) return
+          changed = true
+          sessions.add(part.sessionID)
+          trackPartChange(part.sessionID, messageID, part.id)
+        })
+        if (changed) setData("part", messageID, reconcile(next, { key: "id" }))
+      }
+    })
+    for (const sessionID of sessions) {
+      if (data.message[sessionID] === undefined) continue
+      void (inflight.get(sessionID) ?? Promise.resolve())
+        .catch(() => {})
+        .then(() => (data.message[sessionID] === undefined ? undefined : sync(sessionID, { force: true })))
+        .catch(() => {})
+    }
+    return [...sessions]
   }
 
   const prefetch = async (sessionID: string, limit: number) => {
@@ -1147,6 +1213,7 @@ export function createServerSession(client: VectorClient, options?: { retry?: ty
         await loadMessages(sessionID, count, meta.cursor[sessionID], "prepend")
       },
     },
+    removeComputerScreenshots,
     evict(sessionID: string) {
       if (protectedSessions().has(sessionID)) return
       seen.delete(sessionID)

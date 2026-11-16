@@ -1,3 +1,4 @@
+import { ComputerPrivacy } from "../computer-privacy"
 import { SessionV2 } from "@vectordevai/core/session"
 import { Catalog } from "@vectordevai/core/catalog"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -110,7 +111,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.sharePreview",
         Effect.fn(function* (ctx) {
           yield* requireOwner
-          return { data: yield* session.sharePreview(ctx.params.sessionID) }
+          return {
+            data: yield* session.sharePreview(ctx.params.sessionID, {
+              includeScreenshots: ctx.query.includeScreenshots === "true",
+            }),
+          }
         }),
       )
       .handle(
@@ -598,8 +603,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           const owner = yield* RequestOwner.owner
           yield* SessionAudienceHttp.assertSession(ctx.params.sessionID, owner).pipe(withAudience)
+          const project = yield* ComputerPrivacy.projector
           return session.events({ sessionID: ctx.params.sessionID, after: ctx.query.after }).pipe(
             Stream.filterEffect((event) => SessionAudienceHttp.envelope(event, owner).pipe(withAudience)),
+            Stream.mapEffect((event) => (owner ? Effect.succeed(event) : project(event))),
             Stream.orDie,
           )
         }),

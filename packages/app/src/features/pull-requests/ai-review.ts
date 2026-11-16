@@ -37,16 +37,25 @@ import {
 import { fingerprint, fnv1a64, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
 import {
   buildSummaryBody,
+  codeSpan,
   costWording,
   formatDuration,
   formatTokens,
   formatUsd,
   noteNothingToReview,
   noteTriageUnchecked,
+  noteVerifyUnfinished,
   sanitizeModelMarkdown,
   type RepoRef,
 } from "@vectordevai/core/review/format"
 import { classifyFiles, classifyPath, isSensitivePath, parseGitAttributes } from "@vectordevai/core/review/ignore"
+import {
+  assessReview,
+  evidenceScope,
+  modelEvidenceNotes,
+  type ModelCertificate,
+  type ModelSubject,
+} from "@vectordevai/core/review/model-evidence"
 import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { redactSecrets } from "@vectordevai/core/review/redact"
@@ -56,6 +65,9 @@ import {
   diffBudgetChars,
   estimateCostUsd,
   planSpecialists,
+  verifyCandidates,
+  verifyUnanswered,
+  verifyUnconfirmed,
   type ReviewPrice,
   type Specialist,
 } from "@vectordevai/core/review/plan"
@@ -89,6 +101,7 @@ import {
   type Finding,
   type ModelFinding,
   type ModelReport,
+  type ReviewConfig,
   type ReviewCost,
   type ReviewPass,
   type Risk,
@@ -171,6 +184,9 @@ export type ReviewModel = {
   // WP A35: the lab Vector Codium's listing states, and the entry's parts in the plan's review pair.
   lab?: string
   review?: readonly string[]
+  // What model evidence (VS-07) reads, when the catalog lists it: the catalog status and a free model's data policy.
+  status?: string
+  freeModel?: ModelSubject["freeModel"]
 }
 
 // in-place: every changed file in the checkout already is the pull request's version. rebuilt: the pull request's
@@ -290,6 +306,9 @@ export type ReviewRunInput = ReviewRequest & {
   preferredModels?: readonly (string | undefined)[] // the agent's model first, then the configured defaults
   timeoutMs?: number
   now?: () => number
+  // The certificates model evidence (VS-07) compares the models with under "modelEvidence": "warn"; MODEL_EVIDENCE
+  // when absent. The eval and tests pass their own.
+  certificates?: readonly ModelCertificate[]
 }
 
 type Tokens = { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
@@ -384,6 +403,8 @@ type CatalogProvider = {
       id: string
       cost?: { input: number; output: number; cache?: { read: number; write: number } }
       limit?: { context: number }
+      status?: string
+      freeModel?: { source: "shared" | "openrouter"; dataPolicy?: "no-training" | "may-train" | "unreviewed" }
       codium?: ModelPlanStatus.Listing
     }
   >
@@ -394,8 +415,7 @@ export function reviewCatalog(providers: readonly CatalogProvider[]): ReviewMode
     .filter((provider) => providerUsable(provider.id, provider))
     .flatMap((provider) =>
       Object.values(provider.models)
-        // A Codium model the plan no longer includes is listed for the picker (choosing it opens Change plan), but
-        // every review request to it would be refused, so a review never runs on it, chosen or configured.
+        // Locked Codium models stay visible in the picker, but cannot run reviews.
         .filter((model) => !ModelPlanStatus.isLocked(model))
         .map((model) => {
           const costKind: CostKind = costKindOf(provider, model.cost, model.id)
@@ -417,6 +437,15 @@ export function reviewCatalog(providers: readonly CatalogProvider[]): ReviewMode
             costKind,
             ...(model.codium?.lab ? { lab: model.codium.lab } : {}),
             ...(model.codium?.review?.length ? { review: model.codium.review } : {}),
+            ...(model.status ? { status: model.status } : {}),
+            ...(model.freeModel
+              ? {
+                  freeModel: {
+                    source: model.freeModel.source,
+                    ...(model.freeModel.dataPolicy ? { dataPolicy: model.freeModel.dataPolicy } : {}),
+                  },
+                }
+              : {}),
           }
         }),
     )
@@ -424,14 +453,50 @@ export function reviewCatalog(providers: readonly CatalogProvider[]): ReviewMode
 
 // The model automatic reviews in GitHub Actions run on: the one a review in the app picks, with the environment
 // variables its provider reads a key from, which the workflow takes from repository secrets of the same names. reason
-// says why Actions could not use it.
+// says why Actions could not use it. With `evidence`, the open project's review settings when they opt into model
+// evidence ("modelEvidence": "warn", VS-07), warnings say what VectorScope's evaluation says about the model automatic
+// reviews would use under those settings, after a first warning that says they are this checkout's and that the job
+// reads the base branch's committed copy. They never change the model the workflow is set up with.
 export function workflowModel(
   candidates: readonly (string | undefined)[],
   providers: readonly (CatalogProvider & { env?: readonly string[] })[],
-) {
+  options: { evidence?: ReviewConfig; now?: number; certificates?: readonly ModelCertificate[] } = {},
+): WorkflowModel | undefined {
   const catalog = reviewCatalog(providers)
   const model = pickReviewModel(candidates, catalog) ?? fallbackReviewModel(catalog)
   if (!model) return undefined
+  const chosen = workflowChoice(model, providers)
+  const config = options.evidence
+  if (config?.modelEvidence !== "warn") return chosen
+  // The workflow's reviews run in the engine, which takes a model in review.json over the workflow's MODEL. The card
+  // already says why it chose its model, so the notes leave that out. The settings are this checkout's, which may
+  // differ from the copy committed on the base branch that the job reads, so the first warning says whose they are.
+  const named = config.model && config.model !== chosen.model ? config.model : undefined
+  const reviewed = named ? pickReviewModel([named], catalog) : model
+  const triage = config.triageModel && config.triageModel !== (named ?? chosen.model) ? config.triageModel : undefined
+  const notes = modelEvidenceNotes(
+    assessReview({
+      // A named model that is not connected here is described by its name alone.
+      review: reviewed ? subjectOf(reviewed) : { model: named!, free: false },
+      scope: evidenceScope({ adapter: "engine", config, ...(triage ? { triage } : {}) }),
+      now: options.now ?? Date.now(),
+      ...(options.certificates ? { certificates: options.certificates } : {}),
+    }),
+    { choice: false },
+  )
+  if (!named && !notes.length) return chosen
+  const source = named
+    ? `This checkout's ${codeSpan(REVIEW_CONFIG_PATH)} names ${codeSpan(named)}. Automatic reviews read the copy committed on the pull request's base branch and run a model named there instead of ${codeSpan(chosen.model)}, so these notes are about ${codeSpan(named)} and hold only when that copy names it too.`
+    : `These notes use this checkout's ${codeSpan(REVIEW_CONFIG_PATH)}. Automatic reviews read the copy committed on the pull request's base branch, which may name another model or other settings.`
+  return { ...chosen, warnings: [source, ...notes] }
+}
+
+export type WorkflowModel = { model: string; keys: string[]; reason?: string; warnings?: string[] }
+
+function workflowChoice(
+  model: ReviewModel,
+  providers: readonly (CatalogProvider & { env?: readonly string[] })[],
+): WorkflowModel {
   const keys = [...(providers.find((provider) => provider.id === model.providerID)?.env ?? [])]
   const name = modelName(model)
   // Vector's shared models sign in with the Vector account token every workflow already has.
@@ -449,6 +514,17 @@ export function workflowModel(
       reason: `GitHub Actions can't sign in to ${model.providerID} with a repository secret. Choose another provider's model for your agent, or run \`vector github install\` to pick one.`,
     }
   return { model: name, keys }
+}
+
+// What model evidence reads about a catalog model, and why the review uses it when that is known.
+function subjectOf(model: ReviewModel, choice?: ModelSubject["choice"]): ModelSubject {
+  return {
+    model: modelName(model),
+    free: model.costKind === "free",
+    ...(model.freeModel ? { freeModel: model.freeModel } : {}),
+    ...(model.status ? { status: model.status } : {}),
+    ...(choice ? { choice } : {}),
+  }
 }
 
 // Without a chosen model a review runs on a free one, then on another connected model. Vector Codium spends the
@@ -713,8 +789,10 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   // An explicit model in review.json wins; otherwise the review runs on the agent's model (see preferredModels).
   // The resolved model is passed explicitly to every prompt.
   const catalog = input.catalog ?? []
-  const chosen =
-    pickReviewModel([config.model, ...(input.preferredModels ?? [])], catalog) ?? fallbackReviewModel(catalog)
+  // The first of these that is connected, as one list would pick: review.json's model, the agent's, a fallback.
+  const configured = pickReviewModel([config.model], catalog)
+  const agentModel = configured ? undefined : pickReviewModel(input.preferredModels ?? [], catalog)
+  const chosen = configured ?? agentModel ?? fallbackReviewModel(catalog)
   // review.json's cheaper model runs the review and security passes; the double-check stays on the review model.
   const named = config.triageModel ? pickReviewModel([config.triageModel], catalog) : undefined
   if (!chosen)
@@ -876,16 +954,20 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
 
   // The double-check: a second session re-reads the code behind each finding of concern or above and answers
   // confirmed or rejected; rejected findings are dropped. It is what keeps a reviewer's guesses off the pull request.
-  // `.vector/review.json` "verify": "off" turns it off, except after a triage pass; the desktop otherwise checks every
-  // finding above a nit.
-  const candidates =
-    config.verify === "off" && !triage
-      ? []
-      : proposed.filter(
-          (finding) =>
-            (finding.severity !== "nit" && finding.confidence >= config.minConfidence) ||
-            (checkout.trust === "untrusted" && finding.suggestion !== undefined),
-        )
+  // Which findings it checks is the verify policy (plan.ts). Under the legacy rule, the default, `.vector/review.json`
+  // "verify": "off" turns it off, except after a triage pass, and the desktop otherwise checks every finding above a
+  // nit; under "verifyPolicy": "shared" an explicit "blocking" checks only blocking findings, as the engine does.
+  const candidates = verifyCandidates(
+    proposed,
+    {
+      verify: config.verify,
+      policy: config.verifyPolicy,
+      minConfidence: config.minConfidence,
+      trust: checkout.trust,
+      triaged: triage !== undefined,
+    },
+    "desktop",
+  )
   if (candidates.length)
     status(
       `Double-checking ${candidates.length} ${candidates.length === 1 ? "finding" : "findings"}${triage ? ` with ${modelName(model)}` : ""}…${spentSoFar(runs, first)}`,
@@ -949,13 +1031,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const verdicts = new Map([...(verify?.verdicts ?? []), ...finalCall].map((entry) => [entry.id, entry.verdict]))
   // After a triage pass only what the review model confirmed is shown: a finding above a nit that it rejected, gave
   // no verdict for, or never saw because the double-check stopped or failed is left out.
-  const unchecked = new Set(
-    triage
-      ? candidates
-          .filter((finding) => finding.severity !== "nit" && verdicts.get(finding.id) !== "confirmed")
-          .map((finding) => finding.id)
-      : [],
-  )
+  const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triage !== undefined).map((finding) => finding.id))
   const kept = proposed.filter((finding) => verdicts.get(finding.id) !== "rejected")
   const checked = kept
     .filter((finding) => !unchecked.has(finding.id))
@@ -963,6 +1039,40 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const rejected = proposed.length - kept.length
   const unconfirmed = kept.length - checked.length
   const findings = [...checked, ...carried]
+  // What the panel says about the double-check. The shared policy (plan.ts) accounts for every candidate left without a
+  // verdict, whether or not the pass finished, in the engine's words. The legacy rule gives one note for a pass that did
+  // not finish.
+  const verifyFinished = verify?.status === "ok"
+  const unanswered =
+    config.verifyPolicy === "shared" && verify ? verifyUnanswered(candidates, verdicts, triage !== undefined).length : 0
+  const why = verifyFinished
+    ? "unanswered"
+    : verify?.status === "skipped" && stop.stopped() === "timeout"
+      ? "time"
+      : "unfinished"
+  const verifyNotes = !verify
+    ? []
+    : config.verifyPolicy === "shared"
+      ? [
+          ...(triage && unconfirmed
+            ? [
+                noteTriageUnchecked(
+                  unconfirmed,
+                  modelName(triage),
+                  modelName(model),
+                  verifyFinished ? "unanswered" : "unfinished",
+                ),
+              ]
+            : []),
+          ...(unanswered ? [noteVerifyUnfinished(unanswered, why)] : []),
+        ]
+      : !verifyFinished
+        ? [
+            triage && unconfirmed
+              ? noteTriageUnchecked(unconfirmed, modelName(triage), modelName(model))
+              : VERIFY_SKIPPED_NOTE,
+          ]
+        : []
   const report: ModelReport = {
     summary: (reports.find((entry) => entry.source === "review") ?? reports[0]!).report.summary,
     risk: RISKS[Math.max(...reports.map((entry) => RISKS.indexOf(entry.report.risk)))] ?? "low",
@@ -1139,17 +1249,24 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     notes: [
       ...picked.notes,
       ...(judge && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(modelName(judge))] : []),
-      ...(verify && verify.status !== "ok"
-        ? [
-            triage && unconfirmed
-              ? noteTriageUnchecked(unconfirmed, modelName(triage), modelName(model))
-              : VERIFY_SKIPPED_NOTE,
-          ]
-        : []),
+      ...verifyNotes,
       ...(config.triageModel && !triage && !named
         ? [
             `The triage model in .vector/review.json, ${config.triageModel}, is not connected, so the whole review ran on ${modelName(model)}.`,
           ]
+        : []),
+      ...(config.modelEvidence === "warn"
+        ? evidenceNotes({
+            config,
+            model,
+            chosen,
+            configured,
+            agentModel,
+            triage,
+            named,
+            served: new Set(identities),
+            input,
+          })
         : []),
     ],
     context: {
@@ -1176,6 +1293,73 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     ...(triage ? { triage: modelName(triage) } : {}),
     ...(Object.keys(fixes).length ? { fixes } : {}),
   }
+}
+
+// Model evidence (VS-07), under "modelEvidence": "warn" only. A review.json model that is not connected is replaced by
+// the agent's model, as it always was; the note says so rather than switching in silence. Then what VectorScope's
+// evaluation says about the models, with why each was used.
+function evidenceNotes(context: {
+  config: ReviewConfig
+  model: ReviewModel
+  // The model the settings below picked, before Vector Codium's review pair (WP A35) may have put another in its place.
+  chosen: ReviewModel
+  configured: ReviewModel | undefined
+  agentModel: ReviewModel | undefined
+  triage: ReviewModel | undefined
+  named: ReviewModel | undefined
+  served: ReadonlySet<string>
+  input: Pick<ReviewRunInput, "now" | "certificates">
+}): string[] {
+  const { config, model, chosen, configured, agentModel, triage, named } = context
+  const missing = config.model && !configured ? config.model : undefined
+  const pair: ModelSubject["choice"] = {
+    explicit: false,
+    setting: "Vector Codium's review pair",
+    unset: `no triageModel is set in ${REVIEW_CONFIG_PATH}`,
+  }
+  // The agent's model may be one the person chose for reviews (agent.review.model) or their agent's last pick, and the
+  // list does not say which, so the note says only what review.json left unset.
+  const choice: ModelSubject["choice"] =
+    modelName(model) !== modelName(chosen)
+      ? pair
+      : configured
+        ? { explicit: true, setting: `model in ${REVIEW_CONFIG_PATH}` }
+        : missing
+          ? undefined
+          : agentModel
+            ? { explicit: false, setting: "your agent's model", unset: `no model is set in ${REVIEW_CONFIG_PATH}` }
+            : {
+                explicit: false,
+                setting: model.costKind === "free" ? "the first connected free model" : "the first connected model",
+                unset: `no model is set in ${REVIEW_CONFIG_PATH} and none of your agent's models is connected`,
+              }
+  return [
+    ...(missing
+      ? [
+          // The name comes from the user's review.json and the note can be posted, so it goes in a code span.
+          `The model in ${REVIEW_CONFIG_PATH}, ${codeSpan(missing)}, is not connected, so the review ran on ${codeSpan(modelName(model))}.`,
+        ]
+      : []),
+    ...modelEvidenceNotes(
+      assessReview({
+        review: subjectOf(model, choice),
+        ...(triage
+          ? {
+              triage: subjectOf(
+                triage,
+                named && modelName(named) === modelName(triage)
+                  ? { explicit: true, setting: `triageModel in ${REVIEW_CONFIG_PATH}` }
+                  : pair,
+              ),
+            }
+          : {}),
+        scope: evidenceScope({ adapter: "desktop", config, ...(triage ? { triage: modelName(triage) } : {}) }),
+        served: [...context.served],
+        now: (context.input.now ?? Date.now)(),
+        ...(context.input.certificates ? { certificates: context.input.certificates } : {}),
+      }),
+    ),
+  ]
 }
 
 // A file's diff as one key: its rename, status and hunks.
@@ -1846,6 +2030,8 @@ const PASS_LABEL: Record<ReviewPass["name"], string> = {
   security: "Security",
   verify: "Double-check",
   judge: "Panel judge",
+  lens: "Lens",
+  repro: "Reproducer",
 }
 
 // The double-check chip, and its tooltip, which says why findings were dropped: a finding the review model did not

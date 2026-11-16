@@ -1,0 +1,279 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-main-integration-production-benchmark-log-comparison",
+  "recordedAt": "2026-11-10T01:39:47.793548+00:00",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "baseline": {
+    "source": "4aede6ac67ac43b1ab2502103e150e24caf26447",
+    "run": 42724172551,
+    "job": 129525425181,
+    "conclusion": "success",
+    "artifact": {
+      "id": 13719944901,
+      "sizeBytes": 215293,
+      "apiDigest": "sha256:4c6aa495fc5e921a65c6b3e265c57c03c0bf305678041d3b414ccd07043cf91a"
+    },
+    "scope": "Hands source before joining current main; not a feature-absent control"
+  },
+  "after": {
+    "source": "2229637c48d21cef4a2e32563adc454704e2ae15",
+    "run": 42734610373,
+    "job": 129563121509,
+    "conclusion": "success",
+    "artifact": {
+      "id": 13727381303,
+      "sizeBytes": 215114,
+      "apiDigest": "sha256:33f88b19f3e303e70579db59fe40f2f516044f5a03c68b75a60681bf5cfb1bfe"
+    },
+    "productionJavaScriptFixtureScan": {
+      "files": 846,
+      "desktopFixtureMarkersFound": false
+    }
+  },
+  "measurementSource": "Official decoded GitHub job logs, extracting their 12 actual BENCHMARK JSON rows for each run. Artifact metadata from GitHub API. Archives not locally downloaded or digest verified.",
+  "design": {
+    "samplesPerCasePerSource": 3,
+    "workers": 1,
+    "retries": 0,
+    "productionBuild": true,
+    "timelineCPUThrottle": 4,
+    "sameBenchmarkSourceFiles": true
+  },
+  "comparison": [
+    {
+      "name": "performance: first navigation paint > opens an unvisited task without a blank frame",
+      "metrics": [
+        {
+          "metric": "firstDestinationObservedMs",
+          "before": 107.59999999999127,
+          "after": 142.29999999998836,
+          "percent": 32.24907063197018,
+          "beforeSamples": [
+            107.59999999999127,
+            99.60000000000582,
+            111.89999999999418
+          ],
+          "afterSamples": [
+            167.20000000001164,
+            137.5,
+            142.29999999998836
+          ]
+        },
+        {
+          "metric": "stableDestinationObservedMs",
+          "before": 124.5,
+          "after": 159,
+          "percent": 27.710843373493965,
+          "beforeSamples": [
+            124.5,
+            119,
+            127.89999999999418
+          ],
+          "afterSamples": [
+            183.59999999997672,
+            157.09999999997672,
+            159
+          ]
+        },
+        {
+          "metric": "blankSamples",
+          "before": 0,
+          "after": 0,
+          "percent": null,
+          "beforeSamples": [
+            0,
+            0,
+            0
+          ],
+          "afterSamples": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "performance: first navigation paint > opens the new session page before its lazy module is used",
+      "metrics": [
+        {
+          "metric": "firstDestinationObservedMs",
+          "before": 112.60000000000582,
+          "after": 163.5,
+          "percent": 45.20426287743477,
+          "beforeSamples": [
+            117.60000000000582,
+            112.60000000000582,
+            111.70000000001164
+          ],
+          "afterSamples": [
+            384.80000000004657,
+            145.90000000002328,
+            163.5
+          ]
+        },
+        {
+          "metric": "stableDestinationObservedMs",
+          "before": 163.10000000000582,
+          "after": 255.09999999997672,
+          "percent": 56.40711220108376,
+          "beforeSamples": [
+            171.5,
+            163.10000000000582,
+            160.90000000002328
+          ],
+          "afterSamples": [
+            499.80000000004657,
+            255.09999999997672,
+            239.89999999996508
+          ]
+        },
+        {
+          "metric": "blankSamples",
+          "before": 0,
+          "after": 0,
+          "percent": null,
+          "beforeSamples": [
+            0,
+            0,
+            0
+          ],
+          "afterSamples": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "performance: first navigation paint > opens a child session without a blank frame",
+      "metrics": [
+        {
+          "metric": "firstDestinationObservedMs",
+          "before": 64.89999999999418,
+          "after": 102.29999999998836,
+          "percent": 57.627118644064,
+          "beforeSamples": [
+            63.5,
+            65.59999999997672,
+            64.89999999999418
+          ],
+          "afterSamples": [
+            111.40000000002328,
+            102.29999999998836,
+            102.20000000001164
+          ]
+        },
+        {
+          "metric": "stableDestinationObservedMs",
+          "before": 114.59999999997672,
+          "after": 174.70000000001164,
+          "percent": 52.44328097735351,
+          "beforeSamples": [
+            112.19999999998254,
+            114.59999999997672,
+            119.19999999998254
+          ],
+          "afterSamples": [
+            188.20000000001164,
+            165.29999999998836,
+            174.70000000001164
+          ]
+        },
+        {
+          "metric": "blankSamples",
+          "before": 0,
+          "after": 0,
+          "percent": null,
+          "beforeSamples": [
+            0,
+            0,
+            0
+          ],
+          "afterSamples": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "performance: session timeline streaming > streams assistant text in v2 with review pane closed",
+      "metrics": [
+        {
+          "metric": "endToEndInitialContentObservedMs",
+          "before": 511.05068200000005,
+          "after": 558.8606450000007,
+          "percent": 9.355229272544175,
+          "beforeSamples": [
+            511.05068200000005,
+            454.5249329999997,
+            518.4349750000001
+          ],
+          "afterSamples": [
+            570.7029920000004,
+            558.8606450000007,
+            557.2560909999993
+          ]
+        },
+        {
+          "metric": "completionObservedMs",
+          "before": 10150.299999999988,
+          "after": 10505.399999999965,
+          "percent": 3.4984187659475863,
+          "beforeSamples": [
+            10325.700000000012,
+            10150.299999999988,
+            10125.5
+          ],
+          "afterSamples": [
+            10233.200000000012,
+            10505.399999999965,
+            10539.599999999977
+          ]
+        },
+        {
+          "metric": "rafGapP95Ms",
+          "before": 16.799999999999272,
+          "after": 16.700000000000728,
+          "percent": -0.5952380952294556,
+          "beforeSamples": [
+            16.799999999999272,
+            16.799999999999272,
+            16.799999999999272
+          ],
+          "afterSamples": [
+            16.700000000000728,
+            16.700000000000728,
+            16.799999999999272
+          ]
+        },
+        {
+          "metric": "longTaskCount",
+          "before": 0,
+          "after": 0,
+          "percent": null,
+          "beforeSamples": [
+            0,
+            0,
+            0
+          ],
+          "afterSamples": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ],
+  "interpretation": [
+    "All 12 checks passed at each source, with no sampled blank frames and no timeline long tasks.",
+    "After-integration navigation and initial-content medians are higher in these samples; performance equivalence is not established.",
+    "Current main changes many app/session UI files, so this comparison cannot isolate the computer-use feature as the cause.",
+    "Hardware/CPU manifests and artifact contents are not locally verified because the storage host is blocked; three samples per case do not establish a causal or statistically reliable performance change."
+  ],
+  "releaseCredit": false
+}

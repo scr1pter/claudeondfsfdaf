@@ -3,6 +3,8 @@ import { WorkflowSpec } from "@vectordevai/core/orchestration/spec"
 import { WorkflowMarkers } from "@/orchestration/constants"
 import { WorkflowRuns } from "@/orchestration/runs"
 import GUIDE from "@/orchestration/guide.txt"
+import CONNECTED_GUIDE from "@/orchestration/guide-connected.txt"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { TaskTool } from "./task"
 import { Tool } from "./tool"
 import { ToolJsonSchema } from "./json-schema"
@@ -56,10 +58,11 @@ export type GetTask = () => Effect.Effect<Tool.InferDef<typeof TaskTool>>
 
 /** The late getter prevents the workflow/task registry dependency from cycling. */
 export const make = (task: GetTask) =>
-  Tool.define<typeof Parameters, Metadata, WorkflowRuns.Service, "workflow">(
+  Tool.define<typeof Parameters, Metadata, WorkflowRuns.Service | RuntimeFlags.Service, "workflow">(
     "workflow",
     Effect.gen(function* () {
       const runs = yield* WorkflowRuns.Service
+      const flags = yield* RuntimeFlags.Service
       return {
         description: DESCRIPTION.trim(),
         parameters: Parameters,
@@ -70,7 +73,11 @@ export const make = (task: GetTask) =>
               Effect.orDie,
             )
             if (prepared.action === "guide")
-              return { title: "Workflow guide", metadata: { action: "guide" as const }, output: GUIDE }
+              return {
+                title: "Workflow guide",
+                metadata: { action: "guide" as const },
+                output: flags.experimentalConnect ? `${GUIDE.trimEnd()}\n\n${CONNECTED_GUIDE}` : GUIDE,
+              }
             if (prepared.action === "validate") {
               const result = yield* runs.validate({ ctx, input: prepared.input })
               return {

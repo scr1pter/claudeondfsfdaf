@@ -4,6 +4,7 @@ import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
 import { SessionV1 } from "@vectordevai/schema/session-v1"
 import type {
   AssistantMessage,
+  FilePart,
   GlobalEvent,
   Message,
   Part,
@@ -62,12 +63,18 @@ export type PartSeed<Owner extends Message["role"]> =
     : never
 
 type ToolOptions<State extends ToolStatus> = State extends "pending"
-  ? { output?: never; title?: never; metadata?: never; error?: never }
+  ? { output?: never; title?: never; metadata?: never; error?: never; attachments?: never }
   : State extends "running"
-    ? { title?: string; metadata?: Record<string, unknown>; output?: never; error?: never }
+    ? { title?: string; metadata?: Record<string, unknown>; output?: never; error?: never; attachments?: never }
     : State extends "error"
-      ? { error?: string; metadata?: Record<string, unknown>; output?: never; title?: never }
-      : { output?: string; title?: string; metadata?: Record<string, unknown>; error?: never }
+      ? { error?: string; metadata?: Record<string, unknown>; output?: never; title?: never; attachments?: never }
+      : {
+          output?: string
+          title?: string
+          metadata?: Record<string, unknown>
+          attachments?: FilePart[]
+          error?: never
+        }
 
 const decodeOptions = { errors: "all", onExcessProperty: "error" } as const
 const decodeMessage = Schema.decodeUnknownSync(SessionV1.WithParts)
@@ -491,6 +498,7 @@ export function toolPart(
       title: options.title ?? tool,
       metadata: options.metadata ?? {},
       time: { start: 1700000001000, end: 1700000002000 },
+      ...(options.attachments ? { attachments: options.attachments } : {}),
     },
   }
 }

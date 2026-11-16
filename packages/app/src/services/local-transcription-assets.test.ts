@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
+import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 test("local transcription URL assets bypass dependency optimization on a cold Vite server", async () => {
   const { createServer } = await import("vite")
+  // Stop the same service Vite loaded, even when another workspace resolves a different esbuild version.
+  const viteRequire = createRequire(import.meta.resolve("vite"))
+  const esbuild: { stop(): void | Promise<void> } = viteRequire("esbuild")
   const root = fileURLToPath(new URL("../../", import.meta.url))
   const cacheDir = await mkdtemp(path.join(tmpdir(), "vector-vite-assets-"))
   const server = await createServer({
@@ -32,7 +36,15 @@ test("local transcription URL assets bypass dependency optimization on a cold Vi
     const library = await client.pluginContainer.resolveId("@huggingface/transformers", worker)
     expect(library?.id).toContain("/deps/@huggingface_transformers.js")
   } finally {
-    await server.close()
-    await rm(cacheDir, { recursive: true, force: true })
+    try {
+      await server.close()
+    } finally {
+      try {
+        // Bun on Windows can retain this service after a passing test and a closed middleware server.
+        await esbuild.stop()
+      } finally {
+        await rm(cacheDir, { recursive: true, force: true })
+      }
+    }
   }
 }, 10_000)

@@ -7,6 +7,14 @@ import { mapLine, touched, type DiffFile } from "./diff"
 import type { TeamPattern } from "./prompt"
 import { namedLines } from "./select"
 import {
+  guardedMemory,
+  isDismissalMarker,
+  teamDir,
+  type DismissalMarker,
+  type GuardedTeamInput,
+  type GuardedTeamMemory,
+} from "./team"
+import {
   CATEGORIES,
   SEVERITIES,
   type Category,
@@ -267,6 +275,9 @@ export interface ClassifyContext {
   thread?: ThreadInfo
   isWriter: (login: string) => boolean // a cached permission lookup
   prAuthor: string
+  // The workflow's mentions (its MENTIONS), the App handle included once the workflow bakes it in; DEFAULT_MENTIONS when
+  // absent. The route job reads a dismissal with the same list.
+  mentions?: string[]
 }
 
 export interface ClassifiedPrior extends PriorFinding {
@@ -294,7 +305,8 @@ export function classifyPrior(prior: PriorFinding, ctx: ClassifyContext): Classi
   const signals: string[] = []
   if (thread?.resolved && thread.resolvedBy) signals.push(thread.resolvedBy)
   for (const reaction of thread?.reactions ?? []) if (thumbsDown(reaction.content)) signals.push(...reaction.users)
-  for (const reply of thread?.replies ?? []) if (dismissReply(reply.body)) signals.push(reply.author)
+  for (const reply of thread?.replies ?? [])
+    if (dismissReply(reply.body, ctx.mentions ?? DEFAULT_MENTIONS)) signals.push(reply.author)
 
   // Only writers and the PR author can dismiss. A blocking security finding needs a writer other than the author.
   const guarded = prior.severity === "blocking" && prior.category === "security"
@@ -317,12 +329,12 @@ function thumbsDown(content: string): boolean {
 }
 
 // A reply starting with one of the phrases, or a `/vector dismiss` command. The command is read by the parser the
-// route job runs, so both jobs agree on it: a quote-reply ending in the command counts, "/vector dismissal" does not.
-function dismissReply(body: string): boolean {
+// route job runs, with the same mentions, so both jobs agree on it: a quote-reply ending in the command counts,
+// "/vector dismissal" does not, and `@<slug> dismiss` counts once the workflow's MENTIONS names the App.
+function dismissReply(body: string, mentions: string[]): boolean {
   const text = body.trim().toLowerCase().replace(/’/g, "'")
   return (
-    DISMISS_PHRASES.some((phrase) => text.startsWith(phrase)) ||
-    parseReviewCommand(body, DEFAULT_MENTIONS).kind === "dismiss"
+    DISMISS_PHRASES.some((phrase) => text.startsWith(phrase)) || parseReviewCommand(body, mentions).kind === "dismiss"
   )
 }
 
@@ -343,6 +355,62 @@ export function teamPatterns(comments: readonly { path: string; body: string }[]
     if (out.length >= max) break
   }
   return out
+}
+
+// Guarded team memory's read side (VS-35a). Nothing calls it before VS-35's later window, when the job writes the
+// `vector-dismissal` marker after a comment's finding marker; team.ts holds the rules.
+const DISMISSAL_START = /<!--\s*vector-dismissal\b/gi
+const DISMISSAL_MARKER = /^<!-- vector-dismissal by=(\S+) why=(\S+) h=(\S+) -->$/
+
+// The last dismissal marker that starts after the comment's own (last) finding marker. Model text comes before the
+// finding marker and has its `<!--` escaped, so the position rule is defence in depth. The last thing that starts like
+// a dismissal marker after it, up to its first `-->`, is the candidate. A malformed candidate (an unknown role or
+// reason, a hash that is not 12 to 64 lowercase hex, a field more or less, other spacing, no `-->`) reads as none,
+// never as an earlier marker, so the dismissal counts as unmarked. Only the text after the finding marker is read, in
+// linear time.
+export function parseDismissalMarker(body: string): DismissalMarker | undefined {
+  const own = [...body.matchAll(FINDING_MARKER)].at(-1)
+  if (!own || own.index === undefined) return undefined
+  const rest = body.slice(own.index + own[0].length)
+  const start = [...rest.matchAll(DISMISSAL_START)].at(-1)?.index
+  if (start === undefined) return undefined
+  const end = rest.indexOf("-->", start)
+  const fields = end === -1 ? undefined : rest.slice(start, end + 3).match(DISMISSAL_MARKER)
+  if (!fields) return undefined
+  const marker = { by: fields[1] ?? "", why: fields[2] ?? "", hash: fields[3] ?? "" }
+  return isDismissalMarker(marker) ? marker : undefined
+}
+
+export interface GuardedComment {
+  path: string
+  body: string
+  pr: number
+  at?: number // TeamDismissal.at: the dismissing action's own time, never the comment's created_at or updated_at
+  replied?: boolean // TeamDismissal.replied: a reply from someone other than the dismissing actor
+  codeChanged?: boolean
+}
+
+// The body-level analogue of teamPatterns under guarded rules, over Vector's own review comments, newest first. As
+// there, a comment without a dismissed finding marker or without title words is skipped; every other one becomes a
+// dismissal for guardedMemory, marked or not, so the exclusion counts see it.
+export function guardedTeamPatterns(comments: readonly GuardedComment[], input: GuardedTeamInput): GuardedTeamMemory {
+  return guardedMemory(
+    comments.flatMap((comment) => {
+      const marker = parseFindingMarker(comment.body)
+      if (!marker || marker.status !== "dismissed" || !marker.words.length) return []
+      return [
+        {
+          pattern: { category: marker.category, dir: teamDir(comment.path), words: marker.words },
+          marker: parseDismissalMarker(comment.body),
+          pr: comment.pr,
+          at: comment.at,
+          replied: comment.replied,
+          codeChanged: comment.codeChanged,
+        },
+      ]
+    }),
+    input,
+  )
 }
 
 // ---------------------------------------------------------------------------------------------------------------

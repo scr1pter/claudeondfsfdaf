@@ -237,7 +237,14 @@ function footer(outcome: ReviewOutcome): string {
 // "By pass: review $0.0123 (40.1k in / 2.0k out) · double-check $0.0031 (9.2k in / 0.4k out)". Dollar amounts only
 // when the review as a whole is priced.
 function passesLine(passes: ReviewPass[], cost: ReviewCost | undefined): string {
-  const name = { review: "review", security: "security", verify: "double-check", judge: "panel judge" } as const
+  const name = {
+    review: "review",
+    security: "security",
+    verify: "double-check",
+    judge: "panel judge",
+    lens: "lens",
+    repro: "reproducer",
+  } as const
   return `By pass: ${passes
     .map((pass) => {
       const explicit = pass.model.includes("/")

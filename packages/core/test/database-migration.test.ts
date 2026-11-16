@@ -897,6 +897,59 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("session migrations run in strictly increasing id order, each with its own 14-digit prefix", () => {
+    const ids = migrations.map((migration) => migration.id)
+    const prefixes = ids.map((id) => /^(\d{14})_[a-z0-9_-]+$/.exec(id)?.[1])
+    expect(prefixes).not.toContain(undefined)
+    expect(new Set(prefixes).size).toBe(ids.length)
+    expect(ids).toEqual(ids.toSorted())
+    for (const [index, prefix] of prefixes.entries())
+      if (index > 0) expect(Number(prefix)).toBeGreaterThan(Number(prefixes[index - 1]))
+  })
+
+  test("a migration that replaces an applied id records itself without running", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const ran: string[] = []
+        const migration = (id: string, replaces?: readonly string[]): DatabaseMigration.Migration => ({
+          id,
+          replaces,
+          up: (tx) =>
+            Effect.gen(function* () {
+              ran.push(id)
+              yield* tx.run(`CREATE TABLE ${id.replace(/^\d+_/, "")} (id text PRIMARY KEY)`)
+            }),
+        })
+        yield* db.run(sql`CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
+        // An earlier build ran the first one under its old id and created its table.
+        yield* db.run(sql`INSERT INTO migration (id, time_completed) VALUES ('20200101000000_alpha', 1)`)
+        yield* db.run(sql`CREATE TABLE alpha (id text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO alpha (id) VALUES ('kept')`)
+
+        yield* DatabaseMigration.applyOnly(db, [
+          migration("20200201000000_alpha", ["20200101000000_alpha"]),
+          migration("20200202000000_beta", ["20200102000000_beta"]),
+        ])
+        // Opening again changes nothing.
+        yield* DatabaseMigration.applyOnly(db, [
+          migration("20200201000000_alpha", ["20200101000000_alpha"]),
+          migration("20200202000000_beta", ["20200102000000_beta"]),
+        ])
+
+        // Only the migration whose earlier id was never applied ran, once; the old row stays for older builds.
+        expect(ran).toEqual(["20200202000000_beta"])
+        expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual([
+          { id: "20200101000000_alpha" },
+          { id: "20200201000000_alpha" },
+          { id: "20200202000000_beta" },
+        ])
+        expect(yield* db.all(sql`SELECT id FROM alpha`)).toEqual([{ id: "kept" }])
+        expect(yield* db.all(sql`SELECT id FROM beta`)).toEqual([])
+      }),
+    )
+  })
+
   test("skips drizzle import when migration table already has state", async () => {
     await run(
       Effect.gen(function* () {

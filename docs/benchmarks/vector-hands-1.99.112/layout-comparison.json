@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "before": {
+      "workflowRunID": 41920625342,
+      "jobID": 126891841581,
+      "artifactID": 13368476383,
+      "archiveSha256": "a42ca7fba781bce1a9a91ece62e5110a6708ef59d876cff214a80423ebc5a089",
+      "commit": "2aa64b48f3c1fb60fed72bb11645a223e16a9fe8",
+      "manifest": "desktop-after-manifest.json",
+      "manifestSha256": "6e6d8ddf02d4c25faa52ffc9bb714148294649c2dc20e08192626efa2b760c32",
+      "metrics": "desktop-after-metrics.json",
+      "metricsSha256": "254766813cc16c0bd3ae27857182e09668404cc257f928c4d37810d47bef5522"
+    },
+    "after": {
+      "workflowRunID": 41933580381,
+      "jobID": 126936311006,
+      "artifactID": 13372997746,
+      "archiveSha256": "9c603b4376d925ce8464a405321c6a64874fec28040d304e4a93c2e0dbc3020f",
+      "commit": "09b2a5715684498c66d841b7a8d66e88b30f95f7",
+      "manifest": "layout-after-manifest.json",
+      "manifestSha256": "80a505503a4743fe5ad95dbf4a3a6ac44642a383cb084c6449914574d5246e2f",
+      "metrics": "layout-after-metrics.json",
+      "metricsSha256": "178014de15fc9f632326e97ce3fc68937da0cb4b6f215cceca001dbc3e734cce"
+    }
+  },
+  "matchingEnvironmentFields": [
+    "ref",
+    "node",
+    "bun",
+    "playwright",
+    "platform",
+    "arch",
+    "cpuCount",
+    "workers",
+    "repeats",
+    "channel",
+    "timeline"
+  ],
+  "environmentDifferences": {
+    "cpu": {
+      "before": "AMD EPYC 7763 64-Core Processor",
+      "after": "AMD EPYC 9V74 80-Core Processor"
+    },
+    "memoryBytes": {
+      "before": 16760344576,
+      "after": 16760340480
+    }
+  },
+  "interpretation": {
+    "status": "observations_only",
+    "method": "Median of three measurements per case; after minus before. Exact manifest and metrics JSON is retained byte for byte from each verified GitHub artifact archive.",
+    "limitation": "The CPU model differs (EPYC 7763 versus EPYC 9V74), and reported memory differs by 4096 bytes. CPU count, Node, Bun, Playwright and workload match. These separate hosted runs do not establish causal performance effects or a new numerical regression threshold.",
+    "observations": "Task first/stable paint medians are 17.3/11.9 ms lower; new-session medians are 10.3/6.5 ms lower; child first paint is 13.2 ms lower while stable paint is 39.8 ms higher. Streaming initial content is 181.5 ms higher and completion is 99.0 ms higher. The CPU model and memory differ, so these mixed hosted-run observations do not isolate a layout effect."
+  },
+  "validation": {
+    "before": {
+      "records": 12,
+      "firstTryPasses": 12,
+      "navigationBlankSamples": 0,
+      "navigationUnknownSamples": 0,
+      "streaming": {
+        "measurements": 3,
+        "deliveredDeltas": [40, 40, 40],
+        "pendingDeltas": [0, 0, 0],
+        "blankSamples": 0,
+        "rowReplacements": 0,
+        "markdownReplacements": 0,
+        "longTaskCount": 0,
+        "rafGapsOver50Ms": 1,
+        "maxRafGapMs": 50.034000000000106
+      },
+      "productionMarkerScan": {
+        "javascriptFiles": 844,
+        "desktopFixtureMarkers": 0
+      }
+    },
+    "after": {
+      "records": 12,
+      "firstTryPasses": 12,
+      "navigationBlankSamples": 0,
+      "navigationUnknownSamples": 0,
+      "streaming": {
+        "measurements": 3,
+        "deliveredDeltas": [40, 40, 40],
+        "pendingDeltas": [0, 0, 0],
+        "blankSamples": 0,
+        "rowReplacements": 0,
+        "markdownReplacements": 0,
+        "longTaskCount": 0,
+        "rafGapsOver50Ms": 0,
+        "maxRafGapMs": 33.399999999999636
+      },
+      "productionMarkerScan": {
+        "javascriptFiles": 844,
+        "desktopFixtureMarkers": 0
+      }
+    }
+  },
+  "measurements": [
+    {
+      "name": "performance: first navigation paint > opens an unvisited task without a blank frame",
+      "metric": "firstDestinationObservedMs",
+      "beforeMs": 150.09999999997672,
+      "afterMs": 132.80000000001746,
+      "deltaMs": -17.299999999959255,
+      "deltaPercent": -11.525649566930005,
+      "samples": {
+        "before": [128.40000000002328, 159.40000000002328, 150.09999999997672],
+        "after": [131.5, 133.20000000001164, 132.80000000001746]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens an unvisited task without a blank frame",
+      "metric": "stableDestinationObservedMs",
+      "beforeMs": 160.89999999990687,
+      "afterMs": 149,
+      "deltaMs": -11.899999999906868,
+      "deltaPercent": -7.395898073283876,
+      "samples": {
+        "before": [144.69999999995343, 174.19999999995343, 160.89999999990687],
+        "after": [141.69999999998254, 149, 151.30000000001746]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens the new session page before its lazy module is used",
+      "metric": "firstDestinationObservedMs",
+      "beforeMs": 165.80000000004657,
+      "afterMs": 155.5,
+      "deltaMs": -10.300000000046566,
+      "deltaPercent": -6.212303980725979,
+      "samples": {
+        "before": [182.59999999997672, 165.80000000004657, 162.90000000002328],
+        "after": [179.20000000001164, 155.5, 155.29999999998836]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens the new session page before its lazy module is used",
+      "metric": "stableDestinationObservedMs",
+      "beforeMs": 249.5,
+      "afterMs": 243,
+      "deltaMs": -6.5,
+      "deltaPercent": -2.6052104208416833,
+      "samples": {
+        "before": [328.39999999990687, 241.40000000002328, 249.5],
+        "after": [313.8999999999942, 243, 238.19999999998254]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens a child session without a blank frame",
+      "metric": "firstDestinationObservedMs",
+      "beforeMs": 108.29999999993015,
+      "afterMs": 95.09999999997672,
+      "deltaMs": -13.199999999953434,
+      "deltaPercent": -12.188365650934394,
+      "samples": {
+        "before": [108.29999999993015, 106.30000000004657, 116.10000000009313],
+        "after": [103.39999999999418, 89.90000000002328, 95.09999999997672]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens a child session without a blank frame",
+      "metric": "stableDestinationObservedMs",
+      "beforeMs": 139.40000000002328,
+      "afterMs": 179.19999999998254,
+      "deltaMs": 39.799999999959255,
+      "deltaPercent": 28.550932568115215,
+      "samples": {
+        "before": [141, 124.30000000004657, 139.40000000002328],
+        "after": [212, 168.90000000002328, 179.19999999998254]
+      }
+    },
+    {
+      "name": "performance: session timeline streaming > streams assistant text in v2 with review pane closed",
+      "metric": "endToEndInitialContentObservedMs",
+      "beforeMs": 395.209288,
+      "afterMs": 576.6985129999994,
+      "deltaMs": 181.48922499999935,
+      "deltaPercent": 45.92230762552305,
+      "samples": {
+        "before": [395.209288, 566.9301999999989, 393.76257799999985],
+        "after": [598.6993540000003, 562.0167500000007, 576.6985129999994]
+      }
+    },
+    {
+      "name": "performance: session timeline streaming > streams assistant text in v2 with review pane closed",
+      "metric": "completionObservedMs",
+      "beforeMs": 10506.79999999993,
+      "afterMs": 10605.799999999988,
+      "deltaMs": 99.00000000005821,
+      "deltaPercent": 0.9422469258009942,
+      "samples": {
+        "before": [10506.79999999993, 10393.20000000007, 10543.899999999907],
+        "after": [10579, 10605.799999999988, 10644.5]
+      }
+    }
+  ],
+  "jobLogEvidence": {
+    "before": "2026-11-04T22:19:34.5109466Z Checked 844 production JavaScript files; no desktop test fixture markers found.",
+    "after": "2026-11-04T23:31:06.6792817Z Checked 844 production JavaScript files; no desktop test fixture markers found."
+  }
+}

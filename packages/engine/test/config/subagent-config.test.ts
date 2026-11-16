@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import path from "path"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, Struct } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -190,7 +190,7 @@ describe("a repository's subagent and workflow keys", () => {
   })
 })
 
-// The 1.99.111 shape: the same top-level keys, with budget and sizing as that version declared them.
+// The released top-level inventory remains historical; connect and computer need the newer engine.
 const RELEASED_TOP_LEVEL = [
   "$schema",
   "shell",
@@ -231,9 +231,9 @@ const RELEASED_TOP_LEVEL = [
   "local",
   "research",
   "experimental",
-]
+] as const
 const Released = Schema.Struct({
-  ...ConfigV1.Info.fields,
+  ...Struct.pick(ConfigV1.Info.fields, RELEASED_TOP_LEVEL),
   budget: Schema.optional(
     Schema.Struct({
       run: Schema.optional(RunBudget.Info),
@@ -277,8 +277,20 @@ const everyKey = {
 }
 
 describe("version skew", () => {
-  test("no new top-level key", () => {
-    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
+  test("connect and computer are the intentional top-level additions", () => {
+    expect(() => ConfigParse.schema(Released, { connect: { review: { after_run: "off" } } }, "vector.json")).toThrow()
+    expect(RELEASED_TOP_LEVEL).not.toContain("computer")
+    expect(Object.keys(Released.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
+    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual([...RELEASED_TOP_LEVEL, "connect", "computer"].sort())
+  })
+
+  test("computer is not a released subagent key and cannot become repository policy", () => {
+    const computer = { enabled: false, default_app_access: "deny" as const }
+    expect(() => ConfigParse.schema(Released, { computer }, "vector.json")).toThrow()
+    expect(ConfigParse.schema(ConfigV1.Info, { computer }, "vector.json").computer).toEqual(computer)
+    // The full non-managed-layer matrix is in config.test.ts (INV-C7); a repository cannot bypass it by being trusted.
+    for (const trusted of [false, true])
+      expect(Config.projectExecutableConfig({ ...user, computer }, trusted, user).computer).toBeUndefined()
   })
 
   test("a config with every new key decodes against the 1.99.111 shape and passes its top-level check", () => {

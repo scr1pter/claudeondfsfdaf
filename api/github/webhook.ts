@@ -1,3 +1,4 @@
+import { cloudAgentsWebhookHandler } from "../_lib/github-webhook-handlers/cloud-agents.js"
 import { opsWebhookHandler, registerShipDeskIntake } from "../_lib/github-webhook-handlers/ops.js"
 import { createGithubWebhookRoute, type GithubWebhookHandler } from "../_lib/github-webhook.js"
 import { shipDeskIntake } from "../_lib/ship-desk.js"
@@ -15,6 +16,6 @@ registerShipDeskIntake((pull, context) => shipDeskIntake(pull, context))
  * needs GitHub's events adds its handler to this list; Codex's `cloudAgentsWebhookHandler` is added by the integration
  * commit (A59), one import and one entry.
  */
-export const GITHUB_WEBHOOK_HANDLERS: readonly GithubWebhookHandler[] = [opsWebhookHandler]
+export const GITHUB_WEBHOOK_HANDLERS: readonly GithubWebhookHandler[] = [opsWebhookHandler, cloudAgentsWebhookHandler]
 
 export default createGithubWebhookRoute({ handlers: GITHUB_WEBHOOK_HANDLERS })

@@ -1,0 +1,2218 @@
+{
+  "schemaVersion": 1,
+  "source": "packages/schema/src/computer-apps.ts",
+  "match": {
+    "case": "insensitive",
+    "wildcard": "a pattern ending in * matches by prefix",
+    "macos": "the identity's bundleId against macos",
+    "windows": "windowClass first when the window's class is known, then aumid for an aumid identity or binary (the original file name from the signed image) for an exe identity"
+  },
+  "never": [
+    "vector",
+    "terminal",
+    "scripting",
+    "password-manager",
+    "security",
+    "remote-viewer"
+  ],
+  "noAlways": [
+    "browser",
+    "files",
+    "finance",
+    "developer"
+  ],
+  "clickOnly": [
+    "developer"
+  ],
+  "reasons": {
+    "vector": "vector",
+    "terminal": "terminal",
+    "scripting": "terminal",
+    "password-manager": "passwords",
+    "security": "security",
+    "remote-viewer": "remote"
+  },
+  "rules": [
+    {
+      "id": "never",
+      "rule": "The first entry, in order, whose patterns match the identity decides when its category is in never."
+    },
+    {
+      "id": "child-shell",
+      "rule": "An app whose process tree has a child shell or REPL is terminal, unless its listed category is developer."
+    },
+    {
+      "id": "system-ui",
+      "rule": "A system-ui entry is visible in frames and is never a grant target."
+    },
+    {
+      "id": "system",
+      "rule": "A system identity (an OS platform binary) is security unless it matches a benign-system or default-blocked entry. A macOS benign-system entry matches only an identity with apple: true."
+    },
+    {
+      "id": "listed",
+      "rule": "Otherwise the first matching entry's category, else general."
+    },
+    {
+      "id": "enforce",
+      "rule": "Helpers refuse every target whose category is in never with protected, whatever the session approved. Default-blocked entries are the desktop's verdict: a helper never refuses an app only because it is default-blocked, since the user can unblock it."
+    },
+    {
+      "id": "click-only",
+      "rule": "Helpers refuse text input into an app whose category is in clickOnly with blocked, after the owner and secure-field checks. Text input is input.type, ui.setValue, and an input.key or input.hold that types: its combo holds a key other than a modifier or a key that never types (Enter, Return, Tab, Backspace, Delete, Escape, the arrows, Home, End, Page Up, Page Down, Insert, Help, Caps Lock, Num Lock, Scroll Lock, Print Screen, Pause, the context menu key, F1 to F24, the media and volume keys), and no shortcut modifier. Command, Win and Control are shortcut modifiers, except that on Windows Ctrl+Alt is AltGraph; on Windows Alt is one too unless a numpad key comes with it (an Alt code). Shift, AltGraph and Fn keep a key's text, and so does Option on macOS. The list fails closed: a key name it does not know counts as typing. Clicks, shortcuts and navigation or editing keys stay allowed."
+    }
+  ],
+  "entries": [
+    {
+      "key": "builtin:vector",
+      "name": "Vector",
+      "category": "vector",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "ai.vector.app",
+        "ai.vector.app.computer",
+        "ai.vector.app.helper",
+        "ai.vector.app.helper.Renderer",
+        "ai.vector.app.helper.GPU",
+        "ai.vector.app.helper.Plugin",
+        "ai.vector.app.helper.EH",
+        "ai.vector.app.helper.NP",
+        "ai.vector.app.beta",
+        "ai.vector.app.beta.computer",
+        "ai.vector.app.beta.helper",
+        "ai.vector.app.beta.helper.Renderer",
+        "ai.vector.app.beta.helper.GPU",
+        "ai.vector.app.beta.helper.Plugin",
+        "ai.vector.app.beta.helper.EH",
+        "ai.vector.app.beta.helper.NP",
+        "ai.vector.app.dev",
+        "ai.vector.app.dev.computer",
+        "ai.vector.app.dev.helper",
+        "ai.vector.app.dev.helper.Renderer",
+        "ai.vector.app.dev.helper.GPU",
+        "ai.vector.app.dev.helper.Plugin",
+        "ai.vector.app.dev.helper.EH",
+        "ai.vector.app.dev.helper.NP",
+        "ai.vector.app.*"
+      ],
+      "windows": {
+        "aumid": [
+          "ai.vector.app",
+          "ai.vector.app.beta",
+          "ai.vector.app.dev",
+          "ai.vector.app.*"
+        ],
+        "binary": [
+          "vector-desktop.exe",
+          "vector-desktop-beta.exe",
+          "vector-desktop-dev.exe",
+          "vector-computer.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:terminal",
+      "name": "Terminal",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.Terminal"
+      ]
+    },
+    {
+      "key": "builtin:iterm2",
+      "name": "iTerm2",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.googlecode.iterm2"
+      ]
+    },
+    {
+      "key": "builtin:warp",
+      "name": "Warp",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "dev.warp.*"
+      ],
+      "windows": {
+        "binary": [
+          "warp.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:ghostty",
+      "name": "Ghostty",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.mitchellh.ghostty"
+      ]
+    },
+    {
+      "key": "builtin:kitty",
+      "name": "kitty",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "net.kovidgoyal.kitty"
+      ]
+    },
+    {
+      "key": "builtin:alacritty",
+      "name": "Alacritty",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "org.alacritty",
+        "io.alacritty"
+      ],
+      "windows": {
+        "binary": [
+          "alacritty.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:wezterm",
+      "name": "WezTerm",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.github.wez.wezterm"
+      ],
+      "windows": {
+        "binary": [
+          "wezterm-gui.exe",
+          "wezterm.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:hyper",
+      "name": "Hyper",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "co.zeit.hyper"
+      ],
+      "windows": {
+        "binary": [
+          "hyper.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:tabby",
+      "name": "Tabby",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "org.tabby"
+      ],
+      "windows": {
+        "binary": [
+          "tabby.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:rio",
+      "name": "Rio",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.raphaelamorim.rio"
+      ]
+    },
+    {
+      "key": "builtin:wave",
+      "name": "Wave Terminal",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "dev.commandline.waveterm"
+      ]
+    },
+    {
+      "key": "builtin:termius",
+      "name": "Termius",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.termius-dmg.mac",
+        "com.termius.mac"
+      ],
+      "windows": {
+        "binary": [
+          "termius.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:xquartz",
+      "name": "XQuartz",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "org.xquartz.X11",
+        "org.macosforge.xquartz.X11"
+      ]
+    },
+    {
+      "key": "builtin:windows-terminal",
+      "name": "Windows Terminal",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "aumid": [
+          "Microsoft.WindowsTerminal*"
+        ],
+        "windowClass": [
+          "CASCADIA_HOSTING_WINDOW_CLASS"
+        ],
+        "binary": [
+          "WindowsTerminal.exe",
+          "wt.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:console",
+      "name": "Console window",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "windowClass": [
+          "ConsoleWindowClass",
+          "PseudoConsoleWindow"
+        ],
+        "binary": [
+          "conhost.exe",
+          "OpenConsole.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:cmd",
+      "name": "Command Prompt",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "cmd.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:powershell",
+      "name": "PowerShell",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "powershell.exe",
+          "pwsh.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:wsl",
+      "name": "Windows Subsystem for Linux",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "aumid": [
+          "MicrosoftCorporationII.WindowsSubsystemForLinux*",
+          "CanonicalGroupLimited.*",
+          "TheDebianProject.*",
+          "KaliLinux.*",
+          "46932SUSE.*",
+          "WhitewaterFoundryLtd.Co.*"
+        ],
+        "binary": [
+          "wsl.exe",
+          "wslhost.exe",
+          "bash.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:mintty",
+      "name": "mintty",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "windowClass": [
+          "mintty"
+        ],
+        "binary": [
+          "mintty.exe",
+          "git-bash.exe",
+          "sh.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:putty",
+      "name": "PuTTY",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "windowClass": [
+          "PuTTY"
+        ],
+        "binary": [
+          "putty.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:conemu",
+      "name": "ConEmu",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "windowClass": [
+          "VirtualConsoleClass"
+        ],
+        "binary": [
+          "ConEmu.exe",
+          "ConEmu64.exe",
+          "Cmder.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:mobaxterm",
+      "name": "MobaXterm",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "MobaXterm.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:run-dialog",
+      "name": "Run",
+      "category": "terminal",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "aumid": [
+          "Microsoft.Windows.Shell.RunDialog"
+        ]
+      }
+    },
+    {
+      "key": "builtin:script-editor",
+      "name": "Script Editor",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.ScriptEditor2"
+      ]
+    },
+    {
+      "key": "builtin:automator",
+      "name": "Automator",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.Automator"
+      ]
+    },
+    {
+      "key": "builtin:shortcuts",
+      "name": "Shortcuts",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.shortcuts"
+      ]
+    },
+    {
+      "key": "builtin:script-debugger",
+      "name": "Script Debugger",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.latenightsw.ScriptDebugger*"
+      ]
+    },
+    {
+      "key": "builtin:keyboard-maestro",
+      "name": "Keyboard Maestro",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.stairways.keyboardmaestro.*"
+      ]
+    },
+    {
+      "key": "builtin:hammerspoon",
+      "name": "Hammerspoon",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "org.hammerspoon.Hammerspoon"
+      ]
+    },
+    {
+      "key": "builtin:bettertouchtool",
+      "name": "BetterTouchTool",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.hegenberg.BetterTouchTool"
+      ]
+    },
+    {
+      "key": "builtin:raycast",
+      "name": "Raycast",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.raycast.macos"
+      ]
+    },
+    {
+      "key": "builtin:alfred",
+      "name": "Alfred",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.runningwithcrayons.Alfred*"
+      ]
+    },
+    {
+      "key": "builtin:powershell-ise",
+      "name": "PowerShell ISE",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "powershell_ise.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:script-host",
+      "name": "Windows Script Host",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "wscript.exe",
+          "cscript.exe",
+          "mshta.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:autohotkey",
+      "name": "AutoHotkey",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "AutoHotkey.exe",
+          "AutoHotkey64.exe",
+          "AutoHotkey32.exe",
+          "AutoHotkeyU64.exe",
+          "AutoHotkeyU32.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:power-automate",
+      "name": "Power Automate",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "aumid": [
+          "Microsoft.PowerAutomateDesktop*"
+        ],
+        "binary": [
+          "PAD.Console.Host.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:powertoys-run",
+      "name": "PowerToys Run",
+      "category": "scripting",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "PowerToys.PowerLauncher.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:passwords",
+      "name": "Passwords",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.Passwords"
+      ]
+    },
+    {
+      "key": "builtin:keychain-access",
+      "name": "Keychain Access",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.keychainaccess"
+      ]
+    },
+    {
+      "key": "builtin:1password",
+      "name": "1Password",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.1password.*",
+        "com.agilebits.onepassword*"
+      ],
+      "windows": {
+        "binary": [
+          "1Password.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:bitwarden",
+      "name": "Bitwarden",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.bitwarden.desktop"
+      ],
+      "windows": {
+        "aumid": [
+          "8bitSolutionsLLC.bitwardendesktop*"
+        ],
+        "binary": [
+          "Bitwarden.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:lastpass",
+      "name": "LastPass",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.lastpass.LastPass"
+      ],
+      "windows": {
+        "binary": [
+          "LastPass.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:dashlane",
+      "name": "Dashlane",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.dashlane.*"
+      ],
+      "windows": {
+        "binary": [
+          "Dashlane.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:keepassxc",
+      "name": "KeePassXC",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "org.keepassxc.keepassxc"
+      ],
+      "windows": {
+        "binary": [
+          "KeePassXC.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:keepass",
+      "name": "KeePass",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "KeePass.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:enpass",
+      "name": "Enpass",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "in.sinew.Enpass-Desktop"
+      ],
+      "windows": {
+        "binary": [
+          "Enpass.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:keeper",
+      "name": "Keeper",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.keepersecurity.*"
+      ],
+      "windows": {
+        "binary": [
+          "keeperpasswordmanager.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:proton-pass",
+      "name": "Proton Pass",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "me.proton.pass.*"
+      ],
+      "windows": {
+        "binary": [
+          "Proton Pass.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:nordpass",
+      "name": "NordPass",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "NordPass.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:roboform",
+      "name": "RoboForm",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "RoboForm.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:strongbox",
+      "name": "Strongbox",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.markmcguill.strongbox*"
+      ]
+    },
+    {
+      "key": "builtin:macpass",
+      "name": "MacPass",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.hicknhacksoftware.MacPass"
+      ]
+    },
+    {
+      "key": "builtin:credential-manager",
+      "name": "Windows Credential Manager",
+      "category": "password-manager",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "credwiz.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:system-settings",
+      "name": "System Settings",
+      "category": "security",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.systempreferences"
+      ]
+    },
+    {
+      "key": "builtin:security-prompts",
+      "name": "Security and authorization prompts",
+      "category": "security",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.SecurityAgent",
+        "com.apple.coreservices.uiagent",
+        "com.apple.UserNotificationCenter",
+        "com.apple.LocalAuthentication.UIAgent",
+        "com.apple.accessibility.universalAccessAuthWarn",
+        "com.apple.AuthenticationServicesCore.AuthenticationServicesAgent",
+        "com.apple.loginwindow",
+        "com.apple.ScreenSaver.Engine"
+      ],
+      "windows": {
+        "aumid": [
+          "Microsoft.LockApp*"
+        ],
+        "binary": [
+          "consent.exe",
+          "CredentialUIBroker.exe",
+          "LogonUI.exe",
+          "LockApp.exe",
+          "smartscreen.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:notifications",
+      "name": "Notifications",
+      "category": "security",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.notificationcenterui"
+      ],
+      "windows": {
+        "binary": [
+          "ShellExperienceHost.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:installer",
+      "name": "Installer",
+      "category": "security",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.installer"
+      ],
+      "windows": {
+        "binary": [
+          "msiexec.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:windows-security",
+      "name": "Windows Security",
+      "category": "security",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "aumid": [
+          "Microsoft.SecHealthUI*",
+          "Microsoft.Windows.SecHealthUI*"
+        ],
+        "binary": [
+          "SecHealthUI.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:windows-settings",
+      "name": "Windows Settings and Control Panel",
+      "category": "security",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "aumid": [
+          "windows.immersivecontrolpanel*"
+        ],
+        "binary": [
+          "SystemSettings.exe",
+          "control.exe",
+          "regedit.exe",
+          "mmc.exe",
+          "UserAccountControlSettings.exe",
+          "Taskmgr.exe",
+          "msconfig.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:screen-sharing",
+      "name": "Screen Sharing",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.ScreenSharing"
+      ]
+    },
+    {
+      "key": "builtin:apple-remote-desktop",
+      "name": "Remote Desktop",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.RemoteDesktop"
+      ]
+    },
+    {
+      "key": "builtin:iphone-mirroring",
+      "name": "iPhone Mirroring",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.apple.ScreenContinuity"
+      ]
+    },
+    {
+      "key": "builtin:microsoft-remote-desktop",
+      "name": "Microsoft Remote Desktop and Windows App",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.microsoft.rdc.*"
+      ],
+      "windows": {
+        "aumid": [
+          "Microsoft.RemoteDesktop*",
+          "MicrosoftCorporationII.Windows365*"
+        ],
+        "binary": [
+          "mstsc.exe",
+          "msrdc.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:vnc",
+      "name": "VNC viewers",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.realvnc.vncviewer",
+        "com.tigervnc.*"
+      ],
+      "windows": {
+        "binary": [
+          "vncviewer.exe",
+          "tvnviewer.exe",
+          "vncviewer64.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:teamviewer",
+      "name": "TeamViewer",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.teamviewer.*"
+      ],
+      "windows": {
+        "binary": [
+          "TeamViewer.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:anydesk",
+      "name": "AnyDesk",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.philandro.anydesk"
+      ],
+      "windows": {
+        "binary": [
+          "AnyDesk.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:parallels",
+      "name": "Parallels Desktop",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.parallels.*"
+      ]
+    },
+    {
+      "key": "builtin:vmware",
+      "name": "VMware",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.vmware.*"
+      ],
+      "windows": {
+        "binary": [
+          "vmware.exe",
+          "vmplayer.exe",
+          "vmware-view.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:utm",
+      "name": "UTM",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.utmapp.*"
+      ]
+    },
+    {
+      "key": "builtin:virtualbox",
+      "name": "VirtualBox",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "org.virtualbox.app.*"
+      ],
+      "windows": {
+        "binary": [
+          "VirtualBox.exe",
+          "VirtualBoxVM.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:hyper-v",
+      "name": "Hyper-V Connection",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "vmconnect.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:windows-sandbox",
+      "name": "Windows Sandbox",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "binary": [
+          "WindowsSandbox.exe",
+          "WindowsSandboxClient.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:citrix",
+      "name": "Citrix Workspace",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.citrix.*"
+      ],
+      "windows": {
+        "binary": [
+          "SelfService.exe",
+          "CDViewer.exe",
+          "wfica32.exe",
+          "Receiver.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:jump-desktop",
+      "name": "Jump Desktop",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.p5sys.jump.*"
+      ]
+    },
+    {
+      "key": "builtin:parsec",
+      "name": "Parsec",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "tv.parsec.www"
+      ],
+      "windows": {
+        "binary": [
+          "parsecd.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:moonlight",
+      "name": "Moonlight",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.moonlight-stream.Moonlight"
+      ],
+      "windows": {
+        "binary": [
+          "Moonlight.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:rustdesk",
+      "name": "RustDesk",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.carriez.rustdesk"
+      ],
+      "windows": {
+        "binary": [
+          "rustdesk.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:splashtop",
+      "name": "Splashtop",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.splashtop.*"
+      ],
+      "windows": {
+        "binary": [
+          "strwinclt.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:quick-assist",
+      "name": "Quick Assist",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "windows": {
+        "aumid": [
+          "MicrosoftCorporationII.QuickAssist*"
+        ],
+        "binary": [
+          "QuickAssist.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:amazon-workspaces",
+      "name": "Amazon WorkSpaces",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.amazon.workspaces"
+      ],
+      "windows": {
+        "binary": [
+          "workspaces.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:royal-ts",
+      "name": "Royal TS",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "com.lemonmojo.RoyalTSX*"
+      ],
+      "windows": {
+        "binary": [
+          "RoyalTS.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:orbstack",
+      "name": "OrbStack",
+      "category": "remote-viewer",
+      "list": "never",
+      "removable": false,
+      "macos": [
+        "dev.kdrag0n.MacVirt"
+      ]
+    },
+    {
+      "key": "builtin:dock",
+      "name": "Dock",
+      "category": "system-ui",
+      "list": "system-ui",
+      "macos": [
+        "com.apple.dock"
+      ]
+    },
+    {
+      "key": "builtin:menu-bar",
+      "name": "Menu bar",
+      "category": "system-ui",
+      "list": "system-ui",
+      "macos": [
+        "com.apple.systemuiserver",
+        "com.apple.controlcenter",
+        "com.apple.TextInputMenuAgent"
+      ]
+    },
+    {
+      "key": "builtin:stage-manager",
+      "name": "Stage Manager",
+      "category": "system-ui",
+      "list": "system-ui",
+      "macos": [
+        "com.apple.WindowManager"
+      ]
+    },
+    {
+      "key": "builtin:wallpaper",
+      "name": "Wallpaper",
+      "category": "system-ui",
+      "list": "system-ui",
+      "macos": [
+        "com.apple.wallpaper.*"
+      ]
+    },
+    {
+      "key": "builtin:taskbar",
+      "name": "Taskbar",
+      "category": "system-ui",
+      "list": "system-ui",
+      "windows": {
+        "windowClass": [
+          "Shell_TrayWnd",
+          "Shell_SecondaryTrayWnd"
+        ]
+      }
+    },
+    {
+      "key": "builtin:desktop",
+      "name": "Desktop",
+      "category": "system-ui",
+      "list": "system-ui",
+      "windows": {
+        "windowClass": [
+          "Progman",
+          "WorkerW"
+        ]
+      }
+    },
+    {
+      "key": "builtin:start",
+      "name": "Start",
+      "category": "system-ui",
+      "list": "system-ui",
+      "windows": {
+        "aumid": [
+          "Microsoft.Windows.StartMenuExperienceHost*"
+        ],
+        "binary": [
+          "StartMenuExperienceHost.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:tradingview",
+      "name": "TradingView",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.tradingview.tradingviewapp.desktop"
+      ],
+      "windows": {
+        "binary": [
+          "TradingView.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:interactive-brokers",
+      "name": "Interactive Brokers",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "windows": {
+        "binary": [
+          "tws.exe",
+          "ntws.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:metatrader",
+      "name": "MetaTrader",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "net.metaquotes.*"
+      ],
+      "windows": {
+        "binary": [
+          "terminal64.exe",
+          "terminal.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:thinkorswim",
+      "name": "thinkorswim",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "windows": {
+        "binary": [
+          "thinkorswim.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:ledger-live",
+      "name": "Ledger Live",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.ledger.live"
+      ],
+      "windows": {
+        "binary": [
+          "Ledger Live.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:exodus",
+      "name": "Exodus",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.electron.exodus"
+      ],
+      "windows": {
+        "binary": [
+          "Exodus.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:trezor-suite",
+      "name": "Trezor Suite",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "io.trezor.TrezorSuite"
+      ],
+      "windows": {
+        "binary": [
+          "Trezor Suite.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:electrum",
+      "name": "Electrum",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "org.electrum.electrum"
+      ],
+      "windows": {
+        "binary": [
+          "electrum.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:sparrow",
+      "name": "Sparrow Wallet",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.sparrowwallet.sparrow"
+      ],
+      "windows": {
+        "binary": [
+          "Sparrow.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:bitcoin-core",
+      "name": "Bitcoin Core",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "org.bitcoinfoundation.Bitcoin-Qt"
+      ],
+      "windows": {
+        "binary": [
+          "bitcoin-qt.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:atomic-wallet",
+      "name": "Atomic Wallet",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "windows": {
+        "binary": [
+          "Atomic Wallet.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:binance",
+      "name": "Binance",
+      "category": "finance",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.binance.*"
+      ],
+      "windows": {
+        "binary": [
+          "Binance.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:disk-utility",
+      "name": "Disk Utility",
+      "category": "general",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.apple.DiskUtility"
+      ]
+    },
+    {
+      "key": "builtin:find-my",
+      "name": "Find My",
+      "category": "general",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.apple.findmy"
+      ]
+    },
+    {
+      "key": "builtin:migration-assistant",
+      "name": "Migration Assistant",
+      "category": "general",
+      "list": "default-blocked",
+      "removable": true,
+      "macos": [
+        "com.apple.MigrateAssistant"
+      ]
+    },
+    {
+      "key": "builtin:finder",
+      "name": "Finder",
+      "category": "files",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.finder"
+      ]
+    },
+    {
+      "key": "builtin:safari",
+      "name": "Safari",
+      "category": "browser",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Safari"
+      ]
+    },
+    {
+      "key": "builtin:preview",
+      "name": "Preview",
+      "category": "office",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Preview"
+      ]
+    },
+    {
+      "key": "builtin:textedit",
+      "name": "TextEdit",
+      "category": "office",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.TextEdit"
+      ]
+    },
+    {
+      "key": "builtin:notes",
+      "name": "Notes",
+      "category": "office",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Notes"
+      ]
+    },
+    {
+      "key": "builtin:calendar",
+      "name": "Calendar",
+      "category": "office",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.iCal"
+      ]
+    },
+    {
+      "key": "builtin:mail",
+      "name": "Mail",
+      "category": "mail",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.mail"
+      ]
+    },
+    {
+      "key": "builtin:simulator",
+      "name": "Simulator",
+      "category": "simulator",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.iphonesimulator"
+      ]
+    },
+    {
+      "key": "builtin:calculator",
+      "name": "Calculator",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.calculator"
+      ],
+      "windows": {
+        "aumid": [
+          "Microsoft.WindowsCalculator*"
+        ],
+        "binary": [
+          "calc.exe",
+          "CalculatorApp.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:photos",
+      "name": "Photos",
+      "category": "creative",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Photos"
+      ],
+      "windows": {
+        "aumid": [
+          "Microsoft.Windows.Photos*"
+        ]
+      }
+    },
+    {
+      "key": "builtin:reminders",
+      "name": "Reminders",
+      "category": "office",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.reminders"
+      ]
+    },
+    {
+      "key": "builtin:contacts",
+      "name": "Contacts",
+      "category": "office",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.AddressBook"
+      ]
+    },
+    {
+      "key": "builtin:messages",
+      "name": "Messages",
+      "category": "messaging",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.MobileSMS"
+      ]
+    },
+    {
+      "key": "builtin:maps",
+      "name": "Maps",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Maps"
+      ]
+    },
+    {
+      "key": "builtin:music",
+      "name": "Music",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Music"
+      ]
+    },
+    {
+      "key": "builtin:tv",
+      "name": "TV",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.TV"
+      ]
+    },
+    {
+      "key": "builtin:podcasts",
+      "name": "Podcasts",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.podcasts"
+      ]
+    },
+    {
+      "key": "builtin:books",
+      "name": "Books",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.iBooksX"
+      ]
+    },
+    {
+      "key": "builtin:freeform",
+      "name": "Freeform",
+      "category": "creative",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.freeform"
+      ]
+    },
+    {
+      "key": "builtin:stickies",
+      "name": "Stickies",
+      "category": "office",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Stickies"
+      ]
+    },
+    {
+      "key": "builtin:quicktime",
+      "name": "QuickTime Player",
+      "category": "creative",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.QuickTimePlayerX"
+      ]
+    },
+    {
+      "key": "builtin:font-book",
+      "name": "Font Book",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.FontBook"
+      ]
+    },
+    {
+      "key": "builtin:dictionary",
+      "name": "Dictionary",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Dictionary"
+      ]
+    },
+    {
+      "key": "builtin:weather",
+      "name": "Weather",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.weather"
+      ]
+    },
+    {
+      "key": "builtin:clock",
+      "name": "Clock",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.clock"
+      ]
+    },
+    {
+      "key": "builtin:chess",
+      "name": "Chess",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.Chess"
+      ]
+    },
+    {
+      "key": "builtin:news",
+      "name": "News",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.news"
+      ]
+    },
+    {
+      "key": "builtin:stocks",
+      "name": "Stocks",
+      "category": "general",
+      "list": "benign-system",
+      "macos": [
+        "com.apple.stocks"
+      ]
+    },
+    {
+      "key": "builtin:file-explorer",
+      "name": "File Explorer",
+      "category": "files",
+      "list": "benign-system",
+      "windows": {
+        "binary": [
+          "explorer.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:notepad",
+      "name": "Notepad",
+      "category": "office",
+      "list": "benign-system",
+      "windows": {
+        "aumid": [
+          "Microsoft.WindowsNotepad*"
+        ],
+        "binary": [
+          "notepad.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:paint",
+      "name": "Paint",
+      "category": "creative",
+      "list": "benign-system",
+      "windows": {
+        "aumid": [
+          "Microsoft.Paint*"
+        ],
+        "binary": [
+          "mspaint.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:chrome",
+      "name": "Google Chrome",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "com.google.Chrome*",
+        "org.chromium.Chromium"
+      ],
+      "windows": {
+        "binary": [
+          "chrome.exe",
+          "chromium.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:firefox",
+      "name": "Firefox",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "org.mozilla.firefox*",
+        "org.mozilla.nightly",
+        "org.torproject.torbrowser"
+      ],
+      "windows": {
+        "binary": [
+          "firefox.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:edge",
+      "name": "Microsoft Edge",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "com.microsoft.edgemac*"
+      ],
+      "windows": {
+        "binary": [
+          "msedge.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:brave",
+      "name": "Brave",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "com.brave.Browser*"
+      ],
+      "windows": {
+        "binary": [
+          "brave.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:arc",
+      "name": "Arc",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "company.thebrowser.*"
+      ],
+      "windows": {
+        "aumid": [
+          "TheBrowserCompany.Arc*"
+        ],
+        "binary": [
+          "Arc.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:opera",
+      "name": "Opera",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "com.operasoftware.*"
+      ],
+      "windows": {
+        "binary": [
+          "opera.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:vivaldi",
+      "name": "Vivaldi",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "com.vivaldi.Vivaldi"
+      ],
+      "windows": {
+        "binary": [
+          "vivaldi.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:other-browsers",
+      "name": "Other browsers",
+      "category": "browser",
+      "list": "categorized",
+      "macos": [
+        "com.apple.SafariTechnologyPreview",
+        "com.kagi.kagimacOS",
+        "com.duckduckgo.macos.browser",
+        "app.zen-browser.zen"
+      ],
+      "windows": {
+        "aumid": [
+          "DuckDuckGo.DesktopBrowser*"
+        ],
+        "binary": [
+          "zen.exe",
+          "iexplore.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:file-managers",
+      "name": "File managers",
+      "category": "files",
+      "list": "categorized",
+      "macos": [
+        "com.cocoatech.PathFinder",
+        "com.binarynights.ForkLift*",
+        "com.eltima.cmd1*",
+        "com.panic.Transmit*",
+        "ch.sudo.cyberduck",
+        "org.filezilla-project.filezilla"
+      ],
+      "windows": {
+        "binary": [
+          "TOTALCMD64.EXE",
+          "TOTALCMD.EXE",
+          "dopus.exe",
+          "WinSCP.exe",
+          "filezilla.exe",
+          "Cyberduck.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:mail-apps",
+      "name": "Mail apps",
+      "category": "mail",
+      "list": "categorized",
+      "macos": [
+        "com.microsoft.Outlook",
+        "com.readdle.smartemail-Mac",
+        "com.readdle.SparkDesktop*",
+        "org.mozilla.thunderbird",
+        "com.mimestream.Mimestream",
+        "it.bloop.airmail2",
+        "com.superhuman.electron"
+      ],
+      "windows": {
+        "aumid": [
+          "Microsoft.OutlookForWindows*",
+          "microsoft.windowscommunicationsapps*"
+        ],
+        "binary": [
+          "OUTLOOK.EXE",
+          "olk.exe",
+          "thunderbird.exe",
+          "MailClient.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:messaging-apps",
+      "name": "Messaging apps",
+      "category": "messaging",
+      "list": "categorized",
+      "macos": [
+        "com.tinyspeck.slackmacgap",
+        "com.hnc.Discord",
+        "com.microsoft.teams*",
+        "us.zoom.xos",
+        "net.whatsapp.WhatsApp",
+        "desktop.WhatsApp",
+        "ru.keepcoder.Telegram",
+        "org.telegram.desktop",
+        "org.whispersystems.signal-desktop",
+        "com.skype.skype",
+        "im.riot.app",
+        "com.viber.osx",
+        "com.tencent.xinWeChat",
+        "jp.naver.line.mac",
+        "Cisco-Systems.Spark"
+      ],
+      "windows": {
+        "aumid": [
+          "MSTeams*",
+          "5319275A.WhatsAppDesktop*"
+        ],
+        "binary": [
+          "slack.exe",
+          "Discord.exe",
+          "ms-teams.exe",
+          "Teams.exe",
+          "Zoom.exe",
+          "WhatsApp.exe",
+          "Telegram.exe",
+          "Signal.exe",
+          "Skype.exe",
+          "Element.exe",
+          "Viber.exe",
+          "WeChat.exe",
+          "LINE.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:finance-apps",
+      "name": "Finance apps",
+      "category": "finance",
+      "list": "categorized",
+      "macos": [
+        "com.quicken.Quicken",
+        "com.intuit.QuickBooks*",
+        "com.moneymoney-app.retail",
+        "com.iggsoftware.banktivity*"
+      ],
+      "windows": {
+        "binary": [
+          "qw.exe",
+          "QBW.EXE",
+          "QBW32.EXE"
+        ]
+      }
+    },
+    {
+      "key": "builtin:developer-tools",
+      "name": "Developer tools",
+      "category": "developer",
+      "list": "categorized",
+      "macos": [
+        "com.apple.dt.Xcode",
+        "com.apple.dt.Instruments",
+        "com.microsoft.VSCode",
+        "com.microsoft.VSCodeInsiders",
+        "com.todesktop.230313mzl4w4u92",
+        "com.exafunction.windsurf",
+        "dev.zed.Zed*",
+        "com.jetbrains.*",
+        "com.google.android.studio*",
+        "com.microsoft.visual-studio",
+        "com.sublimetext.*",
+        "com.panic.Nova",
+        "com.barebones.bbedit",
+        "com.macromates.TextMate*",
+        "org.gnu.Emacs",
+        "org.vim.MacVim",
+        "org.eclipse.*",
+        "org.qt-project.qtcreator",
+        "com.github.GitHubClient",
+        "com.fournova.Tower*",
+        "com.DanPristupov.Fork",
+        "com.torusknot.SourceTreeNotMAS",
+        "com.axosoft.gitkraken",
+        "com.postmanlabs.mac",
+        "com.insomnia.app",
+        "com.docker.docker",
+        "com.unity3d.*",
+        "org.godotengine.godot",
+        "com.rstudio.desktop"
+      ],
+      "windows": {
+        "binary": [
+          "Code.exe",
+          "Code - Insiders.exe",
+          "Cursor.exe",
+          "Windsurf.exe",
+          "zed.exe",
+          "devenv.exe",
+          "idea64.exe",
+          "pycharm64.exe",
+          "webstorm64.exe",
+          "rider64.exe",
+          "clion64.exe",
+          "goland64.exe",
+          "phpstorm64.exe",
+          "rubymine64.exe",
+          "datagrip64.exe",
+          "rustrover64.exe",
+          "studio64.exe",
+          "sublime_text.exe",
+          "notepad++.exe",
+          "emacs.exe",
+          "runemacs.exe",
+          "gvim.exe",
+          "eclipse.exe",
+          "qtcreator.exe",
+          "GitHubDesktop.exe",
+          "Fork.exe",
+          "SourceTree.exe",
+          "gitkraken.exe",
+          "Postman.exe",
+          "Insomnia.exe",
+          "Docker Desktop.exe",
+          "Unity.exe",
+          "Unity Hub.exe",
+          "rstudio.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:office-apps",
+      "name": "Office apps",
+      "category": "office",
+      "list": "categorized",
+      "macos": [
+        "com.microsoft.Word",
+        "com.microsoft.Excel",
+        "com.microsoft.Powerpoint",
+        "com.microsoft.onenote.mac",
+        "com.apple.iWork.Pages",
+        "com.apple.iWork.Numbers",
+        "com.apple.iWork.Keynote",
+        "org.libreoffice.script",
+        "com.adobe.Acrobat.Pro",
+        "com.adobe.Reader",
+        "notion.id",
+        "md.obsidian",
+        "com.evernote.Evernote"
+      ],
+      "windows": {
+        "binary": [
+          "WINWORD.EXE",
+          "EXCEL.EXE",
+          "POWERPNT.EXE",
+          "ONENOTE.EXE",
+          "soffice.exe",
+          "soffice.bin",
+          "Acrobat.exe",
+          "AcroRd32.exe",
+          "Notion.exe",
+          "Obsidian.exe",
+          "Evernote.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:creative-apps",
+      "name": "Creative apps",
+      "category": "creative",
+      "list": "categorized",
+      "macos": [
+        "com.adobe.Photoshop",
+        "com.adobe.illustrator",
+        "com.adobe.InDesign",
+        "com.adobe.PremierePro*",
+        "com.adobe.AfterEffects",
+        "com.adobe.LightroomClassicCC7",
+        "com.figma.Desktop",
+        "com.bohemiancoding.sketch3",
+        "com.apple.FinalCut",
+        "com.apple.logic10",
+        "com.apple.garageband10",
+        "com.apple.iMovieApp",
+        "com.pixelmatorteam.pixelmator.x",
+        "com.seriflabs.*",
+        "org.blenderfoundation.blender",
+        "com.blackmagic-design.DaVinciResolve*",
+        "com.canva.CanvaDesktop"
+      ],
+      "windows": {
+        "binary": [
+          "Photoshop.exe",
+          "Illustrator.exe",
+          "InDesign.exe",
+          "Adobe Premiere Pro.exe",
+          "AfterFX.exe",
+          "Lightroom.exe",
+          "Figma.exe",
+          "blender.exe",
+          "Resolve.exe",
+          "Canva.exe"
+        ]
+      }
+    },
+    {
+      "key": "builtin:emulators",
+      "name": "Device emulators",
+      "category": "simulator",
+      "list": "categorized",
+      "windows": {
+        "binary": [
+          "emulator.exe",
+          "qemu-system-x86_64.exe",
+          "qemu-system-aarch64.exe"
+        ]
+      }
+    }
+  ]
+}

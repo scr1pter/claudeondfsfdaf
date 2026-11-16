@@ -9,21 +9,36 @@ export const Issue = Schema.Struct({ path: Schema.String, message: Schema.String
 })
 export interface Issue extends Schema.Schema.Type<typeof Issue> {}
 
-export const PlanStage = Schema.Struct({
+const PlanStageFields = {
   id: Schema.String,
   title: Schema.String,
   phase: Schema.String,
-  agent: Schema.String,
-  model: optional(Schema.String),
-  effort: optional(Schema.String),
-  isolation: optional(Schema.String),
   items: Schema.Union([NonNegativeInt, Schema.Literal("dynamic")]),
   serial: Schema.Boolean,
   writes: Schema.String,
   asks: Schema.Array(Schema.String),
+}
+
+export const PlanAgentStage = Schema.Struct({
+  ...PlanStageFields,
+  kind: optional(Schema.Literal("agent")),
+  agent: Schema.String,
+  model: optional(Schema.String),
+  effort: optional(Schema.String),
+  isolation: optional(Schema.String),
   verify: optional(Schema.Struct({ agent: Schema.String, maxRounds: PositiveInt })),
-}).annotate({ identifier: "Workflow.PlanStage" })
-export interface PlanStage extends Schema.Schema.Type<typeof PlanStage> {}
+}).annotate({ identifier: "Workflow.PlanAgentStage" })
+export interface PlanAgentStage extends Schema.Schema.Type<typeof PlanAgentStage> {}
+
+export const PlanConnectStage = Schema.Struct({
+  ...PlanStageFields,
+  kind: Schema.Literal("connect"),
+  connect: Schema.Struct({ to: Schema.String, action: Schema.String }),
+}).annotate({ identifier: "Workflow.PlanConnectStage" })
+export interface PlanConnectStage extends Schema.Schema.Type<typeof PlanConnectStage> {}
+
+export const PlanStage = Schema.Union([PlanAgentStage, PlanConnectStage]).annotate({ identifier: "Workflow.PlanStage" })
+export type PlanStage = typeof PlanStage.Type
 
 export const Plan = Schema.Struct({
   title: Schema.String,

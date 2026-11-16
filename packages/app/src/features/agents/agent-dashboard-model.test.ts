@@ -3,6 +3,7 @@ import {
   agentCardDetails,
   agentCostLabel,
   boardColumns,
+  directoryReviewTarget,
   elapsedLabel,
   filterAgents,
   hasActiveFilters,
@@ -40,6 +41,25 @@ function agent(partial: Partial<DashboardAgentInput> = {}): DashboardAgentInput 
     ...partial,
   }
 }
+
+test("workspace review uses only a settled native checkout and its real base commit", () => {
+  const selected = agent({
+    id: "workspace",
+    status: "complete",
+    isolatedPath: "/fixture/isolated",
+    baseCommit: "a".repeat(40),
+  })
+  expect(directoryReviewTarget(selected)).toEqual({
+    workspaceID: selected.id,
+    directory: selected.isolatedPath!,
+    base: selected.baseCommit!,
+  })
+  expect(directoryReviewTarget({ ...selected, baseCommit: undefined })).toBeUndefined()
+  expect(directoryReviewTarget({ ...selected, isolatedPath: undefined })).toBeUndefined()
+  expect(directoryReviewTarget({ ...selected, isolatedPath: "relative/folder" })).toBeUndefined()
+  expect(directoryReviewTarget({ ...selected, status: "editing" })).toBeUndefined()
+  expect(directoryReviewTarget({ ...selected, mergeState: "merged" })).toBeUndefined()
+})
 
 describe("status predicates", () => {
   test("classifies running, finished, and attention states", () => {

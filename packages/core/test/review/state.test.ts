@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { DEFAULT_MENTIONS, parseReviewCommand } from "@vectordevai/core/review/command"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import {
@@ -614,6 +615,26 @@ describe("classifyPrior", () => {
       expect(parseReviewCommand(body, DEFAULT_MENTIONS).kind).not.toBe("dismiss")
       expect(status(body)).toBe("open")
     }
+  })
+
+  // The route job reads the comment with the workflow's MENTIONS, the App handle included once the workflow bakes it
+  // in, and answers that the dismissal is read on the next review. That review must read it with the same list.
+  test("reads a dismissal with the workflow's mentions, the App handle included", () => {
+    const mentions = GithubAgents.mentions("vector-fixture")
+    const status = (body: string, list?: string[]) =>
+      classifyPrior(
+        prior,
+        ctx({ thread: { resolved: false, replies: [{ author: "bob", body }] }, ...(list ? { mentions: list } : {}) }),
+      ).status
+    for (const body of ["@vector-fixture dismiss", "@Vector-Fixture  Dismiss", "/vector dismiss"]) {
+      expect(parseReviewCommand(body, mentions).kind).toBe("dismiss")
+      expect(status(body, mentions)).toBe("dismissed")
+    }
+    // Without the workflow's list, only the commands count, as before.
+    expect(status("@vector-fixture dismiss")).toBe("open")
+    expect(status("/vector dismiss")).toBe("dismissed")
+    // A workflow that names no App handle leaves a literal @vector-fixture a plain mention.
+    expect(status("@vector-fixture dismiss", GithubAgents.mentions())).toBe("open")
   })
 
   test("the author cannot dismiss a blocking security finding, even with write access", () => {

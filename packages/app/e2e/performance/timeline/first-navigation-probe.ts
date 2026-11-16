@@ -54,7 +54,7 @@ export async function measureFirstNavigation(
       }
       const onClick = (event: MouseEvent) => {
         const target = event.target instanceof Element ? event.target.closest(clickSelector ?? "a") : undefined
-        if (target && (clickSelector || target.getAttribute("href") === href)) start()
+        if (target && (clickSelector !== undefined || target.getAttribute("href") === href)) start()
       }
       const onRoute = () => {
         if (`${location.pathname}${location.search}` === destinationPath) start()

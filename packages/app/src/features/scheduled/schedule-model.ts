@@ -8,6 +8,11 @@ export type Recurrence =
   | { kind: "weekdays"; time: string }
   | { kind: "weekly"; weekday: number; time: string }
 
+/** One-shot jobs and continuing local sessions cannot be represented by an Actions schedule. */
+export function supportsGithubSchedule(kind: Recurrence["kind"], targets: readonly { sessionId?: string }[]) {
+  return ["daily", "weekdays", "weekly"].includes(kind) && targets.length === 1 && !targets[0].sessionId
+}
+
 export type ScheduledTask = {
   id: string
   title: string
@@ -115,9 +120,7 @@ export function filterTasks(tasks: readonly ScheduledTask[], filter: TaskFilter,
   const needle = query.trim().toLowerCase()
   return tasks
     .filter((task) => (filter === "all" ? true : filter === "paused" ? task.paused : !task.paused))
-    .filter((task) =>
-      !needle ? true : `${task.title} ${task.prompt}`.toLowerCase().includes(needle),
-    )
+    .filter((task) => (!needle ? true : `${task.title} ${task.prompt}`.toLowerCase().includes(needle)))
 }
 
 // Sorted by when they will actually next run, so what is imminent is on top.
@@ -131,7 +134,13 @@ export function sortByNextRun(tasks: readonly ScheduledTask[], now: Date) {
   })
 }
 
-export type Suggestion = { title: string; schedule: string; description: string; recurrence: Recurrence; prompt: string }
+export type Suggestion = {
+  title: string
+  schedule: string
+  description: string
+  recurrence: Recurrence
+  prompt: string
+}
 
 export const SUGGESTIONS: Suggestion[] = [
   {
@@ -256,7 +265,9 @@ export type AutomationDraft = {
 export function buildAutomationTargets(drafts: readonly AutomationTargetDraft[]): AutomationTarget[] {
   return drafts
     .filter((draft) => draft.enabled && draft.directory.trim() !== "")
-    .map((draft) => (draft.sessionId ? { directory: draft.directory, sessionId: draft.sessionId } : { directory: draft.directory }))
+    .map((draft) =>
+      draft.sessionId ? { directory: draft.directory, sessionId: draft.sessionId } : { directory: draft.directory },
+    )
 }
 
 // The input the form currently describes, or the reason it cannot be created.

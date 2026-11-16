@@ -20,6 +20,8 @@ import {
 import type { LLMClientShape } from "@vectordevai/llm/route"
 import { LLMNative } from "./native-request"
 import { ToolOrder } from "./tool-order"
+import { ComputerNativeActions } from "@/computer/native-actions"
+import { ComputerNativeContext } from "@/computer/native-context"
 
 const BOUNDARY = Symbol("vector.native-cache-boundary")
 
@@ -45,6 +47,8 @@ type StreamInput = {
   readonly providerOptions?: Record<string, any>
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
+  readonly computer?: "openai" | "anthropic"
+  readonly computerPlatform?: ComputerNativeActions.Platform
   /** False for a request whose prefix is never sent again: no cache breakpoints (LLM.StreamInput.cache). */
   readonly cache?: boolean
   /** The index in `messages` of a fork's last inherited message, which takes a cache breakpoint of its own. */
@@ -148,7 +152,7 @@ export function stream(input: StreamInput): StreamResult {
         const provider = input.llmClient
           .stream(
             LLMRequest.update(request, {
-              tools: [...request.tools, ...toDefinitions(tools)],
+              tools: LLMNative.definitions([...request.tools, ...toDefinitions(tools)], input.computer),
             }),
           )
           .pipe(
@@ -215,7 +219,10 @@ function nativeSchema(value: unknown): JsonSchema {
   return asSchema(value as Parameters<typeof asSchema>[0]).jsonSchema as JsonSchema
 }
 
-export function nativeTools(tools: Record<string, Tool>, input: Pick<StreamInput, "messages" | "abort">) {
+export function nativeTools(
+  tools: Record<string, Tool>,
+  input: Pick<StreamInput, "messages" | "abort" | "computer" | "computerPlatform">,
+) {
   return Object.fromEntries(
     Object.entries(tools).map(([name, item]) => [
       name,
@@ -228,11 +235,29 @@ export function nativeTools(tools: Record<string, Tool>, input: Pick<StreamInput
           Effect.tryPromise({
             try: () => {
               if (!item.execute) throw new Error(`Tool has no execute handler: ${name}`)
-              return item.execute(args, {
-                toolCallId: ctx?.id ?? name,
-                messages: input.messages,
-                abortSignal: input.abort,
-              })
+              const computer = name === "computer" ? input.computer : undefined
+              const platform = input.computerPlatform ?? process.platform
+              if (computer && platform !== "darwin" && platform !== "win32")
+                throw new Error("The native computer platform is unsupported.")
+              const context = computer
+                ? ComputerNativeContext.parse({
+                    provider: computer,
+                    safetyChecks:
+                      computer === "openai" && isRecord(args) && args.safety_checks !== undefined
+                        ? args.safety_checks
+                        : [],
+                    ...(computer === "openai" ? { scrolls: ComputerNativeActions.scrolls(args) } : {}),
+                  })
+                : undefined
+              return item.execute(
+                computer ? ComputerNativeActions.input(args, platform as ComputerNativeActions.Platform) : args,
+                {
+                  toolCallId: ctx?.id ?? name,
+                  messages: input.messages,
+                  abortSignal: input.abort,
+                  ...(context ? { experimental_context: { computerNative: context } } : {}),
+                },
+              )
             },
             catch: (error) => new ToolFailure({ message: errorMessage(error), error }),
           }),

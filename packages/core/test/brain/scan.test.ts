@@ -42,6 +42,7 @@ describe("BrainScan", () => {
       const started = performance.now()
       BrainScan.redact(text, {})
       BrainScan.credential(text)
+      BrainScan.named(text, {}, { shapes: true })
       expect(performance.now() - started, unit).toBeLessThan(1_000)
     }
     // A private key's header before a long run of the marks a key's lines may sit between: "+ + + …" took 9 seconds.
@@ -50,6 +51,15 @@ describe("BrainScan", () => {
       const started = performance.now()
       BrainScan.redact(text, {})
       BrainScan.secrets(text, {})
+      BrainScan.secrets(text, {}, { shapes: true })
+      expect(performance.now() - started, unit).toBeLessThan(1_000)
+    }
+    // Read for shapes, a key's last line before a long run of marks: a draft of KEY_LAST took 40 seconds under Node on
+    // 40 KB of spaces.
+    for (const unit of [" ", "> ", "\\n"]) {
+      const text = `-----BEGIN ${"PRIVATE"} KEY-----\n${"A".repeat(20)}\n${"B".repeat(20)}${unit.repeat(Math.floor(48_000 / unit.length))}\nC`
+      const started = performance.now()
+      BrainScan.secrets(text, {}, { shapes: true })
       expect(performance.now() - started, unit).toBeLessThan(1_000)
     }
   })
@@ -315,6 +325,84 @@ describe("BrainScan", () => {
   test("redacts the value of a secret environment variable wherever it appears", () => {
     const out = BrainScan.redact("Staging uses abcd1234efgh5678 as its key.", { STAGING_TOKEN: "abcd1234efgh5678" })
     expect(out.text).toBe("Staging uses [redacted] as its key.")
+  })
+
+  // The review payload holdback (VS-34a) reads code this way.
+  test("read for shapes, only what a value's own shape gives away counts, and only the value is replaced", () => {
+    const shapes = { shapes: true } as const
+    const [begin, end] = ["BEGIN", "END"].map((word) => `-----${word} ${"PRIVATE"} KEY-----`)
+    const lines = [
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj",
+      "MkqDHvFKJh0Y3fEfhHEuVOWbqZ1y0O8oKQ2gXdRLFq",
+      "QmF6PQ==",
+    ]
+    const key = `${begin}\n${lines.join("\n")}\n${end}`
+    const github = `${"ghp_"}${"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"}`
+    const id = `${"AKIA"}${"IOSFODNN7EXAMPLE"}`
+    const temporary = `${"ASIA"}${"IOSFODNN7EXAMPLE"}`
+    const secret = `${"wJalrXUtnFEMI/K7MDENG/"}${"bPxRfiCYEXAMPLEKEY"}`
+    const hook = `https://hooks.slack.com/services/T0000/B0000/${"X".repeat(24)}`
+    const digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    const commit = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+    const address = 'const url = "postgres://app:S3cretPassw0rdXY@db:5432/app", x = 1'
+    const found = [
+      [`token ${github}`, [github]],
+      ["Staging DB: postgres://app:S3cretPassw0rd@db.acme.internal:5432/app", ["S3cretPassw0rd"]],
+      // Every line of a key's body, its short last line too.
+      [key, lines],
+      [`aws_access_key_id = ${id}\naws_secret_access_key = ${secret}`, [id, secret]],
+      [`Alerts post to ${hook} now.`, [hook]],
+      // A temporary key ID is one by its shape, and a commit beside a key ID is no AWS secret.
+      [`${temporary} at ${commit}`, [temporary]],
+    ] as const
+    for (const [text, expected] of found) expect(values(text, shapes), text).toEqual([...expected])
+    const none = [
+      "DB_PASSWORD=S3cretPassw0rd",
+      "password: Tr0ub4dor&3",
+      "if (password === confirm) return",
+      `sha256 ${digest}`,
+      `api token ${digest}`,
+      "The staging admin password is Tr0ub4dor&3x",
+      "Staging login: deploy / x7Kq!vR2pz",
+      "const headers = { // Basic\n  authorizationHeaderName,\n}",
+    ]
+    for (const text of none) {
+      expect(values(text, shapes), text).toEqual([])
+      expect(BrainScan.named(text, {}, shapes), text).toEqual({ text, redacted: false })
+    }
+    // An address keeps its user name, host and the code around it, a key its marks and lines, and an environment value
+    // of several lines its line breaks. A second reading changes nothing.
+    const once = BrainScan.named(address, {}, shapes).text
+    expect(once).toBe('const url = "postgres://app:[redacted]@db:5432/app", x = 1')
+    expect(BrainScan.named(once, {}, shapes)).toEqual({ text: once, redacted: false })
+    expect(BrainScan.named('"redis://u:pw12@cache:6379"; connect()', {}, shapes).text).toBe(
+      '"redis://u:[redacted]@cache:6379"; connect()',
+    )
+    expect(BrainScan.named(key, {}, shapes).text).toBe(`${begin}\n[redacted]\n[redacted]\n[redacted]\n${end}`)
+    // In code, the "+" that joins a key's lines is no line of it.
+    const joined = (body: string[]) =>
+      `const key = "${begin}\\n" +\n${body.map((line) => `  "${line}\\n" +\n`).join("")}  "${end}"`
+    expect(BrainScan.named(joined([lines[0], lines[2]]), {}, shapes).text).toBe(joined(["[redacted]", "[redacted]"]))
+    const env = { APP_PRIVATE_KEY: "placeholder-line-one-value\nplaceholder-line-two-value" }
+    const text = `a\n${env.APP_PRIVATE_KEY}\nb`
+    expect(BrainScan.named(text, env, shapes).text).toBe("a\n[redacted]\n[redacted]\nb")
+    // A lone "\r", U+2028 or U+2029 inside a value's line is no line break: the rest of the value goes too.
+    for (const mark of ["\r", "\u2028", "\u2029"]) {
+      const value = `abcdefghijklmnop${mark}qrstuvwxyz123`
+      expect(BrainScan.named(`x ${value} y`, { A_TOKEN: value }, shapes).text, JSON.stringify(mark)).toBe(
+        "x [redacted] y",
+      )
+    }
+    expect(BrainScan.credential("DB_PASSWORD=S3cretPassw0rd", shapes)).toBe(true)
+    // Without `shapes`, every reading is as it was.
+    expect(values("DB_PASSWORD=S3cretPassw0rd")).toEqual(["S3cretPassw0rd"])
+    expect(values(`sha256 ${digest}`)).toEqual([digest])
+    expect(values(key)).toEqual(lines.slice(0, 2))
+    expect(BrainScan.named(key, {}).text).toBe("[redacted]")
+    expect(BrainScan.named(address, {}).text).toBe('const url = "[redacted] x = 1')
+    expect(BrainScan.named(`${id}\nconst sha = "${commit}"`, {}).text).toBe('[redacted]\nconst sha = "[redacted]"')
+    expect(BrainScan.named(temporary, {}).redacted).toBe(false)
+    expect(BrainScan.named(text, env).text).toBe("a\n[redacted]\nb")
   })
 
   test("finds hidden and bidirectional characters", () => {

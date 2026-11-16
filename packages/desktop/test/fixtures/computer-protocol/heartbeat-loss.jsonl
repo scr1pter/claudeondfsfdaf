@@ -1,0 +1,5 @@
+{"send":{"id":1,"op":"session.begin","sessionId":"conformance","mode":"foreground","approved":[],"vectorPids":[],"vectorWindowIds":[],"overlayWindowIds":[],"escStops":true,"stopChord":"Control+Alt+Shift+Escape","heartbeatMs":2000},"expect":{"id":1,"ok":true}}
+{"send":{"id":2,"op":"heartbeat"},"expect":{"id":2,"ok":true}}
+{"send":{"$wait":6500},"expect":null}
+{"send":{"id":3,"op":"input.key","pid":99999,"combo":["a"],"repeat":1},"expect":{"id":3,"ok":false,"code":"stopped","error":"$any"}}
+{"send":{"id":4,"op":"session.end"},"expect":{"id":4,"ok":true}}

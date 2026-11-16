@@ -244,7 +244,7 @@ describe("workspace terminal events", () => {
 
 describe("revealing a terminal in the panel", () => {
   // The panel's side of a reveal over its real inputs: the tab store's reveal and active tab, and the panel's state.
-  function panel(input: { active?: string; opened?: boolean } = {}) {
+  function panel(input: { active?: string; opened?: boolean; typing?: () => boolean } = {}) {
     const [revealed, setRevealed] = createSignal<TerminalReveal>()
     const [active, setActive] = createSignal(input.active)
     const [opened, setOpened] = createSignal(input.opened ?? false)
@@ -258,6 +258,7 @@ describe("revealing a terminal in the panel", () => {
           shown.push(value)
           setOpened(true)
         },
+        ...(input.typing ? { typing: input.typing } : {}),
       }),
       // As the tab store does it: the revealed tab becomes active in the same update.
       reveal: (id: string, focus: boolean) =>
@@ -280,6 +281,18 @@ describe("revealing a terminal in the panel", () => {
     expect(view.opened()).toBe(true)
     expect(view.quiet()).toBe("pty_agent")
     view.dispose()
+  })
+
+  test("a reveal with focus takes the focus, unless the user is typing somewhere right now", () => {
+    const free = panel({ active: "pty_user", typing: () => false })
+    free.reveal("pty_agent", true)
+    expect(free.quiet()).toBeUndefined()
+    free.dispose()
+    const busy = panel({ active: "pty_user", typing: () => true })
+    busy.reveal("pty_agent", true)
+    expect(busy.opened()).toBe(true)
+    expect(busy.quiet()).toBe("pty_agent")
+    busy.dispose()
   })
 
   test("the revealed tab takes the focus again once the user picks a tab", () => {

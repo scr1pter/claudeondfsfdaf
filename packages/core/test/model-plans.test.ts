@@ -141,16 +141,29 @@ test("a fresh engine lists the account's last catalog while vectordev.ai is slow
   await ModelPlans.createClient({ file, request: async () => Response.json(active) }).catalog(account, { force: true })
   // The file names the account by digest; the token itself is never written.
   expect(await Bun.file(file).text()).not.toContain(account)
-  // Next launch: vectordev.ai answers after the listing deadline.
-  const slow = () => Bun.sleep(50).then(() => Response.json(active))
+  // Next launch: vectordev.ai has not answered by the listing deadline. Hold its replies until both later forced
+  // refreshes have started, then settle every reply before another launch replaces the saved catalog.
+  const refreshes: PromiseWithResolvers<Response>[] = []
+  const forced = Promise.withResolvers<void>()
+  const slow = () => {
+    const response = Promise.withResolvers<Response>()
+    refreshes.push(response)
+    if (refreshes.length === 4) forced.resolve()
+    return response.promise
+  }
   const restarted = ModelPlans.createClient({ file, timeout: 5, request: slow })
   expect(await restarted.catalog(account)).toEqual(active)
   expect(await restarted.catalog("vct_another-account.token")).toEqual(off)
-  // Both late answers are still on their way and each saves the file when it lands, which on a slow machine could be
-  // after the refusal below is saved. A forced read settles each account's refresh (the older read then saves nothing,
-  // and this one saves before it resolves), so nothing from this launch writes the file after this point.
-  await restarted.catalog(account, { force: true })
-  await restarted.catalog("vct_another-account.token", { force: true })
+  // The older replies cannot replace either account's forced answer. Waiting for the forced reads also waits for
+  // their actual cache writes, so no reply from this launch can overwrite the later refusal below.
+  const settled = Promise.all([
+    restarted.catalog(account, { force: true }),
+    restarted.catalog("vct_another-account.token", { force: true }),
+  ])
+  await forced.promise
+  expect(refreshes).toHaveLength(4)
+  refreshes.forEach((response, index) => response.resolve(Response.json(index === 3 ? off : active)))
+  expect(await settled).toEqual([active, off])
   // A refused token replaces what was saved.
   await ModelPlans.createClient({ file, request: async () => new Response("revoked", { status: 403 }) }).catalog(
     account,

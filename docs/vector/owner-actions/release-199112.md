@@ -194,3 +194,7 @@ the timer repair. Local socket tests require this workspace's network permission
 Require fresh full Linux/Windows CI on the integrated candidate, including the
 managed-policy case. These local results do not establish Windows CI or desktop
 publication.
+
+## Separate Hands preparation
+
+Vector Hands was not included in this published release. Its unversioned validation and owner actions are tracked in [the Hands release checklist](./hands-release.md); they do not change the publication history above.

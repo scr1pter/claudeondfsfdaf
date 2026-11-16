@@ -3,12 +3,14 @@ import { WorkflowMarkers } from "@/orchestration/constants"
 import { assertWritable } from "@/tool/owned-path"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { Agent } from "@/agent/agent"
+import { ComputerNativeContext } from "@/computer/native-context"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
+import { scopeOf, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -82,6 +84,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   invokedAgents: readonly string[]
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  /** Owned by the prompt run, independently of each provider request. */
+  taskAbort?: AbortSignal
   // The request's size this step, for the escalate tool; absent where sizing does not apply.
   taskSize?: TaskSizeContext
   // Whether the owner's personal memory and private documents may go to this step's model: no guest is in the
@@ -159,20 +163,32 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const inFamily = TaskClaims.familyOf(audience, input.session.id)
 
   const subagentTitle = SubagentLifecycle.read(input.session)?.title
+  const first = input.messages.find((message) => message.info.role === "user")
+  const reviewScope = first?.parts
+    .flatMap((part) => (part.type === "text" ? [scopeOf(part.metadata)] : []))
+    .find(Boolean)
+  // Set by the engine-owned review invocation, never by a tool's model arguments.
+  // It only tightens listing output; read permission remains independently enforced.
+  const restrictedReadListing =
+    input.session.internal?.startsWith("vectorscope.") && (!reviewScope || reviewScope.restrictedReads === true)
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
     parentID: input.session.parentID,
     abort: options.abortSignal!,
+    taskAbort: input.taskAbort,
     messageID: input.processor.message.id,
     callID: options.toolCallId,
     extra: {
       model: input.model,
+      ...(restrictedReadListing ? { restrictedReadListing: true } : {}),
+      ...(input.session.internal?.startsWith(PINNED_SESSION_PREFIX) ? { pinnedReviewInstructions: true } : {}),
       // Whether the model may train on prompts, for tools that keep the owner's personal memory away from such a model.
       mayTrain: freeModelMayTrain(input.model),
       personal: input.personal === true,
       outward: input.outward === true,
       invokedAgents: input.invokedAgents,
       promptOps: input.promptOps,
+      ...ComputerNativeContext.executionContext(options.experimental_context),
       [WorkflowMarkers.TASK_OFFERED]: taskOffered(tools, input.agent.permission, input.session.permission),
       ...(input.taskSize ? { taskSize: input.taskSize } : {}),
       ...(input.delegation ? { delegation: input.delegation } : {}),
@@ -260,8 +276,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             { files: req.patterns.map((pattern) => path.resolve(instance.worktree, pattern)) },
           )
         }
-        yield* permission.ask({ ...req, ...request })
-        if (req.permission !== "edit") return
+        // Return the person's answer to this request; later prompt/memory confirmations cannot turn it into Always.
+        const answer = yield* permission.ask({ ...req, ...request })
+        if (req.permission !== "edit") return answer
         const instance = yield* InstanceState.context
         // A file Vector reads into an agent's prompt or permissions asks again, every time and in every session, after
         // the edit rules allowed the change: whichever tool writes it, and whatever configuration or a client allows.
@@ -289,9 +306,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         const files = req.patterns.filter((pattern) =>
           SessionMemory.source(path.resolve(instance.worktree, pattern), brain.files()),
         )
-        if (files.length === 0) return
+        if (files.length === 0) return answer
         const hold = input.session.parentID ? "subagent" : SessionMemory.taint(yield* history())
-        if (!hold) return
+        if (!hold) return answer
         yield* permission.ask({
           permission: PermissionPolicy.MEMORY_SOURCE,
           patterns: files,
@@ -299,6 +316,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           metadata: { ...req.metadata, hold },
           ...request,
         })
+        return answer
       }).pipe(Effect.orDie),
   })
 
@@ -380,8 +398,13 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   // address is the model's to write, so a hostile page could choose what is sent to an MCP server.
   if (Agent.researchTools(input.agent.name)) return tools
 
-  const hasMcpResourceServer = Object.values(yield* mcp.clients()).some(
-    (client) => !!client.getServerCapabilities()?.resources,
+  // The MCP servers a run on GitHub Actions withholds whole (INV-S13): none of their tools is offered, and none of their
+  // resources is listed or read. The resource tools ask again when they run, since a server can connect later.
+  const mcpClients = yield* mcp.clients()
+  const mcpTools = yield* mcp.tools()
+  const withheldServers = ToolRegistry.actionsWithheldServers(Object.keys(mcpClients), Object.keys(mcpTools))
+  const hasMcpResourceServer = Object.entries(mcpClients).some(
+    ([name, client]) => !withheldServers.includes(name) && !!client.getServerCapabilities()?.resources,
   )
   if (hasMcpResourceServer) {
     tools[MCP_RESOURCE_TOOLS.list] = tool({
@@ -405,8 +428,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
             const clients = yield* mcp.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
             const resourceServers = Object.entries(clients)
-              .filter((entry) => !!entry[1].getServerCapabilities()?.resources)
+              .filter((entry) => !withheld.includes(entry[0]) && !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
               .sort((a, b) => a.localeCompare(b))
             if (parsed.server && !resourceServers.includes(parsed.server)) {
@@ -433,7 +457,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
             const resources = Object.values(yield* mcp.resources(parsed.server))
             const filtered = resources
-              .filter((resource) => !parsed.server || resource.client === parsed.server)
+              .filter(
+                (resource) =>
+                  !withheld.includes(resource.client) && (!parsed.server || resource.client === parsed.server),
+              )
               .toSorted((a, b) =>
                 (a.client + "\u0000" + a.name + "\u0000" + a.uri).localeCompare(
                   b.client + "\u0000" + b.name + "\u0000" + b.uri,
@@ -490,8 +517,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
             const clients = yield* mcp.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
             const resourceServers = Object.entries(clients)
-              .filter((entry) => !!entry[1].getServerCapabilities()?.resources)
+              .filter((entry) => !withheld.includes(entry[0]) && !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
               .sort((a, b) => a.localeCompare(b))
             if (parsed.server && !resourceServers.includes(parsed.server)) {
@@ -518,7 +546,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
             const templates = Object.values(yield* mcp.resourceTemplates(parsed.server))
             const filtered = templates
-              .filter((template) => !parsed.server || template.client === parsed.server)
+              .filter(
+                (template) =>
+                  !withheld.includes(template.client) && (!parsed.server || template.client === parsed.server),
+              )
               .toSorted((a, b) =>
                 (a.client + "\u0000" + a.name + "\u0000" + a.uriTemplate).localeCompare(
                   b.client + "\u0000" + b.name + "\u0000" + b.uriTemplate,
@@ -579,7 +610,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const parsed = parseReadMcpResourceArgs(args)
             const ctx = context(toRecord(args), opts)
             const clients = yield* mcp.clients()
-            const client = clients[parsed.server]
+            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
+            const client = withheld.includes(parsed.server) ? undefined : clients[parsed.server]
             if (!client) {
               throw new Error(`MCP server "${parsed.server}" is not connected`)
             }
@@ -639,7 +671,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   }
 
   const cloud = yield* mcp.cloudTools()
-  for (const [key, item] of Object.entries(yield* mcp.tools())) {
+  for (const [key, item] of Object.entries(mcpTools)) {
+    // A computer-use server's tools, and any id the registry withholds, are never offered on GitHub Actions (INV-S13).
+    if (ToolRegistry.actionsWithheldMcpTool(key, withheldServers)) continue
     const execute = item.execute
     if (!execute) continue
 

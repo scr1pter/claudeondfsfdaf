@@ -12,7 +12,7 @@ import {
   type OpsPullRequest,
 } from "../api/_lib/github-webhook-handlers/ops"
 import { ApiError } from "../api/_lib/http"
-import { registerRunVerifier, type ModelPlanCaller } from "../api/_lib/model-plan-caller"
+import { createRunVerifierRegistry, registerRunVerifier, type ModelPlanCaller } from "../api/_lib/model-plan-caller"
 import { opsJson } from "../api/_lib/ops-api"
 import { newOpsSettings, updateOpsSettings, type OpsRepo, type OpsSettings } from "../api/_lib/ops-settings"
 import { presignSigV4 } from "../api/_lib/r2-presign"
@@ -59,6 +59,7 @@ const R2_ORIGIN = `https://${R2_ACCOUNT}.r2.cloudflarestorage.com`
 const R2_KEY_ID = "fixturemediakey00001"
 const R2_SECRET = "fixtureMediaSecretAccessKey0123456789abcdefXY"
 const MEDIA = {
+  VECTOR_RUN_TOKEN_SECRET: "ship-desk-fixture-run-secret-".repeat(2),
   VECTOR_R2_ACCOUNT_ID: R2_ACCOUNT,
   VECTOR_R2_MEDIA_ACCESS_KEY_ID: R2_KEY_ID,
   VECTOR_R2_MEDIA_SECRET_ACCESS_KEY: R2_SECRET,
@@ -220,9 +221,11 @@ const recordAlert: ShipDeskAlert = async (account, alert) => {
 let runs: Record<string, unknown>[] = []
 const reader: CloudRunReader = async (account) => runs.filter((run) => run.account === account)
 
-// The run tokens of Vector's GitHub agent, as Codex's verifier answers them (one Bun process per test file in CI).
+// Keep synthetic callers in an independent registry: the production vrt_ verifier is already registered and cannot
+// be replaced. The real registry still validates caller identity, source, run id, deadline and service here.
 const runCallers = new Map<string, ModelPlanCaller>()
-registerRunVerifier("vrt_", async (token) => {
+const runVerifiers = createRunVerifierRegistry()
+runVerifiers.register("vrt_", async (token) => {
   const caller = runCallers.get(token)
   if (!caller) throw new ApiError(401, "RUN_TOKEN_INVALID", "fixture")
   return caller
@@ -386,7 +389,7 @@ const cards = (authorization: string, query = "") =>
 /** The capture job's own proof, which `vector ship capture` sends with every ticket request. */
 const PROOF = "p".repeat(43)
 const uploads = (authorization: string, body: unknown, proof: string | null = PROOF) =>
-  invoke((request, response) => handleOpsUploads(request, response, fetcher(), () => world.now), {
+  invoke((request, response) => handleOpsUploads(request, response, fetcher(), () => world.now, {}, runVerifiers), {
     method: "POST",
     authorization,
     body:
@@ -838,6 +841,20 @@ const files = (count: number, bytes = 2_000) =>
   }))
 
 describe("capture", () => {
+  test("synthetic callers need the isolated registry and cannot replace the production run verifier", async () => {
+    await ready()
+    const token = runToken(MAX)
+    const production = await invoke(
+      (request, response) => handleOpsUploads(request, response, fetcher(), () => world.now),
+      { method: "POST", authorization: token, body: { action: "ticket" }, url: "/api/ops/uploads" },
+    )
+    expect(production).toMatchObject({ status: 401, body: { error: { code: "MODEL_PLAN_RUN_EXPIRED" } } })
+    expect(() => registerRunVerifier("vrt_", async () => runCallers.get(token)!)).toThrow(
+      "A Codium run prefix must have exactly one verifier.",
+    )
+    expect((await uploads(token, { action: "ticket" })).status).toBe(200)
+  })
+
   test("a run's token asks for a ticket; the ticket captures its own pull request into the card in one window", async () => {
     await withCard()
     const { ticket, expiresAt } = await ticketFor()

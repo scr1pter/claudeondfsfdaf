@@ -325,6 +325,8 @@ test.describe("smoke: session timeline", () => {
   test("renders seeded timeline in order while paging through history", async ({ page }) => {
     const errors = trackPageErrors(page)
     await mockVectorServer(page, {
+      // The current engine exposes the capabilities route even when every optional flag is off.
+      capabilities: {},
       sessions: fixture.sessions,
       provider: fixture.provider,
       directory: fixture.directory,

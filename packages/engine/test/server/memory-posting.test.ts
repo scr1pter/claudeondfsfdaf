@@ -75,6 +75,18 @@ const send = (directory: string, route: string, body: unknown, headers: Record<s
 const FACT = "Initech pays its invoices through pay.initech-billing.com from account 99812345"
 
 describe("POST /memory/posting-check", () => {
+  test("refuses an uninspectable contributor set instead of authorizing a partial check", async () => {
+    const response = await send(shared.path, "/memory/posting-check", {
+      parts: ["Text awaiting a complete posting check."],
+      typed: false,
+      sessionIDs: Array.from({ length: 201 }, (_, index) => `ses_contributor_${index}`),
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({
+      name: "MemoryError",
+      data: { code: "refused", reason: "limit" },
+    })
+  })
   test("an invited guest gets 403, and nothing is checked for them", async () => {
     const response = await send(shared.path, "/memory/posting-check", { parts: ["Hello."], typed: false }, guest)
     expect(response.status).toBe(403)
@@ -91,7 +103,11 @@ describe("POST /memory/posting-check", () => {
     execFileSync("git", ["add", "billing.ts"], { cwd: tmp.path })
     for (const memory of [
       { kind: "fact", text: FACT, scope: "personal" },
-      { kind: "preference", text: "Check preview.acme-staging.com and status.acme-staging.com before merging", scope: "personal" },
+      {
+        kind: "preference",
+        text: "Check preview.acme-staging.com and status.acme-staging.com before merging",
+        scope: "personal",
+      },
     ])
       expect((await send(tmp.path, "/memory", memory)).status).toBe(200)
     const parts = [

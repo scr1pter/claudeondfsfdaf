@@ -1,0 +1,53 @@
+# Source template only. The owner replaces this unregistered app id after registration; do not deploy it as-is.
+app:
+  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+modules:
+  rovo:agentConnector:
+    - key: vector
+      name: Vector
+      description: Work on your mapped repository using your own computer.
+      icon: resource:vector-assets;vector.svg
+      conversationStarters:
+        - "Link your account by sending: link <code>"
+      productContexts:
+        - jira
+      protocols:
+        agent2Agent:
+          version: '1.0'
+          jsonRpcTransport:
+            endpoint: vector-a2a
+            streaming: false
+  preUninstall:
+    - key: vector-pre-uninstall
+      endpoint: vector-uninstall
+  endpoint:
+    - key: vector-a2a
+      remote: vector-backend
+      route:
+        path: /a2a
+    - key: vector-uninstall
+      remote: vector-backend
+      route:
+        path: /uninstall
+remotes:
+  - key: vector-backend
+    baseUrl: https://vectordev.ai/api/jira
+    operations:
+      - compute
+      - storage
+    storage:
+      inScopeEUD: true
+    auth:
+      appSystemToken:
+        enabled: true
+      appUserToken:
+        enabled: true
+resources:
+  - key: vector-assets
+    path: assets
+permissions:
+  scopes:
+    - read:jira-work
+    - read:jira-user
+    - read:app-user-token
+    - read:app-system-token

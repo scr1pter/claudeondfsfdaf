@@ -8,6 +8,7 @@ import type { PermissionRequest } from "@vectordevai/sdk/v2"
 import {
   canAlwaysAllowPermission,
   cloudPermissionDetails,
+  computerPermissionDetails,
   workflowAsk,
   workflowPlanLines,
   type WorkflowAsk,
@@ -23,6 +24,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { VECTOR_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { connectedConsent, connectedDiff } from "./connect-presentation"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -190,6 +192,19 @@ function WorkflowBody(props: { ask: WorkflowAsk; patterns: readonly string[] }) 
 }
 
 export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
+  return (
+    <Show when={props.request.id} keyed>
+      {(id) => {
+        // Queue advancement must discard confirmation/editor state and keep every reply bound to the shown ask.
+        const request = { ...props.request, id }
+        const directory = props.directory
+        return <PermissionRequestPrompt request={request} directory={directory} />
+      }}
+    </Show>
+  )
+}
+
+function PermissionRequestPrompt(props: { request: PermissionRequest; directory?: string }) {
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
@@ -197,6 +212,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
     stage: "permission" as PermissionStage,
   })
   const pathFormatter = usePathFormatter()
+  const computer = createMemo(() => computerPermissionDetails(props.request))
+  const canAlways = createMemo(
+    () =>
+      (computer()?.canAlways ??
+        canAlwaysAllowPermission(props.request.permission, props.request.always, props.request.patterns)) &&
+      (workflowAsk(props.request)?.canAlways ?? true),
+  )
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
@@ -221,6 +243,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           title="Always allow"
           body={
             <Switch>
+              <Match when={computer()}>{(details) => <TextBody title={details().alwaysDescription} />}</Match>
               <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
                 <TextBody title={"This will allow " + props.request.permission + " until Vector is restarted."} />
               </Match>
@@ -245,7 +268,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           escapeKey="cancel"
           onSelect={(option) => {
             setStore("stage", "permission")
-            if (option === "cancel") return
+            if (option === "cancel" || !canAlways()) return
             void sdk.client.permission.reply({
               reply: "always",
               requestID: props.request.id,
@@ -276,6 +299,8 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           const info = () => {
             const permission = props.request.permission
             const data = input()
+            const details = computer()
+            if (details) return { icon: "✋", title: details.title, body: <TextBody title={details.body} /> }
 
             if (permission.startsWith("vector_cloud_")) {
               return { icon: "☁", title: "Review Cloud action", body: <CloudBody request={props.request} /> }
@@ -451,6 +476,28 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
+            const connected = connectedConsent(permission, props.request.metadata)
+            if (connected !== undefined) {
+              const diff = connectedDiff(permission, props.request.metadata)
+              return {
+                icon: "↔",
+                title:
+                  permission === "connect_write"
+                    ? "Apply review fixes"
+                    : permission === "connect_model"
+                      ? "Use this review model"
+                      : "Connected review",
+                body: (
+                  <box paddingLeft={1} flexDirection="column" gap={1}>
+                    <text fg={theme.text}>{connected}</text>
+                    <Show when={diff}>
+                      <EditBody request={{ ...props.request, metadata: { ...props.request.metadata, diff } }} />
+                    </Show>
+                  </box>
+                ),
+              }
+            }
+
             if (permission === "doom_loop") {
               return {
                 icon: "⟳",
@@ -497,18 +544,15 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               header={header()}
               body={current.body}
               options={{
-                once: "Allow once",
-                // A workflow plan past the defaults or after outside content is never saved as Always (I15).
-                ...(canAlwaysAllowPermission(props.request.permission, props.request.always, props.request.patterns) &&
-                (workflowAsk(props.request)?.canAlways ?? true)
-                  ? { always: "Allow always" }
-                  : {}),
-                reject: "Reject",
+                ...(computer()?.canApprove === false ? {} : { once: computer()?.primaryLabel ?? "Allow once" }),
+                ...(canAlways() ? { always: computer() ? "Always allow" : "Allow always" } : {}),
+                reject: computer() ? "Deny" : "Reject",
               }}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
                 if (option === "always") {
+                  if (!canAlways()) return
                   setStore("stage", "always")
                   return
                 }
@@ -525,6 +569,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   })
                   return
                 }
+                if (computer()?.canApprove === false) return
                 void sdk.client.permission.reply({
                   reply: "once",
                   requestID: props.request.id,

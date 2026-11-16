@@ -1,0 +1,112 @@
+.github-agents {
+  color: var(--vx-text);
+  display: grid;
+  gap: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.github-agents h2 {
+  font-size: 19px;
+  font-weight: 600;
+}
+.github-agents h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.github-agents p {
+  color: var(--vx-text-muted);
+}
+.github-agents section,
+.github-agents fieldset {
+  border: 1px solid var(--vx-line);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 0;
+}
+.github-agents label {
+  display: grid;
+  gap: 6px;
+}
+.github-agents .github-agents-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.github-agents input:not([type="checkbox"]),
+.github-agents textarea,
+.github-agents select {
+  width: 100%;
+  border: 1px solid var(--vx-line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: var(--vx-surface);
+  color: var(--vx-text);
+}
+.github-agents button,
+.github-agents a {
+  border-radius: 7px;
+  padding: 6px 10px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.github-agents button {
+  border: 1px solid var(--vx-line);
+  text-decoration: none;
+}
+.github-agents button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.github-agents button:focus-visible,
+.github-agents a:focus-visible {
+  outline: 2px solid var(--vx-purple);
+  outline-offset: 3px;
+}
+.github-agents pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--vx-surface);
+  border-radius: 7px;
+  padding: 12px;
+  font-size: 11px;
+}
+.github-agents code {
+  overflow-wrap: anywhere;
+}
+.github-agents-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.github-agents-grid {
+  display: grid;
+  gap: 14px;
+}
+.github-agents [role="alert"] {
+  color: var(--vx-red, #ef8c8c);
+}
+.github-agents-warning {
+  border-left: 3px solid var(--vx-amber);
+  padding-left: 12px;
+}
+.github-agents-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: #0009;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding: 6vh 20px;
+  overflow-y: auto;
+}
+.github-agents-dialog {
+  background: var(--vx-canvas);
+  border: 1px solid var(--vx-line);
+  border-radius: 14px;
+  padding: 24px;
+  width: min(100%, 680px);
+}

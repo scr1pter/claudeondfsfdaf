@@ -1,0 +1,792 @@
+{
+  "run": 42122694547,
+  "head": "16b16b6b6c5de610c2357df5388903e941053c47",
+  "workflowStatus": "completed",
+  "workflowConclusion": "failure",
+  "latestRunAttempt": 1,
+  "ordinary": {
+    "jobs": 15,
+    "passed": 15,
+    "failed": 0,
+    "active": 0,
+    "retainedInitialExecutions": 15,
+    "executedJobRetries": 0,
+    "internalPlaywrightRetries": 1,
+    "internalPlaywrightFlakyTests": 1
+  },
+  "jobs": [
+    {
+      "name": "unit (windows)",
+      "job": 127578867426,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:47:23Z",
+      "counts": {
+        "passed": 6987,
+        "skipped": 25,
+        "failed": 0,
+        "bunSummaryBlocks": 259
+      },
+      "countInterpretation": "Sums of emitted Bun test-summary counters for actual suite invocations in this job; these are execution counts, not deduplicated cross-suite tests. HttpApi exerciser counters are recorded separately.",
+      "steps": [
+        {
+          "name": "Run unit tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run desktop computer-use tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check generated client",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run HttpApi exerciser gates",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run hosted API tests",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run website release copy tests",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ],
+      "loggedTestPhases": [
+        {
+          "command": "GITHUB_ACTIONS=false bun turbo test --filter='!@vectordevai/engine' --log-order=stream --continue=dependencies-successful",
+          "counts": {
+            "passed": 6180,
+            "skipped": 25,
+            "failed": 0,
+            "summaryBlocks": 228
+          },
+          "api": []
+        },
+        {
+          "command": "status=0",
+          "counts": {
+            "passed": 807,
+            "skipped": 0,
+            "failed": 0,
+            "summaryBlocks": 31
+          },
+          "api": []
+        }
+      ],
+      "explicitSkippedTests": [
+        "the desktop engine and the terminal read one acceptance, so withdrawing in the terminal stops the desktop app",
+        "pty workspace trust > does not execute an untrusted project-selected shell",
+        "pty workspace trust > resolves an approved relative shell to its canonical config-relative target",
+        "the local search model > the pinned arctic-embed-xs int8 model matches its pinned vectors and finds a paraphrase",
+        "the local search model > a model with no pinned vectors is checked by how it ranks the canaries",
+        "knowledge eval > with the pinned model, every channel finds what the code graph does and unrelated requests cost 0 tokens",
+        "the brain's git calls > never run a program a held repository's own git config names",
+        "UntrustedGit.run > reads history and the file list without running the repository's programs",
+        "UntrustedGit.run > gives git an environment without Vector's secrets",
+        "lists macOS access control lists once until a path in the chain changes, and sees a change then",
+        "never keeps a listing that failed",
+        "WorkspaceTrust > symlink private Bun config > rejects tampered runtime configuration",
+        "Watcher > publishes root create, update, and delete events",
+        "Watcher > watches non-git roots",
+        "Watcher > cleanup stops publishing events",
+        "Watcher > ignores .git/index changes",
+        "Watcher > publishes .git/HEAD events",
+        "Watcher > symlinked .git > publishes .git/HEAD events through a symlinked .git directory",
+        "pty > retains exited sessions until removed",
+        "pty > replays buffered output and streams live output to attachments",
+        "pty > stops delivering output after detach",
+        "pty > isolates output between sessions",
+        "pty > keeps Vector's internal secrets out of the terminal while preserving the user's environment",
+        "pty > notifies attachments with the exit code and rejects attach after exit",
+        "pty create defaults > defaults command, login args, and cwd from config and location"
+      ]
+    },
+    {
+      "name": "desktop engine bundle (node)",
+      "job": 127578867885,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:35:51Z",
+      "nodeVersion": "v24.22.2",
+      "buildStep": "success",
+      "actualNodeSmoke": "success",
+      "smokeCoverage": [
+        "Read tool with bundled and cached provider SDKs",
+        "PDF retained through brain eval worker",
+        "Search-model wasm ships beside bundle",
+        "Computer screenshot/click, HTTP app and sensitive approvals, exact image attachments and clean lease finish against isolated fake bridge"
+      ],
+      "nativeOSEvidence": false
+    },
+    {
+      "name": "engine (linux, shard 3/4)",
+      "job": 127578868000,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:44:04Z",
+      "counts": {
+        "passed": 1398,
+        "skipped": 13,
+        "failed": 0,
+        "tests": 1411,
+        "files": 115
+      },
+      "elapsedSeconds": 454.36,
+      "explicitSkippedTests": [
+        "direct footer recreates the frame across command panel transitions",
+        "direct footer dispatches leader variant binding only when leader is registered",
+        "direct footer skill picker inserts an editable bound skill command",
+        "direct footer clears the synthetic skills draft when the panel closes",
+        "direct custom answer submits through keymap return binding",
+        "defaults Ctrl+Z to input undo on Windows",
+        "keeps explicit input undo overrides on Windows",
+        "ignores terminal suspend bindings on Windows",
+        "Windows deferred standalone removal removes only owned files after its parent exits",
+        "Windows deferred standalone removal preserves a replaced executable",
+        "provider HttpApi > returns public v2 provider not found errors",
+        "session.compaction.create > projects a compaction message to v2 (v2 projector disabled)",
+        "unicode filenames modification and restore"
+      ]
+    },
+    {
+      "name": "unit (linux)",
+      "job": 127578868101,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:44:08Z",
+      "counts": {
+        "passed": 7177,
+        "skipped": 13,
+        "failed": 0,
+        "bunSummaryBlocks": 38
+      },
+      "countInterpretation": "Sums of emitted Bun test-summary counters for actual suite invocations in this job; these are execution counts, not deduplicated cross-suite tests. HttpApi exerciser counters are recorded separately.",
+      "steps": [
+        {
+          "name": "Run unit tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run desktop computer-use tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check generated client",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run HttpApi exerciser gates",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run hosted API tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run website release copy tests",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ],
+      "loggedTestPhases": [
+        {
+          "command": "GITHUB_ACTIONS=false bun turbo test --filter='!@vectordevai/engine' --log-order=stream --continue=dependencies-successful",
+          "counts": {
+            "passed": 6195,
+            "skipped": 12,
+            "failed": 0,
+            "summaryBlocks": 5
+          },
+          "api": []
+        },
+        {
+          "command": "status=0",
+          "counts": {
+            "passed": 807,
+            "skipped": 0,
+            "failed": 0,
+            "summaryBlocks": 31
+          },
+          "api": []
+        },
+        {
+          "command": "bun run check:generated",
+          "counts": {
+            "passed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "summaryBlocks": 0
+          },
+          "api": []
+        },
+        {
+          "command": "bun run test:httpapi",
+          "counts": {
+            "passed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "summaryBlocks": 0
+          },
+          "api": [
+            "summary pass=306 fail=0 skip=0 missing=0 extra=0",
+            "summary pass=306 fail=0 skip=0 missing=0 extra=0",
+            "summary pass=306 fail=0 skip=0 missing=0 extra=0"
+          ]
+        },
+        {
+          "command": "GITHUB_ACTIONS=false bun test --only-failures",
+          "counts": {
+            "passed": 165,
+            "skipped": 0,
+            "failed": 0,
+            "summaryBlocks": 1
+          },
+          "api": []
+        },
+        {
+          "command": "GITHUB_ACTIONS=false bun test test/release-copy.test.ts",
+          "counts": {
+            "passed": 10,
+            "skipped": 1,
+            "failed": 0,
+            "summaryBlocks": 1
+          },
+          "api": []
+        }
+      ],
+      "explicitSkippedTests": [
+        "pwsh to Bun to Windows PowerShell loads native certificate and installer commands",
+        "UntrustedGit.program > on Windows, a git.exe in the repository's root does not run",
+        "knowledge eval > with the pinned model, every channel finds what the code graph does and unrelated requests cost 0 tokens",
+        "the local search model > the pinned arctic-embed-xs int8 model matches its pinned vectors and finds a paraphrase",
+        "the local search model > a model with no pinned vectors is checked by how it ranks the canaries",
+        "Watcher > publishes root create, update, and delete events",
+        "Watcher > watches non-git roots",
+        "Watcher > cleanup stops publishing events",
+        "Watcher > ignores .git/index changes",
+        "Watcher > publishes .git/HEAD events",
+        "Watcher > symlinked .git > publishes .git/HEAD events through a symlinked .git directory",
+        "clears a fixture ACL reader when the test directory is restored",
+        "release notes make no light-theme claim while the workspace mounts dark"
+      ]
+    },
+    {
+      "name": "engine (linux, shard 4/4)",
+      "job": 127578868144,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:43:06Z",
+      "counts": {
+        "passed": 1241,
+        "skipped": 1,
+        "failed": 0,
+        "tests": 1242,
+        "files": 115
+      },
+      "elapsedSeconds": 397.09,
+      "explicitSkippedTests": ["prompt emits v2 prompted and synthetic events (v2 projector disabled)"]
+    },
+    {
+      "name": "engine (linux, shard 2/4)",
+      "job": 127578868190,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:45:33Z",
+      "counts": {
+        "passed": 1857,
+        "skipped": 17,
+        "failed": 0,
+        "tests": 1874,
+        "files": 115
+      },
+      "elapsedSeconds": 554.08,
+      "explicitSkippedTests": [
+        "macos produces a runnable sandbox-exec invocation",
+        "package-manager credential files are masked inside writable caches",
+        "the Vercel and Supabase command-line logins stay out of a sandboxed command",
+        "an agent cannot read Vector's credential stores or the vault key",
+        "linked worktrees keep shared objects, refs, and reflogs read-only",
+        "writes inside the workspace succeed and writes to home are refused",
+        "a denied read is enforced by the kernel, not just written into the profile",
+        "a secret inside a writable cache root cannot be written either",
+        "a workspace path containing a quote stays contained",
+        "the toolchain stays readable and executable inside the sandbox",
+        "the network switch is enforced against a real socket, and no network still reaches loopback",
+        "a root worktree does not turn into write access to the whole disk",
+        "a profile with no writable roots is still a valid read-only profile",
+        "StructuredOutput Integration > produces structured output with simple schema",
+        "StructuredOutput Integration > produces structured output with nested objects",
+        "StructuredOutput Integration > works with text outputFormat (default)",
+        "StructuredOutput Integration > stores outputFormat on user message"
+      ]
+    },
+    {
+      "name": "e2e (windows)",
+      "job": 127578868215,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T23:05:56Z",
+      "suites": [
+        {
+          "name": "app Chromium",
+          "counts": {
+            "tests": 306,
+            "passed": 304,
+            "skipped": 1,
+            "flaky": 1,
+            "failed": 0,
+            "executedTestRetries": 1
+          },
+          "elapsedMinutes": 25.5,
+          "explicitSkippedTests": [
+            {
+              "file": "packages/app/e2e/regression/remote-tab-busy.spec.ts",
+              "line": 12,
+              "name": "tab busy indicator reflects the tab server's own session status",
+              "declaration": "test.skip",
+              "reason": "The redesigned workspace keeps session switching in the project sidebar instead of a second global session tab strip."
+            }
+          ]
+        },
+        {
+          "name": "production public viewer",
+          "counts": {
+            "tests": 5,
+            "passed": 5,
+            "skipped": 0,
+            "flaky": 0,
+            "failed": 0,
+            "executedTestRetries": 0
+          },
+          "elapsedSeconds": 42.1
+        }
+      ]
+    },
+    {
+      "name": "e2e (linux)",
+      "job": 127578868293,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T23:00:00Z",
+      "suites": [
+        {
+          "name": "app Chromium",
+          "counts": {
+            "tests": 306,
+            "passed": 305,
+            "skipped": 1,
+            "flaky": 0,
+            "failed": 0,
+            "executedTestRetries": 0
+          },
+          "elapsedMinutes": 23.2,
+          "explicitSkippedTests": [
+            {
+              "file": "packages/app/e2e/regression/remote-tab-busy.spec.ts",
+              "line": 12,
+              "name": "tab busy indicator reflects the tab server's own session status",
+              "declaration": "test.skip",
+              "reason": "The redesigned workspace keeps session switching in the project sidebar instead of a second global session tab strip."
+            }
+          ]
+        },
+        {
+          "name": "production public viewer",
+          "counts": {
+            "tests": 5,
+            "passed": 5,
+            "skipped": 0,
+            "flaky": 0,
+            "failed": 0,
+            "executedTestRetries": 0
+          },
+          "elapsedSeconds": 25.9
+        }
+      ]
+    },
+    {
+      "name": "engine (linux, shard 1/4)",
+      "job": 127578868375,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:44:06Z",
+      "counts": {
+        "passed": 1506,
+        "skipped": 13,
+        "failed": 0,
+        "tests": 1519,
+        "files": 116
+      },
+      "elapsedSeconds": 467.3,
+      "explicitSkippedTests": [
+        "Windows access rules > checks a real file's access rules with PowerShell",
+        "system tools and folders > reads the MDM profile with the system's plutil, after the trust check",
+        "macOS access control lists > a real file's list is checked, though stat does not show it",
+        "Worktree.remove > stops fsmonitor before removing a worktree",
+        "sync HttpApi > returns structured validation errors",
+        "the shell sandbox under Vector Local's Web access None > on macOS a command still reaches servers on this computer",
+        "the shell sandbox under Vector Local's Web access None > on Linux the sandbox cuts off servers on this computer too",
+        "the shell sandbox under Vector Local's Web access None > the first command of a session says what the sandbox limits, and only once",
+        "the shell sandbox under Vector Local's Web access None > on Windows a command runs and says it is not network-filtered",
+        "Sandbox.offline > wraps a command with no network and no proxy to carry it",
+        "step snapshots carry over to assistant messages",
+        "text ended populates assistant text content",
+        "tool completion stores completed timestamp"
+      ]
+    },
+    {
+      "name": "engine (windows, shard 3/6)",
+      "job": 127578868390,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:44:48Z",
+      "counts": {
+        "passed": 879,
+        "skipped": 17,
+        "failed": 0,
+        "tests": 896,
+        "files": 77
+      },
+      "elapsedSeconds": 378.56,
+      "explicitSkippedTests": [
+        "direct footer recreates the frame across command panel transitions",
+        "direct footer dispatches leader variant binding only when leader is registered",
+        "direct footer skill picker inserts an editable bound skill command",
+        "direct footer clears the synthetic skills draft when the panel closes",
+        "direct custom answer submits through keymap return binding",
+        "plugin publish inherits input through both publishers and preserves failure status",
+        "provider HttpApi > returns public v2 provider not found errors",
+        "worktree endpoint reproduction > direct HttpApi worktree create returns without waiting for boot",
+        "worktree endpoint reproduction > direct HttpApi worktree create accepts missing body",
+        "worktree endpoint reproduction > direct HttpApi worktree create accepts missing content type and body",
+        "worktree endpoint reproduction > direct HttpApi worktree create rejects explicit null payload",
+        "worktree endpoint reproduction > workspace worktree create does not hang",
+        "worktree endpoint reproduction > workspace worktree create returns without waiting for project start command",
+        "unicode filenames modification and restore",
+        "subdirectory snapshots treat wildcard characters literally",
+        "subdirectory snapshots treat leading colons literally",
+        "batched revert restores files with non-ASCII names instead of deleting them"
+      ]
+    },
+    {
+      "name": "engine (windows, shard 1/6)",
+      "job": 127578868454,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:55:59Z",
+      "counts": {
+        "passed": 1294,
+        "skipped": 13,
+        "failed": 0,
+        "tests": 1307,
+        "files": 77
+      },
+      "elapsedSeconds": 990.87,
+      "explicitSkippedTests": [
+        "computer availability > a WSL engine without a bridge reports the Windows-engine requirement",
+        "POSIX ownership > checks the real file and every folder above it",
+        "POSIX ownership > follows a link in the managed folder to the file it names",
+        "system tools and folders > reads the MDM profile with the system's plutil, after the trust check",
+        "managed config > a managed file a standard user could change is ignored by the config loader and by Vector Local",
+        "macOS access control lists > a real file's list is checked, though stat does not show it",
+        "sync HttpApi > returns structured validation errors",
+        "the shell sandbox under Vector Local's Web access None > a command cannot reach another computer",
+        "the shell sandbox under Vector Local's Web access None > on macOS a command still reaches servers on this computer",
+        "the shell sandbox under Vector Local's Web access None > on Linux the sandbox cuts off servers on this computer too",
+        "the shell sandbox under Vector Local's Web access None > the first command of a session says what the sandbox limits, and only once",
+        "the shell sandbox under Vector Local's Web access None > on Linux a command is refused before anything is asked when bwrap is missing",
+        "Sandbox.offline > wraps a command with no network and no proxy to carry it"
+      ]
+    },
+    {
+      "name": "engine (windows, shard 5/6)",
+      "job": 127578868466,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:59Z",
+      "completedAt": "2026-11-05T22:54:54Z",
+      "counts": {
+        "passed": 715,
+        "skipped": 8,
+        "failed": 0,
+        "tests": 723,
+        "files": 77
+      },
+      "elapsedSeconds": 880.58,
+      "explicitSkippedTests": [
+        "v2 pty HttpApi > serves location-wrapped PTY routes and retains exited sessions",
+        "v2 pty HttpApi > rejects connect tokens without the CSRF header and connects with a valid ticket",
+        "v2 pty HttpApi > serves PTY websocket output and input through the canonical route",
+        "v2 pty HttpApi > applies plugin shell environment before forced PTY values",
+        "session.compaction.create > projects a compaction message to v2 (v2 projector disabled)",
+        "step snapshots carry over to assistant messages",
+        "text ended populates assistant text content",
+        "tool completion stores completed timestamp"
+      ]
+    },
+    {
+      "name": "engine (windows, shard 2/6)",
+      "job": 127578868512,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:55:38Z",
+      "counts": {
+        "passed": 944,
+        "skipped": 21,
+        "failed": 0,
+        "tests": 965,
+        "files": 77
+      },
+      "elapsedSeconds": 921.84,
+      "explicitSkippedTests": [
+        "macos produces a runnable sandbox-exec invocation",
+        "package-manager credential files are masked inside writable caches",
+        "the Vercel and Supabase command-line logins stay out of a sandboxed command",
+        "an agent cannot read Vector's credential stores or the vault key",
+        "linked worktrees keep shared objects, refs, and reflogs read-only",
+        "writes inside the workspace succeed and writes to home are refused",
+        "a denied read is enforced by the kernel, not just written into the profile",
+        "a secret inside a writable cache root cannot be written either",
+        "a workspace path containing a quote stays contained",
+        "the toolchain stays readable and executable inside the sandbox",
+        "the network switch is enforced against a real socket, and no network still reaches loopback",
+        "a root worktree does not turn into write access to the whole disk",
+        "a profile with no writable roots is still a valid read-only profile",
+        "renders replayed user, reasoning, and assistant output after completion",
+        "desktop preparation refuses missing matching npm packages",
+        "Worktree > makeWorktreeInfo > creates detached git worktree when info has no branch",
+        "Worktree > createFromInfo > creates git worktree and boots asynchronously",
+        "StructuredOutput Integration > produces structured output with simple schema",
+        "StructuredOutput Integration > produces structured output with nested objects",
+        "StructuredOutput Integration > works with text outputFormat (default)",
+        "StructuredOutput Integration > stores outputFormat on user message"
+      ]
+    },
+    {
+      "name": "engine (windows, shard 6/6)",
+      "job": 127578868563,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:58Z",
+      "completedAt": "2026-11-05T22:44:01Z",
+      "counts": {
+        "passed": 1078,
+        "skipped": 22,
+        "failed": 0,
+        "tests": 1100,
+        "files": 76
+      },
+      "elapsedSeconds": 359.65,
+      "explicitSkippedTests": [
+        "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
+        "an edit and its check in one response: the check runs after the edit (edit, bash)",
+        "an edit and its check in one response: the check runs after the edit (bash, edit)",
+        "shell captures stdout and stderr in completed tool output",
+        "shell completes a fast command on the preferred shell",
+        "shell uses configured shell over env shell",
+        "shell commands can change directory after startup",
+        "shell lists files from the project directory",
+        "shell captures stderr from a failing command",
+        "shell updates running metadata before process exit",
+        "command ! expansion uses configured shell over env shell",
+        "command ! expansion respects shell permission denial",
+        "command ! snippets from the user's config keep their arguments and run without asking",
+        "cancel interrupts shell and resolves cleanly",
+        "cancel persists aborted shell result when shell ignores TERM",
+        "cancel finalizes interrupted bash tool output through normal truncation",
+        "cancel interrupts loop queued behind shell",
+        "shell rejects when another shell is already running",
+        "run guard pauses the same bash call repeated across turns",
+        "run guard leaves a repeated bash call alone while each run of it changes a file",
+        "run guard leaves a repeated bash call alone while it returns something new each time",
+        "run guard leaves repeated calls alone when config turns the loop rules off"
+      ]
+    },
+    {
+      "name": "engine (windows, shard 4/6)",
+      "job": 127578868704,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-11-05T22:34:59Z",
+      "completedAt": "2026-11-05T22:47:01Z",
+      "counts": {
+        "passed": 1092,
+        "skipped": 19,
+        "failed": 0,
+        "tests": 1111,
+        "files": 77
+      },
+      "elapsedSeconds": 463.14,
+      "explicitSkippedTests": [
+        "looks for the bundled reader once however often the layer is built",
+        "Egress decides with the policy in effect > while Vector Local is on, the network log is in Vector's data folder for the user only, kept as long as the company says",
+        "loosening edits wait for the owner > the confirmed block is readable by the user only",
+        "sources Vector cannot read > a user config Vector cannot read keeps the last block in effect, with no web while Local is on",
+        "sources Vector cannot read > a company policy file Vector cannot read or check turns Local on with Web access None",
+        "the network log > a shorter log in the user's config waits for the owner, and a longer one applies at once",
+        "the network log > under a company lock, the user's log setting does not apply, and a shorter one is still held",
+        "workspace CRUD > sessionWarp detaches to the source project when invoked from a workspace instance",
+        "experimental HttpApi > serves worktree mutations through the default server app",
+        "HttpApi Server.listen > serves HTTP routes and upgrades PTY websocket through Server.listen",
+        "HttpApi Server.listen > stop(true) is safe when called concurrently and repeatedly",
+        "HttpApi Server.listen > stop(true) can force a graceful stop already in progress",
+        "HttpApi Server.listen > graceful stop waits for an overlapping forced stop",
+        "HttpApi Server.listen > rejects unsafe PTY ticket mint and connect requests",
+        "HttpApi Server.listen > keeps PTY websocket tickets optional when server auth is disabled",
+        "pty HttpApi bridge > serves PTY JSON routes through experimental Effect routes",
+        "pty HttpApi bridge > hides exited sessions on the legacy surface",
+        "pty HttpApi bridge > disposes PTY sessions with their legacy instance",
+        "pty HttpApi bridge > serves PTY websocket output and input through Effect routes"
+      ]
+    }
+  ],
+  "previouslyTimedOutEngineTest": {
+    "job": 127578868466,
+    "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+    "file": "packages/engine/test/cli/github.review.test.ts",
+    "name": "vector github review against a fake GitHub > 10. a push that merges main: the review's focus leaves main's changes out",
+    "status": "passed",
+    "elapsedMs": 5738.41,
+    "loggedAt": "2026-11-05T22:43:38.0303227Z",
+    "deadlineMs": 60000,
+    "githubJobRetriesExecuted": 0,
+    "testAndDeadlineChangedFromPreviousSource": false,
+    "comparedSource": "e6b9794986142b1cfafc3ff12f20f1b2d11561ea",
+    "previousTimeoutCause": "unproven"
+  },
+  "windowsBrowserFlakyTest": {
+    "job": 127578868215,
+    "runAttempt": 1,
+    "file": "packages/app/e2e/regression/memory-documents.spec.ts",
+    "line": 266,
+    "name": "shows a delivered citation as a solid chip, any other as unverified text, and what memory the turn used",
+    "initial": {
+      "status": "failed",
+      "failure": "expect(locator).toBeVisible() failed; Documents session title element(s) not found",
+      "timeoutMs": 30000,
+      "locator": "locator('[data-vector-session-title]').filter({ hasText: /^Documents session$/ }).or(getByRole('heading', { name: 'Documents session', exact: true })).first()",
+      "stack": [
+        "packages/app/e2e/utils/waits.ts:6:25 expectAppVisible",
+        "packages/app/e2e/utils/waits.ts:13:9 expectSessionTitle",
+        "packages/app/e2e/regression/memory-documents.spec.ts:97:9 setup",
+        "packages/app/e2e/regression/memory-documents.spec.ts:286:3 test"
+      ]
+    },
+    "retry": {
+      "number": 1,
+      "status": "passed",
+      "launchedAt": "2026-11-05T22:52:42.2318241Z",
+      "elapsedMs": null,
+      "elapsedNotEstablishedFromLineReporter": true
+    },
+    "finalClassification": "flaky",
+    "internalRetriesExecuted": 1,
+    "githubJobRetriesExecuted": 0,
+    "configuredCIRetryLimit": 2,
+    "sourceComparedTo": "e6b9794986142b1cfafc3ff12f20f1b2d11561ea",
+    "testWaitsAndPlaywrightConfigChanged": false,
+    "sourceTriage": "Initial failure was in shared setup, after page.goto and before citation assertions. A direct helper-15 regression is not established; cause remains unproven. No edit or additional retry was performed."
+  },
+  "remainingWorkflowFailures": [
+    {
+      "job": 127578981315,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-11-05T22:35:12Z",
+      "completedAt": "2026-11-05T22:51:23Z",
+      "name": "computer-helper / mac-build",
+      "failedSteps": ["Enforce the measured production identity lock"],
+      "ordinary": false,
+      "nativePassCredit": false
+    },
+    {
+      "job": 127578981358,
+      "source": "16b16b6b6c5de610c2357df5388903e941053c47",
+      "runAttempt": 1,
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-11-05T22:35:12Z",
+      "completedAt": "2026-11-05T22:48:07Z",
+      "name": "computer-helper / windows-build",
+      "failedSteps": ["Run real Electron overlay properties and controller lifecycle"],
+      "ordinary": false,
+      "nativePassCredit": false
+    }
+  ],
+  "evidence": {
+    "apiEndpoints": ["actions/runs/42122694547", "actions/runs/42122694547/attempts/1/jobs?per_page=100"],
+    "verifiedLogJobs": [
+      127578867426, 127578867885, 127578868000, 127578868101, 127578868144, 127578868190, 127578868215, 127578868293,
+      127578868375, 127578868390, 127578868454, 127578868466, 127578868512, 127578868563, 127578868704
+    ],
+    "rawLogsSaved": false,
+    "signedArtifactURLsSaved": false,
+    "sourceDiffCheckedPaths": [
+      "packages/engine/test/cli/github.review.test.ts",
+      "packages/app/e2e/regression/memory-documents.spec.ts",
+      "packages/app/e2e/utils/waits.ts",
+      "packages/app/playwright.config.ts"
+    ]
+  },
+  "scope": "All fifteen ordinary JavaScript, actual Node bundle and browser regression jobs succeeded in GitHub job attempt 1 on the exact recorded source. No GitHub job retry was executed. The Windows browser suite used exactly one internal Playwright retry and classifies that test as flaky. The overall workflow concluded failure in native validation. This record grants no native, packaged artifact, signing, manual OS or release approval.",
+  "nativePassCredit": false,
+  "releaseReady": false
+}

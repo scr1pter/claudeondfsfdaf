@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { Hands } from "@vectordevai/schema/hands"
 import {
   composerTakes,
+  handoffPrompt,
   holdsHandoff,
   onComposerPrompt,
   requestComposerPrompt,
@@ -55,5 +57,17 @@ describe("composer handoff", () => {
     expect(holdsHandoff([part("")], "")).toBe(false)
     expect(holdsHandoff([part(`${text} and also this`)], text)).toBe(false)
     expect(holdsHandoff([part(text), { type: "image" }], text)).toBe(false)
+  })
+
+  test("a computer example becomes a real pill in either composer, and a pill draft is never sent on its own", () => {
+    const text = `@${Hands.MENTION} put my October receipts into a Numbers table`
+    const mention = `@${Hands.MENTION}`
+    const parts = handoffPrompt({ text, send: false, mention: "computer" })
+    expect(parts).toEqual([
+      { type: "computer", content: mention, start: 0, end: mention.length },
+      { type: "text", content: text.slice(mention.length), start: mention.length, end: text.length },
+    ])
+    expect(handoffPrompt({ text, send: false })).toEqual([{ type: "text", content: text, start: 0, end: text.length }])
+    expect(holdsHandoff(parts, text)).toBe(false)
   })
 })

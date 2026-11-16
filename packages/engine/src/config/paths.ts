@@ -1,12 +1,27 @@
 export * as ConfigPaths from "./paths"
 
 import path from "path"
+import { realpath, stat } from "node:fs/promises"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { Global } from "@vectordevai/core/global"
 import { unique } from "remeda"
 import { Effect } from "effect"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { ConfigImport } from "./import-settings"
+
+/** One physical scope for discovery and trust: Windows short names and directory links must not split its inputs. */
+export async function canonicalScope<T extends { directory: string; worktree: string }>(ctx: T) {
+  const [directory, worktree] = await Promise.all([
+    realpath(path.resolve(FSUtil.windowsPath(ctx.directory))),
+    ctx.worktree === "/" ? Promise.resolve("/") : realpath(path.resolve(FSUtil.windowsPath(ctx.worktree))),
+  ])
+  const [opened, root] = await Promise.all([stat(directory), worktree === "/" ? undefined : stat(worktree)])
+  if (!opened.isDirectory() || (root && !root.isDirectory()))
+    throw new Error("The configuration scope is no longer a directory.")
+  if (worktree !== "/" && !FSUtil.contains(worktree, directory))
+    throw new Error("The configuration directory is outside its resolved worktree.")
+  return { ...ctx, directory, worktree }
+}
 
 const migrate = (directory: string, worktree?: string) =>
   ConfigImport.discover({

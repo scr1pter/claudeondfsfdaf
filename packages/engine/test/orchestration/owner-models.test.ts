@@ -108,7 +108,9 @@ it.instance(
       const input = { spec: JSON.stringify(spec) }
       const preview = yield* runs.preview(input, { agent: "build", model: auto })
       expect(preview.ok).toBe(true)
-      expect(preview.plan?.stages[0].model).toBe(`${auto.providerID}/${auto.modelID}`)
+      const stage = preview.plan?.stages[0]
+      if (stage?.kind === "connect") throw new Error("The fixture must be an agent stage.")
+      expect(stage?.model).toBe(`${auto.providerID}/${auto.modelID}`)
       expect(preview.warnings.some((warning) => warning.message.includes("Children that inherit Auto"))).toBe(true)
       const started = yield* owner.start(parent.id, input)
       const detail = yield* pollWithTimeout(

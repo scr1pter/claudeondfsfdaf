@@ -1,3 +1,5 @@
+import { isComputerOverlay } from "./computer-overlay-registry"
+
 type RendererEvent = {
   sender: {
     isDestroyed: () => boolean
@@ -13,6 +15,7 @@ export function isTrustedRendererEvent<T extends RendererEvent>(
     trustedUrl: (url?: string) => boolean
   },
 ) {
-  if (event.sender.isDestroyed() || !checks.windowFor(event.sender)) return false
+  const window = checks.windowFor(event.sender)
+  if (event.sender.isDestroyed() || !window || isComputerOverlay(window)) return false
   return checks.trustedUrl(event.senderFrame?.url ?? event.sender.getURL())
 }

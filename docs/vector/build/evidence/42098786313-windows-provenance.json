@@ -1,0 +1,539 @@
+{
+  "run": 42098786313,
+  "head": "e7535097ac7f14a359afff64be464a20f10115f8",
+  "helperVersion": "1.0.14",
+  "job": 127495900843,
+  "jobName": "computer-helper / windows-build",
+  "jobConclusion": "failure",
+  "artifact": {
+    "id": 13448442799,
+    "name": "computer-helper-win32-reports-pr-e7535097ac7f14a359afff64be464a20f10115f8",
+    "zipBytes": 1351,
+    "zipSha256": "acc12c210e0121a6161090c622d43ceb84b654b33a1d297734653c3bb7fdef40",
+    "apiDigest": "sha256:acc12c210e0121a6161090c622d43ceb84b654b33a1d297734653c3bb7fdef40",
+    "zipDigestMatchesApi": true,
+    "createdAt": "2026-11-05T20:09:42Z",
+    "expiresAt": "2026-11-19T20:09:42Z",
+    "artifactRun": 42098786313,
+    "artifactHead": "e7535097ac7f14a359afff64be464a20f10115f8"
+  },
+  "steps": {
+    "Build both channel helper architectures": "success",
+    "Run Windows unit and fresh version/probe checks": "success",
+    "Run required Windows protocol and lifecycle checks": "success",
+    "Run explicitly isolated Windows scenarios": "success",
+    "Run real Electron overlay properties and controller lifecycle": "failure",
+    "Run actual isolated medium-token Windows overlay Stop": "skipped",
+    "Archive shipping files and tests separately": "skipped",
+    "Upload shipping helpers": "skipped",
+    "Upload native tests": "skipped",
+    "Preserve check reports": "success"
+  },
+  "stepConclusionCaveat": "The Actions API reports the optional isolated-scenarios step conclusion as success. Its preserved raw auto report has code 1 and four failed rows; that step conclusion does not turn those failures into passes or skips.",
+  "reports": {
+    "computer-win32-core.json": {
+      "rawBytes": 2466,
+      "rawSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+      "code": 0,
+      "counts": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        }
+      ],
+      "protocolReport": {
+        "schemaVersion": 1,
+        "platform": "win32",
+        "privileged": "off",
+        "checks": [
+          {
+            "name": "catalog",
+            "status": "passed"
+          },
+          {
+            "name": "unit",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged",
+            "status": "passed"
+          },
+          {
+            "name": "packaged",
+            "status": "passed"
+          },
+          {
+            "name": "target-control",
+            "status": "passed"
+          },
+          {
+            "name": "probe.first",
+            "status": "passed"
+          },
+          {
+            "name": "probe.fresh",
+            "status": "passed"
+          },
+          {
+            "name": "responsible",
+            "status": "passed"
+          },
+          {
+            "name": "unverified-parent",
+            "status": "passed"
+          },
+          {
+            "name": "channel-eof",
+            "status": "passed"
+          },
+          {
+            "name": "parent-death",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.cancel-idle",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.eof",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.frame-too-large",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.heartbeat-loss",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.hello",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.malformed-json",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.permissions",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.session",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.shutdown",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.unsupported-action",
+            "status": "passed"
+          },
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          },
+          {
+            "name": "unprivileged.wire-codec",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged.packaged-pe",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged.packaged-manifest",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged.packaged-version",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.wire-codec",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.packaged-pe",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.packaged-manifest",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.packaged-version",
+            "status": "passed"
+          },
+          {
+            "name": "target-control.windows-test-target-control-schema",
+            "status": "passed"
+          }
+        ],
+        "code": 0
+      }
+    },
+    "computer-win32-privileged.json": {
+      "rawBytes": 4371,
+      "rawSha256": "fbcd251842ac5889c60650bbe43484e5eb73d111c8d989378f9b34cddae578d1",
+      "code": 1,
+      "counts": {
+        "passed": 33,
+        "failed": 4,
+        "skipped": 9
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "failed",
+          "reason": "native-check-failed"
+        },
+        {
+          "name": "privileged.apps-installed-target",
+          "status": "failed",
+          "reason": "native_operation_failed"
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "status": "failed",
+          "reason": "native_operation_failed"
+        },
+        {
+          "name": "privileged.capture-affinity-exclusion",
+          "status": "failed",
+          "reason": "native_operation_failed"
+        },
+        {
+          "name": "privileged.uia-counter-increment",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.uia-value-set-and-readback",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.secure-field-refusal",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.tagged-click-increments",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.unicode-type-readback",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.stale-capture-refusal",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.owned-input-release",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.input-detection-probe",
+          "status": "skipped",
+          "reason": "input_detection_unavailable"
+        },
+        {
+          "name": "privileged.hardware-user-input-pauses",
+          "status": "skipped",
+          "reason": "hardware_input_required"
+        }
+      ],
+      "protocolReport": {
+        "schemaVersion": 1,
+        "platform": "win32",
+        "privileged": "auto",
+        "checks": [
+          {
+            "name": "catalog",
+            "status": "passed"
+          },
+          {
+            "name": "unit",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged",
+            "status": "passed"
+          },
+          {
+            "name": "packaged",
+            "status": "passed"
+          },
+          {
+            "name": "target-control",
+            "status": "passed"
+          },
+          {
+            "name": "probe.first",
+            "status": "passed"
+          },
+          {
+            "name": "probe.fresh",
+            "status": "passed"
+          },
+          {
+            "name": "responsible",
+            "status": "passed"
+          },
+          {
+            "name": "unverified-parent",
+            "status": "passed"
+          },
+          {
+            "name": "channel-eof",
+            "status": "passed"
+          },
+          {
+            "name": "parent-death",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.cancel-idle",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.eof",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.frame-too-large",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.heartbeat-loss",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.hello",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.malformed-json",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.permissions",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.session",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.shutdown",
+            "status": "passed"
+          },
+          {
+            "name": "conformance.unsupported-action",
+            "status": "passed"
+          },
+          {
+            "name": "privileged",
+            "status": "failed",
+            "reason": "native-check-failed"
+          },
+          {
+            "name": "unprivileged.wire-codec",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged.packaged-pe",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged.packaged-manifest",
+            "status": "passed"
+          },
+          {
+            "name": "unprivileged.packaged-version",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.wire-codec",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.packaged-pe",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.packaged-manifest",
+            "status": "passed"
+          },
+          {
+            "name": "packaged.packaged-version",
+            "status": "passed"
+          },
+          {
+            "name": "target-control.windows-test-target-control-schema",
+            "status": "passed"
+          },
+          {
+            "name": "privileged.privileged-isolated-target",
+            "status": "passed"
+          },
+          {
+            "name": "privileged.apps-running-target",
+            "status": "passed"
+          },
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "failed",
+            "reason": "native_operation_failed"
+          },
+          {
+            "name": "privileged.capture-color-patch",
+            "status": "failed",
+            "reason": "native_operation_failed"
+          },
+          {
+            "name": "privileged.capture-affinity-exclusion",
+            "status": "failed",
+            "reason": "native_operation_failed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          },
+          {
+            "name": "privileged.isolated-target-cleanup",
+            "status": "passed"
+          }
+        ],
+        "code": 1
+      }
+    }
+  },
+  "privilegedScenarioEvidence": {
+    "actualPasses": ["privileged-isolated-target", "apps-running-target", "isolated-target-cleanup"],
+    "actualFailures": [
+      {
+        "name": "apps-installed-target",
+        "reason": "native_operation_failed"
+      },
+      {
+        "name": "capture-color-patch",
+        "reason": "native_operation_failed"
+      },
+      {
+        "name": "capture-affinity-exclusion",
+        "reason": "native_operation_failed"
+      }
+    ],
+    "aggregateFailure": {
+      "name": "privileged",
+      "status": "failed",
+      "reason": "native-check-failed"
+    },
+    "inputAndUiaSkips": {
+      "count": 8,
+      "reason": "input_detection_unavailable",
+      "names": [
+        "uia-counter-increment",
+        "uia-value-set-and-readback",
+        "secure-field-refusal",
+        "tagged-click-increments",
+        "unicode-type-readback",
+        "stale-capture-refusal",
+        "owned-input-release",
+        "input-detection-probe"
+      ]
+    },
+    "hardwareSkip": {
+      "name": "hardware-user-input-pauses",
+      "reason": "hardware_input_required"
+    },
+    "cause": "unresolved",
+    "diagnosticLimit": "The measured-source scenario runner discards the underlying failed native reply code and direct native failure location. These reports cannot identify which installed-catalog or capture boundary failed. No missing-prerequisite skip or source repair is inferred."
+  },
+  "closedLogReceipts": [
+    {
+      "time": "2026-11-05T20:09:12.0636665Z",
+      "phase": "required-core",
+      "counts": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "time": "2026-11-05T20:09:25.5710356Z",
+      "phase": "isolated-auto",
+      "counts": {
+        "passed": 33,
+        "failed": 4,
+        "skipped": 9
+      }
+    },
+    {
+      "time": "2026-11-05T20:09:41.5344481Z",
+      "phase": "electron-overlay",
+      "failure": {
+        "name": "overlay-bounds",
+        "reason": "assertion_failed"
+      }
+    }
+  ],
+  "scope": "Source-bound Windows helper1.0.14 builds for x64 and ARM64; executed x64 unit/version/probe/core protocol/lifecycle evidence and the preserved isolated auto report. ARM64 native execution is not established. Three privileged scenario failures remain actual failures with unresolved cause; eight input/UIA scenarios and one physical-hardware scenario remain explicit skips. The Electron overlay bounds check failed and later staged native-overlay/shipping archive stages were skipped. No full privileged, native overlay Stop, final shipping artifact, matrix completion, or release approval is established.",
+  "releaseReady": false
+}

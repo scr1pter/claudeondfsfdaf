@@ -189,6 +189,12 @@ export function read(): Read {
   }
 }
 
+/** Explicit periodic policy readers refresh OS-managed sources; ordinary startup reads retain their cache. */
+export function refresh(): Read {
+  policyCache.value = undefined
+  return read()
+}
+
 /**
  * Why a managed file cannot be trusted, or undefined when only an administrator could have changed it (or it does not
  * exist). macOS and Linux: the file and every folder above it must be owned by root, and no one else may write them,
@@ -318,8 +324,8 @@ export function preferences(root: string, options: TrustOptions = {}): Policy | 
 }
 
 // The MDM profile and the policy key change only through the operating system's own tools, so they are read once per
-// process and a change applies at the next start; running a tool on every read would slow each start on a company
-// computer.
+// process unless a periodic reader explicitly calls refresh(); running a tool on every startup read would slow each
+// start on a company computer.
 const policyCache: { value?: readonly (Policy | Ignored)[] } = {}
 
 function systemPolicies() {

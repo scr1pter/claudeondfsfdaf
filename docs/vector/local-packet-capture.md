@@ -39,7 +39,7 @@ The job uploads `vector-local-capture-<commit>` even on failure. The artifact co
 - `result.json`: pass/fail, reasons, identity, duration and comparison counts;
 - `workload.json`: start/end/cycle timestamps, individual checks and exact fixture control routes;
 - `traffic.pcap`, `tcpdump.log`, `packets.json`: the real capture, drop count and field-only decoded metadata;
-- `isolation.json`, `interfaces.json`, `routes.json`, `routes-v6.json`, `resolv.conf`: namespace and sink configuration;
+- `isolation.json`, `interfaces.json`, `routes.json`, `routes-v6.json`, `resolv.conf`, `hosts`: namespace and sink configuration (`hosts` adds only this machine's own name, so sudo's host lookup stays off the DNS sink);
 - `events.json`, `desktop-events.json`, `fixture-hits.json`: actual network-log events and fixture observations;
 - workload and engine/Electron diagnostic logs.
 

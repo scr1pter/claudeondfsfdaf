@@ -147,7 +147,7 @@ const IPV6 = /(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}/g
 // A machine's name: letters and a number ("build01", "db-02", "billing07"). Name, mail and web servers are named in
 // public DNS ("ns51", "mx01", "www2"), and a year names an edition ("cvpr2023"), not a machine.
 const MACHINE = /^(?!(?:ns|mx|www|smtp|mail|imap|pop)-?\d)[a-z]{2,}-?(?!(?:19|20)\d\d$)\d{2,}$/
-// A home folder, and the user name in it ("/Users/krishna/", "/home/kb/", "C:\Users\kbharadwaj\", "~kb/", where
+// A home folder, and the user name in it ("/Users/person/", "/home/kb/", "C:\Users\someone\", "~kb/", where
 // the name after a tilde starts with a letter, so "~200/month" names nobody), and a path that starts at a root, a
 // drive or home ("/srv/x", "D:\finance", "~/notes").
 const HOME = /(?:^|[^\w.-])(?:(?:[a-z]:)?[\\/](?:users|home)[\\/]|~(?=[a-z][\w.-]*[\\/]))([^\\/\s"'`<>|:*?,;()[\]{}]+)/g

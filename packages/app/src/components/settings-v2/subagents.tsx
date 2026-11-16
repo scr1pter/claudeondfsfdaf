@@ -1,6 +1,7 @@
 import "@/features/background-tasks/background-tasks.css"
 import { For, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
+import { ConnectedTools } from "@/features/connect/connected-tools"
 import type { Config } from "@vectordevai/sdk/v2/client"
 import { Button } from "@vectordevai/ui/button"
 import { useDialog } from "@vectordevai/ui/context/dialog"
@@ -50,6 +51,8 @@ import {
   type CeilingKey,
   type WorkflowMode,
 } from "./workflow-settings-model"
+import { SettingsVectorScopeV2 } from "./vectorscope"
+import { vectorScopeOwner } from "./vectorscope-model"
 
 // Vector hands work to two kinds of subagent, and this page explains both.
 // Subagents are the engine's general-purpose `general` agent, which the main
@@ -171,7 +174,7 @@ function DialogStopRunningWork(props: {
   )
 }
 
-export function SettingsSubagentsV2() {
+export function SettingsSubagentsV2(props: { directory?: string }) {
   const serverSync = useServerSync()
   const language = useLanguage()
   const dialog = useDialog()
@@ -263,14 +266,22 @@ export function SettingsSubagentsV2() {
   // workflows route, which tells the two apart.
   const capabilities = () => serverSync().capabilities()
   const serverSDK = useServerSDK()
-  const [owner] = createResource(
+  const [ownerCheck] = createResource(
     () => (capabilities().subagentLimits ? serverSDK() : undefined),
     (sdk) =>
       sdk.client.experimental.workflow
         .saved(undefined, { throwOnError: false })
-        .then((result) => ownerFromStatus(result.response?.status) ?? false)
-        .catch(() => false),
+        .then((result) => ({
+          sdk,
+          owner: ownerFromStatus(result.response?.status) ?? false,
+          // The staged review settings need positive authorization evidence;
+          // an error or malformed response is never proof of ownership.
+          provedOwner: result.response?.status === 200 && Array.isArray(result.data?.workflows),
+        }))
+        .catch(() => ({ sdk, owner: false, provedOwner: false })),
   )
+  const owner = () => ownerCheck()?.owner
+  const scopeOwner = () => vectorScopeOwner(ownerCheck(), serverSDK(), ownerCheck.loading)
   const ownerSettings = () => capabilities().subagentLimits && owner() === true
   const unknown = () => (
     <span class="settings-v2-row-description">
@@ -425,6 +436,20 @@ export function SettingsSubagentsV2() {
           <>
             <SubagentLimitsCard config={config()} confirm={confirmSave} save={saveConfig} />
             <WorkflowsCard config={config()} confirm={confirmSave} save={saveConfig} />
+            <Show
+              when={scopeOwner() && capabilities().vectorscopeSettings && config().experimental?.vectorscope === true}
+            >
+              <SettingsVectorScopeV2
+                config={config()}
+                confirm={confirmSave}
+                save={async (patch) => {
+                  if (!scopeOwner()) throw new Error("Owner access for this server is not available. Reopen Settings.")
+                  const result = await serverSync().updateConfig(patch)
+                  if (!result.data) throw new Error("The engine returned no saved settings.")
+                  return result.data
+                }}
+              />
+            </Show>
           </>
         )}
       </Show>
@@ -483,6 +508,18 @@ export function SettingsSubagentsV2() {
           </p>
         </div>
       </div>
+      <Show when={capabilities().connections}>
+        <ConnectedTools
+          directory={props.directory}
+          config={serverSync().globalConfig()}
+          confirm={confirmSave}
+          save={(patch) =>
+            serverSync()
+              .updateConfig(patch)
+              .then(() => undefined)
+          }
+        />
+      </Show>
     </section>
   )
 }

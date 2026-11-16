@@ -5,6 +5,7 @@ import "./github-agents.css"
 
 export type GithubBinding = {
   repositoryId: string
+  generation: number
   repository?: string
   binder?: { login: string }
   boundAt: number
@@ -34,7 +35,7 @@ export function readGithubBindings(value: unknown): GithubBinding[] {
   const seen = new Set<string>()
   return value.bindings.map((item) => {
     if (!record(item) || typeof item.repositoryId !== "string" || !DECIMAL.test(item.repositoryId) ||
-      !Number.isSafeInteger(Number(item.repositoryId)) || seen.has(item.repositoryId) || !time(item.boundAt) ||
+      !Number.isSafeInteger(Number(item.repositoryId)) || seen.has(item.repositoryId) || !time(item.generation) || !time(item.boundAt) ||
       (item.lastUsedAt !== undefined && !time(item.lastUsedAt)) || typeof item.workflowVersion !== "string" ||
       !/^\d{1,6}$/.test(item.workflowVersion) || typeof item.codium !== "string" || !["ready", "unavailable"].includes(item.codium) ||
       (item.suspended !== undefined && (typeof item.suspended !== "string" || !["transferred", "deleted", "binder-left"].includes(item.suspended)))) throw new GithubConnectionError(503)
@@ -42,7 +43,7 @@ export function readGithubBindings(value: unknown): GithubBinding[] {
     const hidden = item.suspended === "binder-left"
     if (!hidden && ((item.repository !== undefined && (typeof item.repository !== "string" || !repository(item.repository))) ||
       (item.binder !== undefined && (!record(item.binder) || typeof item.binder.login !== "string" || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(item.binder.login))))) throw new GithubConnectionError(503)
-    return { repositoryId: item.repositoryId, boundAt: item.boundAt, workflowVersion: item.workflowVersion,
+    return { repositoryId: item.repositoryId, generation: item.generation, boundAt: item.boundAt, workflowVersion: item.workflowVersion,
       codium: item.suspended ? "unavailable" : item.codium as GithubBinding["codium"],
       ...(time(item.lastUsedAt) ? { lastUsedAt: item.lastUsedAt } : {}),
       ...(item.suspended ? { suspended: item.suspended as GithubBinding["suspended"] } : {}),
@@ -83,9 +84,9 @@ export async function requestGithubBindCode(accessToken: string, name: string, r
     value.expiresAt <= Date.now() || value.expiresAt > Date.now() + 24 * 60 * 60_000) throw new GithubConnectionError(503)
   return { code: value.code, expiresAt: value.expiresAt, repository: selected }
 }
-export async function requestGithubUnbind(accessToken: string, repositoryId: string, request: Request = fetch, signal?: AbortSignal) {
-  if (!DECIMAL.test(repositoryId) || !Number.isSafeInteger(Number(repositoryId))) throw new GithubConnectionError(400)
-  const value = await accountRequest("/api/cloud-agents/unbind", accessToken, "POST", { repositoryId }, request, signal)
+export async function requestGithubUnbind(accessToken: string, repositoryId: string, expectedGeneration: number, request: Request = fetch, signal?: AbortSignal) {
+  if (!DECIMAL.test(repositoryId) || !Number.isSafeInteger(Number(repositoryId)) || !time(expectedGeneration)) throw new GithubConnectionError(400)
+  const value = await accountRequest("/api/cloud-agents/unbind", accessToken, "POST", { repositoryId, expectedGeneration }, request, signal)
   if (value.ok !== true) throw new GithubConnectionError(503)
 }
 const when = (value: number) => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
@@ -181,7 +182,7 @@ export function GithubAgents(props: { accessToken: string; preview?: GithubAgent
   const unbind = (binding: GithubBinding) => {
     const current = generation.current
     void perform(binding.repositoryId, async (signal) => {
-      await requestGithubUnbind(props.accessToken, binding.repositoryId, fetch, signal)
+      await requestGithubUnbind(props.accessToken, binding.repositoryId, binding.generation, fetch, signal)
       if (!signal.aborted && current === generation.current) {
         setBindings((rows) => rows.filter((row) => row.repositoryId !== binding.repositoryId))
         setNotice("Repository disconnected.")

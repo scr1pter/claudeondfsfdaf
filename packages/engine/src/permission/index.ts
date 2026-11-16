@@ -13,12 +13,15 @@ import { TaskPlace } from "@/task/place"
 
 export const Event = PermissionV1.Event
 
+/** How the person answered an ask: "once" or "always". A rule that allows without a prompt has no answer. */
+export type Answer = "once" | "always"
 /** The feedback a permission request no one answered in time is declined with (`sizing.subagents.ask_timeout`). */
 export const TIMED_OUT =
   "No one answered this permission request in time, so it was declined. Do not retry it or work around it; continue without it and say so in your report."
 
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  /** Resolves with the person's answer, or `undefined` when a rule allowed the request without a prompt. */
+  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<Answer | undefined, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   /**
    * Declines one unanswered request that timed out with `CorrectedError({ feedback: message })`. Unlike a rejection it
@@ -26,11 +29,15 @@ export interface Interface {
    */
   readonly expire: (requestID: string, message: string) => Effect.Effect<boolean>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  /** Nonstarting preflight for internal unattended work; an absent implementation always refuses that work. */
+  readonly canAllow?: (input: PermissionV1.AskInput) => Effect.Effect<boolean>
+  /** The allow rules "always" replies added in this instance. A computer permission's reply is never among them. */
+  readonly approved: () => Effect.Effect<ReadonlyArray<PermissionV1.Rule>>
 }
 
 interface PendingEntry {
   info: PermissionV1.Request
-  deferred: Deferred.Deferred<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>
+  deferred: Deferred.Deferred<Answer, PermissionV1.RejectedError | PermissionV1.CorrectedError>
 }
 
 interface State {
@@ -39,16 +46,17 @@ interface State {
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
+  const command = PermissionPolicy.commandPattern(permission, pattern)
   const rule = rulesets
     .flat()
-    .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern)) ?? {
+    .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(command, rule.pattern)) ?? {
     action: "ask" as const,
     permission,
     pattern: "*",
   }
   // A shell statement the scan cannot fully read is allowed only by a rule written for it, never by a wildcard such as
   // "*" or "*--version", whether configured or approved with "always".
-  if (rule.action === "allow" && pattern.startsWith(UNREAD) && !rule.pattern.startsWith(UNREAD.trim()))
+  if (rule.action === "allow" && command.startsWith(UNREAD) && !rule.pattern.startsWith(UNREAD.trim()))
     return { ...rule, action: "ask" }
   return rule
 }
@@ -103,7 +111,7 @@ const layer = Layer.effect(
           needsAsk = true
         }
 
-        if (!needsAsk) return
+        if (!needsAsk) return undefined
 
         const id = request.id ?? PermissionV1.ID.ascending()
         const info: PermissionV1.Request = {
@@ -117,12 +125,11 @@ const layer = Layer.effect(
         }
         yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
 
-        const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
+        const deferred = yield* Deferred.make<Answer, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
         pending.set(id, { info, deferred })
         yield* events.publish(Event.Asked, info)
         return yield* Deferred.await(deferred).pipe(
-          // A request whose asker stopped waiting, such as a stopped subagent, is withdrawn the way a rejection is
-          // announced, so clients stop showing a prompt that can no longer be answered.
+          // A stopped asker withdraws its request so clients do not show a stale prompt.
           Effect.onInterrupt(() =>
             pending.has(id)
               ? events.publish(Event.Replied, { sessionID: info.sessionID, requestID: id, reply: "reject" })
@@ -176,8 +183,11 @@ const layer = Layer.effect(
         return
       }
 
-      yield* Deferred.succeed(existing.deferred, undefined)
+      yield* Deferred.succeed(existing.deferred, reply)
       if (reply === "once") return
+      // The desktop keeps a computer grant in its own sealed store, so a revoke in Settings takes effect at once. The
+      // engine never remembers one: an "always" reply to a computer permission answers only this ask.
+      if (existing.info.permission.startsWith("computer_")) return
 
       for (const pattern of existing.info.always) {
         approved.push({
@@ -200,7 +210,7 @@ const layer = Layer.effect(
           requestID: item.info.id,
           reply: "always",
         })
-        yield* Deferred.succeed(item.deferred, undefined)
+        yield* Deferred.succeed(item.deferred, "always")
       }
     })
 
@@ -224,7 +234,26 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, expire, list })
+    const canAllow = Effect.fn("Permission.canAllow")(
+      function* (input: PermissionV1.AskInput) {
+        if (PermissionPolicy.requiresApproval(input.permission, input.always, input.patterns)) return false
+        const data = yield* InstanceState.get(state)
+        return input.patterns.every((pattern) => {
+          const own = evaluate(input.permission, pattern, input.ruleset)
+          return (
+            own.action !== "deny" &&
+            evaluate(input.permission, pattern, input.ruleset, data.approved).action === "allow"
+          )
+        })
+      },
+      (effect, input) => TaskPlace.atHome(input.sessionID)(effect),
+    )
+
+    const approvedRules = Effect.fn("Permission.approved")(function* () {
+      return [...(yield* InstanceState.get(state)).approved]
+    })
+
+    return Service.of({ ask, reply, expire, list, canAllow, approved: approvedRules })
   }),
 )
 

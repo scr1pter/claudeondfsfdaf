@@ -1,0 +1,761 @@
+[
+  {
+    "runId": 43567384542,
+    "totalCount": 24,
+    "jobs": [
+      {
+        "id": 132364093766,
+        "name": "engine (windows, shard 12/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093766"
+      },
+      {
+        "id": 132364093847,
+        "name": "engine (windows, shard 4/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093847"
+      },
+      {
+        "id": 132364093888,
+        "name": "unit (linux)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093888"
+      },
+      {
+        "id": 132364093892,
+        "name": "e2e (linux)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093892"
+      },
+      {
+        "id": 132364093897,
+        "name": "engine (linux, shard 3/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093897"
+      },
+      {
+        "id": 132364093907,
+        "name": "engine (windows, shard 7/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093907"
+      },
+      {
+        "id": 132364093913,
+        "name": "engine (linux, shard 2/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093913"
+      },
+      {
+        "id": 132364093939,
+        "name": "e2e (windows)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093939"
+      },
+      {
+        "id": 132364093940,
+        "name": "engine (windows, shard 5/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093940"
+      },
+      {
+        "id": 132364093942,
+        "name": "engine (windows, shard 6/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093942"
+      },
+      {
+        "id": 132364093948,
+        "name": "engine (windows, shard 10/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093948"
+      },
+      {
+        "id": 132364093953,
+        "name": "engine (windows, shard 8/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093953"
+      },
+      {
+        "id": 132364093970,
+        "name": "engine (windows, shard 9/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093970"
+      },
+      {
+        "id": 132364093971,
+        "name": "desktop engine bundle (node)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093971"
+      },
+      {
+        "id": 132364093980,
+        "name": "engine (linux, shard 4/4)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093980"
+      },
+      {
+        "id": 132364093990,
+        "name": "unit (windows)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364093990"
+      },
+      {
+        "id": 132364094002,
+        "name": "engine (linux, shard 1/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364094002"
+      },
+      {
+        "id": 132364094064,
+        "name": "engine (windows, shard 2/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364094064"
+      },
+      {
+        "id": 132364094070,
+        "name": "engine (windows, shard 11/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364094070"
+      },
+      {
+        "id": 132364094138,
+        "name": "engine (windows, shard 1/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364094138"
+      },
+      {
+        "id": 132364094146,
+        "name": "engine (windows, shard 3/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364094146"
+      },
+      {
+        "id": 132364094874,
+        "name": "production app benchmark (manual)",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364094874"
+      },
+      {
+        "id": 132364095035,
+        "name": "offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364095035"
+      },
+      {
+        "id": 132364095062,
+        "name": "published release engine evidence (manual)",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567384542/job/132364095062"
+      }
+    ]
+  },
+  {
+    "runId": 43568328649,
+    "totalCount": 24,
+    "jobs": [
+      {
+        "id": 132366972761,
+        "name": "e2e (linux)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366972761"
+      },
+      {
+        "id": 132366972951,
+        "name": "engine (linux, shard 4/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366972951"
+      },
+      {
+        "id": 132366972961,
+        "name": "engine (linux, shard 1/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366972961"
+      },
+      {
+        "id": 132366972963,
+        "name": "engine (linux, shard 2/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366972963"
+      },
+      {
+        "id": 132366972972,
+        "name": "desktop engine bundle (node)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366972972"
+      },
+      {
+        "id": 132366972998,
+        "name": "unit (windows)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366972998"
+      },
+      {
+        "id": 132366973001,
+        "name": "engine (windows, shard 9/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973001"
+      },
+      {
+        "id": 132366973012,
+        "name": "engine (linux, shard 3/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973012"
+      },
+      {
+        "id": 132366973016,
+        "name": "unit (linux)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973016"
+      },
+      {
+        "id": 132366973023,
+        "name": "engine (windows, shard 6/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973023"
+      },
+      {
+        "id": 132366973047,
+        "name": "e2e (windows)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973047"
+      },
+      {
+        "id": 132366973086,
+        "name": "engine (windows, shard 12/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973086"
+      },
+      {
+        "id": 132366973100,
+        "name": "engine (windows, shard 7/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973100"
+      },
+      {
+        "id": 132366973132,
+        "name": "engine (windows, shard 10/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973132"
+      },
+      {
+        "id": 132366973153,
+        "name": "engine (windows, shard 1/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973153"
+      },
+      {
+        "id": 132366973155,
+        "name": "engine (windows, shard 2/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973155"
+      },
+      {
+        "id": 132366973172,
+        "name": "engine (windows, shard 4/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973172"
+      },
+      {
+        "id": 132366973188,
+        "name": "engine (windows, shard 5/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973188"
+      },
+      {
+        "id": 132366973191,
+        "name": "engine (windows, shard 11/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973191"
+      },
+      {
+        "id": 132366973205,
+        "name": "engine (windows, shard 3/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973205"
+      },
+      {
+        "id": 132366973208,
+        "name": "engine (windows, shard 8/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973208"
+      },
+      {
+        "id": 132366973556,
+        "name": "published release engine evidence (manual)",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366973556"
+      },
+      {
+        "id": 132366974043,
+        "name": "production app benchmark (manual)",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132366974043"
+      },
+      {
+        "id": 132367006857,
+        "name": "offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568328649/job/132367006857"
+      }
+    ]
+  },
+  {
+    "runId": 43568981988,
+    "totalCount": 24,
+    "jobs": [
+      {
+        "id": 132369001889,
+        "name": "engine (linux, shard 2/4)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369001889"
+      },
+      {
+        "id": 132369001897,
+        "name": "engine (linux, shard 3/4)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369001897"
+      },
+      {
+        "id": 132369001911,
+        "name": "desktop engine bundle (node)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369001911"
+      },
+      {
+        "id": 132369001912,
+        "name": "unit (linux)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run unit tests"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369001912"
+      },
+      {
+        "id": 132369001926,
+        "name": "engine (windows, shard 12/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369001926"
+      },
+      {
+        "id": 132369001982,
+        "name": "engine (windows, shard 3/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369001982"
+      },
+      {
+        "id": 132369002000,
+        "name": "e2e (windows)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002000"
+      },
+      {
+        "id": 132369002014,
+        "name": "engine (linux, shard 4/4)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002014"
+      },
+      {
+        "id": 132369002034,
+        "name": "engine (windows, shard 10/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002034"
+      },
+      {
+        "id": 132369002036,
+        "name": "engine (windows, shard 2/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002036"
+      },
+      {
+        "id": 132369002038,
+        "name": "engine (windows, shard 8/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002038"
+      },
+      {
+        "id": 132369002052,
+        "name": "engine (linux, shard 1/4)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002052"
+      },
+      {
+        "id": 132369002060,
+        "name": "engine (windows, shard 4/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002060"
+      },
+      {
+        "id": 132369002069,
+        "name": "unit (windows)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run unit tests"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002069"
+      },
+      {
+        "id": 132369002082,
+        "name": "engine (windows, shard 6/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002082"
+      },
+      {
+        "id": 132369002083,
+        "name": "engine (windows, shard 9/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002083"
+      },
+      {
+        "id": 132369002085,
+        "name": "engine (windows, shard 5/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002085"
+      },
+      {
+        "id": 132369002133,
+        "name": "e2e (linux)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002133"
+      },
+      {
+        "id": 132369002174,
+        "name": "engine (windows, shard 11/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002174"
+      },
+      {
+        "id": 132369002318,
+        "name": "engine (windows, shard 7/12)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run Engine shard"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002318"
+      },
+      {
+        "id": 132369002385,
+        "name": "engine (windows, shard 1/12)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369002385"
+      },
+      {
+        "id": 132369003048,
+        "name": "published release engine evidence (manual)",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369003048"
+      },
+      {
+        "id": 132369003067,
+        "name": "offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369003067"
+      },
+      {
+        "id": 132369003458,
+        "name": "production app benchmark (manual)",
+        "status": "completed",
+        "conclusion": "skipped",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43568981988/job/132369003458"
+      }
+    ]
+  },
+  {
+    "runId": 43567463559,
+    "totalCount": 10,
+    "jobs": [
+      {
+        "id": 132364310915,
+        "name": "hosted API",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364310915"
+      },
+      {
+        "id": 132364311112,
+        "name": "sandbox (codium, cancelled, node)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Prepare the agent sandbox",
+          "Observe the synthetic probe report",
+          "Assert isolation, crash protection and cleanup"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311112"
+      },
+      {
+        "id": 132364311124,
+        "name": "sandbox (codium, success, bun)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Prepare the agent sandbox",
+          "Observe the synthetic probe report",
+          "Assert isolation, crash protection and cleanup"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311124"
+      },
+      {
+        "id": 132364311167,
+        "name": "engine and core",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Run engine GitHub tests"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311167"
+      },
+      {
+        "id": 132364311206,
+        "name": "sandbox (codium, bundle-refusal, node)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Prepare the agent sandbox",
+          "Observe the synthetic probe report",
+          "Assert isolation, crash protection and cleanup"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311206"
+      },
+      {
+        "id": 132364311238,
+        "name": "sandbox (codium, success, node)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Prepare the agent sandbox",
+          "Observe the synthetic probe report",
+          "Assert isolation, crash protection and cleanup"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311238"
+      },
+      {
+        "id": 132364311243,
+        "name": "sandbox (codium, seal-refusal, node)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Prepare the agent sandbox",
+          "Observe the synthetic probe report",
+          "Assert isolation, crash protection and cleanup"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311243"
+      },
+      {
+        "id": 132364311274,
+        "name": "sandbox (own-key, success, node)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Prepare the agent sandbox",
+          "Observe the synthetic probe report",
+          "Assert isolation, crash protection and cleanup"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311274"
+      },
+      {
+        "id": 132364311419,
+        "name": "sandbox (codium, session-replaced, node)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Prepare the agent sandbox",
+          "Observe the synthetic probe report",
+          "Assert isolation, crash protection and cleanup"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311419"
+      },
+      {
+        "id": 132364311437,
+        "name": "desktop engine bundle (node)",
+        "status": "completed",
+        "conclusion": "success",
+        "failedSteps": [],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43567463559/job/132364311437"
+      }
+    ]
+  },
+  {
+    "runId": 43566766483,
+    "totalCount": 1,
+    "jobs": [
+      {
+        "id": 132362207081,
+        "name": "Shell seam (bun, own-key, baseline)",
+        "status": "completed",
+        "conclusion": "failure",
+        "failedSteps": [
+          "Actual native prepare without SUDO mode or diagnostic profile",
+          "Preserve every earlier failure and cleanup uncertainty"
+        ],
+        "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43566766483/job/132362207081"
+      }
+    ]
+  }
+]

@@ -144,6 +144,38 @@ function fixture() {
   }
 }
 
+const screenshot =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+
+function screenshotFixture() {
+  const input = fixture()
+  return {
+    ...input,
+    archive: {
+      ...input.archive,
+      messages: [
+        ...input.archive.messages,
+        {
+          id: "computer-result",
+          role: "assistant" as const,
+          createdAt: Date.now(),
+          parts: [
+            {
+              type: "tool" as const,
+              name: "computer",
+              callID: "computer-call",
+              status: "completed" as const,
+              input: '{"action":"read_ui"}',
+              output: "Computer action completed",
+              screenshots: [{ name: "screen.png", mediaType: "image/png" as const, url: screenshot }],
+            },
+          ],
+        },
+      ],
+    },
+  }
+}
+
 async function send(method: string, id?: string, body?: unknown, extra: Record<string, string> = {}) {
   if (body && JSON.stringify(body).length > PublicSession.MAX_BYTES) {
     // Exercise early HTTP rejection independently of Bun's pooled upload client.
@@ -217,6 +249,55 @@ test("create/view/update/unshare executes the real SQL and exposes no management
   const rows = await database`select snapshot, deleted_at from public.vector_public_shares where id = ${input.id}`
   expect(rows[0].snapshot).toBeNull()
   expect(Number(rows[0].deleted_at)).toBeGreaterThan(0)
+})
+
+test("publication without explicit screenshot consent strips bytes before storage", async () => {
+  for (const includeScreenshots of [undefined, false]) {
+    const input = screenshotFixture()
+    const body = includeScreenshots === undefined ? input : { ...input, includeScreenshots }
+    expect((await send("POST", undefined, body)).status).toBe(200)
+    const stored = captured.find((request) => request.action === "create" && request.id === input.id)
+    expect(stored).toBeDefined()
+    expect(JSON.stringify(stored?.archive)).not.toContain(screenshot)
+    expect(JSON.stringify(stored?.archive)).toContain("Computer action completed")
+    const view = await send("GET", input.id)
+    expect(view.status).toBe(200)
+    const snapshot = await view.json()
+    expect(JSON.stringify(snapshot.archive)).not.toContain(screenshot)
+    expect(snapshot.archive.messages[1].parts[0].screenshots).toBeUndefined()
+    const rows = await database`select snapshot from public.vector_public_shares where id = ${input.id}`
+    expect(JSON.stringify(rows[0].snapshot)).not.toContain(screenshot)
+  }
+})
+
+test("explicit publication retains screenshots only until the first live update", async () => {
+  const input = screenshotFixture()
+  const created = await send("POST", undefined, { ...input, includeScreenshots: true })
+  expect(created.status).toBe(200)
+  const info = await created.json()
+  const stored = captured.find((request) => request.action === "create" && request.id === input.id)
+  expect(JSON.stringify(stored?.archive)).toContain(screenshot)
+  const initial = await send("GET", input.id)
+  expect(initial.status).toBe(200)
+  expect((await initial.json()).archive).toEqual(input.archive)
+
+  const updated = await send("PUT", input.id, {
+    secret: input.secret,
+    revision: info.revision,
+    archive: { ...input.archive, title: "Live update" },
+  })
+  expect(updated.status).toBe(200)
+  const update = captured.find((request) => request.action === "update" && request.id === input.id)
+  expect(update).toBeDefined()
+  expect(JSON.stringify(update?.archive)).not.toContain(screenshot)
+  const view = await send("GET", input.id)
+  expect(view.status).toBe(200)
+  const snapshot = await view.json()
+  expect(snapshot.archive.title).toBe("Live update")
+  expect(snapshot.archive.messages[1].parts[0]).toMatchObject({ name: "computer", output: "Computer action completed" })
+  expect(snapshot.archive.messages[1].parts[0].screenshots).toBeUndefined()
+  const rows = await database`select snapshot from public.vector_public_shares where id = ${input.id}`
+  expect(JSON.stringify(rows[0].snapshot)).not.toContain(screenshot)
 })
 
 test("deletion arriving before creation and racing updates cannot resurrect a share", async () => {

@@ -17,6 +17,7 @@ import {
   workflowOpen,
   workflowSlash,
   type Saved,
+  type PlanStage,
   type WorkflowClient,
 } from "./workflow-model"
 
@@ -70,6 +71,31 @@ function httpError(status: number, body: unknown) {
 }
 
 describe("the plan", () => {
+  test("connected plans name the declared action without inventing an agent, model or available execution", () => {
+    const connect: PlanStage = {
+      id: "review",
+      title: "Review changes",
+      phase: "",
+      kind: "connect",
+      connect: { to: "vectorscope", action: "review" },
+      items: 1,
+      serial: false,
+      writes: "read only; execution unavailable",
+      asks: ["connect", "connect_model when required"],
+    }
+    const checked = readPlan({ ...plan, stages: [connect] })
+    expect(checked?.stages[0]).toEqual(connect)
+    expect(stageLine(checked!.stages[0])).toBe(
+      "Review changes · vectorscope.review · 1 item · read only; execution unavailable · asks: connect, connect_model when required",
+    )
+    for (const extra of [
+      { agent: "general" },
+      { model: "provider/model" },
+      { kind: "unknown" },
+      { connect: undefined },
+    ])
+      expect(readPlan({ ...plan, stages: [{ ...connect, ...extra }] })).toBeUndefined()
+  })
   test("reads a plan field by field and refuses anything else", () => {
     expect(readPlan(plan)?.stages.map((stage) => stage.id)).toEqual(["files", "fix"])
     expect(readPlan({ ...plan, delegated: { usd: 25 }, models: {} })?.title).toBe("Review changes")

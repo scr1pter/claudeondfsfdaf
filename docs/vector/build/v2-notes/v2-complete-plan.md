@@ -100,7 +100,7 @@ Commit only real drift.
 
 | Commit | What | In build-complete? |
 |---|---|---|
-| `709f81127` | cherry of `3d7283bda`: "agent Codium: 10" (red group 1) | No. build-complete still has "agent Codium 10" at `vector-at-mention-progress.md:1042`. |
+| `709f81127` | cherry of `3d7283bda`: retired numbered plan label (red group 1) | No. build-complete still has the retired label at `vector-at-mention-progress.md:1042`. |
 | `676674c17` | agent-phase test uses `process.getBuiltinModule` (red group 5) | No. build-complete still has `require(...)` at `github.agent-phase.test.ts:442-443`. |
 | `202b18947` | **Fix A**: `ProcessIsolation.FLOOR=false` (`process-isolation.ts:13`), `decide()`, bounded `namespaceProbeFailure` (`github.sandbox.ts:537`), the probe floor fields, and the deviation "V16 bubblewrap floor held" | No. build-complete has no `FLOOR`, so all 7 sandbox jobs stay red (C1 AppArmor userns, C2 nested bwrap under an empty `/proc`). |
 | `6d4af65b8` | Spawn review §4.1: C4, C10 and C2, plus tests | No |
@@ -233,6 +233,14 @@ Tiers: **A** = must land before the PR is ready (security or privacy, off-by-def
 | F4 lanes | **`d1e9b6283`**, retargeted to `v2` and dispatch (§3.2). |
 | F7 semantic resolutions (review engine × Codium) | Resolved in build-complete `31c4eb724`, but **no test** shows that a Codium-routed review still passes scope's admission and history fence (no `codium` case in `engine/test/review/{run,service,local-admission}.test.ts`). **A**: add one test. |
 | VS-11 remainder, VS-12 executor, VS-14/15/18/19/26, key wiring VS-23…44 | Not built. **C**: each one off by default; separate PRs into v2. |
+
+### 4.5 Pre-merge review of PR #33: follow-ups not fixed in it
+
+| Item | Status |
+|---|---|
+| SPAWN-2: owned cleanup in the hosted engine sandbox (spawn review C9) | **Remains.** `groupEmpty` in `core/src/owned-process.ts` falls back to `/bin/ps`, which fails under the hosted sandbox's empty `/proc`, so cleanup ends `cleanup: "unknown"` and the slot stays reserved until restart. Fails closed. **C**: prove the group empty without `ps` under required isolation, or document that background shells are unsupported in hosted runs. |
+| PUB-8: no `/everywhere` landing page | **Remains.** The Slack and Linear OAuth callbacks redirect to `/everywhere#…`, which does not exist and is not in the prune keep list. Harmless while `VECTOR_EVERYWHERE_ENABLED` is off (the callbacks answer 404 first). **C**: add the page and its keep-list entry before enabling any platform; part of the Everywhere activation checklist. |
+| PUB-2: `computer` and `connect` in the published `config.json` | **Interim.** Their descriptions say they are not available in Vector 1.99.112 or earlier, but the published schema still offers both keys and `workflow.json` still carries the `Connect.*` definitions. Pending the lead's decision: keep the interim, or omit the flagged sections from the public schema build until the release that ships them. Either way, remove the version sentence (also in `core/src/v1/config/config.ts`) when Hands or Connect ships. |
 
 ---
 

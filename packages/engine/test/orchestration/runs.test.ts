@@ -76,7 +76,9 @@ it.instance(
       }
       const accepted = yield* runs.validate({ ctx: f.ctx, input: { spec: JSON.stringify(value) } })
       expect(accepted).toMatchObject({ ok: true, issues: [] })
-      expect(accepted.plan?.stages[0].model).toBe("lmstudio/test-model")
+      const stage = accepted.plan?.stages[0]
+      if (stage?.kind === "connect") throw new Error("The fixture must be an agent stage.")
+      expect(stage?.model).toBe("lmstudio/test-model")
       const denied = yield* runs.validate({
         ctx: f.ctx,
         input: {

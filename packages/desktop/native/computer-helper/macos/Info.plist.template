@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>{{HELPER_BUNDLE_ID}}</string>
+    <key>CFBundleExecutable</key>
+    <string>{{HELPER_EXECUTABLE}}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleName</key>
+    <string>{{HELPER_NAME}}</string>
+    <key>CFBundleDisplayName</key>
+    <string>{{HELPER_NAME}}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>{{HELPER_VERSION}}</string>
+    <key>CFBundleVersion</key>
+    <string>{{HELPER_VERSION}}</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>{{MINIMUM_SYSTEM_VERSION}}</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>{{HELPER_NAME}} uses screen recording only during computer tasks you approve.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>VectorComputerSourceDigest</key>
+    <string>{{SOURCE_DIGEST}}</string>
+</dict>
+</plist>

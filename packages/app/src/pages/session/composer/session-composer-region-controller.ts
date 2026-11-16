@@ -292,6 +292,7 @@ export function createSessionComposerRegionController(input: {
 
   return {
     state: input.state,
+    sessionID: input.sessionID,
     centered: input.centered,
     todo: input.todo,
     followup: input.followup,
@@ -304,7 +305,7 @@ export function createSessionComposerRegionController(input: {
     child: () => !!parentID(),
     interrupted,
     talkToChild,
-    showComposer: () => !input.state.blocked() || !!parentID(),
+    showComposer: () => input.state.promptAllowed() || !!parentID(),
     handoffPrompt: () => getSessionHandoff(input.sessionKey())?.prompt,
     promptReady: () => input.prompt.ready() || promptReady(),
     dock: () => (store.ready && input.state.dock()) || value() > 0.001,

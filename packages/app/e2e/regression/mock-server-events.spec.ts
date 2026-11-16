@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test"
 import { createServer } from "node:http"
 import { mockVectorServer } from "../utils/mock-server"
+import { installSseTransport } from "../utils/sse-transport"
 
 for (const sameOrigin of [false, true]) {
   test(`API mocks leave documents and modules on the local server (${sameOrigin ? "same-origin" : "separate"} backend)`, async ({
@@ -115,4 +116,45 @@ test("keeps global event envelopes separate from directory presence payloads", a
   expect(concurrent).toEqual([`data: ${JSON.stringify(globalEvent)}\n\n`, `data: ${JSON.stringify(presenceEvent)}\n\n`])
   expect(globalEvents).toEqual([])
   expect(directoryEvents).toEqual([])
+})
+
+test("the event-stream transport passes every other request on with its body", async ({ page }) => {
+  const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
+  const posted: unknown[] = []
+  await page.route("**/sse-transport-fixture", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html>" }),
+  )
+  await page.route(/\/session\/ses_transport\/prompt_async(?:\?|$)/, (route) => {
+    posted.push(route.request().postDataJSON())
+    return route.fulfill({ status: 204, body: "" })
+  })
+  const transport = await installSseTransport<unknown>(page, { server, path: "/global/event" })
+  await page.goto("/sse-transport-fixture")
+
+  // The SDK hands fetch a Request that carries the body, as every composer send and permission reply does.
+  const body = { parts: [{ type: "text", text: "hello" }] }
+  const status = await page.evaluate(
+    async (input) => {
+      const response = await fetch(
+        new Request(`${input.server}/session/ses_transport/prompt_async`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input.body),
+        }),
+      )
+      return response.status
+    },
+    { server, body },
+  )
+  expect(status).toBe(204)
+  expect(posted).toEqual([body])
+  expect(await transport.connections()).toEqual([])
+
+  // A Request for the event stream still opens a transport stream, with its headers.
+  await page.evaluate((server) => {
+    void fetch(new Request(`${server}/global/event`, { headers: { "x-fixture": "stream" } }))
+  }, server)
+  const connection = await transport.waitForConnection()
+  expect(connection.path).toBe("/global/event")
+  expect(connection.headers["x-fixture"]).toBe("stream")
 })

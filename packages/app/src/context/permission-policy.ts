@@ -12,7 +12,7 @@ export function computerPermissionDetails(input: {
   const action = typeof input.metadata.action === "string" ? input.metadata.action : ""
   return {
     action: computerActionLabel(action, input.metadata, input.permission),
-    target: computerTargetLabel(input.metadata, input.patterns),
+    target: computerTargetLabel(input.metadata),
     proposedText: action === "type" && typeof input.metadata.text === "string" ? input.metadata.text : undefined,
   }
 }
@@ -22,6 +22,9 @@ function computerActionLabel(action: string, metadata: Record<string, unknown>, 
   if (action === "list_targets") return "View the list of open app windows"
   if (action === "select_target") return "Select and view this app window"
   if (action === "observe") return "Capture a fresh screenshot"
+  if (action === "use_app") return "Use this app"
+  if (action === "run_program") return "Run a program"
+  if (action === "paste") return "Paste in the selected app"
   if (action === "click") return point ? `Click once at ${point}` : "Click once in the selected app"
   if (action === "double_click") return point ? `Double-click at ${point}` : "Double-click in the selected app"
   if (action === "scroll") return "Scroll in the selected app"
@@ -39,7 +42,7 @@ function computerActionLabel(action: string, metadata: Record<string, unknown>, 
   return "Use the keyboard in the selected app"
 }
 
-function computerTargetLabel(metadata: Record<string, unknown>, patterns: readonly string[]) {
+function computerTargetLabel(metadata: Record<string, unknown>) {
   const target = record(metadata.target)
   const app = safeLabel(target?.appName, 100) || safeLabel(metadata.appName, 100) || safeLabel(metadata.targetApp, 100)
   const title =
@@ -50,20 +53,24 @@ function computerTargetLabel(metadata: Record<string, unknown>, patterns: readon
     safeLabel(metadata.windowTitle, 160)
   if (app && title && app !== title) return `${app} · ${title}`
   if (title || app) return title || app
-  return patterns.find((pattern) => pattern !== "*" && !/^window:\d+:\d+$/.test(pattern))
 }
 
-function coordinate(x: unknown, y: unknown): string | undefined {
+export function coordinate(x: unknown, y: unknown): string | undefined {
   if (typeof x !== "number" || !Number.isFinite(x) || typeof y !== "number" || !Number.isFinite(y)) return
   return `${Math.round(x)}, ${Math.round(y)}`
 }
 
-function safeLabel(value: unknown, limit: number) {
+export function safeLabel(value: unknown, limit: number) {
   if (typeof value !== "string") return ""
   return value
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, "")
     .trim()
-    .slice(0, limit)
+    .slice(0, Math.max(0, limit))
+    .replace(/[\ud800-\udbff]$/, "")
+}
+
+export function quotedLabel(value: unknown) {
+  return `“${safeLabel(value, 40)}”`
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

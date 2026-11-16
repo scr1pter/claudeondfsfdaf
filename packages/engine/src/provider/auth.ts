@@ -14,6 +14,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { optional } from "@vectordevai/core/schema"
 import { Plugin } from "../plugin"
 import { ProviderV2 } from "@vectordevai/core/provider"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { Array as Arr, Effect, Layer, Record, Result, Context, Schema } from "effect"
 
 const When = Schema.Struct({
@@ -97,6 +98,7 @@ type Hook = NonNullable<Hooks["auth"]>
 
 /** The sign-in methods Vector offers for a provider, as the app, TUI and CLI list them. */
 export function visibleMethods(hook: Hook) {
+  ProcessIsolation.assertExternalValueAllowed(hook)
   if (!providerEnabled(hook.provider)) return []
   return hook.methods.filter((method) => method.type !== "oauth" || pluginOAuthAllowed(hook))
 }
@@ -138,22 +140,30 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
     const state = yield* InstanceState.make<State>(
       Effect.fn("ProviderAuth.state")(function* () {
         const plugins = yield* plugin.list()
-        return {
+        const result = {
           hooks: Record.fromEntries(
-            Arr.filterMap(plugins, (x) =>
-              x.auth?.provider !== undefined
-                ? Result.succeed([ProviderV2.ID.make(x.auth.provider), x.auth] as const)
-                : Result.failVoid,
-            ),
+            Arr.filterMap(plugins, (hook) => {
+              ProcessIsolation.assertExternalValueAllowed(hook)
+              const value = hook.auth
+              if (value?.provider === undefined) return Result.failVoid
+              if (ProcessIsolation.isExternalCode(hook)) ProcessIsolation.markExternalCode(value)
+              return Result.succeed([ProviderV2.ID.make(value.provider), value] as const)
+            }),
           ),
           pending: new Map<ProviderV2.ID, AuthOAuthResult>(),
         }
+        return plugins.some((hook) => ProcessIsolation.isExternalCode(hook))
+          ? ProcessIsolation.markExternalCode(result)
+          : result
       }),
+    )
+    const authState = InstanceState.get(state).pipe(
+      Effect.tap((value) => Effect.sync(() => ProcessIsolation.assertExternalValueAllowed(value))),
     )
 
     const decode = Schema.decodeUnknownSync(Methods)
     const methods = Effect.fn("ProviderAuth.methods")(function* () {
-      const hooks = (yield* InstanceState.get(state)).hooks
+      const hooks = (yield* authState).hooks
       return decode(
         Record.map(hooks, (item, providerID) =>
           visibleMethods(item).map((method) => ({
@@ -187,7 +197,8 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
     const authorize = Effect.fn("ProviderAuth.authorize")(function* (
       input: { providerID: ProviderV2.ID } & AuthorizeInput,
     ) {
-      const { hooks, pending } = yield* InstanceState.get(state)
+      const snapshot = yield* authState
+      const { hooks, pending } = snapshot
       if (!providerEnabled(input.providerID)) {
         return yield* new ValidationFailed({
           field: "providerID",
@@ -196,6 +207,7 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
       }
       // The owner can switch ChatGPT sign-in off from vectordev.ai; read the switch before choosing the method.
       if (input.providerID === ProviderV2.ID.openai) yield* Effect.promise(() => ProviderRemotePolicy.check(true))
+      ProcessIsolation.assertExternalValueAllowed(snapshot)
       const method = Object.hasOwn(hooks, input.providerID)
         ? indexedMethods(hooks[input.providerID])[input.method]
         : undefined
@@ -211,6 +223,7 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
 
       if (method.prompts && input.inputs) {
         for (const prompt of method.prompts) {
+          ProcessIsolation.assertExternalValueAllowed(snapshot)
           if (prompt.type === "text" && prompt.validate && input.inputs[prompt.key] !== undefined) {
             const error = prompt.validate(input.inputs[prompt.key])
             if (error) return yield* new ValidationFailed({ field: prompt.key, message: error })
@@ -218,7 +231,14 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
         }
       }
 
-      const result = yield* Effect.promise(() => method.authorize(input.inputs))
+      const result = yield* Effect.promise(async () => {
+        ProcessIsolation.assertExternalValueAllowed(snapshot)
+        const value = await method.authorize(input.inputs)
+        ProcessIsolation.assertExternalValueAllowed(snapshot)
+        return ProcessIsolation.isExternalCode(snapshot) ? ProcessIsolation.markExternalCode(value) : value
+      })
+      ProcessIsolation.assertExternalValueAllowed(snapshot)
+      ProcessIsolation.assertExternalValueAllowed(result)
       pending.set(input.providerID, result)
       return {
         url: result.url,
@@ -230,7 +250,7 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
     const callback = Effect.fn("ProviderAuth.callback")(function* (
       input: { providerID: ProviderV2.ID } & CallbackInput,
     ) {
-      const snapshot = yield* InstanceState.get(state)
+      const snapshot = yield* authState
       const current = Object.hasOwn(snapshot.hooks, input.providerID) ? snapshot.hooks[input.providerID] : undefined
       // An allowed provider without a hook has no OAuth attempt; a paused or revoked
       // hook must still be rejected before looking up or running its callback.
@@ -245,31 +265,47 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
       }
       const match = snapshot.pending.get(input.providerID)
       if (!match) return yield* new OauthMissing({ providerID: input.providerID })
+      ProcessIsolation.assertExternalValueAllowed(match)
       if (match.method === "code" && !input.code) {
         return yield* new OauthCodeMissing({ providerID: input.providerID })
       }
 
-      const result = yield* Effect.promise(() =>
-        match.method === "code" ? match.callback(input.code!) : match.callback(),
-      )
+      const result = yield* Effect.promise(async () => {
+        ProcessIsolation.assertExternalValueAllowed(snapshot)
+        ProcessIsolation.assertExternalValueAllowed(match)
+        const value = await (match.method === "code" ? match.callback(input.code!) : match.callback())
+        ProcessIsolation.assertExternalValueAllowed(snapshot)
+        ProcessIsolation.assertExternalValueAllowed(match)
+        return value
+      })
+      ProcessIsolation.assertExternalValueAllowed(snapshot)
+      ProcessIsolation.assertExternalValueAllowed(match)
       if (!result || result.type !== "success") return yield* new OauthCallbackFailed({})
 
       if ("key" in result) {
-        yield* auth.set(input.providerID, {
-          type: "api",
-          key: result.key,
-          ...(result.metadata ? { metadata: result.metadata } : {}),
+        yield* Effect.suspend(() => {
+          ProcessIsolation.assertExternalValueAllowed(snapshot)
+          ProcessIsolation.assertExternalValueAllowed(match)
+          return auth.set(input.providerID, {
+            type: "api",
+            key: result.key,
+            ...(result.metadata ? { metadata: result.metadata } : {}),
+          })
         })
       }
 
       if ("refresh" in result) {
         const { type: _, provider: __, refresh, access, expires, ...extra } = result
-        yield* auth.set(input.providerID, {
-          type: "oauth",
-          access,
-          refresh,
-          expires,
-          ...extra,
+        yield* Effect.suspend(() => {
+          ProcessIsolation.assertExternalValueAllowed(snapshot)
+          ProcessIsolation.assertExternalValueAllowed(match)
+          return auth.set(input.providerID, {
+            type: "oauth",
+            access,
+            refresh,
+            expires,
+            ...extra,
+          })
         })
       }
     })

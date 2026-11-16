@@ -14,6 +14,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import type { Task } from "@vectordevai/schema/task"
 import { Agent } from "@/agent/agent"
+import { ComputerAvailability } from "@/computer/availability"
 import { Config } from "@/config/config"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
@@ -131,6 +132,10 @@ const it = testEffect(
         // Capabilities read the default agent's permissions for the `workflows` flag (WP32).
         Layer.mock(Agent.Service)({
           defaultInfo: () => Effect.succeed({ name: "build", mode: "primary", permission: [], options: {} }),
+        }),
+        // The capabilities route also reports that this HTTP-only fixture has no desktop bridge.
+        Layer.mock(ComputerAvailability.Service)({
+          capabilities: () => Effect.succeed({ available: false, reason: "desktop" }),
         }),
         // These unrelated experimental endpoints are never called by this test.
         Layer.mock(MCP.Service)({}),

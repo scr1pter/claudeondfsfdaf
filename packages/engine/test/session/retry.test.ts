@@ -164,6 +164,42 @@ describe("session.retry.delay", () => {
     }),
   )
 
+  it.effect("pinned gateway waits preserve the later provider-failure retry budget", () =>
+    Effect.gen(function* () {
+      const waiting = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+        new SessionV1.APIError({
+          message: "Provider is busy",
+          isRetryable: false,
+          responseHeaders: { "retry-after-ms": "0" },
+          metadata: { code: "MODEL_PLAN_CONCURRENCY", codium: "unavailable" },
+        }).toObject(),
+      )
+      SessionRetry.pinGateway({
+        classify: (error) =>
+          SessionV1.APIError.isInstance(error) && error.data.metadata?.code === "MODEL_PLAN_CONCURRENCY"
+            ? "wait"
+            : undefined,
+        remaining: () => 60_000,
+        minDelayMs: 0,
+      })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: retryProvider,
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: () => Effect.void,
+        }),
+      )
+      const waits = yield* Effect.forEach(Array.from({ length: 12 }), () => Effect.exit(step(waiting)))
+      const failures = yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_ATTEMPTS + 1 }), () =>
+        Effect.exit(step(apiError({ "retry-after-ms": "0" }))),
+      )
+      expect(waits.every(Exit.isSuccess)).toBe(true)
+      expect(failures.slice(0, SessionRetry.RETRY_MAX_ATTEMPTS).every(Exit.isSuccess)).toBe(true)
+      const last = failures[SessionRetry.RETRY_MAX_ATTEMPTS]
+      expect(Exit.isFailure(last) && Pull.isDoneCause(last.cause)).toBe(true)
+    }).pipe(Effect.ensuring(Effect.sync(() => SessionRetry.pinGateway(undefined)))),
+  )
+
   it.effect("policy stops when a single retry-after hint passes 15 minutes", () =>
     Effect.gen(function* () {
       const step = yield* Schedule.toStepWithMetadata(

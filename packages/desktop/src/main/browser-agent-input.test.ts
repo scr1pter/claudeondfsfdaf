@@ -13,7 +13,15 @@ import type { BrowserAgentInput } from "../preload/types"
 GlobalRegistrator.register({ url: "http://localhost:3000/" })
 
 type Listener = { listener(...input: unknown[]): unknown }["listener"]
-type Input = { type: string; keyCode?: string; modifiers?: string[]; x?: number; y?: number }
+type Input = {
+  type: string
+  keyCode?: string
+  modifiers?: string[]
+  x?: number
+  y?: number
+  button?: string
+  clickCount?: number
+}
 
 // The script Vector sends, run in the page: its value, a promise's included.
 const evaluate = (code: string): unknown => (0, eval)(code)
@@ -463,6 +471,38 @@ describe("clicks, hovers and lists", () => {
       ok: false,
       error: "No element matches selector: #missing",
     })
+  })
+
+  test("a double or a right click is trusted input with the click count and button a user's would have", async () => {
+    html(`<button id="row">Row</button>`)
+    place(byId("row"), { left: 20, top: 40, width: 100, height: 30 })
+    showAt(() => byId("row"))
+    expect((await run({ command: "click", selector: "#row", clickCount: 2 })).ok).toBe(true)
+    expect(page.inputs.map((input) => [input.type, input.button, input.clickCount])).toEqual([
+      ["mouseMove", undefined, undefined],
+      ["mouseDown", "left", 1],
+      ["mouseUp", "left", 1],
+      ["mouseDown", "left", 2],
+      ["mouseUp", "left", 2],
+    ])
+    page.inputs.length = 0
+    expect((await run({ command: "click", selector: "#row", button: "right" })).ok).toBe(true)
+    expect(page.inputs.map((input) => [input.type, input.button, input.clickCount])).toEqual([
+      ["mouseMove", undefined, undefined],
+      ["mouseDown", "right", 1],
+      ["mouseUp", "right", 1],
+    ])
+    // Covered, a double or right click has no DOM stand-in: nothing is clicked.
+    page.inputs.length = 0
+    const clicks: string[] = []
+    byId("row").addEventListener("click", () => clicks.push("row"))
+    showAt(() => document.body)
+    expect(await run({ command: "click", selector: "#row", clickCount: 2 })).toMatchObject({
+      ok: false,
+      error: "Something covers #row where Vector would click it, so it did not double-click it.",
+    })
+    expect(page.inputs).toEqual([])
+    expect(clicks).toEqual([])
   })
 
   test("hover moves a trusted pointer to the element's centre, by ref or selector", async () => {

@@ -1,13 +1,15 @@
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
+import { existsSync, readFileSync } from "node:fs"
 import childProcess, { spawn } from "node:child_process"
 import os from "node:os"
 import path from "node:path"
-import { Effect, Exit, Stream } from "effect"
+import { Effect, Exit, Fiber, Stream } from "effect"
 import type * as PlatformError from "effect/PlatformError"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { OwnedProcess } from "@vectordevai/core/owned-process"
 import { testEffect } from "../lib/effect"
 
 const live = LayerNode.compile(CrossSpawnSpawner.node)
@@ -386,7 +388,7 @@ await new Promise((resolve, reject) => process.stdout.write(${method === "exitCo
     fx.effect(
       "captures stdout via .all when no stderr",
       Effect.gen(function* () {
-        const handle = yield* ChildProcess.make("echo", ["hello from stdout"])
+        const handle = yield* js("console.log('hello from stdout')")
         const all = yield* decodeByteStream(handle.all)
         expect(all).toBe("hello from stdout")
       }),
@@ -564,6 +566,121 @@ await new Promise((resolve, reject) => process.stdout.write(${method === "exitCo
         })
       }),
       10_000,
+    )
+  })
+
+  describe("hosted isolation", () => {
+    // requireIsolation has no reset and test files share one process, so a child process turns it on.
+    fx.live(
+      "a refused isolation plan fails the spawn with a platform error instead of a defect",
+      Effect.gen(function* () {
+        const script = `
+import { Cause, Effect, Exit } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+ProcessIsolation.requireIsolation()
+const exit = await Effect.runPromiseExit(
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    return yield* spawner.string(ChildProcess.make("node", ["-e", "0"], { env: { LD_PRELOAD: "/fixture/loader.so" } }))
+  }).pipe(Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.scoped),
+)
+const failure = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined
+console.log(JSON.stringify({
+  failed: Exit.isFailure(exit),
+  died: Exit.isFailure(exit) && Cause.hasDies(exit.cause),
+  platform: failure?._tag === "Some" && failure.value?._tag === "PlatformError",
+  method: failure?._tag === "Some" ? failure.value?.reason?.method : undefined,
+  refusal: Exit.isFailure(exit) && Cause.pretty(exit.cause).includes("native loader environment"),
+}))
+`
+        const output = yield* Effect.promise(
+          () =>
+            new Promise<string>((resolve, reject) => {
+              const child = spawn(process.execPath, ["-e", script], {
+                cwd: path.join(import.meta.dir, "..", ".."),
+                stdio: ["ignore", "pipe", "inherit"],
+              })
+              const parts: Buffer[] = []
+              child.stdout.on("data", (part: Buffer) => parts.push(part))
+              child.once("error", reject)
+              child.once("close", (code) =>
+                code === 0 ? resolve(Buffer.concat(parts).toString()) : reject(new Error(`child exited ${code}`)),
+              )
+            }),
+        )
+        expect(JSON.parse(output.trim().split("\n").at(-1)!)).toEqual({
+          failed: true,
+          died: false,
+          platform: true,
+          method: "spawn",
+          refusal: true,
+        })
+      }),
+      30_000,
+    )
+  })
+
+  describe.skipIf(process.platform === "win32")("owned commands", () => {
+    // Spawn review S4-5 (C10): interrupting an owned spawn before its spawn event must run owned.stop, which signals
+    // the whole process group, not only the direct child. The spawn is the acquire step of an acquireRelease, so the
+    // interrupt takes effect once the process exists and the release runs owned.stop; this checks the outcome.
+    fx.live(
+      "interrupting an owned spawn before its spawn event stops the whole process group",
+      Effect.gen(function* () {
+        const dir = yield* Effect.acquireRelease(
+          Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "vector-owned-interrupt-"))),
+          (value) => Effect.promise(() => fs.rm(value, { recursive: true, force: true })),
+        )
+        const ready = path.join(dir, "ready")
+        // The leader ignores SIGTERM, as does its background member, so only a group stop that escalates to SIGKILL ends
+        // them; signalling the direct child alone would leave the whole tree running with nothing left to own it. The
+        // leader records its own pid (the group id) and the member's once the trap is set, then waits on the member.
+        const script = `trap '' TERM; sleep 600 & echo "$$ $!" > ${JSON.stringify(ready)}.tmp && mv ${JSON.stringify(ready)}.tmp ${JSON.stringify(ready)}; wait`
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const fiber = yield* spawner
+          .spawn(
+            OwnedProcess.command(ChildProcess.make("/bin/sh", ["-c", script], { stdin: "ignore" }), {
+              grace: 200,
+              kill: 800,
+              drain: 300,
+            }),
+          )
+          .pipe(Effect.scoped, Effect.forkChild({ startImmediately: true }))
+        // Hold the event loop so the spawn event cannot be delivered while the shell starts its group member.
+        const pids = yield* Effect.sync(() => {
+          const deadline = performance.now() + 5_000
+          while (performance.now() < deadline) {
+            // The shell renames a complete file into place, so once it exists it holds both pids.
+            if (existsSync(ready)) return readFileSync(ready, "utf8").trim().split(" ").map(Number)
+            Bun.sleepSync(5)
+          }
+          throw new Error("The owned shell did not start its group member")
+        })
+        const [leader, member] = pids
+        // Never leak the tree, even when the interrupt or an assertion below fails. A group already gone throws ESRCH.
+        yield* Effect.addFinalizer(() =>
+          Effect.try({ try: () => process.kill(-leader, "SIGKILL"), catch: () => "gone" }).pipe(Effect.ignore),
+        )
+        yield* Fiber.interrupt(fiber)
+        const exit = yield* Fiber.await(fiber)
+        // The interrupt was requested before the spawn event was delivered, and the spawn never handed out a handle.
+        expect(Exit.isFailure(exit) && Exit.hasInterrupts(exit)).toBe(true)
+        // A reparented zombie may keep its pid until the container's init reaps it; it no longer runs.
+        const running = (pid: number) =>
+          childProcess
+            .execFileSync("/bin/ps", ["-A", "-o", "pid=,pgid=,stat="], { encoding: "utf8" })
+            .trim()
+            .split("\n")
+            .map((row) => row.trim().split(/\s+/))
+            .some((row) => (Number(row[0]) === pid || Number(row[1]) === pid) && !row[2]?.startsWith("Z"))
+        // owned.stop returned only once the group was confirmed empty: its background member is gone too.
+        expect(running(member)).toBe(false)
+        expect(running(leader)).toBe(false)
+      }),
+      30_000,
     )
   })
 

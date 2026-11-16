@@ -112,13 +112,46 @@ export function trackShell(tracker: Tracker, part: unknown) {
   return true
 }
 
-/** What the run says it stopped waiting for: its subagents and its commands, counted apart. */
+/** Whether a tracked ID names a connected-tools run (a background VectorScope review) rather than a subagent. */
+export function isConnectID(id: string) {
+  return id.startsWith("cr_")
+}
+
+/**
+ * Background VectorScope reviews the run waits for, beside its subagents and commands. A finished `connect` call whose
+ * saved run (`metadata.connect`) asked for the background and had not ended when the call returned names a review that
+ * is still going; it ends with its `connectNotification` note, answered like a subagent's (a quiet one starts no
+ * turn). A run that ended before its call returned was reported by the call, and no note follows. Either part may
+ * arrive first. Returns whether the part was about a background review.
+ */
+export function trackConnect(tracker: Tracker, part: unknown) {
+  if (!isRecord(part)) return false
+  if (part.type === "tool" && part.tool === "connect" && isRecord(part.state) && part.state.status === "completed") {
+    const metadata = part.state.metadata
+    const run = isRecord(metadata) ? metadata.connect : undefined
+    if (!isRecord(run) || typeof run.id !== "string" || !isConnectID(run.id)) return false
+    if (!isRecord(run.request) || run.request.background !== true) return false
+    // The ended run the review writes back into this part changes nothing: its note settles it.
+    if (run.status !== "done") tracker.status(run.id, "running")
+    return true
+  }
+  if (part.type !== "text" || typeof part.messageID !== "string" || !isRecord(part.metadata)) return false
+  const note = part.metadata.connectNotification
+  if (!isRecord(note) || typeof note.runID !== "string" || !isConnectID(note.runID)) return false
+  tracker.status(note.runID, note.state === "cancelled" ? "cancelled" : "completed")
+  tracker.note(note.runID, part.messageID, note.quiet === true || part.metadata.taskQuiet === true)
+  return true
+}
+
+/** What the run says it stopped waiting for: its subagents, its commands and its reviews, counted apart. */
 export function waitingFor(tracker: Tracker) {
   const ids = [...new Set([...tracker.running, ...tracker.unanswered])]
   const commands = ids.filter(isShellID).length
-  const subagents = ids.length - commands
+  const reviews = ids.filter(isConnectID).length
+  const subagents = ids.length - commands - reviews
   return [
-    ...(subagents > 0 || commands === 0 ? [`${subagents} background subagent(s)`] : []),
+    ...(subagents > 0 || commands + reviews === 0 ? [`${subagents} background subagent(s)`] : []),
     ...(commands > 0 ? [`${commands} background command(s)`] : []),
+    ...(reviews > 0 ? [`${reviews} background review(s)`] : []),
   ].join(" and ")
 }

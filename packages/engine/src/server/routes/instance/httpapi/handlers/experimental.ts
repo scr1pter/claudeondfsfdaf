@@ -1,4 +1,6 @@
 import { Agent } from "@/agent/agent"
+import { BackgroundJob } from "@/background/job"
+import { ComputerAvailability } from "@/computer/availability"
 import { Permission } from "@/permission"
 import { WorkflowOwner } from "@/orchestration/owner"
 import { PlaybookClient } from "@/orchestration/playbooks"
@@ -95,6 +97,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const worktreeSvc = yield* Worktree.Service
     const sessions = yield* Session.Service
     const flags = yield* RuntimeFlags.Service
+    const computer = yield* ComputerAvailability.Service
     const tasks = yield* TaskManager.Service
     const workflow = yield* Effect.serviceOption(WorkflowOwner.Service)
     const playbooks = yield* Effect.serviceOption(PlaybookClient.Service)
@@ -349,6 +352,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       const agent = yield* agents.defaultInfo()
       const disabled = Permission.disabled(["task", "workflow"], agent.permission)
       return {
+        computer: yield* computer.capabilities(),
         workflows: flags.backgroundSubagents && !disabled.has("task") && !disabled.has("workflow"),
         backgroundSubagents: flags.backgroundSubagents,
         subagentLimits: true,
@@ -359,6 +363,11 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         taskAttention: true,
         taskIsolation: true,
         backgroundShells: true,
+        vectorscopeSettings: true,
+        vectorscopeRuns: true,
+        // Owner data controls only; this does not advertise automatic review-context consumption.
+        vectorscopeReviewMemoryControls: true,
+        connections: flags.experimentalConnect,
       }
     })
 

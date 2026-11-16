@@ -157,6 +157,8 @@ export function watchInterrupts(input: {
   stopHelpers: boolean
   /** The engine runs in this process (no --attach): every press stops everything and exits. */
   inProcess?: boolean
+  /** Attached connected reviews have their own cancellation route and outlive this CLI. */
+  stopReviews?: () => Promise<void>
   write: (text: string) => void
   /** Ends the process with `code`; called once the stop has been sent (or has timed out). */
   exit: (code: number) => void
@@ -167,8 +169,13 @@ export function watchInterrupts(input: {
   const now = input.now ?? Date.now
   let previous: number | undefined
   let interrupted = false
-  const stop = (helpers: boolean) =>
-    stopSession(input.client, input.sessionID, { helpers, signal: AbortSignal.timeout(STOP_TIMEOUT_MS) })
+  const stop = async (helpers: boolean) => {
+    try {
+      return await stopSession(input.client, input.sessionID, { helpers, signal: AbortSignal.timeout(STOP_TIMEOUT_MS) })
+    } finally {
+      if (helpers) await input.stopReviews?.()
+    }
+  }
   const handler = () => {
     const at = now()
     const plan = interruptPlan({ now: at, previous, stopHelpers: input.stopHelpers, inProcess: input.inProcess })

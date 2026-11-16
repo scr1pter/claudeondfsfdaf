@@ -350,6 +350,7 @@ export function make(options: ClientOptions) {
               expiresAt: input["expiresAt"],
               previewHash: input["previewHash"],
               remember: input["remember"],
+              includeScreenshots: input["includeScreenshots"],
             },
             successStatus: 200,
             declaredStatuses: [400, 401, 403],
@@ -367,6 +368,7 @@ export function make(options: ClientOptions) {
                 throw new Error(`Refusing cross-origin endpoint path: ${path}`)
               return path
             })(),
+            query: { includeScreenshots: input["includeScreenshots"] },
             successStatus: 200,
             declaredStatuses: [400, 401, 403],
             empty: false,

@@ -354,13 +354,14 @@ const LOCAL_TOOLS = new Set([
 
 const DELEGATION_TOOLS = new Set(["task", "workflow", "task_manage", "send_teammate_message"])
 
-// Tools whose output is the web's: pages, search results, the browsers, Vector Cloud's logs, and every research tool
+// Tools whose output contains outside content: pages, search results, the screen, Vector Cloud's logs, and research
 // (a research run reads the web by design, and its notes and reports quote pages; research_browser is the research
 // agents' own browser, and research is the build agent's way to start a run).
 const WEB_TOOLS = new Set([
   "webfetch",
   "websearch",
   "browser",
+  "computer",
   "vector_cloud",
   "research",
   "research_plan",
@@ -964,12 +965,22 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
   )
     return "mcp"
   // Direct MCP content keeps its stronger hold when the same history also contains delegation.
-  if (commands.includes("mcp") || tools.some((tool) => !LOCAL_TOOLS.has(tool) && !DELEGATION_TOOLS.has(tool)))
+  // A connect call is a connected tool's report only with the built-in tool's metadata; any other is an outside tool.
+  const connected = (part: (typeof calls)[number]) =>
+    part.tool === "connect" &&
+    part.state.status !== "pending" &&
+    (part.state.metadata?.connect !== undefined ||
+      ["review", "fix", "findings", "status", "cancel"].includes(part.state.metadata?.action))
+  if (
+    commands.includes("mcp") ||
+    calls.some((part) => !LOCAL_TOOLS.has(part.tool) && !DELEGATION_TOOLS.has(part.tool) && !connected(part))
+  )
     return "mcp"
   // A background subagent's report, note up, waiting or interruption arrives as a synthetic note in a user message. A
   // background command's exit note adds nothing, like a foreground command's result.
   if (
     tools.some((tool) => DELEGATION_TOOLS.has(tool)) ||
+    calls.some(connected) ||
     messages.some((message) =>
       message.parts.some(
         (part) => part.type === "text" && SUBAGENT_NOTES.some((key) => part.metadata?.[key] !== undefined),

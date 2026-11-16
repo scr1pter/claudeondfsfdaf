@@ -45,6 +45,23 @@ export type DashboardAgentInput = {
   previewUrl?: string
   mergeState: "none" | "merged" | "discarded"
   error?: string
+  isolatedPath?: string
+  baseCommit?: string
+}
+
+/** Fail closed when native records cannot identify the isolated checkout and its actual review base. */
+export function directoryReviewTarget(
+  agent: Pick<DashboardAgentInput, "id" | "isolatedPath" | "baseCommit" | "status" | "mergeState">,
+) {
+  if (agent.mergeState !== "none" || !["complete", "needs review"].includes(agent.status)) return undefined
+  if (
+    !agent.isolatedPath ||
+    !/^(?:\/|[A-Za-z]:[\\/])/.test(agent.isolatedPath) ||
+    /[\u0000-\u001f\u007f]/.test(agent.isolatedPath)
+  )
+    return undefined
+  if (!agent.baseCommit || !/^[a-f0-9]{7,64}$/i.test(agent.baseCommit)) return undefined
+  return { workspaceID: agent.id, directory: agent.isolatedPath, base: agent.baseCommit }
 }
 
 const RUNNING: DashboardAgentStatus[] = ["queued", "planning", "editing", "running commands", "testing"]

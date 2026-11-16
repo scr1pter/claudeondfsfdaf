@@ -11,14 +11,20 @@ describe("terminal permission policy", () => {
     expect(`${PermissionPolicy.TERMINAL_OTHER}pty_1`).toBe("other:pty_1")
   })
 
-  test("terminal asks are auto-approvable and can be always-approved", () => {
-    for (const permission of [PermissionPolicy.TERMINAL, PermissionPolicy.TERMINAL_INPUT])
+  test("the agent's own terminals are auto-approvable; the user's and other sessions' only by the user", () => {
+    for (const permission of [PermissionPolicy.TERMINAL, PermissionPolicy.TERMINAL_INPUT]) {
       for (const pattern of ["own:pty_1", "other:pty_1"]) {
         expect(PermissionPolicy.requiresApproval(permission, [pattern], [pattern])).toBe(false)
-        expect(PermissionPolicy.canAutoApprove(permission, [pattern], [pattern])).toBe(true)
+        // The user may still allow one terminal always, by its id.
         expect(PermissionPolicy.canAlwaysApprove(permission, [pattern], [pattern])).toBe(true)
       }
+      expect(PermissionPolicy.canAutoApprove(permission, ["own:pty_1"], ["own:pty_1"])).toBe(true)
+      // Full access or auto-accept never reads or types into the user's ssh session on its own.
+      expect(PermissionPolicy.canAutoApprove(permission, ["other:pty_1"], ["other:pty_1"])).toBe(false)
+    }
+    // The shell tool's own ask when its sandbox fails is unchanged; a terminal asks under its own permission.
     expect(PermissionPolicy.canAutoApprove("unsandboxed_shell", [process.platform], [process.platform])).toBe(true)
+    expect(PermissionPolicy.canAutoApprove(PermissionPolicy.TERMINAL_UNSANDBOXED, [], [process.platform])).toBe(false)
   })
 
   test("a submitted line's network check still asks every time", () => {

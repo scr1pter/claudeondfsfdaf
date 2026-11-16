@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test"
 import { agentColor } from "@/components/editor-attribution"
 import {
   activityFiles,
@@ -220,32 +220,43 @@ describe("following a Vector agent's tool call", () => {
 
 describe("landing an edit", () => {
   test("diffs against the text saved at call time even when the watcher reloaded first", async () => {
-    const before = "a\nb\nc\nd\ne\nf\ng\n"
-    const after = "a\nB\nc\nd\ne\nF\ng\n"
-    const h = harness({ loaded: { "src/a.ts": before }, disk: { "src/a.ts": before } })
-    h.emit(
-      "message.part.updated",
-      part({ callID: "c1", status: "running", tool: "write", input: { filePath: `${ROOT}/src/a.ts`, content: after } }),
-    )
-    // The write lands and the project watcher reloads the buffer before
-    // file.edited (which waits for the formatter) arrives.
-    h.disk["src/a.ts"] = after
-    h.loaded["src/a.ts"] = after
-    h.emit("file.edited", edited("src/a.ts"))
-    await wait(5)
-
-    expect(h.store.attributionsFor("src/a.ts")).toEqual([
-      expect.objectContaining({
-        agentName: "build",
-        ranges: [
-          { start: 2, end: 2 },
-          { start: 6, end: 6 },
-        ],
-      }),
-    ])
-    expect(h.store.cursorsFor("src/a.ts")[0]).toMatchObject({ state: "landed", line: 2 })
-    expect(h.store.cursorsFor("src/a.ts")[0]?.pending).toBeUndefined()
-    expect(h.store.target()).toMatchObject({ path: "src/a.ts", line: 2, endLine: 2 })
+    // This case tests the captured baseline, independently of the diff's wall-clock budget.
+    setSystemTime(new Date())
+    try {
+      const before = "a\nb\nc\nd\ne\nf\ng\n"
+      const after = "a\nB\nc\nd\ne\nF\ng\n"
+      const h = harness({ loaded: { "src/a.ts": before }, disk: { "src/a.ts": before } })
+      h.emit(
+        "message.part.updated",
+        part({
+          callID: "c1",
+          status: "running",
+          tool: "write",
+          input: { filePath: `${ROOT}/src/a.ts`, content: after },
+        }),
+      )
+      // The write lands and the project watcher reloads the buffer before
+      // file.edited (which waits for the formatter) arrives.
+      h.disk["src/a.ts"] = after
+      h.loaded["src/a.ts"] = after
+      h.emit("file.edited", edited("src/a.ts"))
+      await eventually(() => {
+        expect(h.store.attributionsFor("src/a.ts")).toEqual([
+          expect.objectContaining({
+            agentName: "build",
+            ranges: [
+              { start: 2, end: 2 },
+              { start: 6, end: 6 },
+            ],
+          }),
+        ])
+      })
+      expect(h.store.cursorsFor("src/a.ts")[0]).toMatchObject({ state: "landed", line: 2 })
+      expect(h.store.cursorsFor("src/a.ts")[0]?.pending).toBeUndefined()
+      expect(h.store.target()).toMatchObject({ path: "src/a.ts", line: 2, endLine: 2 })
+    } finally {
+      setSystemTime()
+    }
   })
 
   test("the edit tool's own metadata update after landing does not reopen the call", async () => {

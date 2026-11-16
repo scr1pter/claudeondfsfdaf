@@ -1,0 +1,2 @@
+{"send":{"id":1,"op":"permissions.status"},"expect":{"id":1,"ok":true,"screen":"$any","accessibility":"$any"}}
+{"send":{"$wait":200},"expect":null}

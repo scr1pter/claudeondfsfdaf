@@ -34,6 +34,8 @@ export type Input = {
   readonly images?: number
   /** Subagents the user named with @. */
   readonly agents?: readonly string[]
+  /** The request carries a validated structured computer-use mention, which needs the normal tool harness. */
+  readonly computer?: boolean
   /** The sender's explicit size; "auto" or undefined lets the rules decide. */
   readonly choice?: Choice
   /** The size of the work before this message: the last request in the session that was not Chat. */
@@ -203,8 +205,8 @@ export function classify(input: Input): Result {
   // A greeting before this message is not work it could continue.
   const previous = input.previous === "chat" ? undefined : input.previous
   const result = (tier: Tier, source: Source, reasons: readonly string[], judge = true): Result => ({
-    // A structured answer needs its tool and a named subagent needs the task tool, so neither is ever a bare reply.
-    tier: tier === "chat" && (input.structured || agents.length > 0) ? "standard" : tier,
+    // Structured output, a named subagent and an explicit computer mention each need tools, never a bare reply.
+    tier: tier === "chat" && (input.structured || input.computer || agents.length > 0) ? "standard" : tier,
     source,
     reasons,
     judge,
@@ -311,7 +313,7 @@ type Kind = "greeting" | "thanks" | "farewell" | "reaction" | "success" | "about
 // thanks bye". Any clause that is something else ("thanks, now fix the other one", "thanks but it's still broken")
 // makes it not social. The strongest kind names it.
 function socialKind(input: Input, text: string, lower: string): Kind | undefined {
-  if (input.files || input.images || (input.agents?.length ?? 0) > 0) return
+  if (input.files || input.images || input.computer || (input.agents?.length ?? 0) > 0) return
   if (PATH.test(input.text) || URL_PATTERN.test(input.text) || input.text.includes("`") || text.length > 80) return
   // A log pasted under a greeting ("hi" and an npm error) is work: prose() dropped its lines, the user did not.
   if (lines(input.text) > lines(text)) return
@@ -673,7 +675,19 @@ const ACKS = set([
   "fair enough",
 ])
 // Acknowledgements that are social on their own, unless a plan waits on them: "ok", "got it".
-const ACKNOWLEDGEMENTS = set(["ok", "okay", "okey", "okie", "k", "kk", "alright", "got it", "gotcha", "ok got it", "okay got it"])
+const ACKNOWLEDGEMENTS = set([
+  "ok",
+  "okay",
+  "okey",
+  "okie",
+  "k",
+  "kk",
+  "alright",
+  "got it",
+  "gotcha",
+  "ok got it",
+  "okay got it",
+])
 // Words that may sit inside a social message without being one: "ok thanks", "thanks a lot", "hello again", "how are
 // you doing today", a name.
 const FILLERS = set([

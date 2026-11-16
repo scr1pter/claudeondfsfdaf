@@ -1,6 +1,6 @@
 import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
 import { githubApp, type createGithubApp } from "./github-app.js"
-import { consumeGithubOidc, verifyGithubOidc, type GithubIdentity } from "./github-oidc.js"
+import { consumeGithubOidc, verifyGithubOidc, type GithubIdentity, type GithubOidcPurpose } from "./github-oidc.js"
 import { ApiError, json, readJson, type ApiRequest, type ApiResponse } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -15,39 +15,11 @@ export function createGithubApi(
   const verify = input.verify ?? verifyGithubOidc
   const store = input.store ?? persistentStore
 
-  async function proof(request: ApiRequest, response: ApiResponse, purpose: "token" | "installation") {
-    requireTrustedJsonRequest(request, 2_000)
-    await enforceRateLimit(request, response, {
-      scope: "github-oidc-ip",
-      limit: 60,
-      windowSeconds: 300,
-      requirePersistent: true,
-    })
-    const authorization = request.headers.authorization
-    if (
-      typeof authorization !== "string" ||
-      authorization.length > 16_400 ||
-      !/^Bearer [A-Za-z0-9_.-]+$/.test(authorization)
-    )
-      throw new ApiError(401, "OIDC_INVALID", "A GitHub Actions identity token is required.")
-    const body = await readJson<unknown>(request, 2_000)
-    if (!body || typeof body !== "object" || Array.isArray(body)) throw invalidRequest()
-    const identity = await verify(authorization.slice(7), purpose)
-    await enforceRateLimit(request, response, {
-      scope: `github-oidc-${purpose}`,
-      identifier: identity.repositoryId,
-      limit: 60,
-      windowSeconds: 300,
-      requirePersistent: true,
-    })
-    return { body: body as Record<string, unknown>, identity }
-  }
-
   async function installation(request: ApiRequest, response: ApiResponse) {
     requireCleanUrl(request)
     if (request.method === "GET") return json(response, 200, app.configuration())
     if (request.method !== "POST") throw new ApiError(405, "METHOD_NOT_ALLOWED", "Use GET or POST for this endpoint.")
-    const verified = await proof(request, response, "installation")
+    const verified = await githubProof(request, response, "installation", verify)
     if (Object.keys(verified.body).length) throw invalidRequest()
     const result = await app.installation(verified.identity)
     if (result.retryAfterSeconds) response.setHeader("retry-after", String(result.retryAfterSeconds))
@@ -57,12 +29,12 @@ export function createGithubApi(
   async function token(request: ApiRequest, response: ApiResponse) {
     requireCleanUrl(request)
     if (request.method !== "POST") throw new ApiError(405, "METHOD_NOT_ALLOWED", "Use POST for this endpoint.")
-    const verified = await proof(request, response, "token")
+    const verified = await githubProof(request, response, "token", verify)
     const purpose = verified.body.purpose
     const pullRequest = verified.body.pullRequest
     if (
       Object.keys(verified.body).some((key) => !["purpose", "pullRequest"].includes(key)) ||
-      (purpose !== "task" && purpose !== "review") ||
+      (purpose !== "task" && purpose !== "review" && purpose !== "publish") ||
       (pullRequest !== undefined &&
         (typeof pullRequest !== "number" ||
           !Number.isSafeInteger(pullRequest) ||
@@ -88,6 +60,39 @@ export function createGithubApi(
     installation: safe(installation),
     token: safe(token),
   }
+}
+
+export async function githubProof(
+  request: ApiRequest,
+  response: ApiResponse,
+  purpose: GithubOidcPurpose,
+  verify: typeof verifyGithubOidc = verifyGithubOidc,
+) {
+  requireTrustedJsonRequest(request, 2_000)
+  await enforceRateLimit(request, response, {
+    scope: "github-oidc-ip",
+    limit: 60,
+    windowSeconds: 300,
+    requirePersistent: true,
+  })
+  const authorization = request.headers.authorization
+  if (
+    typeof authorization !== "string" ||
+    authorization.length > 16_400 ||
+    !/^Bearer [A-Za-z0-9_.-]+$/.test(authorization)
+  )
+    throw new ApiError(401, "OIDC_INVALID", "A GitHub Actions identity token is required.")
+  const body = await readJson<unknown>(request, 2_000)
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw invalidRequest()
+  const identity = await verify(authorization.slice(7), purpose)
+  await enforceRateLimit(request, response, {
+    scope: `github-oidc-${purpose}`,
+    identifier: identity.repositoryId,
+    limit: 60,
+    windowSeconds: 300,
+    requirePersistent: true,
+  })
+  return { body: body as Record<string, unknown>, identity }
 }
 
 async function mintLimits(request: ApiRequest, response: ApiResponse, identity: GithubIdentity) {

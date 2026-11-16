@@ -12,6 +12,9 @@ import { SessionRevertDock } from "@/pages/session/composer/session-revert-dock"
 import { SessionWorkingStatus } from "@/pages/session/composer/session-working-status"
 import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
 import { useBackgroundTasks } from "@/features/background-tasks/use-background-tasks"
+import { workingLine } from "@/features/background-tasks/computer-card-model"
+import { useComputerState } from "@/features/computer/use-computer-state"
+import { Hands } from "@vectordevai/schema/hands"
 import type { SessionComposerRegionController } from "./session-composer-region-controller"
 
 export function SessionComposerRegion(props: {
@@ -29,6 +32,12 @@ export function SessionComposerRegion(props: {
   // The same count as the header's Tasks button, so the two never disagree.
   const backgroundTasks = useBackgroundTasks()
   const runningTasks = () => backgroundTasks?.runningCount() ?? controller.runningTasks()
+  // "Using Numbers" while this conversation holds the computer, "Waiting for the computer" while it is queued.
+  const computerState = useComputerState()
+  const computer = () => {
+    const line = workingLine(computerState?.state(), controller.sessionID())
+    return line && language.t(line.key, { name: Hands.NAME, ...line.params })
+  }
   const rolled = () => {
     const revert = controller.revert()
     return revert?.items.length ? revert : undefined
@@ -56,6 +65,7 @@ export function SessionComposerRegion(props: {
           tokens={controller.tokens}
           codium={controller.codium}
           runningTasks={runningTasks}
+          computer={computer}
           phrase={controller.phrase}
         />
 
@@ -72,15 +82,15 @@ export function SessionComposerRegion(props: {
           )}
         </Show>
 
-        <Show when={controller.state.permissionRequest()} keyed>
-          {(request) => (
+        <Show when={controller.state.permissionRequest()?.id} keyed>
+          {(requestID) => (
             <div>
               <SessionPermissionDock
-                request={request}
+                request={controller.state.permissionRequest()!}
                 responding={controller.state.permissionResponding()}
                 onDecide={(response) => {
                   controller.onResponseSubmit()
-                  controller.state.decide(response)
+                  return controller.state.decide(response, requestID)
                 }}
               />
             </div>
@@ -182,7 +192,7 @@ export function SessionComposerRegion(props: {
               </Show>
               <Show
                 when={controller.child()}
-                fallback={<Show when={!controller.state.blocked()}>{props.promptInput}</Show>}
+                fallback={<Show when={controller.state.promptAllowed()}>{props.promptInput}</Show>}
               >
                 <div
                   ref={controller.setPromptRef}

@@ -46,10 +46,14 @@ describe("task_manage provider schema", () => {
       const anthropic = yield* AnthropicMessages.protocol.body.from(
         LLM.request({ model: AnthropicMessages.route.model({ id: "fixture" }), prompt: "Inspect task status", tools }),
       )
+      const responseTool = responses.tools?.[0]
+      const anthropicTool = anthropic.tools?.[0]
+      if (!responseTool || responseTool.type !== "function") throw new Error("task_manage must be a function tool")
+      if (!anthropicTool || !("input_schema" in anthropicTool)) throw new Error("task_manage must have an input schema")
       for (const parameters of [
         chat.tools?.[0]?.function.parameters,
-        responses.tools?.[0]?.parameters,
-        anthropic.tools?.[0]?.input_schema,
+        responseTool.parameters,
+        anthropicTool.input_schema,
       ]) {
         expect(parameters).toMatchObject({
           type: "object",

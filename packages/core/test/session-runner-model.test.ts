@@ -42,6 +42,28 @@ const model = (api: Api, variants: ModelV2.Info["variants"] = []) =>
   })
 
 describe("SessionRunnerModel", () => {
+  it.effect("keeps computer screenshot policy with resolved catalog models and free routes", () =>
+    Effect.gen(function* () {
+      const privateModel = yield* SessionRunnerModel.fromCatalogModel(
+        model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }),
+      )
+      expect(SessionRunnerModel.computerScreenshotsAllowed(privateModel)).toBe(true)
+      for (const dataPolicy of ["no-training", "may-train", "unreviewed", undefined] as const) {
+        const freeModel = { source: "shared" as const, ...(dataPolicy ? { dataPolicy } : {}) }
+        const resolved = yield* SessionRunnerModel.fromCatalogModel(
+          ModelV2.Info.make({
+            ...model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }),
+            freeModel,
+          }),
+        )
+        expect(SessionRunnerModel.computerScreenshotsAllowed(resolved)).toBe(dataPolicy === "no-training")
+        const free = SessionRunnerModel.withFreeRoute(resolved, freeModel)
+        expect(SessionRunnerModel.computerScreenshotsAllowed(free)).toBe(dataPolicy === "no-training")
+      }
+      expect(SessionRunnerModel.computerScreenshotsAllowed(SessionRunnerModel.withFreeRoute(privateModel))).toBe(false)
+    }),
+  )
+
   it.effect("maps catalog OpenAI AI SDK models into native Responses routes", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(

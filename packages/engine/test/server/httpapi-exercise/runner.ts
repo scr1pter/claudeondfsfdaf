@@ -238,6 +238,59 @@ function withContext<A, E>(
               )
               return { info, part }
             }),
+          toolMessage: (user, input) =>
+            Effect.gen(function* () {
+              const messageID = MessageID.ascending()
+              const part: SessionV1.ToolPart = {
+                id: PartID.ascending(),
+                sessionID: user.sessionID,
+                messageID,
+                type: "tool",
+                tool: input.tool,
+                callID: `call_${messageID}`,
+                state: {
+                  status: "completed",
+                  input: { action: "screenshot" },
+                  title: "Stored attachment fixture",
+                  output: "Keep this recorded tool output.",
+                  metadata: { fixture: true },
+                  time: { start: input.end - 1, end: input.end },
+                  attachments: [
+                    {
+                      id: PartID.ascending(),
+                      sessionID: user.sessionID,
+                      messageID,
+                      type: "file",
+                      mime: "image/png",
+                      url: input.attachmentURL,
+                    },
+                  ],
+                },
+              }
+              // Seed a completed transcript through the normal session writer; no tool or model executes.
+              yield* run(
+                modules.Session.Service.use((svc) =>
+                  Effect.gen(function* () {
+                    yield* svc.updateMessage({
+                      id: messageID,
+                      sessionID: user.sessionID,
+                      role: "assistant",
+                      parentID: user.id,
+                      agent: "build",
+                      mode: "build",
+                      providerID: user.model.providerID,
+                      modelID: user.model.modelID,
+                      path: { cwd: directory(), root: directory() },
+                      time: { created: input.end - 1 },
+                      cost: 0,
+                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                    })
+                    yield* svc.updatePart(part)
+                  }),
+                ),
+              )
+              return part
+            }),
           messages: (sessionID) =>
             run(modules.Session.Service.use((svc) => svc.messages({ sessionID }).pipe(Effect.orDie))),
           todos: (sessionID, todos) => run(modules.Todo.Service.use((svc) => svc.update({ sessionID, todos }))),

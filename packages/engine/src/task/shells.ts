@@ -8,6 +8,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { OwnedProcess } from "@vectordevai/core/owned-process"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { TaskSize } from "@vectordevai/core/task-size"
 import { BackgroundJob } from "@/background/job"
@@ -88,6 +89,14 @@ export function timeoutRefusal(timeout: number | undefined) {
   return undefined
 }
 
+/**
+ * Why a hosted GitHub agent may not start a background command on Windows: the holder spawns PowerShell itself and
+ * never reaches ProcessIsolation.launch, which refuses every hosted launch off Linux. Nothing when it may.
+ */
+export function isolationRefusal(input: { platform: NodeJS.Platform; required: boolean }) {
+  return input.platform === "win32" && input.required ? ProcessIsolation.REFUSAL : undefined
+}
+
 export type StartInput = {
   /** The session that starts it: the main agent's, never a subagent's. */
   sessionID: SessionID
@@ -95,6 +104,8 @@ export type StartInput = {
   command: string
   /** The process to spawn, made by the shell tool's foreground helper (its sandbox and environment included). */
   process: ChildProcess.Command
+  /** Rechecks dynamic permissions after asynchronous setup and immediately before process creation. */
+  beforeSpawn?: Effect.Effect<void>
   /** Milliseconds, at most MAX_TIMEOUT. Without it the command runs until it exits or is stopped. */
   timeout?: number
   /** How the exit note reaches the session. */
@@ -449,7 +460,8 @@ const layer = Layer.effect(
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const refused =
         refusal({ subagent: session.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
-        timeoutRefusal(input.timeout)
+        timeoutRefusal(input.timeout) ??
+        isolationRefusal({ platform: process.platform, required: ProcessIsolation.required() })
       if (refused) return yield* Effect.die(new Error(refused))
       if (input.process._tag !== "StandardCommand")
         return yield* Effect.die(new Error("A background command must be one prepared shell process."))
@@ -528,6 +540,10 @@ const layer = Layer.effect(
           },
           catch: (error) => new Error(`Vector could not create the command's output file: ${String(error)}`),
         })
+        // Hands' dynamic authority recheck may ask the user, so it runs before any durable row, owner or process
+        // exists, and before the platform split: the POSIX owned spawn and the Windows holder both sit behind it.
+        // A refusal here leaves no job row and reaches the caller with its own message.
+        if (input.beforeSpawn) yield* input.beforeSpawn
         const metadata = {
           parentSessionId: session.id,
           background: true,
@@ -593,14 +609,24 @@ const layer = Layer.effect(
               ? yield* Effect.gen(function* () {
                   windows = WindowsProcess.start(processCommand, {
                     signal: controller.signal,
-                    onReady: (pid) => bridge.promise(persist(pid)),
+                    onReady: (pid) =>
+                      bridge.promise(persist(pid).pipe(Effect.andThen(input.beforeSpawn ?? Effect.void))),
                     onOutput: (chunk) => bridge.promise(write(chunk)),
                   })
-                  const handle = yield* Effect.tryPromise(() => windows!)
+                  const handle = yield* Effect.tryPromise({
+                    try: () => windows!,
+                    catch: (cause) =>
+                      cause instanceof Error ? cause : new Error("Windows shell startup failed", { cause }),
+                  })
                   yield* Deferred.succeed(ready, undefined)
-                  return Effect.tryPromise(() => handle.completion).pipe(Effect.map((result) => result.exitCode))
+                  return Effect.tryPromise({
+                    try: () => handle.completion,
+                    catch: (cause) =>
+                      cause instanceof Error ? cause : new Error("Windows shell execution failed", { cause }),
+                  }).pipe(Effect.map((result) => result.exitCode))
                 })
               : yield* Effect.gen(function* () {
+                  if (input.beforeSpawn) yield* input.beforeSpawn
                   const spawned = yield* spawner.spawn(OwnedProcess.command(processCommand)).pipe(
                     Scope.provide(scope),
                     Effect.mapError((error) => new Error(`Vector could not start the command: ${error.message}`)),
@@ -661,9 +687,7 @@ const layer = Layer.effect(
           return `Exited with code 0.`
         }).pipe(
           Effect.onExit((exit) =>
-            Exit.isFailure(exit)
-              ? Deferred.fail(ready, new Error("The background command could not start or was stopped during startup."))
-              : Deferred.succeed(ready, undefined),
+            Exit.isFailure(exit) ? Deferred.failCause(ready, exit.cause) : Deferred.succeed(ready, undefined),
           ),
           Effect.ensuring(cleanup()),
         )

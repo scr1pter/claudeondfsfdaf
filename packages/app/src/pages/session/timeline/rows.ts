@@ -7,7 +7,7 @@ import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
 import { budgetStopNotice, type BudgetStopNotice } from "@/components/budget-stop-copy"
 import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@vectordevai/sdk/v2"
-import { groupParts, renderable, type PartGroup } from "@vectordevai/session-ui/message-part"
+import { groupParts, renderable, runOpen, type PartGroup } from "@vectordevai/session-ui/message-part"
 import { recallOf } from "@vectordevai/session-ui/knowledge-citations"
 import { TimelineRow, type SummaryDiff } from "./timeline-row"
 
@@ -70,6 +70,12 @@ export namespace Timeline {
         .filter((part) => renderable(part, showReasoning))
         .map((part) => ({ messageID: message.id, messageIndex, part })),
     )
+    // While this turn works, notes after its latest computer step stay in the run card, unless it waits on a
+    // question (see groupParts and runOpen).
+    const working = runOpen(
+      isActive && status !== "idle",
+      assistantMessages.map((message) => getMessageParts(message.id)),
+    )
     const assistantItems =
       interrupted && !compaction
         ? [
@@ -80,14 +86,15 @@ export namespace Timeline {
               }),
             ),
             { type: "interrupted" as const },
-            ...groupParts(assistantPartRefs.filter((ref) => ref.messageIndex > interruptedMessageIndex)).map(
-              (group) => ({
-                type: "part" as const,
-                group,
-              }),
-            ),
+            ...groupParts(
+              assistantPartRefs.filter((ref) => ref.messageIndex > interruptedMessageIndex),
+              working,
+            ).map((group) => ({
+              type: "part" as const,
+              group,
+            })),
           ]
-        : groupParts(assistantPartRefs).map((group) => ({ type: "part" as const, group }))
+        : groupParts(assistantPartRefs, working).map((group) => ({ type: "part" as const, group }))
     if (previousUserMessage) rows.push(new TimelineRow.TurnGap({ userMessageID: userMessage.id }))
 
     if (comments.length > 0)

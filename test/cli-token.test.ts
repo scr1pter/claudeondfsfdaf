@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
+import { randomBytes, randomUUID } from "node:crypto"
+import { GithubAgents } from "../packages/core/src/github-agents.js"
+import { mintRunToken } from "../api/_lib/cloud-agents-run-token.js"
 import {
   mintCliToken,
   mintDeletionGrant,
@@ -69,6 +72,39 @@ describe("cli tokens", () => {
   test("refuses to mint without a configured secret", () => {
     process.env.VECTOR_LICENSE_SECRET = "short"
     expect(() => mintCliToken({ id: "u1", email: "k@vectordev.ai" })).toThrow(ApiError)
+  })
+
+  test("a run token is refused by verifyCliToken", () => {
+    // Both kinds of token then derive their key from the one license secret, each for its own purpose.
+    const dedicated = process.env.VECTOR_RUN_TOKEN_SECRET
+    delete process.env.VECTOR_RUN_TOKEN_SECRET
+    try {
+      const now = Date.now()
+      const repositoryId = "123456789"
+      const token = mintRunToken({
+        sub: randomUUID(),
+        rid: GithubAgents.runId(repositoryId, 9_876_543_210, 1, 55_555_555_555),
+        repo: repositoryId,
+        thr: "12",
+        gen: 1,
+        src: "github-comment",
+        pur: "task",
+        epoch: `p${now - 86_400_000}`,
+        dl: now + 30 * 60_000,
+        iat: now,
+        jti: randomBytes(16).toString("base64url"),
+      }).token
+      expect(token).toStartWith("vrt_")
+      const invalid = expect.objectContaining({ statusCode: 401, code: "CLI_TOKEN_INVALID" })
+      for (const presented of [token, `vct_${token.slice(4)}`]) {
+        expect(() => verifyCliToken(presented)).toThrow(invalid)
+        expect(() => verifyDesktopToken(presented)).toThrow(invalid)
+      }
+    } finally {
+      dedicated === undefined
+        ? delete process.env.VECTOR_RUN_TOKEN_SECRET
+        : (process.env.VECTOR_RUN_TOKEN_SECRET = dedicated)
+    }
   })
 })
 

@@ -6,6 +6,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { SessionMessage } from "@vectordevai/core/session/message"
 import { AgentAttachment, FileAttachment } from "@vectordevai/core/session/prompt"
 import { toLLMMessages } from "@vectordevai/core/session/runner/to-llm-message"
+import { SessionRunnerModel } from "@vectordevai/core/session/runner/model"
 import { SessionV2 } from "@vectordevai/core/session"
 import { DateTime } from "effect"
 
@@ -14,6 +15,85 @@ const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
 
 describe("toLLMMessages", () => {
+  test("a may-train route cannot replay imported computer images or provider result copies", () => {
+    const screenshot = "data:image/png;base64,cHJpdmF0ZS1zY3JlZW4="
+    const ordinary = "data:image/png;base64,dXNlci1pbWFnZQ=="
+    const file = { type: "file" as const, mime: "image/png", uri: screenshot }
+    const text = { type: "text" as const, text: "Observed the approved app" }
+    const input: SessionMessage.Message[] = [
+      SessionMessage.User.make({
+        id: id("screen-user"),
+        type: "user",
+        text: "Continue the task",
+        files: [FileAttachment.make({ mime: "image/png", uri: ordinary })],
+        time: { created },
+      }),
+      SessionMessage.Assistant.make({
+        id: id("screen-history"),
+        type: "assistant",
+        agent: "build",
+        model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+        time: { created, completed: created },
+        content: [
+          ...(["completed", "error"] as const).map((status) =>
+            SessionMessage.AssistantTool.make({
+              type: "tool",
+              name: "computer",
+              id: `provider-screen-${status}`,
+              provider: { executed: true },
+              state:
+                status === "completed"
+                  ? SessionMessage.ToolStateCompleted.make({
+                      status,
+                      input: { action: "screenshot" },
+                      content: [text, file],
+                      structured: { attachments: [file] },
+                      attachments: [FileAttachment.make({ mime: file.mime, uri: file.uri })],
+                      result: { type: "content", value: [text, file] },
+                    })
+                  : SessionMessage.ToolStateError.make({
+                      status,
+                      input: { action: "screenshot" },
+                      content: [text, file],
+                      structured: {},
+                      error: { type: "unknown", message: "Stopped after observing" },
+                      result: { type: "error", value: { content: [text, file] } },
+                    }),
+              time: { created, completed: created },
+            }),
+          ),
+          SessionMessage.AssistantTool.make({
+            type: "tool",
+            name: "read",
+            id: "ordinary-image",
+            state: SessionMessage.ToolStateCompleted.make({
+              status: "completed",
+              input: { path: "image.png" },
+              content: [{ ...file, uri: ordinary }],
+              structured: {},
+            }),
+            time: { created, completed: created },
+          }),
+        ],
+      }),
+    ]
+    const saved = JSON.stringify(input)
+    const training = SessionRunnerModel.withFreeRoute(
+      Model.make({ id: "may-train", provider: "provider", route: OpenAIChat.route }),
+      { source: "shared", dataPolicy: "may-train" },
+    )
+    const result = JSON.stringify(
+      toLLMMessages(input, training, {
+        computerScreenshots: SessionRunnerModel.computerScreenshotsAllowed(training),
+      }),
+    )
+    expect(result).not.toContain(screenshot)
+    expect(result).toContain(ordinary)
+    expect(result).toContain("Observed the approved app")
+    expect(JSON.stringify(toLLMMessages(input, model))).toContain(screenshot)
+    expect(JSON.stringify(input)).toBe(saved)
+  })
+
   test("omits empty assistant turns", () => {
     const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
       SessionMessage.Assistant.make({

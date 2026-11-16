@@ -8,6 +8,7 @@ import { MessageTable } from "@vectordevai/core/session/sql"
 import type { Brain } from "@vectordevai/core/brain/brain"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
+import { ComputerScreenshots } from "@vectordevai/core/util/computer-screenshots"
 import type { Tool } from "ai"
 import { eq } from "drizzle-orm"
 import { Clock, Context, Deferred, Effect, Layer, type Duration } from "effect"
@@ -297,7 +298,11 @@ const layer = Layer.effect(
         sameDirectory(entry.directory, yield* InstanceState.directory) &&
         !i.guest
       // A fresh copy every call: reminders are pushed into the messages a step sends, never into the kept history.
-      return { messages: structuredClone(window), ...(warm ? { prefix: entry } : {}) }
+      // Hands frames belong to the attended model, including copies in native/provider result envelopes, never a fork.
+      return {
+        messages: ComputerScreenshots.stripHistory(structuredClone(window)),
+        ...(warm ? { prefix: { ...entry, request: inheritedRequest(entry.request) } } : {}),
+      }
     })
 
     const userFields: Interface["userFields"] = Effect.fn("SessionFork.userFields")(function* (record) {
@@ -396,10 +401,10 @@ export function virtualize(message: SessionV1.WithParts): SessionV1.WithParts {
 type ForkConfig = { readonly experimental?: { readonly primary_tools?: readonly string[] } }
 
 // What a fork never runs: launching or asking anything (a fork launches nothing, I3), the owner's memory, the planning
-// modes, the parent's StructuredOutput, and the tools the owner keeps for primary agents.
-const NEVER = ["task", "workflow", "memory", "escalate", "research", "question", "plan_enter", "plan_exit"]
+// modes, the parent's StructuredOutput, attended computer use, and tools the owner keeps for primary agents.
+const NEVER = ["task", "workflow", "memory", "escalate", "research", "question", "plan_enter", "plan_exit", "computer"]
 
-/** The tools a fork refuses, though their definitions stay so its requests match its parent's. */
+/** The tools a fork refuses. Computer use is also withheld from its definitions and inherited policy. */
 export function REFUSED(cfg: ForkConfig): readonly string[] {
   return [...new Set([...NEVER, "StructuredOutput", ...(cfg.experimental?.primary_tools ?? [])])]
 }
@@ -412,9 +417,22 @@ export function FORK_DENIES(cfg: ForkConfig): PermissionV1.Ruleset {
 /** What a refused tool returns to the fork. */
 export const refusal = (tool: string) => `${tool} is not available in a fork.`
 
+// A warm fork normally keeps its parent's request for cache reuse. Attended computer authority is the exception:
+// it carries neither the tool nor the canonical policy that promises desktop access. The parent's copy is unchanged.
+function inheritedRequest(request: Request): Request {
+  return {
+    ...request,
+    ...(request.stableSystem
+      ? { stableSystem: request.stableSystem.filter((part) => !part.startsWith("<computer_policy>")) }
+      : {}),
+    system: request.system.filter((part) => !part.startsWith("<computer_policy>")),
+    tools: Object.fromEntries(Object.entries(request.tools).filter(([name]) => name !== "computer")),
+  }
+}
+
 /**
- * The fork's tools: each definition exactly as `tools` (the parent's prefix, or the parent's names when cold) has it,
- * run by the fork's own `own` tool; refused names, and names the fork has no tool for, refuse.
+ * The fork's tools: every definition except attended computer use is exactly as `tools` (the parent's prefix, or the
+ * parent's names when cold) has it, run by the fork's own `own` tool; refused and missing own tools refuse.
  */
 export function adopt(input: {
   tools: Record<string, Tool>
@@ -423,19 +441,21 @@ export function adopt(input: {
 }): Record<string, Tool> {
   const refused = new Set(input.refused)
   return Object.fromEntries(
-    Object.entries(input.tools).map(([name, definition]) => {
-      const own = refused.has(name) ? undefined : input.own[name]
-      const tool: Tool = {
-        ...definition,
-        execute:
-          own?.execute ??
-          (() => {
-            throw new Error(refusal(name))
-          }),
-      }
-      if (own) NativePatch.carry(own, tool)
-      return [name, tool]
-    }),
+    Object.entries(input.tools)
+      .filter(([name]) => name !== "computer")
+      .map(([name, definition]) => {
+        const own = refused.has(name) ? undefined : input.own[name]
+        const tool: Tool = {
+          ...definition,
+          execute:
+            own?.execute ??
+            (() => {
+              throw new Error(refusal(name))
+            }),
+        }
+        if (own) NativePatch.carry(own, tool)
+        return [name, tool]
+      }),
   )
 }
 

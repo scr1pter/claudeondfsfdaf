@@ -32,6 +32,11 @@ type SpawnLocalServerOptions = {
   startupHold?: boolean
   /** The fingerprints of the certificate authorities from the user's own config that its owner trusted. */
   authorities?: readonly string[]
+  /**
+   * Values the engine receives only in its start message, never in its launch environment, such as the Hands
+   * bridge pair (section 2.8). They are set inside the sidecar, so no other process can read them from its launch.
+   */
+  startEnvironment?: Readonly<Record<string, string>>
   onStdout?: (message: string) => void
   onStderr?: (message: string) => void
   onExit?: (code: number) => void
@@ -97,7 +102,7 @@ export async function spawnLocalServer(
   options: SpawnLocalServerOptions,
 ) {
   const sidecar = join(dirname(fileURLToPath(import.meta.url)), "sidecar.js")
-  const environment = sidecarEnvironment(process.env)
+  const environment = sidecarEnvironment(process.env, options.startEnvironment)
   const child = utilityProcess.fork(sidecar, [], {
     cwd: process.cwd(),
     env: { ...createSidecarEnv(environment.launch), ...(options.startupHold ? { VECTOR_STARTUP_HOLD: "1" } : {}) },

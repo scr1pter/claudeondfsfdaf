@@ -3,11 +3,17 @@ import path from "path"
 import fs from "fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
 import { Effect, Layer, Result, Schema } from "effect"
-import { TestConsole } from "effect/testing"
+import { TestClock, TestConsole } from "effect/testing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { httpClient } from "@vectordevai/core/effect/app-node-platform"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { ConfigV1 } from "@vectordevai/core/v1/config/config"
+import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { Computer } from "@vectordevai/schema/computer"
 import { ToolRegistry } from "@/tool/registry"
 import { Tool } from "@/tool/tool"
-import { disposeAllInstances, provideInstance, TestInstance, tmpdir } from "../fixture/fixture"
+import { disposeAllInstances, provideInstance, TestInstance, tmpdir, withTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestConfig } from "../fixture/config"
 import { Config } from "@/config/config"
@@ -65,6 +71,176 @@ const foregroundOnly = testEffect(
     [RuntimeFlags.node, RuntimeFlags.layer({ backgroundSubagents: false })],
   ]),
 )
+
+for (const entry of [
+  { name: "without either bridge variable", present: false, url: false, token: false },
+  { name: "without the bridge token", present: false, url: true, token: false },
+  { name: "without the bridge URL", present: false, url: false, token: true },
+  { name: "with ready desktop", present: true },
+  { name: "with only OS grants missing", present: true, permissions: true },
+  { name: "with company policy off", present: false, config: { computer: { enabled: false } } },
+  { name: "with tools.computer=false", present: false, config: { tools: { computer: false } } },
+  { name: "with Web access None", present: false, offline: true },
+  { name: "for research", present: false, agent: "research" },
+] satisfies {
+  name: string
+  present: boolean
+  url?: boolean
+  token?: boolean
+  permissions?: boolean
+  offline?: boolean
+  config?: ConfigV1.Info
+  agent?: string
+}[]) {
+  const computer = testEffect(
+    LayerNode.compile(root, [
+      [Config.node, TestConfig.layer({ get: () => Effect.succeed(entry.config ?? {}) })],
+      [RuntimeFlags.node, RuntimeFlags.layer()],
+      [
+        httpClient,
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  protocol: 1,
+                  available: !entry.permissions,
+                  ...(entry.permissions ? { reason: "permissions" } : {}),
+                  backend: "fake",
+                  actions: ["read_ui", "screenshot"],
+                  features: { background: false, uiTree: true, zoom: false, clipboard: false, locked: false },
+                } satisfies Computer.Capabilities),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ]),
+  )
+  computer.instance(`computer is ${entry.present ? "present" : "absent"} ${entry.name} (INV-S10)`, () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const previous = {
+          url: process.env.VECTOR_COMPUTER_BRIDGE_URL,
+          token: process.env.VECTOR_COMPUTER_BRIDGE_TOKEN,
+          policy: Egress.policy(),
+        }
+        if (entry.url === false) delete process.env.VECTOR_COMPUTER_BRIDGE_URL
+        else process.env.VECTOR_COMPUTER_BRIDGE_URL = "http://127.0.0.1:45100"
+        if (entry.token === false) delete process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
+        else process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = "computer-test"
+        if (entry.offline) Egress.configure(LocalPolicy.resolve({ global: { enabled: true, web: "none" } }))
+        return previous
+      }),
+      () =>
+        Effect.gen(function* () {
+          const registry = yield* ToolRegistry.Service
+          const agents = yield* Agent.Service
+          const agent = yield* agents.get(entry.agent ?? "build")
+          if (!agent) throw new Error("test agent missing")
+          const tools = yield* registry.tools({
+            providerID: ProviderV2.ID.make("test"),
+            modelID: ModelV2.ID.make("reader-test"),
+            agent,
+          })
+          const offered = tools.find((tool) => tool.id === "computer")
+          expect(!!offered).toBe(entry.present)
+          if (entry.url === false || entry.token === false) expect(yield* registry.ids()).not.toContain("computer")
+          if (offered)
+            expect(ToolJsonSchema.fromTool(offered).properties?.action).toMatchObject({
+              enum: ["read_ui", "screenshot"],
+            })
+        }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous.url === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_URL
+          else process.env.VECTOR_COMPUTER_BRIDGE_URL = previous.url
+          if (previous.token === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
+          else process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = previous.token
+          Egress.configure(previous.policy)
+        }),
+    ),
+  )
+}
+
+const recovery = { probes: 0 }
+const recoveredComputer = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, TestConfig.layer()],
+    [RuntimeFlags.node, RuntimeFlags.layer()],
+    [
+      httpClient,
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          recovery.probes += 1
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              recovery.probes === 1
+                ? Response.json({}, { status: 404 })
+                : Response.json({
+                    protocol: 1,
+                    available: true,
+                    backend: "fake",
+                    actions: ["read_ui", "screenshot"],
+                    features: { background: false, uiTree: true, zoom: false, clipboard: false, locked: false },
+                  } satisfies Computer.Capabilities),
+            ),
+          )
+        }),
+      ),
+    ],
+  ]),
+)
+recoveredComputer.effect("computer schema and decoder recover together after an initial failed capability probe", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const previous = { url: process.env.VECTOR_COMPUTER_BRIDGE_URL, token: process.env.VECTOR_COMPUTER_BRIDGE_TOKEN }
+      process.env.VECTOR_COMPUTER_BRIDGE_URL = "http://127.0.0.1:45100"
+      process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = "computer-recovery-test"
+      return previous
+    }),
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* ToolRegistry.Service
+        const agents = yield* Agent.Service
+        const agent = yield* agents.get("build")
+        if (!agent) throw new Error("test agent missing")
+        const model = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("reader-test"), agent }
+        expect((yield* registry.tools(model)).some((tool) => tool.id === "computer")).toBe(false)
+        expect(recovery.probes).toBe(1)
+        yield* TestClock.adjust(30_000)
+        const tool = (yield* registry.tools(model)).find((tool) => tool.id === "computer")
+        if (!tool) throw new Error("computer did not recover")
+        expect(recovery.probes).toBe(2)
+        expect(ToolJsonSchema.fromTool(tool).properties?.action).toMatchObject({ enum: ["read_ui", "screenshot"] })
+        const result = yield* tool.execute(
+          { action: "read_ui" },
+          {
+            sessionID: SessionID.make("ses_computer_recovery"),
+            messageID: MessageID.ascending(),
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        expect(result.metadata.code).toBe("unavailable")
+      }).pipe(withTmpdirInstance()),
+    (previous) =>
+      Effect.sync(() => {
+        if (previous.url === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_URL
+        else process.env.VECTOR_COMPUTER_BRIDGE_URL = previous.url
+        if (previous.token === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
+        else process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = previous.token
+      }),
+  ),
+)
+
 afterEach(async () => {
   await disposeAllInstances()
 })

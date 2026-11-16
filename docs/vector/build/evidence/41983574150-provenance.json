@@ -1,0 +1,19 @@
+{
+  "run": 41983574150,
+  "head": "e002ec7024b60a0dd05343626c8f3551e15fd403",
+  "macJob": 127099347764,
+  "artifact": {
+    "id": 13395038717,
+    "expectedSha256": "64d8c6a22fc3dbe12d220b15dec7dab47621ed09ed3fe094b92c3bf0a4ab607f",
+    "actualSha256": "64d8c6a22fc3dbe12d220b15dec7dab47621ed09ed3fe094b92c3bf0a4ab607f",
+    "size": 609,
+    "files": [
+      "computer-darwin-core.json"
+    ]
+  },
+  "nativeUnitDiagnostic": {
+    "function": "runPrivilegedSelfTestTests",
+    "assertion": "Malformed, overflowing or extra-field rectangles cannot become target geometry"
+  },
+  "candidateAvailable": false
+}

@@ -1,4 +1,5 @@
 import { ServerAuth } from "../auth"
+import { ComputerPrivacy } from "../computer-privacy"
 import { ForbiddenError, UnauthorizedError } from "@vectordevai/protocol/errors"
 import { Authorization, RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 export { Authorization } from "@vectordevai/protocol/middleware/authorization"
@@ -72,18 +73,27 @@ export const authorizationLayer = Layer.effect(
           )
         if (!ServerAuth.required(config) && (yield* ServerAuth.refusedRequest(false, RequestOwner.forwarded(request))))
           return yield* new ForbiddenError({ message: "This operation requires the server owner" })
-        if (!ServerAuth.required(config))
-          return yield* SessionAudienceHttp.protectResponse(effect, !RequestOwner.forwarded(request), audience).pipe(
-            Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)),
-          )
+        if (!ServerAuth.required(config)) {
+          const owner = !RequestOwner.forwarded(request)
+          return yield* SessionAudienceHttp.protectResponse(
+            effect.pipe(
+              Effect.flatMap((response) => (owner ? Effect.succeed(response) : ComputerPrivacy.response(response))),
+            ),
+            owner,
+            audience,
+          ).pipe(Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)))
+        }
         const credential = yield* credentialFromRequest(request)
         const identity = ServerAuth.identity(credential, config)
         if (!identity) return yield* unauthorized(credential, config)
         if (yield* ServerAuth.refusedRequest(identity === "guest", RequestOwner.forwarded(request)))
           return yield* new ForbiddenError({ message: "This operation requires the server owner" })
+        const owner = identity === "owner" && !RequestOwner.forwarded(request)
         return yield* SessionAudienceHttp.protectResponse(
-          effect,
-          identity === "owner" && !RequestOwner.forwarded(request),
+          effect.pipe(
+            Effect.flatMap((response) => (owner ? Effect.succeed(response) : ComputerPrivacy.response(response))),
+          ),
+          owner,
           audience,
         ).pipe(Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)))
       }),

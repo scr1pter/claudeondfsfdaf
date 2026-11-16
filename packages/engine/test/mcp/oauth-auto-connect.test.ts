@@ -1,6 +1,6 @@
 import { expect, mock, beforeEach } from "bun:test"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { testEffect } from "../lib/effect"
 
 // Mock UnauthorizedError to match the SDK's class
@@ -155,6 +155,7 @@ const { Config } = await import("../../src/config/config")
 const { McpAuth } = await import("../../src/mcp/auth")
 const { McpOAuthProvider } = await import("../../src/mcp/oauth-provider")
 const { McpOAuthCallback } = await import("../../src/mcp/oauth-callback")
+const { McpComputerPolicy } = await import("../../src/mcp/computer-policy")
 const { FSUtil } = await import("@vectordevai/core/fs-util")
 const { CrossSpawnSpawner } = await import("@vectordevai/core/cross-spawn-spawner")
 
@@ -367,4 +368,32 @@ mcpTest.instance(
       }),
     ),
   { trusted: true, config: config("test-oauth-resources") },
+)
+
+mcpTest.instance(
+  "a remote server named computer is refused at startup, and authenticate() cannot store it",
+  () =>
+    Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => Effect.promise(() => McpOAuthCallback.stop()).pipe(Effect.ignore))
+      const mcp = yield* MCP.Service
+      const auth = yield* McpAuth.Service
+      const reason = McpComputerPolicy.reservedName("computer")
+      if (!reason) throw new Error("Expected computer to be reserved")
+      expect((yield* mcp.status()).computer).toEqual({ status: "failed", error: reason })
+      expect(transportCalls).toHaveLength(0)
+
+      // The setup under which authenticate() stores the client it connects without going through create().
+      simulateAuthFlow = false
+      connectSucceedsImmediately = true
+      const exit = yield* mcp.authenticate("computer").pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toMatchObject({ message: reason })
+      expect(transportCalls).toHaveLength(0)
+      expect(yield* auth.getOAuthState("computer")).toBeUndefined()
+      expect((yield* mcp.status()).computer).toEqual({ status: "failed", error: reason })
+      expect(yield* mcp.clients()).toEqual({})
+      // Without the refusal the mock's test_tool would be offered as computer_test_tool.
+      expect(yield* mcp.tools()).toEqual({})
+    }),
+  { trusted: true, config: config("computer") },
 )

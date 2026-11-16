@@ -1,0 +1,198 @@
+{
+  "run": 42096668393,
+  "head": "3573725e12b54dd7c9342953434f8ffa16f9f48c",
+  "helperVersion": "1.0.13",
+  "job": 127488396885,
+  "jobName": "Windows x64 native unit and protocol diagnostic (no release evidence)",
+  "jobConclusion": "success",
+  "build": {
+    "platform": "win32",
+    "architecture": "x64",
+    "status": "passed"
+  },
+  "directNativeUnitVersionProbes": "passed",
+  "required": {
+    "artifact": 13448042900,
+    "artifactName": "computer-helper-win32-x64-diagnostic-3573725e12b54dd7c9342953434f8ffa16f9f48c-1",
+    "zipBytes": 554,
+    "zipSha256": "a770decf6bef78de3271dd75628296e8d30cc858b79e138c67e765a34b2b1a61",
+    "artifactCreatedAt": "2026-11-05T19:51:54Z",
+    "artifactExpiresAt": "2026-11-12T19:51:53Z",
+    "reportFile": "computer-win32-core.json",
+    "artifactDigest": "sha256:a770decf6bef78de3271dd75628296e8d30cc858b79e138c67e765a34b2b1a61",
+    "artifactRun": 42096668393,
+    "artifactHead": "3573725e12b54dd7c9342953434f8ffa16f9f48c",
+    "zipDigestMatchesApi": true,
+    "reportBytes": 2466,
+    "reportSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+    "protocolReport": {
+      "schemaVersion": 1,
+      "platform": "win32",
+      "privileged": "off",
+      "checks": [
+        {
+          "name": "catalog",
+          "status": "passed"
+        },
+        {
+          "name": "unit",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged",
+          "status": "passed"
+        },
+        {
+          "name": "packaged",
+          "status": "passed"
+        },
+        {
+          "name": "target-control",
+          "status": "passed"
+        },
+        {
+          "name": "probe.first",
+          "status": "passed"
+        },
+        {
+          "name": "probe.fresh",
+          "status": "passed"
+        },
+        {
+          "name": "responsible",
+          "status": "passed"
+        },
+        {
+          "name": "unverified-parent",
+          "status": "passed"
+        },
+        {
+          "name": "channel-eof",
+          "status": "passed"
+        },
+        {
+          "name": "parent-death",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.cancel-idle",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.eof",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.frame-too-large",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.heartbeat-loss",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.hello",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.malformed-json",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.permissions",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.session",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.shutdown",
+          "status": "passed"
+        },
+        {
+          "name": "conformance.unsupported-action",
+          "status": "passed"
+        },
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        },
+        {
+          "name": "unprivileged.wire-codec",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-pe",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-manifest",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-version",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.wire-codec",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-pe",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-manifest",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-version",
+          "status": "passed"
+        },
+        {
+          "name": "target-control.windows-test-target-control-schema",
+          "status": "passed"
+        }
+      ],
+      "code": 0
+    },
+    "counts": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    }
+  },
+  "pairedDirectNode": {
+    "status": "skipped",
+    "reason": "required-harness-passed"
+  },
+  "fixedReceipts": [
+    {
+      "phase": "bash-direct-unit-version-probes",
+      "time": "2026-11-05T19:51:41.1430095Z",
+      "receipt": "vector-caller-context initial r=restricted d=parent o=u a=g c=s",
+      "tokenRoute": "restricted-fallback",
+      "desktop": "parent-proved",
+      "owner": "user",
+      "defaultDaclProcessAll": "granted",
+      "defaultDaclCause": "complete",
+      "restrictedDefaultDaclRepair": "not-applied"
+    },
+    {
+      "phase": "required-powershell-bun-to-node-harness",
+      "time": "2026-11-05T19:51:44.3059804Z",
+      "receipt": "vector-caller-context initial r=restricted d=parent o=u a=g c=b",
+      "tokenRoute": "restricted-fallback",
+      "desktop": "parent-proved",
+      "owner": "user",
+      "defaultDaclProcessAll": "granted",
+      "defaultDaclCause": "restricted-user-dacl-repaired",
+      "restrictedDefaultDaclRepair": "applied-and-verified"
+    }
+  ],
+  "conclusion": "The fast Windows x64 build, direct native unit/version/probe checks, and required actual-Node core protocol/lifecycle harness passed. The raw core report has 30 passed, 0 failed, and 1 disabled privileged check. Bash retained the unmodified complete startup proof (c=s); the PowerShell/Bun-to-Node harness observed the applied and verified restricted-candidate DefaultDacl repair (c=b).",
+  "scope": "Fast x64 core diagnostic evidence for the stated helper1.0.13 source only. The DACL receipt proves only the conservative process-object access postcondition, not input/capture authority. ARM64 and privileged Windows scenarios were not run here. This is not full helper1.0.14 matrix, packaged release validation, native artifact acceptance, or release approval.",
+  "releaseReady": false
+}

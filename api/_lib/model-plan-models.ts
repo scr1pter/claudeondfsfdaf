@@ -12,6 +12,7 @@ import {
 } from "./model-plan-catalog-policy.js"
 import { modelPlansEnabled, requireModelPlans } from "./model-plan-config.js"
 import { ApiError, handleApiError, json, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
+import { CodiumModelSelection } from "../../packages/core/src/codium-model-selection.js"
 
 export const CODIUM_AUTO_ID = "vector/codium-auto"
 // A paused or frozen plan is still the account's: its catalog shows what it would serve once the notice is resolved.
@@ -207,5 +208,51 @@ export async function reviewPanelServed(fetcher: typeof fetch = fetch, options: 
     const ids = [catalog.review.triage, catalog.review.confirm, catalog.review.panelJudge]
     const labs = ids.map((id) => catalog.listed.find((model) => model.id === id)?.lab)
     return labs.every(Boolean) && new Set(labs).size === 3
+  })
+}
+
+/** Two independent review labs, without requiring the optional third-lab panel judge. No model is invoked. */
+export async function reviewPairsServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    const pair = [catalog.review.triage, catalog.review.confirm].map((id) =>
+      catalog.listed.find((model) => model.id === id && !model.locked && !model.manualOnly),
+    )
+    const labs = pair.map((model) => model?.lab?.trim())
+    return pair.every(Boolean) && pair[0]?.id !== pair[1]?.id && labs.every(Boolean) && new Set(labs).size === 2
+  })
+}
+
+/**
+ * B03 capacity only: use the client's exact strict-floor selector over qualified per-plan catalogs. Personal consent,
+ * private-input checks and release/listing gates remain independent and cannot be granted by this public probe.
+ */
+export async function brainHelpersServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    return (
+      CodiumModelSelection.brain(
+        { enabled: catalog.models.length > 0, plan: plan.id, models: catalog.models },
+        CODIUM_AUTO_ID,
+      ) !== undefined
+    )
+  })
+}
+
+/** B04 learns from checked outcomes. Auto's usable fallback does not authorize a B03 helper or a model call. */
+export async function autoLearnModelsServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    return (
+      CodiumModelSelection.resolve({
+        autoId: CODIUM_AUTO_ID,
+        catalog: { enabled: catalog.models.length > 0, plan: plan.id, models: catalog.models },
+        tier: "standard",
+        contextTokens: 0,
+      }) !== undefined
+    )
   })
 }

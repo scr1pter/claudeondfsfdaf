@@ -1,0 +1,10 @@
+{
+  "run": 41976359728,
+  "head": "711384a405706e9a8b5b2a843d53e21c41c935cb",
+  "job": 127076096498,
+  "toolchain": "Apple Swift 6.1.2; Xcode 16.4; SDK 15.5",
+  "nativeUnitExecution": "not-run-build-failed",
+  "errors": [
+    "Sources/AccessibilityRegistry.swift:302:9: error: the compiler is unable to type-check this expression in reasonable time; try breaking up the expression into distinct sub-expressions"
+  ]
+}

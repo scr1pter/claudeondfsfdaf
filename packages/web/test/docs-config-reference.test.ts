@@ -6,6 +6,7 @@ import { ConfigAgentV1 } from "@vectordevai/core/v1/config/agent"
 import { ConfigCommandV1 } from "@vectordevai/core/v1/config/command"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { docsMoved, docsNav } from "../src/data/docs-nav"
+import { publishedDesktopVersion } from "../src/data/vector-releases"
 
 const docs = new URL("../src/pages/docs/", import.meta.url)
 const page = (name: string) => Bun.file(new URL(`${name}.astro`, docs)).text()
@@ -31,6 +32,47 @@ async function section(name: string, id: string) {
 }
 
 const strict = { errors: "all", onExcessProperty: "error" } as const
+
+// A key the published desktop's engine does not know is described in the published schema as "Not available in Vector
+// <version> or earlier". That engine rejects unknown top-level keys, so a company policy copied from a sample with such
+// a key would stop config loading on every machine that receives it.
+async function unreleasedKeys() {
+  const schema = await Bun.file(new URL("../public/config.json", import.meta.url)).json()
+  return Object.entries(schema.$defs.Config.properties).flatMap(([key, property]) => {
+    const version = (property as { description?: string }).description?.match(
+      /^Not available in Vector (\S+) or earlier/,
+    )?.[1]
+    return version && Bun.semver.order(publishedDesktopVersion, version) <= 0 ? [key] : []
+  })
+}
+
+test("the published schema says which top-level keys released Vector does not accept", async () => {
+  const schema = await Bun.file(new URL("../public/config.json", import.meta.url)).json()
+  for (const key of ["computer", "connect"])
+    expect(schema.$defs.Config.properties[key].description).toStartWith(
+      "Not available in Vector 1.99.112 or earlier, which rejects this key.",
+    )
+  expect(schema.$defs.Config.properties.computer.description).toContain("Company-policy only")
+})
+
+test("the public company-policy samples and docs samples use only keys the published engine accepts", async () => {
+  const unreleased = await unreleasedKeys()
+  const sample = await Bun.file(new URL("../src/data/local/vector.json", import.meta.url)).json()
+  expect(Object.keys(sample).filter((key) => unreleased.includes(key))).toEqual([])
+  Schema.decodeUnknownSync(ConfigV1.Info)(sample, strict)
+  const profile = await Bun.file(new URL("../src/data/local/ai.vector.managed.mobileconfig", import.meta.url)).text()
+  expect(unreleased.filter((key) => profile.includes(`<key>${key}</key>`))).toEqual([])
+  expect(profile).not.toContain("1.99.112 or later")
+  const shown = await Promise.all(
+    pages.map(async (name) =>
+      samples(await page(name))
+        .filter((text) => text.trimStart().startsWith("{"))
+        .flatMap((text) => Object.keys(JSON.parse(text)).filter((key) => unreleased.includes(key)))
+        .map((key) => `${name}: ${key}`),
+    ),
+  )
+  expect(shown.flat()).toEqual([])
+})
 
 test("every vector.json sample in the docs is one Vector reads, without a key it does not know", async () => {
   const failures: string[] = []
@@ -61,7 +103,11 @@ test("the agent and command file samples are files Vector loads", async () => {
   }
   for (const sample of commands) {
     const md = ConfigMarkdown.parse(sample)
-    const exit = Schema.decodeUnknownExit(ConfigCommandV1.Info)({ name: "sample", ...md.data, template: md.content.trim() })
+    const exit = Schema.decodeUnknownExit(ConfigCommandV1.Info)({
+      name: "sample",
+      ...md.data,
+      template: md.content.trim(),
+    })
     expect(Exit.isSuccess(exit)).toBe(true)
   }
 })
@@ -77,7 +123,9 @@ test("the config schema's help links land on the sections that list agent fields
   ] as const) {
     expect(schema).toContain(`see https://vectordev.ai/docs/${link}"`)
     expect(docsMoved[link]).toBe(target)
-    expect(vercel.redirects.find((redirect) => redirect.source === `/docs/${link}`)?.destination).toBe(`/docs/${target}`)
+    expect(vercel.redirects.find((redirect) => redirect.source === `/docs/${link}`)?.destination).toBe(
+      `/docs/${target}`,
+    )
   }
   const agents = await section("subagents", "custom-agents")
   for (const field of ["description", "mode", "model", "variant", "prompt", "steps", "permission", "hidden", "disable"])

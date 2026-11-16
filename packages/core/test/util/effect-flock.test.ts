@@ -3,12 +3,14 @@ import { spawn } from "child_process"
 import fs from "fs/promises"
 import path from "path"
 import os from "os"
-import { Cause, Clock, Effect, Exit, Fiber, Scope } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import * as PlatformError from "effect/PlatformError"
 import { TestClock } from "effect/testing"
 import { testEffect } from "../lib/effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EffectFlock } from "@vectordevai/core/util/effect-flock"
+import { FSUtil } from "@vectordevai/core/fs-util"
 import { Global } from "@vectordevai/core/global"
 import { Hash } from "@vectordevai/core/util/hash"
 
@@ -112,6 +114,133 @@ const testGlobal = Global.layerWith({
 })
 
 const testLayer = AppNodeBuilder.build(EffectFlock.node, [[Global.node, testGlobal]])
+
+// ---------------------------------------------------------------------------
+// File system faults
+// ---------------------------------------------------------------------------
+
+type FaultMethod = "makeDirectory" | "remove" | "writeFileString"
+
+type Fault = {
+  readonly method: FaultMethod
+  readonly path: string
+  readonly code: string
+  /** How many calls fail. */
+  readonly times: number
+  /** How many calls failed. */
+  hits: number
+}
+
+function fault(method: FaultMethod, file: string, code: string, times = Infinity): Fault {
+  return { method, path: file, code, times, hits: 0 }
+}
+
+// The reason Effect's Node file system gives each code (handleErrnoException in @effect/platform-node-shared). EPERM,
+// ENOTEMPTY and every other code become Unknown.
+const reasons: Record<string, PlatformError.SystemErrorTag> = {
+  ENOENT: "NotFound",
+  EACCES: "PermissionDenied",
+  EEXIST: "AlreadyExists",
+  EBUSY: "Busy",
+}
+
+function injected(fault: Fault) {
+  return PlatformError.systemError({
+    _tag: reasons[fault.code] ?? "Unknown",
+    module: "FileSystem",
+    method: fault.method,
+    pathOrDescriptor: fault.path,
+    cause: Object.assign(new Error(`${fault.code}: injected, ${fault.method} '${fault.path}'`), { code: fault.code }),
+  })
+}
+
+/** EffectFlock over the real file system, except that each fault fails its method on its path. */
+function faultyLayer(...faults: Fault[]) {
+  const filesystem = Layer.effect(
+    FSUtil.Service,
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const take = (method: FaultMethod, file: string) => {
+        const found = faults.find((item) => item.method === method && item.path === file && item.hits < item.times)
+        if (!found) return undefined
+        found.hits++
+        return injected(found)
+      }
+      return FSUtil.Service.of({
+        ...fs,
+        // Suspended, so that each run of the effect, a retry included, is one call.
+        makeDirectory: (file, options) =>
+          Effect.suspend(() => {
+            const err = take("makeDirectory", file)
+            return err ? Effect.fail(err) : fs.makeDirectory(file, options)
+          }),
+        remove: (file, options) =>
+          Effect.suspend(() => {
+            const err = take("remove", file)
+            return err ? Effect.fail(err) : fs.remove(file, options)
+          }),
+        writeFileString: (file, data, options) =>
+          Effect.suspend(() => {
+            const err = take("writeFileString", file)
+            return err ? Effect.fail(err) : fs.writeFileString(file, data, options)
+          }),
+      })
+    }),
+  ).pipe(Layer.provide(AppNodeBuilder.build(FSUtil.node)))
+  return Layer.fresh(
+    AppNodeBuilder.build(EffectFlock.node, [
+      [Global.node, testGlobal],
+      [FSUtil.node, filesystem],
+    ]),
+  )
+}
+
+/** Runs one withLock in a fresh temp dir over the faulty file system, and reports how it ended and how long it took. */
+function withFaults(
+  key: string,
+  faults: (paths: { dir: string; lockDir: string }) => Fault[],
+  setup?: (paths: { dir: string; lockDir: string }) => Promise<void>,
+) {
+  return Effect.gen(function* () {
+    const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-fault-")))
+    const dir = path.join(tmp, "locks")
+    const lockDir = lock(dir, key)
+    const list = faults({ dir, lockDir })
+    if (setup) yield* Effect.promise(() => setup({ dir, lockDir }))
+    let hit = false
+    const start = Date.now()
+    const exit = yield* Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      yield* flock.withLock(
+        Effect.sync(() => {
+          hit = true
+        }),
+        key,
+        dir,
+      )
+    }).pipe(Effect.provide(faultyLayer(...list)), Effect.exit)
+    const elapsed = Date.now() - start
+    const lockDirLeft = yield* Effect.promise(() => exists(lockDir))
+    const breakerLeft = yield* Effect.promise(() => exists(lockDir + ".breaker"))
+    yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+    return {
+      exit,
+      hit,
+      elapsed,
+      lockDir,
+      lockDirLeft,
+      breakerLeft,
+      faults: list,
+      text: Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "",
+    }
+  })
+}
+
+async function makeStale(lockDir: string) {
+  await fs.mkdir(lockDir, { recursive: true })
+  const old = new Date(Date.now() - 120_000)
+  await fs.utimes(lockDir, old, old)
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -439,6 +568,221 @@ describe("util.effect-flock", () => {
       yield* Effect.promise(() => fs.chmod(dir, 0o700).then(() => fs.rm(tmp, { recursive: true, force: true })))
     }),
   )
+
+  // The errors Windows gives a path whose delete is still pending (EPERM), a file another process holds open (EBUSY)
+  // and a directory that is still being emptied (ENOTEMPTY) are injected, so these run on every platform. flock.test.ts
+  // has the same cases for Flock.
+  describe("file system errors", () => {
+    for (const code of ["EPERM", "EBUSY"]) {
+      it.live(
+        `retries a transient ${code} from mkdir of the lock dir`,
+        Effect.gen(function* () {
+          const result = yield* withFaults(`eflock:mkdir-${code}`, ({ lockDir }) => [
+            fault("makeDirectory", lockDir, code, 1),
+          ])
+          expect(result.text).toBe("")
+          expect(result.hit).toBe(true)
+          expect(result.faults[0].hits).toBe(1)
+          expect(result.lockDirLeft).toBe(false)
+        }),
+      )
+    }
+
+    it.live(
+      "reports an EPERM from mkdir of the lock dir that does not clear, well before the lock timeout",
+      Effect.gen(function* () {
+        const result = yield* withFaults("eflock:mkdir-stuck", ({ lockDir }) => [
+          fault("makeDirectory", lockDir, "EPERM"),
+        ])
+        expect(Exit.isFailure(result.exit)).toBe(true)
+        expect(result.hit).toBe(false)
+        expect(result.text).toContain("EPERM")
+        expect(result.text).toContain(result.lockDir)
+        expect(result.faults[0].hits).toBeGreaterThan(2)
+        expect(result.elapsed).toBeLessThan(10_000)
+      }),
+      30_000,
+    )
+
+    it.live(
+      "reports an EACCES from mkdir of the lock dir at once",
+      Effect.gen(function* () {
+        const result = yield* withFaults("eflock:mkdir-denied", ({ lockDir }) => [
+          fault("makeDirectory", lockDir, "EACCES"),
+        ])
+        expect(result.text).toContain("PermissionDenied")
+        expect(result.hit).toBe(false)
+        expect(result.faults[0].hits).toBe(1)
+      }),
+    )
+
+    for (const code of ["EBUSY", "EPERM", "ENOTEMPTY"]) {
+      it.live(
+        `retries a transient ${code} when release deletes the lock dir`,
+        Effect.gen(function* () {
+          const result = yield* withFaults(`eflock:release-${code}`, ({ lockDir }) => [
+            fault("remove", lockDir, code, 1),
+          ])
+          expect(result.text).toBe("")
+          expect(result.hit).toBe(true)
+          expect(result.faults[0].hits).toBe(1)
+          expect(result.lockDirLeft).toBe(false)
+        }),
+      )
+    }
+
+    it.live(
+      "reports a release that cannot delete the lock dir instead of leaving it behind silently",
+      Effect.gen(function* () {
+        const result = yield* withFaults("eflock:release-stuck", ({ lockDir }) => [fault("remove", lockDir, "EPERM")])
+        expect(result.hit).toBe(true)
+        expect(result.text).toContain(`Lock dir ${result.lockDir} could not be removed on release`)
+        expect(result.text).toContain("EPERM")
+        expect(result.faults[0].hits).toBeGreaterThan(2)
+        expect(result.lockDirLeft).toBe(true)
+        expect(result.elapsed).toBeLessThan(10_000)
+      }),
+      30_000,
+    )
+
+    it.live(
+      "treats a lock dir that is already gone on release as removed",
+      Effect.gen(function* () {
+        const result = yield* withFaults("eflock:release-gone", ({ lockDir }) => [
+          fault("remove", lockDir, "ENOENT", 1),
+        ])
+        expect(result.text).toBe("")
+        expect(result.hit).toBe(true)
+        expect(result.faults[0].hits).toBe(1)
+      }),
+    )
+
+    it.live(
+      "retries a transient error deleting a stale lock dir",
+      Effect.gen(function* () {
+        const result = yield* withFaults(
+          "eflock:stale-busy",
+          ({ lockDir }) => [fault("remove", lockDir, "EBUSY", 1)],
+          ({ lockDir }) => makeStale(lockDir),
+        )
+        expect(result.text).toBe("")
+        expect(result.hit).toBe(true)
+        expect(result.faults[0].hits).toBe(1)
+        expect(result.breakerLeft).toBe(false)
+      }),
+    )
+
+    it.live(
+      "reports a stale lock dir it cannot delete instead of waiting for the lock timeout",
+      Effect.gen(function* () {
+        const result = yield* withFaults(
+          "eflock:stale-denied",
+          ({ lockDir }) => [fault("remove", lockDir, "EACCES")],
+          ({ lockDir }) => makeStale(lockDir),
+        )
+        expect(result.hit).toBe(false)
+        expect(result.text).toContain("PermissionDenied")
+        expect(result.text).toContain(result.lockDir)
+        expect(result.breakerLeft).toBe(false)
+        expect(result.elapsed).toBeLessThan(10_000)
+      }),
+      30_000,
+    )
+
+    it.live(
+      "reports a stale breaker it cannot delete instead of waiting for the lock timeout",
+      Effect.gen(function* () {
+        const result = yield* withFaults(
+          "eflock:breaker-denied",
+          ({ lockDir }) => [fault("remove", lockDir + ".breaker", "EACCES")],
+          async ({ lockDir }) => {
+            await makeStale(lockDir)
+            await makeStale(lockDir + ".breaker")
+          },
+        )
+        expect(result.hit).toBe(false)
+        expect(result.text).toContain("PermissionDenied")
+        expect(result.text).toContain(result.lockDir + ".breaker")
+        expect(result.elapsed).toBeLessThan(10_000)
+      }),
+      30_000,
+    )
+
+    it.live(
+      "names the lock dir and the file in a compromised lock error",
+      Effect.gen(function* () {
+        const result = yield* withFaults("eflock:compromised-message", ({ lockDir }) => [
+          fault("writeFileString", path.join(lockDir, "heartbeat"), "EEXIST", 1),
+        ])
+        expect(result.hit).toBe(false)
+        const error = Exit.isFailure(result.exit) ? Cause.squash(result.exit.cause) : undefined
+        expect(error).toBeInstanceOf(EffectFlock.LockCompromisedError)
+        if (!(error instanceof EffectFlock.LockCompromisedError)) return
+        expect(error.path).toBe(result.lockDir)
+        expect(error.message).toBe(`Lock compromised at ${result.lockDir}: heartbeat already existed`)
+        expect(result.text).toContain(error.message)
+        expect(result.lockDirLeft).toBe(false)
+      }),
+    )
+
+    it.live(
+      "names the write error when meta.json cannot be created",
+      Effect.gen(function* () {
+        const result = yield* withFaults("eflock:compromised-write", ({ lockDir }) => [
+          fault("writeFileString", path.join(lockDir, "meta.json"), "ENOSPC", 1),
+        ])
+        const error = Exit.isFailure(result.exit) ? Cause.squash(result.exit.cause) : undefined
+        expect(error).toBeInstanceOf(EffectFlock.LockCompromisedError)
+        if (!(error instanceof EffectFlock.LockCompromisedError)) return
+        expect(error.message).toContain(`Lock compromised at ${result.lockDir}: meta.json could not be created`)
+        expect(error.message).toContain("ENOSPC")
+        expect(result.lockDirLeft).toBe(false)
+      }),
+    )
+
+    it.live(
+      "says so when the lock dir cannot be deleted after a compromise",
+      Effect.gen(function* () {
+        const result = yield* withFaults("eflock:compromised-left", ({ lockDir }) => [
+          fault("writeFileString", path.join(lockDir, "heartbeat"), "EEXIST", 1),
+          fault("remove", lockDir, "EACCES"),
+        ])
+        const error = Exit.isFailure(result.exit) ? Cause.squash(result.exit.cause) : undefined
+        expect(error).toBeInstanceOf(EffectFlock.LockCompromisedError)
+        if (!(error instanceof EffectFlock.LockCompromisedError)) return
+        expect(error.message).toContain("heartbeat already existed; removing the lock dir failed")
+        expect(error.message).toContain("EACCES")
+        expect(result.faults[1].hits).toBe(1)
+        expect(result.lockDirLeft).toBe(true)
+      }),
+    )
+
+    // Real files, no injection: on Windows the delete can stay pending, or the directory stay non-empty, while another
+    // handle on the heartbeat is open. Elsewhere the delete succeeds at once.
+    it.live(
+      "release deletes the lock dir while another handle on the heartbeat closes",
+      Effect.gen(function* () {
+        const flock = yield* EffectFlock.Service
+        const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+        const dir = path.join(tmp, "locks")
+        const key = "eflock:open-heartbeat"
+        const lockDir = lock(dir, key)
+        let closed: Promise<void> | undefined
+
+        yield* flock.withLock(
+          Effect.promise(async () => {
+            const handle = await fs.open(path.join(lockDir, "heartbeat"), "r")
+            closed = sleep(150).then(() => handle.close())
+          }),
+          key,
+          dir,
+        )
+        yield* Effect.promise(() => closed ?? Promise.resolve())
+        expect(yield* Effect.promise(() => exists(lockDir))).toBe(false)
+        yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+      }),
+    )
+  })
 
   it.live(
     "enforces mutual exclusion under process contention",

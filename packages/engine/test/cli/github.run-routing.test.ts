@@ -299,9 +299,15 @@ describe("what the task job posts", () => {
 
   test("githubRun posts comments and pull request bodies through the escape", async () => {
     const source = await Bun.file(new URL("../../src/cli/cmd/github.handler.ts", import.meta.url)).text()
-    expect(source).toContain("return await createTaskComment(octoRest, { owner, repo, issue: issueId!, body })")
-    expect(source).toContain("body: escapeVectorMarkers(body),")
-    expect(source).not.toContain("octoRest.rest.issues.createComment(")
+    const helpers = await Bun.file(new URL("../../src/cli/cmd/github.run-helpers.ts", import.meta.url)).text()
+    expect(source).toContain("GithubRunHelpers.createComment(")
+    expect(source).toContain("{ checked, octoRest, owner, repo, issueId, createTaskComment }")
+    expect(source).toContain("GithubRunHelpers.createPR(")
+    expect(helpers).toContain(
+      "return await ctx.createTaskComment(ctx.octoRest, { owner: ctx.owner, repo: ctx.repo, issue: ctx.issueId!, body })",
+    )
+    expect(helpers).toContain("body: escapeVectorMarkers(body),")
+    expect(source + helpers).not.toContain("octoRest.rest.issues.createComment(")
   })
 })
 

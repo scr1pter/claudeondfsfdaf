@@ -1,4 +1,5 @@
 import { ServerAuth } from "@/server/auth"
+import { ComputerPrivacy } from "@vectordevai/server/computer-privacy"
 import { Effect, Encoding, Layer, Option, Redacted, Schema } from "effect"
 import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
@@ -63,11 +64,11 @@ function validateCredential<A, E, R>(
       )
     )
       return yield* new ForbiddenError({ message: "This operation requires the server owner" })
-    return yield* SessionAudienceHttp.protectResponse(
-      effect,
-      identity === "owner" && !RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest),
-      audience,
-    ).pipe(Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)))
+    const owner = identity === "owner" && !RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest)
+    return yield* SessionAudienceHttp.protectResponse(effect, owner, audience).pipe(
+      Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)),
+      Effect.flatMap((response) => (owner ? Effect.succeed(response) : ComputerPrivacy.response(response))),
+    )
   })
 }
 
@@ -123,12 +124,10 @@ function validateRawCredential<A, E, R>(
         { _tag: "ForbiddenError", message: "This operation requires the server owner" },
         { status: FORBIDDEN },
       )
-    return yield* SessionAudienceHttp.protectResponse(
-      effect,
-      identity === "owner" && !RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest),
-      audience,
-    ).pipe(
+    const owner = identity === "owner" && !RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest)
+    return yield* SessionAudienceHttp.protectResponse(effect, owner, audience).pipe(
       Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)),
+      Effect.flatMap((response) => (owner ? Effect.succeed(response) : ComputerPrivacy.response(response))),
       Effect.catchIf(
         (cause) => cause instanceof ForbiddenError,
         (cause) =>

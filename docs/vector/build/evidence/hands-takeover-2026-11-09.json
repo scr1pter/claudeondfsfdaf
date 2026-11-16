@@ -1,0 +1,225 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-takeover-local-and-hosted-evidence",
+  "observedAtUtc": "2026-11-10T05:42:01.872819+00:00",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands",
+  "integratedBase": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+  "mainRetained": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+  "reconciledDiagnostics": {
+    "oldTip": "ead163391a558f7a94c1fdb589b87b2c71bb1a84",
+    "resultBeforeNewCandidate": "be006a7388b66b7c2e374d2670f1456fd83efe08",
+    "mapping": [
+      {
+        "old": "50c48233",
+        "new": "fdadb10fc0e5b23d80f7ca1d982a8e3d6ff88fe3"
+      },
+      {
+        "old": "792e4fed",
+        "new": "89c59703f09351e985d5792e8e1127e565a444a8"
+      },
+      {
+        "old": "4b3977b1",
+        "new": "7c9ca355634f5b55908a1878bd942b827ef12eca"
+      },
+      {
+        "old": "ead16339",
+        "new": "be006a7388b66b7c2e374d2670f1456fd83efe08"
+      }
+    ],
+    "qualification": "Only four later native/report/test patches carried over. Main integration, newer workflows and unversioned release state retained."
+  },
+  "initialHostedState": {
+    "handsRevision": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+    "pr": 22,
+    "latestChecks": {
+      "success": 34,
+      "failure": 4,
+      "skipped": 18,
+      "pending": 0
+    },
+    "failures": [
+      {
+        "job": 129583289747,
+        "run": 42741329412,
+        "check": "Windows helper build",
+        "step": "Run actual isolated medium-token Windows overlay Stop"
+      },
+      {
+        "job": 129582954591,
+        "run": 42741329412,
+        "check": "engine windows shard7/12",
+        "cause": "Published config schema differed from generator."
+      },
+      {
+        "job": 129582954268,
+        "run": 42741329412,
+        "check": "engine linux shard3/4",
+        "cause": "Same generated config schema mismatch."
+      },
+      {
+        "job": 129582954567,
+        "run": 42741329412,
+        "check": "engine windows shard12/12",
+        "cause": "task_manage normal-completion Promise did not settle within test deadline."
+      }
+    ]
+  },
+  "latestNativeObservation": {
+    "revision": "ead163391a558f7a94c1fdb589b87b2c71bb1a84",
+    "run": 42750149004,
+    "job": 129611594111,
+    "jobUrl": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42750149004/job/129611594111",
+    "nativeUnitVersionProbe": "passed",
+    "requiredProtocolLifecycle": "passed",
+    "isolatedActualReport": {
+      "passed": 34,
+      "failed": 2,
+      "skipped": 10,
+      "qualification": "Optional step conclusion does not replace the actual failed scenario report."
+    },
+    "stopReceipt": {
+      "ok": false,
+      "reason": "native_failure",
+      "stage": "stop-hit-retired",
+      "cause": "core_failure:no_ui_tree"
+    },
+    "capture": {
+      "reason": "native_operation_failed",
+      "stage": "capture-window-item-full-expired-setup-lt25-rpc-ge50",
+      "nativeCode": "capture_unavailable",
+      "interpretation": "Successful CreateForWindow returned after its full50ms ticket; setup<25ms, call span>=50ms. Cause and safe fix are unproven."
+    },
+    "qualification": "Failure concerns native smoke-driver Stop proof, not a demonstrated failure of ordinary app Stop handling. No release credit."
+  },
+  "localEnvironment": {
+    "platform": "Windows x64",
+    "bun": "1.3.14",
+    "node": "24.22.0",
+    "install": "bun install --frozen-lockfile --ignore-scripts; exit0;3725packages;38.34s",
+    "rules": "Individual named test files and package typechecks serially. No native builds, Playwright, Electron, owner capture/input/clipboard or OS-permission changes locally.",
+    "generatedHookInstalledInNewWorktree": false,
+    "hookQualification": "No hook disabled or bypassed. No global/local Turbo pass is claimed; explicit package checks and hosted CI supply validation."
+  },
+  "localChecks": [
+    {
+      "command": "packages/engine: bun --no-env-file script/schema.ts ../../packages/web/public/config.json ../../packages/web/public/tui.json",
+      "exitCode": 0,
+      "result": "One generated config description updated from obsolete1.99.112 to compatibleHands-enabled build; tui unchanged."
+    },
+    {
+      "command": "packages/desktop: bun test --timeout 30000 scripts/computer-overlay-smoke-source.test.ts",
+      "initial": "17pass2fail169assert; real compiler fixtures resolved cwd-relative metadata against their temporary desktop root.",
+      "rootOnlyAttempt": "Explicit root alone retained same17/2 failure.",
+      "final": {
+        "passed": 19,
+        "failed": 0,
+        "assertions": 170,
+        "seconds": 1.54,
+        "exitCode": 0
+      },
+      "proof": "PinnedBunprobe showed metadata names resolve againstprocess.cwd evenwithroot set; fixtures now pass raw metadata with captured compiler directory and the same fixed entrypoint. Production verifier unchanged."
+    },
+    {
+      "command": "packages/desktop: bun test --timeout 30000 scripts/computer-overlay-smoke-report.test.ts",
+      "passed": 39,
+      "failed": 0,
+      "assertions": 21682,
+      "seconds": 0.526,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/engine: bun test --timeout 30000 test/tool/task-manage-abort.test.ts",
+      "firstDiagnostic": {
+        "passed": 2,
+        "failed": 1,
+        "seconds": 62.62,
+        "normalCaseMs": 3133.35,
+        "flags": "manager entered=true, returned=true; child released=true; job=completed"
+      },
+      "secondDiagnostic": {
+        "passed": 2,
+        "failed": 1,
+        "seconds": 6.87,
+        "normalCaseMs": 2087.08,
+        "flags": "manager returned=true; agent entered=true,returned=false; truncate entered=false; child completed"
+      },
+      "instrumentedPrecondition": {
+        "passed": 3,
+        "failed": 0,
+        "assertions": 16,
+        "seconds": 11.01
+      },
+      "minimalFinalPatch": {
+        "passed": 3,
+        "failed": 0,
+        "assertions": 16,
+        "seconds": 11.0,
+        "normalCaseTotalMs": 2011.5,
+        "exitCode": 0
+      },
+      "qualification": "Finalpatch is four setup lines resolving/asserting actualselectedAgent beforeheldchild, matching SessionPrompt. Original2s completion deadline, realservicewiring and existingassertions unchanged. Whole-case time includesfixture setup; temporarydiagnosticdecorators removed."
+    },
+    {
+      "command": "packages/desktop: bun typecheck",
+      "exitCode": 0
+    },
+    {
+      "command": "packages/engine: bun typecheck",
+      "exitCode": 0
+    },
+    {
+      "command": "packages/web: bun typecheck",
+      "exitCode": 0,
+      "files": 204,
+      "errors": 0,
+      "warnings": 0,
+      "hints": 186
+    }
+  ],
+  "candidate": {
+    "scope": "Never-shipped Stop driver uses bounded native point resolution; ordinary UIA hit traversal unchanged.",
+    "authority": "Exact root/PID/runtime identity/bounds ancestry, full selected security, and original freshness/post checks. One original50ms actor ticket; no renewed deadline or fallback.",
+    "nativeUnitGroupsAdded": 11,
+    "nativeUnitResult": "not run locally; requires Windows CI",
+    "nativeTimingFit": "not measured yet",
+    "protocolChanges": false,
+    "ordinaryHitBodyByteComparison": "Exact function text matches be006a73; no ordinary BFS edit."
+  },
+  "otherFeatureBranchesModified": false,
+  "realProviderCalls": 0,
+  "releasePublished": false,
+  "pending": [
+    "Exact-head nativeWindows x64compile/unit/protocol/stagedStop/capture",
+    "Regular x64+ARM64checks and finalpackagedpin verification",
+    "Full integratedregression/Node/browser qualification",
+    "Cold capture stability; previous late success remains failing evidence",
+    "Owner device/grants/UAC/inputhardware checks,signing/notarization, imagegateway and publication approval"
+  ],
+  "downloadedOfficialLogDigests": [
+    {
+      "job": 129611594111,
+      "bytes": 228982,
+      "sha256": "9cdaf33c6bc86efc3ed275ddbdf1f842cffb608f775e72193a5743dd8a1f6e49",
+      "qualification": "Official job URL identifies source; only bounded redacted facts retained in repository."
+    },
+    {
+      "job": 129582954591,
+      "bytes": 212237,
+      "sha256": "d5fbd3ceaf0c3e144d7c92c142ad16e51b55f98a1bf1e0d7dc3b85fd71737a1e",
+      "qualification": "Official job URL identifies source; only bounded redacted facts retained in repository."
+    },
+    {
+      "job": 129582954567,
+      "bytes": 95004,
+      "sha256": "a60d06605db40de65bce242922d73b1f78641ddc49f8341bd505dcfa3b6ec41c",
+      "qualification": "Official job URL identifies source; only bounded redacted facts retained in repository."
+    },
+    {
+      "job": 129582954268,
+      "bytes": 390126,
+      "sha256": "4494de86a1566ba36b4f348264b46ec4e93cbdfc31935c6a624d77aa373fb535",
+      "qualification": "Official job URL identifies source; only bounded redacted facts retained in repository."
+    }
+  ]
+}

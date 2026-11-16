@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // The VectorScope eval scripts sit outside every package, so typecheck.yml checks them with this config. They import
+  // the engine's review modules, which use the engine's "@/" paths, and the desktop runner, which uses the app's: "@/"
+  // tries the engine's source first and the app's second.
+  "extends": "../../packages/engine/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The desktop baseline imports DOM components transitively. Their JSX is Solid DOM, not the engine TUI runtime.
+    "jsxImportSource": "solid-js",
+    // Match the App's import treatment when checking its source through the desktop baseline.
+    "verbatimModuleSyntax": false,
+    "paths": {
+      "@/*": ["../../packages/engine/src/*", "../../packages/app/src/*"],
+      "@test/*": ["../../packages/engine/test/*"]
+    }
+  },
+  "include": ["*.ts", "../../packages/engine/src/*.d.ts", "../../packages/core/src/*.d.ts"]
+}

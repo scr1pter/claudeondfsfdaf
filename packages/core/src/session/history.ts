@@ -5,12 +5,14 @@ import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionContextEpochTable, SessionMessageTable } from "./sql"
+import { ReviewMemoryFence } from "../review/memory-fence"
 
 type DatabaseService = Database.Interface["db"]
+type ReadDatabase = Pick<DatabaseService, "select">
 
 const decode = Schema.decodeUnknownEffect(SessionMessage.Message)
 
-export const latestCompaction = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+export const latestCompaction = Effect.fnUntraced(function* (db: ReadDatabase, sessionID: SessionSchema.ID) {
   return yield* db
     .select({ seq: SessionMessageTable.seq })
     .from(SessionMessageTable)
@@ -22,7 +24,7 @@ export const latestCompaction = Effect.fnUntraced(function* (db: DatabaseService
 })
 
 const messageRows = Effect.fnUntraced(function* (
-  db: DatabaseService,
+  db: ReadDatabase,
   sessionID: SessionSchema.ID,
   compaction: { readonly seq: number } | undefined,
   baselineSeq?: number,
@@ -100,7 +102,17 @@ export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(fun
   sessionID: SessionSchema.ID,
   baselineSeq: number,
 ) {
-  const rows = yield* messageRows(db, sessionID, yield* latestCompaction(db, sessionID), baselineSeq)
+  const rows = yield* db
+    .transaction((tx) =>
+      Effect.gen(function* () {
+        if (yield* ReviewMemoryFence.read(tx, sessionID))
+          return yield* new ReviewMemoryFence.Refused({
+            message: "The review memory history boundary is unavailable.",
+          })
+        return yield* messageRows(tx, sessionID, yield* latestCompaction(tx, sessionID), baselineSeq)
+      }),
+    )
+    .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
   return yield* Effect.forEach(rows, (row) =>
     decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
   )

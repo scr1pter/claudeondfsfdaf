@@ -9,6 +9,8 @@ import { ResearchStore } from "@vectordevai/core/research/store"
 import { WebFetchRequest } from "@vectordevai/core/util/webfetch-request"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 
+import { SessionCleanup } from "@/session/cleanup"
+import { BrowserBridge } from "./browser-bridge"
 import { Tool } from "./tool"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import type { Provider } from "@/provider/provider"
@@ -88,6 +90,12 @@ export const Parameters = Schema.Struct({
   }),
   filter: Schema.optional(Schema.String).annotate({
     description: "read_network: show only requests whose URL contains this text",
+  }),
+  count: Schema.optional(Schema.Literals([1, 2])).annotate({
+    description: "click: 2 for a double click (1 by default)",
+  }),
+  button: Schema.optional(Schema.Literals(["left", "right"])).annotate({
+    description: "click: the mouse button, left by default; right opens the page's own context menu",
   }),
 })
 
@@ -262,22 +270,12 @@ export function isLocalUrl(rawUrl: string) {
 }
 
 function bridgeRequest(input: Record<string, unknown>, signal: AbortSignal) {
-  const url = process.env.VECTOR_BROWSER_BRIDGE_URL
-  const token = process.env.VECTOR_BROWSER_BRIDGE_TOKEN
-  if (!url || !token) throw new Error("The controlled browser is available in the Vector desktop app only.")
-  return fetch(`${url}/command`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(input),
-    signal,
-  }).then(async (response) => {
-    const report = (await response.json()) as BrowserReport
-    // A command the page could not take comes back as its whole report with ok: false (409). Anything else that is
-    // not a report never reached a page: a refused request, a bad token, a desktop that is gone.
-    if (typeof report.ok === "boolean" && (response.ok || response.status === 409)) return report
-    throw new Error(report.error || `Browser command failed (${response.status})`)
-  })
+  return BrowserBridge.command<BrowserReport>(input, signal)
 }
+
+// A session's browser closes with the session, and its helpers' with theirs (Session.remove runs this for each, children
+// first): their pages would otherwise keep running, hidden and unthrottled, in the desktop's park window.
+SessionCleanup.register((info) => BrowserBridge.close([info.id]))
 
 // Everything in a report comes from the page, its scripts or its requests, so all of it is fenced as web text. `view` is
 // the call that asked for it, for the console, requests, HTML chunk and tabs it shows.
@@ -621,6 +619,8 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
                 deltaY: params.deltaY,
                 tabId: params.tab,
                 values: params.values,
+                ...(params.action === "click" && params.count !== undefined ? { clickCount: params.count } : {}),
+                ...(params.action === "click" && params.button !== undefined ? { button: params.button } : {}),
                 // The page and the element the asks above judged: the desktop does nothing once either changed, so
                 // a navigation or another call in between cannot get an action past them (B17).
                 // A tab with no page yet is held to having none (""), so a page another call opens in between cannot

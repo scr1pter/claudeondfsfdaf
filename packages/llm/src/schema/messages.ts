@@ -233,7 +233,7 @@ export class ToolDefinition extends Schema.Class<ToolDefinition>("LLM.ToolDefini
   outputSchema: Schema.optional(JsonSchema),
   cache: Schema.optional(CacheHint),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  native: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  native: Schema.optional(Schema.Union([Schema.Literal("computer"), Schema.Record(Schema.String, Schema.Unknown)])),
 }) {}
 
 export namespace ToolDefinition {

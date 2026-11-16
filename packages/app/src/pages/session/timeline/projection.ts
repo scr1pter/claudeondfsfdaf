@@ -1,6 +1,7 @@
 import { Binary } from "@vectordevai/core/util/binary"
 import type { AssistantMessage, Message, Part, SessionStatus, UserMessage } from "@vectordevai/sdk/v2"
 import { createMemo, mapArray, type Accessor } from "solid-js"
+import { runPartIDs } from "@vectordevai/session-ui/message-part"
 import { reuseTimelineRows } from "./row-reconciliation"
 import { Timeline, TimelineRow } from "./rows"
 
@@ -93,6 +94,10 @@ export function createTimelineProjection(input: {
     })
     return result
   })
+  // Parts a Hands run card holds render inside it, never as a row of their own (D8).
+  const runParts = createMemo(() =>
+    runPartIDs(rows().flatMap((row) => (row._tag === "AssistantPart" ? [row.group] : []))),
+  )
 
   return {
     activeMessageID,
@@ -103,5 +108,6 @@ export function createTimelineProjection(input: {
     messageLastRowIndex,
     rowByKey,
     rows,
+    runParts,
   }
 }

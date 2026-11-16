@@ -25,6 +25,10 @@ const fixture = Effect.fn("TaskManageAbortTest.fixture")(function* () {
   const sessions = yield* Session.Service
   const manager = yield* TaskManager.Service
   const jobs = yield* BackgroundJob.Service
+  const agents = yield* Agent.Service
+  // SessionPrompt resolves the selected agent before SessionTools.resolve offers its tools.
+  // Establish that real precondition before starting the child and timing its completion.
+  expect((yield* agents.get("build"))?.name).toBe("build")
   const root = yield* sessions.create()
   const child = yield* sessions.create({
     parentID: root.id,

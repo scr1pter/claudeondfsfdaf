@@ -13,7 +13,7 @@ import { showToast } from "@/utils/toast"
 import { getFilename } from "@vectordevai/core/util/path"
 import { retry } from "@vectordevai/core/util/retry"
 import { batch } from "solid-js"
-import { produce, reconcile, type SetStoreFunction, type Store } from "solid-js/store"
+import { produce, reconcile, unwrap, type SetStoreFunction, type Store } from "solid-js/store"
 import type { State, VcsCache } from "./types"
 import type { ServerSession } from "../server-session"
 import { cmp, normalizeAgentList, normalizeProviderList } from "./utils"
@@ -266,7 +266,9 @@ export async function bootstrapDirectory(input: {
   if (seededProject) input.setStore("project", seededProject)
   if (seededPath) input.setStore("path", seededPath)
   if (Object.keys(input.store.config).length === 0 && Object.keys(input.global.config).length > 0) {
-    input.setStore("config", reconcile(input.global.config, { merge: false }))
+    // Directory reconciliation mutates nested store objects. Its initial seed
+    // must not share them with the owner-global policy query.
+    input.setStore("config", reconcile(structuredClone(unwrap(input.global.config)), { merge: false }))
   }
   if (loading) input.setStore("status", "partial")
 

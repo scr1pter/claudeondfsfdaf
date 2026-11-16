@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { OpenApi } from "effect/unstable/httpapi"
+import { InstanceHttpApi } from "../../src/server/routes/instance/httpapi/api"
 import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
 
 type Method = "get" | "post" | "put" | "delete" | "patch"
@@ -73,6 +74,38 @@ function isBuiltInEndpointError(name: string) {
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
+  test("registers owner review-memory controls without advertising review-context consumption", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const instance = OpenApi.fromApi(InstanceHttpApi) as OpenApiSpec
+    const operations = Object.entries(spec.paths).flatMap(([path, item]) =>
+      path === "/experimental/review-memory" || path.startsWith("/experimental/review-memory/")
+        ? methods.flatMap((method) => (item[method] ? [`${method} ${path}`] : []))
+        : [],
+    )
+    expect(operations.sort()).toEqual([
+      "delete /experimental/review-memory/previews/{previewId}",
+      "get /experimental/review-memory",
+      "post /experimental/review-memory/confirm",
+      "post /experimental/review-memory/prepare",
+    ])
+    for (const [method, path] of [
+      ["get", "/experimental/review-memory"],
+      ["post", "/experimental/review-memory/prepare"],
+      ["post", "/experimental/review-memory/confirm"],
+      ["delete", "/experimental/review-memory/previews/{previewId}"],
+    ] as const) {
+      expect(instance.paths[path]?.[method]?.responses?.["401"]).toBeDefined()
+      expect(instance.paths[path]?.[method]?.responses?.["403"]).toBeDefined()
+      // The legacy public SDK transform intentionally omits non-/api 401 unions, not runtime authentication.
+      expect(spec.paths[path]?.[method]?.responses?.["401"]).toBeUndefined()
+      expect(spec.paths[path]?.[method]?.responses?.["403"]).toBeDefined()
+    }
+    const capability = spec.components.schemas.ExperimentalCapabilities
+    expect(capability?.properties?.vectorscopeReviewMemoryControls).toEqual({ type: "boolean" })
+    expect(capability?.required).not.toContain("vectorscopeReviewMemoryControls")
+    expect(capability?.properties).not.toHaveProperty("vectorscopeReviewMemoryContext")
+  })
+
   test("Teams Personal selection is nullable and its typed recovery error is documented", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const operation = spec.paths["/experimental/console/switch"].post!

@@ -1,0 +1,175 @@
+{
+  "run": 42029815801,
+  "head": "46f3a6eedc524fefafff98789e1d48d3a17300c0",
+  "macJob": 127253205089,
+  "candidateArtifact": {
+    "id": 13415309270,
+    "zipSha256": "fc4f061ad15d4ab6cf8e2aa15d6a851afe35a9870669fb1bab315e8d1ec72c21",
+    "zipBytes": 477,
+    "rawSha256": "c1aa9a040c16ff1274baf873191da2a877569cd948a36d39f0e416936e6f24b4",
+    "rawBytes": 441
+  },
+  "reportsArtifact": {
+    "id": 13415868171,
+    "zipSha256": "93f3861daf031861778e0f4f93029510a9b80e09cc9ce892de33bb8bfd58e8f1",
+    "zipBytes": 2219
+  },
+  "candidate": {
+    "enforce": true,
+    "helperVersion": "1.0.11",
+    "sourceDigest": "8d1ffbcc361f4b0a201b6bbfce2f8e82c4e421012e65477f916ad75db7617c23",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "845c876e3f7f80c4b0a88f5d3c09f9a934ee4c71",
+      "arm64": "348f8f932218e39bce9d0f4abf10ae9cef5833fe"
+    }
+  },
+  "independentSourceArchive": "46f3a6eedc524fefafff98789e1d48d3a17300c0",
+  "independentSourceDigest": "8d1ffbcc361f4b0a201b6bbfce2f8e82c4e421012e65477f916ad75db7617c23",
+  "archivedSourceDigestMatches": true,
+  "currentMeasuredInputsUnchanged": true,
+  "schemaSourceUnchanged": true,
+  "builds": "production universal helper built twice; every shipping byte identical",
+  "reports": {
+    "computer-darwin-core.json.unit-diagnostic.json": {
+      "schemaVersion": 1,
+      "trigger": "complete",
+      "spawned": true,
+      "exitObserved": true,
+      "closeObserved": true,
+      "signaled": false,
+      "stdoutBytes": 36,
+      "stderrBytes": 2309,
+      "elapsedMs": 10151,
+      "exitAfterMs": 10151,
+      "closeAfterMs": 10151,
+      "sample": {
+        "status": "target-exited",
+        "suites": [],
+        "waits": []
+      },
+      "progress": {
+        "entered": true,
+        "passed": 24,
+        "complete": true,
+        "invalid": false
+      }
+    },
+    "computer-darwin-privileged.json.unit-diagnostic.json": {
+      "schemaVersion": 1,
+      "trigger": "complete",
+      "spawned": true,
+      "exitObserved": true,
+      "closeObserved": true,
+      "signaled": false,
+      "stdoutBytes": 36,
+      "stderrBytes": 2309,
+      "elapsedMs": 9470,
+      "exitAfterMs": 9470,
+      "closeAfterMs": 9470,
+      "sample": {
+        "status": "target-exited",
+        "suites": [],
+        "waits": []
+      },
+      "progress": {
+        "entered": true,
+        "passed": 24,
+        "complete": true,
+        "invalid": false
+      }
+    },
+    "computer-darwin-privileged.json": {
+      "code": 0,
+      "counts": {
+        "passed": 33,
+        "skipped": 13
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "native-skip"
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.capture-overlay-exclusion",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.ax-counter-increment",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.ax-value-set-and-readback",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.secure-field-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.tagged-click-increments",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.stale-capture-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-ax-without-pointer-or-focus",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-selection-insertion",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.helper-tagged-escape-ignored",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.foreign-escape-stops",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.owned-input-release",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        }
+      ]
+    },
+    "computer-darwin-core.json": {
+      "code": 0,
+      "counts": {
+        "passed": 31,
+        "skipped": 1
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        }
+      ]
+    }
+  },
+  "windows": "new overlay near macro compile error, fixed85a05de9; fresh x64/ARM64 execution pending",
+  "signingAndElectron": "skipped after expected old-lock mismatch; fixture/display repairs54aa5c5e require actual CI",
+  "matchingMatrix": "pending; source10 Intel unit timeout is unresolved and must be retested",
+  "releaseReady": false
+}

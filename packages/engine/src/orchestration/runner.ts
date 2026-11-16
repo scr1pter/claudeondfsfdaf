@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Fiber, Semaphore } from "effect"
+import { Cause, Clock, Effect, Fiber, Schema, Semaphore } from "effect"
 import type { Workflow } from "@vectordevai/schema/workflow"
 import { WorkflowLimits } from "@vectordevai/core/orchestration/limits"
 import { WorkflowPlan } from "@vectordevai/core/orchestration/plan"
@@ -93,7 +93,31 @@ export type Result = {
   readonly results: readonly Json[]
   readonly report: string
 }
+export class ConnectUnavailable extends Schema.TaggedErrorClass<ConnectUnavailable>()("WorkflowConnectUnavailable", {
+  code: Schema.Literal("unsupported"),
+  stage: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** Ordinary reviewer prompts renew to the conversation root, so they cannot retain private workflow/group scopes. */
+export function assertSupported(input: Pick<Input, "spec" | "built">) {
+  const connected =
+    input.built.stages?.find((entry) => "connect" in entry.stage)?.stage ??
+    input.spec.stages.find((stage) => "connect" in stage)
+  return connected && "connect" in connected
+    ? Effect.fail(
+        new ConnectUnavailable({
+          code: "unsupported",
+          stage: connected.id,
+          message:
+            "Connected workflow stages are unavailable until reviewer helpers preserve the actual workflow, group and ancestor budget scopes. No connected action was started.",
+        }),
+      )
+    : Effect.void
+}
+
 export const run = Effect.fn("WorkflowRunner.run")(function* (input: WorkflowRuntime.Input) {
+  yield* assertSupported(input)
   const { WorkflowRuntime } = yield* Effect.promise(() => import("./runtime"))
   return yield* WorkflowRuntime.run(input)
 }, Effect.scoped)
@@ -103,10 +127,11 @@ const gates = new Map<string, { gate: Semaphore.Semaphore; users: number }>()
 
 /** Scheduling performs no model inference; launch delegates each admitted node to the existing task lifecycle. */
 export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: Input, ops: Ops) {
+  yield* assertSupported(input)
   if (!input.built.ok || !input.built.plan || !input.built.stages || !input.built.limits)
     return yield* Effect.die(new Error("A workflow must validate successfully before running."))
   const plan = input.built.plan
-  const expanded = input.built.stages
+  const expanded = input.built.stages.filter(WorkflowPlan.isAgent)
   const limits = input.built.limits
   const started = yield* Clock.currentTimeMillis
   const gate = yield* Effect.acquireRelease(
@@ -276,7 +301,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
     return stages
   }
   const context = (
-    entry: WorkflowPlan.Expanded,
+    entry: WorkflowPlan.ExpandedAgent,
     item: WorkflowSources.Item,
     index: number,
     output?: unknown,
@@ -291,8 +316,8 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
     round,
     stages: stagesView(),
   })
-  const counts = (entry: WorkflowPlan.Expanded) => (entry.group ? [usage, groups[entry.group]] : [usage])
-  const checks = (entry: WorkflowPlan.Expanded, fresh: boolean) => {
+  const counts = (entry: WorkflowPlan.ExpandedAgent) => (entry.group ? [usage, groups[entry.group]] : [usage])
+  const checks = (entry: WorkflowPlan.ExpandedAgent, fresh: boolean) => {
     if (stop) return stop
     const check = (budget: WorkflowLimits.Resolved, counter: Counters, observed?: Observation["usage"]) =>
       WorkflowLimits.check(budget, {
@@ -315,7 +340,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
     if (local) groupStops.set(entry.group, local)
     return local
   }
-  const account = (entry: WorkflowPlan.Expanded, result: WorkflowLaunch.Result) => {
+  const account = (entry: WorkflowPlan.ExpandedAgent, result: WorkflowLaunch.Result) => {
     if (!result.sessionID) return
     if (!result.usage) {
       uncertain = true
@@ -341,7 +366,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
         )
     }
   }
-  const waitForAdmission = (entry: WorkflowPlan.Expanded) =>
+  const waitForAdmission = (entry: WorkflowPlan.ExpandedAgent) =>
     Effect.gen(function* () {
       while (!stop && !(entry.group && groupStops.has(entry.group))) {
         const now = yield* Clock.currentTimeMillis
@@ -350,7 +375,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
         yield* Effect.sleep("50 millis")
       }
     })
-  const execute = (entry: WorkflowPlan.Expanded, key: string, item: WorkflowSources.Item, index: number) =>
+  const execute = (entry: WorkflowPlan.ExpandedAgent, key: string, item: WorkflowSources.Item, index: number) =>
     Effect.gen(function* () {
       const stage = entry.stage
       let current = nodes.get(key)!
@@ -630,7 +655,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
         changed()
       }
     })
-  const ready: { entry: WorkflowPlan.Expanded; item: WorkflowSources.Item; index: number; key: string }[] = []
+  const ready: { entry: WorkflowPlan.ExpandedAgent; item: WorkflowSources.Item; index: number; key: string }[] = []
   const stageGroups = new Map(expanded.map((entry) => [entry.stage.id, entry.group]))
   // Per stage, each source item's node key once it has one.
   const admitted = new Map<string, Map<string, string>>()

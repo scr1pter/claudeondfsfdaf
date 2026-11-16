@@ -67,6 +67,7 @@ type Endpoint3_1Input = {
   readonly expiresAt: Endpoint3_1Request["payload"]["expiresAt"]
   readonly previewHash?: Endpoint3_1Request["payload"]["previewHash"]
   readonly remember?: Endpoint3_1Request["payload"]["remember"]
+  readonly includeScreenshots?: Endpoint3_1Request["payload"]["includeScreenshots"]
 }
 const Endpoint3_1 = (raw: RawClient["server.session"]) => (input: Endpoint3_1Input) =>
   raw["session.share"]({
@@ -76,6 +77,7 @@ const Endpoint3_1 = (raw: RawClient["server.session"]) => (input: Endpoint3_1Inp
       expiresAt: input["expiresAt"],
       previewHash: input["previewHash"],
       remember: input["remember"],
+      includeScreenshots: input["includeScreenshots"],
     },
   }).pipe(
     Effect.mapError(mapClientError),
@@ -83,9 +85,15 @@ const Endpoint3_1 = (raw: RawClient["server.session"]) => (input: Endpoint3_1Inp
   )
 
 type Endpoint3_2Request = Parameters<RawClient["server.session"]["session.sharePreview"]>[0]
-type Endpoint3_2Input = { readonly sessionID: Endpoint3_2Request["params"]["sessionID"] }
+type Endpoint3_2Input = {
+  readonly sessionID: Endpoint3_2Request["params"]["sessionID"]
+  readonly includeScreenshots?: Endpoint3_2Request["query"]["includeScreenshots"]
+}
 const Endpoint3_2 = (raw: RawClient["server.session"]) => (input: Endpoint3_2Input) =>
-  raw["session.sharePreview"]({ params: { sessionID: input["sessionID"] } }).pipe(
+  raw["session.sharePreview"]({
+    params: { sessionID: input["sessionID"] },
+    query: { includeScreenshots: input["includeScreenshots"] },
+  }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )

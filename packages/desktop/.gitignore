@@ -23,6 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 out/
+native/out/
+native/build/
 
 resources/vector-cli*
 resources/icons

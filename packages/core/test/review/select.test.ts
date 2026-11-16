@@ -5,7 +5,11 @@ import { buildInlineBody } from "@vectordevai/core/review/format"
 import {
   categoryGroup,
   computeRisk,
+  gap,
   matchPrior,
+  MAX_INLINE,
+  NEAR,
+  sameFinding,
   selectFindings,
   teamPenalty,
   type SelectInput,
@@ -786,5 +790,33 @@ describe("risk", () => {
     ).toBe("medium")
     expect(run({ prior: [prior({ severity: "blocking" })] }).risk).toBe("high")
     expect(run({}).risk).toBe("low")
+  })
+})
+
+// VS-27b exports these for the strict guardrail's S7 and S8 (guardrail.ts), unchanged.
+describe("what selection shares with the strict guardrail", () => {
+  test("sameFinding: same path and side, within NEAR lines, with alike titles, the same fix or two reviewers' code", () => {
+    expect(NEAR).toBe(3)
+    expect(MAX_INLINE).toBe(50)
+    const none = () => ""
+    const a = finding({ line: 52, title: "Refresh restores a session after logout" })
+    expect(sameFinding(a, finding({ line: 55, title: "Refresh restores the session after logout" }), none)).toBe(true)
+    expect(sameFinding(a, finding({ line: 56, title: "Refresh restores the session after logout" }), none)).toBe(false)
+    expect(sameFinding(a, finding({ line: 52, side: "LEFT", title: a.title }), none)).toBe(false)
+    expect(sameFinding(a, finding({ path: "src/db.ts", title: a.title }), none)).toBe(false)
+    const fix = { suggestion: "    await this.store.write(next)" }
+    const settles = finding({ line: 53, title: "Emit before the store settles", ...fix })
+    expect(sameFinding({ ...a, ...fix }, settles, none)).toBe(true)
+    const code = () => "await this.store.write(next)"
+    const other = finding({ line: 52, title: "Emit before the store settles", source: "security" })
+    expect(sameFinding(a, other, code)).toBe(true)
+    expect(sameFinding(a, { ...other, source: "review" }, code)).toBe(false)
+    expect(sameFinding(a, other, none)).toBe(false)
+  })
+
+  test("gap: 0 for overlapping ranges, otherwise the lines between them", () => {
+    expect(gap(10, 12, 12, 20)).toBe(0)
+    expect(gap(10, 12, 15, 15)).toBe(3)
+    expect(gap(15, 15, 10, 12)).toBe(3)
   })
 })

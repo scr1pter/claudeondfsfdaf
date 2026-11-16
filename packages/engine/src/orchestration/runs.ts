@@ -176,6 +176,7 @@ const layer = Layer.effect(
         > = {}
         for (const expanded of built.stages ?? []) {
           const stage = expanded.stage
+          if (!("prompt" in stage)) continue
           for (const target of [
             {
               agent: stage.agent ?? "general",
@@ -255,20 +256,34 @@ const layer = Layer.effect(
         }
         const plan = built.plan && {
           ...built.plan,
-          stages: built.plan.stages.map((stage) => ({
-            ...stage,
-            model: models[stage.id]?.producer ?? stage.model,
-            effort: models[stage.id]?.effort ?? stage.effort,
-          })),
+          stages: built.plan.stages.map((stage) =>
+            stage.kind === "connect"
+              ? stage
+              : {
+                  ...stage,
+                  model: models[stage.id]?.producer ?? stage.model,
+                  effort: models[stage.id]?.effort ?? stage.effort,
+                },
+          ),
           ...(named ? { saved: { name: named.name, source: named.source } } : {}),
         }
         return {
           built: {
             ...built,
-            stages: built.stages?.map((entry) => ({ ...entry, stage: { ...entry.stage,
-              ...(roleStages[entry.stage.id]?.producer ? { model: roleStages[entry.stage.id]!.producer } : {}),
-              ...(entry.stage.verify && roleStages[entry.stage.id]?.verifier ? { verify: { ...entry.stage.verify, model: roleStages[entry.stage.id]!.verifier } } : {}),
-            } })),
+            stages: built.stages?.map((entry) => {
+              const stage = entry.stage
+              if ("connect" in stage) return entry
+              return {
+                ...entry,
+                stage: {
+                  ...stage,
+                  ...(roleStages[stage.id]?.producer ? { model: roleStages[stage.id]!.producer } : {}),
+                  ...(stage.verify && roleStages[stage.id]?.verifier
+                    ? { verify: { ...stage.verify, model: roleStages[stage.id]!.verifier } }
+                    : {}),
+                },
+              }
+            }),
             ok: issues.length === 0,
             issues,
             plan,

@@ -150,6 +150,8 @@ function PromptInputWithOpenDock() {
   }
   const state = {
     blocked: () => false,
+    computerPending: () => false,
+    promptAllowed: () => true,
     questionRequest: () => undefined,
     permissionRequest: () => undefined,
     permissionResponding: () => false,

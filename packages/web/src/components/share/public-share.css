@@ -135,6 +135,14 @@
   font-size: 13px;
   color: var(--muted-strong);
 }
+.public-screenshots img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 12px 0;
+}
 @media (max-width: 600px) {
   .public-session {
     padding: 20px 16px 40px;

@@ -1,0 +1,23 @@
+{
+  "commit": "2aa64b48f3c1fb60fed72bb11645a223e16a9fe8",
+  "ref": "refs/heads/hands",
+  "runID": "2aa64b48f3c1fb60fed72bb11645a223e16a9fe8-41920625342-1",
+  "node": "v24.15.0",
+  "bun": "1.3.14",
+  "playwright": "Version 1.59.1",
+  "platform": "linux",
+  "arch": "x64",
+  "cpu": "AMD EPYC 7763 64-Core Processor",
+  "cpuCount": 4,
+  "memoryBytes": 16760344576,
+  "workers": 1,
+  "repeats": 3,
+  "channel": "prod",
+  "timeline": {
+    "historyTurns": 80,
+    "deltas": 40,
+    "cpuThrottle": 4,
+    "eventBatch": 1,
+    "detailedProfiling": false
+  }
+}

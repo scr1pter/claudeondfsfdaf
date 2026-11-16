@@ -2,6 +2,7 @@ import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entit
 import { ApiError } from "./http.js"
 import type { ModelPlanCaller } from "./model-plan-caller.js"
 import type { ModelPlanModel } from "./model-plan-config.js"
+import { cloudAgentsGatewayHook } from "./cloud-agents-ledger.js"
 
 export type BeforeAdmitContext = { snapshot: EntitlementSnapshot; model: ModelPlanModel; toolNames: readonly string[] }
 export type AfterSettleContext = {
@@ -41,6 +42,8 @@ export function registerGatewayHook(hook: GatewayHook) {
     throw new Error("A Codium gateway hook must have one unique id.")
   hooks.set(hook.id, hook)
 }
+
+registerGatewayHook(cloudAgentsGatewayHook)
 export function registerHostedSessionVerifier(verify: (sessionId: string) => Promise<boolean>) {
   hosted.register(verify)
 }

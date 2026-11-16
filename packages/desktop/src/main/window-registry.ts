@@ -40,6 +40,10 @@ export function createWindowRegistry<W>(persistence: {
       if (focused && [...windows.values()].includes(focused)) return focused
       return (lastFocusedID ? windows.get(lastFocusedID) : undefined) ?? windows.values().next().value
     },
+    /** Every open main window. */
+    all() {
+      return [...windows.values()]
+    },
     /** How many main windows are open. */
     count() {
       return windows.size

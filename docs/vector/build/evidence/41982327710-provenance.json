@@ -1,0 +1,9 @@
+{
+  "run": 41982327710,
+  "head": "1dc21a5e7e270d31da77df7c502e746c6a7b5eb7",
+  "macJob": 127095474704,
+  "error": "PrivilegedSelfTest.swift:168:122 cannot find kSecCSNoNetworkAccess in scope",
+  "diagnosticCompilation": "same error",
+  "nativeExecution": "not run: compilation failed",
+  "candidate": "not accepted"
+}

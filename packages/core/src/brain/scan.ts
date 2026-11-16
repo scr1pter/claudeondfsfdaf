@@ -76,6 +76,14 @@ const PRIVATE_KEY = new RegExp(
 )
 // A line of a key's body, which `secrets` gives one at a time: a key is quoted a line at a time as often as whole.
 const KEY_LINE = /(?<=[\s"'>#*,;]|\\[rn]|-----)[A-Za-z0-9+/]{16,}={0,2}(?=[\s"',;]|\\[rn]|-----|$)/g
+// The last line of a key's body, right before its END line, however short: read for shapes (see `Reading`), it is
+// replaced too. It has a letter or a digit, so the "+" that joins a key's lines in code is none. The marks after it are
+// taken whole, as PRIVATE_KEY takes them, so a long run of them is read once.
+const KEY_LAST = new RegExp(
+  String.raw`(?<=[\s"'>#*,;]|\\[rn]|-----)(?=[A-Za-z0-9+/]*[A-Za-z0-9])[A-Za-z0-9+/]+={0,2}` +
+    String.raw`(?=(?=(${KEY_MARKS}))\1(?:${KEY_BREAK})?(?=(${KEY_MARKS}))\2${KEY_END})`,
+  "g",
+)
 
 // An address with a user name and a password ("postgres://app:S3cretPassw0rd@db"), unless the password stands for one
 // ("https://oauth2:${GITLAB_TOKEN}@gitlab.com"). Group 1 is what comes before the password, 2 the password, 3 the rest.
@@ -146,6 +154,7 @@ const AS_PASSWORD =
 // An AWS secret access key is 40 characters that read like a path once split at "/", so beside an access key id any
 // such run is the secret.
 const AWS_ID = /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/
+const AWS_IDS = new RegExp(AWS_ID.source, "g")
 const AWS_SECRET = /(?<![A-Za-z0-9/+])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/g
 
 // Read as code (see `Reading`), only a password's value counts: "the staging admin password is Tr0ub4dor&3x".
@@ -208,8 +217,18 @@ function passwordLike(token: string, digits = true) {
  * rules that read the words around a value, only "the password is X" applies. Without `digits`, a word whose letters
  * digits break up more than once is no password beside a login word ("login fails on macos-14-arm64", "sign in with
  * secp256k1", "credentials for gpt-4o-2024-08-06"), and a symbol among letters or digits still makes one.
+ *
+ * `shapes` reads only what a value's own shape gives away: a private key's body, an address's password, the provider
+ * token shapes (review redaction's and SECRET_SHAPES), the environment's secret values, and an AWS key ID and the secret
+ * beside it. None of the rules that read the names or words around a value applies (assigned, spoken, login pairs,
+ * near, as-password, hex beside a secret word), nor the long mixed runs `redact` takes for keys. Only the value is
+ * replaced, a line at a time, so the text around it stays as it was and keeps its lines: a key keeps its marks, an
+ * address its user name and host, and an environment value of several lines its line breaks. Every line of a key's
+ * body is replaced, its short last line too, and a bare ASIA key ID is. A 40-character run of hex is no AWS secret,
+ * and "Bearer" or "Basic" with a word on the next line is no token. `named` and `secrets` honour it and `credential`
+ * ignores it. The review payload holdback (VS-34, review/holdback.ts) reads code this way.
  */
-export type Reading = { readonly code?: boolean; readonly digits?: boolean }
+export type Reading = { readonly code?: boolean; readonly digits?: boolean; readonly shapes?: boolean }
 
 /**
  * A value `secrets` found, and whether only the weakest sign gave it away (`weak`): a word whose letters digits break up
@@ -285,30 +304,43 @@ export function secrets(
 ): Found[] {
   const found: Found[] = []
   const out = scrub(text, env, reading, found)
-  found.push(...(out.match(OPAQUE) ?? []).filter(opaque).map((value) => ({ value, weak: false })))
+  if (!reading.shapes) found.push(...(out.match(OPAQUE) ?? []).filter(opaque).map((value) => ({ value, weak: false })))
   return found.filter((item) => item.value && !item.value.includes(REDACTED))
 }
 
 // `named`'s work. Given `found`, it notes each value down, and only the secret part of an address, a login pair and a
 // private key. A value's shape, the environment's values and an AWS secret beside its key ID are read before the words
-// around a value are, so that a token or a key in a sentence about credentials is noted as what it is.
+// around a value are, so that a token or a key in a sentence about credentials is noted as what it is. Read for shapes,
+// it replaces only that secret part whether or not it notes it, and reads no further than the AWS key IDs.
 function scrub(text: string, env: Record<string, string | undefined>, reading: Reading = {}, found?: Found[]) {
   const note = (weak: boolean) => (value: string) => {
     found?.push({ value: value.trim(), weak })
     return REDACTED
   }
-  const hide = note(false)
-  const keys = text.replace(PRIVATE_KEY, (block) => (found ? block.replace(KEY_LINE, hide) : hide(block)))
+  const hide = reading.shapes ? byLine(note(false)) : note(false)
+  const keys = text.replace(PRIVATE_KEY, (block) => {
+    if (reading.shapes) return block.replace(KEY_LINE, hide).replace(KEY_LAST, hide)
+    return found ? block.replace(KEY_LINE, hide) : hide(block)
+  })
   const addresses = keys.replace(CREDENTIALED, (match, head: string, password: string, rest: string) => {
     if (STANDS_FOR.test(password)) return match
-    return found ? `${head}${hide(password)}${rest}` : hide(match)
+    return found || reading.shapes ? `${head}${hide(password)}${rest}` : hide(match)
   })
+  // Read for shapes, a shape that runs over a line break gives no value away: only "Bearer" and "Basic" can, and a
+  // token sits on their line ("// Basic" above a long name is none).
   const shaped = redactSecrets(
-    SECRET_SHAPES.reduce((out, shape) => out.replace(shape, hide), addresses),
+    SECRET_SHAPES.reduce(
+      (out, shape) => out.replace(shape, (match) => (reading.shapes && match.includes("\n") ? match : hide(match))),
+      addresses,
+    ),
     collectSecretValues(env),
     hide,
   )
-  const aws = AWS_ID.test(text) ? shaped.replace(AWS_SECRET, hide) : shaped
+  // Read for shapes, a run of hex beside a key ID is a commit or a checksum, as `opaque` takes it.
+  const aws = AWS_ID.test(text)
+    ? shaped.replace(AWS_SECRET, (match) => (reading.shapes && /^[0-9a-f]{40}$/i.test(match) ? match : hide(match)))
+    : shaped
+  if (reading.shapes) return aws.replace(AWS_IDS, hide)
   const paired = spoken(assigned(aws, hide), hide, reading.code).replace(
     LOGIN,
     (match, name: string, password: string) =>
@@ -321,6 +353,13 @@ function scrub(text: string, env: Record<string, string | undefined>, reading: R
         (_, quote: string, words: string) => `${quote}${hide(words)}${quote}`,
       )
   return keyed(worded, hide)
+}
+
+// A value that runs over a line break (an environment value of several lines, such as a key) is replaced a line at a
+// time, and the spaces around each line are kept. Within a line a lone "\r", U+2028 or U+2029 is replaced with the
+// rest, which `.` would stop at.
+function byLine(hide: Hide): Hide {
+  return (value) => value.replace(/[^\n]+/g, (line) => line.replace(/\S(?:[^\n]*\S)?/, hide))
 }
 
 /** How much of the text is left once secrets are removed, so an entry that is mostly a secret is refused, not kept. */

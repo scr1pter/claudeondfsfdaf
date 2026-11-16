@@ -114,6 +114,8 @@ export interface ReviewGitHubOptions {
   sleep?: (ms: number) => Promise<void>
   log?: (line: string) => void
   signal?: AbortSignal
+  /** What sends each request; the agent phase passes its read-only fetch, which refuses every write before sending. */
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
   /**
    * The posting check every write goes through first (section 6.4a), one post as one text: the parts to send, in the
    * order given. `untrusted` says the pull request comes from a fork, whose posted text may link and embed only on
@@ -324,7 +326,7 @@ export function createReviewGitHub(options: ReviewGitHubOptions): ReviewGitHub {
   const octokit = new Octokit({
     auth: options.token,
     userAgent: "vector-review",
-    request: { signal: options.signal, fetch: githubFetch },
+    request: { signal: options.signal, fetch: options.fetch ?? githubFetch },
     ...(options.baseUrl ? { baseUrl: options.baseUrl.replace(/\/+$/, "") } : {}),
     // Expected 404s (a missing review.json) are handled here; Octokit would print each one.
     log: { debug: () => {}, info: () => {}, warn: (message: string) => log(`GitHub: ${message}`), error: () => {} },

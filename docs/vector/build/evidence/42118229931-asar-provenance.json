@@ -1,0 +1,57 @@
+{
+  "run": 42118229931,
+  "head": "c830e77134ce529a8891eb5518245b9714727f7d",
+  "macJob": 127563572033,
+  "jobConclusion": "failure",
+  "helperVersion": "1.0.14",
+  "manifestArtifact": {
+    "id": 13458610404,
+    "name": "computer-overlay-darwin-manifest-diagnostic-pr-c830e77134ce529a8891eb5518245b9714727f7d-1",
+    "zipBytes": 6165,
+    "zipSha256": "774322ac0bf7775d9fb5928ec28cf532b9e27b78fb3b9932ca97e4cce127f1d6",
+    "zipDigestMatchesApi": true,
+    "rawBytes": 70021,
+    "rawSha256": "493c587c2d76175cda795f8684e92388225849b937a8e8b10b8b6b2ed73e0abf",
+    "artifactHead": "c830e77134ce529a8891eb5518245b9714727f7d"
+  },
+  "nativeBoundary": {
+    "observedAt": "2026-11-05T22:18:49.4793700Z",
+    "protocol": 1,
+    "kind": "boundary",
+    "phase": "artifact",
+    "cause": "file_kind",
+    "role": "runtime",
+    "ordinal": 264,
+    "architecture": "arm64"
+  },
+  "manifest": {
+    "platform": "darwin",
+    "helperVersion": "1.0.14",
+    "overlaySourceDigest": "0af990fbb02939e526ce8419df6a63bc1f9226b8b79c4ec053a22e8195f26028",
+    "regularFileCount": 276,
+    "failureFile": "electron/Electron.app/Contents/Resources/default_app.asar",
+    "failureEntry": {
+      "sha256": "0eb2491b0a9ac94790389d39c09dd5005c6c1f0665842943829bbd0193f6cc4f",
+      "arch": ["arm64"]
+    }
+  },
+  "observedBeforeFailure": [
+    "required native checks 31 passed/1 disabled skip/0 failed",
+    "isolated native auto checks 33 passed/13 missing-grant skips/0 failed",
+    "dedicated runtime source unchanged; fixed profile applied; strict/deep/version verified",
+    "separate source-bound overlay stage built and verified at 22:18:36.6190540Z"
+  ],
+  "sourceExplanation": {
+    "electronVersion": "42.11.4",
+    "virtualFs": "lib/node/asar-fs-wrapper.ts lines335-362 wraps fs.lstat and fs.promises.lstat",
+    "archiveRoot": "shell/common/asar/archive.cc lines324-342 reports the bare archive root as directory",
+    "rawPort": "original-fs has separately generated unpatched promises implementation",
+    "urls": [
+      "https://github.com/electron/electron/blob/v42.11.4/lib/node/asar-fs-wrapper.ts#L335",
+      "https://github.com/electron/electron/blob/v42.11.4/shell/common/asar/archive.cc#L324",
+      "https://github.com/electron/electron/blob/v42.11.4/script/node/generate_original_fs.py"
+    ]
+  },
+  "scope": "Actual helper14 source-bound staged artifact admission failed at the default_app.asar kind check. No native driver/button/input/capture/grant result exists. Helper15 raw-filesystem fix and new measured identity are pending real CI; this record admits no candidate lock.",
+  "releaseReady": false
+}

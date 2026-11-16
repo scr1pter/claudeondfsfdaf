@@ -1,0 +1,330 @@
+{
+  "schemaVersion": 1,
+  "kind": "fast-windows-x64-native-and-staged-diagnostics",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands",
+  "sourceCommit": "c5c1515b135a128a8a1ac907dbd6fe8167b673de",
+  "run": {
+    "id": 42132153760,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "createdAt": "2026-11-05T23:48:14Z",
+    "updatedAt": "2026-11-05T23:59:04Z",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42132153760"
+  },
+  "job": {
+    "id": 127611168433,
+    "name": "Windows x64 native and staged diagnostics (no release evidence)",
+    "status": "completed",
+    "conclusion": "failure",
+    "startedAt": "2026-11-05T23:48:17Z",
+    "completedAt": "2026-11-05T23:59:03Z",
+    "steps": [
+      {
+        "number": 1,
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:48:18Z",
+        "completedAt": "2026-11-05T23:48:19Z"
+      },
+      {
+        "number": 2,
+        "name": "Reject incompatible diagnostic selectors before setup",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:48:19Z",
+        "completedAt": "2026-11-05T23:48:20Z"
+      },
+      {
+        "number": 3,
+        "name": "Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:48:20Z",
+        "completedAt": "2026-11-05T23:48:33Z"
+      },
+      {
+        "number": 4,
+        "name": "Setup Node",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:48:33Z",
+        "completedAt": "2026-11-05T23:48:38Z"
+      },
+      {
+        "number": 5,
+        "name": "Setup Bun",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:48:38Z",
+        "completedAt": "2026-11-05T23:48:40Z"
+      },
+      {
+        "number": 6,
+        "name": "Configure the MSVC environment",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:48:40Z",
+        "completedAt": "2026-11-05T23:48:44Z"
+      },
+      {
+        "number": 7,
+        "name": "Install frozen dependencies without lifecycle scripts",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:48:44Z",
+        "completedAt": "2026-11-05T23:51:23Z"
+      },
+      {
+        "number": 8,
+        "name": "Build only the x64 native diagnostic artifacts",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:51:23Z",
+        "completedAt": "2026-11-05T23:55:39Z"
+      },
+      {
+        "number": 9,
+        "name": "Run Windows unit and fresh version/probe checks",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:55:39Z",
+        "completedAt": "2026-11-05T23:55:42Z"
+      },
+      {
+        "number": 10,
+        "name": "Run required Windows protocol and lifecycle checks",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:55:42Z",
+        "completedAt": "2026-11-05T23:55:55Z"
+      },
+      {
+        "number": 11,
+        "name": "Run explicitly isolated Windows scenarios",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:55:55Z",
+        "completedAt": "2026-11-05T23:56:10Z"
+      },
+      {
+        "number": 12,
+        "name": "Compile the direct Node Windows self-test diagnostic",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-05T23:56:10Z",
+        "completedAt": "2026-11-05T23:56:10Z"
+      },
+      {
+        "number": 13,
+        "name": "Diagnose the same Windows self-test with a direct Node parent",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-05T23:56:10Z",
+        "completedAt": "2026-11-05T23:56:10Z"
+      },
+      {
+        "number": 14,
+        "name": "Preserve the bounded x64 diagnostic report",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:56:10Z",
+        "completedAt": "2026-11-05T23:56:11Z"
+      },
+      {
+        "number": 15,
+        "name": "Preserve the separate direct Node diagnostic report",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-05T23:56:11Z",
+        "completedAt": "2026-11-05T23:56:11Z"
+      },
+      {
+        "number": 16,
+        "name": "Preserve the optional isolated scenario diagnostic report",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:56:11Z",
+        "completedAt": "2026-11-05T23:56:12Z"
+      },
+      {
+        "number": 17,
+        "name": "Install the pinned Electron runtime for the staged diagnostic",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:56:12Z",
+        "completedAt": "2026-11-05T23:56:17Z"
+      },
+      {
+        "number": 18,
+        "name": "Build the source-bound x64 native overlay diagnostic stage",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:56:17Z",
+        "completedAt": "2026-11-05T23:58:53Z"
+      },
+      {
+        "number": 19,
+        "name": "Run the actual medium-token staged overlay diagnostic",
+        "status": "completed",
+        "conclusion": "failure",
+        "startedAt": "2026-11-05T23:58:53Z",
+        "completedAt": "2026-11-05T23:58:58Z"
+      },
+      {
+        "number": 20,
+        "name": "Preserve the bounded staged overlay diagnostic evidence",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:58:58Z",
+        "completedAt": "2026-11-05T23:58:59Z"
+      },
+      {
+        "number": 38,
+        "name": "Post Setup Bun",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-05T23:58:59Z",
+        "completedAt": "2026-11-05T23:58:59Z"
+      },
+      {
+        "number": 39,
+        "name": "Post Setup Node",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-05T23:58:59Z",
+        "completedAt": "2026-11-05T23:58:59Z"
+      },
+      {
+        "number": 40,
+        "name": "Post Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:58:59Z",
+        "completedAt": "2026-11-05T23:59:01Z"
+      },
+      {
+        "number": 41,
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T23:59:01Z",
+        "completedAt": "2026-11-05T23:59:01Z"
+      }
+    ]
+  },
+  "artifactCatalog": [
+    {
+      "id": 13464995021,
+      "name": "computer-overlay-win32-x64-native-diagnostic-c5c1515b135a128a8a1ac907dbd6fe8167b673de-1",
+      "sizeInBytes": 4363,
+      "digest": "sha256:f9b2d4cb5d305860a01ef4259a233f775038cb3ae93bbf6ecf6f529b47006d3d",
+      "expired": false,
+      "createdAt": "2026-11-05T23:58:59Z",
+      "expiresAt": "2026-11-12T23:58:58Z",
+      "workflowRun": {
+        "id": 42132153760,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "c5c1515b135a128a8a1ac907dbd6fe8167b673de"
+      }
+    },
+    {
+      "id": 13464810805,
+      "name": "computer-helper-win32-x64-diagnostic-c5c1515b135a128a8a1ac907dbd6fe8167b673de-1",
+      "sizeInBytes": 554,
+      "digest": "sha256:1c4301a424b2b94c40d680f63d1c17cad980f8a6610af72080a43700335fb93d",
+      "expired": false,
+      "createdAt": "2026-11-05T23:56:11Z",
+      "expiresAt": "2026-11-12T23:56:11Z",
+      "workflowRun": {
+        "id": 42132153760,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "c5c1515b135a128a8a1ac907dbd6fe8167b673de"
+      }
+    },
+    {
+      "id": 13464162536,
+      "name": "computer-helper-win32-x64-isolated-diagnostic-c5c1515b135a128a8a1ac907dbd6fe8167b673de-1",
+      "sizeInBytes": 860,
+      "digest": "sha256:9a58f3a1cc7573f2257f503849881d585a9cd7ea45bcb450b2c9e48f761d4980",
+      "expired": false,
+      "createdAt": "2026-11-05T23:56:12Z",
+      "expiresAt": "2026-11-12T23:56:12Z",
+      "workflowRun": {
+        "id": 42132153760,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "c5c1515b135a128a8a1ac907dbd6fe8167b673de"
+      }
+    }
+  ],
+  "stagedArtifact": {
+    "id": 13464995021,
+    "independentlyVerifiedCatalogRunAndHead": true,
+    "independentlyVerifiedZipBytesAndDigest": true,
+    "zipBytes": 4363,
+    "zipSha256": "f9b2d4cb5d305860a01ef4259a233f775038cb3ae93bbf6ecf6f529b47006d3d",
+    "zipPath": "/workspace/attachments/7e9e53ae-cd7e-4b2d-89c3-2665955e16b1/windows-fast-staged-42132153760.zip",
+    "rawLog": {
+      "member": "_temp/computer-win32-staged-diagnostic.log",
+      "bytes": 93,
+      "sha256": "49f6cd3cc4282b3982232aa7ee3e9dbcab1d68239408f336719d5322d15bdb46",
+      "decode": "utf-8-sig",
+      "closedReceipt": {
+        "protocol": 1,
+        "cause": "missing_report",
+        "phase": "none",
+        "hint": "none"
+      }
+    },
+    "manifest": {
+      "member": "claudeondfsfdaf/claudeondfsfdaf/packages/desktop/native/out/overlay-win32/computer-overlay-smoke.json",
+      "bytes": 13215,
+      "sha256": "78a0c7b0bf0aed806b4d46fe1122d8cef28f347c6ab1053c32ee9c30d7037ad4",
+      "helperVersion": "1.0.15",
+      "protocol": {
+        "min": 1,
+        "max": 1
+      },
+      "platform": "win32",
+      "sourceDigest": "0edce66da198b0fb05fad64e8e50fb334c3c4a6525f4fa8e78f19dc807061361",
+      "filesCount": 79
+    },
+    "fullVerifiedMetadataPath": "/tmp/42132153760-staged-artifact-verified.json"
+  },
+  "interpretation": {
+    "nativeX64Build": "pass",
+    "x64UnitVersionAndTwoFreshProbes": "pass",
+    "x64RequiredProtocol": "step pass; exact core artifact admitted separately",
+    "optionalScenarios": "report rows inspected separately by capture owner; green continued-on-error step is not scenario proof",
+    "sourceBoundStageBuild": "pass",
+    "stagedLaunch": "failure before observed Electron boot; only missing_report receipt",
+    "observedBootstrapTokenReceiptCount": 0,
+    "observedPropertiesReceiptCount": 0,
+    "observedNativeStopReceiptCount": 0,
+    "observedRegionReceiptCount": 0,
+    "actualDriverTokenRoute": "unknown",
+    "actualCandidateDefaultDacl": "unknown",
+    "actualCandidateRepairExecution": "unknown",
+    "nativeOsStopCredit": false,
+    "arm64ExecutionCredit": false,
+    "releaseReadinessCredit": false
+  },
+  "readOnlySourceAudit": {
+    "concreteRegression": "New candidate pre/post checks pass a TOKEN handle to observe_token(HANDLE process), whose first operation is OpenProcessToken; three calls have the wrong handle category.",
+    "wrongCalls": ["linked candidate precheck", "restricted candidate precheck", "restricted candidate postcheck"],
+    "correctCalls": ["current bootstrap process", "actual suspended Electron child process"],
+    "independentReviewConfirmed": true,
+    "relationshipToObservedFailure": "Matches a potential pre-receipt refusal on candidate routes; actual selected route is not observed.",
+    "priorPropertiesFailureCause": "not established",
+    "proposedCorrection": "Reuse existing bounded token decoding behind a separately named token-handle reader; keep process-handle reader behavior unchanged."
+  }
+}

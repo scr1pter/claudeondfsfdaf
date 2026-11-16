@@ -1,0 +1,1296 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-11-06 00:31:26 UTC",
+  "scope": "Mac-only helper 1.0.15 locked build, both matching matrices, staged overlay admission and C4 temporary CI fixture evidence",
+  "run": {
+    "id": 42134454122,
+    "name": "test",
+    "head_sha": "c3991fb627d052103da2b9fd79c580a270d785ed",
+    "head_branch": "hands",
+    "run_attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "in_progress",
+    "conclusion": null,
+    "html_url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42134454122",
+    "created_at": "2026-11-06T00:07:05Z",
+    "updated_at": "2026-11-06T00:28:16Z"
+  },
+  "overallRunInterpretation": "The complete workflow was still in progress at this Mac-only observation. All three Mac build and matrix jobs succeeded. This record does not claim a final whole-workflow conclusion.",
+  "jobs": [
+    {
+      "id": 127619016627,
+      "name": "computer-helper / mac-build",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout repository",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Require the pinned Xcode",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Setup Node for the real Electron smoke",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Setup Bun",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install frozen dependencies without lifecycle scripts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Restore immutable helpers from an earlier attempt",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify restored macOS source and signature before native checks",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build the channel universal helper twice",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Require identical shipping bytes",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run required grant-free native checks",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Diagnose failed build-host native units separately",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run explicitly isolated privileged scenarios",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Diagnose failed optional native units separately",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Summarize native checks without payloads",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Enforce the measured production identity lock",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Require the measured macOS helper version and toolchain for this channel",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Expose the verified source digest",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Archive shipping files and native test executables separately",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload shipping helper",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload native tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Admit verified native artifacts for the independent macOS matrix",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check helper signing contracts and actual Node modules",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install the pinned Electron runtime for the unsigned signing fixture",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify unsigned helper entitlements and final fuse signatures",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify certificate signing with a temporary trusted CI identity",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Remove any interrupted signing fixture trust and keychain",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install the exact pinned Electron runtime",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run real Electron overlay properties and controller lifecycle",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Restore the immutable never-shipped overlay stage",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build the source-bound never-shipped native overlay stage",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actual isolated macOS overlay Stop and capture",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve only the small overlay manifest diagnostic",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Archive the verified never-shipped overlay stage separately",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload the immutable never-shipped overlay stage",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve measured lock candidate",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Preserve check reports",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Setup Bun",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Setup Node for the real Electron smoke",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Checkout repository",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 127627707067,
+      "name": "computer-helper / mac-test (macos-15-intel)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout repository",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Setup Bun",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install frozen dependencies without lifecycle scripts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download shipping helper",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download native test executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Restore executable modes and verify the native artifact",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run required grant-free native checks",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Diagnose failed grant-free native units separately",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run explicitly isolated matrix scenarios",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Diagnose failed optional native units separately",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Summarize matrix checks without payloads",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve check report",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Setup Bun",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Checkout repository",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 127627707146,
+      "name": "computer-helper / mac-test (macos-26)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout repository",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Setup Bun",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install frozen dependencies without lifecycle scripts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download shipping helper",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Download native test executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Restore executable modes and verify the native artifact",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run required grant-free native checks",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Diagnose failed grant-free native units separately",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run explicitly isolated matrix scenarios",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Diagnose failed optional native units separately",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Summarize matrix checks without payloads",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve check report",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Setup Bun",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Checkout repository",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 13465268108,
+      "name": "computer-helper-darwin-reports-pr-c3991fb627d052103da2b9fd79c580a270d785ed",
+      "sizeBytes": 2221,
+      "digest": "sha256:d68b62fe043b4f7939fc6bbc5aaebbbef9abb9bbe0ab7808a94d9c40794638d5",
+      "workflowRun": {
+        "id": 42134454122,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "c3991fb627d052103da2b9fd79c580a270d785ed"
+      },
+      "createdAt": "2026-11-06T00:28:05Z",
+      "localZip": "/workspace/attachments/52191108-1777-46ff-a88b-3e811082a405/github-actions-artifact-13465268108.zip",
+      "zipVerified": true,
+      "members": [
+        {
+          "name": "computer-darwin-core.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/computer-darwin-core.json",
+          "bytes": 2611,
+          "sha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "skipped": 1,
+              "failed": 0
+            },
+            "skipped": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        },
+        {
+          "name": "computer-darwin-core.json.unit-diagnostic.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/computer-darwin-core.json.unit-diagnostic.json",
+          "bytes": 438,
+          "sha256": "b881a7422f19ff2a0f3e60f748b8b050c3200c948013a6615fa63e3991472e40",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        },
+        {
+          "name": "computer-darwin-privileged.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/computer-darwin-privileged.json",
+          "bytes": 4368,
+          "sha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "auto",
+            "code": 0,
+            "counts": {
+              "passed": 33,
+              "skipped": 13,
+              "failed": 0
+            },
+            "skipped": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "native-skip"
+              },
+              {
+                "name": "privileged.capture-color-patch",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.capture-overlay-exclusion",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.ax-counter-increment",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.ax-value-set-and-readback",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.secure-field-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.tagged-click-increments",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.stale-capture-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-ax-without-pointer-or-focus",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-selection-insertion",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.helper-tagged-escape-ignored",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.foreign-escape-stops",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.owned-input-release",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              }
+            ]
+          }
+        },
+        {
+          "name": "computer-darwin-privileged.json.unit-diagnostic.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/computer-darwin-privileged.json.unit-diagnostic.json",
+          "bytes": 438,
+          "sha256": "6c491556042aa54b91bfc53dde326aacbf163b20363911b47e901130da5aba71",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 13465357958,
+      "name": "computer-overlay-darwin-manifest-diagnostic-pr-c3991fb627d052103da2b9fd79c580a270d785ed-1",
+      "sizeBytes": 6169,
+      "digest": "sha256:362c74cafefc4535559389775d6be201c5b7645ecfad880919c5986f2ddb4531",
+      "workflowRun": {
+        "id": 42134454122,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "c3991fb627d052103da2b9fd79c580a270d785ed"
+      },
+      "createdAt": "2026-11-06T00:27:43Z",
+      "localZip": "/workspace/attachments/e81f0df8-8a28-4867-b346-7c3908c7e0a9/github-actions-artifact-13465357958.zip",
+      "zipVerified": true,
+      "members": [
+        {
+          "name": "computer-overlay-smoke.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/computer-overlay-smoke.json",
+          "bytes": 70021,
+          "sha256": "f25b659028c92d5e29e4cd66888eafecff874b83b9b2392c099b6db4913b874b",
+          "manifest": {
+            "helperVersion": "1.0.15",
+            "protocol": {
+              "min": 1,
+              "max": 1
+            },
+            "platform": "darwin",
+            "sourceDigest": "8bcf9cf1b55fe144e2b9f04c4bc328cdbcf40def53642135a74741b4d0c2320d",
+            "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+            "fileCount": 276,
+            "physicalAsar": [
+              {
+                "ordinal": 264,
+                "path": "electron/Electron.app/Contents/Resources/default_app.asar",
+                "sha256": "0eb2491b0a9ac94790389d39c09dd5005c6c1f0665842943829bbd0193f6cc4f",
+                "arch": ["arm64"]
+              }
+            ],
+            "sourceDigestMeaning": "Overlay stage digest; distinct from the measured helper identity sourceDigest."
+          }
+        }
+      ]
+    },
+    {
+      "id": 13466243154,
+      "name": "computer-helper-darwin-report-macos-26-pr-c3991fb627d052103da2b9fd79c580a270d785ed",
+      "sizeBytes": 2259,
+      "digest": "sha256:b23a4d90092c1452467cb092173a67bd8d186b11e8aff3b810a35f65aa7cc3db",
+      "workflowRun": {
+        "id": 42134454122,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "c3991fb627d052103da2b9fd79c580a270d785ed"
+      },
+      "createdAt": "2026-11-06T00:29:34Z",
+      "localZip": "/workspace/attachments/12430941-2844-488f-81fc-9b95870a2b9d/github-actions-artifact-13466243154.zip",
+      "zipVerified": true,
+      "members": [
+        {
+          "name": "computer-darwin-matrix-privileged.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-26/computer-darwin-matrix-privileged.json",
+          "bytes": 4368,
+          "sha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "auto",
+            "code": 0,
+            "counts": {
+              "passed": 33,
+              "skipped": 13,
+              "failed": 0
+            },
+            "skipped": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "native-skip"
+              },
+              {
+                "name": "privileged.capture-color-patch",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.capture-overlay-exclusion",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.ax-counter-increment",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.ax-value-set-and-readback",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.secure-field-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.tagged-click-increments",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.stale-capture-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-ax-without-pointer-or-focus",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-selection-insertion",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.helper-tagged-escape-ignored",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.foreign-escape-stops",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.owned-input-release",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              }
+            ]
+          }
+        },
+        {
+          "name": "computer-darwin-matrix-privileged.json.unit-diagnostic.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-26/computer-darwin-matrix-privileged.json.unit-diagnostic.json",
+          "bytes": 438,
+          "sha256": "d8b6a8433e9bc9ca6fcf09a4f0d98faa3c433c1ba327c688e18a1dab0e0bd74c",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        },
+        {
+          "name": "computer-darwin-matrix.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-26/computer-darwin-matrix.json",
+          "bytes": 2611,
+          "sha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "skipped": 1,
+              "failed": 0
+            },
+            "skipped": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        },
+        {
+          "name": "computer-darwin-matrix.json.unit-diagnostic.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-26/computer-darwin-matrix.json.unit-diagnostic.json",
+          "bytes": 438,
+          "sha256": "e3de1a69c47fb9614ad7e71adda0dfe5965cf4b6bb72e5e0dfeaca346dadd3bd",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 13466317978,
+      "name": "computer-helper-darwin-report-macos-15-intel-pr-c3991fb627d052103da2b9fd79c580a270d785ed",
+      "sizeBytes": 2254,
+      "digest": "sha256:2b463aeb3009c60863753cf5f2cedbabd0fca48e9d8058053fc98351e2ca7f6b",
+      "workflowRun": {
+        "id": 42134454122,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "c3991fb627d052103da2b9fd79c580a270d785ed"
+      },
+      "createdAt": "2026-11-06T00:30:08Z",
+      "localZip": "/workspace/attachments/3217aec1-b584-4cb7-8278-0f42bdb8f11b/github-actions-artifact-13466317978.zip",
+      "zipVerified": true,
+      "members": [
+        {
+          "name": "computer-darwin-matrix-privileged.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-15-intel/computer-darwin-matrix-privileged.json",
+          "bytes": 4368,
+          "sha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "auto",
+            "code": 0,
+            "counts": {
+              "passed": 33,
+              "skipped": 13,
+              "failed": 0
+            },
+            "skipped": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "native-skip"
+              },
+              {
+                "name": "privileged.capture-color-patch",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.capture-overlay-exclusion",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.ax-counter-increment",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.ax-value-set-and-readback",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.secure-field-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.tagged-click-increments",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.stale-capture-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-ax-without-pointer-or-focus",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-selection-insertion",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.helper-tagged-escape-ignored",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.foreign-escape-stops",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.owned-input-release",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              }
+            ]
+          }
+        },
+        {
+          "name": "computer-darwin-matrix.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-15-intel/computer-darwin-matrix.json",
+          "bytes": 2611,
+          "sha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "skipped": 1,
+              "failed": 0
+            },
+            "skipped": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        },
+        {
+          "name": "computer-darwin-matrix-privileged.json.unit-diagnostic.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-15-intel/computer-darwin-matrix-privileged.json.unit-diagnostic.json",
+          "bytes": 438,
+          "sha256": "aa5107a6f0087a70ae0b3a8c21517003cd8a3a9ed8b956f5096cb4ca21c26def",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        },
+        {
+          "name": "computer-darwin-matrix.json.unit-diagnostic.json",
+          "localPath": "/tmp/computer-native-42134454122-macos/macos-15-intel/computer-darwin-matrix.json.unit-diagnostic.json",
+          "bytes": 438,
+          "sha256": "ce5aa25e31f15db24d4f5641b67879e007934ab2e7d8892755d1c60ee13d9f2a",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "matrixArtifactConsumption": [
+    {
+      "platform": "macos-15-intel",
+      "witnesses": [
+        "2026-11-06T00:29:26.8530300Z SHA256 digest of downloaded artifact is 629a283ac294a52ae3bbcd87f077a5a819704eb4f802af10c48f8a4137a9b872",
+        "2026-11-06T00:29:28.0103550Z SHA256 digest of downloaded artifact is b617de8c82ac161eec006509d4bce112afa3cd77bc4f33dd37873dff3a29c488",
+        "2026-11-06T00:29:46.4133210Z Computer helper checks: 31 passed, 1 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-matrix.json",
+        "2026-11-06T00:30:07.2068340Z Computer helper checks: 33 passed, 13 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-matrix-privileged.json"
+      ]
+    },
+    {
+      "platform": "macos-26",
+      "witnesses": [
+        "2026-11-06T00:29:03.2852060Z SHA256 digest of downloaded artifact is 629a283ac294a52ae3bbcd87f077a5a819704eb4f802af10c48f8a4137a9b872",
+        "2026-11-06T00:29:04.0701620Z SHA256 digest of downloaded artifact is b617de8c82ac161eec006509d4bce112afa3cd77bc4f33dd37873dff3a29c488",
+        "2026-11-06T00:29:18.1319530Z Computer helper checks: 31 passed, 1 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-matrix.json",
+        "2026-11-06T00:29:32.1729040Z Computer helper checks: 33 passed, 13 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-matrix-privileged.json"
+      ]
+    }
+  ],
+  "runtimeReceipts": [
+    {
+      "at": "2026-11-06T00:26:37.4683720Z",
+      "event": "computer-smoke-asar",
+      "receipt": {
+        "protocol": 1,
+        "rawRegular": true,
+        "rawBounded": true,
+        "rawBytes": 110862,
+        "rawRead": true,
+        "virtualDirectory": true,
+        "virtualRead": false
+      }
+    },
+    {
+      "at": "2026-11-06T00:26:37.6242300Z",
+      "event": "computer-smoke",
+      "receipt": {
+        "protocol": 1,
+        "platform": "darwin",
+        "electron": "42.11.4",
+        "checks": [
+          {
+            "name": "overlay-count",
+            "ok": true
+          },
+          {
+            "name": "overlay-bounds",
+            "ok": true
+          },
+          {
+            "name": "overlay-window-properties",
+            "ok": true
+          },
+          {
+            "name": "overlay-stack-level",
+            "ok": true
+          },
+          {
+            "name": "overlay-ignore-pointer",
+            "ok": true
+          },
+          {
+            "name": "overlay-workspaces",
+            "ok": true
+          },
+          {
+            "name": "overlay-content-protection",
+            "ok": false,
+            "skipped": true,
+            "reason": "not_applicable"
+          },
+          {
+            "name": "overlay-banner-copy",
+            "ok": true
+          },
+          {
+            "name": "overlay-sandbox",
+            "ok": true
+          },
+          {
+            "name": "overlay-ipc-rejected",
+            "ok": true
+          },
+          {
+            "name": "transparent-theme-switch",
+            "ok": true
+          },
+          {
+            "name": "window-all-closed",
+            "ok": true
+          },
+          {
+            "name": "focus-preserved",
+            "ok": true
+          },
+          {
+            "name": "controller-stop-cancels-helper",
+            "ok": true
+          },
+          {
+            "name": "heartbeat-loss-removes-overlays",
+            "ok": true
+          },
+          {
+            "name": "helper-crash-removes-overlays",
+            "ok": true
+          },
+          {
+            "name": "native-os-stop",
+            "ok": false,
+            "skipped": true,
+            "reason": "native_harness_unavailable"
+          },
+          {
+            "name": "native-capture-exclusion",
+            "ok": false,
+            "skipped": true,
+            "reason": "native_harness_unavailable"
+          }
+        ]
+      },
+      "derivedCounts": {
+        "passed": 15,
+        "skipped": 3,
+        "failed": 0
+      }
+    },
+    {
+      "at": "2026-11-06T00:26:46.7779570Z",
+      "event": "overlay-electron-runtime-prepared",
+      "receipt": {
+        "mode": "c4-deep-ad-hoc",
+        "sourceBytesUnchanged": true,
+        "nestedBytePolicy": "re-signed-not-preserved",
+        "nestedBytesChanged": true,
+        "nestedFiles": 267,
+        "helperExecutables": 4,
+        "profileSha256": "16b05c93e71cebb2b645afa60a55a0dd29d022702d9c95c7076c7fd51e5d6a5a",
+        "profileApplied": true,
+        "finalMetadata": {
+          "identifier": "com.github.Electron",
+          "flags": 65538,
+          "runtime": "26.2.0",
+          "entitlements": "a8a40d1b00745a8b4ffada49b4f10d548e2fd2cbf685ff72785f0d95c2deb5d8"
+        },
+        "strictVerified": true,
+        "deepVerified": true,
+        "versionVerified": true
+      }
+    },
+    {
+      "at": "2026-11-06T00:27:39.5973480Z",
+      "event": "computer-smoke-asar",
+      "receipt": {
+        "protocol": 1,
+        "rawRegular": true,
+        "rawBounded": true,
+        "rawBytes": 110862,
+        "rawRead": true,
+        "virtualDirectory": true,
+        "virtualRead": false
+      }
+    },
+    {
+      "at": "2026-11-06T00:27:41.1152490Z",
+      "event": "computer-smoke-native",
+      "receipt": {
+        "protocol": 1,
+        "kind": "result",
+        "phase": "exit",
+        "stop": {
+          "ok": false,
+          "skipped": true,
+          "reason": "screen_denied"
+        },
+        "capture": {
+          "ok": false,
+          "skipped": true,
+          "reason": "screen_denied"
+        },
+        "exitCode": 77
+      }
+    },
+    {
+      "at": "2026-11-06T00:27:41.3176650Z",
+      "event": "computer-smoke",
+      "receipt": {
+        "protocol": 1,
+        "platform": "darwin",
+        "electron": "42.11.4",
+        "checks": [
+          {
+            "name": "overlay-count",
+            "ok": true
+          },
+          {
+            "name": "overlay-bounds",
+            "ok": true
+          },
+          {
+            "name": "overlay-window-properties",
+            "ok": true
+          },
+          {
+            "name": "overlay-stack-level",
+            "ok": true
+          },
+          {
+            "name": "overlay-ignore-pointer",
+            "ok": true
+          },
+          {
+            "name": "overlay-workspaces",
+            "ok": true
+          },
+          {
+            "name": "overlay-content-protection",
+            "ok": false,
+            "skipped": true,
+            "reason": "not_applicable"
+          },
+          {
+            "name": "overlay-banner-copy",
+            "ok": true
+          },
+          {
+            "name": "overlay-sandbox",
+            "ok": true
+          },
+          {
+            "name": "overlay-ipc-rejected",
+            "ok": true
+          },
+          {
+            "name": "transparent-theme-switch",
+            "ok": true
+          },
+          {
+            "name": "window-all-closed",
+            "ok": true
+          },
+          {
+            "name": "focus-preserved",
+            "ok": true
+          },
+          {
+            "name": "controller-stop-cancels-helper",
+            "ok": true
+          },
+          {
+            "name": "heartbeat-loss-removes-overlays",
+            "ok": true
+          },
+          {
+            "name": "helper-crash-removes-overlays",
+            "ok": true
+          },
+          {
+            "name": "native-os-stop",
+            "ok": false,
+            "skipped": true,
+            "reason": "native_grants_unavailable"
+          },
+          {
+            "name": "native-capture-exclusion",
+            "ok": false,
+            "skipped": true,
+            "reason": "native_grants_unavailable"
+          }
+        ]
+      },
+      "derivedCounts": {
+        "passed": 15,
+        "skipped": 3,
+        "failed": 0
+      }
+    }
+  ],
+  "c4": {
+    "scope": "Unsigned/ad-hoc and temporary trusted CI certificate fixtures only. No production signing, notarization, release or granted-owner evidence.",
+    "witnesses": [
+      "2026-11-06T00:26:12.5951020Z certificate-fixture certificate-witness=recorded",
+      "2026-11-06T00:26:12.7568830Z certificate-fixture search-list=prepared",
+      "2026-11-06T00:26:13.6264550Z certificate-fixture matching=1 valid=1 trust=unknown",
+      "2026-11-06T00:26:23.2718290Z signing-cleanup identity-inventory count=1 fixture-present=true scope=owned-keychain",
+      "2026-11-06T00:26:23.2732950Z signing-cleanup effective-trust=revoked deny-metadata=retained-until-disposable-runner-destruction",
+      "2026-11-06T00:26:23.2734810Z signing-cleanup stage=revoke result=verified",
+      "2026-11-06T00:26:23.3226850Z signing-cleanup stage=restore result=verified",
+      "2026-11-06T00:26:23.3932580Z signing-cleanup owned-keychain=deleted exact-identity=absent-from-restored-search-list",
+      "2026-11-06T00:26:23.3934230Z signing-cleanup stage=keychain result=verified",
+      "2026-11-06T00:26:23.4323380Z \u001b[36;1mbash \"$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-cleanup.sh\"\u001b[0m"
+    ],
+    "cleanup": "Revoke and restore verified; fixture-owned keychain deleted and exact identity absent from restored search list. Disposable runner deny metadata retained until runner destruction."
+  },
+  "stageWitnesses": [
+    "2026-11-06T00:27:23.1146340Z Built and verified the separate source-bound computer overlay stage.",
+    "2026-11-06T00:27:52.0711320Z Archived the separate source-bound computer overlay stage."
+  ],
+  "interpretation": {
+    "rawFilesystem": "Generic and source-bound staged Electron proved the physical ASAR is a bounded regular readable file through original-fs while virtual fs reports its root as a directory. Artifact admission reached the actual native driver.",
+    "nativeDriver": "The staged driver exited 77, with stop and capture skipped for screen_denied. Staged overlay native Stop and capture remain native_grants_unavailable skips. No granted Stop or capture pass is claimed.",
+    "releaseReady": false
+  },
+  "validationMethod": "Read-only API; exact API SHA256 and size validation of four small ZIPs; safe unique basenames; raw JSON byte verification and derived counts. No local Bun, tests, native, Electron, CI dispatch, source edits or sourceDigest recomputation.",
+  "stageArtifact": {
+    "id": 13464959187,
+    "name": "computer-overlay-smoke-darwin-pr-c3991fb627d052103da2b9fd79c580a270d785ed",
+    "sizeBytes": 125760693,
+    "digest": "sha256:90ae87b3b57984f100954bff8381397b27b9bb41288f3badf7e670aa32959f60",
+    "workflowRun": {
+      "id": 42134454122,
+      "repository_id": 1322376900,
+      "head_repository_id": 1322376900,
+      "head_branch": "hands",
+      "head_sha": "c3991fb627d052103da2b9fd79c580a270d785ed"
+    },
+    "verification": "API metadata only. This 125760693-byte ZIP was not downloaded by this auditor. Actual build and archive verification steps succeeded in CI."
+  },
+  "sourceIdentityLock": {
+    "sourceHead": "c3991fb627d052103da2b9fd79c580a270d785ed",
+    "path": "packages/desktop/native/computer-helper/macos/identity.lock.json",
+    "rawBytes": 441,
+    "rawSha256": "06198d7fba8dbc3e98784258caa46c38714e9aacaab95e5359167e730404294f",
+    "value": {
+      "enforce": true,
+      "helperVersion": "1.0.15",
+      "sourceDigest": "55d3ca43a0ad47b925ae5a513c98aba17be9abcd02a910ee86b0c82aa19162a3",
+      "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+      "cdhash": {
+        "x64": "12b404c0476ff83731fdeab6e81f4b123eff39ce",
+        "arm64": "b5661d181baca554ca938aa686a1dbbe12293825"
+      }
+    },
+    "actualValidation": "Enforce the measured production identity lock and measured helper version/toolchain steps both succeeded in mac-build."
+  }
+}

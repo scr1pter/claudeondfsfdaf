@@ -4,8 +4,11 @@ import { Icon } from "@vectordevai/ui/icon"
 import { Tag } from "@vectordevai/ui/v2/badge-v2"
 import { KeybindV2 } from "@vectordevai/ui/v2/keybind-v2"
 import { getDirectory, getFilename } from "@vectordevai/core/util/path"
+import type { ComputerMention } from "@/features/computer/mention"
 
 export type AtOption =
+  | ComputerMention.FeatureOption
+  | ComputerMention.AppOption
   | { type: "agent"; name: string; display: string; description?: string }
   | {
       type: "resource"
@@ -52,19 +55,18 @@ type PromptPopoverProps = {
 
 function VectorSubagentMark() {
   return (
-    <svg
-      viewBox="0 0 16 16"
-      class="size-4 shrink-0 text-icon-info-active"
-      fill="none"
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 16 16" class="size-4 shrink-0 text-icon-info-active" fill="none" aria-hidden="true">
       <path
         d="M8 2.25 10.15 4.4 8 6.55 5.85 4.4 8 2.25ZM3.1 8l1.7-1.7L6.5 8 4.8 9.7 3.1 8Zm6.4 0 1.7-1.7L12.9 8l-1.7 1.7L9.5 8ZM8 9.45l2.15 2.15L8 13.75 5.85 11.6 8 9.45Z"
         stroke="currentColor"
         stroke-width="1.15"
         stroke-linejoin="round"
       />
-      <path d="M6.15 5.35 5.1 6.65m4.75-1.3 1.05 1.3m0 2.7-1.05 1.3m-3.7 0L5.1 9.35" stroke="currentColor" stroke-width="1" />
+      <path
+        d="M6.15 5.35 5.1 6.65m4.75-1.3 1.05 1.3m0 2.7-1.05 1.3m-3.7 0L5.1 9.35"
+        stroke="currentColor"
+        stroke-width="1"
+      />
     </svg>
   )
 }
@@ -104,6 +106,62 @@ export const PromptPopover: Component<PromptPopoverProps> = (props) => {
               <For each={props.atFlat.slice(0, 10)}>
                 {(item) => {
                   const key = props.atKey(item)
+
+                  if (item.type === "computer" || item.type === "app") {
+                    // A company-denied app is shown dimmed and can never be picked, by pointer or by keyboard.
+                    const disabled = item.type === "app" && !!item.disabled
+                    return (
+                      <button
+                        data-computer-row={item.type === "computer" ? "feature" : "app"}
+                        class="w-full flex items-center gap-x-2 px-2 py-0.5"
+                        classList={{
+                          "rounded-[4px]": props.newLayoutDesigns,
+                          "rounded-md": !props.newLayoutDesigns,
+                          "opacity-50 cursor-not-allowed": disabled,
+                          "bg-v2-overlay-simple-overlay-hover": props.newLayoutDesigns && props.atActive === key,
+                          "bg-surface-raised-base-hover": !props.newLayoutDesigns && props.atActive === key,
+                        }}
+                        disabled={disabled}
+                        aria-disabled={disabled}
+                        onClick={() => {
+                          if (!disabled) props.onAtSelect(item)
+                        }}
+                        onPointerMove={() => props.setAtActive(key)}
+                      >
+                        <Show
+                          when={item.type === "app" ? item.icon : undefined}
+                          fallback={<Icon name="hands" size="small" class="shrink-0" />}
+                        >
+                          {(icon) => <img src={icon()} alt="" class="size-4 shrink-0 rounded-[3px]" />}
+                        </Show>
+                        <span
+                          class="whitespace-nowrap shrink-0"
+                          classList={{
+                            "text-[13px] leading-[calc(var(--font-size-base)*1.8)] tracking-[-0.04px] [font-weight:440]":
+                              props.newLayoutDesigns,
+                            "text-v2-text-text-base": props.newLayoutDesigns,
+                            "text-14-regular": !props.newLayoutDesigns,
+                            "text-text-strong": !props.newLayoutDesigns,
+                          }}
+                        >
+                          {item.display}
+                        </span>
+                        <Show when={item.type === "computer" ? item.description : item.disabled}>
+                          {(description) => (
+                            <span
+                              class="min-w-0 truncate text-left text-[12px]"
+                              classList={{
+                                "text-v2-text-text-muted": props.newLayoutDesigns,
+                                "text-text-weak": !props.newLayoutDesigns,
+                              }}
+                            >
+                              {props.t(description())}
+                            </span>
+                          )}
+                        </Show>
+                      </button>
+                    )
+                  }
 
                   if (item.type === "agent") {
                     return (

@@ -1,5 +1,6 @@
 import { useNavigate } from "@solidjs/router"
 import { createSimpleContext } from "@vectordevai/ui/context"
+import { useDialog } from "@vectordevai/ui/context/dialog"
 import {
   createEffect,
   createMemo,
@@ -13,7 +14,7 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import { sendFollowupDraft, type FollowupDraft } from "@/components/prompt-input/submit"
+import { sendFollowupDraft, showComputerRefusal, type FollowupDraft } from "@/components/prompt-input/submit"
 import { useGlobal } from "@/context/global"
 import { directoryKey } from "@/context/global-sync/utils"
 import { useLanguage } from "@/context/language"
@@ -22,6 +23,8 @@ import { ServerConnection, useServer } from "@/context/server"
 import { ServerSDKProvider, useServerSDK } from "@/context/server-sdk"
 import { ServerSyncProvider, useServerSync, type ServerSync } from "@/context/server-sync"
 import type { DirectorySync } from "@/context/sync"
+import { openComputerSetup } from "@/features/computer/open-setup"
+import { ComputerSendGate } from "@/features/computer/send-gate"
 import { sessionPermissionRequest, sessionQuestionRequest } from "@/pages/session/composer/session-request-tree"
 import { Identifier } from "@/utils/id"
 import { formatServerError, isLocalSessionNotFoundError, isSessionNotFoundError } from "@/utils/server-errors"
@@ -281,6 +284,7 @@ export function createFollowupDrain(input: {
  */
 export function sendQueued(input: {
   client: Parameters<typeof sendFollowupDraft>[0]["client"]
+  computer: Parameters<typeof sendFollowupDraft>[0]["computer"]
   sync: DirectorySync
   serverSync: ServerSync
   item: FollowupItem
@@ -289,6 +293,7 @@ export function sendQueued(input: {
   const steering = input.serverSync.session.data.session_working(input.item.sessionID)
   return sendFollowupDraft({
     client: input.client,
+    computer: input.computer,
     sync: input.sync,
     serverSync: input.serverSync,
     draft: input.item,
@@ -502,6 +507,8 @@ function ServerDrain() {
   const global = useGlobal()
   const followups = useFollowups()
   const language = useLanguage()
+  const platform = usePlatform()
+  const dialog = useDialog()
   const navigate = useNavigate()
   const server = untrack(() => ServerConnection.key(serverSDK().server))
 
@@ -538,6 +545,7 @@ function ServerDrain() {
       if (!sync) return Promise.reject(new Error("The session's folder is not loaded"))
       return sendQueued({
         client: serverSDK().createClient({ directory: item.sessionDirectory, throwOnError: true }),
+        computer: platform.computer,
         sync,
         serverSync: serverSync(),
         item,
@@ -557,6 +565,11 @@ function ServerDrain() {
     notFound: (error, sessionID) =>
       isSessionNotFoundError(error, sessionID) || isLocalSessionNotFoundError(error, sessionID),
     failed(item, error) {
+      if (error instanceof ComputerSendGate.Refusal) {
+        const computer = platform.computer
+        showComputerRefusal(error, language.t, computer ? () => void openComputerSetup(dialog, computer) : undefined)
+        return
+      }
       showToast({
         variant: "error",
         title: language.t("followup.toast.failed.title"),

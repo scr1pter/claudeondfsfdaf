@@ -431,6 +431,39 @@ describe("vector review: results and exit codes", () => {
     }),
   )
 
+  it.live("asks the resolver about retired models only when review.json opts into model evidence (VS-07)", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      const resolving = () => {
+        const asked: ReviewModel.ResolveInput[] = []
+        const resolveModel: LocalReviewDeps["resolveModel"] = (input) =>
+          Effect.sync(() => {
+            asked.push(input)
+            return model
+          })
+        return { asked, run: fake({ resolveModel }) }
+      }
+
+      // Off by default: the resolver is asked exactly as before, and the review runs on the model it returns.
+      yield* write(repo.dir, { ".vector/review.json": JSON.stringify({ triageModel: "lmstudio/cheap" }) })
+      const today = resolving()
+      yield* review({ directory: repo.dir, model: "lmstudio/test-model", full: true }, today.run.deps)
+      expect(today.asked.map((input) => Object.hasOwn(input, "evidence"))).toEqual([false, false])
+      expect(today.asked.map((input) => input.flag ?? input.exact)).toEqual(["lmstudio/test-model", "lmstudio/cheap"])
+
+      yield* write(repo.dir, {
+        ".vector/review.json": JSON.stringify({ triageModel: "lmstudio/cheap", modelEvidence: "warn" }),
+      })
+      const warn = resolving()
+      // A full review: the first one is the last local review of this head, so an incremental one has nothing to do.
+      yield* review({ directory: repo.dir, model: "lmstudio/test-model", full: true }, warn.run.deps)
+      expect(warn.asked.map((input) => input.evidence)).toEqual([true, true])
+      expect(warn.asked.map((input) => input.flag ?? input.exact)).toEqual(["lmstudio/test-model", "lmstudio/cheap"])
+      expect(warn.run.calls[0]!.config.modelEvidence).toBe("warn")
+      expect(today.run.calls[0]!.config.modelEvidence).toBe("off")
+    }),
+  )
+
   it.live("a review that cannot run exits 2 with the reason", () =>
     Effect.gen(function* () {
       const repo = yield* branched

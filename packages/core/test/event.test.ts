@@ -1154,6 +1154,124 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("accepts screenshot-free computer retries without rewriting local media or ignoring other changes", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      for (const tool of ["computer", "read"]) {
+        const sessionID = Session.ID.create()
+        const messageID = SessionV1.MessageID.ascending()
+        const part = {
+          id: SessionV1.PartID.ascending(),
+          sessionID,
+          messageID,
+          type: "tool",
+          tool,
+          callID: `call_${tool}`,
+          state: {
+            status: "completed",
+            input: { action: "screenshot" },
+            output: "Visible screen text",
+            title: "Result",
+            metadata: {},
+            time: { start: 1, end: 2 },
+            attachments: [
+              {
+                id: SessionV1.PartID.ascending(),
+                sessionID,
+                messageID,
+                type: "file",
+                mime: "image/png",
+                url: "data:image/png;base64,c2NyZWVu",
+              },
+            ],
+          },
+        }
+        const original = {
+          id: EventV2.ID.create(),
+          type: EventV2.versionedType(SessionV1.Event.PartUpdated.type, 1),
+          seq: 0,
+          aggregateID: sessionID,
+          data: { sessionID, time: 2, part },
+        }
+        yield* events.replay(original)
+        const { attachments, ...state } = part.state
+        const redacted = { ...original, data: { ...original.data, part: { ...part, state } } }
+        const retry = yield* events.replay(redacted).pipe(Effect.exit)
+        expect(Exit.isSuccess(retry)).toBe(tool === "computer")
+        const changed = yield* events
+          .replay({
+            ...redacted,
+            data: { ...redacted.data, part: { ...redacted.data.part, state: { ...state, output: "Changed text" } } },
+          })
+          .pipe(Effect.exit)
+        expect(String(changed)).toContain("Replay diverged")
+        const stored = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.id, original.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(stored?.data).toEqual(original.data)
+      }
+    }),
+  )
+
+  it.effect("resolves native computer retry media from the durable call while preserving ordinary tool files", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      for (const tool of ["computer", "read"]) {
+        const sessionID = Session.ID.create()
+        const assistantMessageID = SessionV1.MessageID.ascending()
+        const callID = `native_${tool}`
+        yield* events.replay({
+          id: EventV2.ID.create(),
+          type: EventV2.versionedType(SessionEvent.Tool.Input.Started.type, 1),
+          seq: 0,
+          aggregateID: sessionID,
+          data: { sessionID, timestamp: 1, assistantMessageID, callID, name: tool },
+        })
+        const original = {
+          id: EventV2.ID.create(),
+          type: EventV2.versionedType(SessionEvent.Tool.Success.type, 1),
+          seq: 1,
+          aggregateID: sessionID,
+          data: {
+            sessionID,
+            timestamp: 2,
+            assistantMessageID,
+            callID,
+            content: [
+              { type: "text", text: "Visible screen text" },
+              { type: "file", uri: "data:image/png;base64,c2NyZWVu", mime: "image/png" },
+            ],
+            structured: { actions: 1 },
+            provider: { executed: false },
+          },
+        }
+        yield* events.replay(original)
+        const redacted = { ...original, data: { ...original.data, content: [original.data.content[0]] } }
+        const retry = yield* events.replay(redacted).pipe(Effect.exit)
+        expect(Exit.isSuccess(retry)).toBe(tool === "computer")
+        const changed = yield* events
+          .replay({
+            ...redacted,
+            data: { ...redacted.data, structured: { actions: 2 } },
+          })
+          .pipe(Effect.exit)
+        expect(String(changed)).toContain("Replay diverged")
+        const stored = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.id, original.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(stored?.data).toEqual(original.data)
+      }
+    }),
+  )
+
   it.effect("rejects an event ID reused at another aggregate position", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

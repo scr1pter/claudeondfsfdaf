@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Global } from "../global"
+import { ProcessIsolation } from "../process-isolation"
 
 const registered = new Set<string>()
 type Import = { s: number; e: number; d: number; n?: string; call?: number }
@@ -13,6 +14,7 @@ type Module = { source: string; imports: Import[]; targets: Map<number, string> 
 // Resolve compatibility imports in an isolated module graph, never in the user's package tree.
 // Existing packages and their export maps remain authoritative for every import that resolves.
 export async function prepare(entry: string) {
+  ProcessIsolation.assertExternalCodeAllowed()
   // The rewrite needs Bun's loader: its resolver, Bun.plugin virtual modules and import.meta.require. The desktop
   // engine runs on Node.js, so it imports the plugin in place, and an SDK import the plugin cannot resolve fails with
   // Node's module-not-found error instead of reaching the bundled SDK.
@@ -103,6 +105,7 @@ function resolve(specifier: string, parent: string) {
 }
 
 function resolveImport(specifier: string, parent: string | URL) {
+  ProcessIsolation.assertExternalCodeAllowed()
   // Bun's package resolver needs a native parent path for Windows drives and percent-escaped URLs.
   const source = typeof parent === "string" ? parent : parent.href
   const file = source.startsWith("file:") ? fileURLToPath(source) : source
@@ -191,6 +194,7 @@ function moduleImports(source: string, file: string, parse: typeof import("@babe
 }
 
 async function load(parent: string, specifier: string, options?: ImportCallOptions) {
+  ProcessIsolation.assertExternalCodeAllowed()
   const target = (() => {
     try {
       return resolveImport(`${specifier}`, parent)
@@ -204,5 +208,9 @@ async function load(parent: string, specifier: string, options?: ImportCallOptio
     target.startsWith("file:") &&
     /\.[cm]?[jt]sx?$/.test(fileURLToPath(target)) &&
     !fileURLToPath(target).split(path.sep).includes("node_modules")
-  return import(local ? await prepare(target) : target, options)
+  const entry = local ? await prepare(target) : target
+  ProcessIsolation.assertExternalCodeAllowed()
+  const mod = await import(entry, options)
+  ProcessIsolation.assertExternalCodeAllowed()
+  return mod
 }

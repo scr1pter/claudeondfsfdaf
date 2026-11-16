@@ -1,5 +1,6 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Config } from "@/config/config"
 import { ConfigAgent } from "@/config/agent"
 import { serviceUse } from "@vectordevai/core/effect/service-use"
@@ -15,6 +16,7 @@ import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
+import PROMPT_CONNECT_FIX from "./prompt/connect-fix.txt"
 import PROMPT_DEBUG from "./prompt/debug.txt"
 import PROMPT_DISTILL from "./prompt/distill.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
@@ -26,6 +28,7 @@ import PROMPT_RESEARCH from "./prompt/research.txt"
 import PROMPT_RESEARCH_JUDGE from "./prompt/research-judge.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_REVIEW from "./prompt/review.txt"
+import PROMPT_VECTORSCOPE from "./prompt/vectorscope.txt"
 import PROMPT_SECURITY from "./prompt/security.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TEST from "./prompt/test.txt"
@@ -39,6 +42,7 @@ import { Plugin } from "@/plugin"
 import { Skill } from "../skill"
 import { Effect, Context, Layer, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import { AbsolutePath, type DeepMutable } from "@vectordevai/core/schema"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -49,6 +53,8 @@ import { Location } from "@vectordevai/core/location"
 import { PluginV2 } from "@vectordevai/core/plugin"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { isNativeSpecialist } from "@vectordevai/core/agent/specialists"
+import { VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
+import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -83,6 +89,28 @@ const CLOUD_MUTATIONS = [
   "vector_cloud_environment",
   "vector_cloud_hosting",
 ]
+
+// The computer tool's permissions (tool id `computer`). A person answers each one whenever it is raised
+// (PermissionPolicy.requiresApproval), and the rulesets say so too: they ask by default, and no allow turns one into
+// an allow (see the pass after the config loop). A deny still wins.
+const COMPUTER_ASKS = {
+  [PermissionPolicy.COMPUTER_APP]: "ask",
+  [PermissionPolicy.COMPUTER_OBSERVE]: "ask",
+  [PermissionPolicy.COMPUTER_INTERACT]: "ask",
+  [PermissionPolicy.COMPUTER_SENSITIVE]: "ask",
+} as const satisfies Record<string, "ask">
+const COMPUTER_PERMISSIONS = Object.keys(COMPUTER_ASKS)
+// Plan mode only observes (section 1.3): `computer_app` still asks, at observe level, and every interacting or
+// sensitive step is denied. The computer tool also refuses interacting actions in plan mode before it asks.
+const PLAN_COMPUTER = {
+  [PermissionPolicy.COMPUTER_INTERACT]: "deny",
+  [PermissionPolicy.COMPUTER_SENSITIVE]: "deny",
+} as const satisfies Record<string, "deny">
+
+/** The computer asks an agent with its own tool list gets: all four when the list includes `computer`, else none. */
+export function computerAsks(tools: readonly string[]): Partial<typeof COMPUTER_ASKS> {
+  return tools.includes("computer") ? { ...COMPUTER_ASKS } : {}
+}
 
 // Deep research's agents (section 5.3): the lead, its web workers and the judge that checks the lead's citations.
 export const RESEARCH = "research"
@@ -119,7 +147,16 @@ const RESEARCH_AGENTS: Record<string, { readonly tools: readonly string[]; reado
 }
 // The built-in agents that never edit files (5.F.4): refused task isolation, and never writers in task claims. Names
 // match exactly; a user's own agent is never read-only because its name starts with one of these.
-const READ_ONLY = new Set(["explore", "review", "judge", "security", RESEARCH, RESEARCHER, RESEARCH_JUDGE])
+const READ_ONLY = new Set([
+  "explore",
+  "review",
+  "judge",
+  "security",
+  VECTORSCOPE_AGENT,
+  RESEARCH,
+  RESEARCHER,
+  RESEARCH_JUDGE,
+])
 export function readOnly(agent: string) {
   return READ_ONLY.has(agent)
 }
@@ -188,6 +225,11 @@ const GeneratedAgent = Schema.Struct({
   systemPrompt: Schema.String,
 })
 
+export interface HelperOptions {
+  /** The owning review service supplied the pinned instructions; no ambient prompt override may accompany them. */
+  readonly reviewedPrompt?: true
+}
+
 export interface Interface {
   readonly get: (agent: string) => Effect.Effect<Info>
   /**
@@ -196,7 +238,7 @@ export interface Interface {
    * reach it, but the helpers that run as one keep it: only this finds it, so every lookup of a helper session's agent
    * goes through here.
    */
-  readonly helper: (agent: string) => Effect.Effect<Info>
+  readonly helper: (agent: string, options?: HelperOptions) => Effect.Effect<Info>
   readonly list: () => Effect.Effect<Info[]>
   readonly defaultInfo: () => Effect.Effect<Info>
   readonly defaultAgent: () => Effect.Effect<string>
@@ -228,6 +270,8 @@ const layer = Layer.effect(
     const skill = yield* Skill.Service
     const provider = yield* Provider.Service
     const locations = yield* LocationServiceMap.Service
+    // Connected tools' fix child exists only while connected tools are on (VECTOR_EXPERIMENTAL_CONNECT).
+    const connect = (yield* RuntimeFlags.Service).experimentalConnect
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
@@ -292,6 +336,8 @@ const layer = Layer.effect(
           learned_skill: "ask",
           workflow: "ask",
           unsandboxed_shell: "ask",
+          // A terminal started while the shell sandbox is on runs outside it: asked every time (PermissionPolicy).
+          unsandboxed_terminal: "ask",
           // Terminals the agent did not open (the user's, or another session's) ask before the agent reads, waits
           // on, types into, resizes or closes them, and a submitted line also goes through the shell's own rules.
           // Its own terminals ask nothing to read.
@@ -300,6 +346,7 @@ const layer = Layer.effect(
           browser_external: "ask",
           browser_interact: "ask",
           browser_sensitive: "ask",
+          ...COMPUTER_ASKS,
           webfetch: "ask",
           private_network: "ask",
           websearch: "ask",
@@ -311,6 +358,8 @@ const layer = Layer.effect(
           vector_cloud_database: "ask",
           vector_cloud_environment: "ask",
           vector_cloud_hosting: "ask",
+          connect_write: "ask",
+          connect_model: "ask",
           external_directory: {
             "*": "ask",
             ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
@@ -348,6 +397,7 @@ const layer = Layer.effect(
           review: ["webfetch", "websearch"],
           judge: ["browser"],
           security: ["webfetch", "websearch"],
+          [VECTORSCOPE_AGENT]: [],
         }
         const verificationCommands = Object.entries(readonlyVerificationBash)
           .filter((entry) => entry[1] !== "deny")
@@ -359,6 +409,7 @@ const layer = Layer.effect(
             Permission.fromConfig({
               "*": "deny",
               ...Object.fromEntries(tools.map((tool) => [tool, "allow" as const])),
+              ...computerAsks(tools),
               read: readDefaults,
               bash: readonlyVerificationBash,
               external_directory: readonlyExternalDirectory,
@@ -409,6 +460,7 @@ const layer = Layer.effect(
                     browser_sensitive: "ask" as const,
                   }
                 : {}),
+              ...computerAsks(tools),
               ...(subagents.length
                 ? {
                     task: {
@@ -442,6 +494,13 @@ const layer = Layer.effect(
           )
         }
 
+        // The connected-tools fix child (CW-07): the defaults, the user's rules, then its fixed part, which comes last.
+        // `requester` is the build agent's rules (final once the config below is applied): the child reads no more.
+        const connectFix = (rules: PermissionV1.Rule[], requester: PermissionV1.Rule[]) =>
+          Permission.merge(defaults, rules, ConnectPolicy.fixAgentRules({ user: rules, requester }))
+        const connectFixDescription =
+          "Fixes chosen VectorScope findings in its own isolated worktree, for connected tools."
+
         const agents: Record<string, Info> = {
           build: {
             name: "build",
@@ -467,6 +526,7 @@ const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 plan_exit: "allow",
+                ...PLAN_COMPUTER,
                 task: {
                   general: "deny",
                   debug: "deny",
@@ -532,6 +592,23 @@ const layer = Layer.effect(
             mode: "subagent",
             native: true,
           },
+          // Fixes chosen VectorScope findings in its own worktree, for connected tools. Hidden and native, so only
+          // connect launches it (the task tool refuses a model); it is rebuilt after the config below. With connected
+          // tools off it is not registered at all, so no agent list shows it.
+          ...(connect
+            ? {
+                [ConnectPolicy.FIX_AGENT]: {
+                  name: ConnectPolicy.FIX_AGENT,
+                  description: connectFixDescription,
+                  permission: connectFix(user, Permission.merge(defaults, user)),
+                  prompt: PROMPT_CONNECT_FIX,
+                  options: {},
+                  mode: "subagent" as const,
+                  native: true,
+                  hidden: true,
+                } satisfies Info,
+              }
+            : {}),
           explore: {
             name: "explore",
             permission: readonlySpecialist("explore", user),
@@ -740,6 +817,9 @@ const layer = Layer.effect(
         // A Subagent specialist turned off still takes its config, for the copy its helpers keep (below).
         const off = new Set<string>()
         for (const [key, value] of Object.entries(cfg.agent ?? {})) {
+          // This entry configures a service helper, never a selectable or
+          // task-launchable agent. Its model policy is resolved separately.
+          if (key === VECTORSCOPE_AGENT) continue
           // A markdown agent with a reserved name fails to load (ConfigAgent); one from a config file is left out.
           if (ConfigAgent.RESERVED.includes(key)) {
             yield* Effect.logWarning(`agent "${key}" is ignored: that name is reserved by Vector`)
@@ -812,6 +892,41 @@ const layer = Layer.effect(
             ...userCeiling(name),
           ])
         }
+        // No config unhides the fix child or puts a rule after its fixed part; its own rules and the ceiling only narrow.
+        // Nor does any config pick its model, prompt, steps or options (a trusted project's included): it runs on its
+        // parent's model, as the task tool picks it, under the prompt that frames the findings as data. It reads as
+        // the build agent does, now that the build agent's own config and ceiling are applied.
+        // With connected tools off the name stays Vector's: a config agent of that name is dropped, not created.
+        if (!connect) delete agents[ConnectPolicy.FIX_AGENT]
+        if (agents[ConnectPolicy.FIX_AGENT])
+          agents[ConnectPolicy.FIX_AGENT] = {
+            name: ConnectPolicy.FIX_AGENT,
+            description: connectFixDescription,
+            permission: connectFix(
+              [
+                ...user,
+                ...Permission.fromConfig(cfg.agent?.[ConnectPolicy.FIX_AGENT]?.permission ?? {}),
+                ...userCeiling(ConnectPolicy.FIX_AGENT),
+              ],
+              agents.build?.permission ?? Permission.merge(defaults, user),
+            ),
+            prompt: PROMPT_CONNECT_FIX,
+            options: {},
+            mode: "subagent",
+            native: true,
+            hidden: true,
+          }
+        // Only connect launches the fix child, naming it in `invokedAgents`, which passes this deny: no agent's own task
+        // call starts it, and the task tool never lists it as one to pick. Only where task may launch it, as for the
+        // research judge below, so a deny for this one agent is never the last word on task for an agent with none.
+        for (const [name, item] of connect ? Object.entries(agents) : []) {
+          if (name === ConnectPolicy.FIX_AGENT) continue
+          if (Permission.evaluate("task", ConnectPolicy.FIX_AGENT, item.permission).action === "deny") continue
+          item.permission = Permission.merge(
+            item.permission,
+            Permission.fromConfig({ task: { [ConnectPolicy.FIX_AGENT]: "deny" } }),
+          )
+        }
 
         // The research tools are the research agents' alone, and so are the researcher and the judge: no other agent,
         // whatever its rules, may call one or launch one outside a research run. The build agent alone may hand a
@@ -848,6 +963,28 @@ const layer = Layer.effect(
           agents[name].permission = Permission.merge(
             permission,
             Permission.fromConfig(Object.fromEntries(unnamed.map((key) => [key, "ask" as const]))),
+          )
+        }
+
+        // No allow answers a computer ask, whoever wrote it (a wildcard such as "*": "allow" or a rule naming the
+        // permission; user, repository or agent config): each allow that covers a computer permission is followed, at
+        // its own place, by an ask for the same pattern, so a deny written after it still wins. Plan mode's denies come
+        // last, so no rule reopens interacting with the computer in plan mode.
+        for (const [name, item] of Object.entries(agents)) {
+          item.permission = Permission.merge(
+            item.permission.flatMap((rule) =>
+              rule.action !== "allow"
+                ? [rule]
+                : [
+                    rule,
+                    ...COMPUTER_PERMISSIONS.filter((key) => Wildcard.match(key, rule.permission)).map((key) => ({
+                      permission: key,
+                      pattern: rule.pattern,
+                      action: "ask" as const,
+                    })),
+                  ],
+            ),
+            name === "plan" ? Permission.fromConfig(PLAN_COMPUTER) : [],
           )
         }
 
@@ -889,8 +1026,34 @@ const layer = Layer.effect(
           return agents[agent]
         })
 
-        const helper = Effect.fnUntraced(function* (agent: string) {
-          return agents[agent] ?? helpers[agent]
+        const helper = Effect.fnUntraced(function* (agent: string, options?: HelperOptions) {
+          if (agent === VECTORSCOPE_AGENT) {
+            if (!options?.reviewedPrompt) throw new Error("VectorScope is available only to a pinned review service.")
+            if ((yield* config.getGlobal()).agent?.[VECTORSCOPE_AGENT]?.disable)
+              throw new Error("VectorScope is disabled in agent.vectorscope.")
+            return {
+              name: VECTORSCOPE_AGENT,
+              description: "VectorScope's service-only code review helper.",
+              prompt: PROMPT_VECTORSCOPE,
+              permission: readonlySpecialist(VECTORSCOPE_AGENT, [
+                ...user,
+                ...Permission.fromConfig(cfg.agent?.[VECTORSCOPE_AGENT]?.permission ?? {}),
+                ...userCeiling(VECTORSCOPE_AGENT),
+              ]),
+              options: {},
+              mode: "primary" as const,
+              native: true,
+              hidden: true,
+            }
+          }
+          const item = agents[agent] ?? helpers[agent]
+          if (!item || !options?.reviewedPrompt) return item
+          if (agent !== "review" && agent !== "security")
+            throw new Error("A pinned review requires a built-in review or security helper.")
+          // Retain configured permission ceilings and model facts, while the
+          // role prompt comes only from the reviewed engine source. Do not
+          // mutate the configured helper used by legacy review sessions.
+          return { ...item, name: agent, prompt: agent === "security" ? PROMPT_SECURITY : PROMPT_REVIEW }
         })
 
         const list = Effect.fnUntraced(function* () {
@@ -937,8 +1100,8 @@ const layer = Layer.effect(
       get: Effect.fn("Agent.get")(function* (agent: string) {
         return yield* InstanceState.useEffect(state, (s) => s.get(agent))
       }),
-      helper: Effect.fn("Agent.helper")(function* (agent: string) {
-        return yield* InstanceState.useEffect(state, (s) => s.helper(agent))
+      helper: Effect.fn("Agent.helper")(function* (agent: string, options?: HelperOptions) {
+        return yield* InstanceState.useEffect(state, (s) => s.helper(agent, options))
       }),
       list: Effect.fn("Agent.list")(function* () {
         return yield* InstanceState.useEffect(state, (s) => s.list())
@@ -1086,7 +1249,7 @@ const locationServiceMapNode = LayerNode.make({
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, locationServiceMapNode],
+  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, locationServiceMapNode, RuntimeFlags.node],
 })
 
 export * as Agent from "./agent"

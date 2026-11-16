@@ -408,8 +408,10 @@ parentPort.postMessage({ connect: await outcome(Bun.connect({ hostname: "${OUTSI
 
   test("refuses a second install and restores every original on uninstall", () => {
     expect(() => EgressGuard.installStrict()).toThrow("already installed")
+    expect([EgressGuard.installed(), EgressGuard.strictInstalled()]).toEqual([true, true])
     state.handle!.uninstall()
     state.handle = undefined
+    expect([EgressGuard.installed(), EgressGuard.strictInstalled()]).toEqual([false, false])
     expect(globalThis.fetch).toBe(original.fetch)
     expect(net.Socket.prototype.connect).toBe(original.connect)
     expect(globalThis.WebSocket).toBe(original.WebSocket)
@@ -453,6 +455,8 @@ describe("EgressGuard.install with Vector Local on", () => {
     expect(await (await fetch(at())).text()).toBe("here")
     expect(state.handle!.attempts()).toEqual([])
     expect(recorded).toEqual([])
+    // Installed, but not the strict guard: an eval that needs every attempt logged tells the two apart.
+    expect([EgressGuard.installed(), EgressGuard.strictInstalled()]).toEqual([true, false])
   })
 
   test("blocks an unlabelled connection off this computer before it is made, in every client", async () => {

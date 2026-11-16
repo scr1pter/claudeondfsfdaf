@@ -382,16 +382,45 @@ test("capability connection failures preserve the transport error", async () => 
 })
 
 test("plans render ceilings and sanitize remote terminal control text", () => {
+  const stage = plan.stages[0]
+  if (stage.kind === "connect") throw new Error("The fixture must be an agent stage.")
   const output = formatWorkflowPlan({
     ...plan,
     title: "Review\x1b[2J\u202eevil",
-    stages: [{ ...plan.stages[0], title: "Title\nforged", asks: ["ask\x1b[2J"], model: "test/model", effort: "high" }],
+    stages: [{ ...stage, title: "Title\nforged", asks: ["ask\x1b[2J"], model: "test/model", effort: "high" }],
   })
   expect(output).toContain("4 agents · 2 concurrent · 20 steps · 5 steps/agent · 3 minutes · $0.25 · 1000 tokens")
   expect(output).toContain("test/model · high")
   expect(output).toContain("Titleforged")
   expect(output).not.toContain("\x1b")
   expect(output).not.toContain("\u202e")
+})
+
+test("connected plan output names the action and its held state while preserving legacy agent text", () => {
+  const output = formatWorkflowPlan({
+    ...plan,
+    stages: [
+      ...plan.stages,
+      {
+        id: "connected-review",
+        title: "Connected\x1b[2J review",
+        phase: "",
+        kind: "connect",
+        connect: { to: "vectorscope", action: "review" },
+        items: 1,
+        serial: false,
+        writes: "Untrusted remote availability claim",
+        asks: ["connect", "connect_model when required"],
+      },
+    ],
+  })
+  expect(output.split("\n").slice(2)).toEqual([
+    "  review: Review · general · 1 items · read only",
+    "  connected-review: Connected review · vectorscope.review · 1 items · read only; execution unavailable · asks: connect, connect_model when required",
+  ])
+  expect(output).not.toContain("undefined")
+  expect(output).not.toContain("Untrusted remote availability claim")
+  expect(output).not.toContain("\x1b")
 })
 
 function fixture(requests: Request[], workflows = true) {

@@ -11,6 +11,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
+import { PINNED_SESSION_PREFIX, SCOPE, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { REVIEW_REPORT_JSON_SCHEMA } from "@vectordevai/core/review/schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../../src/agent/agent"
@@ -85,6 +86,7 @@ const lsp = Layer.succeed(
 const mcp = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
+    snapshot: () => Effect.succeed({}),
     status: () => Effect.succeed({}),
     clients: () => Effect.succeed({}),
     instructions: () => Effect.succeed([]),
@@ -212,6 +214,49 @@ const modelRequests = (llm: TestLLMServer["Service"]) =>
   )
 
 describe("structured output in a review session", () => {
+  for (const valid of [true, false])
+    it.instance(
+      `the VectorScope factory ${valid ? "accepts valid" : "refuses invalid"} checked structured output`,
+      () =>
+        Effect.gen(function* () {
+          const llm = yield* useServer
+          const sessions = yield* Session.Service
+          const prompt = yield* SessionPrompt.Service
+          const session = yield* sessions.create({
+            title: "VectorScope checked output",
+            internal: `${PINNED_SESSION_PREFIX}review`,
+            permission: reviewPermissionRules({}),
+          })
+          yield* llm.tool("StructuredOutput", valid ? REPORT : { ...REPORT, findings: "invalid-array" })
+          const result = yield* prompt.prompt({
+            sessionID: session.id,
+            agent: VECTORSCOPE_AGENT,
+            model: ref,
+            format,
+            parts: [
+              {
+                type: "text",
+                text: "Review the admitted diff. PINNED_BASE_INSTRUCTIONS_MARKER",
+                metadata: { [SCOPE]: { paths: [], trust: "trusted", instructions: "provided" } },
+              },
+            ],
+          })
+          expect(result.info.role).toBe("assistant")
+          if (result.info.role !== "assistant") return
+          expect(result.info.agent).toBe(VECTORSCOPE_AGENT)
+          expect(result.info.structured).toEqual(valid ? REPORT : undefined)
+          expect(result.info.error?.name).toBe(valid ? undefined : "StructuredOutputError")
+          const requests = yield* modelRequests(llm)
+          expect(requests).toHaveLength(1)
+          expect(toolNames(requests[0]!)).toEqual(expect.arrayContaining(["StructuredOutput", "read", "glob", "grep"]))
+          expect(
+            toolNames(requests[0]!).filter(
+              (name) => !["StructuredOutput", "read", "glob", "grep", "list"].includes(name),
+            ),
+          ).toEqual([])
+        }),
+    )
+
   it.instance("a StructuredOutput reply sets info.structured under the review rules", () =>
     Effect.gen(function* () {
       const llm = yield* useServer

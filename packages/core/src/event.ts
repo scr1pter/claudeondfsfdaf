@@ -11,6 +11,8 @@ import { Location } from "./location"
 import { makeGlobalNode } from "./effect/app-node"
 import { isDeepStrictEqual } from "node:util"
 import { Durable } from "@vectordevai/schema/durable-event-manifest"
+import { ComputerRetention } from "./computer/retention"
+import { ComputerScreenshotEvents } from "./computer/screenshot-events"
 
 export const ID = Event.ID
 export type ID = import("@vectordevai/schema/event").ID
@@ -312,10 +314,12 @@ export const layerWith = (options?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
-                          const encoded = Schema.encodeUnknownSync(definition.data)(event.data) as Record<
-                            string,
-                            unknown
-                          >
+                          const data = yield* ComputerRetention.normalize(
+                            db,
+                            event.type,
+                            event.data as Record<string, unknown>,
+                          )
+                          const encoded = Schema.encodeUnknownSync(definition.data)(data) as Record<string, unknown>
                           if (input?.strictOwner && row?.ownerID && row.ownerID !== input.ownerID) {
                             yield* Effect.die(
                               new InvalidDurableEventError({
@@ -331,10 +335,42 @@ export const layerWith = (options?: LayerOptions) =>
                               .where(and(eq(EventTable.aggregate_id, aggregateID), eq(EventTable.seq, input.seq)))
                               .get()
                               .pipe(Effect.orDie)
+                            const retained =
+                              stored?.id === event.id && stored.type === versionedType(definition.type, durable.version)
+                                ? Schema.encodeUnknownSync(definition.data)(
+                                    yield* ComputerRetention.normalize(
+                                      db,
+                                      definition.type,
+                                      Schema.decodeUnknownSync(definition.data)(stored.data) as Record<string, unknown>,
+                                    ),
+                                  )
+                                : undefined
+                            // A remote transport omits computer media. Accept that projection as an exact retry,
+                            // while keeping this server's original row and requiring all other fields to match.
+                            const comparable =
+                              retained !== undefined &&
+                              !isDeepStrictEqual(retained, encoded) &&
+                              [
+                                "message.part.updated",
+                                "session.next.message.imported",
+                                "session.next.tool.progress",
+                                "session.next.tool.success",
+                                "session.next.tool.failed",
+                              ].includes(definition.type)
+                                ? yield* ComputerScreenshotEvents.strip(
+                                    {
+                                      stored: { type: definition.type, data: retained },
+                                      incoming: { type: definition.type, data: encoded },
+                                    },
+                                    { db },
+                                    { unknown: "preserve" },
+                                  )
+                                : undefined
                             if (
                               stored?.id === event.id &&
                               stored.type === versionedType(definition.type, durable.version) &&
-                              isDeepStrictEqual(stored.data, encoded)
+                              (isDeepStrictEqual(retained, encoded) ||
+                                (comparable && isDeepStrictEqual(comparable.stored.data, comparable.incoming.data)))
                             ) {
                               if (input.ownerID && row?.ownerID == null) {
                                 yield* db
@@ -380,6 +416,7 @@ export const layerWith = (options?: LayerOptions) =>
                             )
                           const committed = {
                             ...event,
+                            data,
                             durable: { aggregateID, seq, version: durable.version },
                           } as Payload
                           for (const projector of list) {
@@ -411,7 +448,7 @@ export const layerWith = (options?: LayerOptions) =>
                             ])
                             .run()
                             .pipe(Effect.orDie)
-                          return { aggregateID, seq }
+                          return { aggregateID, seq, event: committed }
                         }),
                       { behavior: "immediate" },
                     )
@@ -448,14 +485,7 @@ export const layerWith = (options?: LayerOptions) =>
           if (definition?.durable) {
             const committed = yield* commitDurableEvent(definition, event as Payload, undefined, commit)
             if (committed) {
-              event = {
-                ...event,
-                durable: {
-                  aggregateID: committed.aggregateID,
-                  seq: committed.seq,
-                  version: definition.durable.version,
-                },
-              }
+              event = committed.event as Payload<D>
               yield* notify(event as Payload, true)
               return event
             }
@@ -547,17 +577,7 @@ export const layerWith = (options?: LayerOptions) =>
               strictOwner: options?.strictOwner,
             })
             if (committed && options?.publish) {
-              yield* notify(
-                {
-                  ...payload,
-                  durable: {
-                    aggregateID: committed.aggregateID,
-                    seq: committed.seq,
-                    version: definition.durable.version,
-                  },
-                },
-                true,
-              )
+              yield* notify(committed.event, true)
             }
           }
         })

@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Layer, Queue } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Queue } from "effect"
 import { Config } from "@vectordevai/core/config"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -91,6 +91,54 @@ const waitForOutput = (output: Queue.Queue<string>, text: string) =>
   )
 
 describe("pty", () => {
+  ptyTest("a late pre-spawn refusal after delayed configuration creates no native terminal", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const proceed = yield* Deferred.make<void>()
+      const order: string[] = []
+      const state = { completed: false }
+      const layer = AppNodeBuilder.build(LayerNode.group([Pty.node, EventV2.node]), [
+        [
+          Config.node,
+          Layer.mock(Config.Service)({
+            entries: () =>
+              Effect.gen(function* () {
+                order.push("setup-entered")
+                yield* Deferred.succeed(entered, undefined)
+                yield* Deferred.await(proceed)
+                order.push("setup-completed")
+                return []
+              }),
+          }),
+        ],
+        [Location.node, locationLayer],
+      ])
+      return yield* Effect.gen(function* () {
+        const pty = yield* Pty.Service
+        const opening = yield* pty
+          .create(
+            // No executable can exist below /dev/null. A hook after spawn would report the native error instead.
+            { command: "/dev/null/vector-pre-spawn-must-not-run", args: [], cwd: "/tmp" },
+            undefined,
+            Effect.gen(function* () {
+              order.push("before-spawn")
+              if (state.completed) return yield* Effect.die(new Error("Fresh authority is required after setup."))
+            }),
+          )
+          .pipe(Effect.exit, Effect.forkChild)
+        yield* Deferred.await(entered).pipe(Effect.timeout("5 seconds"))
+        state.completed = true
+        yield* Deferred.succeed(proceed, undefined)
+        const result = yield* Fiber.join(opening)
+        expect(Exit.isFailure(result)).toBe(true)
+        if (Exit.isFailure(result))
+          expect(String(Cause.squash(result.cause))).toContain("Fresh authority is required after setup.")
+        expect(order).toEqual(["setup-entered", "setup-completed", "before-spawn"])
+        expect(yield* pty.list()).toEqual([])
+      }).pipe(Effect.provide(Layer.fresh(layer)))
+    }),
+  )
+
   it.live("returns typed not found errors for missing sessions", () =>
     Effect.gen(function* () {
       const pty = yield* Pty.Service

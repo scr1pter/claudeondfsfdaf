@@ -1,0 +1,10 @@
+{
+  "enforce": true,
+  "helperVersion": "1.0.15",
+  "sourceDigest": "55d3ca43a0ad47b925ae5a513c98aba17be9abcd02a910ee86b0c82aa19162a3",
+  "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+  "cdhash": {
+    "x64": "12b404c0476ff83731fdeab6e81f4b123eff39ce",
+    "arm64": "b5661d181baca554ca938aa686a1dbbe12293825"
+  }
+}

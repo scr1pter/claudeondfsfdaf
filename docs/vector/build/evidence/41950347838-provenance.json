@@ -1,0 +1,38 @@
+{
+  "run": 41950347838,
+  "commit": "d2301e82f1b2dcf4fab1281b3a74d9006c4f8670",
+  "candidateArtifact": 13381235732,
+  "candidateArchiveSha256": "836ec6ae301d26dc2678483a00f76c5059d72621550f7e97de1788204bb9de45",
+  "candidateFileSha256": "eb9aa9b6597c409f3857b32463e14bef85b9423f7e8ea2852265b4e2b94fa687",
+  "reportsArtifact": 13380213777,
+  "reportsArchiveSha256": "c746569bdb23c7ce2e278cd268116adec7da4b7109dbd92723053843d7fdf5fb",
+  "sourceVerification": "Measured digest independently recomputed against an exact git archive of d2301e82 and its generated identity; in-progress M5 files excluded.",
+  "validation": {
+    "universalCompilation": "passed",
+    "reproducibleShippingBytes": "passed",
+    "nativeUnitAggregate": "passed",
+    "accessibilityRegistryGroups": 22,
+    "accessibilityServiceGroups": 32,
+    "requiredNodeCore": {
+      "passed": 28,
+      "failed": 0,
+      "skipped": 2
+    },
+    "isolatedAutoCore": {
+      "passed": 28,
+      "failed": 0,
+      "skipped": 2
+    },
+    "skipReasons": ["requires-input.keyboard", "privileged-disabled-in-core", "isolated-target-unavailable-in-auto"]
+  },
+  "lock": {
+    "enforce": true,
+    "helperVersion": "1.0.4",
+    "sourceDigest": "686fdb7085df30d5cab0aa979251840709024bb20544a091eba13125400926f0",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "fcfb75b13118dbfcee1756e7e51267eaeef06f8c",
+      "arm64": "ce83948e795260c6e75a5719d3b259fe2c6ba347"
+    }
+  }
+}

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { decideSkip, PAUSED_LABEL, type SkipDecision, type SkipInput } from "@vectordevai/core/review/skip"
+import {
+  decideSkip,
+  PAUSED_LABEL,
+  type SkipDecision,
+  type SkipInput,
+  type SkipReason,
+} from "@vectordevai/core/review/skip"
 import { DEFAULT_REVIEW_CONFIG, type ReviewState } from "@vectordevai/core/review/types"
 
 const head = "d4e5f6a" + "0".repeat(33)
@@ -137,5 +143,28 @@ describe("decideSkip", () => {
       { labels: [PAUSED_LABEL, "vector:skip"], draft: true, author: "dependabot[bot]", headBranch: "wip/x" },
     )
     expect(decideSkip(everything)).toEqual(run)
+  })
+})
+
+// VS-24c: "trivial" is a SkipReason as a type only. decideSkip never gives it, whatever the config says: the GitHub
+// job's trivial skip goes through decideSkip state only after the @vector merge.
+describe("the trivial reason", () => {
+  test("is a SkipReason that decideSkip never returns", () => {
+    // Types only: the name VS-32 maps to policy-skip is exactly "trivial".
+    const reason: SkipReason = "trivial"
+    // @ts-expect-error a misspelled reason is not a SkipReason
+    const misspelled: SkipReason = "trivial-skip"
+    void [reason, misspelled]
+    const trivial = { ...DEFAULT_REVIEW_CONFIG, trivial: "skip" as const }
+    for (const trigger of ["auto", "command"] as const) {
+      for (const size of [
+        { files: 1, changedLines: 1 },
+        { files: 3, changedLines: 120 },
+      ]) {
+        const decision = decideSkip(input({ trigger, config: trivial, size }))
+        expect(decision).toEqual({ skip: false, trust: "trusted" })
+        expect(decideSkip(input({ trigger, size }))).toEqual(decision)
+      }
+    }
   })
 })

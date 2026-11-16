@@ -1,0 +1,14 @@
+# Results and inputs stay out of the repository (I-13). Write them under /tmp/vector-vectorscope/research/;
+# the scripts refuse output paths inside the repository, and these patterns stop a stray copy from being staged.
+*.csv
+*.tsv
+*.json
+*.jsonl
+*.log
+*.txt
+*.out
+*.err
+*.numstat*
+*.git/
+node_modules/
+__pycache__/

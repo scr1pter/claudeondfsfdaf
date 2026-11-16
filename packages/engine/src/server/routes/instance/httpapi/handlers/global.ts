@@ -1,3 +1,4 @@
+import { ComputerPrivacy } from "@vectordevai/server/computer-privacy"
 import { Config } from "@/config/config"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
@@ -39,9 +40,11 @@ function parseBody(body: string) {
 
 export function globalEventResponse(principal: Principal) {
   return Effect.gen(function* () {
+    const project = yield* ComputerPrivacy.projector
     yield* Effect.logInfo("global event connected")
     const request = yield* HttpServerRequest.HttpServerRequest
     const replication = RequestOwner.replication(request)
+    const sync = request.headers[ComputerPrivacy.WORKSPACE_SYNC_HEADER] === "1"
     // The owner's own control plane relays this stream into its app: it is screened like a guest's, except that
     // unscoped events (terminals, toasts) still pass the same checks.
     const relay = principal.kind === "owner" && (yield* RequestOwner.owner) && replication
@@ -55,15 +58,16 @@ export function globalEventResponse(principal: Principal) {
       if (![...principal.workspaceDirectories.values()].includes(event.directory)) return false
       return event.workspace === undefined || principal.workspaceIDs.has(event.workspace)
     }
-    const events = Stream.callback<GlobalBusEvent>((queue) => {
-      const handler = (event: GlobalBusEvent) => {
-        if (visible(event)) Queue.offerUnsafe(queue, event)
-      }
-      return Effect.acquireRelease(
-        Effect.sync(() => GlobalBus.on("event", handler)),
-        () => Effect.sync(() => GlobalBus.off("event", handler)),
-      )
-    })
+    // Register before server.connected is emitted; a consumer may publish its next change as soon as it sees readiness.
+    const queue = yield* Queue.unbounded<GlobalBusEvent>()
+    const handler = (event: GlobalBusEvent) => {
+      if (visible(event)) Queue.offerUnsafe(queue, event)
+    }
+    yield* Effect.acquireRelease(
+      Effect.sync(() => GlobalBus.on("event", handler)),
+      () => Effect.sync(() => GlobalBus.off("event", handler)),
+    )
+    const events = Stream.fromQueue(queue)
     const heartbeat = Stream.tick("10 seconds").pipe(
       Stream.drop(1),
       Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
@@ -83,6 +87,11 @@ export function globalEventResponse(principal: Principal) {
                   visible(event)),
             ),
           ),
+        ),
+        Stream.mapEffect((event) =>
+          principal.kind === "owner" && !sync && !replication && event.payload.type !== "sync"
+            ? Effect.succeed(event)
+            : project(event),
         ),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),

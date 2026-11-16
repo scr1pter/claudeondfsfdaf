@@ -24,6 +24,12 @@ import type {
   CommandListData,
   CommandListErrors,
   CommandListResponses,
+  ComputerProtectedPathsData,
+  ComputerProtectedPathsErrors,
+  ComputerProtectedPathsResponses,
+  ComputerPruneScreenshotsData,
+  ComputerPruneScreenshotsErrors,
+  ComputerPruneScreenshotsResponses,
   ConfigGetData,
   ConfigGetErrors,
   ConfigGetResponses,
@@ -45,6 +51,30 @@ import type {
   ConfigUpdateData,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  ConnectCancelData,
+  ConnectCancelErrors,
+  ConnectCancelResponses,
+  ConnectDirectoryReviewData,
+  ConnectDirectoryReviewErrors,
+  ConnectDirectoryReviewResponses,
+  ConnectDismissData,
+  ConnectDismissErrors,
+  ConnectDismissResponses,
+  ConnectGetData,
+  ConnectGetErrors,
+  ConnectGetResponses,
+  ConnectListData,
+  ConnectListErrors,
+  ConnectListResponses,
+  ConnectRegisterData,
+  ConnectRegisterErrors,
+  ConnectRegisterResponses,
+  ConnectReviewData,
+  ConnectReviewErrors,
+  ConnectReviewResponses,
+  ConnectRunsData,
+  ConnectRunsErrors,
+  ConnectRunsResponses,
   EventSubscribeData,
   EventSubscribeErrors,
   EventSubscribeResponses,
@@ -558,6 +588,33 @@ import type {
   QuestionReplyData,
   QuestionReplyErrors,
   QuestionReplyResponses,
+  ReviewGetData,
+  ReviewGetErrors,
+  ReviewGetResponses,
+  ReviewListData,
+  ReviewListErrors,
+  ReviewListResponses,
+  ReviewMemoryConfirmData,
+  ReviewMemoryConfirmErrors,
+  ReviewMemoryConfirmResponses,
+  ReviewMemoryDiscardData,
+  ReviewMemoryDiscardErrors,
+  ReviewMemoryDiscardResponses,
+  ReviewMemoryInspectData,
+  ReviewMemoryInspectErrors,
+  ReviewMemoryInspectResponses,
+  ReviewMemoryPrepareData,
+  ReviewMemoryPrepareErrors,
+  ReviewMemoryPrepareResponses,
+  ReviewStartData,
+  ReviewStartErrors,
+  ReviewStartResponses,
+  ReviewStopData,
+  ReviewStopErrors,
+  ReviewStopResponses,
+  ReviewTargetData,
+  ReviewTargetErrors,
+  ReviewTargetResponses,
   ServerSessionSessionImportArchiveData,
   ServerSessionSessionImportArchiveErrors,
   ServerSessionSessionImportArchiveResponses,
@@ -1988,6 +2045,45 @@ export class Event extends HeyApiClient {
     return (options?.client ?? this.client).sse.get<EventSubscribeResponses, EventSubscribeErrors, ThrowOnError>({
       url: "/event",
       ...options,
+    })
+  }
+}
+
+export class Computer extends HeyApiClient {
+  /**
+   * Read paths protected from computer input
+   *
+   * Return trusted instruction, memory and configuration paths for the owner's desktop input gate. File contents are never returned.
+   */
+  public protectedPaths<ThrowOnError extends boolean = false>(
+    options?: Options<ComputerProtectedPathsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).get<
+      ComputerProtectedPathsResponses,
+      ComputerProtectedPathsErrors,
+      ThrowOnError
+    >({ url: "/computer/protected-paths", ...options })
+  }
+
+  /**
+   * Delete stored computer screenshots
+   *
+   * Delete computer screenshots before a time or in a session. Use all: true to delete every screenshot and reclaim database pages. Only the server owner can delete screenshots.
+   */
+  public pruneScreenshots<ThrowOnError extends boolean = false>(
+    options?: Options<ComputerPruneScreenshotsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ComputerPruneScreenshotsResponses,
+      ComputerPruneScreenshotsErrors,
+      ThrowOnError
+    >({
+      url: "/computer/screenshots/prune",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
     })
   }
 }
@@ -3752,6 +3848,110 @@ export class Memory extends HeyApiClient {
   }
 }
 
+export class Connect extends HeyApiClient {
+  /**
+   * List connected tools
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<ConnectListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ConnectListResponses, ConnectListErrors, ThrowOnError>({
+      url: "/experimental/connect",
+      ...options,
+    })
+  }
+
+  /**
+   * List connected tool runs
+   */
+  public runs<ThrowOnError extends boolean = false>(options?: Options<ConnectRunsData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ConnectRunsResponses, ConnectRunsErrors, ThrowOnError>({
+      url: "/experimental/connect/runs",
+      ...options,
+    })
+  }
+
+  /**
+   * Get a connected tool run
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<ConnectGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ConnectGetResponses, ConnectGetErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Review changes in a conversation
+   */
+  public review<ThrowOnError extends boolean = false>(options: Options<ConnectReviewData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectReviewResponses, ConnectReviewErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/connect",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Review the selected directory
+   */
+  public directoryReview<ThrowOnError extends boolean = false>(
+    options?: Options<ConnectDirectoryReviewData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ConnectDirectoryReviewResponses,
+      ConnectDirectoryReviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/connect/review",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel a connected tool run
+   */
+  public cancel<ThrowOnError extends boolean = false>(options: Options<ConnectCancelData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectCancelResponses, ConnectCancelErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/cancel",
+      ...options,
+    })
+  }
+
+  /**
+   * Bring desktop findings into a conversation
+   */
+  public register<ThrowOnError extends boolean = false>(options?: Options<ConnectRegisterData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ConnectRegisterResponses, ConnectRegisterErrors, ThrowOnError>({
+      url: "/experimental/connect/findings",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Dismiss findings from an owner action
+   */
+  public dismiss<ThrowOnError extends boolean = false>(options: Options<ConnectDismissData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectDismissResponses, ConnectDismissErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/dismiss",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+}
+
 export class Project extends HeyApiClient {
   /**
    * List all projects
@@ -3963,6 +4163,135 @@ export class Question extends HeyApiClient {
       url: "/question/{requestID}/reject",
       ...options,
     })
+  }
+}
+
+export class Review2 extends HeyApiClient {
+  /**
+   * Read the local review target
+   *
+   * Read the existing conversation's exact Git head without starting model work. Owner only.
+   */
+  public target<ThrowOnError extends boolean = false>(options: Options<ReviewTargetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewTargetResponses, ReviewTargetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/target",
+      ...options,
+    })
+  }
+
+  /**
+   * Find local review runs
+   *
+   * Owner-only bounded status summaries for reconnection. No result JSON or code is included.
+   */
+  public list<ThrowOnError extends boolean = false>(options: Options<ReviewListData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewListResponses, ReviewListErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+    })
+  }
+
+  /**
+   * Start an owner local review
+   *
+   * Opt-in owner-only review of local changes. Placement and read authority come from the existing conversation. No GitHub connection is required; no checks, posting or automatic restart occur.
+   */
+  public start<ThrowOnError extends boolean = false>(options: Options<ReviewStartData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewStartResponses, ReviewStartErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Read an owned local review
+   *
+   * Read the exact retained result without starting or retrying model work.
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<ReviewGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewGetResponses, ReviewGetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Stop an owned local review
+   *
+   * Signal and join this engine's exact owned run, retaining completed partial output.
+   */
+  public stop<ThrowOnError extends boolean = false>(options: Options<ReviewStopData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewStopResponses, ReviewStopErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}/stop",
+      ...options,
+    })
+  }
+}
+
+export class ReviewMemory extends HeyApiClient {
+  /**
+   * Read this repository's review memory
+   *
+   * Owner-only bounded read in the engine's verified physical repository. Does not start a review.
+   */
+  public inspect<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryInspectData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ReviewMemoryInspectResponses, ReviewMemoryInspectErrors, ThrowOnError>({
+      url: "/experimental/review-memory",
+      ...options,
+    })
+  }
+
+  /**
+   * Preview an owner review-memory change
+   *
+   * Prepare one exact, short-lived approval. Preparing does not apply the change.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryPrepareData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ReviewMemoryPrepareResponses, ReviewMemoryPrepareErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/prepare",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Confirm one exact review-memory preview
+   *
+   * Single-use confirmation, bound to fresh owner and repository authority. Read back after a lost response.
+   */
+  public confirm<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryConfirmData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ReviewMemoryConfirmResponses, ReviewMemoryConfirmErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/confirm",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Discard an owned review-memory preview
+   *
+   * Retire this owner's exact preview without applying a change or altering stored memory.
+   */
+  public discard<ThrowOnError extends boolean = false>(options: Options<ReviewMemoryDiscardData, ThrowOnError>) {
+    return (options.client ?? this.client).delete<
+      ReviewMemoryDiscardResponses,
+      ReviewMemoryDiscardErrors,
+      ThrowOnError
+    >({ url: "/experimental/review-memory/previews/{previewId}", ...options })
   }
 }
 
@@ -5269,7 +5598,7 @@ export class Provider2 extends HeyApiClient {
   }
 }
 
-export class Connect extends HeyApiClient {
+export class Connect2 extends HeyApiClient {
   /**
    * Connect with key
    *
@@ -5386,9 +5715,9 @@ export class Integration extends HeyApiClient {
     })
   }
 
-  private _connect?: Connect
-  get connect(): Connect {
-    return (this._connect ??= new Connect({ client: this.client }))
+  private _connect?: Connect2
+  get connect(): Connect2 {
+    return (this._connect ??= new Connect2({ client: this.client }))
   }
 
   private _attempt?: Attempt
@@ -5950,6 +6279,11 @@ export class VectorClient extends HeyApiClient {
     return (this._event ??= new Event({ client: this.client }))
   }
 
+  private _computer?: Computer
+  get computer(): Computer {
+    return (this._computer ??= new Computer({ client: this.client }))
+  }
+
   private _config?: Config2
   get config(): Config2 {
     return (this._config ??= new Config2({ client: this.client }))
@@ -6020,6 +6354,11 @@ export class VectorClient extends HeyApiClient {
     return (this._memory ??= new Memory({ client: this.client }))
   }
 
+  private _connect?: Connect
+  get connect(): Connect {
+    return (this._connect ??= new Connect({ client: this.client }))
+  }
+
   private _project?: Project
   get project(): Project {
     return (this._project ??= new Project({ client: this.client }))
@@ -6033,6 +6372,16 @@ export class VectorClient extends HeyApiClient {
   private _question?: Question
   get question(): Question {
     return (this._question ??= new Question({ client: this.client }))
+  }
+
+  private _review?: Review2
+  get review(): Review2 {
+    return (this._review ??= new Review2({ client: this.client }))
+  }
+
+  private _reviewMemory?: ReviewMemory
+  get reviewMemory(): ReviewMemory {
+    return (this._reviewMemory ??= new ReviewMemory({ client: this.client }))
   }
 
   private _permission?: Permission

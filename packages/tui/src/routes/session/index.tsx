@@ -57,6 +57,7 @@ import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { DialogTasks } from "./dialog-tasks"
+import { DialogConnect } from "./dialog-connect"
 import { DialogWorkflow } from "./dialog-workflow"
 import { interruptedToast, pendingInterruption, stoppedHelpersMessage } from "./task-presentation"
 import { stopBackgroundSubagents, stopIncludingHelpers } from "./task-actions"
@@ -485,6 +486,16 @@ export function Session() {
   })
 
   const sessionCommandList = createMemo(() => [
+    ...(sync.data.capabilities.connections
+      ? [
+          {
+            title: "Connected tools",
+            value: "session.connected",
+            category: "Session",
+            run: () => dialog.replace(() => <DialogConnect sessionID={route.sessionID} />),
+          },
+        ]
+      : []),
     {
       title: "Manage subagent tasks",
       value: "session.tasks",

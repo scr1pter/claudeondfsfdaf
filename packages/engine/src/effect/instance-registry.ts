@@ -37,10 +37,27 @@ export function shutdown() {
 }
 
 // Every disposal of an instance (InstanceStore.disposeContext and reload) runs through here, marked as disposing.
-export async function disposeInstance(directory: string) {
+export async function disposeInstance(directory: string, observed?: (confirmed: boolean) => void) {
   const release = markDisposing(directory)
   try {
-    await Promise.allSettled([...disposers].map((disposer) => disposer(directory)))
+    const results = await Promise.allSettled([...disposers].map((disposer) => disposer(directory)))
+    observed?.(results.every((result) => result.status === "fulfilled"))
+  } catch (error) {
+    observed?.(false)
+    throw error
+  } finally {
+    release()
+  }
+}
+
+/** Exclusive instance owners cannot lend a directory again after an unconfirmed disposer. */
+export async function disposeInstanceConfirmed(directory: string) {
+  const release = markDisposing(directory)
+  try {
+    const results = await Promise.allSettled(
+      [...disposers].map((disposer) => Promise.resolve().then(() => disposer(directory))),
+    )
+    if (results.some((result) => result.status === "rejected")) throw new Error("Instance disposal was not confirmed")
   } finally {
     release()
   }

@@ -4,7 +4,8 @@ import { join } from "node:path"
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { BrainPosting } from "@vectordevai/core/brain/posting"
-import { buildWorkflowYaml } from "@vectordevai/core/review/workflow"
+import { buildWorkflowYaml, buildAgentsWorkflow } from "@vectordevai/core/review/workflow"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 
 import { createPullRequest } from "./github"
 import type { GithubAccess } from "./github-api"
@@ -223,9 +224,9 @@ describe("pull requests over GitHub's API", () => {
   test("refuses to post when the pull request moved after the review", async () => {
     requests.length = 0
     const stale = "c".repeat(40)
-    await expect(
-      postWith(same, { body: "LGTM", event: "approve", head: stale }),
-    ).rejects.toThrow("changed after the review started")
+    await expect(postWith(same, { body: "LGTM", event: "approve", head: stale })).rejects.toThrow(
+      "changed after the review started",
+    )
     expect(requests.some((request) => request.path.endsWith("/reviews"))).toBe(false)
   })
 
@@ -236,9 +237,10 @@ describe("pull requests over GitHub's API", () => {
       { path: "a.ts", line: 9, side: "RIGHT" as const, startLine: 6, body: "This block leaks the handle" },
       { path: "b.ts", line: 2, side: "LEFT" as const, startLine: 2, body: "The removed guard was needed" },
     ]
-    expect(
-      await postWith(same, { body: "Three findings", event: "comment", head: HEAD, comments }),
-    ).toEqual({ posted: true, inline: 3 })
+    expect(await postWith(same, { body: "Three findings", event: "comment", head: HEAD, comments })).toEqual({
+      posted: true,
+      inline: 3,
+    })
     expect(requests.find((request) => request.path.endsWith("/reviews"))?.body).toEqual({
       body: "Three findings",
       event: "COMMENT",
@@ -259,9 +261,10 @@ describe("pull requests over GitHub's API", () => {
 
     // Without the commit they were read on, line numbers could point anywhere, so the comments are left out.
     requests.length = 0
-    expect(
-      await postWith(same, { body: "Three findings", event: "comment", comments }),
-    ).toEqual({ posted: true, inline: 0 })
+    expect(await postWith(same, { body: "Three findings", event: "comment", comments })).toEqual({
+      posted: true,
+      inline: 0,
+    })
     expect(requests.find((request) => request.path.endsWith("/reviews"))?.body).toEqual({
       body: "Three findings",
       event: "COMMENT",
@@ -508,7 +511,10 @@ describe("automatic reviews", () => {
 
   const owner: GithubAccess = { token: "test-token", source: "vector", apiUrl: `http://127.0.0.1:${stand.port}` }
   const repository = (name: string) => ({ owner: "acme", name })
-  const workflow = autoReviewWorkflow({ model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] }, "1.99.99")
+  const workflow = autoReviewWorkflow(
+    { model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] },
+    GithubAgents.MIN_AGENTS_CLI,
+  )
   const writes = () => calls.filter((call) => call.method !== "GET")
 
   test("tells set up, open, read-only and missing-permission repositories apart", async () => {
@@ -540,21 +546,24 @@ describe("automatic reviews", () => {
   test("the file is the workflow `vector github install` writes for the same answers", () => {
     expect(workflow.path).toBe(".github/workflows/vector.yml")
     expect(workflow.content).toBe(
-      buildWorkflowYaml({
+      buildAgentsWorkflow({
         provider: "anthropic",
         model: "claude-sonnet-4-5",
+        mode: "own-key",
         keys: ["ANTHROPIC_API_KEY"],
         autoReview: true,
-        auth: "github",
         share: false,
+        version: GithubAgents.MIN_AGENTS_CLI,
         monthlyUsd: 50,
-        version: "1.99.99",
       }),
     )
-    expect(workflow.content).toContain("  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]")
+    expect(workflow.content).toContain("  pull_request:")
     expect(workflow.secrets.map((secret) => secret.name)).toEqual(["VECTOR_CLI_TOKEN", "ANTHROPIC_API_KEY"])
     // Vector's shared models need only the Vector account token.
-    const shared = autoReviewWorkflow({ model: "vector/acme/coder:free", keys: ["VECTOR_CLI_TOKEN"] }, "1.99.99")
+    const shared = autoReviewWorkflow(
+      { model: "vector/acme/coder:free", keys: ["VECTOR_CLI_TOKEN"] },
+      GithubAgents.MIN_AGENTS_CLI,
+    )
     expect(shared.secrets.map((secret) => secret.name)).toEqual(["VECTOR_CLI_TOKEN"])
     expect(shared.content).toContain("MODEL: vector/acme/coder:free")
   })
@@ -707,7 +716,8 @@ describe("the posting check before Vector posts", () => {
     hostname: "127.0.0.1",
     async fetch(request) {
       const url = new URL(request.url)
-      if (request.method !== "POST" || url.pathname !== "/memory/posting-check") return new Response("", { status: 404 })
+      if (request.method !== "POST" || url.pathname !== "/memory/posting-check")
+        return new Response("", { status: 404 })
       if (request.headers.get("authorization") !== `Basic ${Buffer.from("vector:engine-secret").toString("base64")}`)
         return new Response("", { status: 401 })
       const body = (await request.json()) as { parts: string[]; typed: boolean; untrusted?: boolean }
@@ -717,12 +727,17 @@ describe("the posting check before Vector posts", () => {
       )
     },
   })
-  const reachable = async () => ({ url: `http://127.0.0.1:${engine.port}`, username: "vector", password: "engine-secret" })
+  const reachable = async () => ({
+    url: `http://127.0.0.1:${engine.port}`,
+    username: "vector",
+    password: "engine-secret",
+  })
   const ask: Ask = async (question) => {
     questions.push(question)
     return answers.shift() ?? question.cancel
   }
-  const review = (parts: string[]) => checkPost({ cwd: "/repo", parts, typed: false, sessionIDs: ["ses_review"], untrusted: true })
+  const review = (parts: string[]) =>
+    checkPost({ cwd: "/repo", parts, typed: false, sessionIDs: ["ses_review"], untrusted: true })
   const reset = () => {
     requests.length = 0
     checks.length = 0
@@ -743,7 +758,10 @@ describe("the posting check before Vector posts", () => {
       posted: true,
       inline: 2,
     })
-    expect(checks[0]).toMatchObject({ directory: "/repo", body: { typed: false, sessionIDs: ["ses_review"], untrusted: true } })
+    expect(checks[0]).toMatchObject({
+      directory: "/repo",
+      body: { typed: false, sessionIDs: ["ses_review"], untrusted: true },
+    })
     expect(questions[0]).toMatchObject({ buttons: ["Post without them", "Post as is", "Cancel"] })
     expect(questions[0]?.detail).toContain("Acme drops the Q3")
     const posted = requests.find((request) => request.path.endsWith("/reviews"))?.body as {
@@ -808,14 +826,21 @@ describe("the posting check before Vector posts", () => {
     expect(questions[0]).toMatchObject({ buttons: ["Post as is", "Cancel"], default: 1 })
     answers.push(0)
     expect(await checkPost({ cwd: "/repo", parts: typed, typed: true })).toEqual(typed)
-    expect(await checkPost({ cwd: "/repo", parts: ["Fix the retry loop"], typed: true })).toEqual(["Fix the retry loop"])
+    expect(await checkPost({ cwd: "/repo", parts: ["Fix the retry loop"], typed: true })).toEqual([
+      "Fix the retry loop",
+    ])
     expect(questions).toHaveLength(2)
   })
 
   test("a Parallel Workspace pull request is checked before anything is committed: the typed task asked about, the summary cut", async () => {
     reset()
     const dir = await mkdtemp(join(tmpdir(), "vector-workspace-"))
-    const pullRequest = { projectPath: dir, title: "Retry fix", body: `Fixed the retry loop. ${FACT}.`, task: `Ship it. ${HABIT}.` }
+    const pullRequest = {
+      projectPath: dir,
+      title: "Retry fix",
+      body: `Fixed the retry loop. ${FACT}.`,
+      task: `Ship it. ${HABIT}.`,
+    }
     try {
       // The task is the user's own words: the check asks, and Cancel posts nothing.
       expect(await createPullRequest(pullRequest)).toEqual({ ok: false, log: "", error: "Nothing was posted." })
@@ -857,6 +882,8 @@ describe("the posting check before Vector posts", () => {
     const body = `Found one issue. ${FACT}. See ![x](https://evil.example.net/a.png).`
     expect(await postWith(review, { body, event: "comment", head: HEAD })).toEqual({ posted: false, inline: 0 })
     // The fallback body repeats the body, and the sentence is shown once.
-    expect(questions[0]?.detail).toBe(`• ${FACT}.\n\nPost as is also puts back the links and images that point off GitHub.`)
+    expect(questions[0]?.detail).toBe(
+      `• ${FACT}.\n\nPost as is also puts back the links and images that point off GitHub.`,
+    )
   })
 })

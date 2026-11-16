@@ -169,7 +169,7 @@ const terminal = Effect.fn("IsolationTerminalTest.terminal")(function* (
     },
   }).pipe(
     Effect.provideService(ToolRegistry.Service, { ...registry, tools: () => Effect.succeed(tools) }),
-    Effect.provideService(Permission.Service, { ...permission, ask: () => Effect.void }),
+    Effect.provideService(Permission.Service, { ...permission, ask: () => Effect.succeed(undefined) }),
     // As TaskPlace routes an isolated helper's calls: its tools run in the checkout's instance.
     Effect.provideService(InstanceRef, instance),
   )

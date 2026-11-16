@@ -1,0 +1,166 @@
+{
+  "run": 42073872548,
+  "head": "06f73fd8d5d61d9e0acacb1228a6dda88571fd7f",
+  "job": 127408754304,
+  "artifact": 13437578669,
+  "zipBytes": 648,
+  "zipSha256": "3f37a6c322178043a7218cb13c4e26b71c02545e1c2df438453b87997dfdc173",
+  "zipDigestMatchesApi": true,
+  "directNativeUnitVersionProbes": "passed",
+  "protocolReport": {
+    "schemaVersion": 1,
+    "platform": "win32",
+    "privileged": "off",
+    "checks": [
+      {
+        "name": "catalog",
+        "status": "passed"
+      },
+      {
+        "name": "unit",
+        "status": "failed",
+        "reason": "windows-unit-failure-integration.reply-pipe.caller-initial.bootstrap-child-exit-dll-initialization"
+      },
+      {
+        "name": "unprivileged",
+        "status": "passed"
+      },
+      {
+        "name": "packaged",
+        "status": "passed"
+      },
+      {
+        "name": "target-control",
+        "status": "passed"
+      },
+      {
+        "name": "probe.first",
+        "status": "failed",
+        "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization"
+      },
+      {
+        "name": "probe.fresh",
+        "status": "failed",
+        "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization"
+      },
+      {
+        "name": "responsible",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "unverified-parent",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "channel-eof",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "parent-death",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.cancel-idle",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.eof",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.frame-too-large",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.heartbeat-loss",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.hello",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.malformed-json",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.permissions",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.session",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.shutdown",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "conformance.unsupported-action",
+        "status": "failed",
+        "reason": "verified-caller-unavailable"
+      },
+      {
+        "name": "privileged",
+        "status": "skipped",
+        "reason": "disabled"
+      },
+      {
+        "name": "unprivileged.wire-codec",
+        "status": "passed"
+      },
+      {
+        "name": "unprivileged.packaged-pe",
+        "status": "passed"
+      },
+      {
+        "name": "unprivileged.packaged-manifest",
+        "status": "passed"
+      },
+      {
+        "name": "unprivileged.packaged-version",
+        "status": "passed"
+      },
+      {
+        "name": "packaged.wire-codec",
+        "status": "passed"
+      },
+      {
+        "name": "packaged.packaged-pe",
+        "status": "passed"
+      },
+      {
+        "name": "packaged.packaged-manifest",
+        "status": "passed"
+      },
+      {
+        "name": "packaged.packaged-version",
+        "status": "passed"
+      },
+      {
+        "name": "target-control.windows-test-target-control-schema",
+        "status": "passed"
+      }
+    ],
+    "code": 1
+  },
+  "counts": {
+    "passed": 13,
+    "failed": 17,
+    "skipped": 1
+  },
+  "conclusion": "Isolated desktop fixture compiles and direct checks pass, but the actual Node harness still reports medium bootstrap DLL initialization failure before entry. No protocol, privileged or release credit."
+}

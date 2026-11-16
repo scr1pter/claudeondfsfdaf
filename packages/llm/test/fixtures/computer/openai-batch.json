@@ -1,0 +1,39 @@
+{
+  "description": "Contract transcript for the native computer API; replayed locally without a provider request.",
+  "events": [
+    {
+      "type": "response.output_item.added",
+      "item": { "type": "reasoning", "id": "rs_computer", "encrypted_content": "fixture-reasoning" }
+    },
+    {
+      "type": "response.output_item.done",
+      "item": { "type": "reasoning", "id": "rs_computer", "encrypted_content": "fixture-reasoning" }
+    },
+    {
+      "type": "response.output_item.added",
+      "item": { "type": "computer_call", "id": "cu_batch", "call_id": "call_batch", "status": "in_progress" }
+    },
+    {
+      "type": "response.output_item.done",
+      "item": {
+        "type": "computer_call",
+        "id": "cu_batch",
+        "call_id": "call_batch",
+        "status": "completed",
+        "actions": [
+          { "type": "click", "button": "left", "x": 120, "y": 230 },
+          { "type": "type", "text": "A local note" },
+          { "type": "keypress", "keys": ["CTRL", "S"] },
+          { "type": "wait", "seconds": 1 }
+        ],
+        "pending_safety_checks": [
+          { "id": "sc_1", "code": "malicious_instructions", "message": "Review this step before continuing." }
+        ]
+      }
+    },
+    {
+      "type": "response.completed",
+      "response": { "id": "resp_computer", "usage": { "input_tokens": 20, "output_tokens": 10, "total_tokens": 30 } }
+    }
+  ]
+}

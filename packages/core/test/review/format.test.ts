@@ -26,12 +26,14 @@ import {
   noteNothingToReview,
   notePartial,
   notePrBudget,
+  notePrivacyRefused,
   noteRebase,
   noteSuperseded,
   noteTooLarge,
   sanitizeModelMarkdown,
   type SummaryInput,
 } from "@vectordevai/core/review/format"
+import { ROUTE_REFUSALS } from "@vectordevai/core/review/privacy"
 import { emptyState, parseFindingMarker, readState } from "@vectordevai/core/review/state"
 import type {
   AnchorFailure,
@@ -41,6 +43,7 @@ import type {
   ReviewCost,
   ReviewState,
   Selection,
+  StrictFinding,
 } from "@vectordevai/core/review/types"
 
 // Golden bodies live in fixtures/format-<name>.golden.txt. Run with UPDATE_GOLDEN=1 to rewrite them, then read
@@ -427,6 +430,89 @@ describe("the desktop form with line comments", () => {
   })
 })
 
+// VS-27b: the count line under the strict guardrail. Nothing sets `strict` before VS-27c, and without it every body is
+// byte-identical (the goldens above).
+describe("the count line under the strict guardrail", () => {
+  const base: SummaryInput = { head: HEAD, baseRef: "main", mode: "full", selection: selection(), state: STATE }
+  const strict = (value: SummaryInput["strict"], overrides: Partial<SummaryInput> = {}) =>
+    buildSummaryBody({ ...base, ...overrides, strict: value })
+  const empty = { complete: true, findings: [], dropped: [] }
+  const nit = { selection: selection({ nits: [finding({ severity: "nit" })] }) }
+  const kept: StrictFinding = {
+    id: "3f9a1c07be21",
+    class: "crash",
+    mechanism: "logic",
+    path: "src/auth/refresh.ts",
+    line: 52,
+    side: "RIGHT",
+    title: "Refresh can restore a session after logout",
+    trigger: "Logging out mid-refresh.",
+    impact: "The session comes back.",
+    quotes: [{ path: "src/auth/refresh.ts", line: 52, side: "RIGHT", code: "await this.store.write(next)" }],
+    fix: { kind: "suggestion", text: "x" },
+    verifiedBy: "model",
+    verifier: "anthropic/claude-sonnet-4-5",
+  }
+
+  test("without a strict result the body is unchanged", () => {
+    expect(buildSummaryBody({ ...FULL, strict: undefined })).toBe(buildSummaryBody(FULL))
+    expect(buildSummaryBody(base)).toContain("**No issues found** on the changed lines.")
+  })
+
+  test("an empty, complete result is no verified production-breaking issue, never 'No issues found'", () => {
+    const body = strict(empty)
+    expect(body).toContain("**No verified production-breaking issues** on the changed lines.")
+    expect(body).not.toContain("No issues found")
+    expect(strict(empty, nit)).toContain(
+      "**No verified production-breaking issues** on the changed lines · 1 nit below",
+    )
+  })
+
+  test("an empty, incomplete result says so and never reads as clean", () => {
+    for (const result of [
+      { ...empty, complete: false },
+      { ...empty, complete: false, dropped: [{ reason: "cap" as const, count: 2 }] },
+    ]) {
+      const body = strict(result)
+      expect(body).toContain(
+        "**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read.",
+      )
+      expect(body).not.toMatch(/No issues found|No verified|clean/i)
+    }
+    expect(strict({ ...empty, complete: false }, nit)).toContain(
+      "**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read · 1 nit below",
+    )
+  })
+
+  test("a complete result emptied by the comment limit says the limit left findings out", () => {
+    expect(strict({ ...empty, dropped: [{ reason: "cap", count: 2 }] })).toContain(
+      "**No findings posted** on the changed lines: the comment limit left out 2 verified findings.",
+    )
+    const one = strict({
+      ...empty,
+      dropped: [
+        { reason: "unverified", count: 4 },
+        { reason: "cap", count: 1 },
+      ],
+    })
+    expect(one).toContain("**No findings posted** on the changed lines: the comment limit left out 1 verified finding.")
+    expect(one).not.toContain("No verified")
+  })
+
+  test("the strict result alone decides an empty line; a non-empty one is counted", () => {
+    // A selection the runner has not composed with the strict result yet cannot make an empty one read otherwise.
+    expect(strict(empty, { selection: selection({ inline: [blocking] }) })).toContain(
+      "**No verified production-breaking issues** on the changed lines.",
+    )
+    expect(strict({ ...empty, findings: [kept] }, { selection: selection({ inline: [blocking] }) })).toContain(
+      "**1 blocking** on the changed lines",
+    )
+    expect(strict({ ...empty, complete: false, findings: [kept, { ...kept, id: "b" }] })).toContain(
+      "**2 blocking** on the changed lines",
+    )
+  })
+})
+
 describe("running and note bodies", () => {
   test("the first run shows only the Reviewing line", () => {
     const body = buildRunningBody({ head: HEAD, startedAt: STARTED, state: STATE })
@@ -558,6 +644,42 @@ describe("notes", () => {
     ).toContain("Stopped at the 12-minute time limit after 3 of 4 files. Not reviewed: `x.ts`.")
     expect(notePartial({ reason: "model-error", unreviewed: [], detail: "security: timed out" })).toBe(
       "**Partial review.** One reviewer could not finish: security: timed out. Comment `/vector review` to try again.",
+    )
+  })
+
+  test("a route refusal is never shown as clean, and says what was sent (VS-23a)", () => {
+    const notes = ROUTE_REFUSALS.map((refusal) =>
+      notePrivacyRefused({ model: "anthropic/claude-sonnet-5", refusal, attempts: 0 }),
+    )
+    for (const note of notes) {
+      expect(note).toStartWith(
+        '**Not reviewed.** `anthropic/claude-sonnet-5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: ',
+      )
+      expect(note).toEndWith(" Nothing was sent. Vector does not retry the review on another model.")
+      expect(note).not.toContain("No issues found")
+      expect(note).not.toContain("VectorScope")
+    }
+    // Each refusal says its own reason.
+    expect(new Set(notes).size).toBe(ROUTE_REFUSALS.length)
+    expect(notePrivacyRefused({ model: "vector-plan/auto", refusal: "codium-unaccepted", attempts: 0 })).toBe(
+      '**Not reviewed.** `vector-plan/auto` has no zero data retention route Vector may use while `privacy` is `"zdr"`: Vector does not yet accept Vector Codium or the free models Vector provides as zero data retention routes. Nothing was sent. Vector does not retry the review on another model.',
+    )
+    // VS-33: OpenAI keeps the cache, and the route may be attested by text or by several entries.
+    expect(notePrivacyRefused({ model: "openai/gpt-5.5", refusal: "extended-cache-unattested", attempts: 0 })).toBe(
+      '**Not reviewed.** `openai/gpt-5.5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: OpenAI keeps this model\'s prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`). Nothing was sent. Vector does not retry the review on another model.',
+    )
+    // The model's name comes from configuration, so it cannot close the code span.
+    expect(notePrivacyRefused({ model: "acme/odd`name", refusal: "free-model", attempts: 0 })).toContain(
+      "`acme/odd'name`",
+    )
+    // A refusal after earlier passes went out on allowed routes says so, instead of "Nothing was sent".
+    const later = notePrivacyRefused({ model: "acme/verify", refusal: "unattested-provider", attempts: 2 })
+    expect(later).toContain(
+      "Nothing was sent to `acme/verify`, but this review had already sent 2 requests on routes Vector may use.",
+    )
+    expect(later).not.toContain("Nothing was sent.")
+    expect(notePrivacyRefused({ model: "acme/verify", refusal: "plugins", attempts: 1 })).toContain(
+      "had already sent 1 request on routes",
     )
   })
 

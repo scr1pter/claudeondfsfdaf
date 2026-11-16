@@ -2,6 +2,7 @@
 
 import { Script } from "@vectordevai/script"
 import { prepareGitLab } from "../../../script/prepare-gitlab"
+import { linuxIsolationBuildPlugin, linuxIsolationCIMode } from "../../../script/linux-isolation-asset"
 import { unguardedBunReferences } from "./node-bundle-guard"
 import { brainWorkerModule } from "./brain-worker-module"
 import { bundleBrainWorker } from "./brain-worker"
@@ -20,7 +21,8 @@ const generated = await import("./generate.ts")
 await prepareGitLab()
 
 // Keep the worker build identity and the base64 transport used by Electron.
-const brainWorker = await bundleBrainWorker({ version: Script.version, channel: Script.channel })
+const isolation = await linuxIsolationBuildPlugin(linuxIsolationCIMode(process.argv, process.env.GITHUB_ACTIONS))
+const brainWorker = await bundleBrainWorker({ version: Script.version, channel: Script.channel }, isolation)
 
 const result = await Bun.build({
   target: "node",
@@ -29,6 +31,7 @@ const result = await Bun.build({
   format: "esm",
   sourcemap: "linked",
   external: ["jsonc-parser", "@lydell/node-pty"],
+  plugins: [isolation],
   define: {
     VECTOR_MODEL_CATALOG: generated.modelsData,
     VECTOR_CHANNEL: `'${Script.channel}'`,

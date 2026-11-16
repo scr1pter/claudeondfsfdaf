@@ -5,7 +5,8 @@
 
 import path from "path"
 import { Effect, Option, Schema } from "effect"
-import { Git } from "@/git"
+import { ReviewGit } from "@/review/git"
+import type { Git } from "@/git"
 import {
   focusHunks,
   focusOfFiles,
@@ -49,7 +50,7 @@ export interface FetchInput {
 }
 
 export const ensureObjects = Effect.fn("ReviewSource.ensureObjects")(function* (input: FetchInput) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   const remote = input.remote ?? "origin"
   // With Vector Local on, Git.run decides each fetch by the URL git would use for the remote before git starts.
   const env = input.authEnvironment ?? (input.token ? authEnv(input.token, input.server) : undefined)
@@ -110,18 +111,43 @@ export const ensureObjects = Effect.fn("ReviewSource.ensureObjects")(function* (
   }
 })
 
+// The commits of `revs` this repository does not have, without fetching anything. A replay (ReviewEval.replay)
+// reviews only what is already there, so it never reaches a remote.
+export const missingCommits = Effect.fn("ReviewSource.missingCommits")(function* (input: {
+  directory: string
+  revs: string[]
+}) {
+  const git = yield* ReviewGit.client
+  const missing = yield* Effect.forEach(input.revs, (rev) =>
+    !rev || rev.startsWith("-")
+      ? Effect.succeed([rev])
+      : git
+          .run(["cat-file", "-e", `${rev}^{commit}`], { cwd: input.directory })
+          .pipe(Effect.map((result) => (result.exitCode === 0 ? [] : [rev]))),
+  )
+  return missing.flat()
+})
+
+// A file's text at a commit: undefined when it is not there, is binary, or the revision looks like an option.
+export const show = Effect.fn("ReviewSource.show")(function* (input: { directory: string; rev: string; path: string }) {
+  const git = yield* ReviewGit.client
+  if (input.rev.startsWith("-")) return undefined
+  const result = yield* git.run(["cat-file", "blob", `${input.rev}:${input.path}`], { cwd: input.directory })
+  return result.exitCode === 0 && !result.stdout.includes(0) ? result.text() : undefined
+})
+
 // The pull request's own diff: merge-base → head.
 export const prDiff = Effect.fn("ReviewSource.prDiff")(function* (input: {
   directory: string
   mergeBase: string
   head: string
 }) {
-  return yield* diffFiles(yield* Git.Service, input.directory, input.mergeBase, input.head)
+  return yield* diffFiles(yield* ReviewGit.client, input.directory, input.mergeBase, input.head)
 })
 
 // Git's answer to the compare API, for local reviews and for tests.
 export const localCompare = Effect.fn("ReviewSource.localCompare")(function* (directory: string) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   const resolve = (value: string) =>
     git
       .run(["rev-parse", "--verify", "--end-of-options", `${value}^{commit}`], { cwd: directory })
@@ -163,7 +189,7 @@ export interface RangePlan {
 
 // Section 3.4: full, incremental over what changed since the last review, or carry when a force-push only rebased.
 export const planRange = Effect.fn("ReviewSource.planRange")(function* (input: RangeInput) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   const mergeBase = (yield* input.compare(input.base, input.head)).mergeBase
   if (!mergeBase) return yield* new ReviewGitError({ message: `No merge-base for ${short(input.head)}.` })
   const files = yield* diffFiles(git, input.directory, mergeBase, input.head)
@@ -226,7 +252,7 @@ export const headFiles = Effect.fn("ReviewSource.headFiles")(function* (input: {
   files: DiffFile[]
   maxBytes?: number
 }) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   const max = input.maxBytes ?? MAX_HEAD_FILE_BYTES
   const read = Effect.fnUntraced(function* (file: DiffFile) {
     const object = `${input.head}:${file.path}`
@@ -258,7 +284,7 @@ export const headFiles = Effect.fn("ReviewSource.headFiles")(function* (input: {
 // Whether a path a finding names exists at `rev`. Findings on paths that are neither in the diff nor in the
 // repository are dropped.
 export const knownPath = Effect.fn("ReviewSource.knownPath")(function* (input: { directory: string; rev: string }) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   const cache = new Map<string, Promise<boolean>>()
   return (file: string) => {
     const relative = path.isAbsolute(file) ? path.relative(input.directory, file) : file.replace(/^(\.\/)+/, "")
@@ -277,7 +303,7 @@ export const knownPath = Effect.fn("ReviewSource.knownPath")(function* (input: {
 })
 
 const diffFiles = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   directory: string,
   from: string,
   to: string,

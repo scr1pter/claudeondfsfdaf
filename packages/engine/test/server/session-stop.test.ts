@@ -9,6 +9,7 @@ import { ProjectV2 } from "@vectordevai/core/project"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 import type { Task } from "@vectordevai/schema/task"
 import { Agent } from "@/agent/agent"
+import { ComputerAvailability } from "@/computer/availability"
 import { MCP } from "@/mcp"
 import { Project } from "@/project/project"
 import { ToolRegistry } from "@/tool/registry"
@@ -93,6 +94,10 @@ const it = testEffect(
         // Capabilities read the default agent's permissions for the `workflows` flag (WP32).
         Layer.mock(Agent.Service)({
           defaultInfo: () => Effect.succeed({ name: "build", mode: "primary", permission: [], options: {} }),
+        }),
+        // The capabilities route also reports that this HTTP-only fixture has no desktop bridge.
+        Layer.mock(ComputerAvailability.Service)({
+          capabilities: () => Effect.succeed({ available: false, reason: "desktop" }),
         }),
         // These unrelated experimental endpoints are never called by this test.
         Layer.mock(MCP.Service)({}),
@@ -210,6 +215,6 @@ it.live("capabilities report the stop route", () =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get("/experimental/capabilities").pipe(HttpClient.execute)
     expect(response.status).toBe(200)
-    expect(yield* response.json).toMatchObject({ sessionStop: true })
+    expect(yield* response.json).toMatchObject({ sessionStop: true, vectorscopeSettings: true })
   }),
 )

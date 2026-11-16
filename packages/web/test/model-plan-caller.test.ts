@@ -21,6 +21,9 @@ import { ApiError } from "../../../api/_lib/http"
 import { revokeCliToken } from "../../../api/_lib/revocation"
 import profile from "../../../api/account/profile"
 import deleteAccount from "../../../api/account/delete"
+import { mintRunToken } from "../../../api/_lib/cloud-agents-run-token"
+import { bindingKey, generationKey } from "../../../api/_lib/cloud-agents-binding"
+import { liveKey } from "../../../api/_lib/cloud-agents-ledger"
 
 const user = { id: "22222222-2222-4222-8222-222222222222", email: "fixture@example.test" }
 const now = Date.UTC(2026, 9, 29)
@@ -40,6 +43,7 @@ const record = new Map<string, string>()
 const state = { unavailable: false, calls: [] as string[][], providers: [] as string[] }
 const environment: Record<string, string> = {
   VECTOR_CLI_TOKEN_SECRET: "fixture-caller-secret-that-is-long-enough",
+  VECTOR_RUN_TOKEN_SECRET: "fixture-caller-run-secret-that-is-long-enough",
   VECTOR_ABUSE_SECRET: "fixture-caller-abuse-secret-that-is-long-enough",
   MODEL_PLANS_ENABLED: "true",
   MODEL_PLANS_MIN_CLIENT: "1.99.113",
@@ -86,6 +90,21 @@ const upstream = Bun.serve({
       return Response.json({ result: "OK" })
     }
     if (command[0] === "EVAL" && command[1]?.includes("'INCR'")) return Response.json({ result: [1, 60] })
+    // Exercise the statically registered real verifier over a signed token. The real Redis scripts are covered in
+    // the cloud-agent lane; this caller-domain fixture only supplies the exact read-only authorization receipt.
+    if (command[0] === "EVAL" && command[2] === "4" && command[3] === bindingKey("123")) {
+      expect(command.slice(3)).toEqual([
+        bindingKey("123"),
+        generationKey("123"),
+        liveKey(user.id),
+        `vector:cli-revoked:${user.id}`,
+        user.id,
+        "1",
+        "gh-123-42-1-99",
+        "J".repeat(22),
+      ])
+      return Response.json({ result: "ok" })
+    }
     // The catalog reads the owner's switched-off models (A18): none here.
     if (command[0] === "SMEMBERS" && command[1] === "vector:codium:test:models-off")
       return Response.json({ result: [] })
@@ -105,11 +124,7 @@ const modern = { "x-vector-client": "1.99.113", "x-vector-catalog": "2" }
 const bearer = (token: string, extra: Record<string, string> = {}) =>
   incoming({ authorization: `Bearer ${token}`, ...extra })
 const runtimeRun = { ...run, run: { ...run.run!, deadline: Date.now() + 3600000 } }
-// These are test-only static service registrations. Production has no run verifier until its service/admission ships.
-registerRunVerifier("vrt_", async (token) => {
-  if (token !== "vrt_fixture.signature") throw new ApiError(401, "FIXTURE_RUN_INVALID", "Invalid fixture run")
-  return runtimeRun
-})
+// Cloud-agent tokens use A59's real production registration. Hosted's service is supplied by its own later package.
 registerRunVerifier("vht_", async (token) => {
   if (token !== "vht_fixture.signature") throw new ApiError(401, "FIXTURE_RUN_INVALID", "Invalid fixture run")
   return {
@@ -370,7 +385,24 @@ describe("run verifier domains", () => {
   })
   test.each(["vrt_fixture.signature", "vht_fixture.signature"])(
     "actual %s runs enter only chat/models, never account or billing endpoints",
-    async (token) => {
+    async (token: string) => {
+      if (token.startsWith("vrt_")) {
+        const at = Date.now()
+        token = mintRunToken({
+          sub: user.id,
+          rid: "gh-123-42-1-99",
+          repo: "123",
+          thr: "17",
+          gen: 1,
+          src: "github-comment",
+          pur: "task",
+          epoch: `fixture:${at}`,
+          dl: at + 3_600_000,
+          iat: at,
+          jti: "J".repeat(22),
+          cs: 0.1,
+        }).token
+      }
       expect((await request("models", token)).status).toBe(200)
       expect(await request("chat", token)).toMatchObject({ status: 400, body: { error: { code: "MODEL_PLAN_MODEL" } } })
       for (const route of ["status", "checkout", "change", "portal", "profile", "delete"])

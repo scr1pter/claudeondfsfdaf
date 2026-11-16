@@ -8,8 +8,14 @@ const os = require("os")
 const forwardedSignals = ["SIGINT", "SIGTERM", "SIGHUP"]
 
 function run(target) {
+  // Only the hosted runner creates this private descriptor; ordinary commands never inherit it.
+  const proof =
+    process.env.GITHUB_ACTIONS === "true" &&
+    process.env.VECTOR_MODE === "codium" &&
+    ["pid", "guard"].includes(process.env.VECTOR_GITHUB_TOOL_PID_NAMESPACE) &&
+    process.env.VECTOR_GITHUB_SESSION_PROOF === "fd3"
   const child = childProcess.spawn(target, process.argv.slice(2), {
-    stdio: "inherit",
+    stdio: proof ? ["inherit", "inherit", "inherit", 3] : "inherit",
   })
 
   child.on("error", (error) => {

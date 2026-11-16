@@ -117,6 +117,10 @@ import { appRequested, verifyAppPullRequest } from "./github.app"
 import { prepareGithubGit } from "./github.git"
 import { withGithubCallbacks, withGithubSignals } from "./github.lifecycle"
 import { SessionPosting } from "@/session/posting"
+import { GithubSecrets } from "./github.secrets"
+import { withCodiumReview, type CodiumReviewControl } from "./github.review-codium"
+import { agentModel, stoppedLine } from "./github.agent"
+import { sanitizeActionsLog } from "./github.output"
 
 // Reviews post with the workflow's GITHUB_TOKEN.
 export const ACTIONS_BOT = "github-actions[bot]"
@@ -185,6 +189,7 @@ export interface ReviewJobDeps {
   now: () => number
   dryRun?: boolean
   nonce?: () => string
+  cloud?: CodiumReviewControl
 }
 
 export interface ReviewJobResult {
@@ -194,6 +199,11 @@ export interface ReviewJobResult {
 }
 
 export async function executeReviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps): Promise<ReviewJobResult> {
+  if (deps.cloud) {
+    const cloud = deps.cloud
+    const log = deps.log
+    deps = { ...deps, log: (line) => log(sanitizeActionsLog(cloud.redact(line))) }
+  }
   const seen: Seen = {}
   try {
     return await reviewJob(ctx, deps, seen)
@@ -201,7 +211,7 @@ export async function executeReviewJob(ctx: ReviewJobContext, deps: ReviewJobDep
     // Reading the pull request, its comments, threads or files failed before the review started; anything later is
     // caught inside. A refused token or a missing pull request is a configuration error. Anything else, such as GitHub
     // still failing after its retries, exits 0, with a note when there is a summary comment to put it in.
-    const message = messageOf(error)
+    const message = deps.cloud ? "Codium is unavailable right now." : messageOf(error)
     deps.log(`The review could not start: ${message}`)
     if (seen.cannotStart) {
       deps.log(`Configuration error: ${seen.cannotStart}`)
@@ -215,7 +225,7 @@ export async function executeReviewJob(ctx: ReviewJobContext, deps: ReviewJobDep
       const gh = deps.dryRun ? dryRunGitHub(deps.gh, deps.log) : deps.gh
       const body = buildNoteBody({ previous: sticky.body, note: noteFailed(message), state: readState(sticky.body) })
       await gh
-        .updateIssueComment(sticky.id, redactSecrets(body, collectSecretValues(ctx.env)))
+        .updateIssueComment(sticky.id, deps.cloud?.redact(body) ?? redactSecrets(body, collectSecretValues(ctx.env)))
         .catch((cause) => deps.log(`Could not post the failure: ${messageOf(cause)}`))
     }
     return { exitCode: 0, posted: { reviewIds: [] } }
@@ -233,7 +243,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
   const gh = deps.dryRun ? dryRunGitHub(deps.gh, log) : deps.gh
   const posted: ReviewJobResult["posted"] = { reviewIds: [] }
   const secrets = collectSecretValues(ctx.env)
-  const clean = (text: string) => redactSecrets(text, secrets)
+  const clean = (text: string) => deps.cloud?.redact(redactSecrets(text, secrets)) ?? redactSecrets(text, secrets)
   const repoRef = { owner: ctx.owner, repo: ctx.repo }
   const finish = (exitCode: 0 | 1, error?: string): ReviewJobResult => ({
     exitCode,
@@ -283,6 +293,15 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
     gh.getContent(".gitattributes", base),
   ])
   const { config, warnings } = parseReviewConfig({ json, env: ctx.env, trigger: ctx.trigger })
+  if (deps.cloud) {
+    // A run credential authorizes Codium only. Dollar limits and a repository's own-key model cannot select a
+    // different provider or print historical dollar amounts into this run's public output.
+    config.maxCostUsd = 0
+    config.maxCostUsdPerPr = 0
+    config.maxCostUsdPerMonth = 0
+    config.model = ctx.env.MODEL || "vector-plan"
+    config.triageModel = undefined
+  }
   for (const warning of warnings) log(`warning: ${warning}`)
   const rules = parseReviewRules(rulesText ?? "")
   if (rules.truncated) log("warning: .vector/review.md is over 16 KB; the rest of it is ignored.")
@@ -657,6 +676,8 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
         ...(thread ? { thread } : {}),
         isWriter: (login) => writers.get(login.toLowerCase()) ?? false,
         prAuthor: pull.author,
+        // A `@<slug> dismiss` reply the route job accepted is read with the same mentions here.
+        ...(ctx.mentions ? { mentions: ctx.mentions } : {}),
       })
     }
     const prior: ClassifiedPrior[] = merged.map((entry) => classify(entry))
@@ -685,16 +706,19 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       ),
       config,
       model,
+      ...(deps.cloud ? { checks: false, stopSignal: deps.cloud.signal } : {}),
       ...(triage ? { triage } : {}),
       knownPath: known,
-      onProgress: (event) =>
+      onProgress: (event) => {
+        if (event.type === "cost") deps.cloud?.stepFinished()
         log(
           event.type === "cost"
-            ? event.kind === "codium"
+            ? deps.cloud || event.kind === "codium" || (event.codium && event.costUsd === 0)
               ? "Spent: Codium"
               : `Spent $${event.costUsd.toFixed(4)}${event.codium ? " + Codium" : ""}`
             : `${event.name}: ${event.status}`,
-        ),
+        )
+      },
       onCheckpoint: async (cost) => {
         spent = cost
         await upsertSticky(buildRunningBody({ previous: before, head, startedAt, state: running(cost.costUsd) })).catch(
@@ -706,12 +730,18 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       inlinePosted: state?.inlinePosted ?? 0,
     }
     const outcome = await deps.runReview(input)
+    deps.cloud?.reviewFinished(outcome)
     if (outcome.cost) spent = outcome.cost
 
     // No specialist produced output: the head stays where it was, so a re-run retries.
     const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify")
     if (reviewers.length && reviewers.every((entry) => entry.status === "failed")) {
-      const detail = reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no review"
+      const stopped = deps.cloud?.stopped()
+      const detail = deps.cloud
+        ? stopped
+          ? stoppedLine(stopped)
+          : "Codium is unavailable right now."
+        : (reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no review")
       log(`The review failed: ${detail}`)
       const next = nextState(state, {
         head,
@@ -920,7 +950,9 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       posted: postedCount,
     })
     const banners: string[] = []
-    if (outcome.partial) {
+    const stopped = deps.cloud?.stopped()
+    if (stopped) banners.push(stoppedLine(stopped), ...(stopped.advice ? [stopped.advice] : []))
+    else if (outcome.partial) {
       const detail = outcome.specialists.find((entry) => entry.status === "failed")?.detail
       banners.push(
         notePartial({
@@ -971,7 +1003,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
     return finish(0)
   } catch (error) {
     // The model or a tool failed. The state does not advance, so a re-run retries; the job still exits 0.
-    const message = messageOf(error)
+    const message = deps.cloud ? "Codium is unavailable right now." : messageOf(error)
     log(`The review failed: ${message}`)
     const next = nextState(state, {
       head,
@@ -1105,14 +1137,25 @@ export function createReviewGit(input: {
   }
 }
 
-export const githubReview = Effect.fn("Cli.github.review")(function* (args: {
+type ReviewArguments = {
   event?: string
   pr?: number
   dryRun?: boolean
-}) {
+}
+
+export const githubReview = Effect.fn("Cli.github.review")(function* (args: ReviewArguments) {
+  if (process.env.VECTOR_MODE === "codium")
+    return yield* withCodiumReview((cloud) => githubReviewJob(args, cloud), { env: process.env })
+  return yield* githubReviewJob(args)
+})
+
+const githubReviewJob = Effect.fn("Cli.github.reviewJob")(function* (
+  args: ReviewArguments,
+  cloud?: CodiumReviewControl,
+) {
   const instance = yield* InstanceRef
   if (!instance) return yield* Effect.die("InstanceRef not provided")
-  const env = process.env
+  const env = cloud ? { ...process.env, VECTOR_GITHUB_AUTH: "github", USE_GITHUB_TOKEN: "true" } : process.env
   const event = loadEvent(args.event, env)
   const repository = env["GITHUB_REPOSITORY"] || String(event.payload.repository?.full_name ?? "")
   const [owner, repo] = repository.split("/")
@@ -1147,6 +1190,7 @@ export const githubReview = Effect.fn("Cli.github.review")(function* (args: {
         repository,
         pullRequest: pr,
         env,
+        ...(cloud ? { providedToken: GithubSecrets.credentials.githubToken() } : {}),
         signal,
         notice: console.log,
       })
@@ -1170,7 +1214,7 @@ export const githubReview = Effect.fn("Cli.github.review")(function* (args: {
               : undefined
           const { Review } = yield* Effect.promise(() => import("@/review/run"))
           const { ReviewModel } = yield* Effect.promise(() => import("@/review/model"))
-          const log = (line: string) => console.log(line)
+          const log = (line: string) => console.log(cloud ? sanitizeActionsLog(cloud.redact(line)) : line)
           const context: ReviewJobContext = {
             owner,
             repo,
@@ -1211,15 +1255,26 @@ export const githubReview = Effect.fn("Cli.github.review")(function* (args: {
               }),
               runReview: (input) => run(Review.run(input)),
               resolveModel: async (input) => {
+                if (cloud) {
+                  const { Provider } = await import("@/provider/provider")
+                  const providers = await run(Provider.Service.use((provider) => provider.list()))
+                  const selected = agentModel({ mode: "codium", model: env.MODEL, providers })
+                  const model = await run(
+                    Provider.Service.use((provider) => provider.getModel(selected.providerID, selected.modelID)),
+                  )
+                  return { ...selected, context: model.limit.context, costKind: "codium" as const }
+                }
                 const exit = await run(Effect.exit(ReviewModel.resolveReviewModel(input)))
                 if (Exit.isSuccess(exit)) return exit.value
                 throw new Error(Cause.prettyErrors(exit.cause)[0]?.message ?? "The review model could not be resolved.")
               },
               log,
               now: Date.now,
+              ...(cloud ? { cloud } : {}),
               ...(args.dryRun ? { dryRun: true } : {}),
             }),
           )
+          cloud?.outcome(cloud.stopped() ? "draft" : result.exitCode === 0 ? "no-changes" : "failed")
           if (result.exitCode !== 0) return yield* fail(result.error ?? "The review job failed.")
         }),
       ),
@@ -1234,7 +1289,11 @@ export const githubReview = Effect.fn("Cli.github.review")(function* (args: {
     Effect.catchTag("UnknownError", (error) =>
       Effect.fail(
         new CliError({
-          message: error.cause instanceof Error ? error.cause.message : "GitHub App authentication failed.",
+          message: cloud
+            ? "Codium is unavailable right now."
+            : error.cause instanceof Error
+              ? error.cause.message
+              : "GitHub App authentication failed.",
           exitCode: 1,
         }),
       ),

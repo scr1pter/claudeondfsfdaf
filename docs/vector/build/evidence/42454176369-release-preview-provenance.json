@@ -1,0 +1,1689 @@
+{
+  "schemaVersion": 1,
+  "kind": "release-artifacts-only-preview",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "observedAt": "2026-11-08T07:05:00Z",
+  "run": {
+    "id": 42454176369,
+    "name": "Vector desktop release",
+    "path": ".github/workflows/vector-desktop-release.yml",
+    "run_number": 102,
+    "head_sha": "420912fb42f682220a309821daf166df90a14c87",
+    "head_branch": "hands",
+    "run_attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42454176369",
+    "created_at": "2026-11-08T06:18:09Z",
+    "updated_at": "2026-11-08T06:53:33Z",
+    "referencedWorkflow": "scr1pter/claudeondfsfdaf/.github/workflows/computer-helper.yml@420912fb42f682220a309821daf166df90a14c87"
+  },
+  "dispatch": {
+    "package": "H3",
+    "dispatchedAt": null,
+    "dispatchedAtNote": "the dispatch request time was not recorded to the second: the pre-dispatch check ran at 06:18:01Z, the run's API created_at is 06:18:09Z, and the local dispatch record was first written at 06:18:20Z, just after the 204 response",
+    "preDispatchReleaseRuns": [],
+    "preDispatchCheckedAt": "2026-11-08T06:18:01Z",
+    "preDispatchStatusesChecked": [
+      "in_progress",
+      "queued",
+      "waiting",
+      "requested"
+    ],
+    "approval": "owner 2026-11-08 04:15 UTC, deviation H2 item 4; H3's single dispatch",
+    "furtherDispatches": "none: no re-dispatch, rerun or cancel; dispatch.json records the single dispatch as spent"
+  },
+  "dispatchInputs": {
+    "tag": "v1.99.112",
+    "prerelease": false,
+    "dry_run": true,
+    "allow_unsigned": true,
+    "evidence": [
+      {
+        "at": "2026-11-08T06:18:21.8566487Z",
+        "line": "  TAG: v1.99.112"
+      },
+      {
+        "at": "2026-11-08T06:18:21.8566694Z",
+        "line": "  DRY_RUN: true"
+      },
+      {
+        "at": "2026-11-08T06:18:21.8566903Z",
+        "line": "  REQUESTED_UNSIGNED: true"
+      },
+      {
+        "at": "2026-11-08T06:18:21.8567134Z",
+        "line": "  PRERELEASE: false"
+      },
+      {
+        "at": "2026-11-08T06:18:21.8567378Z",
+        "line": "  EVENT_REPOSITORY: scr1pter/claudeondfsfdaf"
+      },
+      {
+        "at": "2026-11-08T06:32:18.3071727Z",
+        "line": "  dry_run: true"
+      },
+      {
+        "at": "2026-11-08T06:32:18.3072040Z",
+        "line": "  allow_unsigned: true"
+      }
+    ]
+  },
+  "dryRunGuard": {
+    "job": 128649560104,
+    "step3": {
+      "name": "Validate tag, version, and release notes",
+      "conclusion": "success"
+    },
+    "guardLines": ".github/workflows/vector-desktop-release.yml:72-79",
+    "guardResult": "passed: step 3 succeeded with DRY_RUN true; the refusal text appears only once, in the step's script listing, never as output",
+    "protectedEnvironmentStep": "step 4 skipped (.github/workflows/vector-desktop-release.yml:127, if: ${{ !inputs.dry_run }})",
+    "signingPolicy": "step 9 succeeded with RELEASE_DRY_RUN true; its dry-run branch (.github/workflows/vector-desktop-release.yml:199-203) writes unsigned=true to the step output and summary only, so the branch taken is source-derived",
+    "credentialsJob": {
+      "job": 128649776894,
+      "conclusion": "success",
+      "evidence": "the step's first command exits 0 when RELEASE_DRY_RUN is true; all 14 secret and variable inputs printed empty because each reference is '!inputs.dry_run && ... || '''",
+      "emptyInputs": 14
+    },
+    "releaseJob": {
+      "id": 128656734853,
+      "conclusion": "skipped",
+      "condition": ".github/workflows/vector-desktop-release.yml:1211 if: ${{ !inputs.dry_run }}",
+      "environment": "production-release (:1222), never entered",
+      "needs": [
+        "catalog",
+        "mac",
+        "prepare",
+        "windows",
+        "windows-arm64-helper",
+        "linux"
+      ],
+      "needsAllSucceeded": false,
+      "needsConclusions": {
+        "catalog": "success",
+        "mac": "success",
+        "prepare": "success",
+        "windows": "failure",
+        "windows-arm64-helper": "skipped",
+        "linux": "success"
+      },
+      "attribution": "observed facts only: the if expression is false for this dispatch, windows failed and windows-arm64-helper was skipped, and the job was skipped without steps. GitHub does not report which condition skipped it, so the skip is overdetermined and does not show that the dry_run condition alone keeps publishing off"
+    },
+    "signingPaths": "no signing, notarization, publish, tag or deploy step ran: the mac and Windows signing steps took their unsigned branches (witness lines under packaging), and Publish never started"
+  },
+  "jobSummary": {
+    "total": 34,
+    "success": 29,
+    "failure": 1,
+    "skipped": 4
+  },
+  "jobs": [
+    {
+      "id": 128649560104,
+      "name": "Validate release metadata",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:18:13Z",
+      "completedAt": "2026-11-08T06:19:14Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776771,
+      "name": "Prepare one immutable release catalog",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:19:16Z",
+      "completedAt": "2026-11-08T06:20:06Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776816,
+      "name": "Typecheck (cloud)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:19:21Z",
+      "completedAt": "2026-11-08T06:20:03Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776839,
+      "name": "Typecheck (core)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:19:16Z",
+      "completedAt": "2026-11-08T06:20:12Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776845,
+      "name": "Typecheck (app)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:20:05Z",
+      "completedAt": "2026-11-08T06:20:50Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776864,
+      "name": "Typecheck (sdk-next)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:20:14Z",
+      "completedAt": "2026-11-08T06:21:17Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776884,
+      "name": "Test (vector 1/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:19:16Z",
+      "completedAt": "2026-11-08T06:27:29Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776886,
+      "name": "Typecheck (desktop)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:21:00Z",
+      "completedAt": "2026-11-08T06:21:58Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776893,
+      "name": "Test (vector 3/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:19:16Z",
+      "completedAt": "2026-11-08T06:26:08Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776894,
+      "name": "Preflight release credentials",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:21:59Z",
+      "completedAt": "2026-11-08T06:22:02Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776900,
+      "name": "Test (cloud)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:19:16Z",
+      "completedAt": "2026-11-08T06:20:20Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776903,
+      "name": "Test (core)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:20:52Z",
+      "completedAt": "2026-11-08T06:24:56Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776909,
+      "name": "Typecheck (engine)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:20:21Z",
+      "completedAt": "2026-11-08T06:21:23Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776933,
+      "name": "Test (desktop)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:20:59Z",
+      "completedAt": "2026-11-08T06:24:25Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776947,
+      "name": "Test (vector 4/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:19:49Z",
+      "completedAt": "2026-11-08T06:26:32Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776956,
+      "name": "Test (vector 2/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:21:18Z",
+      "completedAt": "2026-11-08T06:27:41Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776967,
+      "name": "Test (hosted-api)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:20:07Z",
+      "completedAt": "2026-11-08T06:20:57Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649776981,
+      "name": "Test (app)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:21:24Z",
+      "completedAt": "2026-11-08T06:22:49Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649777064,
+      "name": "Test (sdk-next)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:21:30Z",
+      "completedAt": "2026-11-08T06:22:31Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649777300,
+      "name": "Build or restore the tested immutable computer helpers / plan",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:22:04Z",
+      "completedAt": "2026-11-08T06:22:14Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649956120,
+      "name": "Build smoke (website)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:22:15Z",
+      "completedAt": "2026-11-08T06:23:16Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128649956193,
+      "name": "Build smoke (desktop)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:22:32Z",
+      "completedAt": "2026-11-08T06:25:47Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128650411398,
+      "name": "Build or restore the tested immutable computer helpers / windows-build",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:22:18Z",
+      "completedAt": "2026-11-08T06:32:12Z",
+      "labels": [
+        "windows-2025"
+      ]
+    },
+    {
+      "id": 128650411445,
+      "name": "Build or restore the tested immutable computer helpers / mac-build",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:22:51Z",
+      "completedAt": "2026-11-08T06:36:21Z",
+      "labels": [
+        "macos-15"
+      ]
+    },
+    {
+      "id": 128650412547,
+      "name": "Build or restore the tested immutable computer helpers / overlay-linux",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-08T06:22:14Z",
+      "completedAt": "2026-11-08T06:22:14Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128650412570,
+      "name": "Build or restore the tested immutable computer helpers / desktop-e2e-linux",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-08T06:22:14Z",
+      "completedAt": "2026-11-08T06:22:14Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128651522063,
+      "name": "Linux desktop apps",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:27:43Z",
+      "completedAt": "2026-11-08T06:33:24Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 128652465162,
+      "name": "Build or restore the tested immutable computer helpers / windows-arm64-test",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:32:14Z",
+      "completedAt": "2026-11-08T06:37:06Z",
+      "labels": [
+        "windows-11-arm"
+      ]
+    },
+    {
+      "id": 128653308567,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-26)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:36:23Z",
+      "completedAt": "2026-11-08T06:37:20Z",
+      "labels": [
+        "macos-26"
+      ]
+    },
+    {
+      "id": 128653308704,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-15-intel)",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:36:24Z",
+      "completedAt": "2026-11-08T06:39:06Z",
+      "labels": [
+        "macos-15-intel"
+      ]
+    },
+    {
+      "id": 128653871810,
+      "name": "macOS desktop apps",
+      "conclusion": "success",
+      "startedAt": "2026-11-08T06:39:09Z",
+      "completedAt": "2026-11-08T06:53:32Z",
+      "labels": [
+        "macos-15"
+      ]
+    },
+    {
+      "id": 128653871818,
+      "name": "Windows desktop apps",
+      "conclusion": "failure",
+      "startedAt": "2026-11-08T06:39:08Z",
+      "completedAt": "2026-11-08T06:53:10Z",
+      "labels": [
+        "windows-2025"
+      ]
+    },
+    {
+      "id": 128656660944,
+      "name": "Verify the final ARM64 helper and actual packed Main pins",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-08T06:53:10Z",
+      "completedAt": "2026-11-08T06:53:10Z",
+      "labels": [
+        "windows-11-arm"
+      ]
+    },
+    {
+      "id": 128656734853,
+      "name": "Publish release and update feeds",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-08T06:53:33Z",
+      "completedAt": "2026-11-08T06:53:32Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    }
+  ],
+  "desktopTests": {
+    "job": 128649776933,
+    "step": 7,
+    "summaryLine": {
+      "at": "2026-11-08T06:24:23.5940961Z",
+      "line": "Desktop: 183/183 test files passed"
+    },
+    "testFilesRun": 183,
+    "failedFiles": [],
+    "files": {
+      "computer-overlay-workflow.test.ts": {
+        "pass": 6,
+        "fail": 0,
+        "expectCalls": 104,
+        "headerAt": "2026-11-08T06:21:56.9879780Z"
+      },
+      "computer-workflow.test.ts": {
+        "pass": 28,
+        "fail": 0,
+        "expectCalls": 1860,
+        "headerAt": "2026-11-08T06:21:57.1540764Z"
+      },
+      "computer-release-workflow.test.ts": {
+        "pass": 8,
+        "fail": 0,
+        "expectCalls": 238,
+        "headerAt": "2026-11-08T06:21:57.0448884Z"
+      },
+      "verify-computer-helper-windows.test.ts": {
+        "pass": 16,
+        "fail": 0,
+        "expectCalls": 78,
+        "headerAt": "2026-11-08T06:22:00.6457779Z"
+      },
+      "verify-computer-helper.test.ts": {
+        "pass": 17,
+        "fail": 0,
+        "expectCalls": 90,
+        "headerAt": "2026-11-08T06:22:00.9984425Z"
+      },
+      "computer-helper-artifact.test.ts": {
+        "pass": 5,
+        "fail": 0,
+        "expectCalls": 32,
+        "headerAt": "2026-11-08T06:21:46.4870976Z"
+      }
+    },
+    "closesH2Item5": "yes: H2's pending 'Test (desktop) 183/183' check is observed here; H2's own text is unchanged"
+  },
+  "helperJobs": [
+    {
+      "id": 128649777300,
+      "name": "Build or restore the tested immutable computer helpers / plan",
+      "conclusion": "success"
+    },
+    {
+      "id": 128650411445,
+      "name": "Build or restore the tested immutable computer helpers / mac-build",
+      "conclusion": "success",
+      "labels": [
+        "macos-15"
+      ],
+      "witnesses": [
+        {
+          "at": "2026-11-08T06:22:51.3866140Z",
+          "line": "Image: macos-15-arm64"
+        },
+        {
+          "at": "2026-11-08T06:23:40.2851420Z",
+          "line": "No earlier helper artifact exists in this run."
+        },
+        {
+          "at": "2026-11-08T06:35:34.9946510Z",
+          "line": "cmp native/out/darwin/computer-helper.json native/out/darwin-repro/computer-helper.json"
+        },
+        {
+          "at": "2026-11-08T06:35:48.2289910Z",
+          "line": "Computer helper checks: 31 passed, 1 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-core.json"
+        },
+        {
+          "at": "2026-11-08T06:35:48.4758250Z",
+          "line": "##[group]Run bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel \"$VECTOR_CHANNEL\" --out native/out/darwin --check-lock"
+        },
+        {
+          "at": "2026-11-08T06:36:14.1535390Z",
+          "line": "signing-cleanup stage=keychain result=verified"
+        }
+      ],
+      "logCopy": "transcribed excerpt"
+    },
+    {
+      "id": 128650411398,
+      "name": "Build or restore the tested immutable computer helpers / windows-build",
+      "conclusion": "success",
+      "labels": [
+        "windows-2025"
+      ],
+      "witnesses": [
+        {
+          "at": "2026-11-08T06:22:19.3995447Z",
+          "line": "Image: windows-2025-vs2026"
+        },
+        {
+          "at": "2026-11-08T06:25:07.5302994Z",
+          "line": "No earlier helper artifact exists in this run."
+        },
+        {
+          "at": "2026-11-08T06:32:04.0980870Z",
+          "line": "Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-core.json"
+        }
+      ],
+      "logCopy": "full log (byte-exact tool spill converted to text)"
+    },
+    {
+      "id": 128652465162,
+      "name": "Build or restore the tested immutable computer helpers / windows-arm64-test",
+      "conclusion": "success",
+      "labels": [
+        "windows-11-arm"
+      ],
+      "witnesses": [
+        {
+          "at": "2026-11-08T06:32:15.8279925Z",
+          "line": "Image: windows-11-vs2026-arm64"
+        },
+        {
+          "at": "2026-11-08T06:32:15.8277799Z",
+          "line": "10.0.26200"
+        },
+        {
+          "at": "2026-11-08T06:36:33.7895361Z",
+          "line": "3705 packages installed [227.99s]"
+        },
+        {
+          "at": "2026-11-08T06:36:35.6512192Z",
+          "line": "SHA256 digest of downloaded artifact is 73509af257a6b7fb9b872e73e9aff1b0c5eaafb9972a83cd42e00a3d8ebe975f"
+        },
+        {
+          "at": "2026-11-08T06:36:58.0240640Z",
+          "line": "Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: C:\\a\\_temp\\computer-win32-arm64.json"
+        }
+      ],
+      "watchPoint": "bun install --frozen-lockfile --ignore-scripts took 227.99 s on windows-11-arm; the final ARM64 verifier job (15-minute timeout) installs through the composite setup-bun and has never run",
+      "logCopy": "transcribed excerpt"
+    },
+    {
+      "id": 128653308567,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-26)",
+      "conclusion": "success",
+      "labels": [
+        "macos-26"
+      ],
+      "totals": "not read: the transcribed tail (60 lines) ends after the totals line",
+      "logCopy": "transcribed excerpt"
+    },
+    {
+      "id": 128653308704,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-15-intel)",
+      "conclusion": "success",
+      "labels": [
+        "macos-15-intel"
+      ],
+      "totals": "not read: the transcribed tail (60 lines) ends after the totals line",
+      "logCopy": "transcribed excerpt"
+    },
+    {
+      "id": 128650412547,
+      "name": "Build or restore the tested immutable computer helpers / overlay-linux",
+      "conclusion": "skipped",
+      "reason": "by design: the release passes full-desktop-e2e false"
+    },
+    {
+      "id": 128650412570,
+      "name": "Build or restore the tested immutable computer helpers / desktop-e2e-linux",
+      "conclusion": "skipped",
+      "reason": "by design: the release passes full-desktop-e2e false"
+    }
+  ],
+  "packaging": {
+    "linux": {
+      "job": 128651522063,
+      "conclusion": "success",
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "name": "Check out release source",
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "name": "Download the exact release catalog",
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "name": "Set up Bun",
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "name": "Set exact build version",
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "name": "Build desktop app",
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "name": "Package AppImage",
+          "conclusion": "success"
+        },
+        {
+          "number": 8,
+          "name": "Verify Linux artifacts",
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "name": "Preserve verified Linux assets",
+          "conclusion": "success"
+        },
+        {
+          "number": 17,
+          "name": "Post Set up Bun",
+          "conclusion": "success"
+        },
+        {
+          "number": 18,
+          "name": "Post Check out release source",
+          "conclusion": "success"
+        },
+        {
+          "number": 19,
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ],
+      "packageAttempts": {
+        "observed": 1,
+        "evidence": "two 'packaging platform=linux' lines (x64, arm64) and one AppImage build line per architecture in step 7; no failure or retry sleep between them"
+      },
+      "witnesses": [
+        {
+          "at": "2026-11-08T06:32:30.4372649Z",
+          "line": "  \u2022 building        target=AppImage arch=x64 file=dist/vector-desktop-1.99.112-linux-x86_64.AppImage"
+        },
+        {
+          "at": "2026-11-08T06:32:56.5615358Z",
+          "line": "  \u2022 building        target=AppImage arch=arm64 file=dist/vector-desktop-1.99.112-linux-arm64.AppImage"
+        },
+        {
+          "at": "2026-11-08T06:33:17.6305738Z",
+          "line": "Artifact audit: 191 files, 519.1 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:33:17.6307934Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:33:17.6308263Z",
+          "line": "Verified bundled license notices and artifact audit: packages/desktop/dist/linux-unpacked"
+        },
+        {
+          "at": "2026-11-08T06:33:19.9903180Z",
+          "line": "Artifact audit: 191 files, 524.2 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:33:19.9905358Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:33:19.9905685Z",
+          "line": "Verified bundled license notices and artifact audit: packages/desktop/dist/linux-arm64-unpacked"
+        }
+      ],
+      "helperAbsence": {
+        "result": "passed (derived): step 8 runs under set -euo pipefail and its first two commands are 'test ! -e .../linux-unpacked/resources/computer' and 'test ! -e .../linux-arm64-unpacked/resources/computer'; the step concluded success",
+        "source": ".github/workflows/vector-desktop-release.yml:1185"
+      },
+      "updaterMetadata": "derived from step 8 success: latest-linux.yml and latest-linux-arm64.yml are non-empty and name their AppImages; 'file' reports x86-64 and aarch64",
+      "artifact": 13607526860
+    },
+    "macos": {
+      "job": 128653871810,
+      "conclusion": "success",
+      "image": {
+        "at": "2026-11-08T06:39:09.5218890Z",
+        "line": "Image: macos-15-arm64"
+      },
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "name": "Check out release source",
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "name": "Download the exact release catalog",
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "name": "Set up Bun",
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "name": "Set exact build version",
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "name": "Restore the exact tested macOS helper source artifact",
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "name": "Verify the prebuilt macOS helper source, bytes, signature and measured cdhash",
+          "conclusion": "success"
+        },
+        {
+          "number": 8,
+          "name": "Require Apple signing and notarization credentials",
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "name": "Install the Electron runtime",
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "name": "Build desktop app",
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "name": "Package signed and notarized arm64 app",
+          "conclusion": "success"
+        },
+        {
+          "number": 12,
+          "name": "Package signed and notarized x64 app",
+          "conclusion": "success"
+        },
+        {
+          "number": 13,
+          "name": "Merge macOS updater metadata",
+          "conclusion": "success"
+        },
+        {
+          "number": 14,
+          "name": "Verify packaged apps can reach the update feed and pass the byte audit",
+          "conclusion": "success"
+        },
+        {
+          "number": 15,
+          "name": "Verify each final macOS computer helper",
+          "conclusion": "success"
+        },
+        {
+          "number": 16,
+          "name": "Verify app notarization and artifact signatures",
+          "conclusion": "success"
+        },
+        {
+          "number": 17,
+          "name": "Preserve verified macOS assets",
+          "conclusion": "success"
+        },
+        {
+          "number": 33,
+          "name": "Post Set up Bun",
+          "conclusion": "success"
+        },
+        {
+          "number": 34,
+          "name": "Post Check out release source",
+          "conclusion": "success"
+        },
+        {
+          "number": 35,
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ],
+      "restore": {
+        "at": "2026-11-08T06:41:09.3519930Z",
+        "line": "Restored the exact helper artifact ids, source/run identity and safe archives."
+      },
+      "prebuiltLockCheck": "step 7 'Verify the prebuilt macOS helper source, bytes, signature and measured cdhash' concluded success (codesign --verify, build-computer-helper.ts --check-lock with VECTOR_COMPUTER_HELPER_PREBUILT, then the lock version/toolchain check); it prints nothing on success",
+      "unsignedSkip": {
+        "at": "2026-11-08T06:41:09.6861970Z",
+        "line": "Skipping Apple signing and notarization for this explicitly approved unsigned release."
+      },
+      "packageAttempts": {
+        "arm64": 1,
+        "x64": 1,
+        "evidence": "one 'packaging platform=darwin' line per architecture"
+      },
+      "finalize": {
+        "at": "2026-11-08T06:53:07.9540640Z",
+        "line": "finalized latest yml files"
+      },
+      "verifyPackage": [
+        {
+          "at": "2026-11-08T06:48:38.3679040Z",
+          "line": "Artifact audit: 381 files, 509.5 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:48:38.3685720Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:48:39.4304340Z",
+          "line": "verified dist/mac-arm64/Vector.app has one consistent compiled, bundle, update channel and computer helper"
+        },
+        {
+          "at": "2026-11-08T06:53:06.3414770Z",
+          "line": "Artifact audit: 381 files, 515.0 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:53:06.3418020Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:53:07.0212900Z",
+          "line": "verified dist/mac/Vector.app has one consistent compiled, bundle, update channel and computer helper"
+        },
+        {
+          "at": "2026-11-08T06:53:11.4301280Z",
+          "line": "Artifact audit: 381 files, 515.0 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:53:11.4303550Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:53:12.1270260Z",
+          "line": "verified /Users/runner/work/claudeondfsfdaf/claudeondfsfdaf/packages/desktop/dist/mac/Vector.app has one consistent compiled, bundle, update channel and computer helper"
+        },
+        {
+          "at": "2026-11-08T06:53:15.9755560Z",
+          "line": "Artifact audit: 381 files, 509.5 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:53:15.9759500Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:53:16.7975580Z",
+          "line": "verified /Users/runner/work/claudeondfsfdaf/claudeondfsfdaf/packages/desktop/dist/mac-arm64/Vector.app has one consistent compiled, bundle, update channel and computer helper"
+        }
+      ],
+      "helperVerifier": [
+        {
+          "at": "2026-11-08T06:53:17.9115040Z",
+          "line": "Verified the final computer helper identity, signatures, provenance and packaged self-test."
+        },
+        {
+          "at": "2026-11-08T06:53:18.7222780Z",
+          "line": "Verified the final computer helper identity, signatures, provenance and packaged self-test."
+        }
+      ],
+      "adhocSignature": "derived from step 16 success: for each Vector.app, codesign --verify --deep --strict and the helper codesign --verify --strict passed and 'codesign -dv' contained Signature=adhoc; each DMG is non-empty; latest-mac.yml names both zips",
+      "artifact": 13608360351
+    },
+    "windows": {
+      "job": 128653871818,
+      "conclusion": "failure",
+      "image": {
+        "at": "2026-11-08T06:39:09.5907678Z",
+        "line": "Image: windows-2025-vs2026"
+      },
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "name": "Check out release source",
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "name": "Download the exact release catalog",
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "name": "Set up Bun",
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "name": "Set exact build version",
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "name": "Restore the exact tested native Windows helper source",
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "name": "Restore final Windows helper bytes from an earlier attempt",
+          "conclusion": "success"
+        },
+        {
+          "number": 8,
+          "name": "Require Windows signing credentials",
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "name": "Sign or verify both final helper copies before compiling Main pins",
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "name": "Archive final Windows helper bytes once",
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "name": "Preserve immutable final Windows helper bytes",
+          "conclusion": "success"
+        },
+        {
+          "number": 12,
+          "name": "Build desktop app",
+          "conclusion": "success"
+        },
+        {
+          "number": 13,
+          "name": "Package signed installer",
+          "conclusion": "success"
+        },
+        {
+          "number": 14,
+          "name": "Verify installer signatures, updater metadata and byte audit",
+          "conclusion": "success"
+        },
+        {
+          "number": 15,
+          "name": "Verify both packaged helper signatures and the x64 final package",
+          "conclusion": "failure"
+        },
+        {
+          "number": 16,
+          "name": "Restore an earlier ARM64 packaged proof without replacing its bytes",
+          "conclusion": "skipped"
+        },
+        {
+          "number": 17,
+          "name": "Archive the exact final ARM64 Main and helper bytes",
+          "conclusion": "skipped"
+        },
+        {
+          "number": 18,
+          "name": "Preserve the immutable final ARM64 package proof",
+          "conclusion": "skipped"
+        },
+        {
+          "number": 19,
+          "name": "Preserve verified Windows assets",
+          "conclusion": "skipped"
+        },
+        {
+          "number": 37,
+          "name": "Post Set up Bun",
+          "conclusion": "success"
+        },
+        {
+          "number": 38,
+          "name": "Post Check out release source",
+          "conclusion": "success"
+        },
+        {
+          "number": 39,
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ],
+      "restoreSource": {
+        "at": "2026-11-08T06:43:44.5502395Z",
+        "line": "Restored the exact helper artifact ids, source/run identity and safe archives."
+      },
+      "restoreFinal": {
+        "at": "2026-11-08T06:43:45.5859387Z",
+        "line": "No earlier helper artifact exists in this run."
+      },
+      "unsignedSkip": {
+        "at": "2026-11-08T06:43:46.0632751Z",
+        "line": "Skipping Windows signing for this explicitly approved unsigned release."
+      },
+      "signStep": {
+        "conclusion": "success",
+        "pinMap": {
+          "x64": "b295af0fc15a87a03d46a87857d5f52637b8d3aed39e121551f6c10cd2ef7ab6",
+          "arm64": "92dcbb3a3e14d4c580b5b64782f9cd71cd323fefb86f6c12d5432e6869f684e6"
+        },
+        "pinMapFirstSeen": {
+          "at": "2026-11-08T06:43:49.2317655Z",
+          "line": "  VECTOR_COMPUTER_HELPER_SHA256: {\"x64\":\"b295af0fc15a87a03d46a87857d5f52637b8d3aed39e121551f6c10cd2ef7ab6\",\"arm64\":\"92dcbb3a3e14d4c580b5b64782f9cd71cd323fefb86f6c12d5432e6869f684e6\"}"
+        },
+        "secretInputs": "every AZURE_* value and VECTOR_COMPUTER_HELPER_PUBLISHER_SUBJECT printed empty in the step environment"
+      },
+      "finalHelperArtifact": 13607507003,
+      "packageAttempts": {
+        "observed": 1,
+        "evidence": "two 'packaging platform=win32' lines (x64, arm64) and one combined NSIS build line"
+      },
+      "audit": [
+        {
+          "at": "2026-11-08T06:52:57.6962756Z",
+          "line": "Artifact audit: 217 files, 576.2 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:52:57.6970775Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:52:57.6971448Z",
+          "line": "Verified bundled license notices and artifact audit: packages/desktop/dist/win-unpacked"
+        },
+        {
+          "at": "2026-11-08T06:53:02.1465005Z",
+          "line": "Artifact audit: 217 files, 578.0 MiB scanned"
+        },
+        {
+          "at": "2026-11-08T06:53:02.1468656Z",
+          "line": "  violations: 0"
+        },
+        {
+          "at": "2026-11-08T06:53:02.1469391Z",
+          "line": "Verified bundled license notices and artifact audit: packages/desktop/dist/win-arm64-unpacked"
+        }
+      ],
+      "installerSignatures": "derived from step 14 success: the three installers exist and Get-AuthenticodeSignature reports NotSigned for each (the step throws otherwise)",
+      "latestYml": "derived from step 14 success: latest.yml names the combined, x64 and arm64 installers",
+      "helperNotSigned": "derived: step 15's loop over win-unpacked and win-arm64-unpacked helpers runs before the verifier and did not print 'The unsigned helper has an unexpected signature.'",
+      "x64Verifier": {
+        "result": "failed",
+        "firstErrorLine": {
+          "at": "2026-11-08T06:53:06.0787151Z",
+          "line": "error: The packaged Main JavaScript files are missing or ambiguous."
+        },
+        "stack": {
+          "at": "2026-11-08T06:53:06.0788646Z",
+          "line": "      at extractWindowsHelperCompiledPins (D:\\a\\claudeondfsfdaf\\claudeondfsfdaf\\packages\\desktop\\scripts\\verify-computer-helper-windows.ts:103:15)"
+        },
+        "source": "packages/desktop/scripts/verify-computer-helper-windows.ts:103 at 420912fb (the run's source)"
+      },
+      "armRestore": "not run (step 16 skipped after step 15 failed)",
+      "armProofArtifact": null,
+      "platformArtifact": null
+    },
+    "arm64Final": {
+      "job": 128656660944,
+      "conclusion": "skipped",
+      "runnerLabels": [
+        "windows-11-arm"
+      ],
+      "image": null,
+      "restore": null,
+      "verifier": null,
+      "outcome": "not observed (skipped because Windows desktop apps failed)"
+    }
+  },
+  "compiledPins": {
+    "verifierEvidence": "not reached: extractWindowsHelperCompiledPins threw before decoding any pin, so no compiled Main pin was compared with the helper bytes in this run",
+    "buildInputPinMap": "the sign step's pin map printed into the Build and Package step environments (x64 b295af0f..., arm64 92dcbb3a...) is the build input, not evidence of what packed Main contains",
+    "localObservation": null,
+    "localObservationNote": "no artifact of this run was downloadable, so the read-only asar pin cross-check was not possible"
+  },
+  "artifacts": [
+    {
+      "id": 13608360351,
+      "name": "vector-desktop-mac-v1.99.112-1",
+      "sizeInBytes": 737158415,
+      "digest": "sha256:f4cdf54599767cc91a2c7a132fd5509e2627b99cfc9bd36858d8638cf4d337b6",
+      "expired": false,
+      "createdAt": "2026-11-08T06:53:29Z",
+      "expiresAt": "2026-11-22T06:53:19Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128653871810,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:53:28.8053480Z",
+            "line": "SHA256 digest of uploaded artifact zip is f4cdf54599767cc91a2c7a132fd5509e2627b99cfc9bd36858d8638cf4d337b6"
+          },
+          {
+            "at": "2026-11-08T06:53:29.3592800Z",
+            "line": "Artifact vector-desktop-mac-v1.99.112-1.zip successfully finalized. Artifact ID 13608360351"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607845234,
+      "name": "computer-helper-darwin-report-macos-26-v1.99.112",
+      "sizeInBytes": 1000,
+      "digest": "sha256:5f186ea5f989a71ddbc004bb62084792c2b050281ce12e645a4689a98c3cb2f3",
+      "expired": false,
+      "createdAt": "2026-11-08T06:37:16Z",
+      "expiresAt": "2026-11-22T06:37:14Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128653308567,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:37:15.2372420Z",
+            "line": "SHA256 digest of uploaded artifact zip is 5f186ea5f989a71ddbc004bb62084792c2b050281ce12e645a4689a98c3cb2f3"
+          },
+          {
+            "at": "2026-11-08T06:37:15.6132740Z",
+            "line": "Artifact computer-helper-darwin-report-macos-26-v1.99.112.zip successfully finalized. Artifact ID 13607845234"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607760297,
+      "name": "computer-helper-darwin-reports-v1.99.112",
+      "sizeInBytes": 993,
+      "digest": "sha256:dcf02f2913c1df3912c35188cd8f3622e5b8c8e6506aa0362a57e4fadeb94867",
+      "expired": false,
+      "createdAt": "2026-11-08T06:36:15Z",
+      "expiresAt": "2026-11-22T06:36:14Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128650411445,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:36:15.2486330Z",
+            "line": "SHA256 digest of uploaded artifact zip is dcf02f2913c1df3912c35188cd8f3622e5b8c8e6506aa0362a57e4fadeb94867"
+          },
+          {
+            "at": "2026-11-08T06:36:15.6289180Z",
+            "line": "Artifact computer-helper-darwin-reports-v1.99.112.zip successfully finalized. Artifact ID 13607760297"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607705567,
+      "name": "computer-helper-darwin-tests-v1.99.112",
+      "sizeInBytes": 3601729,
+      "digest": "sha256:8786c13d4c851e79bb70bf9de67f2e37cea517c691965e12a45c960cc21467f5",
+      "expired": false,
+      "createdAt": "2026-11-08T06:35:53Z",
+      "expiresAt": "2026-11-22T06:35:51Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128650411445,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:35:52.6296530Z",
+            "line": "SHA256 digest of uploaded artifact zip is 8786c13d4c851e79bb70bf9de67f2e37cea517c691965e12a45c960cc21467f5"
+          },
+          {
+            "at": "2026-11-08T06:35:53.0265470Z",
+            "line": "Artifact computer-helper-darwin-tests-v1.99.112.zip successfully finalized. Artifact ID 13607705567"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607670357,
+      "name": "computer-helper-win32-v1.99.112",
+      "sizeInBytes": 1981560,
+      "digest": "sha256:73509af257a6b7fb9b872e73e9aff1b0c5eaafb9972a83cd42e00a3d8ebe975f",
+      "expired": false,
+      "createdAt": "2026-11-08T06:32:06Z",
+      "expiresAt": "2026-11-22T06:32:05Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128650411398,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:32:06.2265271Z",
+            "line": "SHA256 digest of uploaded artifact zip is 73509af257a6b7fb9b872e73e9aff1b0c5eaafb9972a83cd42e00a3d8ebe975f"
+          },
+          {
+            "at": "2026-11-08T06:32:06.6099039Z",
+            "line": "Artifact computer-helper-win32-v1.99.112.zip successfully finalized. Artifact ID 13607670357"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested",
+      "consumedBy": [
+        {
+          "job": 128652465162,
+          "witnesses": [
+            {
+              "at": "2026-11-08T06:36:35.6512192Z",
+              "line": "SHA256 digest of downloaded artifact is 73509af257a6b7fb9b872e73e9aff1b0c5eaafb9972a83cd42e00a3d8ebe975f"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 13607536547,
+      "name": "computer-helper-win32-tests-v1.99.112",
+      "sizeInBytes": 4098435,
+      "digest": "sha256:cf3fbb0fa9b506a99e985f188677af7f1479c7d2b5f31ff52cf12b2c616c9f15",
+      "expired": false,
+      "createdAt": "2026-11-08T06:32:08Z",
+      "expiresAt": "2026-11-22T06:32:06Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128650411398,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:32:08.0304880Z",
+            "line": "SHA256 digest of uploaded artifact zip is cf3fbb0fa9b506a99e985f188677af7f1479c7d2b5f31ff52cf12b2c616c9f15"
+          },
+          {
+            "at": "2026-11-08T06:32:08.4154249Z",
+            "line": "Artifact computer-helper-win32-tests-v1.99.112.zip successfully finalized. Artifact ID 13607536547"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607526860,
+      "name": "vector-desktop-linux-v1.99.112-1",
+      "sizeInBytes": 360843803,
+      "digest": "sha256:1146cc652d6730ded7548027abad21e59cbe443f3fa969ec2b96196c9fea5c14",
+      "expired": false,
+      "createdAt": "2026-11-08T06:33:22Z",
+      "expiresAt": "2026-11-22T06:33:20Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128651522063,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:33:22.3432510Z",
+            "line": "SHA256 digest of uploaded artifact zip is 1146cc652d6730ded7548027abad21e59cbe443f3fa969ec2b96196c9fea5c14"
+          },
+          {
+            "at": "2026-11-08T06:33:22.7657655Z",
+            "line": "Artifact vector-desktop-linux-v1.99.112-1.zip successfully finalized. Artifact ID 13607526860"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607507003,
+      "name": "computer-helper-win32-final-v1.99.112",
+      "sizeInBytes": 1981181,
+      "digest": "sha256:b401a3c227da85f2bd3a1ee4d54bb55b658ef0f0c77e80a3a8dd16113589cf03",
+      "expired": false,
+      "createdAt": "2026-11-08T06:43:50Z",
+      "expiresAt": "2026-11-22T06:43:49Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128653871818,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:43:50.3178943Z",
+            "line": "SHA256 digest of uploaded artifact zip is b401a3c227da85f2bd3a1ee4d54bb55b658ef0f0c77e80a3a8dd16113589cf03"
+          },
+          {
+            "at": "2026-11-08T06:43:50.7176640Z",
+            "line": "Artifact computer-helper-win32-final-v1.99.112.zip successfully finalized. Artifact ID 13607507003"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607361907,
+      "name": "computer-helper-win32-arm64-report-v1.99.112",
+      "sizeInBytes": 556,
+      "digest": "sha256:89af867be9d4065935f7a335d2152e4f86490a8665da314760f797175b5a603b",
+      "expired": false,
+      "createdAt": "2026-11-08T06:36:59Z",
+      "expiresAt": "2026-11-22T06:36:59Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128652465162,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:36:59.5993164Z",
+            "line": "SHA256 digest of uploaded artifact zip is 89af867be9d4065935f7a335d2152e4f86490a8665da314760f797175b5a603b"
+          },
+          {
+            "at": "2026-11-08T06:37:00.1047704Z",
+            "line": "Artifact computer-helper-win32-arm64-report-v1.99.112.zip successfully finalized. Artifact ID 13607361907"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607282688,
+      "name": "computer-helper-win32-reports-v1.99.112",
+      "sizeInBytes": 554,
+      "digest": "sha256:767563266168025c2580684abc57b236bf30bacf93a5598e7719c205198a3cfc",
+      "expired": false,
+      "createdAt": "2026-11-08T06:32:09Z",
+      "expiresAt": "2026-11-22T06:32:08Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128650411398,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:32:09.1299177Z",
+            "line": "SHA256 digest of uploaded artifact zip is 767563266168025c2580684abc57b236bf30bacf93a5598e7719c205198a3cfc"
+          },
+          {
+            "at": "2026-11-08T06:32:09.5045615Z",
+            "line": "Artifact computer-helper-win32-reports-v1.99.112.zip successfully finalized. Artifact ID 13607282688"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13607193837,
+      "name": "computer-helper-darwin-v1.99.112",
+      "sizeInBytes": 4001321,
+      "digest": "sha256:4ac6444c3f2d282d4f4172e7d42358340a40893b8127bc5a88f6d616be399fec",
+      "expired": false,
+      "createdAt": "2026-11-08T06:35:51Z",
+      "expiresAt": "2026-11-22T06:35:49Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128650411445,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:35:50.9201190Z",
+            "line": "SHA256 digest of uploaded artifact zip is 4ac6444c3f2d282d4f4172e7d42358340a40893b8127bc5a88f6d616be399fec"
+          },
+          {
+            "at": "2026-11-08T06:35:51.3096090Z",
+            "line": "Artifact computer-helper-darwin-v1.99.112.zip successfully finalized. Artifact ID 13607193837"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    },
+    {
+      "id": 13606547341,
+      "name": "vector-model-catalog",
+      "sizeInBytes": 543279,
+      "digest": "sha256:9fd0ee62a922db99b181ee0377c261c0c515231ae95335eea466390b5f757252",
+      "expired": false,
+      "createdAt": "2026-11-08T06:20:03Z",
+      "expiresAt": "2026-12-08T06:20:03Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128649776771,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:20:03.7863312Z",
+            "line": "SHA256 digest of uploaded artifact zip is 9fd0ee62a922db99b181ee0377c261c0c515231ae95335eea466390b5f757252"
+          },
+          {
+            "at": "2026-11-08T06:20:04.1406742Z",
+            "line": "Artifact vector-model-catalog.zip successfully finalized. Artifact ID 13606547341"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested",
+      "consumedBy": [
+        {
+          "job": 128651522063,
+          "witnesses": [
+            {
+              "at": "2026-11-08T06:27:49.2220028Z",
+              "line": "SHA256 digest of downloaded artifact is 9fd0ee62a922db99b181ee0377c261c0c515231ae95335eea466390b5f757252"
+            }
+          ]
+        },
+        {
+          "job": 128653871810,
+          "witnesses": [
+            {
+              "at": "2026-11-08T06:39:19.6827550Z",
+              "line": "SHA256 digest of downloaded artifact is 9fd0ee62a922db99b181ee0377c261c0c515231ae95335eea466390b5f757252"
+            }
+          ]
+        },
+        {
+          "job": 128653871818,
+          "witnesses": [
+            {
+              "at": "2026-11-08T06:39:21.8121502Z",
+              "line": "SHA256 digest of downloaded artifact is 9fd0ee62a922db99b181ee0377c261c0c515231ae95335eea466390b5f757252"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 13606534325,
+      "name": "computer-helper-darwin-report-macos-15-intel-v1.99.112",
+      "sizeInBytes": 1003,
+      "digest": "sha256:3f2145da50666473ca8dd33837245fb11dcacbf8b2017ae22b986813a0bbf49c",
+      "expired": false,
+      "createdAt": "2026-11-08T06:39:01Z",
+      "expiresAt": "2026-11-22T06:38:59Z",
+      "workflowRun": {
+        "id": 42454176369,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "420912fb42f682220a309821daf166df90a14c87"
+      },
+      "producedBy": {
+        "job": 128653308704,
+        "witnesses": [
+          {
+            "at": "2026-11-08T06:39:00.3212140Z",
+            "line": "SHA256 digest of uploaded artifact zip is 3f2145da50666473ca8dd33837245fb11dcacbf8b2017ae22b986813a0bbf49c"
+          },
+          {
+            "at": "2026-11-08T06:39:00.7497280Z",
+            "line": "Artifact computer-helper-darwin-report-macos-15-intel-v1.99.112.zip successfully finalized. Artifact ID 13606534325"
+          }
+        ]
+      },
+      "verification": "api-metadata-only",
+      "verificationNote": "not downloaded: the session proxy refused the artifact storage host for this run (403 connect_rejected); network access is owner-gated and was not requested"
+    }
+  ],
+  "failures": [
+    {
+      "job": 128653871818,
+      "step": 15,
+      "stepName": "Verify both packaged helper signatures and the x64 final package",
+      "firstErrorLine": {
+        "at": "2026-11-08T06:53:06.0787151Z",
+        "line": "error: The packaged Main JavaScript files are missing or ambiguous."
+      },
+      "rootCause": "@electron/asar 3.4.1 names entries with the host path separator: listPackage builds them with path.join('/', name), which on Windows gives '\\out\\main\\index.js', and a nested statFile/extractFile splits its argument on path.sep. extractWindowsHelperCompiledPins filtered the listing with a '/'-only pattern, so on Windows it found no Main JavaScript and threw. Its only test ran on Linux Test (desktop), where the separator is '/', and the file is not on the Windows unit lane.",
+      "fix": "committed separately as fix(hands): read packed Windows Main pins with the asar separator; when this record was written (2026-11-08) the fix was in the working tree only, and this preview, which ran 420912fb before it, does not CI-confirm it. extractWindowsHelperCompiledPins maps listed names from the reader's separator to '/' before the existing checks, rejects duplicate names, and reads each entry with the separator restored; an optional {asar, separator} dependency lets the new test drive the real reader with Windows naming rules on Linux; the test asserts the reader is @electron/asar 3.4.1 and hands it path.sep names, so it also holds on a Windows host",
+      "fixFiles": [
+        "packages/desktop/scripts/verify-computer-helper-windows.ts",
+        "packages/desktop/scripts/verify-computer-helper-windows.test.ts"
+      ],
+      "fixTests": {
+        "file": "packages/desktop/scripts/verify-computer-helper-windows.test.ts",
+        "after": {
+          "pass": 17,
+          "fail": 0,
+          "expectCalls": 81
+        },
+        "atHead": {
+          "pass": 16,
+          "fail": 0,
+          "expectCalls": 78
+        },
+        "mutations": [
+          "listing normalization removed: 16/1, missing or ambiguous",
+          "nested read with '/' name: 16/1, not found in this archive",
+          "duplicate-name check removed: 16/1, different error",
+          "each mutation was re-run after the reader-version assertion and the path.sep wrapper were added, with the same results"
+        ]
+      },
+      "fixCommitTitle": "fix(hands): read packed Windows Main pins with the asar separator",
+      "ciConfirmation": "owed to H3a: H8's preview unless the owner approves an extra H3 dispatch",
+      "splitOutPackage": "H3a",
+      "ownerAction": null
+    }
+  ],
+  "notObservedAfterFailure": [
+    "Windows step 15 after the pin extraction: final bytes against compiled pins, PE and manifest checks, the verifier's Authenticode observation, the final-location --version and --self-test=packaged",
+    "Windows steps 16-19: the ARM64 proof restore check, its archive and upload, and the Windows platform artifact upload",
+    "the final ARM64 verifier job on windows-11-arm: setup within its 15-minute timeout, restore by run, id and digest, compiled pins, signature, source, version and packaged self-test"
+  ],
+  "localBaseline": {
+    "head": "420912fb42f682220a309821daf166df90a14c87",
+    "desktopSuiteNode22Root": "181/183 (guard-smoke.test.ts needs Node 24's http.setGlobalProxyFromEnv; local-mode.test.ts trusts root-owned policy files because managed.ts always trusts uid 0)",
+    "desktopSuiteNode24Root": "182/183 (only local-mode.test.ts)",
+    "localModeUid1000": "35 pass, 0 fail",
+    "guardSmokeNode24": "3 pass, 0 fail",
+    "cloudWorkflowCompliance": "12 pass, 0 fail, 122 expect() calls",
+    "engineCompliance": "upstream-free 12/0 in a minimal environment (11/1 with the session's own cloud-credential variables set), egress-inventory 5/0, release-prerequisites 3/0, generated-artifacts 2/0",
+    "realTarAdmission": "checkComputerHelperTar admitted the CI-produced tars of preview 42140933292 (darwin shipping 5 files, darwin tests 6, win32 shipping 4, win32 tests 8) as data"
+  },
+  "interpretation": {
+    "perPlatform": {
+      "linux": "success",
+      "macos": "success",
+      "windows": "failure at step 15 (x64 final verifier, compiled-pin extraction)",
+      "arm64Final": "not observed (skipped because Windows desktop apps failed)"
+    },
+    "packagingObserved": {
+      "linux": "first Linux packaging at this source; AppImages for x64 and arm64, audits 0 violations, helper absent",
+      "macos": "first macOS packaging on this lane; arm64 and x64 apps, ad-hoc signatures, both final helper verifiers passed",
+      "windows": "first Windows packaging on this lane; installers built unsigned and audited, final x64 verifier failed",
+      "arm64Final": "never ran"
+    },
+    "publishTagDeploySigning": "none ran; Publish skipped (overdetermined, see dryRunGuard.releaseJob)",
+    "notProven": [
+      "Windows compiled Main pins and the final x64 and ARM64 packaged helper checks",
+      "the ARM64 packaged self-test",
+      "immutable restoration across attempts (no attempt 2)",
+      "signed or notarized builds, Developer ID and Authenticode",
+      "launching the installers on clean machines and update-feed behaviour",
+      "native Stop and capture, isolated ARM64 scenarios",
+      "owner OS checks"
+    ],
+    "packagingCredit": false,
+    "signingCredit": false,
+    "notarizationCredit": false,
+    "releaseReadinessCredit": false,
+    "nativeOsStopCredit": false,
+    "captureCredit": false,
+    "arm64IsolatedCredit": false
+  },
+  "inferences": [
+    "Inference only: the same separator mismatch would stop the final ARM64 verifier on windows-11-arm, because it runs the same extractWindowsHelperCompiledPins; it was not observed.",
+    "Inference only: macOS step 7 printed no output because build-computer-helper.ts and the lock check are silent on success; only the step conclusion is observed."
+  ],
+  "validationMethod": "Read-only GitHub API and get_job_logs. Byte-exact tool spills: the final job list (identical to the 07:00 copy) and the full logs of jobs 128649560104, 128649776933, 128650411398, 128651522063, 128653871810 and 128653871818 (converted to text for reading). Transcriptions: the run object, the artifact list (node_id and URL fields dropped) and witness-line excerpts of 128649776771, 128649776894, 128650411445, 128652465162, 128653308567 and 128653308704. Artifact digests and sizes are cross-checked only against the CI upload and download lines; no ZIP of this run was downloaded. No signed download URL is recorded."
+}

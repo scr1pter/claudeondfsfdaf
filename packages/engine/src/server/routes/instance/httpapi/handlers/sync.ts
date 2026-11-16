@@ -1,3 +1,4 @@
+import { ComputerPrivacy } from "@vectordevai/server/computer-privacy"
 import { Workspace } from "@/control-plane/workspace"
 import * as InstanceState from "@/effect/instance-state"
 import { Session } from "@/session/session"
@@ -42,13 +43,16 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
     const replay = Effect.fn("SyncHttpApi.replay")(function* (ctx: { payload: typeof ReplayPayload.Type }) {
       const owner = yield* RequestOwner.owner
       yield* SessionAudienceHttp.assertDirectory(ctx.payload.directory, owner)
-      const payload: EventV2.SerializedEvent[] = ctx.payload.events.map((event) => ({
-        id: event.id,
-        aggregateID: event.aggregateID,
-        seq: event.seq,
-        type: event.type,
-        data: { ...event.data },
-      }))
+      const payload: EventV2.SerializedEvent[] = yield* ComputerPrivacy.payload(
+        ctx.payload.events.map((event) => ({
+          id: event.id,
+          aggregateID: event.aggregateID,
+          seq: event.seq,
+          type: event.type,
+          data: { ...event.data },
+        })),
+        { db },
+      )
       const source = payload[0].aggregateID
       if (owner) {
         // Imports may only tighten privacy. Install all relation and isolation hints before publishing any aggregate.
@@ -140,7 +144,10 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
         )
         .orderBy(asc(EventTable.seq))
         .all()
-        .pipe(Effect.orDie)
+        .pipe(
+          Effect.flatMap((rows) => ComputerPrivacy.payload(rows, { db })),
+          Effect.orDie,
+        )
       const owner = yield* RequestOwner.owner
       const request = yield* HttpServerRequest.HttpServerRequest
       const visible = (events: typeof rows) =>

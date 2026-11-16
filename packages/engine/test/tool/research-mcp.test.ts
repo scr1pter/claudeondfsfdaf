@@ -20,6 +20,7 @@ const MCP_TOOLS = ["notes_search", "list_mcp_resources", "list_mcp_resource_temp
 const server = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
+    snapshot: () => Effect.succeed({}),
     status: () => Effect.succeed({}),
     clients: () => Effect.succeed({ notes: { getServerCapabilities: () => ({ resources: {} }) } as unknown as Client }),
     instructions: () => Effect.succeed([]),

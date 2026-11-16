@@ -1,0 +1,9 @@
+#pragma once
+#include <string_view>
+namespace vector::computer::build {
+// Complete shared identity metadata for the native equality checks; shipped behavior uses C1's identity.h.
+inline constexpr std::string_view kMacBundle = "@HELPER_MAC_BUNDLE@";
+inline constexpr std::string_view kMacExecutable = "@HELPER_MAC_EXECUTABLE@";
+inline constexpr std::string_view kMacMinimumSystemVersion = "@HELPER_MAC_MINIMUM_SYSTEM_VERSION@";
+inline constexpr std::string_view kSourceDigest = "@VECTOR_COMPUTER_SOURCE_DIGEST@";
+}

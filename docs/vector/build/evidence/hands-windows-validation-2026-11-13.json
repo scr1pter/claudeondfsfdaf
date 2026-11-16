@@ -1,0 +1,1882 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-windows-continuation",
+  "datePacific": "2026-11-13",
+  "branch": "hands",
+  "parentRevision": "6d23cdb58a1bafba09230643bc8a4ddfc4d3a7c9",
+  "ownerApprovedW9": true,
+  "w9": {
+    "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
+    "nativeGroups": 53,
+    "nativeExecution": "At 60300433 native compilation and all 53 W9 pure groups passed; live privileged.input-listener-health passed. Real hardware calibration remains unverified.",
+    "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
+    "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
+  },
+  "executedPriorPR": {
+    "run": 43167728467,
+    "job": 131020775740,
+    "headRevision": "6d23cdb58a1bafba09230643bc8a4ddfc4d3a7c9",
+    "testedMergeRevision": "2eea3fa83c1a2959e8cb366e65c2269aa7c0fb0d",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 36,
+      "failed": 0,
+      "skipped": 11
+    },
+    "artifact": 13922397057,
+    "artifactBytes": 1354,
+    "archiveSha256": "3bc69e634074c0730fe980e38d5df651b9b0786f06a5645bd5dff17c2f18cd1b",
+    "stop": "failed: input_post_failed / guardian-observe-reply-negative-low32-tag-candidate / driver_failure",
+    "qualification": "Observed projected-marker metadata cannot distinguish MOVE from DOWN or establish exact receipt."
+  },
+  "markerCandidate": {
+    "generation": "Nonzero CSPRNG DWORD, zero-extended to uint64",
+    "unchanged": "Exact full-value received marker equality, injected flag, reservation descriptor, actual DOWN/UP, sequence, deadline and release authority; no received value masking.",
+    "collisionDomainBits": 32,
+    "qualification": "Explicit entropy-domain change, not a claim of 64-bit event entropy. Private channel nonce remains separate. Normal baseline and independent probe Stop passed at 60300433; the earlier marker failure's exact cause remains unproven."
+  },
+  "localChecks": {
+    "coreComputerSchema": {
+      "passed": 90,
+      "failed": 0,
+      "assertions": 657
+    },
+    "appTypecheck": "passed",
+    "desktopTypecheck": "passed",
+    "startup": {
+      "passed": 33,
+      "failed": 0,
+      "assertions": 198
+    },
+    "setup": {
+      "passed": 2,
+      "failed": 0,
+      "assertions": 20
+    },
+    "helperClient": {
+      "passed": 43,
+      "failed": 0,
+      "assertions": 219
+    },
+    "fakeHelper": {
+      "passed": 149,
+      "failed": 0,
+      "assertions": 1411
+    },
+    "signatureVerifier": {
+      "passed": 22,
+      "failed": 0,
+      "assertions": 164
+    },
+    "signer": {
+      "passed": 9,
+      "failed": 0,
+      "assertions": 81
+    },
+    "focusedWorkflow": {
+      "passed": 4,
+      "failed": 0,
+      "filtered": 27,
+      "assertions": 553
+    },
+    "selftestWrapper": {
+      "passed": 48,
+      "failed": 0,
+      "assertions": 1111
+    },
+    "scope": "Serial provider-free named files and package typechecks only; no native or owner desktop execution."
+  },
+  "native84Observation": {
+    "run": 43546191575,
+    "baselineJob": 132298005513,
+    "probeJob": 132298005703,
+    "nativeCompilation": "both passed",
+    "actualPowerShell7Observer": "both passed: native-signature-observer: NotSigned",
+    "unitFailure": "user-input.nonready-desktop-no-health-or-mutation",
+    "cause": "Fixture changed phase before its queued startup observation was drained; safe refusal already held, but the asserted notice was one tick early.",
+    "followup": "Drain initial fixture observation; independently cover that race with refusal by 200 ms. Every pure group now runs once and all static failure labels are collected before a nonzero failure; no test skip, retry or deadline change.",
+    "stagedStop": "not run because units failed"
+  },
+  "pending": "Owner-only/manual gates: real Windows mouse/same-Shift calibration, takeover/privileged device/UAC and ARM64 device checks, Mac grants and grant-persistence/reset verification, production signing/notarization, owner approvals, applicable Codium gateway image deployment and publication. All required automated gates passed at exact a0e: PR27successful/11skipped/0failed and unsigned preview31successful/3skipped/0failed, attempt1 each. Helper1.0.15 remains unreleased.",
+  "native6fObservation": {
+    "revision": "6f53a6ec9130220bf3fe7a03cc256802d227ee89",
+    "run": 43547207683,
+    "baselineJob": 132301309020,
+    "probeJob": 132301309018,
+    "baselineStop": "passed: stop.ok=true, exit 0",
+    "probeStop": "passed, MOVE-PROBE-ONLY",
+    "core": "30 passed / 0 failed / 1 skipped",
+    "isolated": "36 passed / 2 failed / 10 skipped",
+    "failure": "privileged.input-listener-health: input-listener-setup / assertion_failed",
+    "independentPRRun": 43547212497,
+    "independentPRJob": 132301572371,
+    "signature": "actual PowerShell 7 observer: NotSigned, both VMs",
+    "reportArtifact": 14094612864,
+    "reportArchiveSha256": "b945dd09bad376969a7ff2fb2d643de276b6960874143fb4debd447f0ca69786",
+    "baselineStopArtifact": 14095032090,
+    "baselineStopArchiveSha256": "b4633f89a04391260ee0928f45f05dda3745b3daf0508c53a352f594029fb454",
+    "qualification": "Overall successful job did not erase failed diagnostic rows at this revision. Closed startup diagnostics were pending then; d883 later narrowed the refusal and 60300433 passed hosted passive health without a startup budget or admission change."
+  },
+  "nativeD883Observation": {
+    "revision": "d883e2d78adfae311665e2215389ce876f8b964b",
+    "run": 43548977935,
+    "baselineJob": 132307024765,
+    "failure": "privileged.input-listener-health: input-start-native-readback / assertion_failed",
+    "isolated": "36 passed / 2 failed / 10 skipped",
+    "artifact": 14095777103,
+    "artifactBytes": 876,
+    "archiveSha256": "00d0f58d472e9a1fce9e419cc079ab0272fef05be68ef678d1f958c6f339d102",
+    "followup": "The then-next refinement classified route readback without changing acceptance or deadlines; 51 native pure groups were pending at that checkpoint. Later 60300433 execution passed all 53 W9 groups and passive listener health."
+  },
+  "routeCompatibilityCandidate": {
+    "status": "native listener startup and passive health verified at 60300433; exact omitted DEVNOTIFY stage was not observed",
+    "trigger": "Actual d883 startup readback refusal; exact field diagnostic 741a was cancelled while queued and never executed",
+    "witness": "Actual successful two-class INPUTSINK|DEVNOTIFY registration, exact listener generation and private HWND; one-shot publication with permanent retirement before failure/removal/destruction/close",
+    "acceptance": "With current native witness only, returned flags may be exact requested flags or exact INPUTSINK with only DEVNOTIFY omitted. All other flags, wrong targets, missing classes and query failure remain refused. Default classifier strict.",
+    "reviews": "Independent native and UI source reviews; no concrete defect found",
+    "tests": "53 native pure groups passed in hosted Windows checks; no local native/OS execution",
+    "qualification": "Actual health success verifies the candidate path. DEVNOTIFY-only normalization remains a source-based explanation, not an observed Windows flag trace. Real hardware delivery remains a separate owner check."
+  },
+  "native603Probe": {
+    "revision": "60300433519493740408b2971a778ce3926730a5",
+    "run": 43552459826,
+    "job": 132319235899,
+    "nativeCompilation": "passed",
+    "nativeUnits": "passed, including 53 W9 groups",
+    "coreArtifact": 14097271419,
+    "stop": "passed: stop.ok=true, exit 0, native-os-stop=true; MOVE-PROBE-ONLY",
+    "signature": "actual PowerShell 7 observer: NotSigned",
+    "overlayArtifact": 14096913703,
+    "overlayArtifactBytes": 4959,
+    "overlayArchiveSha256": "bfced6abaff3eceede420774ceee364d260c0447fe28b5984d26bf4f69dbbef9",
+    "helperVersion": "1.0.15",
+    "stageHelperSourceDigest": "c814ce315e0759ec39d5b0d52ff23af1d75fbdfbeaa739a317478746f3c239b9",
+    "qualification": "No baseline Stop, isolated listener health or real hardware calibration credit from the probe job."
+  },
+  "scheduling603": {
+    "run": 43552459826,
+    "selectorHost": "windows-2025",
+    "selectorResult": "passed",
+    "runStatus": "completed",
+    "runConclusion": "success",
+    "baselineConclusion": "success",
+    "probeConclusion": "success",
+    "old741Diagnostic": "cancelled while queued; exact DEVNOTIFY-only stage never executed",
+    "previewRun": 43552031298,
+    "previewRevision": "d9f7985bbfec40fe02ce59eeaf2aaf67d751b0fb",
+    "previewScope": "d9f to 603 changes only test.yml, workflow test and progress documentation; identical application/native source, not identical whole revision",
+    "fullPRRun": 43552396408,
+    "fullPRRevision": "60300433519493740408b2971a778ce3926730a5"
+  },
+  "native603Baseline": {
+    "revision": "60300433519493740408b2971a778ce3926730a5",
+    "run": 43552459826,
+    "job": 132319235889,
+    "nativeCompilation": "passed",
+    "nativeUnits": "passed, including 53 W9 groups",
+    "corePassed": 30,
+    "coreFailed": 0,
+    "coreSkipped": 1,
+    "coreArtifact": 14097228129,
+    "coreArtifactBytes": 554,
+    "coreArchiveSha256": "13ec149f29c7e5de0a7d1b4af7879f16c6f3bd3acdea36fc1ba534a081602ed0",
+    "isolatedPassed": 37,
+    "isolatedFailed": 0,
+    "isolatedSkipped": 11,
+    "healthRow": "privileged.input-listener-health: passed",
+    "isolatedTopLevelCode": 0,
+    "isolatedArtifact": 14097627052,
+    "isolatedArtifactBytes": 835,
+    "isolatedArchiveSha256": "d886d0a65bb92e27d23433924c2814fe4ebc5cfbe424e8e1ae85c484d33ca05f",
+    "isolatedSkips": [
+      {
+        "name": "privileged",
+        "status": "skipped",
+        "reason": "native-skip"
+      },
+      {
+        "name": "privileged.apps-installed-target",
+        "status": "skipped",
+        "reason": "target_not_installed"
+      },
+      {
+        "name": "privileged.uia-counter-increment",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.uia-value-set-and-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.secure-field-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.tagged-click-increments",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.unicode-type-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.stale-capture-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.owned-input-release",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.input-detection-probe",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.hardware-user-input-pauses",
+        "status": "skipped",
+        "reason": "hardware_input_required"
+      }
+    ],
+    "normalStop": "passed: stop.ok=true, exit 0, native-os-stop=true; independent unchanged baseline",
+    "signature": "actual PowerShell 7 observer: NotSigned",
+    "overlayArtifact": 14098065165,
+    "overlayArtifactBytes": 4924,
+    "overlayArchiveSha256": "9a279aad26821da1eb6835f7adc1762f4d613c01810dd4f53f4cae4d9e631675",
+    "helperVersion": "1.0.15",
+    "releaseStatus": "unreleased",
+    "stageHelperSourceDigest": "c814ce315e0759ec39d5b0d52ff23af1d75fbdfbeaa739a317478746f3c239b9",
+    "artifactVerification": "Core, isolated and overlay archives downloaded and SHA-256 verified against GitHub artifact metadata; Stop result and native-os-stop row read from the baseline archive log.",
+    "qualification": "Hosted x64 compilation, units, core, passive listener health and independent normal Stop passed at this exact revision. All 11 named isolated skips remain skips. Real hardware calibration, foreground input/takeover, ARM64 runtime and OS grants are not inferred. Exact DEVNOTIFY-only diagnostic never executed."
+  },
+  "fullPR603PlatformProof": {
+    "run": 43552396408,
+    "headRevision": "60300433519493740408b2971a778ce3926730a5",
+    "testedMergeRevision": "dad7b450bbfd30a561f742925a1733d22362f30c",
+    "sourceVerification": "GitHub artifact metadata associates both report archives with PR head 60300433; the Windows checkout log and artifact suffix identify tested merge dad7b450. Head and tested merge are distinct.",
+    "windows": {
+      "artifact": 14098981011,
+      "artifactBytes": 1367,
+      "archiveSha256": "b57e7fc237b0e8d05ba033412ad3e8da1498bc7c7e0b2fc2ace640fa6cd101ec",
+      "archiveVerified": true,
+      "job": 132329351436,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "passed": 37,
+        "failed": 0,
+        "skipped": 11
+      },
+      "isolatedTopLevelCode": 0,
+      "healthRow": "privileged.input-listener-health: passed",
+      "normalStop": "passed: stop.ok=true, exit 0, native-os-stop=true; later source-bound native-stage invocation",
+      "nativeCaptureExclusion": "skipped: not_applicable",
+      "stopEvidence": "Cached job 132329351436 log: actual result line 1021 and native-os-stop row line 1025; the report ZIP contains core/isolated JSON only.",
+      "ordinaryOverlayNativeStop": "Earlier ordinary overlay report retained native_harness_unavailable skip; it is not counted as a native Stop pass.",
+      "qualification": "Independent PR VM corroborates passive listener health and staged Stop. The 11 isolated skips exactly match native603Baseline.isolatedSkips and remain skips. No hardware calibration/takeover or final packaged-helper proof."
+    },
+    "macOS": {
+      "artifact": 14099110979,
+      "artifactBytes": 2219,
+      "archiveSha256": "b15a121280c06440c1673e9d5357feeea7dfa6c71a0fb5e0956e53a2a2485b64",
+      "archiveVerified": true,
+      "job": 132329351433,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "passed": 33,
+        "failed": 0,
+        "skipped": 13
+      },
+      "isolatedTopLevelCode": 0,
+      "isolatedSkips": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "native-skip"
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.capture-overlay-exclusion",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.ax-counter-increment",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.ax-value-set-and-readback",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.secure-field-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.tagged-click-increments",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.stale-capture-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-ax-without-pointer-or-focus",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-selection-insertion",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.helper-tagged-escape-ignored",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.foreign-escape-stops",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.owned-input-release",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        }
+      ],
+      "skipReasonCounts": {
+        "native-skip": 1,
+        "screen_denied": 2,
+        "accessibility_denied": 10
+      },
+      "qualification": "Screen/accessibility denial rows are explicit skips, not granted-permission, pixel capture, AX input or hardware proof. The 13 named skipped rows remain skipped."
+    },
+    "unitJobs": {
+      "linux": {
+        "job": 132320745960,
+        "name": "unit (linux)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      "windows": {
+        "job": 132320745989,
+        "name": "unit (windows)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      "proof": "GitHub job metadata, not counts inferred from native reports."
+    },
+    "qualification": "These completed native/unit jobs do not establish overall PR completion, final package verification, granted owner permissions, signing or release. Exact DEVNOTIFY-only stripping remains unobserved."
+  },
+  "previewD9fPlatformProof": {
+    "run": 43552031298,
+    "revision": "d9f7985bbfec40fe02ce59eeaf2aaf67d751b0fb",
+    "sourceScope": "d9f and 603 have identical application/native source but different whole revisions; preview evidence retains its exact d9f scope.",
+    "windowsX64Core": {
+      "artifact": 14097913631,
+      "artifactBytes": 554,
+      "archiveSha256": "dd7cbb165302e296e38596f85488a595fb6e00a2cb72537678e64da4b4e3fb17",
+      "archiveVerified": true,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "Preview helper core report only; no final packaged helper/Main pin verification or privileged/device behavior is established."
+    },
+    "windowsARM64Core": {
+      "artifact": 14098903110,
+      "artifactBytes": 556,
+      "archiveSha256": "e5c9749c1b186afb5391f9a6be371aafc1dc67f648955fea49a21b3c45dfe16e",
+      "archiveVerified": true,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "Preview helper core report only; no final packaged helper/Main pin verification or privileged/device behavior is established."
+    },
+    "macOSBuildCore": {
+      "artifact": 14098836330,
+      "artifactBytes": 993,
+      "archiveSha256": "cbd63c9740adcb8bf014e862ec2891a9f69435bf19a7932c49ac7d1ed45ad503",
+      "archiveVerified": true,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "Actual core report with privileged checks disabled; no granted Mac permission proof."
+    },
+    "macOSIntelCore": {
+      "artifact": 14098921377,
+      "artifactBytes": 1000,
+      "archiveSha256": "2cc1f866239da3996ef2c48d51bdacff4a33735e1778ed11a5873cc2a76e6d43",
+      "archiveVerified": true,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "macos-15-intel actual core report; privileged checks disabled, no granted Mac permission proof."
+    },
+    "macOS26Core": {
+      "artifact": 14098363130,
+      "artifactBytes": 1002,
+      "archiveSha256": "7fc0809dd9403521865052f70ebe975f47cafa6567ea79322fd48e5977952075",
+      "archiveVerified": true,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "macos-26 actual core report; privileged checks disabled, no granted Mac permission proof."
+    },
+    "desktopTests": {
+      "job": 132320487075,
+      "name": "Test (desktop)",
+      "status": "completed",
+      "conclusion": "success",
+      "proof": "GitHub job metadata."
+    },
+    "qualification": "All five small core-report archives were independently rehashed and parsed. Core execution and desktop-test success are not final installer/package, granted-permission, hardware calibration, signing or publication proof. Helper 1.0.15 remains unreleased."
+  },
+  "browser321": {
+    "source": "321b4ea7f83a3ffa598850e6443a33b13336b9dd",
+    "run": 43559365124,
+    "status": "success",
+    "windows": {
+      "job": 132339624397,
+      "logSha256": "5e61e1a662984d5a210ab63672b7c081be38336d4b902ba6f4f7abe659aa4486",
+      "failed": 0,
+      "retries": 0,
+      "passed": 67,
+      "skipped": 0,
+      "logBytes": 49507
+    },
+    "linux": {
+      "job": 132339624452,
+      "logSha256": "9be0e43d2b4092f5ecaeebe214bf36862e2ddd11bc551a18c6958b3f289b30f4",
+      "failed": 0,
+      "retries": 0,
+      "passed": 67,
+      "skipped": 0,
+      "logBytes": 59298
+    },
+    "scope": "Scripted Chromium fixtures; all five corrected cases executed. No real hardware calibration claim.",
+    "localFakePlatform": {
+      "assertions": 93,
+      "passed": 16,
+      "failed": 0
+    },
+    "localAppTypecheck": "passed",
+    "localE2ETypecheck": "passed"
+  },
+  "linuxAppRunnerContainment": {
+    "firstFailure": {
+      "nodeHarnessPassed": 11,
+      "run": 43552031298,
+      "nativeCrash": "segmentation fault 0x400000002 / SIGILL",
+      "elapsedMs": 26207,
+      "source": "d9f7985bbfec40fe02ce59eeaf2aaf67d751b0fb",
+      "job": 132320487135,
+      "runtime": "Bun 1.3.14",
+      "appSuite": "not completed; no failed assertion reported"
+    },
+    "independentFailure": {
+      "nativeCrash": "segmentation fault 0x0 / SIGILL",
+      "job": 132340641152,
+      "appSuite": "not completed; no failed assertion reported",
+      "elapsedMs": 27981,
+      "source": "321b4ea7f83a3ffa598850e6443a33b13336b9dd",
+      "run": 43559325574
+    },
+    "oldRepeat": "Request refused because workflow was still running; no repeat started; held after independent reproduction",
+    "change": "Linux now reuses existing Windows exact-once sorted inventory and serial fresh-process execution, retaining --isolate, preload and all assertions. Nonzero exit, signal and spawn error remain failures; all remaining files execute once.",
+    "timeouts": "Windows 120-second watchdog unchanged; Linux existing no-child-watchdog policy unchanged; macOS aggregate path unchanged",
+    "localHarness": {
+      "failed": 0,
+      "passed": 13
+    },
+    "hostedAppSuite": {
+      "source": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
+      "run": 43560764334,
+      "job": 132344208614,
+      "conclusion": "success",
+      "runtime": "Bun 1.3.14+0d9b296af; Node v24.22.2; hosted Linux",
+      "logBytes": 153117,
+      "logSha256": "8d7f6567a02a8baf5809f2689e003b2a595bd582f56822c4757da14751d9a54a",
+      "nodeHarnessPassed": 13,
+      "perFileInvocations": 244,
+      "filesPassed": 244,
+      "filesFailed": 0,
+      "browserConditionUnitSuite": {
+        "files": 18,
+        "passed": 83,
+        "failed": 0,
+        "assertions": 218
+      },
+      "qualification": "Actual downloaded preview job log confirms exact-once full per-file app inventory and final244/244 summary, followed by browser-condition unit suite. No failed child was retried. The exact a0e full PR independently completed success, with actual Linux+Windows app244/244 verified below. All final Windows x64/native ARM64/Mac packaged verifiers also passed. None of these establish owner hardware, real certificate-signing or release proof."
+    }
+  },
+  "integrationA0e": {
+    "headRevision": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
+    "qualification": "Application source under validation; subsequent documentation-only commits do not change it. Exact-head PR completed success at attempt1 with27successful/11skipped/0failed jobs; exact-head unsigned artifacts-only preview also completed success at attempt1 with31successful/3skipped/0failed jobs. Actual final Windows x64/native ARM64 and both Mac verifiers passed. Independently read actual reports/logs below retain every named native skip and Windows browser flaky case. This is not a release or owner-device proof.",
+    "fullPR": {
+      "run": 43560683817,
+      "testedMergeRevision": "3b14e6627b394114efca488d7d256fc0709a6e2f",
+      "conclusion": "success",
+      "windowsNative": {
+        "job": 132345115606,
+        "logBytes": 291709,
+        "logSha256": "82e469b159c87036937eea61e0daec3b2559b5414792492c21c53d1ec166c2d4",
+        "conclusion": "success",
+        "artifact": 14100649087,
+        "archiveBytes": 1367,
+        "archiveSha256": "e0dd817fee00fc74643fe1d74679b018507016c86a8760b48c40ce9c72883089",
+        "reports": [
+          {
+            "name": "computer-win32-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          },
+          {
+            "name": "computer-win32-privileged.json",
+            "code": 0,
+            "counts": {
+              "passed": 37,
+              "failed": 0,
+              "skipped": 11
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "native-skip"
+              },
+              {
+                "name": "privileged.apps-installed-target",
+                "status": "skipped",
+                "reason": "target_not_installed"
+              },
+              {
+                "name": "privileged.uia-counter-increment",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.uia-value-set-and-readback",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.secure-field-refusal",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.tagged-click-increments",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.unicode-type-readback",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.stale-capture-refusal",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.owned-input-release",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.input-detection-probe",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.hardware-user-input-pauses",
+                "status": "skipped",
+                "reason": "hardware_input_required"
+              }
+            ],
+            "listenerHealth": [
+              {
+                "name": "privileged.input-listener-health",
+                "status": "passed"
+              }
+            ]
+          }
+        ],
+        "overlayObservations": [
+          {
+            "protocol": 1,
+            "platform": "win32",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": true
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_harness_unavailable"
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              }
+            ]
+          },
+          {
+            "protocol": 1,
+            "platform": "win32",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": true
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": true
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              }
+            ]
+          }
+        ],
+        "nativeStopResults": [
+          {
+            "protocol": 1,
+            "kind": "result",
+            "phase": "exit",
+            "stop": {
+              "ok": true
+            },
+            "exitCode": 0
+          }
+        ],
+        "qualification": "Normal invocation retained native_harness_unavailable skip. Later source-bound isolated invocation passed native Stop with stop.ok true and exitCode 0. Hardware calibration and granted foreground actions remain unverified."
+      },
+      "macNative": {
+        "job": 132345115555,
+        "logBytes": 70379,
+        "logSha256": "52d8ab85811e5c1d8584ac3256bde12f881813794740e18ac169027433afa790",
+        "conclusion": "success",
+        "artifact": 14100432409,
+        "archiveBytes": 2218,
+        "archiveSha256": "6690a6d4c160336146949d3c8f7610b07a97a52e94b6c3207d8dc56873c20cbb",
+        "reports": [
+          {
+            "name": "computer-darwin-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          },
+          {
+            "name": "computer-darwin-privileged.json",
+            "code": 0,
+            "counts": {
+              "passed": 33,
+              "failed": 0,
+              "skipped": 13
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "native-skip"
+              },
+              {
+                "name": "privileged.capture-color-patch",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.capture-overlay-exclusion",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.ax-counter-increment",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.ax-value-set-and-readback",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.secure-field-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.tagged-click-increments",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.stale-capture-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-ax-without-pointer-or-focus",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-selection-insertion",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.helper-tagged-escape-ignored",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.foreign-escape-stops",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.owned-input-release",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ],
+        "overlayObservations": [
+          {
+            "protocol": 1,
+            "platform": "darwin",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": true
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_harness_unavailable"
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_harness_unavailable"
+              }
+            ]
+          },
+          {
+            "protocol": 1,
+            "platform": "darwin",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": true
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_grants_unavailable"
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_grants_unavailable"
+              }
+            ]
+          }
+        ],
+        "nativeStopResults": [
+          {
+            "protocol": 1,
+            "kind": "result",
+            "phase": "exit",
+            "stop": {
+              "ok": false,
+              "skipped": true,
+              "reason": "screen_denied"
+            },
+            "capture": {
+              "ok": false,
+              "skipped": true,
+              "reason": "screen_denied"
+            },
+            "exitCode": 77
+          }
+        ],
+        "qualification": "Actual denial-aware checks; screen/accessibility-denied rows and native Stop/capture skips remain skips. No granted Mac proof. Separate PR Mac matrix was skipped."
+      },
+      "linuxElectron": {
+        "job": 132345115536,
+        "logBytes": 199390,
+        "logSha256": "a4e0a10c171f66c7a97620aac4e04d98eaa42c86a3000f3b432960e79e7fb059",
+        "conclusion": "success",
+        "passed": 1,
+        "skipped": 1,
+        "passedCase": "Actual unsupported Hands platform in dev Electron",
+        "skippedCase": "Onboarding, app approval, sensitive approval and UI Stop journey",
+        "skipReason": "The product does not support Hands on Linux; the preceding test asserts that actual state.",
+        "qualification": "The full Hands journey did not run on Linux."
+      },
+      "arm64": "skipped in this PR; independent preview core matrix recorded separately",
+      "windowsBrowser": {
+        "job": 132343890119,
+        "logBytes": 109909,
+        "logSha256": "e343b7c69bf58548cae7f4cbcff935e1ea455f91c7e43f8a0edfb9157a10bcfe",
+        "conclusion": "success",
+        "passed": 355,
+        "flaky": 1,
+        "skipped": 1,
+        "unrecoveredFailures": 0,
+        "flakyCase": "regression/cloud-home-only.spec.ts:10 Vector Cloud opens from Home, and a task's view has no Cloud controls",
+        "flakyInitialFailure": "After Cloud navigation, #vector-launch expected count 0, received 1 within the existing 10000 ms assertion. Passed on the existing automatic retry #1.",
+        "skippedCase": "regression/remote-tab-busy.spec.ts:12 tab busy indicator reflects the tab server's own session status",
+        "skipSourceReason": "The redesigned workspace intentionally keeps session switching in the project sidebar instead of a second global session tab strip. Existing source-level test.skip.",
+        "publicViewer": {
+          "passed": 5,
+          "failed": 0
+        },
+        "manualReruns": 0,
+        "qualification": "Full scripted Chromium suite includes all five corrected Hands cases. Preserve unrelated cloud case as flaky, not an unqualified retry-free pass. No real hardware calibration proof."
+      },
+      "linuxUnit": {
+        "job": 132343890206,
+        "conclusion": "success",
+        "logBytes": 1062409,
+        "logSha256": "fc5a81ef4076c0ba4c62d0e5073d939d53de7b357500a1b3a37cfdcccac0e639",
+        "nodeHarnessPassed": 13,
+        "perFileAppInvocations": 244,
+        "distinctAppFiles": 244,
+        "appFilesPassed": 244,
+        "appFilesFailed": 0,
+        "browserConditionUnitSuite": {
+          "passed": 83,
+          "files": 18
+        },
+        "turboTasks": {
+          "successful": 8,
+          "total": 8
+        },
+        "followingGates": [
+          "desktop computer-use tests",
+          "HttpApi exerciser gates"
+        ],
+        "qualification": "Actual full integrated PR log independently confirms app containment. Existing unrelated suite skips remain skips; this is not real hardware, final package, signing or release proof."
+      },
+      "windowsUnit": {
+        "job": 132343890156,
+        "conclusion": "success",
+        "logBytes": 911807,
+        "logSha256": "379f3e463f8f59e02fd9480cd9c2664f2831df9017238a08145dc519d9edb40a",
+        "nodeHarnessPassed": 13,
+        "perFileAppInvocations": 244,
+        "distinctAppFiles": 244,
+        "appFilesPassed": 244,
+        "appFilesFailed": 0,
+        "turboTasks": {
+          "successful": 8,
+          "total": 8
+        },
+        "qualification": "Actual current PR Windows log confirms all244 app files once, no failed child marker, and overall integrated unit-job success. Existing suite/platform skips remain skips."
+      },
+      "linuxBrowser": {
+        "job": 132343890155,
+        "conclusion": "success",
+        "logBytes": 116008,
+        "logSha256": "f1fd86c5ed72212d2e0e2df9465975b21f41986de236ddba40122ed9a20b799b",
+        "passed": 356,
+        "flaky": 0,
+        "skipped": 1,
+        "unrecoveredFailures": 0,
+        "retryMarkers": 0,
+        "skippedCase": "regression/remote-tab-busy.spec.ts:12 tab busy indicator reflects the tab server's own session status",
+        "skipSourceReason": "Existing source-level test.skip: redesigned workspace uses project sidebar instead of a second global session tab strip.",
+        "publicViewer": {
+          "passed": 5,
+          "failed": 0
+        },
+        "qualification": "Actual full scripted Chromium suite includes all corrected Hands cases; no physical calibration claim."
+      },
+      "runAttempt": 1,
+      "observedCompleteAtUtc": "2026-11-14T06:30:48Z",
+      "jobCounts": {
+        "success": 27,
+        "skipped": 11,
+        "failure": 0
+      },
+      "manualWorkflowReruns": 0,
+      "skippedJobs": [
+        {
+          "job": 132343890967,
+          "name": "macOS temporary certificate diagnostic (no release evidence)"
+        },
+        {
+          "job": 132343891164,
+          "name": "production app benchmark"
+        },
+        {
+          "job": 132343891309,
+          "name": "Hands UI (${{ matrix.settings.name }})"
+        },
+        {
+          "job": 132343891368,
+          "name": "Windows Electron overlay/controller diagnostic (no release evidence)"
+        },
+        {
+          "job": 132343891408,
+          "name": "Windows x64 native and staged diagnostics (${{ matrix.diagnostic }}, no release evidence)"
+        },
+        {
+          "job": 132343891489,
+          "name": "published release engine evidence (manual)"
+        },
+        {
+          "job": 132343891570,
+          "name": "offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})"
+        },
+        {
+          "job": 132343891594,
+          "name": "macOS Electron overlay/controller diagnostic (no release evidence)"
+        },
+        {
+          "job": 132343891736,
+          "name": "production app benchmark (manual)"
+        },
+        {
+          "job": 132349620373,
+          "name": "computer-helper / mac-test"
+        },
+        {
+          "job": 132350535489,
+          "name": "computer-helper / windows-arm64-test"
+        }
+      ],
+      "skippedRosterProvenance": "All11 skipped job IDs/names and27successful/0failed/0cancelled totals independently reconciled against final authoritative REST at06:58:43UTC; attempt1, no manual workflow rerun."
+    },
+    "unsignedArtifactsOnlyPreview": {
+      "run": 43560764334,
+      "headRevision": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
+      "inputs": {
+        "tag": "v1.99.112",
+        "dry_run": true,
+        "allow_unsigned": true,
+        "prerelease": false
+      },
+      "conclusion": "success",
+      "windowsX64Native": {
+        "job": 132345214986,
+        "logBytes": 189522,
+        "logSha256": "ec0f215e8b94c77bce35e0665097b30b697d2e6b96121c7758414a37c803aea7",
+        "conclusion": "success",
+        "artifact": 14100622060,
+        "archiveBytes": 554,
+        "archiveSha256": "666a1cd972a1682c408fe2df552bc044fe6b7ba821a99e9d0b99afafabe17326",
+        "reports": [
+          {
+            "name": "computer-win32-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ]
+      },
+      "windowsArm64Native": {
+        "job": 132349432974,
+        "logBytes": 36621,
+        "logSha256": "7ade50e3f74d2ed01867c3ae4267d9ea22b277e0faa7d762b19cd714c1c52abb",
+        "conclusion": "success",
+        "artifact": 14100564177,
+        "archiveBytes": 556,
+        "archiveSha256": "a99a1617a700f6a4e5feed1be3c2a451ad306933574d3639ac012ff0a7344fa5",
+        "reports": [
+          {
+            "name": "computer-win32-arm64.json",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ],
+        "qualification": "Native ARM64 core/protocol execution; final packaged Main pins/helper verifier remains pending."
+      },
+      "macNativeBuild": {
+        "job": 132345214931,
+        "logBytes": 49169,
+        "logSha256": "7c2b3c24a858ac9631e300b0f855f1cc74496347ce8b0dbe0eef0a3438bb26fb",
+        "conclusion": "success",
+        "artifact": 14100852196,
+        "archiveBytes": 995,
+        "archiveSha256": "c38e4caf671e83dc797ab0ea8c074dd4afa2059f555cd4d063c04e0c3e749acf",
+        "reports": [
+          {
+            "name": "computer-darwin-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ]
+      },
+      "shippingSourceManifests": {
+        "qualification": "Independently rehashed archive ZIPs; manifests read in memory from bounded tar contents. No extracted or executed binaries.",
+        "prMac": {
+          "artifact": 14101420225,
+          "archiveBytes": 4001325,
+          "archiveSha256": "b5466fdee894cf75c7413c394649913966893e69bd520cf32c86c7dd630d41d0",
+          "helperVersion": "1.0.15",
+          "sourceDigest": "55d3ca43a0ad47b925ae5a513c98aba17be9abcd02a910ee86b0c82aa19162a3",
+          "qualification": "PR Mac source artifact, not the preview package."
+        },
+        "previewWindows": {
+          "artifact": 14101126379,
+          "archiveBytes": 2087867,
+          "archiveSha256": "c59a1dc23b01f4db316a966cfa542fc98e11df196f738f2720e6bff9caafe6b1",
+          "helperVersion": "1.0.15",
+          "sourceDigest": "d3309cc9422609dba810a9e3ab1fb40b825c7b41405dbef300dd3077fc44345b",
+          "architectures": [
+            "x64",
+            "arm64"
+          ],
+          "toolchain": "cmake version 4.4.5; msvc:19.51.36260; vc-tools:14.51.36231; windows-sdk:10.0.26100.0",
+          "qualification": "Both architecture manifests match this actual digest/toolchain; do not substitute the earlier 60300433 digest."
+        }
+      },
+      "remaining": "No required automated gate remains at this application source. Owner device calibration/takeover/UAC/ARM64 privileged checks, Mac grants/grant persistence/reset checks, real signing/notarization, final approvals/Codium gateway image deployment if applicable, and publication remain owner gates.",
+      "macIntelCore": {
+        "job": 132350256389,
+        "logBytes": 34350,
+        "logSha256": "8d855b1cfebb1ccb6327099fb00dc54ff523e3d956602bb047148c1239ebc822",
+        "conclusion": "success",
+        "artifact": 14101361549,
+        "archiveBytes": 1003,
+        "archiveSha256": "b5937704a7b6762d906f6348724341fc6a7c24debafab37fc1b94902454193f0",
+        "reports": [
+          {
+            "name": "computer-darwin-matrix.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        ]
+      },
+      "mac26Core": {
+        "job": 132350256394,
+        "logBytes": 32602,
+        "logSha256": "41b45362df5571001233baface6ffdfe431f5cb6c4808d065c3d51116316ab22",
+        "conclusion": "success",
+        "artifact": 14100714781,
+        "archiveBytes": 1000,
+        "archiveSha256": "b969db07473277e351e74c55749c12a9287498146147d93f7cd4cde5c0d80360",
+        "reports": [
+          {
+            "name": "computer-darwin-matrix.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        ]
+      },
+      "desktopTests": {
+        "job": 132344208623,
+        "conclusion": "success",
+        "logBytes": 119893,
+        "logSha256": "b0126374ddad17b10ec7ea1ddc3935e99d67e15628751ea231df7820b1a79d63",
+        "filesPassed": 189,
+        "filesTotal": 189,
+        "fakeHelper": {
+          "passed": 149,
+          "failed": 0
+        },
+        "qualification": "Actual log ends Desktop: 189/189 test files passed. Host-specific skips within test files remain skips; not final package verification."
+      },
+      "coreTests": {
+        "job": 132344208758,
+        "conclusion": "success",
+        "logBytes": 65142,
+        "logSha256": "4dc759b1058a1b3119611be5c2a34ad8d413c4c06967bceecf88871c9c25095c",
+        "passed": 3959,
+        "failed": 0,
+        "skipped": 17,
+        "files": 343,
+        "qualification": "Actual downloaded hosted core-suite summary; existing17 skips remain skips and do not supply owner OS or package proof."
+      },
+      "desktopBuildSmoke": {
+        "job": 132351843251,
+        "conclusion": "success",
+        "logBytes": 217307,
+        "logSha256": "9f0b46fbb4fcd7e34a4b475bf75261a16b42bf6e51754155ba848eca6270ea04",
+        "nodeComputerSmoke": "passed: bridge screenshot/click, HTTP app/sensitive approvals, exact image attachments and clean lease finish; fake bridge, no native OS evidence",
+        "brainUtilitySmoke": "passed on Electron42.11.4/Node24.19.0 and plain Node, fixture model",
+        "qualification": "Actual success markers in downloaded log, following production build. No paid model or owner desktop used."
+      },
+      "packageJobs": {
+        "spawnedAtUtc": "2026-11-14T06:24:58Z",
+        "windows": 132360549033,
+        "linux": 132360549034,
+        "mac": 132360549035,
+        "statusAtSpawn": "queued",
+        "arm64FinalPackedVerifier": 132364288317,
+        "finalStatus": "All four final package/verifier jobs completed success; no active/queued jobs."
+      },
+      "windowsFinalPackage": {
+        "job": 132360549033,
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:40:05Z",
+        "logBytes": 427357,
+        "logSha256": "8eddc77bc6111478f043bcb6bb3dcb25dd2104a0ed70c66b7de8783016ef1641",
+        "actualVerifierMarker": "Verified the final computer helper identity, signatures, provenance and packaged self-test.",
+        "verifiedArchitecture": "x64",
+        "signatureObserver": "Fixed protected PowerShell7 under Program Files, not PS5; actual final unsigned-package verifier passed.",
+        "signingMode": "unsigned; never published",
+        "nativeSourceDigest": "d3309cc9422609dba810a9e3ab1fb40b825c7b41405dbef300dd3077fc44345b",
+        "helperVersion": "1.0.15",
+        "finalHelperArchive": {
+          "artifact": 14102421841,
+          "archiveBytes": 2087910,
+          "archiveSha256": "e283186545da5f1afc867c4d4ce880e422bacdecad5d3f2a831cd91b63e9c56b",
+          "independentlyRehashed": true
+        },
+        "nativeTestedExeBytesEqualFinalHelperBytes": true,
+        "actualHelperBytes": {
+          "x64": {
+            "bytes": 2444800,
+            "sha256": "757721ead97871e9009f6e659e55ac9d2fd220a98defab061064b8934e5e0117"
+          },
+          "arm64": {
+            "bytes": 2669568,
+            "sha256": "67131b0118a6c5a9c9f893bc699a30f718da46442310f9611ed350d0b14abae1"
+          }
+        },
+        "arm64PackedProof": {
+          "artifact": 14103211979,
+          "archiveBytes": 55646762,
+          "archiveSha256": "455b66542f94be21eee77dabea3283acb77c6aa3102422b22cee600b57ad446a",
+          "metadataProvenance": "Independently fetched API metadata matches package-job upload digest and exact run43560764334/head a0e. Native ARM64 final verifier132364288317 subsequently restored this exact id/digest/source/run and passed actual packed Main/helper checks. Large proof archive was not downloaded locally."
+        },
+        "installerArtifact": {
+          "artifact": 14102773268,
+          "archiveBytes": 596143849,
+          "archiveSha256": "f38bd7aa87df92344ff3a62fea968cc2315c87fecc09930277a62f9d48eb1cfc",
+          "metadataProvenance": "Independently fetched API metadata matches job upload digest and exact a0e preview. Large installer archive was not downloaded or installed locally."
+        },
+        "qualification": "Actual shipped-location x64 helper/packed-Main pins/signature/source/version/non-skipped packaged-self-test verifier success. Separate native ARM64 final packaged verifier and both final Mac verifiers also passed and are recorded below. No owner hardware, certificate-signing or publication claim."
+      },
+      "windowsArm64FinalPackage": {
+        "job": 132364288317,
+        "logBytes": 39186,
+        "logSha256": "4a37cf5fb909dcbedde490219d0d2a54585444ef2a279ac21b366379d9de1147",
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:49:40Z",
+        "actualVerifierMarker": "Verified the final computer helper identity, signatures, provenance and packaged self-test.",
+        "verifiedArchitecture": "arm64",
+        "nativeRunner": "windows-11-arm",
+        "expectedProofArtifact": 14103211979,
+        "expectedProofDigest": "455b66542f94be21eee77dabea3283acb77c6aa3102422b22cee600b57ad446a",
+        "actualRestoreMarker": "Restored the exact helper artifact ids, source/run identity and safe archives.",
+        "qualification": "Actual native ARM64 final shipped-location verification of actual app.asar Main pins, helper bytes/source/signature/version and every non-skipped packaged self-test. This is distinct from earlier ARM64 core checks. Real hardware calibration, privileged/device/UAC behavior, signing and publication remain owner gates."
+      },
+      "linuxFinalPackage": {
+        "job": 132360549034,
+        "logBytes": 405437,
+        "logSha256": "5d0f1f1313706ab1bccadfce4d830ced4e4dda6336ef6883ac2c71d50d5df6f7",
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:43:05Z",
+        "helperAbsence": "Actual successful Verify Linux artifacts step checked both linux-unpacked/resources/computer and linux-arm64-unpacked/resources/computer absent before preservation.",
+        "installerArtifact": {
+          "artifact": 14102962938,
+          "archiveBytes": 364067394,
+          "archiveSha256": "4d2aacc2870965048602204519095f858f283c2582d580652c1c23ac76b32e43",
+          "metadataProvenance": "Independently fetched API metadata matches job upload digest and exact run43560764334/head a0e. Large archive was not downloaded or installed locally."
+        },
+        "qualification": "Actual Linux package/audit/helper-absence validation; product Hands remains unsupported on Linux."
+      },
+      "macFinalPackage": {
+        "job": 132360549035,
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:57:38Z",
+        "logBytes": 623846,
+        "logSha256": "5b13ed945581009b3b193f3c3586dd7eb68258c402a9a31d6a613dd6648aba1e",
+        "actualFinalVerifierMarkers": 2,
+        "verifiedApplicationArchitectures": [
+          "arm64",
+          "x64"
+        ],
+        "signingMode": "ad-hoc; unsigned artifacts-only preview, no Developer ID/notarization claim",
+        "actualVerifierMarker": "Verified the final computer helper identity, signatures, provenance and packaged self-test.",
+        "verifiedScope": "Both final applications: helper source/provenance receipt sealed by outer signature, current enforced measured lock, helper slices/signatures/cdhash/empty entitlements/runtime/channel identity, version and every non-skipped final-location packaged self-test; subsequent outer/helper codesign verification passed.",
+        "installerArtifact": {
+          "artifact": 14103421541,
+          "archiveBytes": 743649875,
+          "archiveSha256": "303a33b4f5ac07ebc6b4ceafaa6addc123a83119787a45913ec0507f5841b74c",
+          "metadataProvenance": "Independently fetched API metadata matches job upload digest and exact run43560764334/head a0e. Large archive was not downloaded or installed locally."
+        },
+        "qualification": "Actual two final-verifier success markers and final signature/audit/preservation steps, not just green metadata. No granted Mac OS behavior, grant persistence, Developer ID, notarization or publication claim."
+      },
+      "runAttempt": 1,
+      "observedCompleteAtUtc": "2026-11-14T06:58:17Z",
+      "jobCounts": {
+        "success": 31,
+        "skipped": 3,
+        "failure": 0
+      },
+      "manualWorkflowReruns": 0,
+      "skippedJobs": [
+        {
+          "job": 132345216392,
+          "name": "Build or restore the tested immutable computer helpers / desktop-e2e-linux"
+        },
+        {
+          "job": 132345216437,
+          "name": "Build or restore the tested immutable computer helpers / overlay-linux"
+        },
+        {
+          "job": 132368468013,
+          "name": "Publish release and update feeds"
+        }
+      ],
+      "finalRosterProvenance": "Final authoritative REST: all34jobs completed,31success/3skipped/0failed; actual required final verifier logs independently read. No active/queued jobs, no publication."
+    },
+    "ownerOnlyGates": "Real Windows mouse/same-Shift calibration and hardware takeover, privileged ARM64/device/UAC checks, Mac grants and manual device checks, owner signing/notarization, final approvals and publication. Helper 1.0.15 remains unreleased."
+  },
+  "ciPriorityIntervention": {
+    "kind": "owner-authorized-ci-priority",
+    "observedAtUtc": "2026-11-14T06:12:27.694364+00:00",
+    "authorization": "Owner explicitly authorized prioritizing Hands autonomously; root specified only the already-failing ordinary build-candidate test run.",
+    "run": 43562005635,
+    "revision": "bb2cd55578de82d401b324a807e951ef95cc2a85",
+    "branch": "build-candidate",
+    "event": "workflow_dispatch",
+    "workflowPath": ".github/workflows/test.yml",
+    "statusBefore": "queued",
+    "conclusionBefore": null,
+    "countsBefore": {
+      "success": 5,
+      "failure": 1,
+      "queued": 11,
+      "in_progress": 4,
+      "skipped": 3,
+      "cancelled": 0
+    },
+    "cancelHttpStatus": 202,
+    "action": "cancel requested",
+    "observedAfterUtc": "2026-11-14T06:13:50.023576+00:00",
+    "statusAfter": "completed",
+    "conclusionAfter": "cancelled",
+    "countsAfter": {
+      "success": 5,
+      "failure": 1,
+      "queued": 0,
+      "in_progress": 0,
+      "skipped": 3,
+      "cancelled": 15
+    },
+    "noCodeChanged": true,
+    "rerunRequired": "If build-candidate validation is still needed, rerun its interrupted tests after its owner addresses the already-recorded failure. Existing passed/failed/skipped rows retain their actual conclusions.",
+    "auditBytes": 13870,
+    "auditSha256": "0fca2dd895f1b80323a4169a094f33768921c592cc389f1445d418dead1b9eaa",
+    "jobs": [
+      {
+        "id": 132347549641,
+        "name": "desktop engine bundle (node)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549816,
+        "name": "engine (linux, shard 1/4)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549839,
+        "name": "engine (linux, shard 2/4)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549863,
+        "name": "engine (linux, shard 4/4)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549865,
+        "name": "engine (linux, shard 3/4)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549868,
+        "name": "e2e (windows)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549901,
+        "name": "engine (windows, shard 9/12)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549904,
+        "name": "unit (linux)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549912,
+        "name": "unit (windows)",
+        "statusBefore": "completed",
+        "conclusionBefore": "failure",
+        "statusAfter": "completed",
+        "conclusionAfter": "failure",
+        "failedStepsBefore": [
+          "Run unit tests"
+        ]
+      },
+      {
+        "id": 132347549915,
+        "name": "engine (windows, shard 12/12)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549950,
+        "name": "engine (windows, shard 4/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549960,
+        "name": "engine (windows, shard 10/12)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549972,
+        "name": "e2e (linux)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549980,
+        "name": "engine (windows, shard 5/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549982,
+        "name": "engine (windows, shard 11/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549991,
+        "name": "engine (windows, shard 1/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549999,
+        "name": "engine (windows, shard 7/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550002,
+        "name": "engine (windows, shard 6/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550037,
+        "name": "engine (windows, shard 8/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550039,
+        "name": "engine (windows, shard 3/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550091,
+        "name": "engine (windows, shard 2/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550665,
+        "name": "production app benchmark (manual)",
+        "statusBefore": "completed",
+        "conclusionBefore": "skipped",
+        "statusAfter": "completed",
+        "conclusionAfter": "skipped",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347551040,
+        "name": "offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})",
+        "statusBefore": "completed",
+        "conclusionBefore": "skipped",
+        "statusAfter": "completed",
+        "conclusionAfter": "skipped",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347551042,
+        "name": "published release engine evidence (manual)",
+        "statusBefore": "completed",
+        "conclusionBefore": "skipped",
+        "statusAfter": "completed",
+        "conclusionAfter": "skipped",
+        "failedStepsBefore": []
+      }
+    ],
+    "qualification": "Only this already-failing ordinary sibling test dispatch was cancelled after explicit owner authorization to prioritize Hands. Its existing failure, passes and skips remain recorded. No sibling code, healthy codium-legal run, deployment or paid benchmark was changed; no interrupted test is counted as passed."
+  }
+}

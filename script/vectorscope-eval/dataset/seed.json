@@ -1,0 +1,775 @@
+{
+  "schema": "vectorscope-dataset/3",
+  "name": "vectorscope-seed",
+  "description": "Seed of VectorScope's real-change dataset: eight bug-fix cases and two clean controls from public, permissively licensed repositories, each pinned to immutable commits and checked read-only against GitHub. Labels are one draft model-assisted pass; VS-22a added failure classes, mechanisms and cross-file labels to it from the case files, and runnable and authoring are not yet examined. VS-22c added context levels, scope and test gaps to the bug cases' defects from the case files and read-only diffs of their candidates; the seed has no sequence, feedback, head-added rule or out-of-change defect. Curating the full set of about 125 cases, its second annotation pass and the owner's adjudication are later dataset work.",
+  "created": "2026-11-03",
+  "selection": {
+    "method": "Hand-picked seed, not a random sample.",
+    "rule": "Fix commits found by the queries below whose introducing change is named by the fix message or its linked pull request or issue, or found by a line blame at the fix's parent. A bug case is admitted when the candidate head is an ancestor of the fix, the defect's cause is established, and the repository is MIT, Apache-2.0 or BSD licensed; at most one case per repository. The candidate base is the head's first parent, so a merged pull request is reviewed as its whole change. Controls are refactor commits to which no later commit or issue attributes a defect. Cases considered and left out are listed under exclusions with the reason.",
+    "queries": [
+      "GitHub commit search: repo:pallets/click \"introduced in\"",
+      "GitHub commit search: repo:pallets/werkzeug \"introduced in\"",
+      "GitHub commit search: repo:spf13/cobra \"introduced in\"",
+      "GitHub commit search: repo:vitejs/vite regression introduced",
+      "GitHub commit search: repo:honojs/hono regression",
+      "GitHub commit search: repo:fastify/fastify regression introduced",
+      "GitHub commit search: repo:caddyserver/caddy regression introduced",
+      "GitHub commit search: repo:nats-io/nats-server race introduced",
+      "GitHub commit search: repo:tokio-rs/tokio regression",
+      "GitHub commit search: repo:tokio-rs/tracing regression introduced",
+      "GitHub commit search: repo:tokio-rs/bytes regression",
+      "GitHub commit search: repo:gin-gonic/gin regression",
+      "GitHub commit search: repo:psf/requests refactor",
+      "GitHub commit search: repo:expressjs/express refactor"
+    ],
+    "date": "2026-11-03"
+  },
+  "contamination": "Every commit, fix and discussion referenced here is public and older than the eval, so a model may have seen any of them in training. Commit dates are recorded so results can be read against a model's training cutoff. This cannot be ruled out, and results on these cases do not establish general real-world recall.",
+  "cases": [
+    {
+      "id": "pallets-werkzeug-1",
+      "kind": "bug",
+      "split": "development",
+      "repository": { "url": "https://github.com/pallets/werkzeug", "licence": "BSD-3-Clause" },
+      "language": "python",
+      "candidate": {
+        "base": "f91eb86e230f42743799fe2a2940e6dd500cabbb",
+        "head": "6650f6c7ac4776ff1bac50a900bc74a24135e061",
+        "date": "2015-02-07T00:38:25Z",
+        "change": "https://github.com/pallets/werkzeug/commit/6650f6c7ac4776ff1bac50a900bc74a24135e061",
+        "changed": { "files": 2, "additions": 22, "deletions": 16 }
+      },
+      "fix": {
+        "sha": "2ff5ed9ce94a9d81573b32f7f0f11bee711be16a",
+        "date": "2015-02-08T13:13:21Z",
+        "change": "https://github.com/pallets/werkzeug/commit/2ff5ed9ce94a9d81573b32f7f0f11bee711be16a"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "server-name-none",
+            "category": "correctness",
+            "severity": "blocking",
+            "failureClass": "crash",
+            "mechanism": "logic",
+            "contextLevel": "hunk",
+            "scope": "introduced-by-pr",
+            "testGap": "none",
+            "summary": "bind_to_environ strips the default port from the server_name argument instead of the Host header, and crashes when server_name is None.",
+            "cause": "In the HTTP_HOST branch the new code tests and slices server_name, the caller's optional argument, instead of wsgi_server_name, the value it has just read from the Host header. With the default server_name=None, every plain-HTTP request evaluates None.endswith(':80') and raises AttributeError. When a server_name is passed, the Host header's explicit :80 or :443 is never removed, so implicit and explicit default ports still compare unequal, which is what the change set out to fix.",
+            "locations": [{ "path": "werkzeug/routing.py", "line": 1187, "endLine": 1192 }],
+            "alternatives": []
+          },
+          {
+            "id": "port-appended-to-host",
+            "category": "correctness",
+            "severity": "blocking",
+            "failureClass": "other",
+            "mechanism": "logic",
+            "contextLevel": "hunk",
+            "scope": "introduced-by-pr",
+            "testGap": "none",
+            "summary": "SERVER_PORT is appended to the server name even when the name came from the Host header, which already carries any port.",
+            "cause": "The block that appends ':' + SERVER_PORT used to run only in the SERVER_NAME fallback; the change moves it after both branches. A request with Host: localhost:5000 and SERVER_PORT 5000 now yields localhost:5000:5000, and a proxied request whose Host has no port gains the backend's port, so server-name and subdomain matching fail.",
+            "locations": [{ "path": "werkzeug/routing.py", "line": 1197, "endLine": 1199 }],
+            "alternatives": []
+          }
+        ],
+        "regressionTest": { "status": "none", "note": "The fix commit adds no test." },
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [
+                  { "id": "server-name-none", "failureClass": "crash", "mechanism": "logic" },
+                  { "id": "port-appended-to-host", "failureClass": "other", "mechanism": "logic" }
+                ],
+                "crossFile": false
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel, scope and testGap from the case files and read-only base..head diffs on local mirrors",
+              "date": "2026-11-07",
+              "labels": {
+                "defects": [
+                  { "id": "server-name-none", "contextLevel": "hunk", "scope": "introduced-by-pr", "testGap": "none" },
+                  {
+                    "id": "port-appended-to-host",
+                    "contextLevel": "hunk",
+                    "scope": "introduced-by-pr",
+                    "testGap": "none"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:pallets/werkzeug \"introduced in\"",
+        "evidence": "The fix's message reads \"Fix bugs introduced in 6650f6c7ac4776ff1bac50a900bc74a24135e061\" and it rewrites the same lines of bind_to_environ.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "fastify-fastify-1",
+      "kind": "bug",
+      "split": "development",
+      "repository": { "url": "https://github.com/fastify/fastify", "licence": "MIT" },
+      "language": "javascript",
+      "candidate": {
+        "base": "eb24aa7ddce4e1e8a3240619638ee448e838b684",
+        "head": "f545accb2976d54a63a573cc187a0b0472cba972",
+        "date": "2018-02-28T20:22:32Z",
+        "change": "https://github.com/fastify/fastify/pull/776",
+        "changed": { "files": 1, "additions": 12, "deletions": 5 }
+      },
+      "fix": {
+        "sha": "288903a3504c98762005e77c5b100ed272e0d352",
+        "date": "2018-03-04T19:02:54Z",
+        "change": "https://github.com/fastify/fastify/pull/827"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "response-time-unset",
+            "category": "correctness",
+            "severity": "concern",
+            "failureClass": "other",
+            "mechanism": "logic",
+            "contextLevel": "hunk",
+            "scope": "introduced-by-pr",
+            "testGap": "none",
+            "summary": "With a logger configured, the request start time is never recorded, so the logged responseTime is NaN.",
+            "cause": "hasLogger is set to true only in the branch where no logger was given, so it means 'no logger', and the rest of the change reads it that way (a no-op response callback, finish listeners registered when it is false). The start-time line reads it the other way round: res._startTime = hasLogger ? now() : undefined records the time only when there is no logger. With logging on, onResponseCallback computes now() - undefined and every completed request logs responseTime as NaN, which serializes as null.",
+            "locations": [{ "path": "fastify.js", "line": 208 }],
+            "alternatives": [
+              { "path": "fastify.js", "line": 46 },
+              { "path": "fastify.js", "line": 53 }
+            ]
+          }
+        ],
+        "regressionTest": {
+          "status": "added-by-fix",
+          "paths": ["test/internals/logger.test.js", "test/logger.test.js"],
+          "note": "The fix adds logger tests that check responseTime (issue 826)."
+        },
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "response-time-unset", "failureClass": "other", "mechanism": "logic" }],
+                "crossFile": false
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel, scope and testGap from the case files and read-only base..head diffs on local mirrors",
+              "date": "2026-11-07",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "response-time-unset",
+                    "contextLevel": "hunk",
+                    "scope": "introduced-by-pr",
+                    "testGap": "none"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:fastify/fastify regression introduced",
+        "evidence": "The fix's message says the responseTime regression was introduced in pull 776; issue 826 points at the start-time line of that change.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "nats-io-nats-server-1",
+      "kind": "bug",
+      "split": "development",
+      "repository": { "url": "https://github.com/nats-io/nats-server", "licence": "Apache-2.0" },
+      "language": "go",
+      "candidate": {
+        "base": "728468277442e97416883bf86d9897cfd9b82bb9",
+        "head": "fe27aec1dc222e10ac342b64a530c9f8dfba9a64",
+        "date": "2019-10-30T00:35:20Z",
+        "change": "https://github.com/nats-io/nats-server/pull/1170",
+        "changed": { "files": 6, "additions": 161, "deletions": 32 }
+      },
+      "fix": {
+        "sha": "51f83220c6d898cff8229f92c8af657824c9a730",
+        "date": "2019-10-30T01:09:21Z",
+        "change": "https://github.com/nats-io/nats-server/commit/51f83220c6d898cff8229f92c8af657824c9a730"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "lds-data-race",
+            "category": "concurrency",
+            "severity": "concern",
+            "failureClass": "other",
+            "mechanism": "concurrency",
+            "pendingQ4": "concurrency-wrong-result",
+            "contextLevel": "hunk",
+            "scope": "introduced-by-pr",
+            "summary": "processLeafSub reads the account's loop-detection subject without the account lock while another connection may be writing it.",
+            "cause": "initLeafNodeSmap sets acc.lds lazily while holding acc.mu, and it runs for each new leafnode connection on the account. processLeafSub compares the incoming subject with c.acc.lds while holding only the client lock c.mu. A subscription arriving on one leafnode connection while another connection initialises the same account is therefore an unsynchronised read and write of the same string, a data race in which the reader can see a stale or torn value. The read needs the account lock.",
+            "locations": [{ "path": "server/leafnode.go", "line": 1204 }],
+            "alternatives": [{ "path": "server/leafnode.go", "line": 973, "endLine": 977 }]
+          }
+        ],
+        "regressionTest": {
+          "status": "none",
+          "note": "The fix adds no test; its message reports a data race in the leafnode loop-detection code."
+        },
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "lds-data-race",
+                    "failureClass": "other",
+                    "mechanism": "concurrency",
+                    "pendingQ4": "concurrency-wrong-result"
+                  }
+                ],
+                "crossFile": false
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel and scope from the case files and read-only base..head diffs on local mirrors; testGap not examined",
+              "date": "2026-11-07",
+              "labels": { "defects": [{ "id": "lds-data-race", "contextLevel": "hunk", "scope": "introduced-by-pr" }] }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:nats-io/nats-server race introduced",
+        "evidence": "The fix's message reads \"Fix race introduced in #1170\"; its parent is the merge of pull 1170, and it moves the c.acc.lds read behind the account lock.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "caddyserver-caddy-1",
+      "kind": "bug",
+      "split": "development",
+      "repository": { "url": "https://github.com/caddyserver/caddy", "licence": "Apache-2.0" },
+      "language": "go",
+      "traits": ["outside-diff"],
+      "candidate": {
+        "base": "b95b87381a282e1fe57295d145b71645d7801f07",
+        "head": "d55d50b3b3a9a8e842bb25e1ee8468587cd346f4",
+        "date": "2020-09-17T01:48:37Z",
+        "change": "https://github.com/caddyserver/caddy/pull/3695",
+        "changed": { "files": 1, "additions": 7, "deletions": 0 }
+      },
+      "fix": {
+        "sha": "6722426f1a9e6c8a5fb0bbcafd4b5f99cad2b070",
+        "date": "2020-10-01T20:05:39Z",
+        "change": "https://github.com/caddyserver/caddy/pull/3756"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "srv-upstream-rejected",
+            "category": "error-path",
+            "severity": "blocking",
+            "failureClass": "other",
+            "mechanism": "regression",
+            "contextLevel": "repo",
+            "scope": "introduced-by-pr",
+            "testGap": "none",
+            "summary": "Provisioning now parses every upstream's dial address, so upstreams that use lookup_srv, which have none, fail to load.",
+            "cause": "An upstream may set lookup_srv instead of dial (Upstream.LookupSRV in hosts.go, outside this change); its address is resolved per request and Dial stays empty. The new check calls caddy.ParseNetworkAddress(upstream.Dial) for every upstream and returns its error, so any reverse_proxy configuration with an SRV upstream is rejected at load (issue 3753). The parse and the port-range check have to be skipped when LookupSRV is set.",
+            "locations": [{ "path": "modules/caddyhttp/reverseproxy/reverseproxy.go", "line": 207, "endLine": 213 }],
+            "alternatives": [{ "path": "modules/caddyhttp/reverseproxy/hosts.go", "line": 83 }]
+          }
+        ],
+        "regressionTest": {
+          "status": "added-by-fix",
+          "paths": ["caddytest/integration/reverseproxy_test.go"],
+          "note": "The fix adds integration tests that load an SRV upstream and reject dial or active health checks combined with lookup_srv."
+        },
+        "crossFile": true,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "srv-upstream-rejected", "failureClass": "other", "mechanism": "regression" }],
+                "crossFile": true
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel, scope and testGap from the case files and read-only base..head diffs on local mirrors",
+              "date": "2026-11-07",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "srv-upstream-rejected",
+                    "contextLevel": "repo",
+                    "scope": "introduced-by-pr",
+                    "testGap": "none"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:caddyserver/caddy regression introduced",
+        "evidence": "The fix's message reads \"fix regression in d55d50b\" and \"fix breakage in handling SRV lookup introduced by 3695\"; it wraps the new parse in a LookupSRV check.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "vitejs-vite-1",
+      "kind": "bug",
+      "split": "calibration",
+      "repository": { "url": "https://github.com/vitejs/vite", "licence": "MIT" },
+      "language": "javascript",
+      "traits": ["outside-diff"],
+      "candidate": {
+        "base": "8d956f6e585bed9ce4f02b7c9fed6631144f638d",
+        "head": "1f068fcec38fc07c34e75a19821064386e460907",
+        "date": "2021-09-06T10:58:47Z",
+        "change": "https://github.com/vitejs/vite/pull/4536",
+        "changed": { "files": 1, "additions": 15, "deletions": 2 }
+      },
+      "fix": {
+        "sha": "fdc3212474ff951e7e67810eca6cfb3ef1ed9ea2",
+        "date": "2021-09-06T16:00:34Z",
+        "change": "https://github.com/vitejs/vite/pull/4861"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "legacy-marker-in-ssr",
+            "category": "correctness",
+            "severity": "blocking",
+            "failureClass": "crash",
+            "mechanism": "regression",
+            "contextLevel": "file",
+            "scope": "introduced-by-pr",
+            "testGap": "none",
+            "summary": "Skipping renderChunk in SSR builds leaves the import.meta.env.LEGACY placeholder unreplaced in server output.",
+            "cause": "The legacy-env plugin, which this change leaves alone, still defines import.meta.env.LEGACY as the bare identifier __VITE_IS_LEGACY__ for every build, and only renderChunk rewrites that identifier to a boolean. The new early return in renderChunk for config.build.ssr skips the rewrite, so an SSR bundle that reads import.meta.env.LEGACY throws ReferenceError: __VITE_IS_LEGACY__ is not defined. The define has to be false for SSR builds as well.",
+            "locations": [{ "path": "packages/plugin-legacy/index.js", "line": 233, "endLine": 235 }],
+            "alternatives": [{ "path": "packages/plugin-legacy/index.js", "line": 454, "endLine": 459 }]
+          }
+        ],
+        "regressionTest": {
+          "status": "added-by-fix",
+          "paths": ["packages/playground/legacy/__tests__/ssr/legacy-ssr.spec.ts"],
+          "note": "The fix adds an SSR playground test that expects import.meta.env.LEGACY to render as false."
+        },
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "legacy-marker-in-ssr", "failureClass": "crash", "mechanism": "regression" }],
+                "crossFile": false
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel, scope and testGap from the case files and read-only base..head diffs on local mirrors",
+              "date": "2026-11-07",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "legacy-marker-in-ssr",
+                    "contextLevel": "file",
+                    "scope": "introduced-by-pr",
+                    "testGap": "none"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:vitejs/vite regression introduced",
+        "evidence": "The fix's title is \"fix(plugin-legacy): fix regression introduced in #4536\"; pull 4536 was squash-merged as the candidate head.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "tokio-rs-tracing-1",
+      "kind": "bug",
+      "split": "calibration",
+      "repository": { "url": "https://github.com/tokio-rs/tracing", "licence": "MIT" },
+      "language": "rust",
+      "candidate": {
+        "base": "352431031776c3a4274f5b195eb4910e463f6ebd",
+        "head": "b1123e431584a6b75f795d93d4eec87f06314d02",
+        "date": "2022-03-22T17:39:30Z",
+        "change": "https://github.com/tokio-rs/tracing/pull/2001",
+        "changed": { "files": 2, "additions": 34, "deletions": 15 }
+      },
+      "fix": {
+        "sha": "fc694a5bcc8c97a774f43e8c2c8b6297f5aa2365",
+        "date": "2022-04-12T16:06:55Z",
+        "change": "https://github.com/tokio-rs/tracing/pull/2065"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "scoped-default-clobbers-global",
+            "category": "correctness",
+            "severity": "blocking",
+            "failureClass": "other",
+            "mechanism": "logic",
+            "contextLevel": "hunk",
+            "scope": "introduced-by-pr",
+            "testGap": "none",
+            "summary": "Dropping a scoped default set before any global default leaves the thread pinned to NoSubscriber, so a global default set later is ignored on that thread.",
+            "cause": "With this change an empty thread-local slot (None) means 'use the global default', and Dispatch::none() is no longer treated as a placeholder. set_default still records the prior value as get_global().cloned().unwrap_or_else(Dispatch::none) when the slot was empty, so if no global default exists yet the guard stores NoSubscriber, and DefaultGuard::drop writes Some(NoSubscriber) back. From then on that thread never falls back to the global default, even after set_global_default succeeds, and its events are silently dropped. The guard has to remember None and restore None.",
+            "locations": [{ "path": "tracing-core/src/dispatcher.rs", "line": 687, "endLine": 693 }],
+            "alternatives": [{ "path": "tracing-core/src/dispatcher.rs", "line": 743 }]
+          }
+        ],
+        "regressionTest": {
+          "status": "added-by-fix",
+          "paths": ["tracing/tests/scoped_clobbers_default.rs"],
+          "note": "The fix adds a test that sets a scoped default before the global one and checks that the global default still records afterwards."
+        },
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "scoped-default-clobbers-global", "failureClass": "other", "mechanism": "logic" }],
+                "crossFile": false
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel, scope and testGap from the case files and read-only base..head diffs on local mirrors",
+              "date": "2026-11-07",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "scoped-default-clobbers-global",
+                    "contextLevel": "hunk",
+                    "scope": "introduced-by-pr",
+                    "testGap": "none"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:tokio-rs/tracing regression introduced",
+        "evidence": "The fix's description says pull 2001 introduced, or uncovered, the clobbering; a line blame of tracing-core/src/dispatcher.rs at the fix's parent attributes the prior-default lines to this commit, the v0.1.x port of pull 2001.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "pallets-click-1",
+      "kind": "bug",
+      "split": "held-out",
+      "repository": { "url": "https://github.com/pallets/click", "licence": "BSD-3-Clause" },
+      "language": "python",
+      "candidate": {
+        "base": "cfa6f4ad3e0078db43f866246b483544afa33ed3",
+        "head": "262bdf02288daf9a37b9e815b44acafd62b5c6fe",
+        "date": "2025-05-20T23:07:15Z",
+        "change": "https://github.com/pallets/click/pull/2934",
+        "changed": { "files": 5, "additions": 27, "deletions": 6 }
+      },
+      "fix": {
+        "sha": "2a0e3ba907927ade6951d5732b775f11b54cb766",
+        "date": "2025-09-13T04:36:16Z",
+        "change": "https://github.com/pallets/click/pull/2940"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "eof-on-iteration",
+            "category": "error-path",
+            "severity": "concern",
+            "failureClass": "crash",
+            "mechanism": "regression",
+            "contextLevel": "hunk",
+            "scope": "introduced-by-pr",
+            "testGap": "weakened",
+            "summary": "CliRunner's input stream now raises EOFError when iteration ends, so a command that iterates its input fails instead of finishing.",
+            "cause": "The new _NamedTextIOWrapper.__next__ turns StopIteration into EOFError. Python's iterator protocol ends a for loop with StopIteration, so any command run under CliRunner that iterates its input stream (for line in stdin, a File('-') argument, chained processors reading lines) raises EOFError when input runs out, and the runner reports an abort. Only the prompt helpers need EOFError at end of input; the conversion belongs in them, not on the stream's iterator. The same change edits the chain test to expect the abort.",
+            "locations": [{ "path": "src/click/testing.py", "line": 119, "endLine": 124 }],
+            "alternatives": [
+              { "path": "src/click/testing.py", "line": 351 },
+              { "path": "src/click/testing.py", "line": 360 },
+              { "path": "tests/test_chain.py", "line": 166, "endLine": 167 }
+            ]
+          }
+        ],
+        "regressionTest": {
+          "status": "added-by-fix",
+          "paths": ["tests/test_chain.py"],
+          "note": "The fix restores the chain test's expectation that reading all input ends without an exception (issue 2939)."
+        },
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "eof-on-iteration", "failureClass": "crash", "mechanism": "regression" }],
+                "crossFile": false
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel, scope and testGap from the case files and read-only base..head diffs on local mirrors",
+              "date": "2026-11-07",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "eof-on-iteration",
+                    "contextLevel": "hunk",
+                    "scope": "introduced-by-pr",
+                    "testGap": "weakened"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:pallets/click \"introduced in\"",
+        "evidence": "The fix's title is \"testing/CliRunner: Fix regression related to EOF introduced in 262bdf0 (#2940)\"; 262bdf0 is the merge of pull 2934.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "honojs-hono-1",
+      "kind": "bug",
+      "split": "held-out",
+      "repository": { "url": "https://github.com/honojs/hono", "licence": "MIT" },
+      "language": "typescript",
+      "candidate": {
+        "base": "8d775dcdf59a900623ecb862cec28854f9fa0774",
+        "head": "e9830c6ba19052d81ef0aeba9d65a1a130f7cf9e",
+        "date": "2024-11-02T22:50:10Z",
+        "change": "https://github.com/honojs/hono/pull/3605",
+        "changed": { "files": 2, "additions": 2, "deletions": 2 }
+      },
+      "fix": {
+        "sha": "e4602ad11a2879eeb4f06d5114d21e0565c114a9",
+        "date": "2026-02-24T07:21:31Z",
+        "change": "https://github.com/honojs/hono/pull/4754"
+      },
+      "labels": {
+        "defects": [
+          {
+            "id": "jwt-time-truncation",
+            "category": "security",
+            "severity": "blocking",
+            "failureClass": "auth-bypass",
+            "mechanism": "access",
+            "contextLevel": "hunk",
+            "scope": "introduced-by-pr",
+            "testGap": "none",
+            "summary": "JWT verification computes the current time with | 0, which wraps negative after January 2038, so expired tokens are accepted.",
+            "cause": "(Date.now() / 1000) | 0 converts the timestamp to a signed 32-bit integer. Unix time passes 2^31 - 1 on 2038-01-19, after which now is negative: payload.exp <= now is never true, so expired tokens pass verification, while payload.nbf > now rejects every token that sets nbf. Math.floor, which this replaces, has no such limit. The sibling Max-Age change in cookie.ts is bounded by its 400-day check and is not a defect.",
+            "locations": [{ "path": "src/utils/jwt/jwt.ts", "line": 77 }],
+            "alternatives": [{ "path": "src/utils/jwt/jwt.ts", "line": 78, "endLine": 86 }]
+          }
+        ],
+        "regressionTest": {
+          "status": "added-by-fix",
+          "paths": ["src/utils/jwt/jwt.test.ts"],
+          "note": "The fix adds a test that rejects an expired token when the clock is past the 2038 boundary."
+        },
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "jwt-time-truncation", "failureClass": "auth-bypass", "mechanism": "access" }],
+                "crossFile": false
+              }
+            },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22c labels: contextLevel, scope and testGap from the case files and read-only base..head diffs on local mirrors",
+              "date": "2026-11-07",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "jwt-time-truncation",
+                    "contextLevel": "hunk",
+                    "scope": "introduced-by-pr",
+                    "testGap": "none"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:honojs/hono regression",
+        "evidence": "A line blame of src/utils/jwt/jwt.ts at the fix's parent attributes the truncating line to this commit (pull 3605); the fix's message explains the 2038 failure.",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "psf-requests-1",
+      "kind": "control",
+      "split": "development",
+      "repository": { "url": "https://github.com/psf/requests", "licence": "Apache-2.0" },
+      "language": "python",
+      "candidate": {
+        "base": "2ecdb685619340735fa85d253c4779029957246f",
+        "head": "dfe46c1b7f55c9377caecba2119be14d3cce74e5",
+        "date": "2023-07-30T01:55:18Z",
+        "change": "https://github.com/psf/requests/pull/6187",
+        "changed": { "files": 1, "additions": 1, "deletions": 5 }
+      },
+      "labels": {
+        "defects": [],
+        "rationale": "dict_from_cookiejar's loop becomes a dict comprehension over the same jar. Both iterate the cookies in the same order and store cookie.value under cookie.name, so a later cookie with a repeated name still overwrites an earlier one, and the function still returns a new dict.",
+        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:psf/requests refactor",
+        "evidence": "Refactor-only commit. Searches of later commits and issues for dict_from_cookiejar and pull 6187 found no defect attributed to it (2026-11-03).",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    },
+    {
+      "id": "expressjs-express-1",
+      "kind": "control",
+      "split": "development",
+      "repository": { "url": "https://github.com/expressjs/express", "licence": "MIT" },
+      "language": "javascript",
+      "candidate": {
+        "base": "7f13d572c13228856822af9ba4a7a094f4784ac9",
+        "head": "511d9dfca8f2329534ee9c75990163766b82c407",
+        "date": "2025-02-04T10:59:48Z",
+        "change": "https://github.com/expressjs/express/pull/6097",
+        "changed": { "files": 1, "additions": 3, "deletions": 8 }
+      },
+      "labels": {
+        "defects": [],
+        "rationale": "normalizeTypes' index loop becomes types.map(exports.normalizeType). map also passes the index and the array, but normalizeType reads only its first argument, and its one caller (res.format) passes a dense array of keys, so map's skipping of holes cannot differ. The result is the same array; the added blank line is formatting.",
+        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+      },
+      "provenance": {
+        "found": "GitHub commit search: repo:expressjs/express refactor",
+        "evidence": "Refactor-only commit. Searches of later commits and issues for normalizeTypes and pull 6097 found only added tests, no defect attributed to it (2026-11-03).",
+        "checked": { "date": "2026-11-03", "method": "gh-api", "commits": true, "ancestry": true, "licence": true }
+      }
+    }
+  ],
+  "exclusions": [
+    {
+      "repository": "https://github.com/tokio-rs/tokio",
+      "candidate": {
+        "base": "4c7d8b2a14de81ace4d8e61cfaeb8eca26f6f68c",
+        "head": "1604bc335157be9a131e24cfde55cab3c90ebc92"
+      },
+      "fix": "56aaa43e91c4fbed88f0c2a5b65019ed9a0c3c61",
+      "reason": "no-causal-explanation",
+      "detail": "Pull 7757 (a sharded spawn_blocking queue) was reverted by pull 8057 because programs hang (issue 8056), but no root cause was identified, so no defect location or cause can be labelled.",
+      "date": "2026-11-03"
+    },
+    {
+      "repository": "https://github.com/tokio-rs/bytes",
+      "candidate": {
+        "base": "ebe96021b0eaf52be1fedd0a925f4384275c9cc4",
+        "head": "43ac8e5494e9404327f971937edb092b8cae6a2b"
+      },
+      "fix": "af606aab9be1dde2aeefc1a21344a79beaba7bbe",
+      "reason": "oversized",
+      "detail": "The Bytes::truncate regression came from the internal vtable refactor (pull 298): 17 files and 5,005 changed lines, above the automatic review's 5,000-line limit. Recorded so it can join a large-change bucket once bounded large-change review exists.",
+      "date": "2026-11-03"
+    },
+    {
+      "repository": "https://github.com/honojs/hono",
+      "candidate": {
+        "base": "d1ff3d89c7819b164c9ecfb6b4d7a676ea1b406a",
+        "head": "48dc87dfd542b9b8f1a442c2d0abab5d13ed4a3b"
+      },
+      "fix": "82dad6297c90c33c41bf48b4530509a21588ad06",
+      "reason": "quota",
+      "detail": "A valid case (a non-global backslash replace in the file-path helper, fixed by pull 4962) left out by the seed's one-case-per-repository rule. Eligible for the full set.",
+      "date": "2026-11-03"
+    },
+    {
+      "repository": "https://github.com/spf13/cobra",
+      "candidate": {
+        "base": "a16cb2499939d048b37ce4ad9488bb099a57fc2e",
+        "head": "bf480fe62889c100db0a9fcfee3c2de868cd748d"
+      },
+      "fix": "e784a5991089b1209b46c73889ddc34fa9660a0f",
+      "reason": "quota",
+      "detail": "A valid pair whose defect only drops a blank line from help output; the seed's eight bug slots went to behavioural defects. Eligible for the full set.",
+      "date": "2026-11-03"
+    },
+    {
+      "repository": "https://github.com/gin-gonic/gin",
+      "fix": "3b08cd7235bd5ad2f055aa9e38135f111f6c5926",
+      "reason": "no-defensible-candidate",
+      "detail": "The getValue skipped-nodes overflow (issue 4818) comes from the pooled skippedNodes stack meeting the HandleMethodNotAllowed loop; no single introducing change was identified while building the seed.",
+      "date": "2026-11-03"
+    }
+  ]
+}

@@ -15,6 +15,7 @@ const permissions = {
     metadata: "read",
   },
   review: { contents: "read", pull_requests: "write", issues: "write", checks: "read", metadata: "read" },
+  publish: { contents: "write", pull_requests: "write", issues: "write", checks: "read", metadata: "read" },
 } as const
 
 const Token = z
@@ -57,7 +58,7 @@ type Services = {
 /** A Vector account token cannot authorize a GitHub repository. Only Actions OIDC can exchange for App access. */
 export async function resolveGithubAuth(
   input: {
-    purpose: "task" | "review"
+    purpose: "task" | "review" | "publish"
     repository: string
     pullRequest?: number
     providedToken?: string

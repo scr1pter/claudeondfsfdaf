@@ -1,5 +1,6 @@
 import type { IconProps } from "@vectordevai/ui/icon"
 import type { SettingsSection } from "./general"
+import { Hands } from "@vectordevai/schema/hands"
 
 export type SettingsTab =
   | SettingsSection
@@ -15,9 +16,11 @@ export type SettingsTab =
   | "about"
   | "trust"
   | "subagents"
+  | "computer"
   | "memory"
   | "local"
   | "shortcuts"
+  | "github"
 
 export type SettingsItem = {
   value: SettingsTab
@@ -185,6 +188,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
     title: "Agents & environment",
     items: [
       {
+        value: "github",
+        label: "GitHub",
+        icon: "github",
+        keywords: ["github", "actions", "repository bindings", "run in github", "scheduled runs"],
+      },
+      {
         value: "subagents",
         label: "Agents",
         icon: "task",
@@ -200,6 +209,23 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "spend ceiling",
           "workflows",
           "saved workflows",
+        ],
+      },
+      {
+        value: "computer",
+        label: Hands.NAME,
+        icon: "hands",
+        keywords: [
+          Hands.NAME,
+          Hands.SHORT,
+          "computer use",
+          "use my computer",
+          "screen recording",
+          "accessibility permission",
+          "always allowed apps",
+          "blocked apps",
+          "screenshots",
+          "mouse",
         ],
       },
       {

@@ -3,6 +3,7 @@ export * as WorkflowPlan from "./plan"
 import { createHash } from "node:crypto"
 import { Schema } from "effect"
 import type { Workflow } from "@vectordevai/schema/workflow"
+import type { Connect } from "@vectordevai/schema/connect"
 import { WorkflowSpec } from "./spec"
 import { WorkflowTemplate } from "./template"
 import { WorkflowLimits } from "./limits"
@@ -24,14 +25,22 @@ export type Options = {
   readonly cpus?: number
   readonly source?: "model" | "owner" | "saved"
   readonly modelAllowed?: (model: string, agent: string) => boolean
+  /** Engine-owned member manifests only. Workflow JSON cannot supply or override declared effects. */
+  readonly connections?: readonly Pick<Connect.Member, "id" | "actions">[]
 }
-export type Expanded = {
-  readonly stage: WorkflowSpec.AgentStage
+type ExpandedFields = {
   readonly inputs: Readonly<Record<string, unknown>>
   readonly path: string
   readonly dependencies: readonly string[]
   readonly barriers: readonly string[]
   readonly group?: string
+}
+export type ExpandedAgent = ExpandedFields & { readonly stage: WorkflowSpec.AgentStage }
+export type ExpandedConnect = ExpandedFields & { readonly stage: WorkflowSpec.ConnectStage }
+export type Expanded = ExpandedFields & { readonly stage: WorkflowSpec.ExecutableStage }
+
+export function isAgent(entry: Expanded): entry is ExpandedAgent {
+  return "prompt" in entry.stage
 }
 export type Built = {
   readonly ok: boolean
@@ -53,7 +62,7 @@ export function build(value: unknown, options: Options): Built {
   const warnings: WorkflowSpec.Issue[] = []
   const inputs = resolveInputs(parsed.spec, options.inputs ?? {}, issues, "/inputs")
   const stages: {
-    stage: WorkflowSpec.AgentStage
+    stage: WorkflowSpec.ExecutableStage
     inputs: Readonly<Record<string, unknown>>
     path: string
     group?: string
@@ -70,6 +79,11 @@ export function build(value: unknown, options: Options): Built {
     ids.add(stage.id)
     if ("prompt" in stage) {
       stages.push({ stage: { ...parsed.spec.defaults, ...stage }, inputs, path: at })
+      groups.set(stage.id, [stage.id])
+      return
+    }
+    if ("connect" in stage) {
+      stages.push({ stage, inputs, path: at })
       groups.set(stage.id, [stage.id])
       return
     }
@@ -115,7 +129,7 @@ export function build(value: unknown, options: Options): Built {
     // Each nested group has its own ledger; parent limits still apply to every descendant.
     groupLimits[stage.id] = WorkflowLimits.resolve(child.spec.limits, configured, options.cpus ?? 1)
     large ||= WorkflowLimits.exceeds(child.spec.limits ?? {}, configured)
-    const children = child.spec.stages.filter((item): item is WorkflowSpec.AgentStage => "prompt" in item)
+    const children = child.spec.stages.filter((item): item is WorkflowSpec.ExecutableStage => !("workflow" in item))
     groups.set(
       stage.id,
       children.map((item) => `${stage.id}.${item.id}`),
@@ -130,6 +144,21 @@ export function build(value: unknown, options: Options): Built {
     }
     const prefixed = (text: string) => text.replace(/\{\{\s*stages\.([a-z][a-z0-9_-]*)\./g, `{{stages.${stage.id}.$1.`)
     children.forEach((item, j) => {
+      if ("connect" in item) {
+        stages.push({
+          stage: {
+            ...item,
+            id: `${stage.id}.${item.id}`,
+            title: item.title ? prefixed(item.title) : undefined,
+            after: [...(stage.after ?? []), ...(item.after ?? []).map((id) => `${stage.id}.${id}`)],
+            if: item.if ? nestedPredicate(item.if, stage.id) : undefined,
+          },
+          inputs: childInputs,
+          group: stage.id,
+          path: `${at}/workflow/stages/${j}`,
+        })
+        return
+      }
       const source =
         item.for_each && "from" in item.for_each
           ? {
@@ -166,15 +195,21 @@ export function build(value: unknown, options: Options): Built {
     // All edges validate the DAG; only barriers wait for completion. A `from` edge may stream ready items.
     const dependencies = new Set<string>(stage.after ?? [])
     const barriers = new Set<string>(stage.after ?? [])
-    if (stage.for_each && "from" in stage.for_each)
+    if ("prompt" in stage && stage.for_each && "from" in stage.for_each)
       for (const id of typeof stage.for_each.from === "string" ? [stage.for_each.from] : stage.for_each.from)
         dependencies.add(id)
     const fields = [
-      { text: stage.prompt, path: "prompt", verify: false },
+      ...("prompt" in stage ? [{ text: stage.prompt, path: "prompt", verify: false }] : []),
       ...(stage.title ? [{ text: stage.title, path: "title", verify: false }] : []),
-      ...(stage.owned_paths ?? []).map((text, i) => ({ text, path: `owned_paths/${i}`, verify: false })),
-      ...(stage.success_criteria ?? []).map((text, i) => ({ text, path: `success_criteria/${i}`, verify: false })),
-      ...(stage.verify ? [{ text: stage.verify.prompt, path: "verify/prompt", verify: true }] : []),
+      ...("prompt" in stage
+        ? (stage.owned_paths ?? []).map((text, i) => ({ text, path: `owned_paths/${i}`, verify: false }))
+        : []),
+      ...("prompt" in stage
+        ? (stage.success_criteria ?? []).map((text, i) => ({ text, path: `success_criteria/${i}`, verify: false }))
+        : []),
+      ...("prompt" in stage && stage.verify
+        ? [{ text: stage.verify.prompt, path: "verify/prompt", verify: true }]
+        : []),
     ]
     for (const field of fields) {
       issues.push(
@@ -235,7 +270,39 @@ export function build(value: unknown, options: Options): Built {
   const permitted = options.agents
     .filter((agent) => agent.allowed && !agent.primary && !agent.hidden && !agent.research)
     .map((agent) => agent.name)
-  const plans: Workflow.PlanStage[] = expanded.map(({ stage, path }) => {
+  const plans: Workflow.PlanStage[] = expanded.map(({ stage, path }): Workflow.PlanStage => {
+    if ("connect" in stage) {
+      const members = options.connections?.filter((member) => member.id === stage.connect.to) ?? []
+      const actions =
+        members.length === 1 ? (members[0].actions?.filter((action) => action.id === stage.connect.action) ?? []) : []
+      const action = actions.length === 1 ? actions[0] : undefined
+      if (!action)
+        issues.push({
+          path: `${path}/connect`,
+          message: "The connected action has no trusted member manifest in this workflow build.",
+        })
+      else if (!action.effects.length || action.effects.some((effect) => effect !== "read"))
+        issues.push({
+          path: `${path}/connect/action`,
+          message: "Workflow connected actions must declare only read effects.",
+        })
+      warnings.push({
+        path: `${path}/connect`,
+        message:
+          "Connected workflow execution is unavailable until reviewer helpers preserve the workflow and ancestor budget scopes.",
+      })
+      return {
+        id: stage.id,
+        title: stage.title ?? stage.id,
+        phase: "",
+        kind: "connect",
+        connect: { to: stage.connect.to, action: stage.connect.action },
+        items: 1,
+        serial: false,
+        writes: "read only; execution unavailable",
+        asks: ["connect", "connect_model when required"],
+      }
+    }
     const name = stage.agent ?? "general"
     const agent = options.agents.find((item) => item.name === name)
     if (!agent || !permitted.includes(name))

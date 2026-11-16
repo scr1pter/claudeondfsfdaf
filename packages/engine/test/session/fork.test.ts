@@ -295,25 +295,31 @@ describe("SessionFork.virtualize", () => {
 describe("SessionFork.adopt", () => {
   const cfg = { experimental: { primary_tools: ["deploy"] } }
 
-  test("keeps every definition byte for byte and refuses REFUSED tools, a primary_tools entry among them", async () => {
+  test("keeps non-computer definitions byte for byte and refuses REFUSED tools, a primary_tools entry among them", async () => {
     const parent: Record<string, Tool> = {
       ...definitions(),
       memory: tool({ description: "Search memory", inputSchema: schema, execute: async () => "parent memory" }),
       deploy: tool({ description: "Deploy", inputSchema: schema, execute: async () => "parent deploy" }),
       edit: tool({ description: "Edit a file", inputSchema: schema, execute: async () => "parent edit" }),
       question: tool({ description: "Ask the user", inputSchema: schema, execute: async () => "parent question" }),
+      computer: tool({ description: "Use the computer", inputSchema: schema, execute: async () => "parent computer" }),
     }
     const mine: Record<string, Tool> = {
       read: tool({ description: "Read (child copy)", inputSchema: schema, execute: async () => "child read" }),
       edit: tool({ description: "Edit (child copy)", inputSchema: schema, execute: async () => "child edit" }),
       task: tool({ description: "Launch (child copy)", inputSchema: schema, execute: async () => "child task" }),
       deploy: tool({ description: "Deploy (child copy)", inputSchema: schema, execute: async () => "child deploy" }),
+      computer: tool({ description: "Child computer", inputSchema: schema, execute: async () => "child computer" }),
       extra: tool({ description: "Only the child has this", inputSchema: schema, execute: async () => "extra" }),
     }
     const refused = SessionFork.REFUSED(cfg)
-    expect(refused).toEqual(expect.arrayContaining(["task", "memory", "question", "StructuredOutput", "deploy"]))
+    expect(refused).toEqual(
+      expect.arrayContaining(["task", "memory", "question", "StructuredOutput", "deploy", "computer"]),
+    )
     const adopted = SessionFork.adopt({ tools: parent, own: mine, refused })
-    expect(Object.keys(adopted)).toEqual(Object.keys(parent))
+    const offered = Object.fromEntries(Object.entries(parent).filter(([name]) => name !== "computer"))
+    expect(Object.keys(adopted)).toEqual(Object.keys(offered))
+    expect(adopted.computer).toBeUndefined()
     const render = async (tools: Record<string, Tool>) =>
       JSON.stringify(
         await Promise.all(
@@ -324,7 +330,7 @@ describe("SessionFork.adopt", () => {
           })),
         ),
       )
-    expect(await render(adopted)).toBe(await render(parent))
+    expect(await render(adopted)).toBe(await render(offered))
     for (const [name, item] of Object.entries(adopted)) expect(item.inputSchema).toBe(parent[name]!.inputSchema)
     const run = (name: string) =>
       Promise.resolve()
@@ -410,6 +416,93 @@ describe("SessionFork prefixes", () => {
 })
 
 describe("SessionFork.inherited", () => {
+  it.instance(
+    "warm and cold forks withhold computer tools, policy and private frames without changing the parent",
+    () =>
+      Effect.gen(function* () {
+        const forks = yield* SessionFork.Service
+        const session = yield* Session.Service
+        const { root, first, launching } = yield* conversation()
+        const earlier = (yield* session.messages({ sessionID: root.id })).find(
+          (message) => message.info.role === "assistant" && message.info.parentID === first.id,
+        )!.info
+        const privateFrame = "cHJpdmF0ZS1jb21wdXRlci1mcmFtZQ=="
+        const upload = "b3JkaW5hcnktdXNlci11cGxvYWQ="
+        const image = (messageID: MessageID, data: string): SessionV1.FilePart => ({
+          id: PartID.ascending(),
+          sessionID: root.id,
+          messageID,
+          type: "file",
+          mime: "image/png",
+          url: `data:image/png;base64,${data}`,
+        })
+        yield* session.updatePart({
+          ...toolPart(earlier, "computer", "call_private_frame", {
+            status: "completed",
+            input: { action: "screenshot" },
+            output: "Observed approved app",
+            title: "Read the app",
+            time: { start: 1, end: 2 },
+            metadata: {
+              providerResult: { content: [{ type: "image-data", mediaType: "image/png", data: privateFrame }] },
+            },
+            attachments: [image(earlier.id, privateFrame)],
+          }),
+        })
+        yield* session.updatePart(image(first.id, upload))
+        let executions = 0
+        const computer = tool({
+          description: "Use the computer",
+          inputSchema: schema,
+          execute: async () => {
+            executions++
+            return "unexpected computer action"
+          },
+        })
+        const policy = "<computer_policy>\nUse the approved app.\n</computer_policy>"
+        const prefix = prefixOf(root.id, launching.id)
+        yield* forks.remember({
+          ...prefix,
+          request: {
+            ...prefix.request,
+            stableSystem: ["Stable block", policy],
+            system: ["Session block", policy],
+            tools: { ...definitions(), computer },
+          },
+        })
+        const fork = yield* forkChild(root.id, launching.id, "Fix the parser.")
+        const base = {
+          session: fork.child,
+          record: fork.record,
+          messages: yield* own(fork.child.id),
+          model: ref,
+          agent: "build",
+          personal: true,
+          audience: "owner" as const,
+          guest: false,
+        }
+        const warm = (yield* forks.inherited(base))!
+        expect(warm.prefix?.request.stableSystem).toEqual(["Stable block"])
+        expect(warm.prefix?.request.system).toEqual(["Session block"])
+        expect(Object.keys(warm.prefix!.request.tools)).toEqual(Object.keys(definitions()))
+        const adopted = SessionFork.adopt({ tools: warm.prefix!.request.tools, own: { computer }, refused: [] })
+        expect(adopted.computer).toBeUndefined()
+        expect(executions).toBe(0)
+        expect(JSON.stringify(warm.messages)).not.toContain(privateFrame)
+        expect(JSON.stringify(warm.messages)).toContain(upload)
+        expect(JSON.stringify(warm.messages)).toContain("Observed approved app")
+        const cold = (yield* forks.inherited({ ...base, variant: "high" }))!
+        expect(cold.prefix).toBeUndefined()
+        expect(JSON.stringify(cold.messages)).not.toContain(privateFrame)
+        expect(JSON.stringify(cold.messages)).toContain(upload)
+        expect(JSON.stringify(yield* session.messages({ sessionID: root.id }))).toContain(privateFrame)
+        const parent = (yield* forks.prefix(launching.id))!
+        expect(parent.request.tools.computer).toBe(computer)
+        expect(parent.request.stableSystem).toEqual(["Stable block", policy])
+        expect(parent.request.system).toEqual(["Session block", policy])
+      }),
+  )
+
   it.instance("returns a fresh copy every call: two siblings over three steps send identical parts", () =>
     Effect.gen(function* () {
       const forks = yield* SessionFork.Service

@@ -2,10 +2,12 @@
 // tests read the same answer. The route job in the workflow runs core's parseReviewCommand directly
 // (@vectordevai/core/review/workflow); this is the CLI side of the same rules.
 
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { DEFAULT_MENTIONS, parseReviewCommand } from "@vectordevai/core/review/command"
 
-// Task comments use the same four Vector mentions as reviews.
-export const TASK_MENTIONS = ["/vectorscope", "/vs", "/vector", "/vx"]
+// Task comments use the same mentions as reviews: the /vector and /vs commands and the aliases installed workflows bake
+// in. The App handle (@<slug>) arrives through a workflow's MENTIONS once the workflow bakes it in.
+export const TASK_MENTIONS = GithubAgents.mentions()
 
 // The pull_request actions that start an automatic review.
 export const REVIEW_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_review"]

@@ -5,9 +5,24 @@ import { getStore, removeStoreFileIfEmpty } from "./store"
 import { vaultSecrets } from "./vault-secrets"
 import { createVectorAccount, refreshVectorModels, syncVectorAccount } from "./vector-account"
 import { createManagedAccountLifecycle } from "./vector-account-lifecycle"
+import { isComputerOverlay } from "./computer-overlay-registry"
 
 const STORE = "vector-account"
 const TOKEN_PURPOSE = "vector-account-token"
+let authorityRevision = 0
+const authorityListeners = new Set<() => void>()
+function changedAuthority() {
+  authorityRevision++
+  for (const listener of authorityListeners) listener()
+}
+export const vectorAccountAuthorityRevision = () => authorityRevision
+/** Main-only authority invalidation; no credentials or identity are exposed to renderer listeners. */
+export function onVectorAccountAuthorityChange(listener: () => void) {
+  authorityListeners.add(listener)
+  return () => {
+    authorityListeners.delete(listener)
+  }
+}
 const engine: {
   ready?: () => Promise<{ url: string; username: string | null; password: string | null }>
 } = {}
@@ -22,8 +37,14 @@ export function onVectorAccountChanged(listener: (status: { authenticated: boole
 
 export const vectorAccount = createVectorAccount({
   read: () => getStore(STORE).get("account"),
-  write: (value) => getStore(STORE).set("account", value),
+  write: (value) => {
+    const previous = getStore(STORE).get("account")
+    getStore(STORE).set("account", value)
+    if (!(previous instanceof Object) || !("ciphertext" in previous) || previous.ciphertext !== value.ciphertext)
+      changedAuthority()
+  },
   clear: async () => {
+    changedAuthority()
     getStore(STORE).delete("account")
     await removeStoreFileIfEmpty(STORE)
   },
@@ -53,7 +74,8 @@ export const vectorAccount = createVectorAccount({
   },
   changed: (status) => {
     BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed() && !isBillingWindow(window)) window.webContents.send("vector-account-changed", status)
+      if (!window.isDestroyed() && !isBillingWindow(window) && !isComputerOverlay(window))
+        window.webContents.send("vector-account-changed", status)
     })
     accountListeners.forEach((listener) => listener(status))
   },

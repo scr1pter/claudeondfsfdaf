@@ -61,19 +61,18 @@ benchmark.describe("performance: first navigation paint", () => {
   benchmark("opens a child session without a blank frame", async ({ page, report }) => {
     await setup(page)
     const href = stressSessionHref(fixture.childID)
+    const clickSelector = `${messageSelector(fixture.expected.sourceMessageIDs.at(-1)!)} button[aria-controls="vector-bg-tasks"]`
     const result = await measureFirstNavigation(page, {
       href,
       trigger: "click",
-      clickSelector: 'button[aria-label^="Inspect child navigation"]',
+      clickSelector,
       destinationPath: href,
       sourceSelector: messageSelector(fixture.expected.sourceMessageIDs.at(-1)!),
       destinationSelector: messageSelector(fixture.expected.childMessageIDs.at(-1)!),
       contentSelector,
       navigate: async () => {
-        // Task parts now render as phase chips; modifier-click opens a single agent's child session.
-        await page
-          .getByRole("button", { name: /Inspect child navigation.*Show in Background tasks/ })
-          .click({ modifiers: ["ControlOrMeta"] })
+        // The single-agent chip opens its child session with a modifier click.
+        await page.locator(clickSelector).click({ modifiers: ["ControlOrMeta"] })
         await expectSessionTitle(page, fixture.expected.childTitle)
       },
     })

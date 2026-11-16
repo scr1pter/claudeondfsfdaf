@@ -1,0 +1,13 @@
+#pragma once
+#include <string_view>
+namespace vector::computer::overlay_driver_identity {
+// Checkpoint72 supplies measured pins from the exact test-only Electron/bundle artifacts. This header is
+// generated only for the never-shipped overlay driver; no runtime environment may replace a pin.
+inline constexpr std::string_view kSourceDigest = "@VECTOR_COMPUTER_SOURCE_DIGEST@";
+inline constexpr std::string_view kElectronVersion = "@VECTOR_OVERLAY_ELECTRON_VERSION@";
+inline constexpr std::string_view kElectronSha256 = "@VECTOR_OVERLAY_ELECTRON_SHA256@";
+inline constexpr std::string_view kMainSha256 = "@VECTOR_OVERLAY_MAIN_SHA256@";
+inline constexpr std::string_view kPreloadSha256 = "@VECTOR_OVERLAY_PRELOAD_SHA256@";
+inline constexpr std::string_view kDefaultAppSha256 = "@VECTOR_OVERLAY_DEFAULT_APP_SHA256@";
+inline constexpr std::string_view kFakeHelperSha256 = "@VECTOR_OVERLAY_FAKE_HELPER_SHA256@";
+}

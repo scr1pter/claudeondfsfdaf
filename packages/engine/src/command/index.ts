@@ -5,11 +5,13 @@ import { EffectBridge } from "@/effect/bridge"
 import type { InstanceContext } from "@/project/instance-context"
 import { Effect, Layer, Context, Schema } from "effect"
 import { Config } from "@/config/config"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { Global } from "@vectordevai/core/global"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
+import PROMPT_VECTORSCOPE from "./template/vectorscope.txt"
 import { LegacyEvent } from "@vectordevai/schema/legacy-event"
 import { TaskSize } from "@vectordevai/schema/task-size"
 
@@ -54,6 +56,7 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  VECTORSCOPE: "vectorscope",
 } as const
 
 export interface Interface {
@@ -70,6 +73,7 @@ const layer = Layer.effect(
     const mcp = yield* MCP.Service
     const skill = yield* Skill.Service
     const global = yield* Global.Service
+    const flags = yield* RuntimeFlags.Service
 
     const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
       const cfg = yield* config.get()
@@ -95,6 +99,18 @@ const layer = Layer.effect(
         subtask: true,
         hints: hints(PROMPT_REVIEW),
       }
+      // Connected tools: asks the build agent to hand a review to VectorScope with the connect tool. Never a subtask,
+      // since a subagent cannot call connect, and sized Work, since reviews run on Work and Thorough requests.
+      if (flags.experimentalConnect)
+        commands[Default.VECTORSCOPE] = {
+          name: Default.VECTORSCOPE,
+          description: "review changes with VectorScope [uncommitted|staged|branch <base>], defaults to uncommitted",
+          source: "command",
+          template: PROMPT_VECTORSCOPE,
+          subtask: false,
+          size: "standard",
+          hints: hints(PROMPT_VECTORSCOPE),
+        }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
         commands[name] = {
@@ -185,6 +201,10 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [Config.node, MCP.node, Skill.node, Global.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer: layer,
+  deps: [Config.node, MCP.node, Skill.node, Global.node, RuntimeFlags.node],
+})
 
 export * as Command from "."

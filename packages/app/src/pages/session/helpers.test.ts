@@ -9,6 +9,7 @@ import {
   getTabReorderIndex,
   shouldFocusTerminalOnKeyDown,
   shouldShowFileTree,
+  userTyping,
 } from "./helpers"
 
 describe("shouldShowFileTree", () => {
@@ -209,5 +210,33 @@ describe("createSessionTabs", () => {
       expect(result.activeTab()).toBe("sources")
       dispose()
     })
+  })
+})
+
+describe("userTyping", () => {
+  test("a text field, a text area or an editable element holding the focus is the user typing", () => {
+    const input = document.createElement("input")
+    const checkbox = Object.assign(document.createElement("input"), { type: "checkbox" })
+    const area = document.createElement("textarea")
+    const button = document.createElement("button")
+    document.body.append(input, checkbox, area, button)
+    try {
+      for (const [element, typing] of [
+        [input, true],
+        [area, true],
+        [checkbox, false],
+        [button, false],
+      ] as const) {
+        element.focus()
+        expect(userTyping(document)).toBe(typing)
+      }
+      button.blur()
+      expect(userTyping({ activeElement: null })).toBe(false)
+    } finally {
+      input.remove()
+      checkbox.remove()
+      area.remove()
+      button.remove()
+    }
   })
 })

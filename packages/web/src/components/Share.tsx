@@ -1,5 +1,6 @@
 import { For, Show, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
+import { Hands } from "@vectordevai/schema/hands"
 import type { PublicSession } from "@vectordevai/schema/public-session"
 import { ContentMarkdown } from "./share/content-markdown"
 import { readSnapshot, shareID } from "./share/snapshot"
@@ -61,9 +62,14 @@ export default function Share() {
             : "The public copy could not be loaded. Retrying shortly…",
         )
       } else {
-        if (!result.snapshot) return unavailable()
-        if (!state.snapshot || result.snapshot.revision >= state.snapshot.revision) {
-          setState({ snapshot: result.snapshot, status: "" })
+        const latest = result.snapshot
+        if (!latest) return unavailable()
+        if (!state.snapshot || latest.revision > state.snapshot.revision) setState({ snapshot: latest })
+        if (latest.revision === state.snapshot?.revision) {
+          // The same revision carries the same transcript, so only its details are merged. Replacing the snapshot
+          // would rebuild every message and close any step a reader has opened, along with its screenshots.
+          setState("snapshot", { expiresAt: latest.expiresAt, updatedAt: latest.updatedAt, updates: latest.updates })
+          setState("status", "")
           clearTimeout(expiry)
           checkExpiry()
         }
@@ -110,6 +116,16 @@ export default function Share() {
                 This is a read-only transcript. Conversation text, reasoning, code, and tool input or output may contain
                 sensitive information. Attachments are descriptions only; no files or images are fetched.
               </p>
+              <Show
+                when={snapshot.archive.messages.some((message) =>
+                  message.parts.some((part) => part.type === "tool" && part.screenshots?.length),
+                )}
+              >
+                <p>
+                  The person who shared this chose to include screenshots from {Hands.NAME}; they can show other things
+                  that were on that screen.
+                </p>
+              </Show>
               <p>
                 {snapshot.updates
                   ? "Future conversation updates are public and checked periodically."
@@ -174,11 +190,32 @@ function TranscriptPart(props: { part: PublicSession.Part }) {
         Attachment: {part.name} ({part.mediaType}) — description only
       </p>
     )
+  // Only a completed computer step can carry screenshots: embedded PNG, JPEG or WebP data the snapshot schema has
+  // already checked, so nothing is fetched. They stay inside the closed step until someone opens it.
+  const screenshots = part.screenshots ?? []
   return (
     <details class="public-tool">
       <summary>
         {part.name} · {part.status}
+        {screenshots.length
+          ? ` · ${screenshots.length} ${screenshots.length === 1 ? "screenshot" : "screenshots"}`
+          : ""}
       </summary>
+      <Show when={screenshots.length}>
+        <h3>Screenshots</h3>
+        <div class="public-screenshots">
+          <For each={screenshots}>
+            {(shot, index) => (
+              <img
+                src={shot.url}
+                alt={`Screenshot ${index() + 1} from ${Hands.NAME}`}
+                loading="lazy"
+                decoding="async"
+              />
+            )}
+          </For>
+        </div>
+      </Show>
       <h3>Input</h3>
       <pre>{part.input}</pre>
       <h3>Output</h3>

@@ -14,8 +14,22 @@ import { ProviderV2 } from "../provider"
 import { Reference } from "../reference"
 import type { DeepMutable } from "../schema"
 import { SkillV2 } from "../skill"
+import { ProcessIsolation } from "../process-isolation"
 
 const mutable = <T>(value: T) => value as DeepMutable<T>
+
+function sourceEffect<A, E, R>(external: boolean, run: () => Effect.Effect<A, E, R>) {
+  return Effect.suspend(() => {
+    if (external) ProcessIsolation.assertExternalCodeAllowed()
+    return run().pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (external) ProcessIsolation.assertExternalCodeAllowed()
+        }),
+      ),
+    )
+  })
+}
 
 export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Interface) {
   const agents = yield* AgentV2.Service
@@ -42,8 +56,8 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
         ),
     },
     aisdk: {
-      sdk: (callback) =>
-        aisdk.hook.sdk((event) => {
+      sdk: (callback) => {
+        const adapter: Parameters<AISDK.Interface["hook"]["sdk"]>[0] = (event) => {
           const output = {
             model: mutable(event.model),
             package: event.package,
@@ -54,9 +68,12 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
           return Effect.suspend(() => (Effect.isEffect(result) ? result : Effect.void)).pipe(
             Effect.tap(() => Effect.sync(() => (event.sdk = output.sdk))),
           )
-        }),
-      language: (callback) =>
-        aisdk.hook.language((event) => {
+        }
+        if (ProcessIsolation.isExternalCode(callback)) ProcessIsolation.markExternalCode(adapter)
+        return aisdk.hook.sdk(adapter)
+      },
+      language: (callback) => {
+        const adapter: Parameters<AISDK.Interface["hook"]["language"]>[0] = (event) => {
           const output = {
             model: mutable(event.model),
             sdk: event.sdk,
@@ -67,7 +84,10 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
           return Effect.suspend(() => (Effect.isEffect(result) ? result : Effect.void)).pipe(
             Effect.tap(() => Effect.sync(() => (event.language = output.language))),
           )
-        }),
+        }
+        if (ProcessIsolation.isExternalCode(callback)) ProcessIsolation.markExternalCode(adapter)
+        return aisdk.hook.language(adapter)
+      },
     },
     catalog: {
       reload: catalog.reload,
@@ -122,16 +142,18 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
                 if ("authorize" in input) {
                   const methodID = Integration.MethodID.make(input.method.id)
                   const refresh = input.refresh
-                  draft.method.update({
+                  const external = ProcessIsolation.isExternalCode(callback)
+                  const implementation: Integration.OAuthImplementation = {
                     integrationID: Integration.ID.make(input.integrationID),
                     method: { ...input.method, id: methodID },
                     authorize: (inputs) =>
-                      input.authorize(inputs).pipe(
+                      sourceEffect(external, () => input.authorize(inputs)).pipe(
                         Effect.map((authorization) => {
+                          if (external) ProcessIsolation.assertExternalCodeAllowed()
                           if (authorization.mode === "auto") {
-                            return {
+                            const value: Integration.OAuthAuthorization = {
                               ...authorization,
-                              callback: authorization.callback.pipe(
+                              callback: sourceEffect(external, () => authorization.callback).pipe(
                                 Effect.map((credential) =>
                                   credential.type === "key"
                                     ? Credential.Key.make(credential)
@@ -142,11 +164,16 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
                                 ),
                               ),
                             }
+                            if (external) {
+                              ProcessIsolation.markExternalCode(value.callback)
+                              ProcessIsolation.markExternalCode(value)
+                            }
+                            return value
                           }
-                          return {
+                          const value: Integration.OAuthAuthorization = {
                             ...authorization,
                             callback: (code: string) =>
-                              authorization.callback(code).pipe(
+                              sourceEffect(external, () => authorization.callback(code)).pipe(
                                 Effect.map((credential) =>
                                   credential.type === "key"
                                     ? Credential.Key.make(credential)
@@ -157,12 +184,17 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
                                 ),
                               ),
                           }
+                          if (external) {
+                            ProcessIsolation.markExternalCode(value.callback)
+                            ProcessIsolation.markExternalCode(value)
+                          }
+                          return value
                         }),
                       ),
                     ...(refresh
                       ? {
                           refresh: (value: Credential.OAuth) =>
-                            refresh(value).pipe(
+                            sourceEffect(external, () => refresh(value)).pipe(
                               Effect.map((next) =>
                                 Credential.OAuth.make({
                                   ...next,
@@ -172,8 +204,24 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
                             ),
                         }
                       : {}),
-                    ...(input.label ? { label: input.label } : {}),
-                  })
+                    ...(input.label
+                      ? {
+                          label: (value: Credential.OAuth) => {
+                            if (external) ProcessIsolation.assertExternalCodeAllowed()
+                            const result = input.label!(value)
+                            if (external) ProcessIsolation.assertExternalCodeAllowed()
+                            return result
+                          },
+                        }
+                      : {}),
+                  }
+                  if (external) {
+                    ProcessIsolation.markExternalCode(implementation)
+                    ProcessIsolation.markExternalCode(implementation.authorize)
+                    ProcessIsolation.markExternalCode(implementation.refresh)
+                    ProcessIsolation.markExternalCode(implementation.label)
+                  }
+                  draft.method.update(implementation)
                   return
                 }
                 if (input.method.type === "env") {

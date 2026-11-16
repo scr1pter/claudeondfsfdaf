@@ -128,6 +128,7 @@ const terminal = Effect.fn("TerminalAdmissionTest.terminal")(function* (
           const item = { permission: request.permission, patterns: request.patterns }
           asked.push(item)
           during?.(item)
+          return undefined
         }),
     }),
   )
@@ -479,9 +480,9 @@ if (process.platform !== "win32")
           )
           expect(asked).toEqual([])
           const id = result(yield* call(SH)).metadata.id!
-          // An admitted terminal asks to run unsandboxed first, before the shell's own asks.
-          expect(asked[0]).toEqual({ permission: "unsandboxed_shell", patterns: [process.platform] })
-          expect(asked.filter((item) => item.permission === "unsandboxed_shell")).toHaveLength(1)
+          // Opening a terminal has its own mandatory ask, the only sandbox-off ask: typed lines then ask only as commands.
+          expect(asked[0]).toEqual({ permission: "unsandboxed_terminal", patterns: [process.platform] })
+          expect(asked.filter((item) => item.permission === "unsandboxed_terminal")).toHaveLength(1)
           asked.length = 0
           expect(refusal(yield* call({ action: "type", id, text: "printf x > vault/new.ts", enter: true }))).toContain(
             "which owns vault",
@@ -489,9 +490,10 @@ if (process.platform !== "win32")
           expect(asked.map((item) => item.permission)).toEqual(["terminal_input"])
           asked.length = 0
           result(yield* call({ action: "type", id, text: "echo admitted", enter: true }))
-          expect(asked.map((item) => item.permission).slice(0, 2)).toEqual(["terminal_input", "unsandboxed_shell"])
-          expect(asked.filter((item) => item.permission === "unsandboxed_shell")).toHaveLength(1)
-          expect(asked.length).toBeGreaterThan(2)
+          expect(asked.map((item) => item.permission)).toEqual(["terminal_input", "bash"])
+          expect(
+            asked.filter((item) => item.permission === "unsandboxed_shell" || item.permission === "unsandboxed_terminal"),
+          ).toHaveLength(0)
         }),
       options,
     )

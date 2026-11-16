@@ -148,6 +148,7 @@ describe("measureCost", () => {
       ),
     ])
     expect(cost).toEqual({
+      codiumTurns: 0,
       costUsd: 0.03,
       input: 1500,
       output: 300,
@@ -354,7 +355,7 @@ for (const mixed of [false, true]) {
       ...(mixed ? [withParts(assistant({ cost: 0.12, tokens: { input: 100, output: 20 } }))] : []),
     ]
     const measured = measureCost(messages)
-    expect(measured).toMatchObject({ codium: true, costUsd: mixed ? 0.12 : 0, input: mixed ? 100 : 0 })
+    expect(measured).toMatchObject({ codium: true, codiumTurns: 1, costUsd: mixed ? 0.12 : 0, input: mixed ? 100 : 0 })
     const body = buildEvidenceBody({
       response: "done",
       changes: [],
@@ -367,7 +368,7 @@ for (const mixed of [false, true]) {
     expect(body).not.toContain("$0.00")
     if (mixed) {
       expect(body).toContain("$0.12")
-      expect(body).toContain("100 in / 20 out")
+      expect(body).toContain("**Cost:** $0.12 + Codium · 100 in / 20 out from other models · 2 turns")
     } else expect(body).toContain("**Cost:** Codium · Vector Codium · vector-flash · 1 turn")
   })
 }
@@ -430,4 +431,92 @@ test("mixed evidence retains an own charge without inventing missing token count
   expect(body).toContain("token usage unavailable")
   expect(body).not.toContain("0 in / 0 out")
   expect(body).not.toContain("987")
+})
+
+test("mixed evidence uses measured other-model totals and counts Codium turns without their figures", () => {
+  const messages = [
+    withParts(
+      assistant({
+        providerID: "vector-plan",
+        modelID: "Kimi K3.1 Pro",
+        cost: 99,
+        tokens: { input: 987654, output: 876543 },
+      }),
+    ),
+    withParts(
+      assistant({
+        providerID: "vector-plan",
+        modelID: "Kimi K3.1 Pro",
+        cost: 99,
+        tokens: { input: 987654, output: 876543 },
+      }),
+    ),
+    withParts(
+      assistant({
+        cost: 0.08,
+        tokens: { input: 30_000, output: 2_000, reasoning: 123, cache: { read: 456, write: 0 } },
+      }),
+    ),
+    withParts(assistant({ cost: 0.04, tokens: { input: 18_200, output: 1_100 } })),
+  ]
+  expect(measureCost(messages)).toMatchObject({
+    codiumTurns: 2,
+    ownTurns: 2,
+    turns: 4,
+    costUsd: 0.12,
+    input: 48_200,
+    output: 3_100,
+  })
+  const body = buildEvidenceBody({
+    response: "done",
+    changes: [],
+    messages,
+    runUrl: "https://github.com/acme/widgets/actions/runs/42",
+  })
+  expect(body.split("\n").find((line) => line.startsWith("**Cost:**"))).toBe(
+    "**Cost:** $0.12 + Codium · 48.2k in / 3.1k out from other models · 4 turns",
+  )
+  expect(body).not.toContain("987654")
+  expect(body).not.toContain("876543")
+})
+
+test("mixed evidence never infers a free or OAuth-plan label from a zero own-model amount", () => {
+  const messages = [
+    withParts(assistant({ providerID: "vector-plan", tokens: { input: 987654 } })),
+    withParts(assistant({ cost: 0, tokens: { input: 100, output: 20 } })),
+  ]
+  const body = buildEvidenceBody({
+    response: "done",
+    changes: [],
+    messages,
+    runUrl: "https://github.com/acme/widgets/actions/runs/42",
+  })
+  expect(body).toContain("**Cost:** Codium · 100 in / 20 out from other models · 2 turns")
+  expect(body).not.toContain("$0.00")
+  expect(body).not.toContain("free + Codium")
+  expect(body).not.toContain("on your keys")
+})
+
+test("Codium evidence omits private billing and usage fields while retaining a model name containing Pro", () => {
+  const message = assistant({
+    providerID: "vector-plan",
+    modelID: "Kimi K3.1 Pro",
+    cost: 99,
+    tokens: { input: 987654, output: 876543 },
+  })
+  const forked = { ...message, id: MessageID.ascending(), forked: true }
+  const messages = [withParts(message), withParts(forked)]
+  expect(measureCost(messages)).toMatchObject({ codiumTurns: 1, turns: 1, costUsd: 0, input: 0, output: 0 })
+  const body = buildEvidenceBody({
+    response: "done",
+    changes: [],
+    messages,
+    runUrl: "https://github.com/acme/widgets/actions/runs/42",
+  })
+  expect(body).toContain("**Cost:** Codium · Vector Codium · Kimi K3.1 Pro · 1 turn")
+  expect(body).not.toMatch(
+    /\b(?:vector-(?:10|50|100|200)|(?:Plus|Pro|Max|Ultra) plan|payment|dispute|fraud|past_due|payment_failed|closing|tokens?)\b|\$\d|\d+(?:\.\d+)?%/i,
+  )
+  expect(body).not.toContain("987654")
+  expect(body).not.toContain("876543")
 })

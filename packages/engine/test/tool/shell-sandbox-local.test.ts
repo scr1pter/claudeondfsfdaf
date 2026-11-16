@@ -19,6 +19,8 @@ import { ShellTool } from "../../src/tool/shell"
 import { Sandbox } from "../../src/tool/shell/sandbox"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { ComputerSession } from "@/computer/session"
+import { Session } from "@/session/session"
 
 // Vector Local's Web access None for the commands the agent runs (section 4.3.5): on macOS and Linux every command runs
 // in the sandbox with no network but this computer's, whatever VECTOR_SHELL_SANDBOX says, and one the sandbox cannot
@@ -37,6 +39,8 @@ const it = testEffect(
         Config.node,
         Agent.node,
         RuntimeFlags.node,
+        ComputerSession.node,
+        Session.node,
       ]),
     ),
     testInstanceStoreLayer,

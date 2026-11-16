@@ -127,7 +127,10 @@ export interface Interface {
   readonly share: (
     input: { sessionID: SessionSchema.ID } & PublicSession.Publish,
   ) => Effect.Effect<PublicSession.Info, PublicSession.Error>
-  readonly sharePreview: (sessionID: SessionSchema.ID) => Effect.Effect<PublicSession.Archive, PublicSession.Error>
+  readonly sharePreview: (
+    sessionID: SessionSchema.ID,
+    options?: { includeScreenshots?: boolean },
+  ) => Effect.Effect<PublicSession.Archive, PublicSession.Error>
   readonly shareFlush: (sessionID: SessionSchema.ID) => Effect.Effect<PublicSession.Info, PublicSession.Error>
   readonly unshare: (sessionID: SessionSchema.ID) => Effect.Effect<void, PublicSession.Error>
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -263,7 +266,7 @@ const layer = Layer.effect(
           const imported = yield* sharing.import({ ...input, targetEngine: "v2" })
           return yield* result.get(imported.sessionID).pipe(Effect.orDie)
         }),
-      sharePreview: (sessionID) => sharing.preview({ sessionID, engine: "v2" }),
+      sharePreview: (sessionID, options) => sharing.review({ sessionID, engine: "v2", ...options }),
       shareFlush: sharing.flush,
       unshare: sharing.unshare,
       create: Effect.fn("V2Session.create")(function* (input, actor: SessionAudience.Actor = "owner") {

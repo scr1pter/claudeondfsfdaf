@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "kind": "windows-x64-native-test-compilation-failure",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands",
+  "sourceCommit": "c3991fb627d052103da2b9fd79c580a270d785ed",
+  "run": {
+    "id": 42134301183,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "createdAt": "2026-11-06T00:05:52Z",
+    "updatedAt": "2026-11-06T00:14:01Z",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42134301183"
+  },
+  "job": {
+    "id": 127618421474,
+    "name": "Windows x64 native and staged diagnostics (no release evidence)",
+    "status": "completed",
+    "conclusion": "failure",
+    "startedAt": "2026-11-06T00:05:56Z",
+    "completedAt": "2026-11-06T00:14:00Z",
+    "steps": [
+      {
+        "number": 1,
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:05:58Z",
+        "completedAt": "2026-11-06T00:06:00Z"
+      },
+      {
+        "number": 2,
+        "name": "Reject incompatible diagnostic selectors before setup",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:06:00Z",
+        "completedAt": "2026-11-06T00:06:01Z"
+      },
+      {
+        "number": 3,
+        "name": "Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:06:01Z",
+        "completedAt": "2026-11-06T00:06:14Z"
+      },
+      {
+        "number": 4,
+        "name": "Setup Node",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:06:14Z",
+        "completedAt": "2026-11-06T00:06:20Z"
+      },
+      {
+        "number": 5,
+        "name": "Setup Bun",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:06:20Z",
+        "completedAt": "2026-11-06T00:06:24Z"
+      },
+      {
+        "number": 6,
+        "name": "Configure the MSVC environment",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:06:24Z",
+        "completedAt": "2026-11-06T00:06:30Z"
+      },
+      {
+        "number": 7,
+        "name": "Install frozen dependencies without lifecycle scripts",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:06:30Z",
+        "completedAt": "2026-11-06T00:09:40Z"
+      },
+      {
+        "number": 8,
+        "name": "Build only the x64 native diagnostic artifacts",
+        "status": "completed",
+        "conclusion": "failure",
+        "startedAt": "2026-11-06T00:09:40Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 9,
+        "name": "Run Windows unit and fresh version/probe checks",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 10,
+        "name": "Run required Windows protocol and lifecycle checks",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 11,
+        "name": "Run explicitly isolated Windows scenarios",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 12,
+        "name": "Compile the direct Node Windows self-test diagnostic",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 13,
+        "name": "Diagnose the same Windows self-test with a direct Node parent",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 14,
+        "name": "Preserve the bounded x64 diagnostic report",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 15,
+        "name": "Preserve the separate direct Node diagnostic report",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 16,
+        "name": "Preserve the optional isolated scenario diagnostic report",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 17,
+        "name": "Install the pinned Electron runtime for the staged diagnostic",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 18,
+        "name": "Build the source-bound x64 native overlay diagnostic stage",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 19,
+        "name": "Run the actual medium-token staged overlay diagnostic",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 20,
+        "name": "Preserve the bounded staged overlay diagnostic evidence",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 38,
+        "name": "Post Setup Bun",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 39,
+        "name": "Post Setup Node",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:56Z"
+      },
+      {
+        "number": 40,
+        "name": "Post Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:13:56Z",
+        "completedAt": "2026-11-06T00:13:59Z"
+      },
+      {
+        "number": 41,
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:13:59Z",
+        "completedAt": "2026-11-06T00:13:59Z"
+      }
+    ]
+  },
+  "artifactCatalog": [],
+  "compilerDiagnostic": {
+    "file": "packages/desktop/native/computer-helper/windows/tests/parent_identity_tests.cpp",
+    "errors": ["C2220: warning is treated as an error"],
+    "warnings": [
+      {
+        "code": "C4456",
+        "line": 77,
+        "detail": "declaration of token hides previous local declaration"
+      },
+      {
+        "code": "C4456",
+        "line": 92,
+        "detail": "declaration of token hides previous local declaration"
+      }
+    ],
+    "introducedOuterLocalLine": 34,
+    "warningPolicy": "unchanged /WX"
+  },
+  "interpretation": {
+    "nativeUnitExecution": "not run",
+    "nativeHandleRegression": "not run",
+    "requiredCoreChecks": "not run",
+    "optionalScenarios": "not run",
+    "stageBuild": "not run",
+    "stagedElectronLaunch": "not run",
+    "bootstrapRoute": "unknown",
+    "candidateAccess": "unknown",
+    "nativeOsStopCredit": false,
+    "releaseReadinessCredit": false
+  },
+  "sourceCorrection": {
+    "summary": "Rename only new regression's outer token RAII handle to borrowed_token and update its five uses.",
+    "logicChanged": false,
+    "assertionsChanged": false,
+    "independentReadOnlyReview": "pass",
+    "testsRunLocally": false
+  }
+}

@@ -6,10 +6,10 @@ import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
 import { lazy } from "@/util/lazy"
+import { TreeSitter } from "@/util/tree-sitter"
 import { Language, type Node } from "web-tree-sitter"
 
 import { FSUtil } from "@vectordevai/core/fs-util"
-import { fileURLToPath } from "url"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Shell } from "@vectordevai/core/shell"
@@ -34,6 +34,11 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { LocalCommand } from "@vectordevai/core/local-mode/command"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import { ComputerCommand } from "@vectordevai/core/util/computer-command"
+import { Hands } from "@vectordevai/schema/hands"
+import { ComputerSession } from "@/computer/session"
+import { Session } from "@/session/session"
 
 export { Parameters } from "./shell/prompt"
 
@@ -130,18 +135,13 @@ type Scan = {
   cloud: Map<string, CloudCli.Request & { command: string }>
   /** Every git invocation the scan recognizes, read-only ones included, for the guest Git guard. */
   gitReads: { cwd: string; args: string[]; env: Record<string, string> }[]
+  /** Rechecked after asynchronous setup and immediately before this line may execute. */
+  beforeRun?: Effect.Effect<void>
 }
 
 type Chunk = {
   text: string
   size: number
-}
-
-const resolveWasm = (asset: string) => {
-  if (asset.startsWith("file://")) return fileURLToPath(asset)
-  if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
-  const url = new URL(asset, import.meta.url)
-  return fileURLToPath(url)
 }
 
 // A command's name and arguments. Numbers and expansions are arguments too:
@@ -1014,7 +1014,10 @@ function tail(text: string, maxLines: number, maxBytes: number) {
 }
 
 const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boolean) {
-  const tree = yield* Effect.promise(() => (ps ? psParser() : bashParser()).then((parser) => parser.parse(command)))
+  // A poisoned runtime (TreeSitter.poison) may misread the command without failing, so it is not parsed at all.
+  const tree = TreeSitter.poisoned()
+    ? null
+    : yield* Effect.promise(() => (ps ? psParser() : bashParser()).then((parser) => parser.parse(command)))
   if (!tree) throw new Error("Failed to parse command")
   return tree
 })
@@ -1041,6 +1044,14 @@ const cloudRequests = Effect.fn("ShellTool.cloudRequests")(function* (
   return nested.flat()
 })
 
+function afterScreenPatterns(patterns: readonly string[], command: string) {
+  return [
+    ...patterns,
+    ...(patterns.length ? patterns : [command]).map(
+      (pattern) => PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX + pattern,
+    ),
+  ]
+}
 // The ownership check over every line a call hands to a shell: the shell tool's one command, or each line a terminal
 // call submits.
 const assertOwnership = (ctx: Tool.Context, scans: readonly Scan[]) =>
@@ -1056,6 +1067,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (
   scan: Scan,
   input: {
     readonly command: string
+    readonly afterScreen: Effect.Effect<boolean>
     readonly unread?: boolean
     readonly recalled?: boolean
     readonly first?: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">
@@ -1094,30 +1106,30 @@ const ask = Effect.fn("ShellTool.ask")(function* (
     })
   }
 
-  // Vector's owner-only commands refuse under the agent marker every program the agent starts carries (CliOwnerGate). A
-  // command that removes or overrides it would run one as the owner, so it asks every time, whatever the rules allow.
-  // Best effort, like the write scan: a program that empties its children's environment some other way is not seen.
+  // Owner-only commands refuse the agent marker. Dropping it requires a fresh explicit answer.
   if (dropsMarker(input.command)) {
     yield* ctx.ask({
       permission: PermissionPolicy.AGENT_MARKER,
       patterns: [input.command],
       always: [],
-      metadata: {
-        command: input.command,
-        reason: PermissionPolicy.AGENT_MARKER_REASON,
-      },
+      metadata: { command: input.command, reason: PermissionPolicy.AGENT_MARKER_REASON },
     })
   }
 
-  if (scan.patterns.size > 0) {
-    yield* ctx.ask({
+  const afterScreen = yield* input.afterScreen
+  if (scan.patterns.size > 0 || afterScreen) {
+    const patterns = Array.from(scan.patterns)
+    const answer = yield* ctx.ask({
       permission: ShellID.ToolID,
-      patterns: Array.from(scan.patterns),
-      always: Array.from(scan.always),
+      patterns: afterScreen ? afterScreenPatterns(patterns, input.command) : patterns,
+      always: afterScreen ? [] : Array.from(scan.always),
       metadata: {
         command: input.command,
+        ...(afterScreen ? { reason: PermissionPolicy.AFTER_SCREEN_COMMAND_REASON } : {}),
       },
     })
+    if (afterScreen && answer !== "once")
+      return yield* Effect.die(new Error("This shell command needs a fresh Allow once answer after computer use."))
   }
 
   // With Vector Local on, a command that may reach the network asks first, with the command shown: one whose output is
@@ -1156,18 +1168,14 @@ const ask = Effect.fn("ShellTool.ask")(function* (
     })
   }
 
-  if (scan.patterns.size === 0) return
-  // A terminal line the shell may have filled from its history, its kill ring or a completion may be a Vercel or
-  // Supabase command the scan never saw, so it asks every time as one would.
+  if (scan.patterns.size === 0) return afterScreen
+  // A line recalled or completed by the terminal must also ask for any cloud operation it may hide.
   if (input.recalled) {
     yield* ctx.ask({
       permission: PermissionPolicy.CLOUD_UNREAD,
       patterns: [UNREAD + input.command.trim()],
       always: [],
-      metadata: {
-        command: input.command,
-        summary: RECALLED_SUMMARY,
-      },
+      metadata: { command: input.command, summary: RECALLED_SUMMARY },
     })
   }
   // After the shell's own permission, so a session that may not run the command
@@ -1187,6 +1195,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (
       },
     })
   }
+  return afterScreen
 })
 
 const UNREAD_NETWORK_REASON =
@@ -1231,7 +1240,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     })
   }
 
-  if (Sandbox.sandboxEnabled()) {
+  if (Sandbox.sandboxEnabled() && !ProcessIsolation.required()) {
     const wrapped = Sandbox.wrapCommand({ shell, command, cwd, env, workspaceRoot })
     yield* Effect.logInfo("shell tool sandbox", {
       sandboxed: wrapped.sandboxed,
@@ -1261,7 +1270,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     })
   }
 
-  yield* Effect.logWarning("shell tool sandbox disabled", { workspaceRoot, cwd })
+  if (!ProcessIsolation.required()) yield* Effect.logWarning("shell tool sandbox disabled", { workspaceRoot, cwd })
 
   if (process.platform === "win32" && Shell.ps(shell)) {
     return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
@@ -1280,27 +1289,14 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     detached: process.platform !== "win32",
   })
 })
-const runtime = lazy(async () => {
-  const { Parser } = await import("web-tree-sitter")
-  const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const treePath = resolveWasm(treeWasm)
-  await Parser.init({
-    locateFile() {
-      return treePath
-    },
-  })
-  return Parser
-})
 // Each grammar loads on the first command in its language. The PowerShell grammar alone adds about 15 MiB, and a
 // session whose shell is not PowerShell never parses with it.
 const grammar = (wasm: () => Promise<{ default: string }>) =>
   lazy(async () => {
-    const Parser = await runtime()
+    const Parser = await TreeSitter.runtime()
     const { default: asset } = await wasm()
     const parser = new Parser()
-    parser.setLanguage(await Language.load(resolveWasm(asset)))
+    parser.setLanguage(await Language.load(TreeSitter.resolveWasm(asset)))
     return parser
   })
 const bashParser = grammar(
@@ -1324,6 +1320,8 @@ const psParser = grammar(
 export const ShellPermission = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner
   const fs = yield* FSUtil.Service
+  const computer = yield* ComputerSession.Service
+  const sessions = yield* Session.Service
 
   const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
     const lines = yield* spawner
@@ -1804,6 +1802,38 @@ export const ShellPermission = Effect.gen(function* () {
           const tree = yield* Effect.acquireRelease(parse(input.command, ps), (tree) =>
             Effect.sync(() => tree.delete()),
           )
+          const session = yield* sessions
+            .get(ctx.sessionID)
+            .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)))
+          let rootID = ctx.sessionID
+          let parentID = session ? session.parentID : ctx.parentID
+          const seen = new Set([rootID])
+          while (parentID) {
+            if (seen.has(parentID) || seen.size >= 64)
+              return yield* Effect.die(new Error("The shell's conversation ancestry could not be verified."))
+            seen.add(parentID)
+            const parent = yield* sessions.get(parentID).pipe(Effect.orDie)
+            rootID = parent.id
+            parentID = parent.parentID
+          }
+          const history = () =>
+            rootID === ctx.sessionID
+              ? ctx.history
+                ? ctx.history()
+                : Effect.succeed(ctx.messages)
+              : sessions.messages({ sessionID: rootID }).pipe(Effect.orDie)
+          const controlsDesktop =
+            ComputerCommand.controls(input.command) ||
+            commands(tree.rootNode).some((node) => ComputerCommand.controlsTokens(parts(node).map((item) => item.text)))
+          const checkComputer = Effect.gen(function* () {
+            if (controlsDesktop && (yield* computer.held(rootID)))
+              return yield* Effect.die(
+                new Error(
+                  `Use the computer tool for desktop input and screenshots while ${Hands.NAME} holds the computer.`,
+                ),
+              )
+          })
+          yield* checkComputer
           const scan = yield* collect(tree.rootNode, input.cwd, ps, input.shell, instance)
           if (!containsPath(input.cwd, instance)) scan.dirs.add(input.cwd)
           if (input.unread) unread(scan, input.command)
@@ -1818,7 +1848,27 @@ export const ShellPermission = Effect.gen(function* () {
               recursive: true,
             })
           if (ctx.assertGitReadable) for (const read of scan.gitReads) yield* ctx.assertGitReadable(read)
-          yield* ask(ctx, scan, input)
+          let confirmed = yield* ask(ctx, scan, {
+            ...input,
+            afterScreen: history().pipe(Effect.flatMap((messages) => computer.completedThisTurn(rootID, messages))),
+          })
+          scan.beforeRun = Effect.gen(function* () {
+            yield* checkComputer
+            if (!confirmed && (yield* computer.completedThisTurn(rootID, yield* history()))) {
+              const answer = yield* ctx.ask({
+                permission: ShellID.ToolID,
+                patterns: afterScreenPatterns(Array.from(scan.patterns), input.command),
+                always: [],
+                metadata: { command: input.command, reason: PermissionPolicy.AFTER_SCREEN_COMMAND_REASON },
+              })
+              if (answer !== "once")
+                return yield* Effect.die(
+                  new Error("This shell command needs a fresh Allow once answer after computer use."),
+                )
+              confirmed = true
+            }
+            yield* checkComputer
+          })
           return scan
         }),
       )
@@ -1827,7 +1877,10 @@ export const ShellPermission = Effect.gen(function* () {
     // same file locks as edit, write and apply_patch: the ownership check repeats inside them, so another writer that
     // claimed a file while the asks waited is refused here, and only then do the files become this session's changes.
     // One admission for all of a call's lines, so a refused line leaves no claim on a file an earlier line names.
+    beforeRun: (scans: readonly Scan[]) =>
+      Effect.forEach(scans, (scan) => scan.beforeRun ?? Effect.void, { discard: true }),
     admit: Effect.fn("ShellPermission.admit")(function* (ctx: Tool.Context, scans: readonly Scan[]) {
+      yield* Effect.forEach(scans, (scan) => scan.beforeRun ?? Effect.void, { discard: true })
       const files = [...new Set(scans.flatMap((scan) => [...scan.written, ...scan.mutates]))]
       yield* FileLock.withFiles(files)(
         Effect.gen(function* () {
@@ -1848,7 +1901,7 @@ export const ShellTool = Tool.define(
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
     const permission = yield* ShellPermission
-    // Background commands (5.H). A build that leaves them out (a test that makes the tool alone) refuses them.
+    // Background commands (5.H). A build that leaves them out refuses them.
     const jobs = yield* Effect.serviceOption(ShellJobs.Service)
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
 
@@ -1874,6 +1927,7 @@ export const ShellTool = Tool.define(
         workspaceRoot: string
       },
       ctx: Tool.Context,
+      beforeSpawn: Effect.Effect<void>,
     ) {
       const limits = shellBudget(yield* config.get(), yield* trunc.limits())
       const keep = limits.maxBytes * 2
@@ -1932,9 +1986,18 @@ export const ShellTool = Tool.define(
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(
-            yield* cmd(input.shell, input.command, input.cwd, input.env, input.workspaceRoot, ctx, offline),
+          const command = yield* cmd(
+            input.shell,
+            input.command,
+            input.cwd,
+            input.env,
+            input.workspaceRoot,
+            ctx,
+            offline,
           )
+          // Permission and environment hooks can wait while computer activity changes. Check after those waits.
+          yield* beforeSpawn
+          const handle = yield* spawner.spawn(command)
 
           const output = yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
@@ -2093,6 +2156,7 @@ export const ShellTool = Tool.define(
         timeout?: number
         workspaceRoot: string
         ops: TaskPromptOps
+        beforeSpawn: Effect.Effect<void>
       },
       ctx: Tool.Context,
       shells: ShellJobs.Interface,
@@ -2106,6 +2170,7 @@ export const ShellTool = Tool.define(
         sessionID: ctx.sessionID,
         command: input.command,
         process: spawned,
+        beforeSpawn: input.beforeSpawn,
         ...(input.timeout === undefined ? {} : { timeout: input.timeout }),
         ops: input.ops,
         agent: ctx.agent,
@@ -2168,10 +2233,9 @@ export const ShellTool = Tool.define(
               const refused = webNone() ? Sandbox.offlineRefusal() : undefined
               if (refused) return yield* Effect.die(new Error(refused))
               const scan = yield* permission.ask(ctx, { command: params.command, cwd, shell })
-              // Reserve resolved shell targets before spawning: another unscoped writer must not pass while this
-              // command is running.
+              // Reserve resolved targets only after every permission, before any process starts.
               yield* permission.admit(ctx, [scan])
-
+              const beforeSpawn = permission.beforeRun([scan])
               if (params.background && Option.isSome(jobs) && ops)
                 return yield* background(
                   {
@@ -2182,6 +2246,7 @@ export const ShellTool = Tool.define(
                     ...(params.timeout === undefined ? {} : { timeout: params.timeout }),
                     workspaceRoot: instanceCtx.worktree,
                     ops,
+                    beforeSpawn,
                   },
                   ctx,
                   jobs.value,
@@ -2200,6 +2265,7 @@ export const ShellTool = Tool.define(
                   workspaceRoot: instanceCtx.worktree,
                 },
                 ctx,
+                beforeSpawn,
               )
             }),
         }

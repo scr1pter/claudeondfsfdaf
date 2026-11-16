@@ -114,6 +114,7 @@ describe("task intelligence", () => {
       expect(classifyTaskDifficulty(text, { images: 1 }), text).toBe("standard")
       expect(classifyTaskDifficulty(text, { files: 1 }), text).toBe("standard")
       expect(classifyTaskDifficulty(text, { agents: ["explore"] }), text).toBe("standard")
+      expect(classifyTaskDifficulty(text, { computer: true }), text).toBe("standard")
     }
   })
 

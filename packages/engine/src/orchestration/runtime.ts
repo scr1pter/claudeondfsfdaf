@@ -80,6 +80,7 @@ const mergeUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsage =>
 
 /** The only persistence/event adapter. All model work still enters the ordinary TaskTool lifecycle. */
 export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
+  yield* WorkflowRunner.assertSupported(input)
   if (!input.built.ok || !input.built.limits || !input.built.stages)
     return yield* new RuntimeError({ message: "Validate the workflow before starting its runtime." })
   const owner = yield* input.sessions.get(input.runID)
@@ -272,7 +273,8 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
     let recovered: WorkflowRunner.Node = { ...node, ...(verify ? { verifierID: child!.id } : { sessionID: child!.id }) }
     if (!SubagentLifecycle.open(lifecycle) && !lifecycle.interruption) {
       const stage = input.built.stages.find((entry) => entry.stage.id === node.stage)?.stage
-      const outputSchema = verify ? stage?.verify?.output?.schema : stage?.output?.schema
+      const outputSchema =
+        stage && "prompt" in stage ? (verify ? stage.verify?.output.schema : stage.output?.schema) : undefined
       const answer = yield* input.sessions.findMessage(child!.id, (message) => message.info.role === "assistant")
       const messageID = Option.isSome(answer) ? answer.value.info.id : undefined
       const output =

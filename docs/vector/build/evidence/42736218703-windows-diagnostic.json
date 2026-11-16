@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "kind": "windows-accessibility-root-located-failure",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "sourceCommit": "2c9446f9f9620596a39188eb76f470ad0b8ba056",
+  "run": 42736218703,
+  "job": 129566005648,
+  "runUrl": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42736218703",
+  "conclusion": "failure",
+  "observationSource": "Official decoded GitHub job log; raw artifact archives not locally verified.",
+  "core": {
+    "passed": 30,
+    "skipped": 1,
+    "failed": 0
+  },
+  "isolated": {
+    "passed": 34,
+    "skipped": 10,
+    "failed": 2,
+    "capture": {
+      "reason": "native_operation_failed",
+      "stage": "capture-window-item-expired-cancelled",
+      "nativeCode": "capture_unavailable"
+    }
+  },
+  "stagedReceipt": {
+    "protocol": 1,
+    "kind": "result",
+    "phase": "exit",
+    "stop": {
+      "ok": false,
+      "reason": "native_failure",
+      "stage": "uia-security-keyboard",
+      "cause": "core_failure:no_ui_tree"
+    },
+    "exitCode": 1
+  },
+  "receiptObservedAt": "2026-11-10T01:41:23.7937616Z",
+  "interpretation": "Healthy UIA root observation refused while checking keyboard focusability. This phase does not distinguish a failed query from a non-boolean variant and does not establish provider non-support.",
+  "releaseCredit": false,
+  "candidateAttempts": [
+    {
+      "source": "dc2b00657f6c25e265f478b3304032c0f2d51902",
+      "run": 42738568867,
+      "job": 129573733269,
+      "outcome": "native-build-failed",
+      "reason": "Strict MSVC C4244/C2220 in new test-only VARENUM-to-VARTYPE assignment. No candidate runtime outcome established."
+    },
+    {
+      "source": "ec642c39544c868afe9433fdf478292770b685ee",
+      "run": 42739754161,
+      "outcome": "queued-at-record",
+      "change": "Exact VARTYPE cast in the fixed test enum list; production candidate unchanged."
+    }
+  ]
+}

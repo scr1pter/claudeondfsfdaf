@@ -1,0 +1,11 @@
+{
+  "run": 41976830206,
+  "head": "4cb1355a97147227a408a03ace92a93b60d73257",
+  "job": 127078000666,
+  "artifact": 13392746590,
+  "artifactSha256": "9844e03896283d7c067ec1a8b260459d2bf86c0418c2fa088a9562594c25abd1",
+  "build": "universal-and-repro-pass",
+  "failureSuite": "runAccessibilityRegistryTests",
+  "assertion": "Same wire ID/revision with a fresh authority epoch must retire refs and stable IDs.",
+  "candidate": "absent-core-failed"
+}

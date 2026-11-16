@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import path from "path"
+import { Hands } from "@vectordevai/schema/hands"
 import { cliIt } from "../lib/cli-process"
 
 describe("vector mcp add (non-interactive subprocess)", () => {
@@ -64,6 +65,22 @@ describe("vector mcp add (non-interactive subprocess)", () => {
             VALUE: "one=two",
           },
         })
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "refuses a server named computer, in any letter case, before writing the config",
+    ({ home, vector }) =>
+      Effect.gen(function* () {
+        const result = yield* vector.spawn(["mcp", "add", "Computer", "--", "node", "server.js"])
+        vector.expectExit(result, 1)
+        expect(result.stderr).toContain('MCP server "Computer" cannot be used')
+        expect(result.stderr).toContain(Hands.NAME)
+
+        const file = Bun.file(path.join(home, ".config", "vector", "vector.json"))
+        const config = (yield* Effect.promise(() => file.exists())) ? yield* Effect.promise(() => file.json()) : {}
+        expect(config.mcp?.Computer).toBeUndefined()
       }),
     60_000,
   )

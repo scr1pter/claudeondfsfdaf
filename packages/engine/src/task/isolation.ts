@@ -25,7 +25,9 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { KeyedMutex } from "@vectordevai/core/effect/keyed-mutex"
 import { Global } from "@vectordevai/core/global"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { IsolationCopy } from "@vectordevai/core/isolation/copy"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Database } from "@vectordevai/core/database/database"
@@ -37,6 +39,7 @@ import { Watcher } from "@vectordevai/core/filesystem/watcher"
 import { Location } from "@vectordevai/core/location"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { Pty } from "@vectordevai/core/pty"
+import { PtyProcess } from "@vectordevai/core/pty/process"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Git } from "@/git"
@@ -146,10 +149,10 @@ export type By =
       kind: "agent"
       sessionID: string
       ask: (input: {
-        permission: "edit"
+        permission: "edit" | "connect_write"
         patterns: string[]
         always: string[]
-        metadata: { diff: string }
+        metadata: { diff: string; description?: string; runID?: string }
       }) => Effect.Effect<void, unknown>
       assertWritable: (input: { files: string[] }) => Effect.Effect<void, unknown>
       assertExternalDirectory: (file: string) => Effect.Effect<unknown, unknown>
@@ -572,53 +575,10 @@ export const closeTerminalsIn = Effect.fn("TaskIsolation.closeTerminalsIn")(func
     }),
   )
   const running = closed.flat()
-  yield* Effect.forEach(running, (info) => ended(info.pid), { concurrency: "unbounded", discard: true })
+  // Each program closed above is waited for, and killed with its group if it ignores the hangup (PtyProcess.ended).
+  yield* Effect.forEach(running, (info) => PtyProcess.ended(info.pid), { concurrency: "unbounded", discard: true })
   return running.length
 })
-
-// The close sent the terminal's program the terminal library's hangup or terminate. One that ignores it is killed, with
-// its process group, after a second; on Windows the close already ends the console's processes. Waiting probes with
-// signal 0, which sends nothing.
-const ended = Effect.fn("TaskIsolation.ended")(function* (pid: number) {
-  // The pid comes from the terminal library unchecked (bun-pty reports -1 until it has one), and `process.kill` reads
-  // 0 or less as a process group or every process: 0 would probe and then kill the engine's own group, -1 every
-  // process the user may signal. Such a pid is neither probed nor killed. `alive` and `kill` are reached only here.
-  if (!Number.isInteger(pid) || pid <= 0)
-    return yield* Effect.logWarning("a closed terminal reported no usable pid; its program was not waited for", { pid })
-  if (yield* exited(pid, 50)) return
-  if (process.platform !== "win32") kill(pid)
-  if (yield* exited(pid, 100)) return
-  yield* Effect.logWarning("a closed terminal's program is still running", { pid })
-})
-
-const exited = (pid: number, polls: number) =>
-  Effect.gen(function* () {
-    for (let poll = 0; poll < polls; poll++) {
-      if (!alive(pid)) return true
-      yield* Effect.sleep("20 millis")
-    }
-    return !alive(pid)
-  })
-
-function alive(pid: number) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (cause) {
-    return (cause as NodeJS.ErrnoException).code === "EPERM"
-  }
-}
-
-// The program may end between the probe and the kill; then there is nothing left to kill.
-function kill(pid: number) {
-  try {
-    process.kill(-pid, "SIGKILL")
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL")
-    } catch {}
-  }
-}
 
 export const make = Effect.gen(function* () {
   const git = yield* Git.Service
@@ -768,6 +728,70 @@ export const make = Effect.gen(function* () {
       return yield* err("registry", "The task checkout's Git metadata changed identity.")
     return current
   })
+  const inspectReview = (record: Record) =>
+    Effect.tryPromise({
+      try: () => {
+        if (!record.gitDirectory || !record.gitCommonDirectory)
+          return Promise.reject(new ReadOnlyGit.Unavailable("the task has no verified Git binding"))
+        return ReadOnlyGit.inspect({
+          directory: record.directory,
+          gitDirectory: record.gitDirectory,
+          commonDirectory: record.gitCommonDirectory,
+        })
+      },
+      catch: () =>
+        new IsolationError({
+          code: "review_target",
+          message: "This task's Git metadata cannot be inspected safely. The review did not start.",
+        }),
+    })
+  /** A settled checkout remains the same registered task until the read-only review releases this lock. */
+  const review = <A, E, R>(
+    input: { readonly taskID: string; readonly parentSessionID: string },
+    use: (record: Record) => Effect.Effect<A, E, R>,
+  ) =>
+    lock(
+      input.taskID,
+      Effect.gen(function* () {
+        const record = yield* get(input.taskID)
+        if (record.parentSessionID !== input.parentSessionID || record.deleted)
+          return yield* err("review_target", "That isolated task does not belong to this conversation.")
+        if (record.mode !== "worktree" || !["changed", "diverged"].includes(record.state))
+          return yield* err("review_target", "Only a settled task with saved worktree changes can be reviewed.")
+        if (!record.tip || !(record.reviewBase ?? record.seed))
+          return yield* err("review_target", "The task has no saved review range.")
+        const checked = yield* verify(record)
+        const before = yield* inspectReview(checked)
+        if (before.head !== checked.tip)
+          return yield* err(
+            "review_target",
+            "The task checkout changed since it settled. Settle it again before reviewing.",
+          )
+        // The branch review covers saved commits only; unsaved edits must never be silently reported as reviewed.
+        if (before.dirty)
+          return yield* err("review_target", "The task has unsaved changes. Settle it again before reviewing.")
+        const result = yield* use(checked)
+        const current = yield* verify(checked)
+        const after = yield* inspectReview(current)
+        if (
+          current.deleted ||
+          current.parentSessionID !== checked.parentSessionID ||
+          current.state !== checked.state ||
+          current.attempt !== checked.attempt ||
+          current.settledAttempt !== checked.settledAttempt ||
+          current.tip !== checked.tip ||
+          (current.reviewBase ?? current.seed) !== (checked.reviewBase ?? checked.seed) ||
+          after.head !== checked.tip ||
+          after.dirty
+        )
+          return yield* err(
+            "review_target",
+            "The task changed while it was being reviewed; the review was not accepted.",
+          )
+        return result
+      }),
+    )
+
   const identity = Effect.fn("TaskIsolation.identity")(function* (cwd: string) {
     const name = yield* run(cwd, ["config", "user.name"])
     const email = yield* run(cwd, ["config", "user.email"])
@@ -2294,6 +2318,10 @@ export const make = Effect.gen(function* () {
             // them there for the prompt_source and memory_source asks. A project that is not a Git repository has the
             // file system root as its worktree, while its merge targets sit in the project folder.
             const ctx = yield* home
+            const patterns = plan.targets.map((target) => path.relative(ctx.worktree, target))
+            // A connected-tools fix child's changes reach the checkout only after the user says yes, every time (CW-07).
+            if (plan.record.agent.name === ConnectPolicy.FIX_AGENT)
+              yield* by.ask(ConnectPolicy.mergeAsk({ title: plan.record.title, patterns, diff: plan.diff }))
             yield* by.ask({
               permission: "edit",
               patterns: plan.targets.map((target) => path.relative(ctx.worktree, target)),
@@ -2805,6 +2833,7 @@ export const make = Effect.gen(function* () {
     find: optional,
     markSettling,
     records,
+    review,
     enqueue,
     admit,
   }
@@ -2845,7 +2874,31 @@ export const complete = Effect.fn("TaskIsolation.complete")(function* (input: {
   }
   yield* save
 })
-export const layer = Layer.effect(Service, make)
+/**
+ * An agent's terminals end with its session: deleting a conversation closes the ones each of its sessions opened, at
+ * home or in a helper's checkout, and waits for their programs, killing one that ignores the hangup with its group.
+ * Session.remove runs this for every session it deletes, children first.
+ */
+export const closeSessionTerminals =
+  (locations: LocationServiceMap.Service["Service"]) =>
+  (session: Pick<Session.Info, "id" | "directory">) => {
+    const place = TaskPlace.get(session.id)
+    return closeTerminalsIn(
+      [session.directory, ...(place ? [place.work.directory] : [])],
+      (info) => info.owner?.kind === "agent" && info.owner.sessionID === session.id,
+      locations,
+    ).pipe(Effect.asVoid)
+  }
+
+const registerCleanup = Effect.gen(function* () {
+  const locations = yield* LocationServiceMap.Service
+  yield* Effect.acquireRelease(
+    Effect.sync(() => SessionCleanup.register(closeSessionTerminals(locations))),
+    (unregister) => Effect.sync(unregister),
+  )
+})
+
+export const layer = Layer.effect(Service, registerCleanup.pipe(Effect.andThen(make)))
 // The location services the terminal tool opens terminals in (tool/registry.ts), the same instance by the shared layer,
 // so a retiring checkout's terminals are closed where they were opened.
 const locationServiceMapNode = LayerNode.make({

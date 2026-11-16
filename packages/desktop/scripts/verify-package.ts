@@ -9,8 +9,13 @@
 // clicks the button.
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 import { verifyNotices } from "./verify-notices"
 import { BUILD_IDENTITY_FILE, parseBuildIdentity } from "./build-identity"
+
+import { verifyComputerHelperMac } from "./verify-computer-helper"
+export { checkComputerHelper, parseMacCodeSignature } from "./verify-computer-helper"
 
 export type PackageCheck = { ok: true } | { ok: false; problem: string }
 
@@ -108,7 +113,7 @@ if (import.meta.main) {
   const targets: string[] = []
   if (explicit) targets.push(explicit)
   else {
-    const dist = join(import.meta.dir, "..", "dist")
+    const dist = fileURLToPath(new URL("../dist", import.meta.url))
     for (const dir of readdirSync(dist, { withFileTypes: true })) {
       if (!dir.isDirectory() || !dir.name.startsWith("mac")) continue
       const full = join(dist, dir.name)
@@ -122,12 +127,12 @@ if (import.meta.main) {
   for (const appPath of targets) {
     // Also runs the release byte audit over the whole .app.
     await verifyNotices(appPath, "darwin")
-    verify(appPath)
+    await verify(appPath)
   }
   process.exit(0)
 }
 
-function verify(appPath: string) {
+async function verify(appPath: string) {
   const metadata = updaterMetadataPath(appPath)
   const identity = buildIdentityPath(appPath)
   const result = checkPackagedApp({
@@ -146,11 +151,21 @@ function verify(appPath: string) {
     console.error(`${appPath} failed release verification: ${result.problem}`)
     process.exit(1)
   }
-  console.log(`verified ${appPath} has one consistent compiled, bundle, and update channel`)
+  if (
+    !(
+      process.env.VECTOR_COMPUTER_HELPER === "skip" &&
+      plistValue(join(appPath, "Contents", "Info.plist"), "CFBundleIdentifier") === "ai.vector.app.dev"
+    )
+  )
+    await verifyComputerHelperMac({
+      app: appPath,
+      expectSigning: process.env.VECTOR_SIGN_MAC === "true" ? "developer-id" : "adhoc",
+    })
+  console.log(`verified ${appPath} has one consistent compiled, bundle, update channel and computer helper`)
 }
 
 function plistValue(file: string, key: string) {
-  const result = Bun.spawnSync(["/usr/bin/plutil", "-extract", key, "raw", "-o", "-", file])
-  if (result.exitCode !== 0) return
+  const result = spawnSync("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", file], { timeout: 5000 })
+  if (result.error || result.status !== 0) return
   return result.stdout.toString().trim()
 }

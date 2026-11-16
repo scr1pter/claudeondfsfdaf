@@ -26,8 +26,10 @@ import { Worker } from "node:worker_threads"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { lines, pdf } from "../../core/test/brain/fixture/pdf"
 import { bundleBrainWorker } from "./brain-worker"
+import { linuxIsolationBuildPlugin } from "../../../script/linux-isolation-asset"
 
 const SMOKE = { version: "0.0.0-brain-worker-smoke", channel: "brain-worker-smoke" }
+const isolation = await linuxIsolationBuildPlugin(false)
 const STARTED = "brain reader started in a worker thread"
 const FALLBACK = "brain reader runs on the main thread"
 const dir = path.resolve(import.meta.dirname, "..")
@@ -80,10 +82,8 @@ async function smoke(binary: string, home: string) {
     }),
   )
   await writeFile(path.join(home, "models.json"), "{}")
-  const run = (args: string[]) => spawnSync(
-    binary,
-    ["--print-logs", "--log-level", "INFO", ...args],
-    {
+  const run = (args: string[]) =>
+    spawnSync(binary, ["--print-logs", "--log-level", "INFO", ...args], {
       cwd: repository,
       encoding: "utf8",
       timeout: 120_000,
@@ -105,8 +105,7 @@ async function smoke(binary: string, home: string) {
         VECTOR_SITE_URL: "http://127.0.0.1:1",
         NPM_CONFIG_REGISTRY: "http://127.0.0.1:1",
       },
-    },
-  )
+    })
   const result = run(["memory", "doc", "extract", "spec.pdf", "--json"])
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`
   if (result.error) return [`the binary could not run: ${result.error.message}`]
@@ -115,7 +114,9 @@ async function smoke(binary: string, home: string) {
     .then(() => JSON.parse(result.stdout) as { format?: string; pages?: number; records?: { card: string }[] })
     .catch(() => undefined)
   return [
-    ...(structured?.format === "pdf" && structured.pages === 2 ? [] : [`the PDF was not read as two pages: ${result.stdout.slice(0, 400)}`]),
+    ...(structured?.format === "pdf" && structured.pages === 2
+      ? []
+      : [`the PDF was not read as two pages: ${result.stdout.slice(0, 400)}`]),
     ...(structured?.records?.some((record) => record.card.includes("retry at most 3 times"))
       ? []
       : ["no record of the retry requirement came back"]),
@@ -155,7 +156,7 @@ async function sealed() {
   })
   parentPort.postMessage({ named })
 })()`
-  const worker = new Worker((await bundleBrainWorker(SMOKE)) + probe, {
+  const worker = new Worker((await bundleBrainWorker(SMOKE, isolation)) + probe, {
     eval: true,
     env: { ...process.env, VECTOR_TEST_EGRESS: "strict", VECTOR_TEST_EGRESS_NAMES: "example.com" },
   })
@@ -183,7 +184,9 @@ async function meaning(run: (args: string[]) => SpawnSyncReturns<string>) {
     return {
       status: result.status,
       value: await Promise.resolve()
-        .then(() => JSON.parse(stdout.slice(Math.max(0, stdout.search(/^[[{]/m)))) as Record<string, unknown> & unknown[])
+        .then(
+          () => JSON.parse(stdout.slice(Math.max(0, stdout.search(/^[[{]/m)))) as Record<string, unknown> & unknown[],
+        )
         .catch(() => undefined),
       output: `${stdout}${result.stderr ?? ""}`.slice(-4_000),
     }
@@ -198,7 +201,8 @@ async function meaning(run: (args: string[]) => SpawnSyncReturns<string>) {
   if (installed.value?.state !== "ready" || check?.by !== "vectors" || (check.lowest ?? 0) < 0.995)
     return [`vector memory model install did not leave a checked model: ${installed.output}`]
   const added = await json(["memory", "doc", "add", "spec.pdf", "--wait=all"])
-  const document = (added.value?.[0] as { document?: { status?: string; stats?: { embedded?: number } } } | undefined)?.document
+  const document = (added.value?.[0] as { document?: { status?: string; stats?: { embedded?: number } } } | undefined)
+    ?.document
   if (document?.status !== "ready" || !document.stats?.embedded)
     return [`the PDF was not embedded by meaning: ${added.output}`]
   const found = await json(["memory", "doc", "search", "how", "long", "do", "sessions", "last", "--why"])
@@ -212,7 +216,9 @@ async function meaning(run: (args: string[]) => SpawnSyncReturns<string>) {
 async function compile(out: string) {
   const started = Date.now()
   const local = path.join(dir, "node_modules/@opentui/core/parser.worker.js")
-  const parserWorker = await realpath(local).catch(() => realpath(path.join(dir, "../../node_modules/@opentui/core/parser.worker.js")))
+  const parserWorker = await realpath(local).catch(() =>
+    realpath(path.join(dir, "../../node_modules/@opentui/core/parser.worker.js")),
+  )
   const workerPath = "./src/cli/tui/worker.ts"
   const system = process.platform === "win32" ? "windows" : process.platform
   const outfile = path.join(out, process.platform === "win32" ? "vector.exe" : "vector")
@@ -220,7 +226,7 @@ async function compile(out: string) {
   const result = await Bun.build({
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
-    plugins: [createSolidTransformPlugin()],
+    plugins: [createSolidTransformPlugin(), isolation],
     external: ["node-gyp"],
     format: "esm",
     minify: true,
@@ -234,7 +240,7 @@ async function compile(out: string) {
       outfile,
     },
     files: {
-      "brain-worker.gen.ts": `export default ${JSON.stringify(await bundleBrainWorker(SMOKE))}`,
+      "brain-worker.gen.ts": `export default ${JSON.stringify(await bundleBrainWorker(SMOKE, isolation))}`,
     },
     entrypoints: ["./src/index.ts", parserWorker, workerPath, "brain-worker.gen.ts"],
     define: {

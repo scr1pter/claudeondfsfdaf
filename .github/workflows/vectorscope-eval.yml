@@ -1,14 +1,60 @@
 name: vectorscope eval
 
 # Scores Vectorscope's review prompt on the fixture set in script/vectorscope-eval with the models you list.
-# Manual only: it spends OpenRouter credit. Add the repository secret OPENROUTER_API_KEY before running it.
+# Manual only, and a dry run unless you choose "paid": the dry run validates the inputs, the fixtures and the dataset
+# manifest and estimates the worst-case cost, and sends nothing. A paid run needs a total budget and a per-case bound,
+# waits for the owner's approval in the protected vectorscope-eval environment, and spends only from that
+# environment's own VECTORSCOPE_EVAL_API_KEY secret. Every request is admitted by the budget ledger before it is sent.
+# The inputs reach the scripts as environment variables and are validated in script/vectorscope-eval/ci.ts; none is
+# written into a shell command. Setup: script/vectorscope-eval/README.md, "Budgeted CI runs".
+#
+# This repository is public: anyone can read its Actions logs and step summaries, and any signed-in user can download
+# its artifacts. Results stay internal until the owner reviews them (D12), so a paid run logs only the budget ledger's
+# spend and counts, and its reports are uploaded only after ci.ts seals them to the owner's public key
+# (the VECTORSCOPE_EVAL_PUBLIC_KEY variable of the vectorscope-eval environment).
+#
+# The replay pipeline (pipeline: replay, VS-21c) runs the dataset's cases through the engine's review pipeline instead,
+# for each registry variant named (engine and engine:shared-verify when empty). Both jobs fetch the seed repositories'
+# commits into local mirrors first: anonymous https fetches of the committed manifest's URLs, with no secret. The dry
+# run projects every seed case for each variant against a canned model on the runner, under a strict egress guard, and
+# uploads nothing. A paid replay projects the development cases it will pay for, with no key, then replays them with the
+# eval key, within the D5 pilot's limits; both go into the sealed artifact. Its timeouts are longer, and one dispatch
+# covers only what fits in them. A pilot larger than that needs more dispatches, and they share D5's $50: each
+# dispatch's budget_usd is at most $50 less what the earlier dispatches' sealed ledgers settled (their uncertain
+# reservations included), given as pilot_spent_usd, and the dispatches split the pilot by the variants and models
+# inputs, never repeating a case, variant and model. Each dispatch restarts at the first development case, and nothing
+# carries spend between them. The engine:cross-family variant (VS-29a) pairs each model with triage_model as its first
+# pass, in dry runs only; nothing checks the pair's labs or tier until codium's labOf merges and the owner chooses it.
 
 on:
   workflow_dispatch:
     inputs:
-      models:
-        description: "Comma-separated OpenRouter model ids, e.g. anthropic/claude-sonnet-4.5,openai/gpt-5"
+      mode:
+        description: "dry-run sends nothing; paid spends from the vectorscope-eval key once the owner approves"
         required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - paid
+      models:
+        description: "Comma-separated model=input:output, USD per million tokens, e.g. anthropic/claude-sonnet-4.5=3:15"
+        required: true
+        type: string
+      budget_usd:
+        description: "Total USD for the whole run, every model and retry included (needed for paid)"
+        required: false
+        default: ""
+        type: string
+      case_budget_usd:
+        description: "USD bound for one fixture reviewed once by one model, its retry included (needed for paid)"
+        required: false
+        default: ""
+        type: string
+      max_tokens:
+        description: "Output token limit for each request"
+        required: true
+        default: "16000"
         type: string
       repeat:
         description: "Runs per fixture, 1-5 (repeat to see run-to-run variance)"
@@ -17,6 +63,29 @@ on:
         type: string
       fixtures:
         description: "Comma-separated fixture names (empty for all ten)"
+        required: false
+        default: ""
+        type: string
+      pipeline:
+        description: "smoke sends the prompt for each fixture; replay runs the dataset's cases through the engine"
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - replay
+      variants:
+        description: "replay only: comma-separated registry names (empty for engine,engine:shared-verify)"
+        required: false
+        default: ""
+        type: string
+      pilot_spent_usd:
+        description: "replay only: USD the pilot's earlier dispatches settled, from their sealed ledgers (empty for none)"
+        required: false
+        default: ""
+        type: string
+      triage_model:
+        description: "replay only: model=input:output, the first pass engine:cross-family pairs with each models entry; dry runs only (empty for none)"
         required: false
         default: ""
         type: string
@@ -29,9 +98,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  eval:
+  plan:
+    name: Dry run
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.pipeline == 'replay' && 45 || 15 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -41,45 +111,131 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Score each model
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MODELS: ${{ inputs.models }}
-          REPEAT: ${{ inputs.repeat }}
-          FIXTURES: ${{ inputs.fixtures }}
-        run: |
-          set -euo pipefail
-          if [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "::error::Add the repository secret OPENROUTER_API_KEY (Settings → Secrets and variables → Actions) and run again."
-            exit 1
-          fi
-          [[ "$REPEAT" =~ ^[1-5]$ ]] || { echo "::error::repeat must be 1 to 5"; exit 1; }
-          [[ -z "$FIXTURES" || "$FIXTURES" =~ ^[a-z0-9,-]+$ ]] || { echo "::error::fixtures must be comma-separated fixture names"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/vectorscope-eval"
-          status=0
-          IFS=, read -ra models <<< "$MODELS"
-          for model in "${models[@]}"; do
-            model="$(echo "$model" | xargs)"
-            [ -n "$model" ] || continue
-            [[ "$model" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo "::error::invalid model id: $model"; status=1; continue; }
-            out="$RUNNER_TEMP/vectorscope-eval/$(echo "$model" | tr '/:' '__').json"
-            args=(--model "$model" --repeat "$REPEAT" --out "$out")
-            [ -z "$FIXTURES" ] || args+=(--fixture "$FIXTURES")
-            {
-              echo "### $model"
-              echo
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            bun script/vectorscope-eval/run.ts "${args[@]}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || status=1
-            printf '```\n\n' >> "$GITHUB_STEP_SUMMARY"
-          done
-          exit "$status"
+      # The dry projection runs under a strict egress guard, so Vector may not download ripgrep: it has to be installed.
+      - name: Install ripgrep
+        if: inputs.pipeline == 'replay'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
 
-      - name: Keep the JSON reports
+      - name: Fetch the dataset mirrors
+        if: inputs.pipeline == 'replay'
+        env:
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+        run: bun script/vectorscope-eval/ci.ts mirrors
+
+      - name: Validate the inputs and estimate the cost
+        env:
+          EVAL_MODE: ${{ inputs.mode }}
+          EVAL_MODELS: ${{ inputs.models }}
+          EVAL_BUDGET_USD: ${{ inputs.budget_usd }}
+          EVAL_CASE_BUDGET_USD: ${{ inputs.case_budget_usd }}
+          EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
+          EVAL_REPEAT: ${{ inputs.repeat }}
+          EVAL_FIXTURES: ${{ inputs.fixtures }}
+          EVAL_PIPELINE: ${{ inputs.pipeline }}
+          EVAL_VARIANTS: ${{ inputs.variants }}
+          EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_TRIAGE_MODEL: ${{ inputs.triage_model }}
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+          EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
+        run: bun script/vectorscope-eval/ci.ts plan
+
+      - name: Validate the dataset manifest
+        run: bun script/vectorscope-eval/dataset.ts
+
+  eval:
+    name: Paid run
+    needs: plan
+    if: inputs.mode == 'paid'
+    runs-on: ubuntu-24.04
+    # Protected: the owner is its only required reviewer, and the eval key is a secret of this environment alone.
+    environment: vectorscope-eval
+    # A replay review can take the engine's 12-minute timeout, and replays run one at a time, so a dispatch covers only
+    # the cases that fit; an attempt cut off by the timeout keeps its whole reservation in the ledger journal.
+    timeout-minutes: ${{ inputs.pipeline == 'replay' && 360 || 75 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install ripgrep
+        if: inputs.pipeline == 'replay'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+
+      - name: Fetch the dataset mirrors
+        if: inputs.pipeline == 'replay'
+        env:
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+        run: bun script/vectorscope-eval/ci.ts mirrors
+
+      # The development cases this run will pay for, projected with no key, so the sealed report can measure how far
+      # each estimate was from what the replay settled at.
+      - name: Project the paid cases, sending nothing
+        if: inputs.pipeline == 'replay'
+        timeout-minutes: 30
+        env:
+          EVAL_MODE: ${{ inputs.mode }}
+          EVAL_MODELS: ${{ inputs.models }}
+          EVAL_BUDGET_USD: ${{ inputs.budget_usd }}
+          EVAL_CASE_BUDGET_USD: ${{ inputs.case_budget_usd }}
+          EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
+          EVAL_REPEAT: ${{ inputs.repeat }}
+          EVAL_FIXTURES: ${{ inputs.fixtures }}
+          EVAL_PIPELINE: ${{ inputs.pipeline }}
+          EVAL_VARIANTS: ${{ inputs.variants }}
+          EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_TRIAGE_MODEL: ${{ inputs.triage_model }}
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+          EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+        run: bun script/vectorscope-eval/ci.ts project
+
+      - name: Run each model within the budget
+        timeout-minutes: ${{ inputs.pipeline == 'replay' && 300 || 60 }}
+        env:
+          VECTORSCOPE_EVAL_API_KEY: ${{ secrets.VECTORSCOPE_EVAL_API_KEY }}
+          EVAL_MODE: ${{ inputs.mode }}
+          EVAL_MODELS: ${{ inputs.models }}
+          EVAL_BUDGET_USD: ${{ inputs.budget_usd }}
+          EVAL_CASE_BUDGET_USD: ${{ inputs.case_budget_usd }}
+          EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
+          EVAL_REPEAT: ${{ inputs.repeat }}
+          EVAL_FIXTURES: ${{ inputs.fixtures }}
+          EVAL_PIPELINE: ${{ inputs.pipeline }}
+          EVAL_VARIANTS: ${{ inputs.variants }}
+          EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_TRIAGE_MODEL: ${{ inputs.triage_model }}
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+          EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+          # This job's environment, which run.ts requires before it sends to a hosted endpoint.
+          EVAL_ENVIRONMENT: vectorscope-eval
+          VECTORSCOPE_EVAL_PUBLIC_KEY: ${{ vars.VECTORSCOPE_EVAL_PUBLIC_KEY }}
+        run: bun script/vectorscope-eval/ci.ts paid
+
+      - name: Summarise the budget ledger
+        if: always()
+        env:
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+        run: bun script/vectorscope-eval/ci.ts report
+
+      - name: Seal the reports to the owner's key
+        if: always()
+        env:
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+          EVAL_SEALED_DIR: ${{ runner.temp }}/vectorscope-eval-sealed
+          VECTORSCOPE_EVAL_PUBLIC_KEY: ${{ vars.VECTORSCOPE_EVAL_PUBLIC_KEY }}
+        run: bun script/vectorscope-eval/ci.ts seal
+
+      # Only the sealed file is uploaded: an artifact of this public repository can be downloaded by anyone signed in.
+      - name: Keep the sealed reports and ledger
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: vectorscope-eval
-          path: ${{ runner.temp }}/vectorscope-eval/
+          name: vectorscope-eval-sealed
+          path: ${{ runner.temp }}/vectorscope-eval-sealed/
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 7

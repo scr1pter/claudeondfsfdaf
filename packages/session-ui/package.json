@@ -9,6 +9,8 @@
     "./session-diff": "./src/components/session-diff.ts",
     "./message-file": "./src/components/message-file.ts",
     "./message-part-text": "./src/components/message-part-text.ts",
+    "./message-part-group": "./src/components/message-part-group.ts",
+    "./computer-labels": "./src/components/computer-labels.ts",
     "./knowledge-citations": "./src/components/knowledge-citations.ts",
     "./markdown-stream": "./src/components/markdown-stream.ts",
     "./markdown-cache": "./src/components/markdown-cache.tsx",

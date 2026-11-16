@@ -1,0 +1,26 @@
+{
+  "display_information": {
+    "name": "Vector",
+    "description": "Coding tasks on your own computer or GitHub runner.",
+    "background_color": "#171717"
+  },
+  "features": {
+    "bot_user": { "display_name": "Vector", "always_online": false },
+    "app_home": { "home_tab_enabled": false, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false },
+    "agent_view": { "agent_description": "Ask Vector to work on coding tasks using your own mapped computer or configured GitHub runner, and receive progress and a draft pull request." }
+  },
+  "oauth_config": {
+    "redirect_urls": ["https://vectordev.ai/api/slack/oauth"],
+    "scopes": { "bot": ["app_mentions:read", "chat:write", "assistant:write", "im:history", "users:read", "channels:history", "groups:history"] }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://vectordev.ai/api/slack/events",
+      "bot_events": ["app_mention", "message.im", "agent_session_stopped", "app_uninstalled", "tokens_revoked"]
+    },
+    "interactivity": { "is_enabled": true, "request_url": "https://vectordev.ai/api/slack/interactivity" },
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

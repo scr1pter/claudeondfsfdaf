@@ -92,11 +92,13 @@ export type Event =
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
+  | EventComputerState
   | EventSessionCompacted
   | EventResearchUpdated
   | EventLocalUpdated
   | EventLocalBlocked
   | EventMemoryLearned
+  | EventConnectRunUpdated
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -1771,6 +1773,7 @@ export type GlobalEvent = {
            */
           questions: Array<QuestionInfo>
           tool?: QuestionTool
+          metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
         }
       }
     | {
@@ -1788,6 +1791,14 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           requestID: string
+        }
+      }
+    | {
+        id: string
+        type: "computer.state"
+        properties: {
+          sessionID: string
+          state: ComputerState2
         }
       }
     | {
@@ -1832,6 +1843,39 @@ export type GlobalEvent = {
           sessionID: string
           entryIDs: Array<string>
           messageID?: string
+        }
+      }
+    | {
+        id: string
+        type: "connect.run.updated"
+        properties: {
+          sessionID?: string
+          run: {
+            id: string
+            request: ConnectRequest
+            status: ConnectRunStatus
+            progress?: ConnectProgress
+            result?: {
+              state: ConnectResultState
+              verdict?: ConnectVerdict
+              summary: string
+              findings: Array<ConnectFinding>
+              sendsTo?: "this-computer" | "vector-codium" | string | string
+              cached?: boolean
+              cost?: ConnectCost
+              sessions: Array<string>
+              notes: Array<string>
+              refusal?: ConnectRefusalCode
+              target?: ConnectTarget
+              head?: string
+              base?: string
+            }
+            time: {
+              created: number
+              started?: number
+              ended?: number
+            }
+          }
         }
       }
     | {
@@ -2185,6 +2229,41 @@ export type RunBudget = {
   unpricedSteps?: number
 }
 
+export type ComputerConfig = {
+  enabled?: boolean
+  default_app_access?: "ask" | "deny"
+  allow_always?: boolean
+  background?: boolean
+  keep_awake?: boolean
+  away_minutes?: number
+  screenshot_retention_days?: number
+  max_actions?: number
+  max_minutes?: number
+  native_tools?: "auto" | "off"
+  screenshots?: {
+    keep?: number
+    max_width?: number
+    max_height?: number
+  }
+  apps?: {
+    macos?: {
+      [key: string]: "allow" | "deny"
+    }
+    windows?: Array<
+      | {
+          aumid: string
+          access: "allow" | "deny"
+        }
+      | {
+          publisher: string
+          product: string
+          binary?: string
+          access: "allow" | "deny"
+        }
+    >
+  }
+}
+
 export type LocalAllowed = {
   source: string
   hosts?: Array<string>
@@ -2269,6 +2348,17 @@ export type ResearchConfig = {
   }
   robots?: boolean
   retain_days?: number
+}
+
+export type ConnectReviewConfig = {
+  after_run?: "off" | "report" | "repair"
+  before_commit?: "off" | "offer" | "run"
+  max_rounds?: number
+  max_cost_usd?: number
+}
+
+export type ConnectConfig = {
+  review?: ConnectReviewConfig
 }
 
 export type ConfigWithLocks = {
@@ -2450,9 +2540,12 @@ export type ConfigWithLocks = {
       }
     }
   }
+  computer?: ComputerConfig
   local?: LocalConfig
   research?: ResearchConfig
+  connect?: ConnectConfig
   experimental?: {
+    vectorscope?: boolean
     disable_paste_summary?: boolean
     batch_tool?: boolean
     openTelemetry?: boolean
@@ -2646,9 +2739,12 @@ export type Config = {
       }
     }
   }
+  computer?: ComputerConfig
   local?: LocalConfig
   research?: ResearchConfig
+  connect?: ConnectConfig
   experimental?: {
+    vectorscope?: boolean
     disable_paste_summary?: boolean
     batch_tool?: boolean
     openTelemetry?: boolean
@@ -2679,6 +2775,12 @@ export type TeamsError = {
     code: "unavailable" | "denied" | "invalid" | "storage"
     message: string
   }
+}
+
+export type UnknownError1 = {
+  _tag: "UnknownError"
+  message: string
+  ref?: string
 }
 
 export type ProjectTrustStatus = {
@@ -2822,6 +2924,11 @@ export type Provider = {
 
 export type ExperimentalCapabilities = {
   backgroundSubagents: boolean
+  computer?: {
+    available: boolean
+    protocol?: number
+    reason?: string
+  }
   workDelegation?: boolean
   subagentLimits?: boolean
   sessionStop?: boolean
@@ -2831,6 +2938,10 @@ export type ExperimentalCapabilities = {
   taskIsolation?: boolean
   workflows?: boolean
   backgroundShells?: boolean
+  vectorscopeSettings?: boolean
+  vectorscopeRuns?: boolean
+  vectorscopeReviewMemoryControls?: boolean
+  connections?: boolean
 }
 
 export type ToolListItem = {
@@ -4591,6 +4702,11 @@ export type MemoryResearchSourceText = {
   private: boolean
 }
 
+export type ConnectApiError = {
+  code: "disabled" | "forbidden" | "not_found" | "invalid"
+  message: string
+}
+
 export type Project = {
   id: string
   worktree: string
@@ -4627,11 +4743,41 @@ export type QuestionRequest = {
    */
   questions: Array<QuestionInfo>
   tool?: QuestionTool
+  metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
 }
 
 export type QuestionNotFoundError = {
   _tag: "QuestionNotFoundError"
   requestID: string
+  message: string
+}
+
+export type ReviewApiError = {
+  code:
+    | "disabled"
+    | "placement"
+    | "invalid"
+    | "not_found"
+    | "conflict"
+    | "unavailable"
+    | "corrupt"
+    | "permissions"
+    | "stale"
+  message: string
+}
+
+export type ReviewMemoryApiError = {
+  code:
+    | "invalid"
+    | "denied"
+    | "unavailable"
+    | "limit"
+    | "stale"
+    | "used"
+    | "expired"
+    | "disabled"
+    | "not-found"
+    | "source-unavailable"
   message: string
 }
 
@@ -5456,7 +5602,7 @@ export type SessionNotFoundError = {
   message: string
 }
 
-export type UnknownError1 = {
+export type UnknownError2 = {
   _tag: "UnknownError"
   message: string
   ref?: string
@@ -5616,6 +5762,24 @@ export type QuestionRejected2 = {
   }
 }
 
+export type ComputerState = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "computer.state"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    state: ComputerState2
+  }
+}
+
 export type V2Event =
   | ModelCatalogRefreshed
   | IntegrationUpdated
@@ -5704,11 +5868,13 @@ export type V2Event =
   | QuestionAsked
   | QuestionReplied2
   | QuestionRejected2
+  | ComputerState
   | SessionCompacted
   | ResearchUpdated
   | LocalUpdated
   | LocalBlocked
   | MemoryLearned
+  | ConnectRunUpdated
   | VcsBranchUpdated
   | WorkspaceReady
   | WorkspaceFailed
@@ -6201,6 +6367,237 @@ export type ProjectTime = {
   updated: number
   initialized?: number
 }
+
+export type ComputerHandoffReason =
+  | "credential"
+  | "sign_in"
+  | "captcha"
+  | "payment_details"
+  | "admin_prompt"
+  | "security_prompt"
+  | "capture_confirm"
+  | "elevated"
+  | "site_permission"
+  | "download"
+  | "extension"
+  | "protocol_handler"
+  | "macros"
+  | "other"
+
+export type ComputerHandoffQuestionMetadata = {
+  computer: {
+    kind: "handoff"
+    app?: string
+    reason: ComputerHandoffReason
+  }
+}
+
+export type ComputerCheckInQuestionMetadata = {
+  computer: {
+    kind: "check_in"
+    actions: number
+    minutes: number
+  }
+}
+
+export type ComputerPhase =
+  | "off"
+  | "setup"
+  | "ready"
+  | "working"
+  | "asking"
+  | "handoff"
+  | "paused"
+  | "waiting"
+  | "done"
+  | "stopped"
+
+export type ComputerMode = "foreground" | "background"
+
+export type ComputerAppKey = string
+
+export type ComputerIcon = string
+
+export type ComputerPauseReason =
+  | "input"
+  | "button"
+  | "locked"
+  | "suspend"
+  | "away"
+  | "helper"
+  | "detection"
+  | "secure_input"
+  | "secure_desktop"
+  | "overlay"
+  | "pointer"
+
+export type ComputerAskKind = "app" | "sensitive" | "handoff" | "pointer" | "check_in"
+
+export type ComputerState2 = {
+  phase: ComputerPhase
+  backend: "local-macos" | "local-windows" | "remote"
+  mode: ComputerMode
+  holder?: {
+    sessionID: string
+    directory: string
+    title: string
+    startedAt: number
+    actions: number
+  }
+  apps: Array<{
+    key: ComputerAppKey
+    name: string
+    icon?: ComputerIcon
+  }>
+  step?: string
+  pause?: ComputerPauseReason
+  secureInputHolder?: string
+  ask?: {
+    requestID: string
+    directory: string
+    kind: ComputerAskKind
+    title: string
+    detail?: string
+    canAlways: boolean
+    icon?: ComputerIcon
+    shownAt: number
+  }
+  queue: Array<{
+    sessionID: string
+    title: string
+  }>
+  escStops: boolean
+  stopChord: string
+  lease: number
+  reduceMotion: boolean
+}
+
+export type ConnectBudget = {
+  maxCostUsd?: number
+  timeoutMinutes?: number
+}
+
+export type ConnectTarget =
+  | {
+      kind: "uncommitted"
+    }
+  | {
+      kind: "staged"
+    }
+  | {
+      kind: "branch"
+      base?: string
+    }
+  | {
+      kind: "task"
+      task: string
+    }
+
+export type ConnectReviewRequest = {
+  id: string
+  to: string
+  requester: {
+    kind: "agent" | "user" | "workflow"
+    sessionID?: string
+    agent?: string
+  }
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "review"
+  target: ConnectTarget
+  security?: boolean
+  since?: string
+}
+
+export type ConnectFixMode = "here" | "worktree"
+
+export type ConnectFixRequest = {
+  id: string
+  to: string
+  requester: {
+    kind: "agent" | "user" | "workflow"
+    sessionID?: string
+    agent?: string
+  }
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "fix"
+  run: string
+  findings: Array<string>
+  mode: ConnectFixMode
+}
+
+export type ConnectRequest = ConnectReviewRequest | ConnectFixRequest
+
+export type ConnectRunStatus = "queued" | "running" | "done"
+
+export type ConnectProgress = {
+  pass?: string
+  message: string
+  at: number
+}
+
+export type ConnectResultState = "completed" | "partial" | "refused" | "failed" | "cancelled"
+
+export type ConnectVerdict = "clean" | "findings" | "blocking" | "incomplete" | "not-reviewed"
+
+export type ConnectSeverity = "blocking" | "concern" | "nit"
+
+export type ConnectCategory =
+  | "bug"
+  | "security"
+  | "reliability"
+  | "performance"
+  | "tests"
+  | "maintainability"
+  | "style"
+  | "docs"
+
+export type ConnectSide = "RIGHT" | "LEFT"
+
+export type ConnectBucket = "inline" | "overflow" | "outside-diff" | "elsewhere" | "nit" | "still-open"
+
+export type ConnectFindingStatus = "open" | "fixing" | "fixed" | "still-open" | "new" | "dismissed"
+
+export type ConnectFinding = {
+  id: string
+  severity: ConnectSeverity
+  category: ConnectCategory
+  path: string
+  line?: number
+  side: ConnectSide
+  title: string
+  body: string
+  source: "review" | "security"
+  verified?: boolean
+  suggestion?: string
+  bucket: ConnectBucket
+  status: ConnectFindingStatus
+}
+
+export type ConnectCostKind = "free" | "priced" | "plan" | "local" | "unknown"
+
+export type ConnectCost = {
+  kind: ConnectCostKind
+  usd?: number
+}
+
+export type ConnectRefusalCode =
+  | "unknown"
+  | "effect"
+  | "permission"
+  | "denied"
+  | "read-rule"
+  | "limit"
+  | "budget"
+  | "unavailable"
+  | "input"
+  | "not-allowed"
+  | "escalate"
 
 export type EventServerInstanceDisposed = {
   id: string
@@ -6987,6 +7384,21 @@ export type ConfigV2ExperimentalPolicy = {
 
 export type TeamsId = string
 
+export type ComputerProtectionResult = {
+  paths: Array<string>
+  directories: Array<string>
+}
+
+export type ComputerPruneInput = {
+  before?: number
+  sessionID?: string
+  all?: boolean
+}
+
+export type ComputerPruneResult = {
+  removed: number
+}
+
 export type ModelCodium = {
   lab?: string
   role?: "floor" | "default" | "ceiling"
@@ -7375,23 +7787,41 @@ export type WorkflowValidateInput = {
   }
 }
 
-export type WorkflowPlanStage = {
+export type WorkflowPlanAgentStage = {
   id: string
   title: string
   phase: string
-  agent: string
-  model?: string
-  effort?: string
-  isolation?: string
   items: number | "dynamic"
   serial: boolean
   writes: string
   asks: Array<string>
+  kind?: "agent"
+  agent: string
+  model?: string
+  effort?: string
+  isolation?: string
   verify?: {
     agent: string
     maxRounds: number
   }
 }
+
+export type WorkflowPlanConnectStage = {
+  id: string
+  title: string
+  phase: string
+  items: number | "dynamic"
+  serial: boolean
+  writes: string
+  asks: Array<string>
+  kind: "connect"
+  connect: {
+    to: string
+    action: string
+  }
+}
+
+export type WorkflowPlanStage = WorkflowPlanAgentStage | WorkflowPlanConnectStage
 
 export type WorkflowPlan = {
   title: string
@@ -7479,6 +7909,74 @@ export type ResearchMeasurement = {
   definition?: string
 }
 
+export type ConnectKind = "agent" | "helper" | "tool" | "runtime" | "service" | "mcp" | "workflow" | "skill"
+
+export type ConnectOwner =
+  | "main"
+  | "vectorscope"
+  | "hands"
+  | "vector-at-mention"
+  | "codium"
+  | "cloud-workspaces"
+  | "plugin"
+  | "user"
+
+export type ConnectPlace = "local" | "your-cloud" | "vector-cloud"
+
+export type ConnectState = "ready" | "busy" | "unavailable" | "off" | "not-installed"
+
+export type ConnectReach = "connect" | "ui" | "none" | string
+
+export type ConnectActionId = "review" | "fix"
+
+export type ConnectEffect = "read" | "write"
+
+export type ConnectResultKind = "review" | "fix"
+
+export type ConnectAction = {
+  id: ConnectActionId
+  title: string
+  effects: Array<ConnectEffect>
+  background: boolean
+  result: ConnectResultKind
+}
+
+export type ConnectActivity = {
+  running: number
+  lastRunAt?: number
+}
+
+export type ConnectReviewInput = {
+  to?: string
+  target?: ConnectTarget
+  security?: boolean
+  background?: boolean
+  budget?: ConnectBudget
+  since?: string
+}
+
+export type ConnectDirectoryReviewInput = {
+  to?: string
+  target?: ConnectTarget
+  security?: boolean
+  background?: boolean
+  budget?: ConnectBudget
+  since?: string
+  requestKey: string
+}
+
+export type ConnectRegisterInput = {
+  sessionID: string
+  target: ConnectTarget
+  findings: Array<ConnectFinding>
+}
+
+export type ConnectDismissInput = {
+  sessionID: string
+  findings: Array<string>
+  reason?: string
+}
+
 export type ProjectDirectories = Array<{
   directory: string
   strategy?: string
@@ -7488,6 +7986,309 @@ export type PtyTicketConnectToken = {
   ticket: string
   expires_in: number
 }
+
+export type ReviewRunTarget = {
+  kind: "working-tree" | "staged"
+  head: string
+}
+
+export type ReviewRunStart = {
+  requestID: string
+  target: ReviewRunTarget
+  maxCost?: number
+}
+
+export type ReviewRunStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted" | "unknown"
+
+export type ReviewRunArtifact = {
+  version: 1
+  json: string
+  bytes: number
+  sha256: string
+}
+
+export type ReviewRunInfo = {
+  runID: string
+  parentID: string
+  request: ReviewRunStart
+  status: ReviewRunStatus
+  canStop: boolean
+  startedAt: number
+  completedAt?: number
+  artifact?: ReviewRunArtifact
+  error?: string
+}
+
+export type ReviewRunSummary = {
+  runID: string
+  parentID: string
+  request: ReviewRunStart
+  status: ReviewRunStatus
+  canStop: boolean
+  startedAt: number
+  completedAt?: number
+  error?: string
+  hasResult: boolean
+}
+
+export type ReviewRunList = {
+  runs: Array<ReviewRunSummary>
+  next?: string
+}
+
+export type ReviewMemoryControlId = string
+
+export type ReviewMemoryControlScope = string
+
+export type ReviewMemoryControlGeneration = number
+
+export type ReviewMemoryControlHead = string
+
+export type ReviewMemoryControlCitation = {
+  path: string
+  line: number
+  head: ReviewMemoryControlHead
+  quote: string
+}
+
+export type ReviewMemoryControlTimestamp = number
+
+export type ReviewMemoryControlOwnerEntry = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  id: ReviewMemoryControlId
+  createdAt: ReviewMemoryControlTimestamp
+  updatedAt: ReviewMemoryControlTimestamp
+  approvedBy: ReviewMemoryControlId
+  approvedAt: number
+  kind: "preference" | "check"
+  origin: "owner"
+  status: "active"
+}
+
+export type ReviewMemoryControlSource = {
+  parentID: ReviewMemoryControlId
+  reviewID: ReviewMemoryControlId
+  head: ReviewMemoryControlHead
+}
+
+export type ReviewMemoryControlProposedEntry = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  id: ReviewMemoryControlId
+  createdAt: ReviewMemoryControlTimestamp
+  updatedAt: ReviewMemoryControlTimestamp
+  kind: "outcome"
+  origin: "review"
+  status: "proposed"
+  source: ReviewMemoryControlSource
+}
+
+export type ReviewMemoryControlApprovedEntry = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  id: ReviewMemoryControlId
+  createdAt: ReviewMemoryControlTimestamp
+  updatedAt: ReviewMemoryControlTimestamp
+  approvedBy: ReviewMemoryControlId
+  approvedAt: number
+  kind: "outcome"
+  origin: "review"
+  status: "active"
+  source: ReviewMemoryControlSource
+}
+
+export type ReviewMemoryControlEntry =
+  | ReviewMemoryControlOwnerEntry
+  | ReviewMemoryControlProposedEntry
+  | ReviewMemoryControlApprovedEntry
+
+export type ReviewMemoryControlInspect = {
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  state: {
+    enabled: boolean
+    generation: ReviewMemoryControlGeneration
+    entries: Array<ReviewMemoryControlEntry>
+  }
+  next?: number
+}
+
+export type ReviewMemoryControlConfigure = {
+  action: "configure"
+  expected: ReviewMemoryControlGeneration
+  enabled: boolean
+}
+
+export type ReviewMemoryControlRecord = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  action: "record"
+  expected: ReviewMemoryControlGeneration
+  kind: "preference" | "check"
+}
+
+export type ReviewMemoryControlApprove = {
+  action: "approve"
+  expected: ReviewMemoryControlGeneration
+  id: ReviewMemoryControlId
+}
+
+export type ReviewMemoryControlReopen = {
+  action: "reopen"
+  expected: ReviewMemoryControlGeneration
+  id: ReviewMemoryControlId
+  reason: string
+}
+
+export type ReviewMemoryControlForget = {
+  action: "forget"
+  expected: ReviewMemoryControlGeneration
+  id: ReviewMemoryControlId
+}
+
+export type ReviewMemoryControlErase = {
+  action: "erase"
+  expected: ReviewMemoryControlGeneration
+}
+
+export type ReviewMemoryControlCommand =
+  | ReviewMemoryControlConfigure
+  | ReviewMemoryControlRecord
+  | ReviewMemoryControlApprove
+  | ReviewMemoryControlReopen
+  | ReviewMemoryControlForget
+  | ReviewMemoryControlErase
+
+export type ReviewMemoryControlPrepare = {
+  expectedScope: ReviewMemoryControlScope
+  command: ReviewMemoryControlCommand
+}
+
+export type ReviewMemoryControlPreviewId = string
+
+export type ReviewMemoryControlSha256 = string
+
+export type ReviewMemoryControlConfigurePreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "configure"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+    enabled: boolean
+  }
+}
+
+export type ReviewMemoryControlRecordPreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "record"
+  payload: {
+    text: string
+    paths: Array<string>
+    citations: Array<ReviewMemoryControlCitation>
+    reason: string
+    visibility: "private" | "repository"
+    expected: ReviewMemoryControlGeneration
+    kind: "preference" | "check"
+  }
+}
+
+export type ReviewMemoryControlApprovePreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "approve"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+    id: ReviewMemoryControlId
+    entry: ReviewMemoryControlProposedEntry
+  }
+}
+
+export type ReviewMemoryControlForgetPreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "forget"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+    id: ReviewMemoryControlId
+  }
+}
+
+export type ReviewMemoryControlErasePreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "erase"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+  }
+}
+
+export type ReviewMemoryControlPreview =
+  | ReviewMemoryControlConfigurePreview
+  | ReviewMemoryControlRecordPreview
+  | ReviewMemoryControlApprovePreview
+  | {
+      previewId: ReviewMemoryControlPreviewId
+      sha256: ReviewMemoryControlSha256
+      expiresAt: ReviewMemoryControlTimestamp
+      repository: ReviewMemoryControlId
+      scope: ReviewMemoryControlScope
+      expected: ReviewMemoryControlGeneration
+      operation: "reopen"
+      payload: {
+        expected: ReviewMemoryControlGeneration
+        id: ReviewMemoryControlId
+        reason: string
+        entry: ReviewMemoryControlApprovedEntry
+      }
+    }
+  | ReviewMemoryControlForgetPreview
+  | ReviewMemoryControlErasePreview
+
+export type ReviewMemoryControlConfirmation = {
+  previewId: ReviewMemoryControlPreviewId
+  approvedSha256: ReviewMemoryControlSha256
+}
+
+export type ReviewMemoryControlState = {
+  enabled: boolean
+  generation: ReviewMemoryControlGeneration
+}
+
+export type ReviewMemoryControlConfirmationResult = ReviewMemoryControlState | ReviewMemoryControlEntry
 
 export type PublicSessionConsent = {
   version: 1
@@ -7500,7 +8301,25 @@ export type PublicSessionPublish = {
   expiresAt: number
   previewHash?: string
   remember?: boolean
+  includeScreenshots?: boolean
 }
+
+export type PublicSessionScreenshot =
+  | {
+      name: string
+      mediaType: "image/png"
+      url: string
+    }
+  | {
+      name: string
+      mediaType: "image/jpeg"
+      url: string
+    }
+  | {
+      name: string
+      mediaType: "image/webp"
+      url: string
+    }
 
 export type PublicSessionPart =
   | {
@@ -7518,6 +8337,16 @@ export type PublicSessionPart =
       status: "completed" | "error" | "interrupted"
       input: string
       output: string
+      screenshots?: Array<PublicSessionScreenshot>
+    }
+  | {
+      type: "tool"
+      name: "computer"
+      callID: string
+      status: "completed"
+      input: string
+      output: string
+      screenshots?: Array<PublicSessionScreenshot>
     }
   | {
       type: "attachment"
@@ -9647,6 +10476,7 @@ export type QuestionAsked = {
      */
     questions: Array<QuestionInfo>
     tool?: QuestionTool
+    metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
   }
 }
 
@@ -9741,6 +10571,87 @@ export type MemoryLearned = {
     sessionID: string
     entryIDs: Array<string>
     messageID?: string
+  }
+}
+
+export type ConnectRequester = {
+  kind: "agent" | "user" | "workflow"
+  sessionID?: string
+  agent?: string
+}
+
+export type ConnectReviewRequest1 = {
+  id: string
+  to: string
+  requester: ConnectRequester
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "review"
+  target: ConnectTarget
+  security?: boolean
+  since?: string
+}
+
+export type ConnectFixRequest1 = {
+  id: string
+  to: string
+  requester: ConnectRequester
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "fix"
+  run: string
+  findings: Array<string>
+  mode: ConnectFixMode
+}
+
+export type ConnectResult = {
+  state: ConnectResultState
+  verdict?: ConnectVerdict
+  summary: string
+  findings: Array<ConnectFinding>
+  sendsTo?: "this-computer" | "vector-codium" | string | string
+  cached?: boolean
+  cost?: ConnectCost
+  sessions: Array<string>
+  notes: Array<string>
+  refusal?: ConnectRefusalCode
+  target?: ConnectTarget
+  head?: string
+  base?: string
+}
+
+export type ConnectRun = {
+  id: string
+  request: ConnectRequest
+  status: ConnectRunStatus
+  progress?: ConnectProgress
+  result?: ConnectResult
+  time: {
+    created: number
+    started?: number
+    ended?: number
+  }
+}
+
+export type ConnectRunUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "connect.run.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    sessionID?: string
+    run: ConnectRun
   }
 }
 
@@ -10870,6 +11781,7 @@ export type EventQuestionAsked = {
      */
     questions: Array<QuestionInfo>
     tool?: QuestionTool
+    metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
   }
 }
 
@@ -10889,6 +11801,15 @@ export type EventQuestionRejected = {
   properties: {
     sessionID: string
     requestID: string
+  }
+}
+
+export type EventComputerState = {
+  id: string
+  type: "computer.state"
+  properties: {
+    sessionID: string
+    state: ComputerState2
   }
 }
 
@@ -10938,6 +11859,40 @@ export type EventMemoryLearned = {
     sessionID: string
     entryIDs: Array<string>
     messageID?: string
+  }
+}
+
+export type EventConnectRunUpdated = {
+  id: string
+  type: "connect.run.updated"
+  properties: {
+    sessionID?: string
+    run: {
+      id: string
+      request: ConnectRequest
+      status: ConnectRunStatus
+      progress?: ConnectProgress
+      result?: {
+        state: ConnectResultState
+        verdict?: ConnectVerdict
+        summary: string
+        findings: Array<ConnectFinding>
+        sendsTo?: "this-computer" | "vector-codium" | string | string
+        cached?: boolean
+        cost?: ConnectCost
+        sessions: Array<string>
+        notes: Array<string>
+        refusal?: ConnectRefusalCode
+        target?: ConnectTarget
+        head?: string
+        base?: string
+      }
+      time: {
+        created: number
+        started?: number
+        ended?: number
+      }
+    }
   }
 }
 
@@ -11558,6 +12513,79 @@ export type EventSubscribeResponses = {
 }
 
 export type EventSubscribeResponse = EventSubscribeResponses[keyof EventSubscribeResponses]
+
+export type ComputerProtectedPathsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/computer/protected-paths"
+}
+
+export type ComputerProtectedPathsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type ComputerProtectedPathsError = ComputerProtectedPathsErrors[keyof ComputerProtectedPathsErrors]
+
+export type ComputerProtectedPathsResponses = {
+  /**
+   * ComputerProtection.Result
+   */
+  200: ComputerProtectionResult
+}
+
+export type ComputerProtectedPathsResponse = ComputerProtectedPathsResponses[keyof ComputerProtectedPathsResponses]
+
+export type ComputerPruneScreenshotsData = {
+  body?: ComputerPruneInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/computer/screenshots/prune"
+}
+
+export type ComputerPruneScreenshotsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type ComputerPruneScreenshotsError = ComputerPruneScreenshotsErrors[keyof ComputerPruneScreenshotsErrors]
+
+export type ComputerPruneScreenshotsResponses = {
+  /**
+   * ComputerPrune.Result
+   */
+  200: ComputerPruneResult
+}
+
+export type ComputerPruneScreenshotsResponse =
+  ComputerPruneScreenshotsResponses[keyof ComputerPruneScreenshotsResponses]
 
 export type ConfigGetData = {
   body?: never
@@ -16923,6 +17951,437 @@ export type MemoryResearchSourceResponses = {
 
 export type MemoryResearchSourceResponse = MemoryResearchSourceResponses[keyof MemoryResearchSourceResponses]
 
+export type ConnectListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect"
+}
+
+export type ConnectListErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectListError = ConnectListErrors[keyof ConnectListErrors]
+
+export type ConnectListResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    id: string
+    kind: ConnectKind
+    title: string
+    summary: string
+    owner: ConnectOwner
+    place: ConnectPlace
+    sendsTo?: "this-computer" | "vector-codium" | string | string
+    state: ConnectState
+    reason?: string
+    reach: ConnectReach
+    actions?: Array<ConnectAction>
+    activity?: ConnectActivity
+  }>
+}
+
+export type ConnectListResponse = ConnectListResponses[keyof ConnectListResponses]
+
+export type ConnectRunsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect/runs"
+}
+
+export type ConnectRunsErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectRunsError = ConnectRunsErrors[keyof ConnectRunsErrors]
+
+export type ConnectRunsResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }>
+}
+
+export type ConnectRunsResponse = ConnectRunsResponses[keyof ConnectRunsResponses]
+
+export type ConnectGetData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect/runs/{runID}"
+}
+
+export type ConnectGetErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectGetError = ConnectGetErrors[keyof ConnectGetErrors]
+
+export type ConnectGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectGetResponse = ConnectGetResponses[keyof ConnectGetResponses]
+
+export type ConnectReviewData = {
+  body?: ConnectReviewInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/connect"
+}
+
+export type ConnectReviewErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectReviewError = ConnectReviewErrors[keyof ConnectReviewErrors]
+
+export type ConnectReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectReviewResponse = ConnectReviewResponses[keyof ConnectReviewResponses]
+
+export type ConnectDirectoryReviewData = {
+  body?: ConnectDirectoryReviewInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/connect/review"
+}
+
+export type ConnectDirectoryReviewErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectDirectoryReviewError = ConnectDirectoryReviewErrors[keyof ConnectDirectoryReviewErrors]
+
+export type ConnectDirectoryReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectDirectoryReviewResponse = ConnectDirectoryReviewResponses[keyof ConnectDirectoryReviewResponses]
+
+export type ConnectCancelData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect/runs/{runID}/cancel"
+}
+
+export type ConnectCancelErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectCancelError = ConnectCancelErrors[keyof ConnectCancelErrors]
+
+export type ConnectCancelResponses = {
+  /**
+   * Success
+   */
+  200: boolean
+}
+
+export type ConnectCancelResponse = ConnectCancelResponses[keyof ConnectCancelResponses]
+
+export type ConnectRegisterData = {
+  body?: ConnectRegisterInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/connect/findings"
+}
+
+export type ConnectRegisterErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectRegisterError = ConnectRegisterErrors[keyof ConnectRegisterErrors]
+
+export type ConnectRegisterResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectRegisterResponse = ConnectRegisterResponses[keyof ConnectRegisterResponses]
+
+export type ConnectDismissData = {
+  body?: ConnectDismissInput
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/connect/runs/{runID}/dismiss"
+}
+
+export type ConnectDismissErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectDismissError = ConnectDismissErrors[keyof ConnectDismissErrors]
+
+export type ConnectDismissResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectDismissResponse = ConnectDismissResponses[keyof ConnectDismissResponses]
+
 export type ProjectListData = {
   body?: never
   path?: never
@@ -17514,6 +18973,312 @@ export type QuestionRejectResponses = {
 
 export type QuestionRejectResponse = QuestionRejectResponses[keyof QuestionRejectResponses]
 
+export type ReviewTargetData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/target"
+}
+
+export type ReviewTargetErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewTargetError = ReviewTargetErrors[keyof ReviewTargetErrors]
+
+export type ReviewTargetResponses = {
+  /**
+   * ReviewRun.Target
+   */
+  200: ReviewRunTarget
+}
+
+export type ReviewTargetResponse = ReviewTargetResponses[keyof ReviewTargetResponses]
+
+export type ReviewListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: string
+  }
+  url: "/experimental/session/{sessionID}/review"
+}
+
+export type ReviewListErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewListError = ReviewListErrors[keyof ReviewListErrors]
+
+export type ReviewListResponses = {
+  /**
+   * ReviewRun.List
+   */
+  200: ReviewRunList
+}
+
+export type ReviewListResponse = ReviewListResponses[keyof ReviewListResponses]
+
+export type ReviewStartData = {
+  body?: ReviewRunStart
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review"
+}
+
+export type ReviewStartErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewStartError = ReviewStartErrors[keyof ReviewStartErrors]
+
+export type ReviewStartResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewStartResponse = ReviewStartResponses[keyof ReviewStartResponses]
+
+export type ReviewGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/{runID}"
+}
+
+export type ReviewGetErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewGetError = ReviewGetErrors[keyof ReviewGetErrors]
+
+export type ReviewGetResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewGetResponse = ReviewGetResponses[keyof ReviewGetResponses]
+
+export type ReviewStopData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/{runID}/stop"
+}
+
+export type ReviewStopErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewStopError = ReviewStopErrors[keyof ReviewStopErrors]
+
+export type ReviewStopResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewStopResponse = ReviewStopResponses[keyof ReviewStopResponses]
+
+export type ReviewMemoryInspectData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    offset?: string
+    limit?: string
+  }
+  url: "/experimental/review-memory"
+}
+
+export type ReviewMemoryInspectErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryInspectError = ReviewMemoryInspectErrors[keyof ReviewMemoryInspectErrors]
+
+export type ReviewMemoryInspectResponses = {
+  /**
+   * ReviewMemoryControl.Inspect
+   */
+  200: ReviewMemoryControlInspect
+}
+
+export type ReviewMemoryInspectResponse = ReviewMemoryInspectResponses[keyof ReviewMemoryInspectResponses]
+
+export type ReviewMemoryPrepareData = {
+  body?: ReviewMemoryControlPrepare
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/review-memory/prepare"
+}
+
+export type ReviewMemoryPrepareErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryPrepareError = ReviewMemoryPrepareErrors[keyof ReviewMemoryPrepareErrors]
+
+export type ReviewMemoryPrepareResponses = {
+  /**
+   * ReviewMemoryControl.Preview
+   */
+  200: ReviewMemoryControlPreview
+}
+
+export type ReviewMemoryPrepareResponse = ReviewMemoryPrepareResponses[keyof ReviewMemoryPrepareResponses]
+
+export type ReviewMemoryConfirmData = {
+  body?: ReviewMemoryControlConfirmation
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/review-memory/confirm"
+}
+
+export type ReviewMemoryConfirmErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryConfirmError = ReviewMemoryConfirmErrors[keyof ReviewMemoryConfirmErrors]
+
+export type ReviewMemoryConfirmResponses = {
+  /**
+   * ReviewMemoryControl.ConfirmationResult
+   */
+  200: ReviewMemoryControlConfirmationResult
+}
+
+export type ReviewMemoryConfirmResponse = ReviewMemoryConfirmResponses[keyof ReviewMemoryConfirmResponses]
+
+export type ReviewMemoryDiscardData = {
+  body?: never
+  path: {
+    previewId: ReviewMemoryControlPreviewId
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/review-memory/previews/{previewId}"
+}
+
+export type ReviewMemoryDiscardErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryDiscardError = ReviewMemoryDiscardErrors[keyof ReviewMemoryDiscardErrors]
+
+export type ReviewMemoryDiscardResponses = {
+  /**
+   * Success
+   */
+  200: boolean
+}
+
+export type ReviewMemoryDiscardResponse = ReviewMemoryDiscardResponses[keyof ReviewMemoryDiscardResponses]
+
 export type PermissionListData = {
   body?: never
   path?: never
@@ -17961,9 +19726,9 @@ export type SessionDeleteErrors = {
    */
   404: NotFoundError
   /**
-   * PublicShareRemovalError
+   * PublicShareRemovalError | SessionBusyError
    */
-  409: PublicShareRemovalError
+  409: PublicShareRemovalError | SessionBusyError
 }
 
 export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
@@ -18625,6 +20390,7 @@ export type SessionSharePreviewData = {
   query?: {
     directory?: string
     workspace?: string
+    includeScreenshots?: "true" | "false"
   }
   url: "/session/{sessionID}/share/preview"
 }
@@ -19908,9 +21674,9 @@ export type ExperimentalWorkspaceRemoveErrors = {
    */
   403: ForbiddenError
   /**
-   * PublicShareRemovalError
+   * PublicShareRemovalError | SessionBusyError
    */
-  409: PublicShareRemovalError
+  409: PublicShareRemovalError | SessionBusyError
 }
 
 export type ExperimentalWorkspaceRemoveError =
@@ -20201,7 +21967,9 @@ export type ServerSessionSessionSharePreviewData = {
   path: {
     sessionID: string
   }
-  query?: never
+  query?: {
+    includeScreenshots?: "true" | "false"
+  }
   url: "/api/session/{sessionID}/share/preview"
 }
 
@@ -20558,7 +22326,7 @@ export type V2SessionResumeFreeModelsErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionResumeFreeModelsError = V2SessionResumeFreeModelsErrors[keyof V2SessionResumeFreeModelsErrors]
@@ -20783,7 +22551,7 @@ export type V2SessionRevertStageErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionRevertStageError = V2SessionRevertStageErrors[keyof V2SessionRevertStageErrors]
@@ -20828,7 +22596,7 @@ export type V2SessionRevertClearErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionRevertClearError = V2SessionRevertClearErrors[keyof V2SessionRevertClearErrors]
@@ -20910,7 +22678,7 @@ export type V2SessionContextErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionContextError = V2SessionContextErrors[keyof V2SessionContextErrors]
@@ -21130,7 +22898,7 @@ export type V2SessionMessagesErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionMessagesError = V2SessionMessagesErrors[keyof V2SessionMessagesErrors]

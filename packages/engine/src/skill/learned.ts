@@ -208,12 +208,16 @@ const layer = Layer.effect(
         typed: false,
         sessionIDs: ready.sessions,
       }).pipe(
+        Effect.catchTag("PostingRefused", (error) =>
+          Effect.succeed({ type: "refused" as const, reason: "lineage", message: error.message }),
+        ),
         Effect.provideService(Instruction.Service, instruction),
         Effect.provideService(Session.Service, sessions),
         Effect.provideService(Git.Service, git),
         Effect.provideService(Brain.Service, brain),
         Effect.provideService(BrainKnowledge.Service, knowledge),
       )
+      if ("type" in checked) return checked
       if (checked.status !== "clean")
         return {
           type: "refused" as const,
