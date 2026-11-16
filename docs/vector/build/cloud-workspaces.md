@@ -681,3 +681,11 @@ Local evidence (merge tree before the commit, Bun 1.3.14, through the workload l
 - Hosted API typecheck (`bun typecheck --project ../../tsconfig.json` from `packages/engine`) clean; full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
 
 Follow-ups: the lead pushes, then dispatches `test.yml` (or opens the draft PR) for D32 and records its `unit (linux)` result in "Evidence scope"; D9 and D34 are unchanged.
+
+### workspaces-finish lane: merged main after #33 (2026-11-16)
+
+PR #33 merged into `main` as `b362fdf6`. `origin/main` is merged into `workspaces-finish` at `098b5a1c` with `--no-ff` (merge commit `028787f8`). It merged cleanly: since the merge base `0f034957`, `main` changed 20 files (its round-2 CI and review fixes) and this branch 19, and no file changed on both sides. No generated file changed on either side, so nothing was regenerated. The D33 checks still hold on the merge: `grep -c '^VECTOR_WORKSPACES_' .env.example` returns 4, `grep -c "stuck past the revocation mark" test/account-delete.test.ts` returns 1, and `vector-workspaces.yml` keeps `push: branches: [main]`.
+
+Local evidence (Bun 1.3.14, through the workload lock): `test/api-module-loading.test.ts` 2 pass, 0 fail (`main` changed it and this lane changed `api/_lib/codium-erase.ts`); full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
+
+Open decisions for the owner or lead: D9 (test (a) inside the P5 describe) and D34 (CN-19's proxy route scope) stay open. D33 has been applied and needs no further action. D32 is met by the pull request's own `test.yml` run on this head, whose `unit (linux)` result goes in "Evidence scope" once it finishes.
