@@ -730,17 +730,38 @@ jobs:
         env:
           WINDOWS_PROTOCOL: ${{ needs.plan.outputs.windows-protocol }}
         run: |
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS="$(bun --no-env-file --eval 'import { WINDOWS_NATIVE_CHECKS, WINDOWS_NATIVE_REASONS, WINDOWS_NATIVE_STAGES, WINDOWS_NATIVE_CODES } from "./scripts/computer-helper-selftest-windows.ts"; process.stdout.write(JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged, reasons: WINDOWS_NATIVE_REASONS, stages: WINDOWS_NATIVE_STAGES, codes: WINDOWS_NATIVE_CODES }))')" || VECTOR_WINDOWS_NATIVE_DIAGNOSTICS=""
+          export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS
           node --input-type=module <<'NODE'
           import { readdirSync, readFileSync, appendFileSync } from "node:fs"
           import path from "node:path"
+          // Stages print only from the closed native vocabulary. If it cannot load, rows and counts still print, without stages.
+          const native = (() => {
+            try {
+              const value = JSON.parse(process.env.VECTOR_WINDOWS_NATIVE_DIAGNOSTICS)
+              return { checks: new Set(value.checks.map(name => "privileged." + name)), reasons: new Set(value.reasons), stages: new Set(value.stages), codes: new Set(value.codes) }
+            } catch {
+              return undefined
+            }
+          })()
           if (process.env.WINDOWS_PROTOCOL !== "true")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\nSKIPPED: W2 has not supplied Windows protocol/conformance/parent-death behavior.\n")
+          if (!native) {
+            const unavailable = "\nStage diagnostics unavailable: the closed Windows native vocabulary did not load.\n"
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, unavailable)
+            process.stdout.write(unavailable)
+          }
           for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-.*\.json$/.test(name))) {
             const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
             const summary = "\n" + name + ": " + counts + "\n" + report.checks
               .filter(check => check.status === "skipped" || check.status === "failed")
-              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+              .map(check => {
+                const diagnostic = native && name === "computer-win32-privileged.json" && check.status === "failed"
+                  && native.checks.has(check.name) && native.reasons.has(check.reason) && native.stages.has(check.stage) && native.codes.has(check.nativeCode)
+                  ? " [stage=" + check.stage + ", nativeCode=" + check.nativeCode + "]" : ""
+                return "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + diagnostic + "\n"
+              }).join("")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
             process.stdout.write(summary)
           }
@@ -947,17 +968,38 @@ jobs:
         env:
           WINDOWS_PROTOCOL: ${{ needs.plan.outputs.windows-protocol }}
         run: |
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS="$(bun --no-env-file --eval 'import { WINDOWS_NATIVE_CHECKS, WINDOWS_NATIVE_REASONS, WINDOWS_NATIVE_STAGES, WINDOWS_NATIVE_CODES } from "./scripts/computer-helper-selftest-windows.ts"; process.stdout.write(JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged, reasons: WINDOWS_NATIVE_REASONS, stages: WINDOWS_NATIVE_STAGES, codes: WINDOWS_NATIVE_CODES }))')" || VECTOR_WINDOWS_NATIVE_DIAGNOSTICS=""
+          export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS
           node --input-type=module <<'NODE'
           import { readdirSync, readFileSync, appendFileSync } from "node:fs"
           import path from "node:path"
+          // Stages print only from the closed native vocabulary. If it cannot load, rows and counts still print, without stages.
+          const native = (() => {
+            try {
+              const value = JSON.parse(process.env.VECTOR_WINDOWS_NATIVE_DIAGNOSTICS)
+              return { checks: new Set(value.checks.map(name => "privileged." + name)), reasons: new Set(value.reasons), stages: new Set(value.stages), codes: new Set(value.codes) }
+            } catch {
+              return undefined
+            }
+          })()
           if (process.env.WINDOWS_PROTOCOL !== "true")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\nSKIPPED: W2 has not supplied ARM64 protocol/conformance/parent-death behavior.\n")
+          if (!native) {
+            const unavailable = "\nStage diagnostics unavailable: the closed Windows native vocabulary did not load.\n"
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, unavailable)
+            process.stdout.write(unavailable)
+          }
           for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-arm64.*\.json$/.test(name))) {
             const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
             const summary = "\n" + name + ": " + counts + "\n" + report.checks
               .filter(check => check.status === "skipped" || check.status === "failed")
-              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+              .map(check => {
+                const diagnostic = native && name === "computer-win32-arm64-privileged.json" && check.status === "failed"
+                  && native.checks.has(check.name) && native.reasons.has(check.reason) && native.stages.has(check.stage) && native.codes.has(check.nativeCode)
+                  ? " [stage=" + check.stage + ", nativeCode=" + check.nativeCode + "]" : ""
+                return "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + diagnostic + "\n"
+              }).join("")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
             process.stdout.write(summary)
           }
