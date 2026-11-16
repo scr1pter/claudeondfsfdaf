@@ -26,6 +26,11 @@ import {
   computerSmokeMoveProbe,
   parseComputerSmokeDriverResultFrame,
   COMPUTER_SMOKE_ASAR_MARK,
+  COMPUTER_SMOKE_STOP_EFFECT_MARK,
+  COMPUTER_SMOKE_STOP_EFFECT_LISTENER,
+  COMPUTER_SMOKE_STOP_EFFECT_PROBE,
+  computerSmokeStopEffect,
+  parseComputerSmokeStopEffect,
   COMPUTER_SMOKE_PROPERTIES_MARK,
   COMPUTER_SMOKE_PROPERTY_STEPS,
   COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK,
@@ -665,6 +670,168 @@ test("Windows DOWN diagnostics retain the original receipt and transport boundar
   expect(watcher.indexOf("(void)deadlines_.retire(*ticket); ticket.reset();")).toBeLessThan(
     watcher.lastIndexOf("GetTickCount64()<deadline"),
   )
+})
+
+test("a failed Windows UP confirmation names only its own phase and keeps its call, budget and reason", async () => {
+  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+  const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
+  const up = driver.slice(driver.indexOf("if (backend.confirm_down)"), driver.indexOf("stage = Stage::cleanup;"))
+  expect(up.match(/guardian->retire\(\*ticket\)/g)).toHaveLength(1)
+  expect(up.match(/guardian->observed\(\*ticket, false, 300\)/g)).toHaveLength(1)
+  expect(up.match(/guardian_diagnostic->phase\.load\(std::memory_order_relaxed\)/g)).toHaveLength(1)
+  const order = [
+    "stage = Stage::observe_up; confirmed_up = guardian->observed(*ticket, false, 300);",
+    "if (!confirmed_up) {",
+    "overlay_driver_guardian_stage(guardian_diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;",
+    'require(confirmed_up, L"cleanup_failed");',
+  ].map((step) => up.indexOf(step))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((left, right) => left - right))
+  expect(up).not.toMatch(/drain\(|GetTickCount|SendInput|Sleep|wait_for|input_post_failed/)
+  // The failure path still retires and drains exactly as before.
+  expect(driver).toContain(
+    "} catch (...) { guardian->retire(*ticket, !attempted); (void)guardian->drain(300); throw; }",
+  )
+})
+
+test("Windows Stop effect receipts carry only closed booleans and round-trip every built record", () => {
+  const line = (value: unknown) => COMPUTER_SMOKE_STOP_EFFECT_MARK + JSON.stringify(value)
+  const delivered = { protocol: 1, cancel: true, page: true, down: true, up: true, click: true }
+  const unread = { protocol: 1, cancel: false, page: false, down: false, up: false, click: false }
+  expect(parseComputerSmokeStopEffect(line(delivered))).toEqual(delivered)
+  expect(parseComputerSmokeStopEffect(line(unread))).toEqual(unread)
+  for (const patch of [
+    { protocol: 2 },
+    { cancel: "PRIVATE" },
+    { page: 1 },
+    { down: null },
+    { up: "true" },
+    { click: 0 },
+    { page: false, down: true },
+    { page: false, up: true },
+    { page: false, click: true },
+    { reason: "PRIVATE" },
+    { stage: "observe-up" },
+  ])
+    expect(() => parseComputerSmokeStopEffect(line({ ...delivered, ...patch }))).toThrow()
+  for (const missing of Object.keys(delivered))
+    expect(() =>
+      parseComputerSmokeStopEffect(
+        line(Object.fromEntries(Object.entries(delivered).filter(([key]) => key !== missing))),
+      ),
+    ).toThrow()
+  expect(() => parseComputerSmokeStopEffect(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(delivered))).toThrow()
+  expect(() => parseComputerSmokeStopEffect(line(delivered) + " ".repeat(256))).toThrow()
+  expect(computerSmokeStopEffect(true, [true, false, false])).toEqual({
+    protocol: 1,
+    cancel: true,
+    page: true,
+    down: true,
+    up: false,
+    click: false,
+  })
+  // Only the probe's three booleans count as a read page.
+  for (const page of [
+    null,
+    undefined,
+    [],
+    [true, true],
+    [true, true, true, true],
+    [1, 1, 1],
+    ["true", false, false],
+    {},
+  ])
+    expect(computerSmokeStopEffect(false, page)).toEqual(unread)
+  for (const cancel of [false, true])
+    for (const page of [null, [false, false, false], [true, false, false], [true, true, false], [true, true, true]]) {
+      const effect = computerSmokeStopEffect(cancel, page)
+      expect(parseComputerSmokeStopEffect(line(effect))).toEqual(effect)
+    }
+})
+
+test("the Stop effect listener records only trusted left-button Stop presses and releases", () => {
+  const listeners = new Map<string, ((event: unknown) => void)[]>()
+  const page: Record<string, unknown> = {}
+  const context = {
+    window: page,
+    document: {
+      addEventListener: (type: string, listener: (event: unknown) => void, options: unknown) => {
+        expect(JSON.stringify(options)).toBe('{"capture":true}')
+        listeners.set(type, [...(listeners.get(type) ?? []), listener])
+      },
+    },
+  }
+  const probe = () => {
+    const value: unknown = new Script(COMPUTER_SMOKE_STOP_EFFECT_PROBE).runInNewContext(context)
+    return Array.isArray(value) ? Array.from(value) : value
+  }
+  // Before installation the probe reports nothing, so the record is an unread page.
+  expect(probe()).toBeNull()
+  new Script(COMPUTER_SMOKE_STOP_EFFECT_LISTENER).runInNewContext(context)
+  expect([...listeners.keys()]).toEqual(["mousedown", "mouseup"])
+  const stop = { closest: (selector: string) => (selector === "button[data-action=stop]" ? {} : null) }
+  const dispatch = (type: string, event: unknown) => listeners.get(type)?.forEach((listener) => listener(event))
+  for (const [type, event] of [
+    ["mousedown", { isTrusted: false, button: 0, target: stop }],
+    ["mousedown", { isTrusted: true, button: 2, target: stop }],
+    ["mousedown", { isTrusted: true, button: 0, target: { closest: () => null } }],
+    ["mousedown", { isTrusted: true, button: 0, target: null }],
+    ["mouseup", { isTrusted: false, button: 0, target: stop }],
+    ["mouseup", { isTrusted: true, button: 0, target: {} }],
+    ["click", { isTrusted: true, button: 0, target: stop }],
+  ] as const)
+    dispatch(type, event)
+  expect(probe()).toEqual([false, false, false])
+  dispatch("mousedown", { isTrusted: true, button: 0, target: stop })
+  expect(probe()).toEqual([true, false, false])
+  dispatch("mouseup", { isTrusted: true, button: 0, target: stop })
+  expect(probe()).toEqual([true, true, false])
+  // The click flag belongs to the unchanged pass-condition listener; the probe only reads it.
+  page.__computerSmokeTrustedStop = true
+  expect(computerSmokeStopEffect(false, probe())).toEqual({
+    protocol: 1,
+    cancel: false,
+    page: true,
+    down: true,
+    up: true,
+    click: true,
+  })
+})
+
+test("only a failed Windows Stop prints its effect, once, inside the native proof step", async () => {
+  const scripts = fileURLToPath(new URL("./", import.meta.url))
+  const [electron, harness] = await Promise.all([
+    readFile(path.join(scripts, "computer-overlay-smoke-electron.ts"), "utf8"),
+    readFile(path.join(scripts, "computer-overlay-smoke.ts"), "utf8"),
+  ])
+  // The pass condition is unchanged: the same click listener and the same final wait.
+  expect(electron).toContain(
+    `"window.__computerSmokeTrustedStop = false; document.addEventListener('click', event => { if (event.isTrusted && event.button === 0 && event.target?.closest('button[data-action=stop]')) window.__computerSmokeTrustedStop = true }, {capture:true})"`,
+  )
+  expect(electron).toContain(
+    '(await banner.webContents.executeJavaScript("window.__computerSmokeTrustedStop === true")) === true',
+  )
+  const effect = electron.indexOf('if (!proof.stop.ok && platform === "win32") {')
+  expect(effect).toBeGreaterThan(electron.indexOf('controllerStep("native-proof")'))
+  expect(effect).toBeLessThan(electron.indexOf("require(proof.stop.ok)"))
+  expect(electron.match(/COMPUTER_SMOKE_STOP_EFFECT_MARK \+/g)).toHaveLength(1)
+  expect(electron.match(/executeJavaScript\(COMPUTER_SMOKE_STOP_EFFECT_LISTENER\)/g)).toHaveLength(1)
+  const branch = harness.slice(
+    harness.indexOf("line.startsWith(COMPUTER_SMOKE_STOP_EFFECT_MARK)"),
+    harness.indexOf("line.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK)"),
+  )
+  for (const guard of [
+    "!stage ||",
+    'process.platform !== "win32" ||',
+    'lastPhase !== "controller" ||',
+    'lastController !== "native-proof" ||',
+    "streamState.childFailure ||",
+    "streamState.exception ||",
+    "parseComputerSmokeStopEffect(line)",
+  ])
+    expect(branch).toContain(guard)
+  expect(branch).toMatch(/\|\|\s+stopEffect\s+\)/)
+  expect(harness).toContain("pendingLine.startsWith(COMPUTER_SMOKE_STOP_EFFECT_MARK)")
 })
 
 test("isolated Windows capture keeps resource setup behind one admitted native deadline", async () => {
