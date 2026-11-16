@@ -201,9 +201,9 @@ Both journeys exist and pass in the lane at `50b4f82c2`:
 
 Remaining:
 1. The whole lane green, including the sandbox matrix. The matrix is V16's runner proof.
-2. Add the V27 cases above to the journeys, plus the V24 v3 flip.
+2. Add the V27 cases above to the journeys, plus the V24 v3 flip. Engine journey: built in BT08a on `brain-transport` (6 cases: a Codium follow-up that continues its issue's saved conversation, own key with every save and restore seam present, the P6 scan widened and the generated file's workflow version checked; progress "BT08a"). The server journey's V27/B08 cases are BT08b.
 3. `test.yml`, `typecheck.yml` and `verify.yml` green at the exact PR head.
-4. Update the progress doc. Its header still says "Work only on branch `vector-at-mention`" (`progress.md:3`), so name `v2-vector`. Update the PR body to match.
+4. Update the progress doc. Done: its header names `brain-transport` since BT01. Update the PR body to match.
 
 ### What waits for Codium or A59 on v2
 

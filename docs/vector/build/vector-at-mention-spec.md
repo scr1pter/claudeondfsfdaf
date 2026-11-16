@@ -369,7 +369,7 @@ Tests: `github-oidc.test.ts` › "runner_environment is recorded" (V08); `cloud-
 
 Tests:
 - `packages/engine/test/cli/github.evidence.test.ts` › "Codium-only and mixed cost lines" (V19)
-- `packages/engine/test/cli/github.agents-journey.test.ts` › "captured logs and posts pass the P6 scan" (V30)
+- `packages/engine/test/cli/github.agents-journey.test.ts` › every case (the five "GitHub workflow journey <scenario> preserves route, run and publication authority" cases and "… follow-up continues its issue thread's saved conversation and posts nothing restored"): the route's lines, the agent and publish lines, posts, pull bodies, notices and both file-command files pass the P6 scan (V30; the test name was never a literal title, amended in BT08a)
 - `cloud-agents-mint-api.test.ts` › "responses pass the P6/P1 scan" (V12)
 - `github.publish.test.ts` › "refusal comments name no plan or billing state" (V21)
 
@@ -420,7 +420,7 @@ Test: `packages/engine/test/cli/github.bundle.test.ts` › "stop-code table, inc
 ### Own key and the Codium seam
 
 **INV-K1. The own-key path needs nothing from Codium.** An own-key run makes zero calls to `/api/cloud-agents/*` and never sends a model request to Codium (`/api/model-plans/chat`). Its vectordev.ai traffic is today's: the account check (`/api/account/cli-verify`) and the catalog listings the CLI already reads.
-Tests: `packages/engine/test/cli/github.cloud.test.ts` › "own key calls no cloud-agents endpoint" (V15); `github.bundle.test.ts` › "own-key agent phase sends no heartbeat or settle" (V18); `github.agents-journey.test.ts` › "own-key journey" (V30)
+Tests: `packages/engine/test/cli/github.cloud.test.ts` › "own key calls no cloud-agents endpoint" (V15); `github.bundle.test.ts` › "own-key agent phase sends no heartbeat or settle" (V18); `github.agents-journey.test.ts` › "GitHub workflow journey own-key preserves route, run and publication authority" (V30; neither the loopback vectordev.ai nor the cloud client sees an `/api/cloud-agents/*` request and the fake gateway none, with a forced session proof, the job's ids, recording export and import seams, a listed session artifact and a dying share present; amended in BT08a)
 
 **INV-K2. The free path has no paid gate on the client.** No CLI, desktop or app code decides own-key availability from plan state or perk listing.
 Test: `packages/app/src/features/github-agents/agents-model.test.ts` › "own-key setup and Run in GitHub never read plan state or listing" (V25)
@@ -2075,7 +2075,8 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   3. `github run --phase agent`, given the secret channel directly (the sandbox's uid switch is proven by V16's probe), with a fake model provider in a temporary repository;
   4. `github publish` against a fake GitHub and a bare remote.
   - Covered for: Codium success, a Codium stop code → draft, at-once → one comment, a stranger refused, and own key (INV-K1: the fake vectordev.ai sees no `/api/cloud-agents/*` and no `/api/model-plans/chat` request).
-  - Every post and the captured stdout pass the P6 scan, including the billing words `dispute`, `fraud`, `past_due` and `payment_failed`.
+  - Also covered (BT08a; deviations, "2026-11-16 BT08a"): a Codium follow-up on the same issue thread continues the conversation its first run saved (V27): run 1 saves and attests `session.vsa`, the fake GitHub lists and serves it (re-sealed under a session id the test database never saw) as `vector-session-<thread>`, and run 2's first model request carries run 1's history while nothing restored is logged or posted. Every job and step of the generated file carries `VECTOR_WORKFLOW_VERSION` equal to `GITHUB_WORKFLOW_VERSION`, the CLI asks no reinstall for its mint and agent steps, and mint receives that version (2.11.4).
+  - Every post and the captured stdout pass the P6 scan, including the billing words `dispute`, `fraud`, `past_due` and `payment_failed`. As built (BT08a), the scan covers the route's lines, the agent and publish lines, posts, pull bodies, cloud notices and both file-command files, and matches those four words anywhere in the text, `payment` and `closing` as words, the plan ids and labels and the fake gateway's words; on Codium also an amount and a percentage. The phase's fixed `console.log` progress lines (`github.run-helpers.ts`) go straight to the process's stdout and are not captured or scanned.
 - **Done:** both journeys pass in the V00 lane.
 - **CI-only:** the engine journey, if it spawns the CLI.
 
