@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show
 import { createStore } from "solid-js/store"
 import { githubApi, GithubDeviceSignIn } from "@/components/github-connect"
 import { OffInLocal } from "@/features/local/off-in-local"
+import { LocalFixSlot, type LocalFixRender } from "@/features/vectorscope/local-fix-slot"
 import { agentsApi } from "@/features/github-agents/agents-model"
 import { GithubAgentsSetup } from "@/features/github-agents/setup-card"
 import {
@@ -667,6 +668,9 @@ export function PullRequests(props: {
   onChanges?: () => Promise<WorkingTreeChanges | undefined>
   // The engine-owned local runner is separate from the PR review adapter.
   localReview?: () => JSX.Element
+  // VS-12d (SF-10b): local fixes under a pull request's review result, passed only when the engine has the owner fix
+  // API and the global VectorScope setting is on (localFixesMounted); without it this panel renders as before.
+  localFix?: LocalFixRender
   factoryLocal?: boolean
   // The model automatic reviews would run on, with its provider's key variables (see workflowModel), and the model
   // evidence warnings when the open project opted into them ("modelEvidence": "warn", VS-07).
@@ -736,6 +740,13 @@ export function PullRequests(props: {
     return outcome ? findingGroups(outcome) : []
   }
   const dismissedIds = () => new Set(Object.keys(dismissed()))
+  // Findings whose fix "Apply" wrote (or may have written) into the user's checkout; a local fix refuses while any is.
+  const appliedIds = () =>
+    new Set(
+      Object.entries(applied())
+        .filter((entry) => entry[1] !== "changed")
+        .map((entry) => entry[0]),
+    )
   const counts = () =>
     countBySeverity(
       groups().map((group) => ({ ...group, findings: group.findings.filter((finding) => !dismissed()[finding.id]) })),
@@ -1601,6 +1612,14 @@ export function PullRequests(props: {
                 Not reviewed: {skippedText(outcome().skipped)}
               </p>
             </Show>
+
+            <LocalFixSlot
+              pr={subject.pr}
+              render={props.localFix}
+              outcome={outcome}
+              dismissed={dismissedIds}
+              applied={appliedIds}
+            />
 
             <Show when={subject.pr}>
               {(pr) => (

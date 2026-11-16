@@ -2773,6 +2773,7 @@ describe("the abort scope", () => {
     vectorscopeSettings: false,
     vectorscopeRuns: false,
     vectorscopeReviewMemoryControls: false,
+    vectorscopeLocalFixes: false,
     connections: false,
   })
   const stopper = (input: {

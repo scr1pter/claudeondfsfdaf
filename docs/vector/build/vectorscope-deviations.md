@@ -22331,3 +22331,559 @@ lane's progress record for SF-10a.
     `packages/client/src/contract.ts`: `:14-17`.
   - Line numbers in the new and changed files are from the working tree after
     this package.
+
+## 2026-11-16 · VS-12d Desktop fix preview and separate step actions (SF-10b)
+
+The desktop half of VS-12 (`vectorscope-plan.md` VS-12 row `:322`: "app PR
+actions/diff preview. Separate proposal, apply, checks and push states"; "Fix
+proposals and consent" `:214-236`; "the desktop becomes an adapter for …
+presenting proposals; it must not import engine runtime into the renderer"). It
+was built on `scope-finish` at `b6eaf122` (SF-10a) as lane package SF-10b, from
+the SF-10b plan as corrected by its critique. Where a critique point was taken
+in another form or rejected, the reason is under "Critique points". This entry
+is also the lane's progress record for SF-10b.
+
+- **Status.** Built and tested, then committed by the lane's commit gate in
+  two commits: `feat(review): share the fix planner with the desktop`
+  (`9a38e9d9`: core `fix-plan.ts` and its test, engine `review.fix.ts`, the
+  `review-fix.test.ts` import, the model-evidence comment) and `feat(app):
+  preview and apply consented local fixes` (the app, e2e and workflow files
+  and this entry). Before the push the gate re-ran every new and changed test
+  file listed under "Tests run" (same counts, 0 fail), the per-package
+  typechecks and the full TURBO typecheck (27 of 27 tasks). No CI had run on
+  these changes when they were committed (see "CI to dispatch with the
+  commit"). Done also needs `scope-app-validation.yml` and
+  `test.yml` green on `scope-finish`, and `test.yml`'s `test:httpapi` step is
+  red there until the lead merges main (the SF-10a entry says why).
+
+- **The lead's 2026-11-16 ruling** (quoted in full in the SF-07 entry) names
+  SF-10b. SF-10b changes nothing it governs: `git diff --stat` touches no
+  isolation registry, `fix.json` record, `TaskClaims`, owned-path, worktree,
+  executor or spawn file (`task/isolation.ts`, `tool/owned-path.ts`,
+  `worktree/index.ts`, `review/fix.ts`, `review/fix-owner.ts` and every
+  `v2-spawn-review.md` hot spot are unchanged). The desktop starts no process;
+  it reaches the executor only through SF-10a's five owner routes, so every
+  check and push stays behind the executor's owner and single-signaller rules.
+  Nothing seeds the user's files into a fix checkout: the desktop sends a patch
+  and the digests of the files it read, and the engine applies the patch to the
+  head's own files after checking each preimage against the committed blob.
+
+- **Scope.** In `packages/app`, behind the engine capability and the global
+  `experimental.vectorscope` setting, through the generated client only:
+  - under a pull request's review result, the fixes the review offers and one
+    "Prepare a fix checkout" button;
+  - the engine's preview: the full patch, the files, the fix checkout, the
+    repository, the branches, the destination branch and "Commands: none";
+  - four separate step buttons ("Preview apply", "Preview checks", "Preview
+    commit", "Preview push"), each of which asks the engine for that step's
+    exact offer and runs nothing;
+  - an offer card with its own "Approve and …" button, apart from the step
+    buttons, which executes that one offer once;
+  - results (check output escaped), a lost-answer notice with "Check open
+    fixes", and this conversation's open fixes with "Cancel this fix".
+
+  Posting the review to GitHub, suggestions included, approves none of these
+  steps; the panel says so. SF-09's planner moved from the CLI into core so the
+  CLI and the desktop build byte-identical proposals by one rule.
+
+- **What landed** (line numbers from the working tree after this package).
+  - `packages/core/src/review/fix-plan.ts` (new, 283 lines; plain exports, not
+    pinned): the types `FixCandidate` `:15`, `FixLeft` `:25`, `FixCandidates`
+    `:26`, `FixSkipped` `:27`, `FixPlannedFile` `:28`, `FixPlan` `:36`;
+    `fixCandidates` `:45` (its parameter widened to `Pick<ReviewOutcome,
+    "selection" | "strict">`), `planEdits` `:136`, `fixPath` `:212`,
+    `plainBranch` `:221`, and the module-private `sortCandidates`, `UNSHOWN`,
+    `utf8`, `nonOverlapping`, `linesText`, `patchText` and `gitPatch`. Moved
+    from `cli/cmd/review.fix.ts` HEAD `:108-120`, `:330-437` and `:459-598`
+    (keeping `readHeads` `:438-458`) with exactly three changes: Node's
+    `isUtf8` became `utf8` (a non-fatal `TextDecoder` with `ignoreBOM`, and
+    the text counts only if it encodes back to the same bytes, which is Node's
+    rule with the byte order mark kept), and both `Buffer.byteLength` calls
+    became `TextEncoder` byte counts.
+  - `packages/engine/src/cli/cmd/review.fix.ts`: the moved code deleted, the
+    planner imported from core `:12-22`, the local type names renamed
+    (`Candidates` → `FixCandidates`, `Planned` → `FixPlan`, `Left` →
+    `FixLeft`, `Skipped` → `FixSkipped`, `Candidate` → `FixCandidate`); every
+    string, `readHeads`, `person`, `shown`, `commitMessage` and `sha256` stay.
+  - `packages/engine/test/cli/review-fix.test.ts`: `planEdits` is imported from
+    core; no case changed.
+  - `packages/core/test/review/model-evidence.test.ts` `:52-53`: the rationale
+    comment adds that the shared planner and the desktop's fix adapter are left
+    out for the same reason (a comment does not move the digest).
+  - `packages/app/src/features/background-tasks/engine-capabilities.ts` `:25`:
+    `vectorscopeLocalFixes` in `FLAGS` (true only for an exact `true`);
+    `submit.test.ts` adds it to its typed literal.
+  - `packages/app/src/features/vectorscope/local-review.ts`
+    `conversationProblem` `:104` (the placement check, extracted and shared:
+    `missing`, `unverified`, `mismatch`); `localReviewTransport` maps each to
+    its exact old message, so its behaviour and tests are unchanged.
+  - `packages/app/src/features/vectorscope/local-fix.ts` (new, 874 lines, no
+    JSX): `LOCAL_FIX_DWELL_MS` `:26`, the types `:28-84`, `PREPARE_MS` `:89`,
+    `LOCAL_FIX_COPY` `:93`, `localFixCandidates` `:131`, `localFixRequest`
+    `:159`, `LocalFixRefusal` `:205` and `LocalFixLost` `:209`,
+    `localFixTransport` `:230`, `localFixCancel` `:348`, `localFixActions`
+    `:366`, `localFixController` `:431` (`check` `:482`, `prepare` `:513`,
+    `offer` `:574`, `approve` `:595`, `cancel` `:638`, `dispose` `:679`),
+    `sameFix` `:691`, `sameOffer` `:709`, and the presentation helpers
+    `visible` `:750`, `candidateLines` `:761`, `previewLines` `:784`,
+    `offerLines` `:800`, `resultLines` `:838`.
+  - `packages/app/src/features/vectorscope/local-fix-slot.tsx` (new, 42
+    lines): `localFixesEnabled` `:9`, `localFixesMounted` `:17`,
+    `LocalFixRender` `:22`, `LocalFixSlot` `:29` (the mount boundary, kept
+    apart so the layout and the pull request panel load neither the panel nor
+    its controller).
+  - `packages/app/src/features/vectorscope/local-fix-panel.tsx` (new, 415
+    lines):
+    `LocalFixPanel` `:35` (one controller per server, conversation, folder and
+    owner authority, as `LocalReviewPanel`) and `LocalFixView` `:126` (the
+    copy `:177`, with the open-fix limit read from `ReviewFixControl.LIMIT.fixes`
+    `:189`, the constant the engine's `fix-owner.ts:33` limit uses; the patch
+    `<pre>` `:239`, the step buttons `:249-321`, the offer card's Approve
+    `:373`, open fixes `:388`, each fix's Cancel gated by `localFixCancel`
+    `:403-404`; text nodes only).
+  - `packages/app/src/features/pull-requests/pull-requests.tsx` (not pinned):
+    the `localFix` prop `:673`, `appliedIds` `:744` (findings whose "Apply"
+    wrote or may have written into the checkout) and `<LocalFixSlot>` `:1616`
+    after the "Not reviewed" note, before the footer. The posting code is
+    unchanged.
+  - `packages/app/src/pages/layout-new.tsx`: the lazy `LocalFixPanel` `:166`
+    and the `localFix` prop `:6970`, passed only when
+    `localFixesMounted(capabilities().vectorscopeLocalFixes, globalConfig())`.
+  - Guards and configuration: `src/browser-bundle.test.ts` (the five new
+    modules in the walk and no `packages/engine/` module), `tsconfig.json`
+    (`test-browser/vectorscope-fix.test.ts`), `e2e/tsconfig.json`
+    (`./regression/vectorscope-fix.spec.ts`).
+  - E2E (CI only): `e2e/fixtures/vectorscope-fix.html` and `.jsx` (the real
+    view, controller and transport on `createVectorClient({ baseUrl:
+    origin + "/fixture" })`, `?enabled=0`, `?variant=untrusted|uncommitted`,
+    "Close fixture panel" and "Disable fixes") and
+    `e2e/regression/vectorscope-fix.spec.ts` (10 cases, a `page.route` engine).
+  - `.github/workflows/scope-app-validation.yml`: three steps
+    (`local-fix.test.ts`, `local-fix-panel.test.tsx`,
+    `test-browser/vectorscope-fix.test.ts`) and the new spec in the Playwright
+    list; triggers unchanged.
+  - Tests: `packages/core/test/review/fix-plan.test.ts` (new),
+    `src/features/vectorscope/local-fix.test.ts` (new),
+    `src/features/vectorscope/local-fix-panel.test.tsx` (new),
+    `test-browser/vectorscope-fix.test.ts` (new), and
+    `engine-capabilities.test.ts` (+1 block).
+
+- **Decisions.**
+  - _D1 source rule: only the desktop runner's own review of the owner's own
+    pull request, read in place at its exact head._ `localFixCandidates`
+    refuses, in order and with fixed copy: a review of uncommitted changes (it
+    reads working-tree text, which is not in the commit a fix checkout is
+    detached at; SF-10a reached the same conclusion); `authored !== "trusted"`
+    (SF-09 parity: the CLI refuses `--pr`; absent `authored` is refused too);
+    a rebuilt checkout; an outcome that reused an earlier review (`unchanged`)
+    or carried findings from one (`carried > 0`; critique major 2, below); a
+    head that is not 40 or 64 hex or not `pr.headRefOid`; a missing base
+    commit or one of another length; another pull request number; any finding
+    whose "Apply" wrote into the checkout (critique minor 7). Then SF-09's
+    rule through the shared `fixCandidates`: verified, committable inline
+    suggestions, after the dismissed findings are removed (`withoutDismissed`).
+  - _D2 the planner in core, and its byte-identical CLI proof._ Besides the
+    unchanged CLI test, a parity run (`/tmp/vector-v2/scope/sf10b/parity.ts`,
+    the HEAD file copied in beside the real one for the run only, then
+    removed) compared HEAD's `planEdits` with core's over 4,000 seeded random
+    cases (752 of them planned a file; every one had skips): files with
+    invalid UTF-8, a BOM, CR, controls, bidi characters and NULs, unreadable
+    heads, lines and patch fixes, overlaps and bad paths. Every result was
+    identical as JSON (bytes included), and `plainBranch` was identical on 11
+    names. `fixCandidates` changed only its parameter type.
+  - _D3 gating and pin._ No `ReviewConfig` key. The layout passes the prop only
+    when all three hold: `vectorscopeLocalFixes`, global
+    `experimental.vectorscope === true`, and not `agent.vectorscope.disable`
+    (`localFixesMounted`, shared with the panel's `localFixesEnabled`). No
+    pinned file is touched.
+  - _D4 reconnection is cancel-only._ A listed fix this panel did not prepare
+    shows "prepared elsewhere: it can only be cancelled here": its patch was
+    not shown in this panel, and nothing retains code across unmounts
+    (`local-review.ts:36-37`).
+  - _D5 the gesture._ Each step is two clicks, "Preview <step>" then "Approve
+    and <step>". `approve` acts only for `event.isTrusted`, a single
+    activation (`event.detail <= 1`; a keyboard activation is 0), at least
+    `LOCAL_FIX_DWELL_MS` (750 ms) after the offer arrived, and before its
+    `expiresAt`; the button is also rendered disabled for that pause and after
+    expiry ("Read the offer first.", "This offer expired. Preview the step
+    again."). The offer is cleared before the execute is sent, and the execute
+    body is built from four primitives. No chaining and no retry: a lost answer
+    sets `uncertain`, which disables every step until "Check open fixes"
+    reads the list.
+  - _D6 dismissal and unmount._ Dismissing a finding the prepared fix includes
+    disables every step and Approve until the fix is cancelled. Unmounting (the
+    critique's list: Review again, another pull request, Changes, a project
+    switch, merging, closing the panel, and also a reconnect or a settings
+    save, which retire the controller) aborts a running step's request (SF-10a:
+    the engine stops it and spends its offer) and sends one best-effort cancel
+    for the fix this panel prepared. A prepare already sent is not aborted: it
+    runs on its own `AbortSignal.timeout(PREPARE_MS)` (5 minutes), never the
+    panel's signal, so an answer that arrives after unmount still names the
+    fix the engine placed, and the overtaken branch cancels it; so does an
+    unmount that lands while the answer is being compared (`sameFix` awaits a
+    digest). Those cancels are the only requests sent without a click; they
+    remove, never approve. The panel names these triggers, the open-fix limit
+    (`ReviewFixControl.LIMIT.fixes`, "other conversations' included") and that
+    a fix left open is removed when the engine restarts.
+  - _D7 Cancel during a running step is the running fix's only._ The step's
+    own fix shows "Stop and cancel this fix", which aborts the step and then
+    cancels; every other listed fix's Cancel is disabled while the step runs
+    ("A step of the fix prepared here is running. Wait for it, or stop it with
+    that fix's own Cancel."), and `cancel(fixID)` refuses it too
+    (`localFixCancel`, used by the controller, the view and
+    `localFixActions.cancel`), so no Cancel can stop a step it does not name.
+  - _Base is the pull request's base tip (critique minor 6, recorded)._ No
+    client route computes a merge base (the generated `vcs` routes are status,
+    diff, apply, commit, branches and switch), so `base` is `pr.baseRefOid`
+    where the CLI sends the merge base. Two effects: when the base branch has
+    moved past the fork point, the engine's checks note says it did not count
+    other authors (`fix-owner.ts:462-469`), a weaker note than the CLI's; and
+    when that tip is not fetched in the local clone the engine refuses the
+    prepare ("The proposal's base is not a commit in this repository."), and
+    the panel adds "If the base branch's latest commit is not in this clone,
+    fetch it …" to a `stale` prepare refusal. The notes are shown verbatim
+    from the engine either way.
+  - _Every transport call reads the conversation first, `read` included
+    (critique minor 8, taken in another form)._ One rule for all six methods
+    rather than a single check in `localFixRequest`: it costs one session
+    `GET` per file read, and a read can never reach a moved selection (M16).
+  - _Strict decoding both ways._ Outbound bodies are decoded strictly, then
+    copied into fresh arrays; every answer is decoded with `onExcessProperty:
+    "error"`, and an answer that fails is `LocalFixLost` ("could not
+    verify"), so a failed execute decode is uncertain, never shown as done.
+  - _Engine refusals._ A 400 with a known review code shows the engine's
+    message through `visible` (escaped) and capped at 1,000 characters; a
+    prepare refusal coded `invalid` adds the preimage hint (critique minor 7);
+    401 and 403 show the owner copy; anything else, a lost connection
+    included, is `LocalFixLost`.
+  - _The generated `File` type drops null._ The OpenAPI generator rendered
+    `ReviewFixControl.File`'s `NullOr(Digest)` preimage and postimage as plain
+    strings (`ReviewFixControlFile`, `types.gen.ts:8063-8067`). The desktop
+    only modifies existing files, so the transport refuses a request with a
+    null digest instead of casting; a hand-off for the lead's regeneration.
+  - _Scratch._ `/tmp/vector-v2/scope/sf10b/` (the planning receipt moved
+    there as `walk-head.json`).
+
+- **Order of each action** (controller, `local-fix.ts:431-689`).
+  - Construction sends nothing. `check` (on mount, after a prepare, after a
+    cancel): `GET` the list; for the prepared fix, take the engine's `step`
+    and `commit`; a fix no longer listed clears with "This fix is no longer
+    open …"; one in `proposal`, `failed` or `cancelled` clears with "This fix
+    stopped … Cancel it to remove it."; `uncertain` clears.
+  - `prepare`: refused locally when off, busy, uncertain or a fix is prepared;
+    the source rule; the reads, one after another; the plan; the strict
+    request; the reads, one after another (an awaited `reduce`), each with its
+    session `GET`; `POST` on its own bounded signal (D6); then `sameFix` (the
+    preview's patch equals the request's, its `patchDigest` is sha256 of that
+    patch, the same head, base, base branch, sorted findings and file paths,
+    `source.kind: "client"`, `findingsVerified: false`, a `vector/fix-`
+    destination); a mismatch, or an answer overtaken before or during that
+    comparison, is cancelled at once with its own signal (a mismatch is shown
+    as "The engine's preview does not match the fix Vector built. Nothing was
+    applied."); then `check`.
+  - `offer`: the step's action must be enabled; `POST …/preview`; a late answer
+    (dispose, or a newer request) is dropped by the epoch guard in `begin`;
+    `sameOffer` (fix, head, digest, patch digest and kind; checks: the exact
+    commands and network off; commit: an identity; push: the remote, mode and
+    the known commit; apply: no identity); else "The engine offered another
+    step than the one asked for. Nothing was approved." and no offer is kept.
+  - `approve`: the gesture rules (D5); the offer cleared; `POST …/execute`
+    with the four-key echo; the result must be for this fix and kind; apply
+    moves to `applied`, commit to `committed` with its commit, push to
+    `pushed`, checks keep the step; a 400 shows the message (the offer is
+    spent); a lost answer is uncertain.
+  - `cancel` (allowed while off; during a running step only for that step's
+    own fix, D7): a running step's request is dropped first; `POST …/cancel`;
+    the prepared fix clears; a kept checkout shows the engine's reason; then
+    `check`.
+
+- **Default and parity proof.**
+  - The fix panel mounts only for an engine with SF-10a's routes and the global
+    setting on (`localFixesMounted`, tested in `local-fix-panel.test.tsx` case
+    1 and killed by M18). Without the `localFix` prop the pull request panel
+    renders as before: `LocalFixSlot` renders nothing without the prop or for
+    an uncommitted review, and a dismissal never remounts it (case 2, M17).
+    Case 3 renders the slot between a note and a footer, as the review result
+    places it, and the parent's `innerHTML` with the slot and no `render` (with
+    and without a pull request) is the same as with no slot at all (R6). No
+    happy-dom render of the whole `PullRequests` component was added (it needs
+    most of the app's contexts); the slot is the only new node in its tree.
+  - The CLI is unchanged: `review-fix.test.ts` gives 17 pass, 1 skip, 169
+    `expect()` calls before and after, and the parity run above.
+  - `local-review.test.ts` is unchanged and gives 12 pass, 63 before and after.
+  - `model-evidence.test.ts` passes untouched in its assertions (30 pass, 393).
+  - No key, default, flag default, permission, model call, revision, replay or
+    help change.
+
+- **Pin.** Unchanged: `REVIEW_PIPELINE_SOURCES` `b49b61aed2d6b707`,
+  `REVIEW_PIPELINE_REVISION` 4. No pinned file is touched (`ai-review.ts`,
+  `cli/cmd/review.ts` and the review routes are left alone); `fix-plan.ts` and
+  `local-fix*.ts` are left out for the reason the edited rationale comment
+  gives.
+- **Replay variant.** None: there is no key, so
+  `script/vectorscope-eval/replay.ts` VARIANTS is untouched.
+- **Desktop half.** This package is VS-12's desktop half. The CLI half is
+  SF-09; the GitHub half is VS-13 (after @vector).
+- **VS-12 row acceptance, mapped.** Shown by the app (unit and e2e): head
+  movement and a stale echo (the engine's `stale` message, the offer spent,
+  e2e case 5), a changed patch or digest (`sameFix`, unit case "not the fix
+  built here"), an expired or used offer (unit Approve case; a used offer
+  cannot be sent twice, M6), a failed check (escaped output and "information
+  only", e2e case 6), leftovers (steps disabled), cancellation (unit and e2e).
+  Engine only (`test/review/fix.test.ts`, `httpapi-review-fix.test.ts`): dirty
+  checkout, path traversal, symlinks, revoked consent and the unrelated work
+  and base branch staying intact.
+
+- **Tests run** (all through `/home/user/.tools/vector-serial`, one file at a
+  time, `--timeout 30000`, from the package directory, on this Linux host).
+  - Baselines at `b6eaf122` before any edit
+    (`/tmp/vector-v2/scope/sf10b/baseline.log`): core `fix-proposal.test.ts`
+    16 pass, 166 `expect()` calls; core `model-evidence.test.ts` 30 pass, 393;
+    engine `review-fix.test.ts` 17 pass, 1 skip, 169; app
+    `local-review.test.ts` 12 pass, 63; `engine-capabilities.test.ts` 12
+    pass, 70; `browser-bundle.test.ts` 4 pass, 16;
+    `test-browser/vectorscope-local.test.ts` 1 pass, 12.
+  - After (`/tmp/vector-v2/scope/sf10b/after.log`, 0 fail everywhere):
+    - core `test/review/fix-plan.test.ts` (new): 4 pass, 19. Cases: the UTF-8
+      rule equals `node:buffer` `isUtf8` over ASCII, multibyte, BOM-led (kept
+      in the postimage), overlong `C0 AF`, surrogate `ED A0 80`, truncated
+      `E2 82`, `F4 90 80 80` and NUL; the size limit counts UTF-8 bytes (a
+      140,000-"é" line under the limit in UTF-16 units, over it in bytes); a
+      `{selection}`-only outcome takes only verified committable inline
+      suggestions and counts the rest in `left`, and a strict result for
+      another head gives none; `plainBranch` and `fixPath` tables.
+    - core `fix-proposal.test.ts` 16 pass, 166; `model-evidence.test.ts` 30
+      pass, 393.
+    - engine `test/cli/review-fix.test.ts`: 17 pass, 1 skip, 169.
+    - app `src/features/vectorscope/local-fix.test.ts` (new, `--isolate
+      --preload ./happydom.ts`): 25 pass, 182. The source rule (A1, A2 with
+      twelve refusals); the exact strict prepare request with crypto sha256
+      digests and Git patch, two files read one after another (never two in
+      flight), a non-plain base name, an unread or bidi file;
+      the generated client transport (each call's session `GET` first, the
+      five routes with the folder, the exact bodies; a moved session reaches
+      no fix route, `read` included; a 400's message escaped, 403, an
+      unexpected 400, an extra response property, a lost connection, a 401 on
+      the session); the controller (construction plus `check` is one `GET`;
+      prepare, apply, commit and push each previewed and approved once with
+      the exact four-key echo, a second approval sends nothing; nine
+      mismatching offers refused and a late one after dispose dropped; a
+      mismatching preview cancelled; a lost execute uncertain and never
+      resent until `check`; off sends nothing but cancel; dispose aborts,
+      drops the late answer and cancels, and the next panel offers Cancel
+      only; dispose while the preview is compared, and dispose while a prepare
+      is in flight with a fake that rejects on abort as the transport does,
+      each cancel the placed fix once; the pause, an untrusted or double
+      activation and expiry; Cancel during a running step; another fix's
+      Cancel during a running step sends nothing and leaves the step running;
+      a fix gone or stopped; a refused prepare's preimage hint); presentation
+      (preview, the four offers, candidates, escaped check output, leftovers,
+      "information only", the action matrix with `localFixCancel`).
+    - app `src/features/vectorscope/local-fix-panel.test.tsx` (new, happy-dom
+      with the Solid preset compiling the view, slot, button and icon, as the
+      share dialog's test does; only the two server contexts are replaced): 8
+      pass, 64. The mount predicate; the slot (none without the prop, none for
+      uncommitted changes, no remount on a dismissal, and no change to its
+      parent's markup without the prop); the view (nothing sent before
+      Prepare, the copy with the schema's limit, the four separate buttons and
+      their states, the patch as text with no element made from it, a
+      happy-dom click and a dispatched click on Approve send no execute,
+      Dismiss); Approve disabled for the pause, then enabled; a refused review
+      shows why with no Prepare; off keeps a listed fix's Cancel; while a step
+      runs (approved through the controller, since happy-dom cannot make a
+      trusted click), only its own fix's "Stop and cancel this fix" is
+      enabled, another listed fix's Cancel is disabled with its reason and a
+      click on it sends nothing, and it is enabled again once the step ends.
+    - app `test-browser/vectorscope-fix.test.ts` (new, `--conditions=browser`):
+      1 pass, 15. Solid's real store and memos drive prepare, offer and
+      approve; the prepare and execute bodies keep exactly their own keys
+      (`Reflect.ownKeys`) and decode strictly.
+    - app `engine-capabilities.test.ts` 12 pass, 81 (the new flag true only for
+      `true`, in `FLAGS`, false in `NO_CAPABILITIES`); `local-review.test.ts`
+      12 pass, 63; `submit.test.ts` 105 pass, 479; `browser-bundle.test.ts` 4
+      pass, 17; `ai-review.test.ts` 121 pass, 507;
+      `test-browser/vectorscope-local.test.ts` 1 pass, 12.
+  - The browser walk (`script/browser-imports.ts`): 3,291 modules at HEAD,
+    3,300 after (the three app files, core `fix-plan.ts`, `fix-proposal.ts`,
+    `guardrail.ts`, `trivial.ts`, schema `review-fix.ts` and `diff`'s
+    `create.js`), `runtime` `[]`, no `packages/engine/` module.
+  - `bun typecheck` passes in `packages/core`, `packages/engine`,
+    `packages/schema` (unchanged) and `packages/app`; `bun run typecheck:e2e`
+    in `packages/app`; `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`
+    from `packages/engine`. Prettier `--check` passes on the twenty touched
+    code files (each was Prettier-clean at HEAD). The full TURBO typecheck is
+    left to the commit gate, before the push.
+  - Mutations (`/tmp/vector-v2/scope/sf10b/mutate.py`: each edits one file,
+    runs one case with `-t`, restores the file and checks its md5; results in
+    `mutate.log`, `m2.log`, `m19.log`). Each was killed (0 pass, 1 fail):
+    M1 commit enabled before apply; M2 a stale `operationDigest` in the echo;
+    M3 an automatic execute after an offer; M4 an untrusted pull request
+    accepted; M5 an unverified finding taken (core `fixCandidates`); M6 the
+    offer kept after execute; M7 the preview's patch not compared; M8
+    `visible` keeps U+202E; M9 `local-fix.ts` imports an engine module (the
+    bundle guard); M10 the UTF-8 round trip replaced by true; M11 `.length`
+    for the patch byte count; M12 no pause before Approve; M13 carried
+    findings accepted; M14 a double-click's second click accepted; M15 dispose
+    leaves the fix open; M16 `read` skips the conversation check; M17 the slot
+    mounts without a pull request; M18 the mount ignores the capability; M19
+    the view approves a script's click. M2 and M19 first survived: the fake
+    offer's `operationDigest` equalled the proposal digest by chance, and the
+    render test's controller kept the default pause, so the click was refused
+    for the wrong reason. Both tests were fixed and both mutations then
+    failed.
+  - Review round mutations (`/tmp/vector-v2/scope/sf10b/mutate-r1.py` and
+    `mutate-r1b.py`, same method, `mutate-r1.log`), each killed (0 pass, 1
+    fail): R1 `cancel` gated by `actions().cancel` again (another fix's Cancel
+    aborts the step); R2 no current check after `sameFix`; R3 the sent prepare
+    on the panel's signal; R4 the reads started before the previous one ends;
+    R5 the view's Cancel gated by `localFixActions(...).cancel` for every fix;
+    R6 the slot renders a hidden `<span>` without `render`.
+  - Never run locally: Playwright (`vectorscope-fix.spec.ts`), the Windows and
+    macOS legs.
+
+- **CI to dispatch with the commit** (on `scope-finish`; none run yet):
+  - `typecheck.yml`.
+  - `scope-app-validation.yml`: the three new steps and the new spec.
+  - `test.yml`: app unit (the two new `src` files), `test:browser` (the new
+    `test-browser` file), the e2e job (`bun --cwd packages/app test:e2e` runs
+    every spec, the new one included), core `fix-plan.test.ts` and engine
+    `review-fix.test.ts`, and the Windows and macOS legs. Expect
+    `test:httpapi` to fail on the four review-memory scenarios until main is
+    merged (SF-10a entry).
+  - `vector-at-mention.yml` (core `review/**` change: `fix-plan.ts` and the
+    model-evidence comment).
+  - `scope-directory-identity.yml` (`packages/core/src/review/**` change).
+  - Not needed: `review-memory-fence.yml` (no `run.ts`, `model.ts` or
+    `session/llm.ts`) and `review-http-regression.yml` (no review HttpApi
+    group, handler or service change).
+
+- **Review findings (round one)**, all taken; none was rejected.
+  - _Another fix's Cancel stopped the running step (non-blocking): taken_ as
+    D7, with the unit case "while a step runs, another fix's Cancel neither
+    stops it nor sends anything", the view case and R1, R5.
+  - _No cancel when overtaken during `sameFix` (non-blocking): taken._ One
+    `shown` check (current, `sameFix`, current again) leads to the same
+    removal as the overtaken branch; unit case "dispose lands while its
+    preview is being compared" (the fake's `patchDigest` getter disposes just
+    before `sameFix` awaits its digest), R2.
+  - _A prepare in flight aborted by dispose (non-blocking): taken_ in the
+    finding's first form, with a 5-minute bound instead of 30 s so a slow
+    checkout of a large repository is not reported as lost while the panel is
+    open; the window left is under "Not claimed"; unit case "dispose while
+    preparing …", R3.
+  - _`as LocalFixStep` (non-blocking): taken_; `placed` is a type guard.
+  - _The reads' `for` loop (non-blocking): taken_ as an awaited `reduce` that
+    keeps the reads sequential; unit case and R4.
+  - _Default parity of the pull request panel rests on reasoning
+    (non-blocking): taken_ as the slot markup case (R6); a full `PullRequests`
+    render is still not claimed.
+  - _The hard-coded 8 (non-blocking): taken_; the copy reads
+    `ReviewFixControl.LIMIT.fixes`.
+
+- **Critique points** (the plan critique, before the build).
+  - _Double-click approval (major): taken._ The 750 ms pause, `detail > 1`
+    ignored, the button disabled for the pause, the offer card below the
+    patch and step row (never in place of a step button, never focused);
+    a unit case with an injected clock and an e2e case (a `dblclick` on
+    "Preview apply" gives one preview and no execute), M12 and M14.
+  - _Reused and carried findings (major): taken_ (the refusal and its copy, A2,
+    M13, the untrusted/uncommitted e2e variants for the reason copy). No lead
+    ruling was asked for: refusing keeps either answer possible.
+  - _Unmount triggers and leaked fixes (major): taken in form (b)_, the
+    dispose-time cancel for every state of the fix this panel prepared, not
+    only `preview` and `applied`: a remounted panel could only cancel it (D4),
+    and cancel keeps a commit's branch. Form (a), disabling Review again,
+    selection, Changes and merge in `PullRequests` while a step runs, was not
+    taken: it touches five handlers in `pull-requests.tsx` and cannot stop a
+    project switch or a reconnect, which unmount the panel anyway. Covered by
+    the unit dispose case (M15) and the e2e close case.
+  - _Untested default proof (major): taken_ (the exported predicate used by the
+    layout and the panel, the slot render test, M17, M18), except a render of
+    the whole `PullRequests`, as said above.
+  - _Unreachable off-state Cancel (minor): taken in its second form._ With the
+    setting off the layout does not mount the panel, so a mount that only lists
+    and cancels would need a request on every review result while VectorScope
+    is off, a new default behaviour. A settings save disposes the panel, which
+    cancels its prepared fix; any other fix left open is removed by the
+    engine's boot sweep, and the copy says so. The view's off notice remains
+    for a live flip before the reload arrives.
+  - _Base differs from the CLI's (minor): recorded_ (Decisions).
+  - _Preimage refusal copy (minor): taken_, as a hint on any `invalid` prepare
+    refusal (no matching of engine message text), and Prepare refused while
+    any finding was applied in place.
+  - _Transport and controller gaps (minor): taken_: `read` checks the
+    conversation (in another form, Decisions); `proposal`, `failed` and
+    `cancelled` clear the prepared fix with a message; Approve refuses after
+    `expiresAt`; the epoch guard for late preview answers is named in the code
+    and its unit case.
+  - _Copy and the open ruling (minor): taken_: "findings this review's
+    double-check confirmed … The engine did not check those findings again";
+    the SF-07 ruling line above; the `source: "client"` request repeated in
+    the hand-offs.
+  - _Citation slips (minor): taken_ (re-cited above; the receipt moved).
+  - _Forward-compatible decoding (minor): taken as documentation._ Decoding
+    stays strict; an engine that adds a response field makes this desktop
+    refuse every answer as unverifiable (an execute's as uncertain), so a
+    response field addition needs a desktop release or a new capability flag.
+    SF-40 and SF-41 should know.
+  - _Plan deviations._ The plan's e2e case 7 ("a 403 shows the owner alert and
+    no Prepare") became "shows the owner alert and places nothing": the source
+    rule, not the engine's answer, decides whether Prepare shows, and a
+    refused prepare places nothing. The plan's single `scope-app-validation`
+    step became three, one per file, instead of appending to the existing
+    browser step.
+
+- **Not claimed.**
+  - No Playwright run locally; no CI run yet.
+  - A placed fix can still be left open when the prepare's answer never
+    arrives: the connection drops after the engine placed it, or the answer
+    takes longer than `PREPARE_MS` (5 minutes). The panel then marks the answer
+    lost if it is still shown; the fix stays in the project's open-fix count
+    until someone cancels it from the open-fixes list (where it shows as
+    "prepared elsewhere") or the engine restarts. After an unmount, a prepare
+    already sent may still place a checkout, which is then cancelled when its
+    answer arrives.
+  - No proof that a person approved: `isTrusted`, the pause and the single
+    activation are renderer-side, and any local process with owner authority
+    (any local process when the server has no password) can still call the
+    API directly (SF-10a "Not claimed").
+  - No real check run, `Checked` result from a real executor, or https push
+    from the app; the e2e engine is a `page.route` fake.
+  - No Windows or macOS run (the executor is Linux only anyway).
+  - No model call, paid run or quality claim; no default change.
+  - Refused by design: a file with a byte order mark (the file read drops it,
+    so its preimage digest cannot match), a file edited since the review, a
+    review of uncommitted changes, rebuilt checkouts, other people's pull
+    requests and reused or carried findings.
+  - The fix is only as good as the findings: the engine does not verify them,
+    and the panel says so.
+
+- **Hand-offs.**
+  - The lead:
+    - the `source: "client"` ruling from SF-10a is still open, and SF-10b is now
+      its only producer; it blocks the scope-finish PR description, which must
+      name it as a lead decision;
+    - the own-pull-request-only and no-carried-findings source rule, and
+      cancel-only reconnection;
+    - the generated `ReviewFixControlFile` type drops `null` from the preimage
+      and postimage (an OpenAPI generation issue; the engine accepts null), for
+      the item-6 regeneration;
+    - whether the engine should require more than the desktop's gesture.
+  - SF-40 and SF-41: strict response decoding (above).
+  - SF-42: `vectorscope-remaining.md:47`, `vectorscope-continuation.md`, and the
+    correcting entry for the stale `vectorscope-deviations.md:16000` sentence.
+    SF-10b edits neither `remaining.md` nor `continuation.md`.
+
+- **Citations at `b6eaf122`.**
+  - App `features/pull-requests/ai-review.ts`: `ReviewPullRequest` `:163`,
+    `ReviewOutcomeLite` `:227` (`authored` `:234`, `carried` `:257`,
+    `unchanged` `:259`), `authorship` `:589`, the unchanged return `:786-787`,
+    carried findings `:953` and `:1041`, `withoutDismissed` `:2327`.
+  - App `features/vectorscope/local-review.ts`: the retained-state rule
+    `:36-37`; `review-memory-transport.ts`: fresh outbound copies `:88-99`.
+  - Engine `review/fix-owner.ts`: prepare `:233`, the checks authorship note
+    `:457-489`, `REASONS` `:682`; `review/fix.ts`: `checkHead` `:349-363`;
+    engine `server/routes/instance/httpapi/handlers/file.ts`: the fatal UTF-8
+    read that drops a BOM `:127-157`.
+  - Core `review/permission.ts`: `CHECK_COMMANDS` `:32`;
+    `review/fix-proposal.ts`: `FIX_LIMITS` `:8`, `prepareFixProposal` `:92`.
