@@ -7048,6 +7048,21 @@ in the worktree after these fixes.
 1. PR7 (both entries): unchanged from the first two rounds' item 1. Decide on `31ddb43b` before this lane's PR.
 2. No new defect was found in another lane's file in this round.
 
+Lead ruling (16 Nov 2026): PR4 and PR7 are closed, in all three rounds, and with them TB For the lead item 1 and its
+16 Nov correction. Main fixes the same import cycle in PR #33's round-two commit `9be63d68` ("fix(api): load the meter
+epoch rule from a leaf module to break the ledger import cycle"): `METER_EPOCH_PATTERN` now lives in
+`api/_lib/cloud-agents-epoch.ts`, which has no imports, and the ledger and the run token both import it from there.
+Main's fix is the one copy. At the merge of main into `codium-finish` after PR #33 (`b362fdf6`), merge commit
+"chore(codium): merge main after PR #33", `api/_lib/cloud-agents-run-token.ts` and `test/api-module-loading.test.ts`
+resolve to main's version, so `31ddb43b`'s decode-time read is dropped. Nothing was added to main's version: its fresh
+Node ESM entries already include the lane's two (`cloud-agents-ledger.ts`, `model-plan-gateway-hooks.ts`) plus
+`hosted-run.ts` and the three `api/model-plans` routes, and on the merged tree `test/api-module-loading.test.ts` (2
+pass), `packages/web` `test/model-plan-gateway-hooks.test.ts` (13 pass) and `test/cloud-agents-run-token.test.ts` (8
+pass, the Redis setup case CI only) show no ReferenceError. The same merge settles TB item 6 as that item asked: it
+keeps main's four-shard tests matrix and `--shard=i/n` picker split together with this lane's `base` and
+`browser_specs` dispatch inputs and their env-only wiring, and the env-only test now also allows
+`${{ matrix.shard }}`, a fixed matrix value like `${{ matrix.command }}`, in a run script.
+
 ### Ran locally
 
 All runs went through `vector-serial`, one file at a time from `test/` with `--timeout 30000`, after the last code
