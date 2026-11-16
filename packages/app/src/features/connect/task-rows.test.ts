@@ -3,7 +3,7 @@ import { Connect } from "@vectordevai/schema/connect"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
 import { createConnectClient } from "./client"
-import { MAX_TASK_ROWS, cancelTaskRow, readTaskRows, taskRows } from "./task-rows"
+import { MAX_TASK_ROWS, cancelTaskRow, goingFirst, readTaskRows, runState, taskRows } from "./task-rows"
 import { finding, reviewRun, sessionID } from "./test-fixture"
 
 const review: Connect.Action = { id: "review", title: "Review", effects: ["read"], background: true, result: "review" }
@@ -420,4 +420,14 @@ test("finding text never reaches a row and a row carries no action besides cance
       "tone",
       "verdict",
     ])
+})
+
+test("the row order and the run states are shared with the phone's runs list (CW-23c)", () => {
+  const done = Array.from({ length: 12 }, (_, index) => ({ id: `d${index}`, going: false }))
+  const rows = goingFirst([...done, { id: "g1", going: true }], (item) => item.going)
+  expect(rows.map((item) => item.id)).toEqual(["g1", ...done.slice(0, MAX_TASK_ROWS - 1).map((item) => item.id)])
+  expect(runState({ status: "queued" })).toEqual({ status: "Queued", tone: "pending" })
+  expect(runState({ status: "running" })).toEqual({ status: "Running", tone: "running" })
+  expect(runState({ status: "done", result: { state: "partial" } })).toEqual({ status: "Partial", tone: "done" })
+  expect(runState({ status: "done", result: { state: "cancelled" } })).toEqual({ status: "Cancelled", tone: "stopped" })
 })

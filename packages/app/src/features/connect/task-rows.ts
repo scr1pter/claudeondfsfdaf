@@ -34,15 +34,18 @@ export function taskRows(input: {
   members?: readonly Connect.Member[]
 }): TaskRow[] {
   const own = input.runs.filter((run) => run.request.requester.sessionID === input.sessionID)
-  const going = own.filter((run) => run.status !== "done")
-  return [...going, ...own.filter((run) => run.status === "done")]
-    .slice(0, Math.max(MAX_TASK_ROWS, going.length))
-    .map((run) =>
-      taskRow(
-        run,
-        input.members?.find((member) => member.id === run.request.to),
-      ),
-    )
+  return goingFirst(own, (run) => run.status !== "done").map((run) =>
+    taskRow(
+      run,
+      input.members?.find((member) => member.id === run.request.to),
+    ),
+  )
+}
+
+/** Runs still going first, then the rest, at most `MAX_TASK_ROWS` in all; a run still going is never cut. */
+export function goingFirst<T>(runs: readonly T[], going: (run: T) => boolean): T[] {
+  const live = runs.filter(going)
+  return [...live, ...runs.filter((run) => !going(run))].slice(0, Math.max(MAX_TASK_ROWS, live.length))
 }
 
 /**
@@ -114,7 +117,9 @@ const ENDED = {
   cancelled: { status: "Cancelled", tone: "stopped" },
 } as const satisfies Record<Connect.ResultState, Pick<TaskRow, "status" | "tone">>
 
-function runState(run: Connect.Run): Pick<TaskRow, "status" | "tone"> {
+export function runState(
+  run: Pick<Connect.Run, "status"> & { readonly result?: Pick<Connect.Result, "state"> },
+): Pick<TaskRow, "status" | "tone"> {
   if (run.status === "queued") return { status: "Queued", tone: "pending" }
   if (!run.result) return { status: "Running", tone: "running" }
   return ENDED[run.result.state]

@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { generateDeviceIdentity } from "@vectordevai/core/remote/crypto"
-import { createPhoneRemote, type RemoteSocket } from "./client"
+import {
+  cancelRunRequest,
+  connectRunsRequest,
+  createPhoneRemote,
+  reviewChallengeRequest,
+  reviewStartRequest,
+  reviewTarget,
+  type RemoteSocket,
+  type ReviewTarget,
+} from "./client"
 import { PasskeyError } from "./passkey"
 import { decodeRecord, memoryRemoteStore } from "./store"
 
@@ -228,5 +237,69 @@ describe("pairing links", () => {
     env.remote.cancelPairing()
     expect(env.remote.view().pairing).toEqual({ state: "idle" })
     env.remote.disconnect()
+  })
+})
+
+// CW-23c (CN-18): what the phone sends for connected tools. The computer checks each again (desktop remote-routes.ts).
+describe("connected tools", () => {
+  const passkey = { id: "cred_1", clientDataJSON: "cdj", authenticatorData: "ad", signature: "sig" }
+
+  test("a review start carries only the allowed fields and the passkey's assertion, rebuilt", () => {
+    // A patched caller's extra fields stay behind: the target and the assertion are rebuilt from what they may hold.
+    const target = { kind: "branch", base: "main", task: "ses_9", security: true } as unknown as ReviewTarget
+    const assertion = { ...passkey, userHandle: "u", extra: { budget: 9 } }
+    const start = reviewStartRequest("/repo", "ses_1", target, assertion)
+    expect(start).toEqual({
+      method: "POST",
+      path: "/experimental/session/ses_1/connect",
+      directory: "/repo",
+      body: { to: "vectorscope", action: "review", target: { kind: "branch", base: "main" }, passkey },
+    })
+    expect(Object.keys(start).sort()).toEqual(["body", "directory", "method", "path"])
+    expect(Object.keys(start.body as object).sort()).toEqual(["action", "passkey", "target", "to"])
+    expect(
+      reviewStartRequest("/repo", "ses_1", { kind: "uncommitted", base: "x" } as unknown as ReviewTarget, passkey).body,
+    ).toMatchObject({
+      target: { kind: "uncommitted" },
+    })
+  })
+
+  test("the challenge names the conversation and the same target", () => {
+    expect(reviewChallengeRequest("/repo", "ses_1", { kind: "staged", extra: 1 } as unknown as ReviewTarget)).toEqual({
+      method: "POST",
+      path: "/remote/approval",
+      directory: "/repo",
+      body: { review: { sessionID: "ses_1", target: { kind: "staged" } } },
+    })
+    expect(reviewChallengeRequest("/repo", "ses_1", { kind: "branch" }).body).toEqual({
+      review: { sessionID: "ses_1", target: { kind: "branch" } },
+    })
+  })
+
+  test("the changes to review come from the person's choice; a base that is not a branch or commit name is refused", () => {
+    expect(reviewTarget("uncommitted")).toEqual({ kind: "uncommitted" })
+    expect(reviewTarget("staged", "main")).toEqual({ kind: "staged" })
+    expect(reviewTarget("branch")).toEqual({ kind: "branch" })
+    expect(reviewTarget("branch", "   ")).toEqual({ kind: "branch" })
+    expect(reviewTarget("branch", " origin/main ")).toEqual({ kind: "branch", base: "origin/main" })
+    expect(reviewTarget("branch", "0123abc")).toEqual({ kind: "branch", base: "0123abc" })
+    for (const base of ["-x", "--output=/tmp/x", "a b", "a\u0007b", "x".repeat(257)])
+      expect({ base, target: reviewTarget("branch", base) }).toEqual({ base, target: undefined })
+  })
+
+  test("runs are read and cancelled only within the conversation", () => {
+    expect(connectRunsRequest("/repo", "ses_1")).toEqual({
+      method: "GET",
+      path: "/experimental/connect/runs",
+      directory: "/repo",
+      query: { sessionID: "ses_1" },
+    })
+    expect(cancelRunRequest("/repo", "ses_1", "cr_01")).toEqual({
+      method: "POST",
+      path: "/experimental/connect/runs/cr_01/cancel",
+      directory: "/repo",
+      query: { sessionID: "ses_1" },
+      body: {},
+    })
   })
 })

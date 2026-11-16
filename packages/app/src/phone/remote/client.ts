@@ -36,7 +36,7 @@ import {
   type PairingOffer,
 } from "@vectordevai/core/remote/crypto"
 import { negotiate, phoneHello } from "../version"
-import { PasskeyError, type PasskeyAdapter } from "./passkey"
+import { PasskeyError, type PasskeyAdapter, type PasskeyAssertion } from "./passkey"
 import type { PairedComputer, PhoneIdentity, RemoteRecord, RemoteStore } from "./store"
 
 // Vector Remote's phone half (WP A42). The desktop half is packages/desktop/src/main/remote-link.ts (A41); both speak
@@ -55,6 +55,9 @@ import type { PairedComputer, PhoneIdentity, RemoteRecord, RemoteStore } from ".
 // - Each paired computer that is online gets its own encrypted channel. Requests go through the computer's route
 //   allowlist; allowing a permission request is "once" with a passkey the computer verifies, or a denial. There is no
 //   "always" here at all (S6).
+// - Connected tools (CW-23c): starting a VectorScope review is one more passkey answer, bound by the computer to the
+//   conversation, the folder and the exact changes to review. Runs are read and cancelled only within the
+//   conversation. Nothing here asks for a fix.
 
 export type RemoteSocket = {
   readonly readyState: number
@@ -138,6 +141,76 @@ export type RemoteRequest = {
 export type ApprovalResult =
   | { kind: "answered"; answer: EngineAnswer }
   | { kind: "tap"; confirm: () => Promise<ApprovalResult> }
+
+/** The changes a phone may have VectorScope review: never a task's, and a branch against an optional base. */
+export type ReviewTarget = { kind: "uncommitted" } | { kind: "staged" } | { kind: "branch"; base?: string }
+
+// A branch review's base, as the computer checks it (desktop remote-routes.ts `REF`, schema Connect.Ref).
+const REF = /^(?!-)[^\s\u0000-\u001f\u007f]{1,256}$/
+
+/** The changes to review from the person's choice, or undefined for a base that is not a branch or commit name. */
+export function reviewTarget(kind: ReviewTarget["kind"], base = ""): ReviewTarget | undefined {
+  if (kind !== "branch") return { kind }
+  const name = base.trim()
+  if (!name) return { kind }
+  return REF.test(name) ? { kind, base: name } : undefined
+}
+
+/** The challenge for one review start: this conversation and exactly these changes. */
+export function reviewChallengeRequest(directory: string, sessionID: string, target: ReviewTarget): RemoteRequest {
+  return {
+    method: "POST",
+    path: "/remote/approval",
+    directory,
+    body: { review: { sessionID, target: rebuilt(target) } },
+  }
+}
+
+/** A review start: VectorScope's review of these changes, with the passkey's answer and nothing else. */
+export function reviewStartRequest(
+  directory: string,
+  sessionID: string,
+  target: ReviewTarget,
+  passkey: PasskeyAssertion,
+): RemoteRequest {
+  return {
+    method: "POST",
+    path: `/experimental/session/${sessionID}/connect`,
+    directory,
+    body: {
+      to: "vectorscope",
+      action: "review",
+      target: rebuilt(target),
+      passkey: {
+        id: passkey.id,
+        clientDataJSON: passkey.clientDataJSON,
+        authenticatorData: passkey.authenticatorData,
+        signature: passkey.signature,
+      },
+    },
+  }
+}
+
+/** The conversation's connected runs. */
+export function connectRunsRequest(directory: string, sessionID: string): RemoteRequest {
+  return { method: "GET", path: "/experimental/connect/runs", directory, query: { sessionID } }
+}
+
+/** Cancels one of the conversation's runs; always scoped to it, so no other run can be stopped from here. */
+export function cancelRunRequest(directory: string, sessionID: string, runID: string): RemoteRequest {
+  return {
+    method: "POST",
+    path: `/experimental/connect/runs/${runID}/cancel`,
+    directory,
+    query: { sessionID },
+    body: {},
+  }
+}
+
+function rebuilt(target: ReviewTarget): ReviewTarget {
+  if (target.kind !== "branch") return { kind: target.kind }
+  return target.base === undefined ? { kind: "branch" } : { kind: "branch", base: target.base }
+}
 
 export class RemoteError extends Error {
   constructor(
@@ -812,11 +885,11 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
     return answer
   }
 
+  /** Signs a challenge the computer issued with this phone's passkey, then sends what it allows with the answer. */
   const allowOnce = async (
     computer: string,
-    directory: string,
-    requestID: string,
     challenge: { challenge: string; expiresAt: number },
+    send: (passkey: PasskeyAssertion) => Promise<EngineAnswer>,
   ): Promise<ApprovalResult> => {
     const entry = paired(computer)
     if (!entry) throw new RemoteError("REMOTE_NOT_PAIRED", "This phone is not paired with that computer.")
@@ -826,16 +899,23 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
     } catch (error) {
       // Safari asks for a passkey only straight from a tap; the challenge is kept for the next one.
       if (error instanceof PasskeyError && error.reason === "cancelled" && challenge.expiresAt - now() > 10_000)
-        return { kind: "tap", confirm: () => allowOnce(computer, directory, requestID, challenge) }
+        return { kind: "tap", confirm: () => allowOnce(computer, challenge, send) }
       throw error
     }
-    const answer = await request(computer, {
-      method: "POST",
-      path: `/permission/${requestID}/reply`,
-      directory,
-      body: { reply: "once", passkey },
-    })
-    return { kind: "answered", answer }
+    return { kind: "answered", answer: await send(passkey) }
+  }
+
+  /** Asks the computer for a challenge; one it refuses is answered as it is, with no passkey prompt. */
+  const challenged = async (
+    computer: string,
+    ask: RemoteRequest,
+    send: (passkey: PasskeyAssertion) => Promise<EngineAnswer>,
+  ): Promise<ApprovalResult> => {
+    const answer = await request(computer, ask)
+    const body = answer.body as Record<string, unknown> | null
+    if (answer.status !== 200 || typeof body?.challenge !== "string") return { kind: "answered", answer }
+    const expiresAt = typeof body.expiresAt === "number" ? body.expiresAt : now() + 60_000
+    return allowOnce(computer, { challenge: body.challenge, expiresAt }, send)
   }
 
   return {
@@ -970,12 +1050,37 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
      * Allows a permission request once: the computer issues a challenge for it, this phone's passkey signs it, and the
      * computer checks the signature before answering "once". Never "always".
      */
-    async approve(computer: string, directory: string, requestID: string): Promise<ApprovalResult> {
-      const answer = await request(computer, { method: "POST", path: "/remote/approval", directory, body: { requestID } })
-      const body = answer.body as Record<string, unknown> | null
-      if (answer.status !== 200 || typeof body?.challenge !== "string") return { kind: "answered", answer }
-      const expiresAt = typeof body.expiresAt === "number" ? body.expiresAt : now() + 60_000
-      return allowOnce(computer, directory, requestID, { challenge: body.challenge, expiresAt })
+    approve(computer: string, directory: string, requestID: string): Promise<ApprovalResult> {
+      return challenged(
+        computer,
+        { method: "POST", path: "/remote/approval", directory, body: { requestID } },
+        (passkey) =>
+          request(computer, {
+            method: "POST",
+            path: `/permission/${requestID}/reply`,
+            directory,
+            body: { reply: "once", passkey },
+          }),
+      )
+    },
+    /**
+     * Starts a VectorScope review of a conversation's changes (CW-23c): the computer issues a challenge for exactly that
+     * conversation, folder and target, this phone's passkey signs it, and the computer checks it before the engine
+     * hears of the review. The start answers once the review's own questions are behind it, so they are answered
+     * from the phone while it waits.
+     */
+    startReview(computer: string, directory: string, sessionID: string, target: ReviewTarget): Promise<ApprovalResult> {
+      return challenged(computer, reviewChallengeRequest(directory, sessionID, target), (passkey) =>
+        request(computer, reviewStartRequest(directory, sessionID, target, passkey)).catch((error: unknown) => {
+          // The computer gives a start the same window as any request, and stops a review still waiting by then.
+          if (error instanceof RemoteError && error.code === "REMOTE_TIMEOUT")
+            throw new RemoteError(
+              "REMOTE_REVIEW_TIMEOUT",
+              "Your computer did not answer in time. A review still waiting for an approval stops then; answer its approval right away.",
+            )
+          throw error
+        }),
+      )
     },
     deny(computer: string, directory: string, requestID: string, message?: string) {
       return request(computer, {

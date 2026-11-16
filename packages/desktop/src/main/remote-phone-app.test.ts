@@ -125,12 +125,13 @@ function computer(relay: MemoryRelay) {
   return { link, fake, stored, enabled }
 }
 
-function phone(relay: MemoryRelay, options: { store?: RemoteStore; passkeyOrigin?: string } = {}) {
+function phone(relay: MemoryRelay, options: { store?: RemoteStore; passkeyOrigin?: string; requestMs?: number } = {}) {
   const store = options.store ?? memoryRemoteStore()
   const key = softPasskey({ origin: options.passkeyOrigin ?? ORIGIN, rpId: "remote.vectordev.ai" })
   const alertKeys = new Map<string, Uint8Array>()
   const calls: { path: string; body?: unknown }[] = []
   let refuseGets = 0
+  let gets = 0
   const passkeys: PasskeyAdapter = {
     async create({ challenge, rpId }) {
       expect(rpId).toBe("remote.vectordev.ai")
@@ -138,6 +139,7 @@ function phone(relay: MemoryRelay, options: { store?: RemoteStore; passkeyOrigin
     },
     async get({ challenge, credential }) {
       expect(credential).toBe(key.id)
+      gets += 1
       if (refuseGets > 0) {
         refuseGets -= 1
         throw new PasskeyError("cancelled", "The passkey was cancelled or timed out. Try again.")
@@ -165,9 +167,17 @@ function phone(relay: MemoryRelay, options: { store?: RemoteStore; passkeyOrigin
       forget: async () => alertKeys.clear(),
     },
     phoneName: () => "iPhone",
-    timing: { heartbeatMs: 1_000, channelMs: 300, requestMs: 3_000, retryMs: 20 },
+    timing: { heartbeatMs: 1_000, channelMs: 300, requestMs: options.requestMs ?? 3_000, retryMs: 20 },
   })
-  return { remote, store, alertKeys, calls, key, refuseGets: (count: number) => void (refuseGets = count) }
+  return {
+    remote,
+    store,
+    alertKeys,
+    calls,
+    key,
+    refuseGets: (count: number) => void (refuseGets = count),
+    gets: () => gets,
+  }
 }
 
 /** Pairs a phone with the computer through the relay, the person confirming the six digits on the computer. */
@@ -285,10 +295,10 @@ describe("pairing a phone with a computer", () => {
   })
 })
 
-async function paired() {
+async function paired(options: Parameters<typeof phone>[1] = {}) {
   const relay = createMemoryRelay()
   const desktop = computer(relay)
-  const mobile = phone(relay)
+  const mobile = phone(relay, options)
   const { shown } = await pair(desktop, mobile)
   await desktop.link.confirmPairing(shown.code)
   await until(() => mobile.remote.view().computers[0]?.channel === "open")
@@ -478,6 +488,73 @@ describe("using a paired computer from the phone", () => {
     })
     expect(await started).toEqual({ status: 200, body: { id: "cr_02", status: "running" } })
     expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(true)
+    desktop.link.stop()
+    mobile.remote.disconnect()
+  })
+
+  test("the phone's review start asks for its passkey, then waits on its own question, which the phone allows once (CW-23c)", async () => {
+    const { desktop, mobile, computerID } = await paired()
+    desktop.fake.connect.ask = "per_c"
+    const started = mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "branch", base: "main" })
+    await until(() => desktop.fake.permissions.some((item) => item.id === "per_c"))
+    // While the start waits, the phone answers the review's own question with a second passkey.
+    expect(await mobile.remote.approve(computerID, "/repo", "per_c")).toMatchObject({
+      kind: "answered",
+      answer: { status: 200 },
+    })
+    expect(await started).toEqual({
+      kind: "answered",
+      answer: { status: 200, body: { id: "cr_02", status: "running" } },
+    })
+    expect(desktop.fake.requests.filter((request) => request.path === "/experimental/session/ses_1/connect")).toEqual([
+      {
+        method: "POST",
+        path: "/experimental/session/ses_1/connect",
+        query: { directory: "/repo" },
+        body: { to: "vectorscope", target: { kind: "branch", base: "main" }, background: true },
+      },
+    ])
+    expect(mobile.gets()).toBe(2)
+    desktop.link.stop()
+    mobile.remote.disconnect()
+  })
+
+  test("a review start held for a fresh tap starts on that tap; one the computer refuses asks for no passkey (CW-23c)", async () => {
+    const { desktop, mobile, computerID } = await paired()
+    const starts = () =>
+      desktop.fake.requests.filter((request) => request.path === "/experimental/session/ses_1/connect")
+    mobile.refuseGets(1)
+    const first = await mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "uncommitted" })
+    expect(first.kind).toBe("tap")
+    expect(starts()).toEqual([])
+    const second = await (first as { confirm: () => Promise<unknown> }).confirm()
+    expect(second).toMatchObject({ kind: "answered", answer: { status: 200 } })
+    expect(starts()).toHaveLength(1)
+
+    desktop.fake.connect.connections = false
+    const gets = mobile.gets()
+    const off = await mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "staged" })
+    expect(off).toMatchObject({
+      kind: "answered",
+      answer: { status: 403, body: { error: { code: "REMOTE_CONNECT_OFF" } } },
+    })
+    expect(mobile.gets()).toBe(gets)
+    expect(starts()).toHaveLength(1)
+    desktop.link.stop()
+    mobile.remote.disconnect()
+  })
+
+  test("a review start whose question is not answered in time says so (CW-23c)", async () => {
+    // Long enough for pairing and the challenge on a loaded runner; the start alone waits until the ask is answered.
+    const { desktop, mobile, computerID } = await paired({ requestMs: 1_500 })
+    desktop.fake.connect.ask = "per_late"
+    const started = mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "uncommitted" })
+    await expect(started).rejects.toMatchObject({
+      code: "REMOTE_REVIEW_TIMEOUT",
+      message: expect.stringContaining("did not answer in time"),
+    })
+    // Answered at the computer afterwards, so the fake engine's start returns.
+    desktop.fake.permissions.splice(0)
     desktop.link.stop()
     mobile.remote.disconnect()
   })
