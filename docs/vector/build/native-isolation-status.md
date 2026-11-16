@@ -22,6 +22,8 @@ Independent source review, Engine typecheck, pure manifest boundary checks, stat
 
 Actual CI must first prove the installed Python metadata observer and runtime/profile provenance on the same host. Then a reviewed immutable installer and workflow must run the complete baseline matrix and four fresh Engine-death cells, including owned cleanup on every path. The stock Ubuntu reader fix is being qualified separately on `build-scope`/`build-scope-witness`; an integration must preserve its exact reviewed implementation instead of substituting a path-only interpreter check.
 
+Status at the `native-qualify` lane head `ce5e5605`, 15 November 2026: the installed Python metadata observer and stock dpkg package-profile part of the first gate above is proven only as workflow step 12 on the bun/own-key diagnostic cell, by run 43697711119 (job `132761821581`), and only for the reader bytes pinned in that tree; there "profile" means the stock dpkg package profile, not the `vector-sandbox-v1` AppArmor profile. That evidence does not carry over a merge that changes the reader. Every other gate in this section stays open, including the reader-integration requirement. See [Native qualification lane end, 15 November 2026](#native-qualification-lane-end-15-november-2026).
+
 Full bootstrap, preconstruction alias/canary cases, native profile/LSM compatibility, installed runtime provenance, root installation and production floor qualification remain open. No production activation is authorized by this document.
 
 ## Prepare diagnostic continuation, 14 November 2026
@@ -189,3 +191,400 @@ named read-only Git/pure spawn-refusal selection passes 7 cases with 66 explicit
 Linux-only skips. The six genuine Linux cases, including the restored-mtime
 negative, require fresh hosted qualification and are not local passes. No fixture,
 assertion, native control, evidence pin or model/provider route was weakened here.
+
+## Lane dispatch and destination errno diagnostics, 15 November 2026
+
+The `native-qualify` lane (from `release-finish` `0ee486e3`) adds
+`refs/heads/native-qualify` to the native workflow's manual ref allowlist. It is
+reachable only through `workflow_dispatch`; push triggers, the diagnostic-cell
+selector and its default, the full matrix, pinned actions, permissions, runtime
+provenance, host and cleanup checks are unchanged. The lane's bounded dispatches and
+their results are logged in `native-qualify-notes.md`.
+
+The keeper destination diagnostic now also names a closed cause. After one of the ten
+fixed destination kinds, only the complete C-locale strerror text of six errnos maps to
+a suffix: `eacces`, `erofs`, `enoent`, `enotdir`, `eloop` or `eperm` (for example
+`bwrap-destination-host-temp-eacces`). Bubblewrap v0.9.0 never calls `setlocale` and
+the keeper starts it under `env -i`, so this is the text it prints. Every other errno
+text, any prose, any unknown target and every path still stays private: an unknown
+remainder keeps the unsuffixed target label and an unknown target keeps
+`bwrap-destination`. This supersedes the 37-log/222-stage count of the 14 November
+section: the closed product is now 97 logs and 582 stages, checked consistently in the
+Python source, the Python fixture and the native TypeScript decoder.
+
+Nothing is relaxed in mounts, capabilities, profile, admission, timeout or cleanup.
+Both native build switches and `FLOOR` remain false, and native commands registered with
+`OwnedProcess` remain refused before launch. The authoritative evidence for the Python
+changes is the CI `native-guard-unit.yml` run of the 35-test pure fixture; it and the
+hosted label are CI-only and are logged in `native-qualify-notes.md`. Local evidence:
+both Python sources parse; an AST-only agreement check and the TypeScript decoder agree
+on exactly the 582 stages; the Engine isolation decoder suite passes 31 tests; Core and
+Engine `bun typecheck` pass. A local AST-extracted smoke of the five pure keeper
+diagnostic functions also passed; it is supplementary only, outside the lane's allowed
+local checks, and no substitute for guard-unit.
+
+Ubuntu's `0.9.0-1ubuntu0.3` build rewrites bubblewrap's userns-denied message, so the
+exact upstream `bwrap-userns-denied` label cannot match on the hosted runner; such a
+failure would classify as `no-marker`. That gap fails closed and is left for a later
+package. An `eacces` result would confirm the errno only, not which ancestor of the
+hosted temporary root blocks the keeper. No production activation is authorized by this
+document.
+
+## Keeper search admission, 15 November 2026
+
+The bounded lane dispatch `43660129312` (job `132647364562`, head `597dbcc9`) closed with
+`prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created`:
+bubblewrap could not build the parents of the hosted temporary root as the keeper and
+got `EACCES`. The keeper runs as `vector-agent` with no supplementary groups in a user
+namespace that maps only its own uid and gid, so its namespace capabilities override
+permissions only on its own inodes; Root- and runner-owned ancestors are searchable only
+through their one selected mode class.
+
+Admission now refuses such a geometry before any construction, with fixed labels only:
+`prepare-mask-<label>-keeper-search` when a strict ancestor of a mask is not searchable
+by the keeper (checked after every other mask predicate, from the parent metadata those
+predicates already admitted), and `prepare-keeper-search-checkout` when the container
+ancestry of the checkout and scratch binds is not (checked after every other
+pre-construction predicate). No path, mode, owner or group leaves the private log.
+Nothing is relaxed: geometry the keeper's mode bits allow is admitted as before, no
+`chmod` is added, and `MASKS` and the keeper argv are unchanged.
+
+This adds to, and does not change, the 15 November keeper product, which stays 97 logs
+and 582 stages. The mask admission product grows from 68 to 73 stages (the TypeScript
+per-mask entries from 57 to 62), plus the one container-ancestry stage, checked
+consistently in `entry.py`, the CI-only Python fixture (40 tests) and the native
+TypeScript decoder and its test file `github.isolation.test.ts` (33 tests, 2 new). Both
+native build switches and `FLOOR` remain false, and native commands registered with
+`OwnedProcess` remain refused before launch.
+
+The expected hosted label for the next bounded diagnostic cell is
+`prepare-mask-host-temp-keeper-search`. It would confirm at admission that `/` and
+`/home` are searchable by the keeper and that `/home/runner` or `/home/runner/work` is
+not. Which of those two blocks remains unproven; the planned `/home/runner` mask does not
+depend on it, but a narrower `/home/runner/work` mask would need a per-ancestor witness
+first. ACLs and mandatory access control are not modelled, and the hosted run is the
+authority. The run and its result are logged in `native-qualify-notes.md`. No production
+activation is authorized by this document.
+
+## Runner-home mask, 15 November 2026
+
+The bounded lane dispatch `43675930370` (job `132695971881`, head `f05f9916`) closed at
+admission with `prepare-mask-host-temp-keeper-search`. The keeper cannot search a strict
+ancestor of the fixed hosted temporary root `/home/runner/work/_temp`, which is
+`/home/runner` or `/home/runner/work`; which of the two is still unproven. The earlier
+dispatch `43660129312` closed with `...-bwrap-destination-host-temp-eacces-...` on that
+same fifth mask. Bubblewrap applies its operations in order, so the four earlier masks
+over Root-owned host directories did not fail. That last step is code reading of
+bubblewrap, not a hosted witness.
+
+The mask list is now `/home/vector-agent`, `/tmp`, `/var/tmp`, `/run` and `/home/runner`,
+each an empty read-only tmpfs in that order. This supersedes every earlier mask list in
+this document that names `/home/runner/work/_temp` as a mask root. The fixed
+`RUNNER_TEMP` stays `/home/runner/work/_temp` for the TypeScript `hostedTemporary`
+equality and is hidden beneath the runner-home mask. The mask now also hides every other
+runner-home path, such as the runner install and diagnostic trees, `~/.bun` and tool
+caches. This is a fact about the mask's extent, not a security or qualification claim.
+
+Proof obligations in the source:
+
+- Admission requires the following:
+  - the runner home is a canonical directory owned by the runner uid, with no group or
+    other write;
+  - the runner account's home directory is exactly `/home/runner`;
+  - every mask parent is canonical, Root-owned, without group or other write, and
+    keeper-searchable;
+  - each mask root's mount is descriptor-pinned on its recorded device;
+  - nested mounts beneath any mask are pinned origins.
+  Alias refusal and the capture closure are unchanged.
+- Construction checks each mask twice as a live, read-only, empty, keeper-owned `0755`
+  tmpfs.
+- No published container, stage, scratch, directory or socket path may lie under a mask
+  (`validate_spec`, `parseSpec`).
+- The native `run()` refuses any engine or runtime beneath a mask. That now includes
+  `/home/runner`, so a runtime installed there (for example by setup-bun) is refused, which
+  is stricter. The CI fixture runs only its copies under `/usr/libexec`.
+- After prepare, mask-source validation re-checks each root record's mode, uid and gid,
+  and the runner-owned `/home/runner` is now one of those records. A runner-owned step
+  that changes `/home/runner`'s mode or owner after prepare therefore makes validation
+  refuse in a later step. That fails closed; the check is not to be widened.
+- Still open until a hosted run passes prepare, as CI witnesses:
+  - the runner-home canaries are exactly `ENOENT` through the mask;
+  - `/home/runner/work` cannot be recreated (`EROFS`);
+  - Root reads both hosted seeds before the agent's privilege drop.
+
+The hosted temporary label families are removed and replaced in place by `runner-home`
+ones, consistently in `entry.py`, the CI-only Python fixture (45 tests) and the
+TypeScript decoder with its test file `github.isolation.test.ts` (34 tests). The mask
+admission product stays 73 stages, the TypeScript per-mask entries 62, and the keeper
+product 97 logs and 582 stages. No `chmod` or `chown` is added, no mask is dropped, and
+no alias or capture check is weakened. The run and its result are logged in
+`native-qualify-notes.md`.
+
+No qualification follows from this change. Both native build switches and `FLOOR` stay
+false, and native plus `OwnedProcess` stays refused. No production activation is
+authorized by this document.
+
+## Host witness diagnostics, 15 November 2026
+
+Run 43685383291 (job `132724666982`, head `4eb7e06c`, the diagnostic cell) is the first
+hosted native prepare that passed: mask admission with the runner-home mask, keeper,
+broker, publish and mask proof. The seed and byte-verification steps passed too. The host
+witness then refused in about 1 s and printed only its generic line, because its driver
+and engine stderr stay private and it had no closed failure vocabulary. Finish exited 0
+after the ready prepare. Whether any engine or Shell command ran is unknown, and finish
+uses the control `cleanup` operation, so it proves nothing about `inspect` or mask
+validation. This is not a qualification.
+
+The CI-only host fixture now prints one `VECTOR_NATIVE_SHELL_FAILURE` line on refusal,
+before the generic line. That line carries only these fields:
+
+- fixed role-prefixed labels for the host, Root observer, driver, engine and `run()`
+  error stages;
+- closed case and operation names;
+- an exit code from 0 to 255;
+- the already-validated control failure projection.
+
+If any other field fails its own validation, the line carries the host stage alone. No
+path, message, stderr, argv or secret is printed. No assertion is weakened, and no
+deadline, manifest, provenance, cleanup step, workflow or matrix changes. The host's
+close check gains one condition: it also refuses a run in which the engine or the
+driver reported its own refusal. No production source changes.
+The runner-home witness obligations listed above stay open until a host witness passes.
+The run and the new vocabulary are logged in `native-qualify-notes.md`.
+
+No qualification follows from this change. Both native build switches and `FLOOR` stay
+false, and native plus `OwnedProcess` stays refused. No production activation is
+authorized by this document.
+
+## Engine proc and the Bun runtime, 15 November 2026
+
+Run 43690568146 (job `132740150684`, head `bd840ff6`, the diagnostic cell) passed
+prepare, seed and byte verification again. The host witness then printed `host-close`
+with `driverExit` 134 and every other field null. The production `run()` resolved with
+exit 134 from its sudo and bubblewrap engine launch, and the engine fixture reported
+nothing. By code reading, bubblewrap reports a child killed by signal n as exit 128 + n,
+so 134 is SIGABRT inside the engine sandbox, before the engine fixture reported. The
+native engine launch uses `ProcessIsolation.engineArguments`, whose `/proc` is an empty
+read-only tmpfs.
+
+Suspected open gate, not a CI result: the Bun runtime may abort at startup under the
+engine sandbox's empty read-only `/proc`. The code shows that the native engine launch
+uses that `/proc`. This document cites only code reading and CI evidence for it.
+
+The CI-only host fixture now runs a failure-only, report-only probe. It runs only on this
+exact geometry, and never after the engine fixture reported. It makes three bounded sudo
+starts of a copied runtime with `-e 0`:
+
+- the engine's runtime under the production empty `/proc`;
+- the same runtime under its own PID namespace and read-only procfs;
+- Node under the empty `/proc`.
+
+The FAILURE line gains two closed fields, `probe` and `probeNode`. The NQ-7 dispatch
+confirms or refutes the cause on the hosted image, and NQ-8 reads it and updates
+"Remaining qualification" from that evidence only.
+
+If the cause is confirmed, the engine sandbox's `/proc` treatment is a mount decision
+outside this lane. It belongs to the lead or the native lane, and to the owner where it
+touches the held-off FLOOR, which uses the same `engineArguments`. Inference only: the
+shipped `vector` executable is Bun-compiled, so a native hosted engine would meet the same
+`/proc`. That is moot while the native build switches are off. Whether the Node cells
+share the gate is what `probeNode` shows.
+
+No production source changes. No mount, mask, assertion, deadline, workflow or matrix
+changes. No qualification follows from this change. Both native build switches and
+`FLOOR` stay false, and native plus `OwnedProcess` stays refused. No production
+activation is authorized by this document.
+
+## Native qualification lane end, 15 November 2026
+
+This is the `native-qualify` lane's closing record. All citations are at the lane head
+`ce5e5605` (`ce5e56054a57a92279341593255ed4f4fd98f902`). The package table, the dispatch
+log and the decisions are in `native-qualify-notes.md`, NQ-8. No Shell lifecycle cell has
+passed. One gate is proven, for one cell at one head, as described below.
+
+### Evidence
+
+Every run below is the single diagnostic cell `Shell seam (bun, own-key, baseline)` on
+`ubuntu-24.04`, dispatched with `{"diagnostic_cell": true}`:
+
+| Run | Job | Head | Package | Closed result |
+| --- | --- | --- | --- | --- |
+| [43621985900](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43621985900) | `132529480650` | `f141ef16` | before the lane | `prepare-keeper-child-exit-log-bwrap-destination-host-temp-info-child-created` |
+| [43660129312](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43660129312) | `132647364562` | `597dbcc9` | NQ-1 | `prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created` |
+| [43675930370](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675930370) | `132695971881` | `f05f9916` | NQ-3 | `prepare-mask-host-temp-keeper-search` |
+| [43685383291](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43685383291) | `132724666982` | `4eb7e06c` | NQ-5 | no label: prepare passed for the first time, and step 16 printed only its generic line |
+| [43690568146](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43690568146) | `132740150684` | `bd840ff6` | NQ-6 | `host-close`, `driverExit` 134 |
+| [43697711119](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43697711119) | `132761821581` | `ce5e5605` | NQ-7 | `host-close`, `driverExit` 134, `probe-empty-abort-own-zero`, `probe-node-zero` |
+
+The 14 November hypothesis is confirmed in part: the keeper cannot search a runner-owned
+ancestor of the hosted temporary root. Run 43660129312 shows this at construction:
+bubblewrap, running as the keeper, got `EACCES` on the parents of the hosted temporary
+root. Run 43675930370 shows it at admission, with the keeper-search label. Which of
+`/home/runner` and `/home/runner/work` blocks the keeper is still unproven (lane decision
+D34).
+
+### The last run
+
+Run 43697711119 (`workflow_dispatch`, run 17, attempt 1), job `132761821581`, head
+`ce5e5605`. The runner was image `ubuntu-24.04` version 20261111.127.1 (Ubuntu 24.04.5
+LTS), runner 2.338.2. Tool versions: setup-node 24.15.0, setup-bun 1.3.14+0d9b296af,
+bubblewrap `0.9.0-1ubuntu0.3` and apparmor-utils `4.0.1really4.0.1-0ubuntu0.24.04.9`.
+
+- Steps 1-15 passed:
+  - control policy: 10 pass, 0 fail, 764 `expect()` calls;
+  - pure Python: `Ran 45 tests in 0.226s` ... `OK`;
+  - compile, install and workspace;
+  - both metadata preflights, with `readerSHA256`
+    `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8` and
+    `sourceRevision` equal to the head;
+  - prepare (09:08:41 to 09:09:19Z), the seed and the byte verification.
+- Step 16 printed the line below, then "Native Shell host fixture refused", and exited
+  125:
+
+  `VECTOR_NATIVE_SHELL_FAILURE {"v":1,"host":"host-close","case":null,"operation":null,"observer":null,"driver":null,"run":null,"driverExit":134,"probe":"probe-empty-abort-own-zero","probeNode":"probe-node-zero","engine":null,"engineCase":null,"control":null}`
+
+- Step 17 (finish) reports `success`, which proves nothing about the witness.
+- Step 18 refused as designed: `manage.mjs assert 'success' 'success' 'failure' 'success'`
+  exited 125.
+- Step 19 uploaded 4 files (artifact `14155032027`).
+- The gate runs at the same head both passed: guard-unit 43697541691 (job `132761304777`,
+  `Ran 45 tests in 0.221s` ... `OK`) and typecheck 43697544910.
+
+### What the probe shows
+
+The probe results are read with the table that NQ-7 registered before the run:
+
+- `probe-empty-abort-own-zero`: on this hosted image the engine's runtime aborts with
+  `-e 0` under the empty read-only `/proc`, and starts under its own PID namespace and
+  procfs. That runtime is Bun, at the manifest's `runtimePath`
+  (`packages/engine/test/fixture/native-shell-host.ts:405`).
+- `probe-node-zero`: Node 24.15.0 starts with `-e 0` under the empty `/proc`.
+
+The scope of this result is narrow:
+
+- Both results are for `-e 0` under the probe's own argv
+  (`packages/engine/test/fixture/native-shell-payload.ts:173-212`).
+- That argv differs from the production engine start in five ways, all listed in the
+  NQ-7 notes: it has no writable binds, it uses `--chdir /`, it passes
+  `PATH=/usr/bin:/bin`, it runs `-e 0` instead of the engine bundle, and it has no
+  proof-FD wrapper.
+- The probe makes the `/proc` cause consistent with step 16's `driverExit` 134. Saying
+  that this is what aborted step 16 is still inference. It stays inference until a run
+  with the `/proc` decision applied passes.
+- No Node cell was dispatched, so `probe-node-zero` qualifies no Node cell.
+
+The `/proc` decision still belongs to the lead or the native lane, and to the owner where
+it touches the held-off FLOOR.
+
+### Mask geometry and its proof obligations
+
+The mask list is `/home/vector-agent`, `/tmp`, `/var/tmp`, `/run` and `/home/runner`. It is
+defined in `packages/core/src/process-isolation/linux.ts:15-17` and
+`packages/core/src/process-isolation/linux/entry.py:37-38`, and built into the keeper argv
+at `entry.py:1747`.
+
+Status of each obligation at `ce5e5605`:
+
+- Admission, `supported_mask_sources` (`entry.py:1401`, called at `:1722`): positive path
+  only (step 13 passed).
+- Construction checks, `validate_masks` (`entry.py:1600`, called at `:1793` for
+  `prepare-mask-proof` and at `:1830` for `prepare-broker-mask-proof`): positive path
+  only.
+- No spec path under a mask, `validate_spec` (`entry.py:109`, at publish `:1833`):
+  positive path only.
+- `run()`'s `assertUnmaskedRuntime` (`packages/engine/src/cli/cmd/github.sandbox.ts:680-681`):
+  positive path only. `run()` reached its engine launch: it resolves with its launcher's
+  exit code (`github.sandbox.ts:817-819`), and `driverExit` 134 is that code.
+
+Refusals by these checks have only unit evidence. The pure Python fixture
+`packages/core/test/fixture/native-mask-origins.py` ran in guard-unit 43697541691 (job
+`132761304777`) and in step 8. For `assertUnmaskedRuntime`, the refusal is in
+`packages/engine/test/fixture/native-shell-ci/policy.test.ts:100-101`, which ran in step 7.
+No hosted run has built a runner-home geometry and seen it refused. Run 43675930370 was a
+hosted refusal, but of the former geometry.
+
+The three runner-home witness obligations:
+
+- Root reads both hosted seeds before the agent's privilege drop: witnessed. Run
+  43690568146 at `bd840ff6` was the first witness, and run 43697711119 repeats it; the
+  controls code is the same at both heads.
+  - The derivation: the host stage reads `host-close` only if `main()` reached
+    `native-shell-host.ts:945` with the witness unfrozen. `at()` (`:325-327`) stops
+    updating the stage only after `fail()` sets `witness.frozen` (`:878`). `main()` runs
+    linearly from `at("host-controls")` (`:432`) through Root's `controls` operation
+    (`:433`) and its count checks (`:434-443`) to `:945`, so none of them threw.
+  - That operation reads the hosted seeds as Root before the drop (`:157-162`).
+  - This corrects, without rewriting, the "Host witness diagnostics" section above, which
+    kept this obligation open.
+- The runner-home canaries are exactly `ENOENT` through the mask
+  (`native-shell-payload.ts:701-719`): open.
+- `/home/runner/work` cannot be rebuilt, `EROFS` (`:731-743`): open.
+
+The two open obligations are checks in the `inspect` case, which no run reached.
+
+### Remaining qualification at `ce5e5605`
+
+**Proven** by one run at one head (43697711119, job `132761821581`, `ce5e5605`), for the
+bun/own-key diagnostic cell on this image only:
+
+- Step 12, as `packages/engine/test/fixture/native-shell-ci/preflight.ts:6-36` defines it:
+  the same-host installed Python metadata observer and the stock dpkg package profile
+  (`packages/core/src/directory-identity.ts:531-538`), under both copied runtimes.
+- The reader is the one pinned in this tree, with SHA-256 `c8283da6...`
+  (`native-shell-ci/common.ts:11`, required by `native-shell-ci/build.ts:57`).
+- "Profile" here means that package profile. It does not mean the `vector-sandbox-v1`
+  AppArmor profile, whose compatibility stays open below.
+- The result is per SHA and repeats earlier runs. Step 12 also passed in every earlier
+  lane dispatch and in pre-lane run 43566766483.
+- `origin/review-fixes` `48b76a5b`, not merged here, adds a workflow comment that only a
+  run on `main` is the qualification of record.
+
+**Passed but not a gate:** prepare, the seed and the byte verification (steps 13-15) on
+that cell at that head.
+
+**Open:**
+
+- prepare and the baseline Shell lifecycle on one bun/own-key diagnostic cell. Step 16 is
+  red; the suspected blocker (inference from the `-e 0` probe, run 43697711119) is the
+  engine sandbox `/proc` decision;
+- the complete eight-cell matrix (four baseline cells and the four fresh Engine-death
+  cells), including owned cleanup on every path. They were never dispatched in this lane;
+- the native `owned` refusal case. It does not exist: `CASES` is at
+  `native-shell-payload.ts:17-28`;
+- the two open witness obligations above, D34, and D4 (Ubuntu's rewritten userns-denied
+  message has no closed label);
+- a hosted `test.yml` run of the lane's Bun tests. `test.yml` has no run on
+  `native-qualify`;
+- the reader integration clause in "Remaining qualification" above. This lane has not
+  verified it;
+- a reviewed reader re-pin before any native dispatch after a merge.
+  - At `origin/release-finish` `cf2373c4`, commits `7b43deb5` and `73f6de55` change
+    `packages/core/src/directory-identity.ts`, which then hashes to `b132565e...`.
+  - `release-finish` leaves `native-shell-ci` unchanged.
+  - Once #33 or `main` is merged into this branch, every native dispatch therefore refuses
+    at the compile step (`build.ts:57` against `common.ts:11`), before the preflight,
+    until a reviewed reader is re-pinned there.
+  - The step-12 result above does not carry over.
+
+**Always open:**
+
+- the full Engine bootstrap;
+- preconstruction alias/canary cases;
+- native profile/LSM compatibility beyond this image. This image is `ubuntu-24.04`
+  20261111.127.1 with bubblewrap `0.9.0-1ubuntu0.3`;
+- installed runtime provenance outside CI;
+- root installation on real hosts;
+- the production floor.
+
+### Invariants at `ce5e5605`
+
+- `FLOOR` is `false` (`packages/core/src/process-isolation.ts:26`).
+- `LinuxIsolationBuild.enabled` is `false` and `entrySHA` is `undefined`
+  (`packages/core/src/process-isolation/build.ts:2-3`).
+- `GithubIsolationBuild.enabled` is `false`
+  (`packages/engine/src/cli/cmd/github.isolation-build.ts:2`).
+- Native plus `OwnedProcess` is refused before any process exists
+  (`packages/core/src/cross-spawn-spawner.ts:405-411`, the throw at `:411`).
+- No runtime, environment or configuration switch was added in this lane.
+
+No production activation is authorized by this document.
