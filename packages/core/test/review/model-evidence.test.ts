@@ -49,7 +49,8 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // So are the fix executor (engine review/fix.ts) and the CLI's apply step (cli/cmd/review.fix.ts, VS-12c): they run
 // after a review, from its outcome, and decide nothing it finds or posts. So are the owner fix API's adapter (engine
 // review/fix-owner.ts, VS-12d) and its wire schema (schema review-fix.ts), for the same reason; the review routes and
-// owner files they extend stay pinned.
+// owner files they extend stay pinned. So are the fix planner the CLI step shares with the desktop (core
+// review/fix-plan.ts) and the desktop's fix adapter (app features/vectorscope/local-fix*.ts), for the same reason.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/connect/hub.ts",
   "packages/engine/src/connect/adapters/vectorscope.ts",
