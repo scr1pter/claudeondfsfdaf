@@ -7173,3 +7173,19 @@ non-blocking findings; none rejected.
 Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeout 30000`): `hosted-sessions-api.test.ts`
 59 pass, 0 fail, 1 skip; `hosted-copy.test.ts` 7/0; `account-delete.test.ts` 38 pass, 0 fail, 1 skip;
 `hosted-lifecycle.test.ts` 23/0. The full `bun turbo typecheck --concurrency=2` ran before the push.
+
+- **16 Nov 2026, engine (linux, shard 4/4) red at `b2537951` (test.yml run 43859026439, job 133280588136).** "task
+  isolation saves > Stop returns while Git is still saving, and a same-ID resume waits for the saved result"
+  (`packages/engine/test/tool/task.test.ts`) failed with `TaskIsolation.Error` code `registry`, "Isolation data cannot
+  be a symbolic or hard link." Not caused by this lane: its diff touches no task, worktree or isolation code, no Git or
+  temp-dir helper and not `test.yml`; shard 4/4 ran the same 163 files in the same order in main's run 43839344467 (job
+  133204672318) and #33's head run 43829091585 (job 133172046619), where the same test passed. Root cause, a real race
+  in `guarded()` (`packages/engine/src/task/isolation.ts`): every save renames a fresh file over `record.json`, and the
+  test polls `isolation.find` (no per-task lock) while the forked save writes. An `lstat` that resolved the old file
+  just before the rename reports it with `nlink` 0, and `nlink !== 1` read that as a hard link. A Python probe on this
+  machine (rename over a file in a loop while another thread lstats it) saw `nlink` 0 on 4504 of 6.7 million calls. The
+  guard now refuses `nlink > 1`, so a second name is still refused. New test in `test/task/isolation.test.ts`, "a
+  record replaced while it is read is not taken for a hard link, and a real hard link still is": four readers call
+  `find` while 3000 renames replace the record, then a second name for the record must still fail with `registry`. It
+  failed before the fix with the same error on several reads and passes after. Ran locally through `vector-serial`,
+  one file at a time: `test/task/isolation.test.ts` 91/0, `test/tool/task.test.ts` 161/0; engine `bun typecheck`.

@@ -761,6 +761,44 @@ it.instance(
 )
 
 it.instance(
+  "a record replaced while it is read is not taken for a hard link, and a real hard link still is",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* f.reserve()
+      const text = yield* contents(path.dirname(f.recordPath), "record.json")
+      // Every save renames a fresh file over record.json. An lstat that resolved the old file just before the rename
+      // can report it with no names left (nlink 0): engine shard 4/4 of test.yml run 43859026439 failed on that read.
+      const replacing = yield* Effect.promise(async () => {
+        for (const index of Array.from({ length: 3000 }, (_, index) => index)) {
+          const temp = `${f.recordPath}.${index}.tmp`
+          await fs.writeFile(temp, text, { flag: "wx", mode: 0o600 })
+          await fs.rename(temp, f.recordPath)
+        }
+      }).pipe(Effect.forkScoped)
+      const reads = yield* Effect.forEach(
+        Array.from({ length: 4 }, () => 0),
+        () =>
+          Effect.gen(function* () {
+            const exits = []
+            while (replacing.pollUnsafe() === undefined)
+              exits.push(yield* f.isolation.find(f.child.id).pipe(Effect.exit))
+            return exits
+          }),
+        { concurrency: "unbounded" },
+      )
+      yield* Fiber.join(replacing)
+      const exits = reads.flat()
+      expect(exits.filter(Exit.isFailure).map((exit) => Cause.pretty(exit.cause))).toEqual([])
+      expect(exits.length).toBeGreaterThan(0)
+      // A second name for the record, which every OS can create without a privilege, is still refused.
+      yield* Effect.promise(() => fs.link(f.recordPath, path.join(path.dirname(f.recordPath), "second-name.json")))
+      yield* failure(f.isolation.find(f.child.id), "registry")
+    }),
+  { git: true },
+)
+
+it.instance(
   "a merge through a symlinked target directory is refused",
   () =>
     Effect.gen(function* () {

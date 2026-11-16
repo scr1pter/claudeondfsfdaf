@@ -299,7 +299,9 @@ async function guarded(file: string, root = Global.Path.data) {
       if (missing(cause)) return undefined
       throw cause
     })
-    if (info?.isSymbolicLink() || (info?.isFile() && info.nlink !== 1))
+    // A second name is nlink 2 or more. Every save renames a fresh file over the record, and an lstat that resolved
+    // the old file just before that rename reports it with no names left (nlink 0): that is a replaced file, not a link.
+    if (info?.isSymbolicLink() || (info?.isFile() && info.nlink > 1))
       throw err("registry", "Isolation data cannot be a symbolic or hard link.")
     if (name !== file && info && !info.isDirectory())
       throw err("registry", "Isolation registry ancestor is not a directory.")
