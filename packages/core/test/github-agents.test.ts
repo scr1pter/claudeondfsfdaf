@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import { GithubAgents } from "@vectordevai/core/github-agents"
-import { buildWorkflowYaml, WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
+import { buildWorkflowYaml, GITHUB_WORKFLOW_VERSION, WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 
 const COMMANDS = ["/vector", "/vs", "/vectorscope", "/vx"]
 // Characters actions/upload-artifact refuses in an artifact name.
@@ -260,6 +260,7 @@ describe("credentials", () => {
         "VECTOR_THREAD",
         "VECTOR_PROMPT",
         "VECTOR_SCHEDULE_PROMPTS",
+        "VECTOR_BRAIN_UPLOAD",
         "VECTOR_WORKFLOW_VERSION",
         "VECTOR_DISABLE_USAGE",
         "VECTOR_PURE",
@@ -320,6 +321,7 @@ describe("shared names", () => {
       publish: "Vector publish",
       review: "Vector review",
       bind: "Vector bind",
+      capture: "Vector capture",
       legacyTask: "Vector task",
     })
   })
@@ -330,10 +332,25 @@ describe("shared names", () => {
     expect(Number(GithubAgents.WORKFLOW_VERSION)).toBeGreaterThanOrEqual(GithubAgents.MIN_CODIUM_WORKFLOW_VERSION)
   })
 
+  test("the CLI compares installed workflows against what the v3 builder writes", () => {
+    expect(GITHUB_WORKFLOW_VERSION).toBe(GithubAgents.WORKFLOW_VERSION)
+  })
+
   test("every endpoint is /api/cloud-agents/<kebab-case name>, and each audience is its endpoint's address", () => {
     const kebab = (name: string) => name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
     expect(Object.keys(GithubAgents.ENDPOINT).sort()).toEqual(
-      ["bindCode", "bind", "bindings", "unbind", "mint", "heartbeat", "settle", "runs", "artifactKey"].sort(),
+      [
+        "bindCode",
+        "bind",
+        "bindings",
+        "unbind",
+        "mint",
+        "heartbeat",
+        "settle",
+        "runs",
+        "artifactKey",
+        "brainDownload",
+      ].sort(),
     )
     expect(
       Object.entries(GithubAgents.ENDPOINT).filter(([name, route]) => route !== `/api/cloud-agents/${kebab(name)}`),
@@ -376,7 +393,7 @@ describe("numbers", () => {
       AT_ONCE_POLL_MS: 30_000,
       BIND_CODE_SECONDS: 10 * 60,
       TICKET_SECONDS: 15 * 60,
-      TIMEOUT_MIN: { codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20 },
+      TIMEOUT_MIN: { codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20, capture: 15 },
       PATCH_LIMITS: {
         bytes: 8_000_000,
         files: 2_000,

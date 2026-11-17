@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import { RedisClient } from "bun"
-import { createHash } from "node:crypto"
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto"
 import { createServer } from "node:http"
+import { mintCliToken } from "../../../api/_lib/cli-token"
 import { createCloudAgentsApi } from "../../../api/_lib/cloud-agents-api"
+import { cloudBrainArtifactKey, cloudRunArtifactKey } from "../../../api/_lib/cloud-agents-artifact"
 import { bindingFor, createBindCode, redeemAndBind } from "../../../api/_lib/cloud-agents-binding"
+import { bindBrainUpload, commitBrainUpload, prepareBrainUpload } from "../../../api/_lib/cloud-agents-brain"
+import { createDesktopCloudAgentApi } from "../../../api/_lib/cloud-agents-desktop"
 import type { CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitlement"
 import { liveKey, liveRun } from "../../../api/_lib/cloud-agents-ledger"
 import { readRunToken } from "../../../api/_lib/cloud-agents-run-token"
@@ -49,9 +53,17 @@ function integrationTests() {
     "KV_REST_API_URL",
     "KV_REST_API_TOKEN",
     "VECTOR_RUN_TOKEN_SECRET",
+    "VECTOR_RUN_ARTIFACT_SECRET",
     "VECTOR_LICENSE_SECRET",
     "VECTOR_CLI_TOKEN_SECRET",
   ]
+  // The desktop Brain routes take their switch and wrapping secret from this env; the ordinary artifact-key route reads
+  // the same secret from process.env.
+  const brainEnv = {
+    VECTOR_GITHUB_BRAIN_ENABLED: "true",
+    MODEL_PLANS_ENABLED: "true",
+    VECTOR_RUN_ARTIFACT_SECRET: "cloud-start-artifact-fixture-secret-32-characters",
+  }
   const previous = Object.fromEntries(environment.map((key) => [key, process.env[key]]))
   beforeAll(async () => {
     await redis.connect()
@@ -62,6 +74,7 @@ function integrationTests() {
       KV_REST_API_URL: upstream.url.origin,
       KV_REST_API_TOKEN: "mint-fixture-kv",
       VECTOR_RUN_TOKEN_SECRET: "cloud-mint-fixture-secret-32-characters",
+      VECTOR_RUN_ARTIFACT_SECRET: brainEnv.VECTOR_RUN_ARTIFACT_SECRET,
       VECTOR_CLI_TOKEN_SECRET: "cloud-mint-cli-fixture-secret-32-characters",
     })
   })
@@ -89,6 +102,7 @@ function integrationTests() {
     const policy: {
       now: number
       allowance: CloudAgentAllowance
+      eligible: boolean
       before?: number
       beforeCall?: () => Promise<void>
       onStore?: (command: readonly (string | number)[]) => Promise<void>
@@ -103,6 +117,7 @@ function integrationTests() {
         periodEnd: Date.now() + 86_400_000,
         premiumModels: true,
       },
+      eligible: true,
     }
     const identity = {
       repository: "fixture-owner/project",
@@ -134,22 +149,45 @@ function integrationTests() {
       },
       { preconnect: fetch.preconnect },
     )
+    const store = async (command: readonly (string | number)[]) => {
+      await policy.onStore?.(command)
+      return persistentStore(command)
+    }
+    const entitlement = async () => {
+      await policy.beforeCall?.()
+      return policy.allowance
+    }
     const api = createCloudAgentsApi({
       app: github.app,
       verify: github.verify,
       fetcher,
       now: () => policy.now,
-      store: async (command) => {
-        await policy.onStore?.(command)
-        return persistentStore(command)
-      },
-      entitlement: async () => {
-        await policy.beforeCall?.()
-        return policy.allowance
-      },
+      store,
+      entitlement,
       revokedBefore: async () => policy.before,
     })
-    const handlers = { mint: api.mint, heartbeat: api.heartbeat, settle: api.settle }
+    // The desktop API has no revokedBefore seam: its run reader and desktop revocation checks read the real store
+    // through `fetcher`, which reaches this file's KV bridge.
+    const desktop = createDesktopCloudAgentApi({
+      store,
+      fetcher,
+      now: () => policy.now,
+      env: brainEnv,
+      app: github.app,
+      eligible: async () => policy.eligible,
+      limit: async () => {},
+      prepare: (trigger, prepareDeps) => prepareCloudRun(trigger, { ...prepareDeps, entitlement }),
+    })
+    const handlers = {
+      mint: api.mint,
+      heartbeat: api.heartbeat,
+      settle: api.settle,
+      artifactKey: api.artifactKey,
+      prepare: desktop.prepare,
+      commit: desktop.commit,
+      download: desktop.download,
+      desktopRun: desktop.start,
+    }
     const server = createServer((request, response) => {
       const route = new URL(request.url ?? "/", "http://fixture").pathname.slice(1) as keyof typeof handlers
       void handlers[route](request, response)
@@ -158,7 +196,7 @@ function integrationTests() {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Fixture could not bind")
     const origin = `http://127.0.0.1:${address.port}`
-    async function send(route: keyof typeof handlers, token: string, body: unknown, query = "") {
+    async function post(route: keyof typeof handlers, token: string, body: unknown, query = "") {
       const response = await fetch(`${origin}/${route}${query}`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -168,10 +206,15 @@ function integrationTests() {
       expect(response.headers.get("cache-control")).toBe("no-store")
       expect(response.headers.get("x-content-type-options")).toBe("nosniff")
       expect(response.headers.get("referrer-policy")).toBe("no-referrer")
-      expect(JSON.stringify(answer)).not.toMatch(
+      return { status: response.status, body: answer, retryAfter: response.headers.get("retry-after") }
+    }
+    // Brain answers carry random base64url, which the copy check below could match by chance; they use post().
+    async function send(route: keyof typeof handlers, token: string, body: unknown, query = "") {
+      const answer = await post(route, token, body, query)
+      expect(JSON.stringify(answer.body)).not.toMatch(
         /"(?:reason|plan|account|email)"|billing|subscription|payment|dispute|fraud|closing|\$\d/i,
       )
-      return { status: response.status, body: answer, retryAfter: response.headers.get("retry-after") }
+      return answer
     }
     async function mint(body: Record<string, unknown> = {}, claims: Record<string, unknown> = {}) {
       return send(
@@ -201,19 +244,7 @@ function integrationTests() {
       target: { kind: "github-run", repositoryId: Number(github.repositoryId) },
       prompt: "Untrusted production log: fixture-only",
     }
-    const deps = {
-      app: github.app,
-      now: () => policy.now,
-      fetcher,
-      store: async (command: readonly (string | number)[]) => {
-        await policy.onStore?.(command)
-        return persistentStore(command)
-      },
-      entitlement: async () => {
-        await policy.beforeCall?.()
-        return policy.allowance
-      },
-    }
+    const deps = { app: github.app, now: () => policy.now, fetcher, store, entitlement }
     async function start(change: Partial<RunTrigger> = {}) {
       return startCloudRun({ ...trigger, ...change }, deps)
     }
@@ -233,17 +264,54 @@ function integrationTests() {
       if (!value) throw new Error("Fixture has no ticket")
       return value
     }
+    function job(check_run_id: string) {
+      github.state.extraJobs.push({
+        ...github.state.job,
+        id: 1000 + Number(check_run_id),
+        check_run_url: `https://api.github.com/repos/fixture-owner/project/check-runs/${check_run_id}`,
+      })
+    }
+    /** The desktop flow over HTTP: prepare, local encryption, commit and start, then the bot's ticket mint. */
+    async function brainRun(check_run_id = "1001") {
+      const content = Buffer.from(
+        JSON.stringify({ format: "vector-brain-run", version: 1, note: "approved knowledge" }),
+      )
+      const sha256 = createHash("sha256").update(content).digest("hex")
+      const token = mintCliToken({ id: account, email: "fixture@example.test" }, Date.now(), "desktop").token
+      const prepared = await post("prepare", token, {
+        repositoryId: github.repositoryId,
+        sha256,
+        bytes: content.length,
+        includeBrain: true,
+      })
+      expect(prepared.status).toBe(200)
+      const encrypted = seal(prepared.body, content)
+      expect((await post("commit", token, { uploadId: prepared.body.uploadId, ...encrypted })).status).toBe(200)
+      const started = await post("desktopRun", token, {
+        repositoryId: github.repositoryId,
+        prompt: "Maintain this repository",
+        brain: { uploadId: prepared.body.uploadId, sha256 },
+      })
+      expect(started.body).toEqual({ ok: true, dispatchedAt: policy.now })
+      expect(github.state.dispatches.at(-1)?.inputs.brain_upload).toBe(prepared.body.uploadId)
+      const minted = await mint({ ticket: ticket() }, { check_run_id })
+      expect(minted.status).toBe(200)
+      return { content, sha256, prepared: prepared.body, encrypted, minted: minted.body }
+    }
     return {
       trigger,
       deps,
       start,
       botIdentity,
       ticket,
+      job,
+      brainRun,
       github,
       account,
       binding,
       bind,
       policy,
+      post,
       send,
       mint,
       revoke,
@@ -771,9 +839,10 @@ function integrationTests() {
     try {
       await f.bind(f.account, "")
       expect((await bindingFor(f.github.repositoryId))?.installationId).toBeUndefined()
-      const before = await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])
+      // KEYS order follows hash-table buckets and can change across a rehash; compare the key sets.
+      const before = ((await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])) as string[]).sort()
       expect(await f.start()).toEqual({ ok: false, reason: "app-required" })
-      expect(await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])).toEqual(before)
+      expect(((await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])) as string[]).sort()).toEqual(before)
       expect(f.github.state.requests).toEqual([])
       await f.bind()
       expect((await f.start()).ok).toBe(true)
@@ -811,6 +880,273 @@ function integrationTests() {
       await f.close()
     }
   })
+
+  async function expire(key: string) {
+    await redis.send("PEXPIRE", [key, "1"])
+    const until = Date.now() + 2_000
+    while ((await redis.send("PTTL", [key])) !== -2) {
+      if (Date.now() > until) throw new Error(`${key} did not expire`)
+      await Bun.sleep(5)
+    }
+  }
+
+  test("an owner-started Brain run downloads exactly its approved bytes and records only immutable metadata", async () => {
+    const f = await fixture()
+    try {
+      const run = await f.brainRun()
+      const download = () => f.post("download", run.minted.token, { uploadId: run.prepared.uploadId })
+      const answer = await download()
+      expect(answer.status).toBe(200)
+      expect(Object.keys(answer.body).sort()).toEqual([
+        "aad",
+        "approvedAt",
+        "artifactKey",
+        "bytes",
+        "ciphertext",
+        "key",
+        "nonce",
+        "publicRepository",
+        "sha256",
+        "uploadId",
+      ])
+      expect(answer.body).toMatchObject({
+        uploadId: run.prepared.uploadId,
+        key: run.prepared.key,
+        aad: run.prepared.aad,
+        ...run.encrypted,
+        sha256: run.sha256,
+        bytes: run.content.length,
+        publicRepository: true,
+      })
+      const opened = unseal(answer.body)
+      expect(opened).toEqual(run.content)
+      expect(createHash("sha256").update(opened).digest("hex")).toBe(run.sha256)
+      const claims = { sub: f.account, repo: f.github.repositoryId, gen: f.binding.generation, thr: "dispatch-1000" }
+      expect(answer.body.artifactKey).toEqual(
+        cloudBrainArtifactKey(claims, { sha256: run.sha256, publicRepository: true }, brainEnv),
+      )
+      expect(answer.body.artifactKey.key).not.toBe(cloudRunArtifactKey(claims).key)
+      const record = `vector:cloud-agents:run:${run.minted.runId}`
+      expect(await redis.send("HMGET", [record, "brainSha", "brainPublic"])).toEqual([run.sha256, "1"])
+      expect(await download()).toEqual(answer)
+      expect(JSON.stringify(await listCloudRuns(f.account))).not.toMatch(/brainSha|brainPublic|ticketHash/)
+    } finally {
+      await f.close()
+    }
+  })
+
+  test("a Brain run's key domain takes the repository's current visibility at its first download; a later change refuses", async () => {
+    for (const startPublic of [true, false]) {
+      const f = await fixture()
+      try {
+        f.github.state.repository.private = !startPublic
+        const run = await f.brainRun()
+        expect(run.prepared.publicRepository).toBe(startPublic)
+        const record = `vector:cloud-agents:run:${run.minted.runId}`
+        const download = () => f.post("download", run.minted.token, { uploadId: run.prepared.uploadId })
+        // The repository changes visibility after the owner approved the upload and before the run reads it.
+        f.github.state.repository.private = startPublic
+        const first = await download()
+        expect(first.status).toBe(200)
+        expect(first.body.publicRepository).toBe(!startPublic)
+        expect(first.body.artifactKey).toEqual(
+          cloudBrainArtifactKey(
+            { sub: f.account, repo: f.github.repositoryId, gen: f.binding.generation, thr: "dispatch-1000" },
+            { sha256: run.sha256, publicRepository: !startPublic },
+            brainEnv,
+          ),
+        )
+        const recorded = [run.sha256, startPublic ? "0" : "1"]
+        expect(await redis.send("HMGET", [record, "brainSha", "brainPublic"])).toEqual(recorded)
+        // The first download fixed the key domain, so a later visibility change refuses every further download.
+        f.github.state.repository.private = !startPublic
+        const second = await download()
+        expect({ status: second.status, key: second.body.key, artifactKey: second.body.artifactKey }).toEqual({
+          status: 503,
+          key: undefined,
+          artifactKey: undefined,
+        })
+        expect(await redis.send("HMGET", [record, "brainSha", "brainPublic"])).toEqual(recorded)
+      } finally {
+        await f.close()
+      }
+    }
+  })
+
+  test("a Brain download needs the exact live desktop ticket, this repository's upload and a current allowance", async () => {
+    const f = await fixture()
+    try {
+      if (!f.policy.allowance.active) throw new Error("fixture allowance")
+      f.policy.allowance = { ...f.policy.allowance, limits: { ...f.policy.allowance.limits, atOnce: 5 } }
+      const run = await f.brainRun()
+      const live = await liveRun(f.account, run.minted.runId)
+      if (!live?.ticketHash) throw new Error("Fixture has no live desktop ticket")
+      // An ops ticket run, and a writer's own dispatch of the same workflow.
+      expect((await f.start()).ok).toBe(true)
+      f.job("1002")
+      const ops = await f.mint({ ticket: f.ticket() }, { check_run_id: "1002" })
+      expect(ops.status).toBe(200)
+      f.job("1003")
+      const bot = f.github.state.run.actor
+      const human = { id: 789, login: "fixture-person", type: "User" }
+      f.github.state.run.actor = human
+      f.github.state.run.triggering_actor = human
+      const writer = await f.mint({}, { actor: human.login, actor_id: "789", check_run_id: "1003" })
+      f.github.state.run.actor = bot
+      f.github.state.run.triggering_actor = bot
+      expect(writer.status).toBe(200)
+      // Uploads of the same account that this run must not read: one bound to another ticket, and one of another
+      // bound repository that is bound to this run's own ticket.
+      const deps = { store: persistentStore, env: brainEnv }
+      async function upload(repositoryId: string, generation: number, ticketHash: string) {
+        const prepared = await prepareBrainUpload(
+          {
+            account: f.account,
+            repositoryId,
+            generation,
+            publicRepository: true,
+            source: "desktop",
+            includeBrain: true,
+            sha256: run.sha256,
+            bytes: run.content.length,
+          },
+          deps,
+        )
+        await commitBrainUpload(
+          { account: f.account, uploadId: prepared.uploadId, ...seal(prepared, run.content) },
+          deps,
+        )
+        await bindBrainUpload(
+          { account: f.account, repositoryId, generation, uploadId: prepared.uploadId, sha256: run.sha256, ticketHash },
+          deps,
+        )
+        return prepared.uploadId
+      }
+      const other = String(100_000_000 + crypto.getRandomValues(new Uint32Array(1))[0]!)
+      await persistentStore(["HSET", `vector:cloud-agents:binding:${other}`, "account", f.account, "generation", "1"])
+      await persistentStore(["SET", `vector:cloud-agents:gen:${other}`, "1"])
+      const otherTicket = await upload(f.github.repositoryId, f.binding.generation, "c".repeat(64))
+      const otherRepository = await upload(other, 1, live.ticketHash)
+      const records = [run.minted.runId, ops.body.runId, writer.body.runId].map(
+        (rid) => `vector:cloud-agents:run:${rid}`,
+      )
+      async function refused(token: string, uploadId: string, status: number) {
+        const answer = await f.post("download", token, { uploadId })
+        expect({ status: answer.status, key: answer.body.key, artifactKey: answer.body.artifactKey }).toEqual({
+          status,
+          key: undefined,
+          artifactKey: undefined,
+        })
+        for (const record of records) expect(await redis.send("HGET", [record, "brainSha"])).toBeNull()
+      }
+      await refused(ops.body.token, run.prepared.uploadId, 503)
+      await refused(writer.body.token, run.prepared.uploadId, 503)
+      await refused(run.minted.token, otherTicket, 400)
+      await refused(run.minted.token, otherRepository, 400)
+      f.policy.eligible = false
+      await refused(run.minted.token, run.prepared.uploadId, 503)
+      f.policy.eligible = true
+      // The same live run and upload with the allowance back: each refusal above came from the one thing it changed.
+      expect((await f.post("download", run.minted.token, { uploadId: run.prepared.uploadId })).status).toBe(200)
+      expect(await redis.send("HGET", [records[0]!, "brainSha"])).toBe(run.sha256)
+    } finally {
+      await f.close()
+    }
+  })
+
+  test("a Brain download refuses a rebound, revoked, settled, expired or unreachable run and an expired upload", async () => {
+    const expected = { rebind: 401, revoked: 401, settled: 401, deadline: 401, outage: 503, upload: 400 }
+    for (const change of ["rebind", "revoked", "settled", "deadline", "outage", "upload"] as const) {
+      const f = await fixture()
+      try {
+        const run = await f.brainRun()
+        if (change === "rebind") await f.bind()
+        if (change === "revoked") await f.revoke()
+        if (change === "settled")
+          expect((await f.send("settle", run.minted.token, { outcome: "no-changes" })).status).toBe(200)
+        if (change === "deadline") f.policy.now = run.minted.deadline
+        if (change === "outage") state.down = true
+        // The upload's own two hours run out while the run token is still live.
+        if (change === "upload") await expire(`vector:cloud-agents:brain:${run.prepared.uploadId}`)
+        const answer = await f.post("download", run.minted.token, { uploadId: run.prepared.uploadId })
+        state.down = false
+        expect({ change, status: answer.status, key: answer.body.key, artifactKey: answer.body.artifactKey }).toEqual({
+          change,
+          status: expected[change],
+          key: undefined,
+          artifactKey: undefined,
+        })
+        if (change === "upload") expect(answer.body.error.code).toBe("BRAIN_UPLOAD_INVALID")
+        expect(await redis.send("HGET", [`vector:cloud-agents:run:${run.minted.runId}`, "brainSha"])).toBeNull()
+      } finally {
+        state.down = false
+        await f.close()
+      }
+    }
+  })
+
+  test("an owner-desktop run never gets the ordinary conversation key, before or after its Brain download, while other ticket runs do", async () => {
+    const f = await fixture()
+    try {
+      const run = await f.brainRun()
+      async function refused(token: string) {
+        const answer = await f.send("artifactKey", token, { thread: "dispatch-1000" })
+        expect({
+          status: answer.status,
+          code: answer.body.error?.code,
+          key: answer.body.key,
+          keyId: answer.body.keyId,
+        }).toEqual({ status: 403, code: "ARTIFACT_KEY_NOT_ALLOWED", key: undefined, keyId: undefined })
+      }
+      await refused(run.minted.token)
+      expect((await f.post("download", run.minted.token, { uploadId: run.prepared.uploadId })).status).toBe(200)
+      await refused(run.minted.token)
+      // A bot renewal of the same check run keeps the desktop provenance, so it is refused too.
+      const renewed = await f.mint()
+      expect(renewed.status).toBe(200)
+      expect(renewed.body.deadline).toBe(run.minted.deadline)
+      await refused(renewed.body.token)
+      // An ops ticket run on the same dispatch thread still gets the ordinary key.
+      expect((await f.start()).ok).toBe(true)
+      f.job("1002")
+      const ops = await f.mint({ ticket: f.ticket() }, { check_run_id: "1002" })
+      expect(ops.status).toBe(200)
+      const key = await f.post("artifactKey", ops.body.token, { thread: "dispatch-1000" })
+      expect(key.status).toBe(200)
+      expect(key.body).toEqual(
+        cloudRunArtifactKey({
+          sub: f.account,
+          repo: f.github.repositoryId,
+          gen: f.binding.generation,
+          thr: "dispatch-1000",
+        }),
+      )
+    } finally {
+      await f.close()
+    }
+  })
+}
+
+function seal(prepared: { key: string; aad: string }, content: Uint8Array) {
+  const nonce = randomBytes(12)
+  const cipher = createCipheriv("aes-256-gcm", Buffer.from(prepared.key, "base64url"), nonce)
+  cipher.setAAD(Buffer.from(prepared.aad))
+  return {
+    nonce: nonce.toString("base64url"),
+    ciphertext: Buffer.concat([cipher.update(content), cipher.final(), cipher.getAuthTag()]).toString("base64url"),
+  }
+}
+
+function unseal(value: { key: string; aad: string; nonce: string; ciphertext: string }) {
+  const bytes = Buffer.from(value.ciphertext, "base64url")
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    Buffer.from(value.key, "base64url"),
+    Buffer.from(value.nonce, "base64url"),
+  )
+  decipher.setAAD(Buffer.from(value.aad))
+  decipher.setAuthTag(bytes.subarray(-16))
+  return Buffer.concat([decipher.update(bytes.subarray(0, -16)), decipher.final()])
 }
 
 function reserveCommand(command: readonly (string | number)[]) {

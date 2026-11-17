@@ -17,6 +17,7 @@ import { liveKey, reserveRun, settleRun, usedKey } from "../../../api/_lib/cloud
 import {
   eraseCloudAgentsAccount,
   listCloudRuns,
+  ownerCloudRun,
   recordRunEnd,
   recordRunStart,
   type RunStart,
@@ -24,6 +25,10 @@ import {
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { persistentStore } from "../../../api/_lib/persistent-store"
 import { ERASE_PARTS } from "../../../api/_lib/codium-erase"
+import "../../../api/_lib/cloud-agents-run-registration"
+import { cloudRunReader } from "../../../api/_lib/cloud-run-reader"
+import { publicCloudRun, type RemoteCloudRun } from "../../../api/_lib/remote-ticket"
+import { runFacts } from "../../../api/_lib/ship-desk"
 import { githubAppFixture } from "./github-app-fixture"
 
 integrationTests()
@@ -429,6 +434,73 @@ function integrationTests() {
     }
   })
 
+  // WP A59 (BT11): the reader cloud-agents-run-registration.ts registers is what Remote's run list (publicCloudRun) and
+  // Ship Desk's run checks and verdicts (runFacts) read.
+  test("A59: the registered reader lists the records in the shapes Remote and Ship Desk read", async () => {
+    const reader = cloudRunReader()
+    if (!reader) throw new Error("The cloud run reader is not registered")
+    const f = await fixture()
+    const passed = await f.start()
+    await f.settle(passed, "changes")
+    const drafted = await f.start({ startedAt: f.now + 1000 })
+    await f.settle(drafted, "draft")
+    const running = await f.start({ startedAt: f.now + 2000 })
+    const records = await listCloudRuns(f.account, { limit: 50 })
+    expect(records.map((record) => record.rid)).toEqual([running.rid, drafted.rid, passed.rid])
+    expect(await reader(f.account, { limit: 50 })).toEqual(records)
+    expect(await reader(f.account, { limit: 1 })).toEqual(records.slice(0, 1))
+
+    const url = (run: RunStart) => `https://github.com/${run.repository}/actions/runs/${run.runId}`
+    // What the phone may show of each record; after the binder leaves, without the repository, its address or actor.
+    const shown = (run: RunStart, hidden: boolean): RemoteCloudRun => ({
+      id: run.rid,
+      ...(hidden ? {} : { repository: run.repository, url: url(run), actor: { login: f.identity.actor } }),
+      event: "issue_comment",
+      source: "github-comment",
+      purpose: "task",
+      startedAt: run.startedAt,
+    })
+    const remote = (hidden = false): RemoteCloudRun[] => [
+      shown(running, hidden),
+      { ...shown(drafted, hidden), endedAt: drafted.startedAt + 1000, outcome: "draft", verdict: "fail" },
+      { ...shown(passed, hidden), endedAt: passed.startedAt + 1000, outcome: "changes", verdict: "pass" },
+    ]
+    expect(records.map(publicCloudRun)).toEqual(remote())
+    expect(JSON.stringify(records.map(publicCloudRun))).not.toMatch(
+      /account|generation|jti|repositoryId|trigger|thread|brain|subscription|billing/,
+    )
+    expect(JSON.stringify(records.map(publicCloudRun))).not.toContain(f.account)
+    const repositoryId = Number(f.identity.repositoryId)
+    expect(records.map(runFacts)).toEqual([
+      { rid: running.rid, repositoryId, ended: false, url: url(running) },
+      { rid: drafted.rid, repositoryId, verdict: "fail", ended: true, url: url(drafted) },
+      { rid: passed.rid, repositoryId, verdict: "pass", ended: true, url: url(passed) },
+    ])
+
+    // After the binder leaves, neither shape names the repository, the run's address or the actor; verdicts stay.
+    await suspendBinding(f.binding, "binder-left")
+    const hidden = await reader(f.account, { limit: 50 })
+    expect(hidden).toEqual(await listCloudRuns(f.account, { limit: 50 }))
+    expect(hidden.map(publicCloudRun)).toEqual(remote(true))
+    expect(hidden.map(runFacts)).toEqual([
+      { rid: running.rid, repositoryId, ended: false },
+      { rid: drafted.rid, repositoryId, verdict: "fail", ended: true },
+      { rid: passed.rid, repositoryId, verdict: "pass", ended: true },
+    ])
+
+    // The GitHub agent service off: nothing is read. The store down: the reader fails, and its callers say so.
+    const sent = commands.length
+    delete process.env.VECTOR_GITHUB_BRAIN_ENABLED
+    try {
+      expect(await reader(f.account, { limit: 50 })).toEqual([])
+      expect(commands.length).toBe(sent)
+    } finally {
+      process.env.VECTOR_GITHUB_BRAIN_ENABLED = "true"
+    }
+    state.down = true
+    await expect(reader(f.account, { limit: 50 })).rejects.toMatchObject({ code: "PERSISTENT_STORE_UNAVAILABLE" })
+  })
+
   test("only server-started dispatches retain the bounded trigger fields", async () => {
     const f = await fixture()
     const run = await f.start({
@@ -443,6 +515,32 @@ function integrationTests() {
     await expect(recordRunStart({ ...run, source: "github-comment", event: "issue_comment" })).rejects.toMatchObject({
       code: "INVALID_REQUEST",
     })
+  })
+
+  // This file's bridge forwards to Bun's RESP3 client, which answers a bare HGETALL with a map: the owner read's record
+  // lookup must not depend on the store's reply protocol (deviations, "2026-11-16 BT09"). The flat-array reply a REST
+  // store sends is covered by cloud-agents-owner-artifact.test.ts's fake store.
+  test("a completed desktop run's owner provenance reads its record through a RESP3 store client", async () => {
+    const f = await fixture()
+    const run = await f.start({
+      event: "workflow_dispatch",
+      source: "github-dispatch",
+      thread: "17",
+      trigger: { source: "desktop", purpose: "task" },
+    })
+    await expect(ownerCloudRun(f.account, run.rid)).rejects.toMatchObject({ code: "RUN_UNAVAILABLE" })
+    await f.settle(run)
+    expect(await ownerCloudRun(f.account, run.rid)).toEqual({
+      account: f.account,
+      rid: run.rid,
+      repositoryId: f.identity.repositoryId,
+      generation: f.binding.generation,
+      thread: "17",
+      runId: run.runId,
+      startedAt: run.startedAt,
+      endedAt: run.startedAt + 1000,
+    })
+    await expect(ownerCloudRun(randomUUID(), run.rid)).rejects.toMatchObject({ code: "RUN_UNAVAILABLE" })
   })
 
   test("erasure removes ledgers, codes, bindings and generation pointers while counters and another account survive", async () => {

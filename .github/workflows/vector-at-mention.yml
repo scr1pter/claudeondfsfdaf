@@ -315,6 +315,12 @@ jobs:
           fi
           node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --install
 
+      # The Codium agent job's Ship Desk ticket step writes its capture ticket to $GITHUB_OUTPUT before the sandbox
+      # (V31). The probe looks for this ticket-shaped value in every runner file-command file it can read.
+      - name: Plant a pre-sandbox step output
+        id: plant
+        run: printf 'capture=%s\n' vcap_probe-capture-ticket-private-5e1c-000000000 >> "$GITHUB_OUTPUT"
+
       - name: Prepare the agent sandbox
         run: vector github sandbox prepare
 
@@ -355,4 +361,5 @@ jobs:
         env:
           PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
           PROBE_UPLOAD_OUTCOME: ${{ steps.artifact_boundary.outcome }}
+          PROBE_PLANTED: ${{ steps.plant.outputs.capture }}
         run: node /opt/vector-sandbox-probe.mjs --assert

@@ -9,6 +9,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Effect, Fiber, ManagedRuntime } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { buildAnchorIndex, fromGitHubFiles, parseUnifiedDiff, type GitHubPrFile } from "@vectordevai/core/review/diff"
 import {
   noteCannotStart,
@@ -1777,7 +1778,7 @@ describe("vector github review: the workflow's command end to end", () => {
     GITHUB_API_URL: w.fake.url,
     GITHUB_RUN_ID: "1",
     GITHUB_TOKEN: "test-token-placeholder",
-    VECTOR_WORKFLOW_VERSION: "2",
+    VECTOR_WORKFLOW_VERSION: GithubAgents.WORKFLOW_VERSION,
     VECTOR_DISABLE_USAGE: "1",
     VECTOR_REVIEW_PR: String(PR),
     VECTOR_REVIEW_REF: w.head,

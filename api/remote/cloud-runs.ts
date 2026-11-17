@@ -9,6 +9,8 @@ import {
   type ApiResponse,
 } from "../_lib/http.js"
 import { remoteCloudRuns, requireRemoteCaller, type CloudRunReader } from "../_lib/remote-ticket.js"
+// A59: the run list reads the registered @vector run records.
+import "../_lib/cloud-agents-run-registration.js"
 
 export default function handler(request: ApiRequest, response: ApiResponse) {
   return handleRemoteCloudRuns(request, response)
@@ -16,8 +18,8 @@ export default function handler(request: ApiRequest, response: ApiResponse) {
 
 /**
  * `GET /api/remote/cloud-runs?limit=` (WP A40): the account's newest runs of Vector's GitHub agent for the phone, from
- * the run records Codex's GitHub work keeps (registered at the integration commit, A59; until then `{runs: [],
- * available: false}`). They run in the user's own repo, on the user's own Actions minutes. Every paid plan includes
+ * the run records Codex's GitHub work keeps (registered by cloud-agents-run-registration.ts, A59; none while the GitHub
+ * agent service is off). They run in the user's own repo, on the user's own Actions minutes. Every paid plan includes
  * them, while the plan allows Remote (§4.4). The desktop app's own sign-in or a website session; 120 reads an hour per
  * account; at most 50 runs (20 by default).
  */

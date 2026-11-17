@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import { GithubAgents } from "@vectordevai/core/github-agents"
-import { buildAgentsWorkflow, type AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
+import { buildAgentsWorkflow, readWorkflowOptions, type AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
 import { createGithubAgents } from "./github-agents"
 
-function fixture(mode: "codium" | "own-key" = "codium") {
+function fixture(mode: "codium" | "own-key" = "codium", brain = false) {
   const options: AgentsWorkflowOptions = {
     mode,
     provider: mode === "codium" ? "vector" : "anthropic",
@@ -29,6 +29,8 @@ function fixture(mode: "codium" | "own-key" = "codium") {
     authorityReads: 0,
     beforeUnbindAuthorityReads: 0,
     time: 1_800_000_000_000,
+    // The owner read's answer; unset, it answers 503 as the hosted route does while the Brain switch is off.
+    ownerKey: undefined as Record<string, unknown> | undefined,
   }
   const hooks: {
     github?: (path: string) => Promise<void>
@@ -45,6 +47,7 @@ function fixture(mode: "codium" | "own-key" = "codium") {
     codium: "ready",
   }
   const github = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
       const url = new URL(request.url)
@@ -106,6 +109,14 @@ function fixture(mode: "codium" | "own-key" = "codium") {
             },
           ],
         })
+      if (url.pathname === "/repos/acme/repo/actions/artifacts/7")
+        return Response.json({
+          id: 7,
+          name: "vector-session-dispatch-99",
+          expired: false,
+          size_in_bytes: 1024,
+          workflow_run: { id: 99, repository_id: 41, head_repository_id: 41 },
+        })
       if (url.pathname.endsWith("/git/ref/heads/main")) return Response.json({ object: { sha: "b".repeat(40) } })
       if (url.pathname.endsWith("/git/refs")) return Response.json({ ref: "created" }, { status: 201 })
       if (url.pathname.endsWith("/pulls"))
@@ -141,7 +152,9 @@ function fixture(mode: "codium" | "own-key" = "codium") {
       if (url.pathname === "/api/model-plans/config")
         return Response.json({
           enabled: true,
-          listed: state.listed ? ["github-agents", "scheduled", "github-no-secret"] : [],
+          listed: state.listed
+            ? ["github-agents", "scheduled", "github-no-secret", ...(brain ? ["brain-cloud"] : [])]
+            : [],
         })
       if (url.pathname === "/api/github/installation") return Response.json({ available: false })
       if (new Headers(init?.headers).get("authorization") !== "Bearer " + state.vectorToken)
@@ -165,8 +178,21 @@ function fixture(mode: "codium" | "own-key" = "codium") {
         return Response.json({ ok: true })
       }
       if (url.pathname === GithubAgents.ENDPOINT.runs) return Response.json({ runs: [] })
+      if (url.pathname === "/api/cloud-agents/owner-artifact-key")
+        return state.ownerKey
+          ? Response.json(state.ownerKey)
+          : Response.json({ error: { code: "ARTIFACT_READ_UNAVAILABLE" } }, { status: 503 })
       throw new Error("Unexpected Vector endpoint")
     },
+    // Only a Brain fixture has an engine, so listed.brain stays false everywhere else. Its engine never starts, so a
+    // Brain call that passes every desktop gate stops here with this message.
+    ...(brain
+      ? {
+          engine: async () => {
+            throw new Error("The Brain fixture engine never starts.")
+          },
+        }
+      : {}),
   })
   return {
     state,
@@ -197,6 +223,61 @@ test("workflow status separates missing, old, current and an old actual CLI pin"
     "@vectordevai/cli@1.99.112",
   )
   expect((await f.controller.status("/fixture")).workflow).toBe("cli-too-old")
+})
+
+// BT01 declared the Codium brain_upload input. A v3 file written before it would make GitHub refuse an owner-started
+// Brain dispatch with 422, so the desktop offers the workflow update and starts nothing until it merges.
+test("a v3 Codium workflow from before the Brain input reads as an update and refuses Brain and plain starts", async () => {
+  using f = fixture("codium", true)
+  const current = buildAgentsWorkflow(f.options)
+  const stale = current
+    .replace("      brain_upload:\n        type: string\n        required: false\n", "")
+    .replace("          VECTOR_BRAIN_UPLOAD: ${{ inputs.brain_upload }}\n", "")
+  expect(stale.length).toBeLessThan(current.length)
+  expect(stale).not.toContain("brain_upload")
+  expect(stale).not.toContain("VECTOR_BRAIN_UPLOAD")
+  expect(readWorkflowOptions(stale)).toEqual(readWorkflowOptions(current))
+  // Every other Brain gate passes and stays the same, so the stale file is the only reason for the refusals below.
+  const gates = (value: Awaited<ReturnType<typeof f.controller.status>>) => ({
+    brain: value.listed.brain,
+    bound: value.bound,
+    codium: value.binding?.codium,
+    suspended: value.binding?.suspended,
+    canDispatch: value.canDispatch,
+  })
+  const ready = await f.controller.status("/fixture")
+  expect(ready.workflow).toBe("current")
+  expect(gates(ready)).toEqual({
+    brain: true,
+    bound: "yours",
+    codium: "ready",
+    suspended: undefined,
+    canDispatch: true,
+  })
+  await expect(f.controller.previewBrain("/fixture")).rejects.toThrow("The Brain fixture engine never starts.")
+  f.state.content = stale
+  const old = await f.controller.status("/fixture")
+  expect(old.workflow).toBe("old")
+  expect(gates(old)).toEqual(gates(ready))
+  expect(old.timeoutMinutes).toBeUndefined()
+  await expect(
+    f.controller.run({
+      cwd: "/fixture",
+      ...(await f.scope()),
+      prompt: "task",
+      brain: { previewId: "preview", approvedSha256: "0".repeat(64) },
+    }),
+  ).rejects.toThrow("Merge the current Vector workflow")
+  await expect(f.controller.run({ cwd: "/fixture", prompt: "task", ...(await f.scope()) })).rejects.toThrow(
+    "Merge the current Vector workflow",
+  )
+  await expect(f.controller.previewBrain("/fixture")).rejects.toThrow("listed Codium desktop run")
+  expect(f.calls.some((call) => call.path.endsWith("/dispatches"))).toBe(false)
+  expect(
+    f.calls.some(
+      (call) => call.path.startsWith("/api/cloud-agents/brain-") || call.path === "/api/cloud-agents/desktop-run",
+    ),
+  ).toBe(false)
 })
 
 test("own-key run stays available when Codium is unlisted and never sends an account request", async () => {
@@ -247,6 +328,49 @@ test("bind uses the trusted default branch, keeps token domains separate, and ha
       .filter((call) => call.path.startsWith("/api/cloud-agents/"))
       .every((call) => call.token === "Bearer vector-only"),
   ).toBe(true)
+})
+
+// BT10: the returned-draft owner read through the real account transport (`vector()`), which the Brain controller's
+// own test replaces with a fake port. vectordev.ai gets the desktop bearer and only the run and artifact ids; GitHub
+// gets only its own bearer.
+test("the returned-draft owner read sends only the desktop bearer to vectordev.ai and only the GitHub bearer to GitHub", async () => {
+  using f = fixture("codium", true)
+  const input = { cwd: "/fixture", rid: "gh-41-99-1-7", artifactId: "7" }
+  await expect(f.controller.previewReturned(input)).rejects.toThrow("Vector could not complete this GitHub request")
+  expect(f.calls.some((call) => call.path.includes("/actions/artifacts"))).toBe(false)
+  f.state.ownerKey = {
+    key: Buffer.alloc(32, 7).toString("base64url"),
+    keyId: "b".repeat(16),
+    repositoryId: "41",
+    thread: "dispatch-99",
+    rid: input.rid,
+    artifactId: "7",
+    publicRepository: false,
+  }
+  // This fixture's account transport serves only vectordev.ai, so the zip download stops there once it is recorded.
+  await expect(f.controller.previewReturned(input)).rejects.toThrow("The encrypted GitHub run artifact is unavailable.")
+  expect(
+    f.calls
+      .filter((call) => call.path === "/api/cloud-agents/owner-artifact-key")
+      .map((call) => [call.host, call.method, call.token, call.body]),
+  ).toEqual(
+    Array.from({ length: 2 }, () => [
+      "https://vectordev.ai",
+      "POST",
+      "Bearer vector-only",
+      { rid: input.rid, artifactId: "7" },
+    ]),
+  )
+  expect(
+    f.calls
+      .filter((call) => call.path.startsWith("/repos/acme/repo/actions/artifacts/"))
+      .map((call) => [call.path, call.token]),
+  ).toEqual([
+    ["/repos/acme/repo/actions/artifacts/7", "Bearer github-only"],
+    ["/repos/acme/repo/actions/artifacts/7/zip", "Bearer github-only"],
+  ])
+  for (const call of f.calls)
+    expect(JSON.stringify(call)).not.toContain(call.host === "https://vectordev.ai" ? "github-only" : "vector-only")
 })
 
 test("unsettled bind returns pending within its bounded polling window", async () => {

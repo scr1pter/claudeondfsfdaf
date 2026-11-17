@@ -344,7 +344,7 @@ const env = {
   GITHUB_SERVER_URL: "https://github.com",
   GITHUB_API_URL: "https://api.github.com",
   VECTOR_GITHUB_AUTH: "app",
-  VECTOR_WORKFLOW_VERSION: "2",
+  VECTOR_WORKFLOW_VERSION: "3",
   VECTOR_REVIEW_AUTO: "1",
   ACTIONS_ID_TOKEN_REQUEST_URL: `${proxyURL}/oidc?fixture=1`,
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: "synthetic-request",

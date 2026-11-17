@@ -139,24 +139,24 @@ Also:
 Built in `e34523980`: 23 files, `desktop/src/main/github-agents.ts` and `github-agents-brain.ts`, IPC, preload and tests. Browser validation passed: 43216635830 and 43565027734.
 
 Remaining:
-1. **The version flip** (spec 2.11.4):
-   - `packages/core/src/review/workflow.ts:18` still has `GITHUB_WORKFLOW_VERSION = "2"`. Set it to `GithubAgents.WORKFLOW_VERSION`.
-   - Update the hard-coded `"2"` in `engine/test/cli/github.workflow.test.ts:145,195,279,328,483`, `github.review.test.ts:1780`, `github.run-routing.test.ts:122`, `engine/script/verify-sharing.ts:484` and `verify-github-app.ts:347`.
-   - Update the comment at `core/src/github-agents.ts:6-7`.
-2. A progress entry for V24. Today it is mentioned only in deviations ("Combined desktop integration review", `deviations.md:628`).
+1. **The version flip** (spec 2.11.4): **built in BT02** on `brain-transport` (progress and deviations, "2026-11-15 BT02").
+   - `GITHUB_WORKFLOW_VERSION` is now `GithubAgents.WORKFLOW_VERSION`, and the comments in `workflow.ts` and `core/src/github-agents.ts:6-7` are updated.
+   - Corrected line list: `github.workflow.test.ts:145,195,279,328` are legacy `buildWorkflowYaml` goldens and stay `"2"`. Only `:483` changed there, plus `github.review.test.ts:1780`, `github.run-routing.test.ts:122`, `engine/script/verify-sharing.ts:484` and `verify-github-app.ts:347`.
+2. A progress entry for V24: **added in BT02** (the "V24 record" in BT02's progress entry).
 3. **Waits on the owner (A1 and spec §4 step 7):**
    - `vectorRequiredCliVersion` is `"1.99.99"` (`packages/desktop/package.json:6`).
    - `MIN_AGENTS_CLI` is a provisional `"1.99.113"` (`github-agents.ts:12`).
    - Raise both only to an actually published CLI release.
+4. **V24's carries, not built:** publish learning the agent job's result (`VECTOR_AGENT_RESULT`, deviation V18b item 1) and `VECTOR_APP_BOT_ID` with the `sender.id` check (deviation V18c item 9). No package owns them yet; the lead assigns them (deviations "2026-11-15 BT02" item 5).
 
 ### V25: App UI
 
 Built in `3b2476494`, plus `4c8e7390b` and `e706636ad`. App types and E2E types passed locally per the commit message. Browser lane green.
 
 Remaining:
-1. The copy is written inline in the components (`setup-card.tsx`, `run-dialog.tsx`, `agents-model.ts:3`), not in `packages/app/src/i18n/en.ts` as spec V25 lists. Move it there or record a deviation.
-2. The pending "final V24/V25 cross-surface copy audit" (`progress.md:1158`).
-3. A progress entry.
+1. The copy is written inline in the components (`setup-card.tsx`, `run-dialog.tsx`, `agents-model.ts:3`), not in `packages/app/src/i18n/en.ts` as spec V25 lists. Move it there or record a deviation. **Recorded as a deviation in BT13** (deviations "2026-11-16 BT13" item 1); the strings are not moved.
+2. The pending "final V24/V25 cross-surface copy audit" (`progress.md:1158`). **Done in BT13** (its progress entry, "V24/V25 cross-surface copy audit"); the one shipped INV-H1 phrase and the legacy auto-review text go to the lead (deviations "2026-11-16 BT13" items 2 and 3).
+3. A progress entry. **Added in BT13** (the "V25 record" in BT13's progress entry).
 4. A5 (fold the UI into the redesign) is the owner's call.
 
 ### V27 runtime: built pieces versus missing pieces
@@ -165,27 +165,32 @@ Remaining:
 - Server key `api/cloud-agents/artifact-key.ts`.
 - Owner read `owner-artifact-key.ts`.
 - The Brain prepare, commit, download and desktop-run routes (all behind `VECTOR_GITHUB_BRAIN_ENABLED`, which is off: `api/_lib/cloud-agents-desktop.ts:75`, `cloud-agents-owner-artifact.ts:50`, `cloud-agents-readiness.ts:66`).
-- The VSA1 codec, newest-artifact selection and restore predicate (`engine/src/cli/cmd/github.session.ts:135,197,284,360,392`).
-- The runner side of the session proof: the FD3 bridge (`github.sandbox.ts:626-637`) and the proof-checked copy into `vector-session` (`:785-790`, `:828-850`).
-- The workflow upload of `vector-session-<thread>` (`core/src/review/workflow.ts:702-703`).
-- Desktop preview and import (`desktop/src/main/github-agents-brain.ts:114,192,269,361`), with the engine's local `/experimental/brain/preview` and `/experimental/brain/run-proposals/import` routes.
+- The VSA1 codec, newest-artifact selection and restore predicate (`engine/src/cli/cmd/github.session.ts`: `encryptConversation`, `decryptConversation`, `allowConversationRestore`, `latestConversation`, `downloadConversationArtifact`; named by symbol, since line numbers moved with BT06, BT12 and `a5280117`).
+- The runner side of the session proof: the FD3 bridge (`github.sandbox.ts` `run`, the `vector-session-proof` `bash -c 'exec 3>"$1" …'` prefix opened after sudo and bwrap, before the `setpriv` UID switch) and the proof-checked copy into `vector-session` (`finish`, through `readSessionProof` and `copyBundleFile`).
+- The workflow upload of `vector-session-<thread>` (`core/src/review/workflow.ts` `buildAgentsWorkflow`: the Codium-only `actions/upload-artifact@v4` step after `sandbox_finish`, named `vector-session-${{ needs.route.outputs.thread }}`).
+- Desktop preview and import (`desktop/src/main/github-agents-brain.ts` `createGithubAgentsBrain`: `preview`, `start`, `previewReturned`, `importReturned`), with the engine's local `/experimental/brain/preview` and `/experimental/brain/run-proposals/import` routes.
+- BT03 (`brain-transport`): the Brain upload store and the live run reader are hardened and tested against real Redis (and passed against the lane's hosted Valkey in vector-at-mention.yml 43675601284, job 132694938440), and with the switch off every Brain route answers 503 first (deviations, "2026-11-15 BT03"). The ordinary artifact key is now refused (403 `ARTIFACT_KEY_NOT_ALLOWED`) to every owner-desktop run, so the engine client in item 3 must take a Brain run's conversation key from `brain-download`'s `artifactKey`, never call artifact-key when `VECTOR_BRAIN_UPLOAD` is set, and treat that 403 as "no ordinary key" (the run then saves no session).
 
 **Missing: the Actions engine side does none of this yet.**
 1. **Save and restore.**
-   - Nothing calls the codec: `encryptConversation`, `latestConversation` and `decryptConversation` are used only by the desktop.
+   - Nothing called the codec before BT05: `encryptConversation`, `latestConversation` and `decryptConversation` were used only by the desktop. BT05 calls `encryptConversation` for the save; BT06 calls `latestConversation`, `decryptConversation` and `allowConversationRestore` for the restore.
    - The engine never calls `GithubAgents.ENDPOINT.artifactKey` (`github-agents.ts:38`). `github.cloud.ts` calls only mint, bind, heartbeat and settle (`:244,332,363,382`).
    - Add a key client in `github.cloud.ts` that uses the run token.
-   - Restore before the session starts (`github.agent.ts:459-461`): pick the newest artifact with `GITHUB_TOKEN` `actions: read`, decrypt, check `allowConversationRestore`, then import using `cli/cmd/import.ts`. Any failure falls back to the thread.
-   - Save after the share flush and before `writeBundle` (`:559`): export, encrypt, write `vector-out/session.vsa`.
-2. **Runner attestation.** `GithubSessionProof.attestSessionArtifact` (`github.session-proof.ts:35`) has no caller. Call it right after the encrypted bytes are written. The `session-replaced` matrix scenario proves it once the lane is green (§1).
+     - BT04 (`brain-transport`) built it: `artifactKey` asks once with the authorized run token for the run's own thread, never on own key or a Brain run, and answers a closed status (deviations, "2026-11-15 BT04"). BT05 calls it for the save; restore is BT06.
+   - Restore before the session starts (`github.agent.ts:459-461`): pick the newest artifact with `GITHUB_TOKEN` `actions: read`, decrypt, check `allowConversationRestore`, then import using `cli/cmd/import.ts`. Any failure falls back to the thread. **Built in BT06** (`brain-transport`): `github.agent.ts` `restoreConversation` (`:783`) and `readConversation` (`:802`), Codium only and only with the runner's session proof; the import is `SessionArchive.import` through the archive service, as `cli/cmd/import.ts` uses it. It adds a compaction and context-share gate, a fork-artifact filter in `latestConversation`, and a `message-v2.ts` fix without which no imported session could continue (deviations, "2026-11-15 BT06").
+   - Save after the share flush and before `writeBundle` (`:559`): export, encrypt, write `vector-out/session.vsa`. **Built in BT05** (`brain-transport`): `github.agent.ts` `saveConversation`, Codium only and only with the runner's session proof, for non-Brain runs (progress and deviations, "2026-11-15 BT05"). **BT07b** added the desktop Brain run's save, only under brain-download's Brain key with the exact approved bundle and its approval, and its re-run restore under the same approval, which production cannot reach yet (deviations, "2026-11-16 BT07b" items 3 and 5).
+2. **Runner attestation.** `GithubSessionProof.attestSessionArtifact` (`github.session-proof.ts:35`) had no caller. Call it right after the encrypted bytes are written. **Built in BT05**: the save attests the exact written bytes and removes the file when attestation fails. The real FD3 write on this path runs only on a hosted runner; the `session-replaced` matrix scenario proves the runner side once the lane is green (§1), and the Bun caller stays unverified until the Undici baseline fix reaches this branch (deviations, "2026-11-15 BT05" item 13).
 3. **The desktop Brain transport is broken end to end.**
    - The App dispatch sends the input `brain_upload` (`api/_lib/github-app.ts:725`).
    - The v3 workflow declares only `mode, prompt, pr, code, ticket` (`workflow.ts:768-773`). GitHub rejects undeclared `workflow_dispatch` inputs with a 422, so every Brain-start dispatch would fail.
    - Fix: add the input (golden test), pass it to the agent step, and add a `brain-download` endpoint constant and engine client.
-   - Use the immutable `brain/bundle.json` as context, and collect model drafts into `brain/proposals.json` inside the encrypted manifest under the separately labeled Brain key.
+   - BT01 (`brain-transport`) added the Codium input, the agent-step env `VECTOR_BRAIN_UPLOAD` and `ENDPOINT.brainDownload`. The tests the engine must add are in deviations, "2026-11-14 BT01" item 7.
+   - BT04 (`brain-transport`) added the engine client (`brainDownload`) and the local opener (`GithubBrain.openUpload`: AAD bound to the run's own repository and upload, AES-256-GCM, digest, size, current public policy, bundle schema), with the empty and malformed upload id half of those tests. The event gate, the call and the fixture half are BT07a (deviations, "2026-11-15 BT04"), and BT07a built them: a Codium ticket dispatch with `VECTOR_BRAIN_UPLOAD` downloads once, opens the envelope locally and gives the bundle to its first task message as labelled untrusted JSON, never to the runner's Brain (`github.agent.ts` `brainContext`; deviations, "2026-11-16 BT07a").
+   - Use the immutable `brain/bundle.json` as context, and collect model drafts into `brain/proposals.json` inside the encrypted manifest under the separately labeled Brain key. BT07a uses the bundle as context; BT07b saves it under the Brain key but writes no `brain/proposals.json`, because every memory write of a GitHub run is quarantined, never proposed, so there is nothing to collect; returning drafts needs a contract decision for the lead and the Codium lane (deviations, "2026-11-16 BT07b" item 2).
 4. **Preview and import.** The desktop and UI exist, but no real run produces `session.vsa` or proposals yet. After items 1–3, add a CI case: a returned artifact, then the owner preview, then a one-shot import.
+   - BT10 (`brain-transport`) built the desktop case with an artifact the engine's codec seals as a desktop Brain run's save writes it, plus drafts packed by core (`packages/desktop/src/main/github-agents-brain.test.ts`), and fixed public screening for a public run in a now-private repository (deviations, "2026-11-16 BT10"). The drafts are codec-built: no production run writes `brain/proposals.json` yet (item 3, BT07b item 2), so a run that produces drafts is still open.
 5. Tests:
-   - Agent-phase cases for restore (newest of several), fallback (wrong key, rebind, tamper), refusal of a Brain-provenance restore, and the proof write.
+   - Agent-phase cases for restore (newest of several), fallback (wrong key, rebind, tamper), refusal of a Brain-provenance restore, and the proof write. Restore, fallback and Brain-provenance cases are **done in BT06** (`github.agent-codium.test.ts`, "the conversation restore (V27, BT06)"); the proof write was BT05's.
    - Spec V27 test list: thread 5 asking for thread 6, and INV-P5.
 6. Switch the privacy copy to "encrypted per conversation" (V29) only after items 1–3 pass in CI.
 
@@ -197,9 +202,9 @@ Both journeys exist and pass in the lane at `50b4f82c2`:
 
 Remaining:
 1. The whole lane green, including the sandbox matrix. The matrix is V16's runner proof.
-2. Add the V27 cases above to the journeys, plus the V24 v3 flip.
+2. Add the V27 cases above to the journeys, plus the V24 v3 flip. Engine journey: built in BT08a on `brain-transport` (6 cases: a Codium follow-up that continues its issue's saved conversation, own key with every save and restore seam present, the P6 scan widened and the generated file's workflow version checked; progress "BT08a"). BT08b added the desktop Brain run end to end (8 cases: the App's ticket dispatch with `brain_upload` through route, mint, one brain-download, the labelled context, a Brain-key-only save and publish, and a writer's dispatch with an upload id that reads no context and saves nothing; every step now runs with the generated file's own env) and fixed the v3 publish step, which lacked `VECTOR_PROMPT` and refused every dispatched task (progress and deviations "BT08b"). BT09 added the server journey's V27/B08 cases (2 new cases against real Redis, so the journey now has 3 next to its bind-to-rebind case, and 4 tests because the first new case runs once for a public and once for a private repository: the desktop Brain run from marked prepare and commit through the App dispatch, ticket mint, the engine client's download and opener, settle and the Brain-domain owner read; and the refusals for another thread, another repository's token and upload, an expired token, the switch off with no store or GitHub work, a rebind and revocation then erasure) and fixed the owner read's record lookup on RESP3 stores (progress and deviations "BT09"); the lane's hosted API job must still show them passing against Valkey.
 3. `test.yml`, `typecheck.yml` and `verify.yml` green at the exact PR head.
-4. Update the progress doc. Its header still says "Work only on branch `vector-at-mention`" (`progress.md:3`), so name `v2-vector`. Update the PR body to match.
+4. Update the progress doc. Done: its header names `brain-transport` since BT01. Update the PR body to match.
 
 ### What waits for Codium or A59 on v2
 
@@ -209,8 +214,8 @@ The v2 order is process-finish, release-coordination, codium, then @vector. I si
 - Release-coordination and codium add 0 conflicts. Codium's last commit `1ce8f5f30` already has an equivalent here (`8d5e79a7e`).
 
 After codium is on v2:
-- The A59 joint check on v2: allowance `27e140de9`; verifier, gateway-hook and meter registrations; real-Redis mint and admission; the final webhook registration from `d8516df3d`.
-- V31 (Ship Desk capture job, workflow golden) once A49 is on v2.
+- The A59 joint check on v2: allowance `27e140de9`; verifier, gateway-hook and meter registrations; real-Redis mint and admission; the final webhook registration from `d8516df3d`; cloud run reader registration: BT11 (the repository binding reader and the ops run starter remain, deviations "2026-11-16 BT11" item 8).
+- V31 (Ship Desk capture job, workflow golden) once A49 is on v2: built in BT12 on `brain-transport` (the ticket step after mint, the capture job behind `vars.VECTOR_SHIP_DESK`, publish's `pr` output; deviations "2026-11-16 BT12"). It captures nothing in production until the repository binding reader is registered (BT11 item 8) and the owner activates Ship Desk.
 
 ### What waits for the owner (never done by agents)
 
@@ -269,12 +274,12 @@ Also:
 2. Commit the test fixes: group 1 (`3d7283bda`), group 5 (`getBuiltinModule`), group 2 (one regenerated snapshot) unless the Build Agent has already landed them.
 3. Commit the bounded probe diagnostics (§1.5).
 4. Commit Fix A, or Fix B if the orchestrator picks it, with the docs and owner note.
-5. The V24 version flip.
+5. The V24 version flip (built in BT02 on `brain-transport`).
 6. Re-fetch and push `v2-vector` (fast-forward only). Open the draft PR once with `gh pr create -R scr1pter/claudeondfsfdaf --base v2 --head v2-vector --draft`.
    - `test`, `verify` and `typecheck` run on the PR. The lane runs on `pull_request` (path filter).
    - Dispatch `github-compat.yml` and `github-desktop-validation.yml` with `--ref v2-vector`.
 7. V27 runtime items 1–5 with tests, then the V30 journey extension.
-8. After codium lands on v2: merge `origin/v2`, resolve `cross-spawn-spawner.ts`, run the A59 joint check, then V31.
+8. After codium lands on v2: merge `origin/v2`, resolve `cross-spawn-spawner.ts`, run the A59 joint check, then V31 (the run reader and V31 are built on `brain-transport`, BT11 and BT12).
 9. Update the progress doc (V24, V25, V27, V30 entries and the branch name), the deviations doc and the PR body.
    - After the merge, the orchestrator closes #25 as superseded.
    - Remove `github-compat.yml` before the v2 merge.

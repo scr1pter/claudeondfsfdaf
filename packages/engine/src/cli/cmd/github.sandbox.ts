@@ -508,6 +508,9 @@ export async function prepare(env: Env = process.env) {
     String(state.uid),
     "-g",
     String(state.gid),
+    // Created first, so `~/.config` is the agent's own as the image's skel copy (configstore) made it before: tools keep
+    // their XDG config directory (deviations, "2026-11-16 V16 account skeleton"). The other parents stay root-owned.
+    `${AGENT_HOME}/.config`,
     ...ProcessIsolation.ENGINE_PRIVATE_DIRECTORIES,
   ])
   await sudo(["/usr/bin/chown", "-hR", `${state.uid}:${state.gid}`, "--", staged])

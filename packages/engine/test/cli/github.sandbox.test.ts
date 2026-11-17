@@ -113,6 +113,22 @@ test("the sandbox environment excludes every credential and runner file command 
   }
 })
 
+// The workflow passes `${{ inputs.brain_upload }}`, which is empty on every comment, issue and schedule run, so the
+// engine must read an empty value as absent.
+test("the Codium launcher keeps the desktop Brain upload id, empty or set", async () => {
+  await using f = await fixture()
+  const locations = {
+    node: path.join(f.directory, "node", "bin", "node"),
+    home: f.directory,
+    temporary: f.directory,
+    event: path.join(f.directory, "event"),
+  }
+  const upload = "vbu_" + "A".repeat(32)
+  expect(sandboxEnvironment({ ...f.env, VECTOR_BRAIN_UPLOAD: upload }, locations).VECTOR_BRAIN_UPLOAD).toBe(upload)
+  expect(sandboxEnvironment({ ...f.env, VECTOR_BRAIN_UPLOAD: "" }, locations).VECTOR_BRAIN_UPLOAD).toBe("")
+  expect(sandboxEnvironment(f.env, locations).VECTOR_BRAIN_UPLOAD).toBeUndefined()
+})
+
 test("tool PID isolation is derived from the trusted launcher, never an inherited environment override", async () => {
   await using f = await fixture()
   const locations = {
