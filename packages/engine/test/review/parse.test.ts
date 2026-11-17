@@ -1137,49 +1137,38 @@ async function child(body: string, prepare?: (repo: string) => Promise<void>, li
   const repo = tmp.path
   await prepare?.(repo)
   const script = path.join(repo, "child.ts")
-  // Imported first, so "started" is written before the engine modules load: it separates Bun start-up from the imports.
+  const mark = "(phase: string) => writeSync(2, `child ${phase} at ${Math.round(performance.now())}ms\\n`)"
+  // A preload runs before Bun resolves, transpiles or evaluates the script's static imports, so "started" separates
+  // Bun start-up (no marks) from loading the engine modules (no "imported"). A static first import would not: ESM loads
+  // the whole graph before any module body runs.
   await writeFile(
     path.join(repo, "mark.ts"),
-    [
-      `import { writeSync } from "node:fs"`,
-      "export const mark = (phase: string) => writeSync(2, `child ${phase} at ${Math.round(performance.now())}ms\\n`)",
-      `mark("started")`,
-    ].join("\n"),
+    [`import { writeSync } from "node:fs"`, `const mark = ${mark}`, `mark("started")`].join("\n"),
   )
   await writeFile(
     script,
     [
-      `import { mark } from "./mark.ts"`,
+      `import { writeSync } from "node:fs"`,
       `import { Effect } from ${JSON.stringify(fileURLToPath(import.meta.resolve("effect")))}`,
       `import { ReviewParse } from ${JSON.stringify(path.join(ENGINE, "src/review/parse.ts"))}`,
       `import { TreeSitter } from ${JSON.stringify(path.join(ENGINE, "src/util/tree-sitter.ts"))}`,
+      `const mark = ${mark}`,
       `mark("imported")`,
       `process.on("exit", () => mark("exiting"))`,
       body,
       `mark("ran")`,
     ].join("\n"),
   )
-  // Windows: pass on SystemRoot and windir, which Windows programs expect, and point the profile, local-data and temp
-  // folders into `repo` like HOME, so Bun's Windows home and cache lookups stay inside the scratch directory (I-8).
-  const windows = process.platform === "win32"
-  if (windows) await mkdir(path.join(repo, "AppData", "Local", "Temp"), { recursive: true })
   const started = performance.now()
-  const proc = Bun.spawn([process.execPath, script], {
+  const proc = Bun.spawn([process.execPath, "--preload", path.join(repo, "mark.ts"), script], {
     cwd: repo,
     env: {
       PATH: process.env.PATH ?? "",
       HOME: repo,
       NODE_PATH: path.join(repo, "node_modules"),
-      ...(windows
-        ? {
-            ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-            ...(process.env.windir ? { windir: process.env.windir } : {}),
-            USERPROFILE: repo,
-            LOCALAPPDATA: path.join(repo, "AppData", "Local"),
-            TEMP: path.join(repo, "AppData", "Local", "Temp"),
-            TMP: path.join(repo, "AppData", "Local", "Temp"),
-          }
-        : {}),
+      // Windows programs expect these two; elsewhere they are unset and add nothing.
+      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(process.env.windir ? { windir: process.env.windir } : {}),
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -1192,8 +1181,9 @@ async function child(body: string, prepare?: (repo: string) => Promise<void>, li
     proc.exited,
   ])
   const elapsed = Math.round(performance.now() - started)
-  // Told by time alone: Bun's `killed` reads true after any exit, and a Windows kill may report no signal code.
-  const bounded = elapsed >= limit
+  // Told by time, not by `killed` (true after any exit) or the signal alone (a Windows kill may report none). A killed
+  // child has no exit code, so allow for a timer that fires a little early, as Windows timers can.
+  const bounded = elapsed >= limit || (proc.exitCode === null && elapsed >= limit - 50)
   if (code !== 0 || proc.signalCode)
     throw new Error(
       [
