@@ -104,7 +104,9 @@ test("a paired phone shows helper and background-job states, stops including hel
   await expect(row("Index the docs")).toContainText("Disconnected · last known state")
   await expect(row("Unit tests")).toContainText("Working")
   await expect(tasks.getByRole("listitem")).toHaveCount(5)
-  // The Stop button shows only once the capabilities answer arrived, so both reads are in the engine's log.
+  // The session view reads capabilities once for connected tools (CW-23c, connected-workspace-deviations.md:1837),
+  // before SessionTasks mounts, and SessionTasks reads them once for `sessionStop`. The Stop button shows only
+  // after SessionTasks' answer, so both capability reads and the task-board read are already in the engine's log.
   const stop = phone.getByRole("button", { name: "Stop including helpers", exact: true })
   await expect(stop).toBeVisible()
   await expect(phone).not.toContainText("PRIVATE")
@@ -113,6 +115,7 @@ test("a paired phone shows helper and background-job states, stops including hel
     .filter((entry) => entry.path.startsWith("/experimental/"))
     .sort((a, b) => a.path.localeCompare(b.path))
   expect(reads).toEqual([
+    { method: "GET", path: "/experimental/capabilities", query: { directory: "/repo" } },
     { method: "GET", path: "/experimental/capabilities", query: { directory: "/repo" } },
     {
       method: "GET",
