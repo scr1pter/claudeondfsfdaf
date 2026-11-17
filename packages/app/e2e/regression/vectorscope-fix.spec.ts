@@ -289,6 +289,8 @@ test("a double-click on a step previews once and approves nothing; a script's cl
   expect(state.executes).toEqual([])
   await button(page, "Approve and apply").click()
   await expect(button(page, "Approve and apply")).toHaveCount(0)
+  // The offer leaves the page before its session check and execute are sent, so wait for the applied step.
+  await expect(button(page, "Preview commit")).toBeEnabled()
   expect(state.executes).toHaveLength(1)
 })
 
