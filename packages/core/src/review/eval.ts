@@ -113,9 +113,10 @@ export const VARIANT_NAME = /^[a-z]+(:[a-z][a-z0-9]*(-[a-z0-9]+)*)?$/
 
 // The settings a variant may set over the base's review.json, per runner. A key joins a runner's list only in the
 // package that makes it change what that runner does, with that package's D3 parity test; adding a ReviewConfig key
-// alone never adds it. The eval's own limits are never a variant's.
+// alone never adds it. The eval's own limits are never a variant's. The engine's `privacy` is VS-23c's (engine:
+// privacy-zdr), which a variant may only raise to "zdr"; the desktop's waits for VS-23d.
 export const VARIANT_KEYS = {
-  engine: ["verifyPolicy"],
+  engine: ["verifyPolicy", "privacy"],
   desktop: ["verifyPolicy"],
 } as const satisfies Record<
   string,

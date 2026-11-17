@@ -669,10 +669,14 @@ export const run: (
       yield* guard.ignoreLoops(session.id)
       tracks.set(session.id, track)
       sessionIDs.push(session.id)
-      // Every session is registered with the review's policy, and under "zdr" with the model its pass was decided for
-      // and what it was decided on, which admission below and VS-23c's transport backstop (provider.ts) hold each
-      // attempt to. Released when the review ends.
-      ReviewRoutes.register(session.id, { policy: route, ...decided })
+      // The agent every turn of this pass is prompted with (send, below).
+      const agent =
+        input.identity === VECTORSCOPE_AGENT ? VECTORSCOPE_AGENT : spec.name === "security" ? "security" : "review"
+      // Every session is registered with the review's policy and its pass's agent, and under "zdr" with the model its
+      // pass was decided for and what it was decided on, which admission below and VS-23c's transport backstop
+      // (provider.ts) hold each attempt to. Under "zdr" the session runtime (llm.ts) sends only that agent's turns of
+      // the session, so no helper request of it goes out. Released when the review ends.
+      ReviewRoutes.register(session.id, { policy: route, agent, ...decided })
       yield* progress({ type: "specialist", name: spec.name, status: "running" })
 
       // One policy survives every processor instance, retry and prompt for this fresh owned session. It is never
@@ -777,12 +781,7 @@ export const run: (
           return prompts
             .prompt({
               sessionID: session.id,
-              agent:
-                input.identity === VECTORSCOPE_AGENT
-                  ? VECTORSCOPE_AGENT
-                  : spec.name === "security"
-                    ? "security"
-                    : "review",
+              agent,
               model: { providerID: spec.model.providerID, modelID: spec.model.modelID },
               ...(spec.model.variant ? { variant: spec.model.variant } : {}),
               // A class instance: the stored user message only accepts the schema class, not a plain object.
@@ -1206,14 +1205,21 @@ export const run: (
     })
     const cost = yield* measure()
     // Model evidence (VS-07), only when review.json opts in: notes on what VectorScope's evaluation says about the
-    // models, after the replies are known. It never changes which model ran.
+    // models, after the replies are known. It never changes which model ran. Under "zdr" the review ran on zero data
+    // retention routes only, which admission, the transport and the session runtime enforce (VS-23c), so its scope is
+    // the zdr route's.
     const evidenceNotes =
       config.modelEvidence === "warn"
         ? modelEvidenceNotes(
             assessReview({
               review: subjectOf(model),
               ...(triaged ? { triage: subjectOf(triage) } : {}),
-              scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: nameOf(triage) } : {}) }),
+              scope: evidenceScope({
+                adapter: "engine",
+                config,
+                ...(triaged ? { triage: nameOf(triage) } : {}),
+                ...(zdr ? { route: "zdr" as const } : {}),
+              }),
               served: state.served,
               now: Date.now(),
               ...(input.certificates ? { certificates: input.certificates } : {}),

@@ -63,9 +63,10 @@ import { testProviderConfig } from "../lib/test-provider"
 // canned model (test/fixture/projection.ts). Each framing must give the same scope (policy digest included), models,
 // passes and steps as the neutral body, and wire bodies that differ only inside the wrapped <untrusted_pr_body> block.
 // The depth plan, lenses and the runtime decision get the same comparison with their wiring packages (VS-28, VS-30),
-// since no projection produces them yet; the privacy decision has it from VS-23b on (the last case below), and VS-23c
-// extends it to the transport. The paid comparison that findings and the verdict do not change between framings is
-// Later (L8, Q9). Nothing here reaches a model provider or GitHub.
+// since no projection produces them yet; the privacy decision has it from VS-23b on (the last case below), and from
+// VS-23c the zdr case's scope also claims the zdr route, which the transport and the session runtime enforce. The paid
+// comparison that findings and the verdict do not change between framings is Later (L8, Q9). Nothing here reaches a
+// model provider or GitHub.
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -361,7 +362,10 @@ describe("narrative invariance (VS-22d)", () => {
     () =>
       Effect.gen(function* () {
         const checked = yield* checkout({ price: PRICE, review: JSON.stringify({ privacy: "zdr" }) })
-        checkInvariance(yield* projectOnOneDay(checked, FRAMINGS, "trusted"))
+        checkInvariance(
+          yield* projectOnOneDay(checked, FRAMINGS, "trusted"),
+          evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG, route: "zdr" }),
+        )
 
         const refused = yield* projectOnOneDay(checked, FRAMINGS, "trusted", FABLE)
         expect(planOf(refused.control)).toEqual(planOf(refused.neutral))
@@ -385,13 +389,13 @@ type Run = Effect.Success<ReturnType<typeof projectAll>>
 
 // Every assertion the two cases share: the control first, so that a failure names run-to-run variation before it names
 // a framing; then the neutral run's own shape; then each framing against it.
-function checkInvariance(run: Run) {
+function checkInvariance(run: Run, scope = evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG })) {
   const neutral = run.neutral
   // Two projections of the same body agree in every planned field and in every wire body, byte for byte.
   expect(planOf(run.control)).toEqual(planOf(neutral))
   expect(bodies(run.control)).toEqual(bodies(neutral))
 
-  expect(neutral.scope).toEqual(evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG }))
+  expect(neutral.scope).toEqual(scope)
   expect(planOf(neutral).passes.map((pass) => [pass.pass, pass.status, pass.requests])).toEqual([
     ["review", "ok", 1],
     ["security", "ok", 1],

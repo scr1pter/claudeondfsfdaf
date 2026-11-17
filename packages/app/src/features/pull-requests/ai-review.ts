@@ -478,7 +478,14 @@ export function workflowModel(
     assessReview({
       // A named model that is not connected here is described by its name alone.
       review: reviewed ? subjectOf(reviewed) : { model: named!, free: false },
-      scope: evidenceScope({ adapter: "engine", config, ...(triage ? { triage } : {}) }),
+      // The engine's scope, as Review.run makes it: under privacy "zdr" the engine enforces the route rules (VS-23c),
+      // so its scope is the zdr route's.
+      scope: evidenceScope({
+        adapter: "engine",
+        config,
+        ...(triage ? { triage } : {}),
+        ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
+      }),
       now: options.now ?? Date.now(),
       ...(options.certificates ? { certificates: options.certificates } : {}),
     }),

@@ -632,6 +632,18 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `admitReplay`, `report.ts` and `certify.ts`. `ReplayInput.config`'s type
   leaves `VARIANT_KEYS.engine` out, so a typed caller cannot set one there;
   the refusal is the backstop for an untyped one.
+- `VARIANT_KEYS.engine` holds `verifyPolicy` and, since VS-23c, `privacy`. A
+  variant's keys go over the base's `review.json`, whose `privacy` is
+  raise-only (`config.ts`), so `replay()` refuses a variant that sets
+  `privacy` to anything but `"zdr"`. `privacy` in `config` is still refused
+  as a route setting a replay cannot apply.
+- Under `engine:privacy-zdr` (or a base `review.json` that sets
+  `privacy: "zdr"`) `Review.run` enforces the route rules at admission, at
+  the transport and in the session runtime, and the artifact's
+  `scope.route` is `"zdr"`. The eval attests no route (owner Q7, D7), so
+  only a model server on this computer is admitted: on any other route the
+  run is a `privacy` stop, refused before anything is sent. A replay under
+  this name says nothing about quality on a ZDR route (Q9).
 - The verify policy (VS-06) is measured as the variant `engine:shared-verify`,
   `{ "verifyPolicy": "shared" }`, against the frozen pipeline's default
   (`"legacy"`). The replay reads it as a repository that opted in would be: the
@@ -733,26 +745,26 @@ its model in `report.ts --candidate` and `--baseline`. The grammar is
 `VARIANT_NAME` in core `review/eval.ts`; it cannot tell a model id from a
 word, so only the registry keeps model ids out.
 
-| Suffix             | Sets                                                                                  | Engine                      | Desktop                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
-| `shared-verify`    | `verifyPolicy: "shared"`                                                              | built (VS-06)               | built (VS-06)                                                                 |
-| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run` and at the transport                       | pending VS-23c              | pending VS-23d                                                                |
-| `trivial-skip`     | `trivial: "skip"`                                                                     | pending VS-24 wiring        | pending VS-24 wiring                                                          |
-| `impact-graph`     | `impact: "graph"`                                                                     | pending VS-25b wiring       | pending, after VS-10                                                          |
-| `cards-brain`      | `cards: "brain"`, local-only eval                                                     | pending VS-26               | pending, after VS-10                                                          |
-| `guardrail-strict` | `guardrail: "strict"`                                                                 | pending VS-27c              | pending VS-27c                                                                |
-| `depth-auto`       | `depth: "auto"`                                                                       | pending VS-28 wiring        | pending, after VS-10                                                          |
-| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                  | pending VS-28 wiring        | pending, after VS-10                                                          |
-| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)          | built (VS-29a)              | pending, after VS-10                                                          |
-| `precise`          | `mode: "precise"`                                                                     | pending VS-31               | pending VS-31                                                                 |
-| `holdback-secrets` | `holdback: "secrets"`                                                                 | pending VS-34 wiring        | pending VS-34 wiring                                                          |
-| `team-guarded`     | `teamMemory: "guarded"`                                                               | pending VS-35 wiring        | pending, documented difference                                                |
-| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                   | pending VS-42 wiring        | pending VS-42 wiring, after VS-27c                                            |
-| `rule-strict`      | `ruleCheck: "strict"`                                                                 | pending VS-43 wiring        | pending VS-43 wiring                                                          |
-| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                             | pending VS-44 wiring        | pending VS-44 wiring, after VS-27c                                            |
-| `explore-slice`    | `explore: "slice"`                                                                    | pending VS-49 wiring        | pending, documented difference                                                |
-| `receipt-json`     | `receipt: "json"`, built only from recorded execution facts                           | pending VS-47 runner wiring | pending VS-47 desktop wiring                                                  |
-| `verify-isolated`  | no key: the top 3 blocking candidates verified blind, one call each, the rest batched | pending VS-44c wiring (R3)  | pending, documented difference until VS-27's desktop guardrail (after VS-27c) |
+| Suffix             | Sets                                                                                    | Engine                      | Desktop                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| `shared-verify`    | `verifyPolicy: "shared"`                                                                | built (VS-06)               | built (VS-06)                                                                 |
+| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run`, at the transport and in the session runtime | built (VS-23c)              | pending VS-23d                                                                |
+| `trivial-skip`     | `trivial: "skip"`                                                                       | pending VS-24 wiring        | pending VS-24 wiring                                                          |
+| `impact-graph`     | `impact: "graph"`                                                                       | pending VS-25b wiring       | pending, after VS-10                                                          |
+| `cards-brain`      | `cards: "brain"`, local-only eval                                                       | pending VS-26               | pending, after VS-10                                                          |
+| `guardrail-strict` | `guardrail: "strict"`                                                                   | pending VS-27c              | pending VS-27c                                                                |
+| `depth-auto`       | `depth: "auto"`                                                                         | pending VS-28 wiring        | pending, after VS-10                                                          |
+| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | pending VS-28 wiring        | pending, after VS-10                                                          |
+| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)            | built (VS-29a)              | pending, after VS-10                                                          |
+| `precise`          | `mode: "precise"`                                                                       | pending VS-31               | pending VS-31                                                                 |
+| `holdback-secrets` | `holdback: "secrets"`                                                                   | pending VS-34 wiring        | pending VS-34 wiring                                                          |
+| `team-guarded`     | `teamMemory: "guarded"`                                                                 | pending VS-35 wiring        | pending, documented difference                                                |
+| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                     | pending VS-42 wiring        | pending VS-42 wiring, after VS-27c                                            |
+| `rule-strict`      | `ruleCheck: "strict"`                                                                   | pending VS-43 wiring        | pending VS-43 wiring                                                          |
+| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                               | pending VS-44 wiring        | pending VS-44 wiring, after VS-27c                                            |
+| `explore-slice`    | `explore: "slice"`                                                                      | pending VS-49 wiring        | pending, documented difference                                                |
+| `receipt-json`     | `receipt: "json"`, built only from recorded execution facts                             | pending VS-47 runner wiring | pending VS-47 desktop wiring                                                  |
+| `verify-isolated`  | no key: the top 3 blocking candidates verified blind, one call each, the rest batched   | pending VS-44c wiring (R3)  | pending, documented difference until VS-27's desktop guardrail (after VS-27c) |
 
 - `resolveVariant(name)` gives a built variant's keys, or refuses the name as
   malformed, unknown (prototype names such as `constructor` included) or
@@ -1231,9 +1243,18 @@ How it works:
     tokens per review, wall time end to end and per pass (each with its mean,
     median and p90; a desktop pass from its first call's start to its last
     call's end), cache reads and writes, the zero-token rate, early stops by
-    reason and route refusals (VS-23's `privacy` stops: from VS-23b only where
-    a case's base review.json sets `privacy: "zdr"`, since the
-    `engine:privacy-zdr` variant waits for VS-23c)
+    reason and route refusals (VS-23's `privacy` stops: where a case's base
+    review.json sets `privacy: "zdr"` (VS-23b), and in runs of the
+    `engine:privacy-zdr` variant, `{ "privacy": "zdr" }`, since VS-23c). A
+    request the transport or the session runtime refuses after admission
+    (`ReviewRoutes.Refused`, VS-23c), and a "zdr" pass that would compact, end
+    that pass as a failed one (`partial: "model-error"`), not as a `privacy`
+    stop, so they are not counted here; the pass's detail gives the reason.
+    The session runtime gives every refusal of its own (a title, helper or
+    compaction request, a child or released session, a GitLab Duo workflow
+    model) the code `unknown-destination`, so a count by code cannot tell
+    them from a destination the rules refused; only `Refused.site`
+    (`"session"` or `"transport"`) and its message do
   - the estimate error, `|projected low - settled| / settled`, for each run
     joined with a projection record of the same variant, case and model id
     after its provider; a projection over its dollar cap is counted apart and

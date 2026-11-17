@@ -99,7 +99,11 @@ describe("the flags", () => {
       { name: "engine" },
       { name: "engine:shared-verify", record: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } },
     ])
-    expect(parseReplayArgs([...base, "--variant", "engine:privacy-zdr"])).toContain("VS-23c")
+    expect(parseReplayArgs([...base, "--variant", "engine:impact-graph"])).toContain("VS-25b wiring")
+    // VS-23c (SF-12b): privacy-zdr's engine half is built.
+    expect(flags([...base, "--variant", "engine:privacy-zdr"]).variants).toEqual([
+      { name: "engine:privacy-zdr", record: { name: "engine:privacy-zdr", keys: { privacy: "zdr" } } },
+    ])
     expect(parseReplayArgs([...base, "--variant", "engine:verify-isolated"])).toContain("VS-44c wiring (R3)")
     expect(parseReplayArgs([...base, "--variant", "desktop"])).toContain("runs on the desktop runner")
     expect(parseReplayArgs([...base, "--variant", "engine:nothing"])).toContain("not a registered variant")

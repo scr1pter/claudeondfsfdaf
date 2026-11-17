@@ -2513,6 +2513,28 @@ describe("model evidence (VS-07)", () => {
       "This checkout's `.vector/review.json` names `vector/openrouter/free`. Automatic reviews read the copy committed on the pull request's base branch and run a model named there instead of `anthropic/claude-sonnet-4-5`, so these notes are about `vector/openrouter/free` and hold only when that copy names it too.",
       "`vector/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it.",
     ])
+
+    // Under privacy "zdr" the engine's scope is the zdr route's (Review.run, VS-23c), so the card applies only a
+    // certificate made on that route, as the engine does, and says why a standard-route one does not apply.
+    // parseReviewConfig never sets `privacy` (a sourced key, mergeReviewConfig's), so the settings are given as
+    // mergeReviewConfig returns them; the policy is the same, so only the route differs between the two certificates.
+    const zdr = { ...warn, privacy: "zdr" as const }
+    expect(parsed({ modelEvidence: "warn", privacy: "zdr" })).toEqual(warn)
+    const standard = certificate("anthropic/claude-sonnet-4-5", "engine", zdr)
+    expect(
+      workflowModel(["anthropic/claude-sonnet-4-5"], providers, { evidence: zdr, now: NOW, certificates: [standard] })
+        ?.warnings,
+    ).toEqual([
+      local,
+      "The VectorScope evaluation of `anthropic/claude-sonnet-4-5` on record (`vs-test`) was made with another privacy setting, so it does not apply here.",
+    ])
+    expect(
+      workflowModel(["anthropic/claude-sonnet-4-5"], providers, {
+        evidence: zdr,
+        now: NOW,
+        certificates: [{ ...standard, route: "zdr" }],
+      }),
+    ).toEqual(today)
   })
 })
 

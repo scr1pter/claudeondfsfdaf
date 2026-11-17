@@ -94,6 +94,7 @@ import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
+import { ReviewRoutes } from "@/review/route"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -145,10 +146,13 @@ const VECTORSCOPE = "vectorscope."
 // Agents whose output leaves the machine or reaches the web: research workers and the research judge.
 const OUTWARD_AGENTS = new Set(["researcher", "research-judge"])
 
-/** A pinned review cannot substitute ambient files or a lossy summary for its admitted context. */
+/**
+ * A review session that cannot go on with what it was given: a pinned review cannot substitute ambient files or a lossy
+ * summary for its admitted context, and a "zdr" review never summarises its history (VS-23c). `next` says what to do.
+ */
 export class ReviewContextUnavailable extends Error {
-  constructor(reason: string) {
-    super(`Review incomplete: ${reason} Start a fresh review with the pinned context.`)
+  constructor(reason: string, next = "Start a fresh review with the pinned context.") {
+    super(`Review incomplete: ${reason} ${next}`)
     this.name = "ReviewContextUnavailable"
   }
 }
@@ -2545,6 +2549,14 @@ const layer = Layer.effect(
         // replace the exact base instructions supplied by the owning service.
         if (pinnedReview && tasks.some((task) => task.type === "compaction"))
           throw new ReviewContextUnavailable("Compaction would discard the provided review context.")
+        // VS-23c (SF-12b): a "zdr" review's history is never summarised. The summary would be one more request, on the
+        // compaction agent's model or the pass's, that is not one of the pass's own turns (ReviewRoutes.turn refuses it
+        // as well). An overflow, a step that ends in "compact" and a pending compaction task all come back here first.
+        if (tasks.some((task) => task.type === "compaction") && ReviewRoutes.zdr(sessionID))
+          throw new ReviewContextUnavailable(
+            'This review\'s privacy is "zdr", so its history is never summarised, and nothing more was sent.',
+            "Review fewer files at once, or use a model with a larger context.",
+          )
         if (pinnedReview && reviewScope(msgs).instructions !== "provided")
           throw new ReviewContextUnavailable("The provided review context is no longer available.")
         if (resumed && lastUser.id === resumed.parentID)

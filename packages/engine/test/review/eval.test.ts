@@ -1325,9 +1325,9 @@ describe("ReviewEval.replay", () => {
 
   // VS-23b (SF-11): the replay reads the base's review.json as the CLI does (mergeReviewConfig on "local"), so a case's
   // review.json may raise privacy, and Review.run's admission holds it to the route rules. The fake provider is on this
-  // computer, the one route "zdr" allows without an attestation, and the eval attests nothing before VS-23c's variant.
+  // computer, the one route "zdr" allows without an attestation, and the eval attests nothing (owner Q7).
   it.instance(
-    'replays a base review.json under privacy "zdr" on the server on this computer, claiming no zdr route',
+    'replays a base review.json under privacy "zdr" on the server on this computer, with the zdr route in its scope',
     () =>
       Effect.gen(function* () {
         const { directory, llm, base, head } = yield* checkout({
@@ -1348,8 +1348,42 @@ describe("ReviewEval.replay", () => {
         expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
         expect(artifact.attempts.some((attempt) => attempt.stop === "privacy")).toBe(false)
         expect(artifact.outcome?.partial).toBeUndefined()
-        // Admission alone claims no zero data retention route; VS-23c sets the scope's route with the transport.
-        expect(artifact.scope.route).toBeUndefined()
+        // VS-23c (SF-12b): admission, the transport and the session runtime enforce the route rules, so the scope
+        // claims the zdr route.
+        expect(artifact.scope.route).toBe("zdr")
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-23c (SF-12b): the engine:privacy-zdr variant raises privacy over the base's review.json, as the registry hands
+  // it out. The eval attests nothing (owner Q7), so only the server on this computer is admitted, and the scope claims
+  // the zdr route that admission, the transport and the session runtime enforce.
+  it.instance(
+    "replays the engine:privacy-zdr variant on the server on this computer, with the zdr route in its scope",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const variant = { name: "engine:privacy-zdr", keys: { privacy: "zdr" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          variant,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.config.value.privacy).toBe("zdr")
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.scope.route).toBe("zdr")
+        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+        expect(artifact.attempts.some((attempt) => attempt.stop === "privacy")).toBe(false)
+        expect(artifact.outcome?.partial).toBeUndefined()
       }),
     GIT,
     TIMEOUT,
@@ -1423,6 +1457,7 @@ describe("ReviewEval.replay", () => {
         })
         expect(Object.hasOwn(artifact.config.value, "zdrAttested")).toBe(false)
         expect(Object.hasOwn(artifact.config.value, "privacy")).toBe(false)
+        expect(artifact.scope.route).toBeUndefined()
         expect(artifact.config.warnings).toEqual([
           '.vector/review.json: "zdrAttested" is ignored: "zdrAttested" is read only from the global config.',
         ])
@@ -1602,6 +1637,10 @@ describe("ReviewEval.replay", () => {
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
           "engine:trivial-skip sets trivial, which this replay does not apply",
+        )
+        // A variant raises privacy and never lowers it (VS-23c): its keys go over the base's raise-only privacy.
+        expect(yield* refused({ variant: { name: "engine:privacy-zdr", keys: { privacy: "standard" } } })).toContain(
+          'engine:privacy-zdr sets privacy "standard": a variant may raise privacy to "zdr", never lower it.',
         )
         // A pending name with nothing to set would be the frozen pipeline.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: {} } })).toContain(

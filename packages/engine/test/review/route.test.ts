@@ -583,6 +583,94 @@ describe("ReviewRoutes.hold", () => {
   )
 })
 
+// VS-23c (SF-12b): what the session runtime (session/llm.ts) does with a model call (turn), and whether a session's
+// calls are a "zdr" review's (zdr). zdr-route.test.ts covers the same through LLM.stream. Both take plain values, so
+// what they read cannot be observed here; and a "zdr" session released earlier in this process (an earlier case, or
+// another file in the same process) stays remembered, so these cases run past the first line, whose answer for every
+// session but a "zdr" review's is the same.
+describe("ReviewRoutes.turn and zdr (SF-12b)", () => {
+  // The registry is process-global: every session a case names is released after it, whatever the case does.
+  const named: SessionID[] = []
+  const session = (suffix: string) => {
+    const id = SessionID.make(`ses_turntest${suffix}`)
+    named.push(id)
+    return id
+  }
+  afterEach(() => named.splice(0).forEach((id) => ReviewRoutes.release(id)))
+  const STANDARD = { privacy: "standard" as const, attested: [] }
+  const REFUSED: ReviewRoutes.Turn = { refusal: "unknown-destination" }
+  const call = (sessionID: string, overrides: Partial<Parameters<typeof ReviewRoutes.turn>[0]> = {}) =>
+    ReviewRoutes.turn({ sessionID, agent: "review", ...overrides })
+
+  test("every session but a zdr review's and its children's takes the path it took before", () => {
+    const standard = session("standard")
+    ReviewRoutes.register(standard, { policy: STANDARD, agent: "review" })
+    // A zdr review registered beside them changes nothing for them.
+    ReviewRoutes.register(session("beside"), { policy: zdr(), agent: "review" })
+    for (const id of ["ses_turntestowner", standard]) {
+      expect(ReviewRoutes.zdr(id)).toBe(false)
+      expect(call(id)).toBeUndefined()
+      expect(call(id, { agent: "title", small: true })).toBeUndefined()
+      expect(call(id, { agent: "compaction" })).toBeUndefined()
+      expect(call(id, { small: true })).toBeUndefined()
+      expect(call(id, { parentSessionID: standard })).toBeUndefined()
+      expect(call(id, { parentSessionID: "ses_turntestowner" })).toBeUndefined()
+    }
+  })
+
+  test("a zdr session sends its pass's own turns, on the AI SDK runtime, and nothing else", () => {
+    const id = session("own")
+    ReviewRoutes.register(id, { policy: zdr(), agent: "review" })
+    expect(ReviewRoutes.zdr(id)).toBe(true)
+    expect(call(id)).toEqual({ runtime: "ai-sdk" })
+    expect(call(id, { small: false })).toEqual({ runtime: "ai-sdk" })
+    // Another agent (a title, the memory learner, a compaction summary, another pass's), or the pass's own small.
+    for (const overrides of [
+      { agent: "title", small: true },
+      { agent: "brain.learn", small: true },
+      { agent: "brain.skill", small: true },
+      { agent: "compaction" },
+      { agent: "judge" },
+      { agent: "security" },
+      { small: true },
+    ])
+      expect(call(id, overrides)).toEqual(REFUSED)
+    // A child of the zdr session (a task or a subagent), unregistered itself, whatever its agent.
+    expect(call("ses_turntestchild", { parentSessionID: id })).toEqual(REFUSED)
+    expect(call("ses_turntestchild", { parentSessionID: id, agent: "explore" })).toEqual(REFUSED)
+    // A registration with no agent sends no turn.
+    const bare = session("bare")
+    ReviewRoutes.register(bare, { policy: zdr() })
+    expect(ReviewRoutes.zdr(bare)).toBe(true)
+    expect(call(bare)).toEqual(REFUSED)
+    // The agent Review.run registered is the one that is allowed.
+    const security = session("security")
+    ReviewRoutes.register(security, { policy: zdr(), agent: "security" })
+    expect(call(security, { agent: "security" })).toEqual({ runtime: "ai-sdk" })
+    expect(call(security)).toEqual(REFUSED)
+  })
+
+  test("a released zdr session and its children send nothing, with nothing registered, until it is registered again", () => {
+    const id = session("released")
+    ReviewRoutes.register(id, { policy: zdr(), agent: "review" })
+    ReviewRoutes.release(id)
+    // Nothing is registered now (every case releases what it named), and the released session is still a zdr review's.
+    expect(ReviewRoutes.registered(id)).toBeUndefined()
+    expect(ReviewRoutes.zdr(id)).toBe(true)
+    expect(call(id)).toEqual(REFUSED)
+    expect(call("ses_turntestreleasedchild", { parentSessionID: id })).toEqual(REFUSED)
+    // A released standard session is an unregistered one's.
+    const standard = session("releasedstandard")
+    ReviewRoutes.register(standard, { policy: STANDARD, agent: "review" })
+    ReviewRoutes.release(standard)
+    expect(ReviewRoutes.zdr(standard)).toBe(false)
+    expect(call(standard)).toBeUndefined()
+    // Registered again, the session's own turns are sent.
+    ReviewRoutes.register(id, { policy: zdr(), agent: "review" })
+    expect(call(id)).toEqual({ runtime: "ai-sdk" })
+  })
+})
+
 describe("ReviewRoutes.sendBody", () => {
   const send = (input: Partial<Parameters<typeof ReviewRoutes.sendBody>[0]> & { body: unknown }) =>
     ReviewRoutes.sendBody({

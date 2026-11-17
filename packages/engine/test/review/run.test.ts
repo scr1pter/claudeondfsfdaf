@@ -2,8 +2,11 @@ import { describe, expect } from "bun:test"
 import { $ } from "bun"
 import fs from "node:fs/promises"
 import path from "path"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
+import { BrainLearn } from "@vectordevai/core/brain/learn"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
+import { buildPrompt } from "@vectordevai/core/session/compaction"
 import { Database } from "@vectordevai/core/database/database"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
@@ -79,7 +82,7 @@ import { ReviewService } from "../../src/review/service"
 import { ReviewLocalRun } from "../../src/review/local-run"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { ReviewLifecycle } from "../../src/review/lifecycle"
-import { SessionID } from "../../src/session/schema"
+import { MessageID, SessionID } from "../../src/session/schema"
 import { TestInstance, trustWorkspace, reloadInstance, tmpdirScoped } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
@@ -398,6 +401,8 @@ const REVIEW = answering("You are Vector's code reviewer")
 const SECURITY = answering("You are Vector's security reviewer")
 const VERIFY = answering("You are checking candidate findings")
 const FINALIZE = answering("Stop investigating")
+// A compaction summary's request (compaction.ts), which ends with core's summary prompt.
+const SUMMARY = answering(buildPrompt({ context: [] }))
 
 function toolNames(body: Record<string, unknown>): string[] {
   const tools: unknown[] = Array.isArray(body.tools) ? body.tools : []
@@ -3015,6 +3020,41 @@ describe("model evidence (VS-07)", () => {
       }),
     TIMEOUT,
   )
+
+  // VS-23c (SF-12b): under privacy "zdr" the review's scope is the zdr route's, which admission, the transport and the
+  // session runtime enforce. A certificate made on the standard route does not apply, and one made on the zdr route
+  // does.
+  it.instance(
+    "warn under zdr: a certificate applies only when it was made on the zdr route",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const warn = config({ modelEvidence: "warn", privacy: "zdr" })
+        const model = {
+          ...ref,
+          context: 100_000,
+          costKind: "priced" as const,
+          subject: { model: "lmstudio/test-model", free: false, choice: { explicit: true, setting: "--model" } },
+        }
+        const standard = certificate(evidenceScope({ adapter: "engine", config: warn }))
+        const routed = {
+          ...certificate(evidenceScope({ adapter: "engine", config: warn, route: "zdr" })),
+          route: "zdr" as const,
+        }
+        expect(certificateProblems(routed)).toEqual([])
+
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+        const elsewhere = yield* Review.run(input(directory, { model, config: warn, certificates: [standard] }))
+        expect(elsewhere.notes).toEqual([
+          "The VectorScope evaluation of `lmstudio/test-model` on record (`vs-test`) was made with another privacy setting, so it does not apply here. Vector used it because --model names it, and does not switch a chosen model.",
+        ])
+
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+        const applied = yield* Review.run(input(directory, { model, config: warn, certificates: [routed] }))
+        expect(applied.notes).toEqual([])
+      }),
+    TIMEOUT,
+  )
 })
 
 // VS-21b: the projection hook, which only ReviewEval.project sets. It is asked about each decision the dollar cap
@@ -3527,12 +3567,13 @@ describe("VS-23b route admission", () => {
           ["finalize", true],
         ])
 
-        // Every admitted attempt was in a session registered under the review's policy, decided as loopback; the
-        // registry is empty again once each review ends.
+        // Every admitted attempt was in a session registered under the review's policy and its pass's agent, decided
+        // as loopback; the registry is empty again once each review ends.
         expect(seen).toHaveLength(4)
         for (const entry of seen)
           expect(entry).toMatchObject({
             policy: { privacy: "zdr", attested: [] },
+            agent: "review",
             decision: { allowed: true, kind: "loopback" },
           })
         for (const id of [...retried.sessions, ...finalized.sessions])
@@ -3755,6 +3796,161 @@ describe("VS-23b route admission", () => {
         const bodies = yield* modelRequests(llm)
         expect(bodies.length).toBeGreaterThan(0)
         for (const body of bodies) expect(body.provider).toEqual({ zdr: true, data_collection: "deny" })
+      }),
+    TIMEOUT,
+  )
+
+  // VS-23c (SF-12b): a "zdr" review's history is never summarised. The overflow that would start a compaction ends the
+  // pass at the loop's top instead (prompt.ts, as a pinned review does), so neither the compaction agent's request nor
+  // another attempt is sent, and the pass fails with the reason. The control under privacy unset sends the summary.
+  it.instance(
+    "VS-23c (SF-12b): a zdr review never summarises a pass's history, and the pass fails with the reason",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const observed: Review.Observation[] = []
+        const overflow = () => httpError(400, { type: "error", error: { code: "context_length_exceeded" } })
+        yield* llm.pushMatch(REVIEW, overflow())
+        const outcome = yield* Review.run(
+          input(directory, { config: zdr({ maxSteps: 3 }), observe: (event) => observed.push(event) }),
+        )
+        const hits = yield* llm.hits
+        expect(hits).toHaveLength(1)
+        expect(hits.filter(REVIEW)).toHaveLength(1)
+        expect(hits.filter(SUMMARY)).toHaveLength(0)
+        expect(hits.filter(FINALIZE)).toHaveLength(0)
+        expect(outcome.specialists).toHaveLength(1)
+        expect(outcome.specialists[0]).toMatchObject({
+          name: "review",
+          status: "failed",
+          detail:
+            'Review incomplete: This review\'s privacy is "zdr", so its history is never summarised, and nothing more was sent. Review fewer files at once, or use a model with a larger context.',
+        })
+        expect(outcome.partial).toBe("model-error")
+        expect(outcome.unreviewed).toEqual(["src/list.ts"])
+        expect(attemptsOf(observed).map((attempt) => [attempt.phase, attempt.admitted])).toEqual([["turn", true]])
+
+        // The control: the same overflow under privacy unset is summarised, in one compaction request.
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, overflow())
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        yield* Review.run(input(directory, { config: config({ maxSteps: 3 }) }))
+        expect((yield* llm.hits).filter(SUMMARY)).toHaveLength(1)
+      }),
+    TIMEOUT,
+  )
+
+  // VS-23c (SF-12b), the proof that every request a "zdr" review sends is one of its passes' own: a retried turn, a
+  // finalizer and the verify pass. Each names, in its session header, a session the review created, and none is a title,
+  // memory learner, skill drafter or compaction request. Under privacy unset the same review sends the same kinds. A
+  // title-shaped request on a session the review has released is refused by the session runtime, and sends nothing.
+  it.instance(
+    "VS-23c (SF-12b): every request of a zdr review names a session the review created, and none is a helper's",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const KINDS = [REVIEW, SECURITY, FINALIZE, VERIFY]
+        const reviewed = (privacy?: "zdr") =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, httpError(503, { error: "temporary failure" }))
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+            yield* llm.pushMatch(SECURITY, reply().text("I looked around.").stop())
+            yield* llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report()))
+            yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
+            const settings = { security: "always" as const, verify: "blocking" as const, maxSteps: 2 }
+            const outcome = yield* Review.run(input(directory, { config: privacy ? zdr(settings) : config(settings) }))
+            return { outcome, hits: yield* llm.hits }
+          })
+        const zdrRun = yield* reviewed("zdr")
+        const unset = yield* reviewed()
+        const kinds = (hits: typeof zdrRun.hits) =>
+          hits.map((hit) => KINDS.findIndex((kind) => kind(hit))).toSorted((a, b) => a - b)
+        expect(zdrRun.outcome.specialists.map((entry) => [entry.name, entry.status])).toEqual(
+          unset.outcome.specialists.map((entry) => [entry.name, entry.status]),
+        )
+        expect(kinds(zdrRun.hits)).toEqual(kinds(unset.hits))
+        expect(kinds(zdrRun.hits)).not.toContain(-1)
+        // The retry, the finalizer and the verify pass all ran.
+        expect(zdrRun.hits.filter(REVIEW)).toHaveLength(2)
+        expect(zdrRun.hits.filter(FINALIZE)).toHaveLength(1)
+        expect(zdrRun.hits.filter(VERIFY)).toHaveLength(1)
+        const helpers = [
+          "Generate a title for this conversation",
+          BrainLearn.PROMPT.split("\n")[0]!,
+          BrainSkill.PROMPT.split("\n")[0]!,
+          buildPrompt({ context: [] }).split("\n")[0]!,
+        ]
+        for (const hit of zdrRun.hits) {
+          expect(hit.session).toBeDefined()
+          expect(Schema.is(SessionID)(hit.session)).toBe(true)
+          expect(zdrRun.outcome.sessions).toContain(hit.session!)
+          for (const helper of helpers) expect(hit.text).not.toContain(helper)
+        }
+
+        // A title-shaped request on a released session of the zdr review: refused, and nothing sent.
+        const runtime = yield* LLM.Service
+        const provider = yield* Provider.Service
+        const found = yield* provider.getModel(ref.providerID, ref.modelID).pipe(Effect.orDie)
+        const sessionID = zdrRun.outcome.sessions[0]!
+        const before = (yield* llm.hits).length
+        const late = yield* runtime
+          .stream({
+            user: {
+              id: MessageID.make("msg_lateTitleAfterRelease"),
+              sessionID: SessionID.make(sessionID),
+              role: "user",
+              time: { created: 1 },
+              agent: "title",
+              model: { providerID: found.providerID, modelID: found.id },
+            },
+            sessionID,
+            model: found,
+            agent: { name: "title", mode: "primary", options: {}, permission: [] },
+            system: [],
+            small: true,
+            purpose: "title",
+            tools: {},
+            messages: [{ role: "user", content: "Generate a title for this conversation:\n" }],
+          })
+          .pipe(Stream.runDrain, Effect.exit)
+        const error = Exit.isFailure(late) ? Cause.squash(late.cause) : undefined
+        expect(error).toBeInstanceOf(ReviewRoutes.Refused)
+        expect((error as ReviewRoutes.Refused).site).toBe("session")
+        expect((yield* llm.hits).length).toBe(before)
+      }),
+    60_000,
+  )
+
+  // VS-23c (SF-12b): the agent a pass is registered with is the one Review.run prompts it with, whatever the review's
+  // identity, so a pinned review and a VectorScope-identity review send their turns under zdr as before.
+  it.instance(
+    "VS-23c (SF-12b): a pinned review and a VectorScope-identity review are registered with their agent and sent",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        for (const identity of [undefined, VECTORSCOPE_AGENT] as const) {
+          yield* llm.reset
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+          const seen: (ReviewRoutes.Registered | undefined)[] = []
+          const outcome = yield* Review.run(
+            input(directory, {
+              ...(identity ? { identity } : {}),
+              instructionsFromContext: true,
+              context: { instructions: "PINNED_BASE_INSTRUCTIONS_MARKER" },
+              config: zdr(),
+              observe: (event) => {
+                if (event.type === "attempt" && event.admitted && event.sessionID)
+                  seen.push(ReviewRoutes.registered(event.sessionID))
+              },
+            }),
+          )
+          expect(outcome.specialists).toEqual([{ name: "review", status: "ok", steps: 1 }])
+          expect(outcome.partial).toBeUndefined()
+          expect(yield* modelRequests(llm)).toHaveLength(1)
+          expect(seen).toHaveLength(1)
+          expect(seen[0]).toMatchObject({ policy: { privacy: "zdr" }, agent: identity ?? "review" })
+        }
       }),
     TIMEOUT,
   )

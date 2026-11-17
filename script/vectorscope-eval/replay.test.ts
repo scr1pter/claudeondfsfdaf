@@ -499,6 +499,7 @@ describe("the variant registry", () => {
     expect(built.map((item) => item.name)).toEqual([
       "engine:shared-verify",
       "desktop:shared-verify",
+      "engine:privacy-zdr",
       "engine:cross-family",
     ])
     for (const item of built) {
@@ -513,7 +514,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 3)
+    expect(pending).toHaveLength(2 * entries.length - 4)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -527,7 +528,6 @@ describe("the variant registry", () => {
         pending.filter((item) => item.name.startsWith("engine:")).map((item) => [item.name, item.package]),
       ),
     ).toEqual({
-      "engine:privacy-zdr": "VS-23c",
       "engine:trivial-skip": "VS-24 wiring",
       "engine:impact-graph": "VS-25b wiring",
       "engine:cards-brain": "VS-26",
@@ -576,6 +576,17 @@ describe("the variant registry", () => {
       frozen: false,
     })
     expect(pending).toContainEqual({ name: "desktop:cross-family", package: "VS-29a's desktop half, after VS-10" })
+    // VS-23c (SF-12b): privacy-zdr's engine half is built and raises privacy; its desktop half waits for VS-23d, since
+    // the desktop's review sessions are not registered with the route rules.
+    expect(resolveVariant("engine:privacy-zdr")).toEqual({
+      ok: true,
+      name: "engine:privacy-zdr",
+      adapter: "engine",
+      keys: { privacy: "zdr" },
+      frozen: false,
+    })
+    expect(variantProblems("engine", { name: "engine:privacy-zdr", keys: { privacy: "zdr" } })).toEqual([])
+    expect(resolveVariant("desktop:privacy-zdr")).toMatchObject({ ok: false, reason: "pending", package: "VS-23d" })
   })
 
   test("a variant made by its models needs the review model, then a triage model other than it (VS-29a)", () => {
@@ -644,8 +655,8 @@ describe("the variant registry", () => {
     )
     expect(variantProblems("engine", { name: "engine:bogus", keys: {} })[0]).toContain("not a registered variant")
     // A pending name carrying a built variant's keys, which ReviewEval.replay would run, is still pending.
-    expect(variantProblems("engine", { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" } })[0]).toContain(
-      "engine:privacy-zdr is registered for VS-23c, which has not landed",
+    expect(variantProblems("engine", { name: "engine:impact-graph", keys: { verifyPolicy: "shared" } })[0]).toContain(
+      "engine:impact-graph is registered for VS-25b wiring, which has not landed",
     )
   })
 
@@ -1104,7 +1115,7 @@ describe("projection records (VS-21b)", () => {
       ),
     ).toEqual([])
     // A pending variant's name carrying a built one's keys is the registry's problem, as in report.ts.
-    const pending = { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" as const } }
+    const pending = { name: "engine:impact-graph", keys: { verifyPolicy: "shared" as const } }
     expect(variantProblems("engine", pending)).not.toEqual([])
     expect(projectionProblems(record({ variant: pending }))).toEqual(variantProblems("engine", pending))
   })
@@ -1392,9 +1403,9 @@ describe("the entry point's variants and the pilot's limits", () => {
       ok: false,
       detail: "desktop runs on the desktop runner; replays and projections here run the engine.",
     })
-    expect(variantRecord("engine:privacy-zdr")).toEqual({
+    expect(variantRecord("engine:impact-graph")).toEqual({
       ok: false,
-      detail: expect.stringContaining("registered for VS-23c"),
+      detail: expect.stringContaining("registered for VS-25b wiring"),
     })
     expect(variantRecord("not a name")).toEqual({ ok: false, detail: expect.stringContaining("is not a variant name") })
     // admitReplay keeps its own wording for a desktop name, and hands out the same record.

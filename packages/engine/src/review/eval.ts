@@ -19,7 +19,8 @@
 // A pipeline variant (VS-21a) arrives only as `variant`: a registry name and the keys it sets over the base's settings,
 // which the artifact records with the run. The registry (script/vectorscope-eval/replay.ts) refuses a variant whose
 // package has not landed; this replay cannot see the registry, so it refuses any variant that would run the frozen
-// pipeline under its name: one with no key and no model requirement, or a key outside VARIANT_KEYS.engine.
+// pipeline under its name: one with no key and no model requirement, or a key outside VARIANT_KEYS.engine. A variant
+// may raise privacy to "zdr" (engine:privacy-zdr, VS-23c), never lower it.
 //
 // ReviewEval.project (VS-21b) runs the same replay against a fake model server on this computer, so every pass runs,
 // verify, the finalizer and retries included, and records each pass's real wire body with its estimated tokens and
@@ -142,7 +143,8 @@ export interface ReplayInput {
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
   // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from the sources
   // mergeReviewConfig tags: the base's review.json may raise privacy (VS-23b, whose admission enforces it in
-  // Review.run), and no eval attestation exists before VS-23c's variant. Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
+  // Review.run), and so may the engine:privacy-zdr variant (VS-23c); the eval attests no route (owner Q7), so under
+  // "zdr" only a server on this computer is admitted. Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
   // VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence,
   // VS-28's depth and lenses, and VS-30's runtime, which is also trusted-only). The type says so, and step 0b refuses
   // any of them from an untyped caller.
@@ -717,7 +719,14 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
           } satisfies VariantRecord,
         }
       : {}),
-    scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: triaged } : {}) }),
+    // Under privacy "zdr", from the base's review.json or the engine:privacy-zdr variant, Review.run enforces the route
+    // rules at admission, at the transport and in the session runtime (VS-23c), so the scope claims the zdr route.
+    scope: evidenceScope({
+      adapter: "engine",
+      config,
+      ...(triaged ? { triage: triaged } : {}),
+      ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
+    }),
     rules: { digest: digest(rules) },
     models: { review: modelRecord(input.model), ...(input.triage ? { triage: modelRecord(input.triage) } : {}) },
     files: { reviewed: files.map((file) => file.path), skipped },
@@ -1219,7 +1228,13 @@ const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
 // the run unnamed, a route setting there, which nothing would enforce, or a variant that would run the frozen pipeline,
 // or anything but itself, under its name.
 function variantProblem(input: ReplayInput) {
-  const misplaced = VARIANT_KEYS.engine.filter((key) => input.config && Object.hasOwn(input.config, key))
+  // A route setting a variant may raise (privacy) is still a route setting in `config`, which gets its own message.
+  const misplaced = VARIANT_KEYS.engine.filter(
+    (key) =>
+      !SOURCED_REVIEW_KEYS.some((item) => item === key) &&
+      input.config !== undefined &&
+      Object.hasOwn(input.config, key),
+  )
   if (misplaced.length)
     return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
   // A replay's route settings come from the case's own review.json alone (VS-23b), so its artifact never records one the
@@ -1248,6 +1263,10 @@ function variantProblem(input: ReplayInput) {
   const unapplied = keys.filter(([key, value]) => value === undefined || !allowed.includes(key)).map(([key]) => key)
   if (unapplied.length)
     return `${variant.name} sets ${unapplied.join(", ")}, which this replay does not apply (it applies ${allowed.join(", ")}, each with a value), so the run would not be ${variant.name}.`
+  // A variant's keys go over the base's review.json, whose privacy is raise-only (config.ts), so one may raise it to
+  // "zdr" (engine:privacy-zdr) and never lower it.
+  if (variant.keys.privacy !== undefined && variant.keys.privacy !== "zdr")
+    return `${variant.name} sets privacy "${variant.keys.privacy}": a variant may raise privacy to "zdr", never lower it.`
   if (!keys.length && !variant.models)
     return `${variant.name} sets no key and no model requirement, so it would run the frozen pipeline under its name.`
   const triaged = input.triage && modelRecord(input.triage).id !== modelRecord(input.model).id

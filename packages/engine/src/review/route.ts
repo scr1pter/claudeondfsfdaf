@@ -11,10 +11,14 @@
 // session the review has released is refused. Every other request, the owner's own (no header), an unregistered
 // session's or a "standard" one's, is left exactly as it was.
 //
-// What neither sees yet is SF-12b's: the native runtime, and helper, title and compaction requests on another model
-// (refused here by the session's key). A model whose destination is computed at send time (a base URL with an
-// unfilled `${VARIABLE}`, Vertex's and Bedrock's URLs from project and region) has none admission can read, so it is
-// refused as "unknown-destination".
+// VS-23c (SF-12b): the session runtime. session/llm.ts calls `turn` before it reads anything or chooses a runtime: a
+// "zdr" session sends only its pass's own turns, made with the agent Review.run registered for it, and only on the AI
+// SDK runtime, whose fetch is provider.ts's and holds them; never on the native runtime, which sends through
+// @vectordevai/llm and never reaches that fetch, nor on a GitLab Duo workflow model's own connection. Its title, memory
+// learner, skill drafter, compaction summary and judge requests, its calls once released, and every call of a session
+// whose parent is a "zdr" session, are refused there. prompt.ts never starts a compaction of a "zdr" session (`zdr`).
+// A model whose destination is computed at send time (a base URL with an unfilled `${VARIABLE}`, Vertex's and
+// Bedrock's URLs from project and region) has none admission can read, so it is refused as "unknown-destination".
 
 import type { ModelV2 } from "@vectordevai/core/model"
 import type { ModelCatalog } from "@vectordevai/core/model-catalog"
@@ -66,10 +70,13 @@ export interface Decided {
   readonly decidedOn?: RouteModel
 }
 
-// What a session Review.run created runs under: the review's policy and, under "zdr", the model its pass was decided
-// for, that decision, and what it was decided on, which the transport (hold) decides again with what it sees.
+// What a session Review.run created runs under: the review's policy, the agent its pass is prompted with and, under
+// "zdr", the model its pass was decided for, that decision, and what it was decided on, which the transport (hold)
+// decides again with what it sees. Under "zdr" `agent` is the only agent whose requests the session runtime sends for
+// the session (turn), so every registrant (SF-15's desktop path too) must set it, or no turn of the session is sent.
 export interface Registered {
   readonly policy: Policy
+  readonly agent?: string
   readonly key?: string
   readonly decision?: RouteDecision
   readonly decidedOn?: RouteModel
@@ -78,16 +85,26 @@ export interface Registered {
 // What the transport does with a model call (hold): refuse it, or send it on a route of this kind.
 export type Held = { readonly refusal: RouteRefusal } | { readonly kind: RouteKind }
 
+// What the session runtime does with a model call (turn): refuse it, or send it on the AI SDK runtime, whose fetch is
+// provider.ts's and holds it.
+export type Turn = { readonly refusal: RouteRefusal } | { readonly runtime: "ai-sdk" }
+
 /**
- * VS-23c's refusal of a model call, thrown by provider.ts's fetch before anything is sent. A plain Error, so the AI SDK
- * rethrows it as it is and the session does not retry it.
+ * VS-23c's refusal of a model call, before anything is sent: thrown by provider.ts's fetch (`site` "transport"), or
+ * failed by the session runtime before it chose a runtime or built a request (`site` "session", turn). A plain Error,
+ * so the AI SDK rethrows it as it is and the session does not retry it.
  */
 export class Refused extends Error {
   public override readonly name = "ZdrRouteRefused"
 
-  constructor(public readonly refusal: RouteRefusal) {
+  constructor(
+    public readonly refusal: RouteRefusal,
+    public readonly site: "transport" | "session" = "transport",
+  ) {
     super(
-      `Vector did not send this request: this review's privacy is "zdr", and the route rules refused it (${refusal}). Nothing was sent.`,
+      site === "session"
+        ? `Vector did not send this request: this review's privacy is "zdr", and its sessions send only a review pass's own turns, on a connection the route rules hold (${refusal}). Nothing was sent.`
+        : `Vector did not send this request: this review's privacy is "zdr", and the route rules refused it (${refusal}). Nothing was sent.`,
     )
   }
 }
@@ -245,6 +262,42 @@ export function attempt(sessionID: string, model: Provider.Model): RouteRefusal 
 }
 
 /**
+ * VS-23c (SF-12b): whether a session's model calls are a "zdr" review's: registered under "zdr", or released by its
+ * review after it was (hold refuses those). False before anything is read while no review session is registered and no
+ * released "zdr" one is remembered.
+ */
+export function zdr(sessionID: string): boolean {
+  if (!sessions.size && !released.size) return false
+  return released.has(sessionID) || sessions.get(sessionID)?.policy.privacy === "zdr"
+}
+
+/**
+ * VS-23c (SF-12b): what the session runtime (session/llm.ts) does with a model call, before it reads anything or
+ * chooses a runtime. Undefined, so the call takes the path it took before, for every session but a "zdr" review's and
+ * its children's. A "zdr" session's call is one of its pass's own turns when it is made with the agent Review.run
+ * registered for it (`agent`), at full size: that is sent, on the AI SDK runtime only, whose fetch is provider.ts's and
+ * holds it (hold), never on the native runtime, which sends through @vectordevai/llm. This is an allowlist, so every
+ * other call is refused: a title, the memory learner or the skill drafter (small), a compaction summary or a judge
+ * (another agent), a registration with no agent, a session its review released, and any call of a session whose parent
+ * is a "zdr" session (a task or a subagent), which is refused before its first request and so never starts one of its
+ * own.
+ */
+export function turn(input: {
+  readonly sessionID: string
+  readonly parentSessionID?: string
+  readonly agent: string
+  readonly small?: boolean
+}): Turn | undefined {
+  if (!sessions.size && !released.size) return undefined
+  if (input.parentSessionID !== undefined && zdr(input.parentSessionID)) return { refusal: "unknown-destination" }
+  if (!zdr(input.sessionID)) return undefined
+  const entry = sessions.get(input.sessionID)
+  return entry && !input.small && entry.agent === input.agent
+    ? { runtime: "ai-sdk" }
+    : { refusal: "unknown-destination" }
+}
+
+/**
  * VS-23c: what the transport does with a model call, from the session its `x-session-id` names (`session` gives
  * undefined without the header, and no `id` when the header names no one session ID; it is read only while some review
  * session is registered or a released "zdr" one is remembered). Undefined, so the call is sent exactly as before, for
@@ -341,7 +394,8 @@ export function sendBody(input: {
 // The sessions Review.run created and has not yet released, by session ID.
 const sessions = new Map<string, Registered>()
 // The "zdr" sessions Review.run released, oldest first: a call that still names one, such as a late helper request or
-// the session continued after its review, is refused (hold). Bounded, so a long-running server keeps the most recent.
+// the session continued after its review, is refused (hold, turn), and so is a call of a session whose parent is one
+// (turn). Bounded, so a long-running server keeps the most recent; one forgotten past the bound is unregistered again.
 const released = new Set<string>()
 const RELEASED_LIMIT = 4096
 

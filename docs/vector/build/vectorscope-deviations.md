@@ -24089,3 +24089,546 @@ carries a parseable header) are SF-12b's.
   - No `cat-file --batch`.
   - No change to session/llm.ts, the spawn hot spots, the connect files, the
     app, replay.ts VARIANTS or the README.
+
+## 2026-11-17 · VS-23c ZDR backstop in the session LLM runtime and helpers (SF-12b)
+
+The session-runtime half of VS-23c (`vectorscope-upgrade.md` VS-23c `:430-441` items 4 and 5, the integration-map row
+for `session/llm.ts` `:291`, and invariant I-3 `:258`). It was built on `scope-finish` at `fb441eae` (SF-12a is
+`7796084c`, SF-11 `43e21b48`) as lane package SF-12b, from the SF-12b plan as corrected by its critique. Where a critique
+point was taken in another form or rejected, the reason is under "Critique points". This entry is also the lane's
+progress record for SF-12b. With it, VS-23c's two halves (SF-12a's transport, SF-12b's session runtime) are built for the
+engine runner; the desktop half is VS-23d (SF-15).
+
+- **Status.** Built and tested in the working tree on `scope-finish` at `fb441eae`; the lane's commit gate commits it as
+  `feat(review): keep zdr review sessions off native and helper requests` and pushes it to `origin/scope-finish`. A
+  commit cannot name its own SHA, so the SHA and each dispatched run's ID and result go in a later entry.
+  - The lead's go for the protected transport file `session/llm.ts`: the lane workflow dispatched SF-12b on 2026-11-17
+    ("TASK: implement this package"), and then its commit gate ("TASK: commit gate for this package"), which tells the
+    gate to commit, push to `origin/scope-finish` and dispatch the lane's CI. The build took the first dispatch as the
+    go, and the gate took the second as the go for the push, as SF-12a's gate did for `provider.ts`; no separate
+    message from the lead was received. The build had planned to hold the push until the lead confirmed; the gate's
+    dispatch is that instruction, so the push was not held. The lead's explicit confirmation of both (`session/llm.ts`
+    for SF-12b, `provider.ts` for SF-12a) is still to be recorded, with its date and source, in the follow-up entry
+    that records the SHA and the CI runs (review round one, findings 4 and 7). The branch reaches `main` only through
+    the lead's PR, so the lead can still revert either before it does.
+  - The compaction choice (deviation 1) is the lead's to reverse; the build keeps the other option open.
+  - Every new or changed test file and every regression file below was run one at a time through the lock, `bun
+    typecheck` passes in `packages/engine` and `packages/core`, and `bun tsgo -p ../../script/vectorscope-eval/
+    tsconfig.json` from `packages/engine` passes (counts and results under "Tests run"). The commit gate ran them again
+    and the full TURBO typecheck (under "Tests run", "Commit gate").
+
+- **SF-12a's CI, read with the GitHub tools while SF-12b was built** (SF-12a's entry left the SHA and the runs to a later
+  entry; this is it):
+  - on `7796084c` (SF-12a): `typecheck.yml` 43995522292 success; `scope-directory-identity.yml` 43995527596 success;
+    `review-memory-fence.yml` 43995532144 success (SF-12a's `run.ts` change); `scope-app-validation.yml` 43995536366
+    failure, one job ("VectorScope local review (linux)", job 133746532120): 1 failed, 59 passed, the failed spec
+    `e2e/regression/vectorscope-fix.spec.ts:276` "a double-click on a step previews once and approves nothing", the
+    same spec as SF-11's run 43978250944; `vector-at-mention.yml` 43995540654 still queued when read.
+  - on `fb441eae` (`fix(app): wait for the applied step before counting the fix execute`, the fix for that spec):
+    `scope-app-validation.yml` 43995956415 success, so the `:276` failure is root-caused and fixed (the assertion ran
+    before the routed execute arrived; that commit's message gives the cause); `review-memory-fence.yml` 43995951787
+    success; `typecheck.yml` 43995942667 success; `scope-directory-identity.yml` 43995947209 success;
+    `vector-at-mention.yml` 43995960444 still queued when last read (both at-mention runs had sat queued for over an
+    hour, behind the shared runner queue).
+  - `test.yml` and `review-http-regression.yml` (scope local) have still not run on SF-11 or SF-12a (SF-12a's entry left
+    them to the lead).
+  - The commit gate reads the runs still queued above, and root-causes any failure, before it pushes SF-12b; the
+    older `vector-at-mention.yml` probe failure ("sandbox (codium, success, bun)", SF-12a's entry) is the lead's.
+  - Read by the commit gate: `vector-at-mention.yml` 43995540654 (`7796084c`) and 43995960444 (`fb441eae`) both
+    concluded "failure", each in one job of ten, "sandbox (codium, success, bun)" (jobs 133746546350 and
+    133747982626), at "Run the unprivileged probe": `error: The tool process probe attempted external network access`
+    at `probeToolProcesses`, after which `summary.json` and `observed.json` are missing. That is the older failure
+    above, seen on `scope-finish` since before SF-09; SF-12b does not touch the sandbox probe. "engine and core" (core
+    `test/review/*` and the engine GitHub tests) passed in both runs, and so did the other eight jobs. Both runs are
+    now read, so none is still queued.
+
+- **Scope.**
+  - Engine `review/route.ts` (pinned): `Registered.agent`, the `Turn` type, `zdr`, `turn`, and `Refused.site`.
+  - Engine `session/llm.ts` (pinned, protected): `turn` is asked at the top of `LLM.run`; a refusal fails the call; a
+    "zdr" session never takes the native runtime or asks the computer adapter, and never sends on a GitLab Duo workflow
+    model.
+  - Engine `session/prompt.ts` (pinned): a "zdr" session's compaction task ends the pass at the loop's top
+    (`ReviewContextUnavailable`, which takes an optional second sentence).
+  - Engine `review/run.ts` (pinned): each session is registered with its pass's agent, and under "zdr" the evidence
+    scope is the zdr route's.
+  - App `features/pull-requests/ai-review.ts` (pinned): the automatic-review card's prediction of the engine's evidence
+    scope (`workflowModel`) adds the zdr route under privacy "zdr", as run.ts does (review round one, finding 1).
+  - Engine `review/eval.ts` (not pinned): the artifact's scope is the zdr route's under privacy "zdr"; `variantProblem`
+    lets a variant raise privacy, never lower it, and keeps `config`'s route-setting message.
+  - Core `review/eval.ts`: `VARIANT_KEYS.engine` gains `privacy`. Core `review/model-evidence.ts`: the `route` comment
+    and the pin.
+  - `script/vectorscope-eval/replay.ts` (the `engine:privacy-zdr` engine half) and the README.
+  - Under privacy unset or "standard" no request, outcome or body changes (I-1, below). No key is enabled and no default
+    changes.
+
+- **What landed** (line numbers in the working tree).
+  - Engine `review/route.ts`:
+    - `Registered.agent` `:79`: the agent Review.run prompts the pass with. Its comment says every registrant (SF-15's
+      desktop path too) must set it: under "zdr" a registration without it sends no turn.
+    - `zdr(sessionID)` `:269`: false on the first line while no review session is registered and no released "zdr" one
+      is remembered; otherwise whether the session is a released "zdr" one or is registered under "zdr".
+    - `turn(input)` `:285`, an allowlist: undefined on the same first line; `{ refusal: "unknown-destination" }` when
+      `parentSessionID` names a "zdr" session (a task or subagent of a "zdr" review, refused before its first
+      request, so it never starts one of its own); undefined for every session `zdr` says is not a "zdr" review's (the
+      owner's, an unregistered one, a "standard" one, a released "standard" one); otherwise `{ runtime: "ai-sdk" }`
+      only for a registered session's call at full size (`!small`) whose agent is the registered one, and the refusal
+      for everything else: a released "zdr" session, a title, the memory learner and the skill drafter (small), a
+      compaction summary and a judge (another agent), and a registration with no agent.
+    - `Refused` `:97` gains `site`, "transport" (the default, every provider.ts call site unchanged) or "session", with
+      its own message (`…its sessions send only a review pass's own turns, on a connection the route rules hold
+      (<refusal>). Nothing was sent.`), so a test can tell the session runtime's refusal from the transport's (critique
+      point 1).
+    - The header and the released set's comments are in the present tense; "What neither sees yet is SF-12b's" is
+      gone.
+  - Engine `session/llm.ts`:
+    - `import { ReviewRoutes } from "@/review/route"` `:48`; route.ts imports Provider and SessionID as types only.
+    - `LLM.run` `:207-217`, right after the "stream" log and before `Provider.brief`, `getLanguage`, the config, the
+      provider and the credential are read: `turn({ sessionID, parentSessionID, agent: input.agent.name, small })`;
+      a refusal is `Effect.fail(new ReviewRoutes.Refused(refusal, "session"))`, a plain Error the processor does not
+      retry (`retry.ts:67-92`) and Review.run reports as the pass's error.
+    - `:251-253`: a "zdr" turn whose language model is a GitLab Duo workflow model (`isWorkflow`) fails the same way,
+      before `LLMRequestPrep.prepare` and the workflow's tool executor (critique point 4). Its WebSocket is neither
+      provider.ts's fetch nor the native client.
+    - `:394-408`: `nativeComputer = !zdr && computerNative.wants(...)`, so a "zdr" turn never writes the computer
+      adapter's choice; `:431`: `if (!zdr && (flags.experimentalNativeLlm || nativeComputer))`, so it always takes
+      the AI SDK path, whose fetch is provider.ts's and holds it (SF-12a).
+    - For every other session `turn` returns undefined, so llm.ts's local `zdr` is undefined and the code path is
+      HEAD's.
+  - Engine `session/prompt.ts`:
+    - `ReviewContextUnavailable` `:149-158` takes `next` (default "Start a fresh review with the pinned context."), so
+      the pinned messages are byte-identical (run.test.ts `:2151` at HEAD).
+    - At the loop's top `:2552-2559`, right after the pinned review's compaction check: a compaction task in a session
+      `ReviewRoutes.zdr` names throws `ReviewContextUnavailable('This review\'s privacy is "zdr", so its history is
+      never summarised, and nothing more was sent.', "Review fewer files at once, or use a model with a larger
+      context.")`. An overflow (`:2760`), a step that ends in "compact" (`:3402`) and a pending task (the HTTP
+      summarize route included) all create the task and come back here before `compaction.process`, so no compaction
+      request is sent and no admission is spent on one. Review.run maps the error to a "failed" pass with that detail
+      and no finalizer (`run.ts:801`, `:821`, `:854`).
+    - Title, judge, learner and skill drafter keep their internal-session gates (`prompt.ts:553`, `:1061`, `:3601`,
+      `skill-learn.ts:107`); the llm.ts allowlist backstops each.
+  - Engine `review/run.ts`: `agent` is computed once `:673` and both registered `:679` and prompted with; the
+    evidence scope `:1207-1222` adds `route: "zdr"` under "zdr" (SF-12a's hand-off of `EvidenceScope.route`).
+  - App `ai-review.ts` `:481-488`: `workflowModel`'s scope, which predicts the notes of the engine review the GitHub
+    job runs (`adapter: "engine"`), adds `route: "zdr"` when `config.privacy` is "zdr", the condition run.ts reads
+    (`policyOf(config).privacy`). It is not reachable from the app today: the card's settings come from
+    `parseReviewConfig` (`layout-new.tsx:1149`), which never sets `privacy` (a sourced key, `config.ts:145-151`), and
+    so do the GitHub job's (`github.review.ts:295`): with review.json setting `privacy: "zdr"` the job still reviews
+    under "standard" and the card still predicts that. It keeps the card equal to Review.run for the same settings
+    once SF-15 (the app) and SF-37 (the job) read the sourced keys. The desktop runner's own scope
+    (`ai-review.ts:1363`, `adapter: "desktop"`) still sets no route (VS-23d). The test (`ai-review.test.ts:2517-2537`)
+    passes the settings as `mergeReviewConfig` returns them and asserts that `parseReviewConfig` drops `privacy`.
+  - Engine `review/eval.ts`: the artifact's scope `:722-729` adds `route: "zdr"` when the replay's config has privacy
+    "zdr" (from the base's review.json or the variant); `variantProblem` `:1231-1238` leaves sourced keys out of the
+    "variant's key in config" check, so `config: { privacy }` keeps "a route setting a replay cannot apply"
+    (eval.test.ts, `:1537-1542` at HEAD, unchanged), and `:1266-1269` refuses a variant that sets privacy to anything
+    but "zdr"; comments at `:19-23` and `:140-148`.
+  - Core `review/eval.ts` `:114-120`: `VARIANT_KEYS.engine` is `["verifyPolicy", "privacy"]`; desktop stays
+    `["verifyPolicy"]` (the README's flip rule: the package that makes a key change what a runner does adds it).
+  - Core `review/model-evidence.ts`: the `EvidenceScope.route` comment `:112-115` in the present tense; the pin.
+  - `script/vectorscope-eval/replay.ts` `:170-178`: `"privacy-zdr": { planned, keys: { privacy: "zdr" }, engine:
+    { from: "VS-23c" }, desktop: { pending: "VS-23d" } }`, with a comment.
+  - README: the variant table's row (Engine "built (VS-23c)", Desktop "pending VS-23d"), two bullets after the
+    `config` bullet (`VARIANT_KEYS.engine` and the raise-only rule; what a replay under `engine:privacy-zdr` is: the
+    zdr scope, loopback only since the eval attests nothing (Q7, D7), no quality claim (Q9)), and the route-refusal
+    line of the report section. Review round one: the row's Sets cell names the session runtime too, as replay.ts's
+    `planned` does, and the report section says that a refusal after admission ends a pass as a failed one, not a
+    counted route refusal, and that the session runtime gives all its refusals the code `unknown-destination`.
+
+- **Deviations from the brief and the plan.**
+  1. **Compaction of a "zdr" review is suppressed at its source, with llm.ts as the backstop** (VS-23c item 5: "Prove
+     with tests that no title, memory, compaction or other helper request is sent for a `vectorscope.*` session under
+     `zdr`; suppress any that are"; the brief's "prove that no title, compaction or memory helper request is sent").
+     The critique (point 3) named the alternative, Option B: allow a compaction whose model's key is the decided one,
+     which admission and the transport already hold to the same compliant route, and admit agent "compaction" in
+     `turn` only then. Option A is kept because item 5 and the brief say "no compaction request is sent", and a
+     summary re-sends the reviewed code in one more request, on the compaction agent's own model when one is
+     configured (`compaction.ts:533-545`). I-3's reading: I-3 allows a request
+     "sent with ZDR routing"; item 5 narrows that for helper kinds. Effects of A, recorded under "Known limits": a pass
+     that outgrows its context fails ("model-error", its detail the zdr sentence, its files unreviewed) where standard
+     would compact; and a compaction on another model than the pass's, which at HEAD admission refused for the whole
+     review (`partial: "privacy"` with `notePrivacyRefused`), now ends that one pass before any admission, while the
+     other passes go on. The owner sees the reason: the GitHub job's and the eval's partial banner quotes the first
+     failed specialist's detail (`notePartial`, `github.review.ts:955-967`, `eval.ts:894-906`). Reversing to B is one
+     condition in prompt.ts and one in `turn`; the lead decides.
+  2. **The helper rule is an allowlist** (the pass's registered agent at full size), not a list of helper agents to
+     refuse, so a helper added later is refused until it is named.
+  3. **The end-to-end proofs are in run.test.ts**, where Review.run's layers are, beside the LLM-level rows in
+     zdr-route.test.ts and the pure ones in route.test.ts.
+  4. **`VARIANT_KEYS.engine` and `variantProblem` change**, so the flipped variant can run: without `privacy` in the
+     list the replay refuses `engine:privacy-zdr` as a key it does not apply.
+  5. **`EvidenceScope.route` is set** (run.ts and eval.ts), as SF-12a handed off and `model-evidence.ts` planned.
+  6. **`ReviewContextUnavailable` takes an optional second sentence**; the pinned review's messages are unchanged.
+  7. **`Refused` gains `site`**, and the session runtime's message names what it holds (critique point 1).
+  8. **The GitLab Duo workflow refusal is built here** (critique point 4), not handed to SF-35.
+  9. **The app's prediction of the engine scope changes** (review round one, finding 1), so the card and Review.run
+     agree for the same settings; it is a pinned file, so the pin moved again and `scope-app-validation.yml` is
+     dispatched.
+
+- **Default and parity proof (I-1).**
+  - With no review session registered and no released "zdr" one remembered (the normal case), `turn` and `zdr` return
+    on their first line, which reads two sizes. That line is shown by the code, not by a test: a "zdr" session
+    released by an earlier case or another file in the same process stays remembered, so no test reaches it, and
+    `turn` takes plain values, so what it reads cannot be observed (critique point 2; no test-only reset was added).
+  - Past that line every other session's call gets undefined and takes HEAD's path: zdr-route.test.ts "other sessions
+    send the same requests on both runtimes…" records an unregistered session, a standard one, a released standard one
+    and a child of a standard one, in all five request shapes (turn, title, learner, compaction, small turn), on the
+    AI SDK runtime (the recorder's method, path, headers and body) and the native one (the `LLMRequest` as JSON),
+    first with no "zdr" session registered and again beside two registered "zdr" sessions and a released one: equal.
+    Both rounds run past the first line whatever order the cases run in: the standard session the case registers stays
+    registered through both. A probe run of that case alone (`-t`, a temporary `console.error` in `turn`, route.ts
+    restored and its checksum confirmed) printed 40 calls at `sessions=1 released=0` and 40 at `sessions=3
+    released=1`. The test's comment said an earlier case's released session was what carried the first round past the
+    line; it now gives this reason (review round one, finding 6).
+  - `test/session/llm.test.ts` and every other session-runtime file listed under "Tests run" have the same counts as at
+    HEAD.
+  - run.test.ts D3 (unset, "standard" and "zdr" on this computer send the same bodies and outcomes in the ok, retry,
+    finalizer and verify scenarios) passes unchanged: a zdr review on loopback sends exactly what it sent before,
+    since every request it sends is its passes' own turn on the AI SDK runtime.
+  - The pinned-review compaction case ("a provided-context review refuses compaction…", `run.test.ts:2134` at HEAD)
+    and its message pass unchanged.
+  - eval.test.ts's `config` refusals (`:1537-1542` at HEAD, "a route setting a replay cannot apply") pass unchanged.
+  - Under privacy unset the evidence scope, the eval's scope and every variant but `engine:privacy-zdr` are unchanged.
+
+- **I-3 for the engine runner (VS-23c's Done line, as far as fakes on this computer can show it).**
+  - Request kinds: a pass's turns, retries and finalizer, the verify pass and the panel judge's pass (each a pass of
+    its own, registered with its agent) are sent only as their pass's own turns on the AI SDK runtime, and run.test.ts
+    shows every request of a "zdr" review carries an `x-session-id` naming a session the review created (VS-23c item
+    3's header proof) and is one of those kinds; compaction is never started, and title, memory learner, skill
+    drafter and any other helper are refused in the session runtime. Lenses and repro do not exist yet (VS-28, VS-30
+    wiring); `turn` refuses them unless they run as a registered pass's own agent.
+  - Transports: the generic V1 fetch, the plan route and the free route (SF-12a's `hold`); the native runtime (never
+    selected for a "zdr" turn); a GitLab Duo workflow model's own connection (refused). Under "zdr" Codium is always
+    refused ("codium-unaccepted").
+  - What is not shown: the desktop runner (VS-23d), the released-set bound and the Gemini paths (Known limits), and any
+    real provider: every server here is a loopback fake.
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `7abbcc78d5ff0f90` -> `4a530700aa9a8f83` (route.ts, llm.ts, prompt.ts, run.ts and
+  the app's `ai-review.ts` changed; model-evidence.test.ts printed it). Two earlier values are not used:
+  `98556c7a8bc14f50` (before Prettier's rewrap of llm.ts's `nativeComputer` and a comment reflow in route.ts) and
+  `b95efb76d834db84` (the build's value, before review round one changed `ai-review.ts`). `REVIEW_PIPELINE_REVISION`
+  stays 4:
+  with privacy unset nothing a review finds or posts changes, and under "zdr" what a review sends changes only by what
+  it no longer sends. `REVIEW_PIPELINE_FILES` is unchanged (eval.ts and replay.ts are not pinned). Recompute after every
+  merge of main: the connect-finish lane edits the pinned `hub.ts` and `adapters/vectorscope.ts`.
+
+- **Replay variant.** `engine:privacy-zdr`'s engine half `{ pending: "VS-23c" }` -> `{ from: "VS-23c" }` with keys
+  `{ privacy: "zdr" }`; `VARIANT_KEYS.engine` gains `privacy`. A replay under it runs Review.run under "zdr" with no
+  attestation (the eval attests nothing; owner Q7, D7), so only a model server on this computer is admitted; any other
+  route is a `privacy` stop before anything is sent. The `cross-family`, `shared-verify` and pending halves are
+  unchanged, and so is ci.ts's `DEFAULT_VARIANTS` (`engine`, `engine:shared-verify`): no eval runs the variant unless
+  it is named.
+
+- **Desktop half.** A documented difference, left `{ pending: "VS-23d" }`: `ai-review.ts`'s review sessions are not
+  registered with ReviewRoutes, so neither the transport nor the session runtime holds them, and the desktop runner's
+  scope (`ai-review.ts:1363`, `adapter: "desktop"`) sets no route. SF-15 (VS-23d) registers them, with `agent`, and
+  sets that route. `ai-review.ts:481-488` is not the desktop's scope: it is the card's prediction of the engine
+  review the GitHub job runs (`adapter: "engine"`), and since review round one it adds the zdr route as run.ts does
+  (What landed). The build's text listed `:481` with `:1356` as "the app's scopes"; that was wrong.
+
+- **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory; scratch and
+  `TMPDIR` under `/tmp/vector-v2/scope/sf12b/`, so the engine preload's per-process XDG roots are fresh under it).
+  HEAD baseline at `fb441eae`, run in this build before any edit (`/tmp/vector-v2/scope/sf12b/baseline/`) -> after
+  (`after/`, `regress/`, and `final/` after Prettier); pass, skip, fail, expects.
+  - Core (`packages/core`): `test/review/model-evidence.test.ts` 30, 0, 0, 393 -> 30, 0, 0, 393 (the pin; 29, 0, 1, 392
+    with the old pin, which printed the new digest); `test/review/eval.test.ts` 55, 0, 0, 297 -> 55, 0, 0, 297;
+    `test/review/privacy.test.ts` 57, 0, 0, 844 -> 57, 0, 0, 844 (the HEAD count from SF-12a's entry, at the same
+    sources).
+  - Engine (`packages/engine`), new or changed:
+    - `test/provider/zdr-route.test.ts`: 14, 0, 0, 171 -> 20, 0, 0, 283 (six LLM-level cases; `admitted` registers
+      the pass's agent, as Review.run does);
+    - `test/review/route.test.ts`: 32, 0, 0, 117 -> 35, 0, 0, 154;
+    - `test/review/run.test.ts`: 71, 1, 4, 641 -> 75, 1, 4, 708 (four new cases; the registration case now asserts
+      `agent: "review"`). The 4 failures are the same at HEAD and after, the sandbox-only ones of SF-11's and SF-12a's
+      entries ("Read-only Git inspection is unavailable: this host has no supported unprivileged Git verifier": "the
+      durable local runner…", "deletion without instance context…" (30 s timeout), "nested service placement…", "a
+      resolver-time symlink retarget…");
+    - `test/review/eval.test.ts`: 44, 0, 0, 520 -> 45, 0, 0, 528;
+    - `test/review/narrative-invariance.test.ts`: 3, 0, 0, 293 -> 3, 0, 0, 293 (the zdr case's expected scope);
+    - `test/review/vectorscope-replay.test.ts`: 29, 0, 0, 352 -> 29, 0, 0, 353.
+  - Eval (`packages/script`, as test.yml runs it): `../../script/vectorscope-eval/replay.test.ts` 49, 0, 0, 653 -> 49,
+    0, 0, 657; `ci.test.ts` 39, 0, 0, 507 -> 39, 0, 0, 509; `report.test.ts` 44, 0, 0, 312 -> 44, 0, 0, 312;
+    `certify.test.ts` 7, 0, 0, 46 -> 7, 0, 0, 46. Only which still-pending variant serves as the example moved
+    (`engine:impact-graph`, "VS-25b wiring"); no assertion was loosened.
+  - Review round one (scratch `/tmp/vector-v2/scope/sf12b/fix/`): app (`packages/app`, `bun test --isolate --timeout
+    30000 --preload ./happydom.ts`, as `scripts/test-unit.mjs` runs it) `src/features/pull-requests/ai-review.test.ts`
+    121, 0, 0, 507 at HEAD -> 121, 0, 0, 510 (one case extended, no new case); core
+    `test/review/model-evidence.test.ts` 29, 0, 1, 392 with the build's pin (it printed `4a530700aa9a8f83`) -> 30, 0, 0,
+    393; engine `test/provider/zdr-route.test.ts` 20, 0, 0, 283 after the comment fix. No other source changed in
+    round one (route.ts was probed and restored, checksum confirmed), so the other files' counts below stand.
+  - Engine regressions, the same at HEAD and after (HEAD in this build unless named):
+    - session runtime and helpers: `test/session/llm.test.ts` 63, 0, 0, 185; `llm-request.test.ts` 46, 0, 0, 139;
+      `llm-memory-fence.test.ts` 17, 0, 0, 115; `llm-native.test.ts` 19, 0, 0, 60; `llm-native-recorded.test.ts` 6, 0,
+      0, 30; `llm-timing.test.ts` 8, 0, 0, 17; `llm/computer-native.test.ts` 15, 0, 0, 74;
+      `llm/computer-native-actions.test.ts` 15, 0, 0, 91; `llm/computer-native-replay.test.ts` 6, 0, 0, 13;
+      `processor-computer.test.ts` 40, 0, 0, 176; `processor-effect.test.ts` 71, 0, 0, 534;
+    - compaction, title and learners: `compaction.test.ts` 78, 1, 0, 196; `compaction-tail.test.ts` 12, 0, 0, 95;
+      `revert-compact.test.ts` 9, 0, 0, 54; `title-usage.test.ts` 31, 0, 0, 123; `title-output-plugin.test.ts` 8, 0, 0,
+      32; `skill-learn.test.ts` 17, 0, 0, 62; `learn.test.ts` 21, 0, 0, 67;
+    - the prompt loop: `prompt.test.ts` 157, 1, 0, 710; `prompt-routing.test.ts` 6, 0, 0, 35; `prompt-guard.test.ts`
+      43, 0, 0, 101;
+    - review and CLI: `test/review/structured-output-review.test.ts` 5, 0, 0, 22; `test/review/model.test.ts` 27, 0, 0,
+      126 and `test/cli/review-privacy.test.ts` 6, 0, 0, 88 (HEAD counts from SF-12a's entry, at the same sources);
+    - provider (HEAD counts from SF-12a's entry): `test/provider/free-catalog.test.ts` 7, 0, 0, 23;
+      `model-plans.test.ts` 15, 0, 0, 70; `header-timeout.test.ts` 6, 0, 0, 8; `prompt-cache-breakpoint.test.ts` 5, 0,
+      0, 21.
+  - Engine files that fail in this sandbox, identical test for test to the HEAD counts in SF-12a's entry (the missing
+    unprivileged Git verifier, or what follows from it): `test/review/service.test.ts` 4, 1, 9, 44; `local-run.test.ts`
+    1, 1, 11, 33; `local-admission.test.ts` 2, 1, 2, 35; `test/connect/vectorscope.test.ts` 7, 1, 19, 113.
+  - Never run: `test/cli/review.test.ts` (lane rule).
+  - Commit gate (2026-11-17, the final working tree, this entry's Status and CI text aside; scratch and `TMPDIR` under
+    `/tmp/vector-v2/scope/sf12b-gate/`), one file at a time through the lock; pass, skip, fail, expects:
+    - engine: `test/provider/zdr-route.test.ts` 20, 0, 0, 283; `test/review/route.test.ts` 35, 0, 0, 154;
+      `test/review/eval.test.ts` 45, 0, 0, 528; `test/review/narrative-invariance.test.ts` 3, 0, 0, 293;
+      `test/review/vectorscope-replay.test.ts` 29, 0, 0, 353; `test/review/run.test.ts` 75, 1, 4, 708 (the same four
+      sandbox-only failures named above, by name; the first reports "no supported unprivileged Git verifier");
+      `test/session/llm.test.ts` 63, 0, 0, 185; `llm-native.test.ts` 19, 0, 0, 60; `llm-memory-fence.test.ts` 17, 0, 0,
+      115; `compaction.test.ts` 78, 1, 0, 196;
+    - core: `test/review/model-evidence.test.ts` 30, 0, 0, 393 (the pin `4a530700aa9a8f83` holds);
+      `test/review/eval.test.ts` 55, 0, 0, 297; `test/review/privacy.test.ts` 57, 0, 0, 844;
+    - eval (from `packages/script`): `replay.test.ts` 49, 0, 0, 657; `ci.test.ts` 39, 0, 0, 509; `report.test.ts` 44, 0,
+      0, 312; `certify.test.ts` 7, 0, 0, 46;
+    - app (`--isolate --preload ./happydom.ts`): `src/features/pull-requests/ai-review.test.ts` 121, 0, 0, 510;
+    - typecheck: `bun typecheck` in `packages/engine`, `packages/core` and `packages/app`, and the eval tsconfig: clean;
+      the full TURBO typecheck (`--concurrency=2`, `TURBO_CACHE_DIR` in the worktree): 27 of 27 tasks successful.
+  - Typecheck: `bun typecheck` in `packages/engine` and `packages/core` (test files included), and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`: clean. Round one: `bun typecheck` in
+    `packages/app` and `packages/core` again: clean (the engine's only round-one change is a test comment, and the
+    eval's a README).
+  - Prettier: every touched source and test file is Prettier-clean at HEAD; `--write` on `llm.ts`, `eval.ts`,
+    zdr-route.test.ts, eval.test.ts and run.test.ts changed only SF-12b's own hunks (it rewrapped seven expressions and
+    one type), and every touched file is clean after. The model-evidence pin was recomputed after that (the pin above).
+    `vectorscope-deviations.md` is not Prettier-clean at HEAD and was not reformatted. Round one: `ai-review.ts`,
+    `ai-review.test.ts` and zdr-route.test.ts are clean; the README's variant table was rewidened by Prettier, since
+    the `privacy-zdr` row's Sets cell is two characters wider than the column was (whitespace only in the other rows);
+    `v2-notes/vectorscope-v2-plan.md` is not Prettier-clean at HEAD and was not reformatted.
+  - The regression files ran before Prettier rewrapped `llm.ts`'s `nativeComputer` expression; the changed test files,
+    run.test.ts included, ran again after it with the counts above.
+
+- **Mutation checks** (`/tmp/vector-v2/scope/sf12b/mutate.py`, mutations in `mutations.json`: each applied alone, the
+  named test files run one at a time through the lock (run.test.ts with `-t` on the cases named), the source restored
+  and its checksum confirmed against the pre-mutation one; results in `mutations/results.json` and each run's log in
+  `mutations/`). A mutation is listed as caught only where a named test failed.
+  1. llm.ts's `!zdr &&` on the native branch dropped (a "zdr" turn may take the native runtime): caught by
+     `test/provider/zdr-route.test.ts` ("the native runtime: other sessions go native, and a zdr session's turn goes out
+     on the held fetch, its header named").
+  2. llm.ts's refusal at the top of `LLM.run` dropped (a refused `turn` only keeps the call off the native runtime, and
+     the transport may still refuse it, with `site` "transport"): caught by `test/provider/zdr-route.test.ts`,
+     `test/review/run.test.ts` ("a zdr session's title, memory learner, compaction summary and small request are refused
+     before either runtime"; "a child of a zdr session is refused at its first request, and a child of a standard one is
+     sent"; "a released zdr session's own turn is refused before either runtime, and a released standard session's is
+     sent"; "VS-23b route admission > VS-23c (SF-12b): every request of a zdr review names a session the review created,
+     and none is a helper's").
+  3. `turn`'s `!input.small` dropped: caught by `test/provider/zdr-route.test.ts`, `test/review/route.test.ts` ("a zdr
+     session's title, memory learner, compaction summary and small request are refused before either runtime";
+     "ReviewRoutes.turn and zdr (SF-12b) > a zdr session sends its pass's own turns, on the AI SDK runtime, and nothing
+     else").
+  4. `turn`'s registered-agent match dropped: caught by `test/provider/zdr-route.test.ts`, `test/review/route.test.ts`
+     ("a zdr session's title, memory learner, compaction summary and small request are refused before either runtime";
+     "ReviewRoutes.turn and zdr (SF-12b) > a zdr session sends its pass's own turns, on the AI SDK runtime, and nothing
+     else").
+  5. `turn`'s child-of-a-"zdr"-session refusal dropped: caught by `test/provider/zdr-route.test.ts`,
+     `test/review/route.test.ts` ("a child of a zdr session is refused at its first request, and a child of a standard
+     one is sent"; "a released zdr session's own turn is refused before either runtime, and a released standard
+     session's is sent"; "ReviewRoutes.turn and zdr (SF-12b) > a zdr session sends its pass's own turns, on the AI SDK
+     runtime, and nothing else"; "ReviewRoutes.turn and zdr (SF-12b) > a released zdr session and its children send
+     nothing, with nothing registered, until it is registered again").
+  6. `zdr` without its released half: caught by `test/provider/zdr-route.test.ts`, `test/review/route.test.ts` ("a
+     released zdr session's own turn is refused before either runtime, and a released standard session's is sent";
+     "ReviewRoutes.turn and zdr (SF-12b) > a released zdr session and its children send nothing, with nothing
+     registered, until it is registered again").
+  7. `turn`'s first line on `sessions.size` alone: caught by `test/provider/zdr-route.test.ts`,
+     `test/review/route.test.ts` ("a released zdr session's own turn is refused before either runtime, and a released
+     standard session's is sent"; "ReviewRoutes.turn and zdr (SF-12b) > a released zdr session and its children send
+     nothing, with nothing registered, until it is registered again").
+  8. `zdr`'s first line on `sessions.size` alone: caught by `test/provider/zdr-route.test.ts`,
+     `test/review/route.test.ts` ("a released zdr session's own turn is refused before either runtime, and a released
+     standard session's is sent"; "ReviewRoutes.turn and zdr (SF-12b) > a released zdr session and its children send
+     nothing, with nothing registered, until it is registered again").
+  9. prompt.ts's "zdr" compaction check never true (the llm.ts allowlist then refuses the compaction agent's request,
+     after an admission, with another detail): caught by `test/review/run.test.ts` ("VS-23b route admission > VS-23c
+     (SF-12b): a zdr review never summarises a pass's history, and the pass fails with the reason").
+  10. run.ts registers no `agent`: caught by `test/review/run.test.ts` ("VS-23b route admission > a server on this
+      computer is admitted under zdr, retries and finalizer included, and each session is registered"; "VS-23b route
+      admission > D3: unset, standard and zdr on this computer send the same requests and return the same outcome";
+      "VS-23b route admission > VS-23c (SF-12b): a zdr review never summarises a pass's history, and the pass fails with
+      the reason"; "VS-23b route admission > VS-23c (SF-12b): every request of a zdr review names a session the review
+      created, and none is a helper's"; and 1 more).
+  11. run.ts's evidence scope without `route: "zdr"`: caught by `test/review/run.test.ts` ("model evidence (VS-07) >
+      warn under zdr: a certificate applies only when it was made on the zdr route").
+  12. eval.ts's artifact scope without `route: "zdr"`: caught by `test/review/eval.test.ts`,
+      `test/review/narrative-invariance.test.ts` ("ReviewEval.replay > replays a base review.json under privacy "zdr" on
+      the server on this computer, with the zdr route in its scope"; "ReviewEval.replay > replays the engine:privacy-zdr
+      variant on the server on this computer, with the zdr route in its scope"; "narrative invariance (VS-22d) > under
+      privacy "zdr" five framings make the same route decision, admitted on this computer and refused for a Covered
+      Model").
+  13. `VARIANT_KEYS.engine` without `privacy`: caught by `replay.test.ts`, `test/review/eval.test.ts`
+      ("ReviewEval.replay > replays the engine:privacy-zdr variant on the server on this computer, with the zdr route in
+      its scope"; "ReviewEval.replay > refuses a variant it cannot apply, and a variant's key in config, before any
+      model call"; "the variant registry > a built half sets keys its runner applies, and a pending half names the
+      package it waits for").
+  14. replay.ts's engine half back to `{ pending: "VS-23c" }`: caught by `ci.test.ts`, `replay.test.ts`,
+      `test/review/vectorscope-replay.test.ts` ("the variant registry > a built half sets keys its runner applies, and a
+      pending half names the package it waits for"; "the replay pipeline > takes the default variants, or registry names
+      built for the engine, and refuses everything else"; "the flags > take built engine variants only: a pending,
+      desktop, unknown or repeated name is refused").
+  15. eval.ts's privacy-lowering refusal dropped: caught by `test/review/eval.test.ts` ("ReviewEval.replay > refuses a
+      variant it cannot apply, and a variant's key in config, before any model call").
+  16. eval.ts's `misplaced` without the sourced-key exclusion: caught by `test/review/eval.test.ts` ("ReviewEval.replay
+      > refuses a variant it cannot apply, and a variant's key in config, before any model call").
+  17. llm.ts's GitLab Duo workflow refusal dropped (the bundled provider then asked the instance, here the recorder, for
+      a workflow token: "Failed to get workflow token: 400", the first request of a connection nothing holds): caught by
+      `test/provider/zdr-route.test.ts` ("a zdr session's GitLab Duo workflow model is refused: it sends on a connection
+      of its own, which nothing holds").
+  18. ai-review.ts's engine prediction without `route: "zdr"` (review round one; HEAD's `ai-review.ts` put back alone,
+      then restored and its checksum confirmed): caught by `packages/app/src/features/pull-requests/ai-review.test.ts`
+      ("model evidence (VS-07) > the automatic-review set-up warns only when the open project opts in, and never
+      changes the model"; 120, 0, 1, 509).
+  - 18 of 18 fail a test.
+
+- **Known limits.**
+  - **The released set's bound** (SF-12a's hand-off, decided here: declined, not closed). A "zdr" session forgotten
+    past `RELEASED_LIMIT` (4096 later "zdr" releases in one process) is an unregistered session's again, to the
+    transport and to `turn`, and its calls go out unchecked. Closing it needs durable "zdr" state that outlives the
+    process's memory, such as the global `review.privacy` fallback the integration map's `route.ts` row names ("internal
+    is `vectorscope.*` and the global `review.privacy` is `zdr`"), which is VS-23d's (SF-15). Owner of the gap: SF-15,
+    or the lead if SF-15 does not take it. No test exercises the bound, since one would assert the fail-open side.
+    Since review round one (finding 9) the gap is also an explicit SF-15 acceptance item in the v2 plan's §4 wiring
+    table (`v2-notes/vectorscope-v2-plan.md:203`, the VS-23 b/c/d row), so it does not live only in this entry.
+  - **Compaction under "zdr" fails the pass** (deviation 1): its files are unreviewed where standard would compact,
+    and the outcome is `partial: "model-error"` with the zdr detail, not `partial: "privacy"`. A compaction on another
+    model is no longer the whole-review privacy stop it was at HEAD.
+  - **A refusal in the middle of a review shows as a failed pass**, not as `partial: "privacy"` with
+    `notePrivacyRefused` (SF-12a left the mapping to SF-12b as an option). Not taken: only a helper or a child is
+    refused in the session runtime once a pass's own turns are allowed, a pass's own turn on the transport is refused
+    only after admission allowed it (a switch the transport sees), and attempts were already sent by then. Review
+    round one (finding 2) proposed mapping an error that is `instanceof ReviewRoutes.Refused` in `send`/`done` to
+    `track.stop = "privacy"`. Declined, recorded here: no such instance reaches Review.run. LLM.stream's failure is
+    stored on the assistant message by the processor (`halt`, `processor.ts:1137-1145`, through
+    `MessageV2.fromError`), where a Refused is a plain `NamedError.Unknown` with its message
+    (`message-v2.ts:839-840`), and `prompts.prompt` succeeds with that message, so `send`'s `Exit` failure branch never
+    sees it. The mapping would need a named error of its own on the message, or matching the message text. The report
+    undercounts these refusals as route refusals; the README's report section now says so. The lead decides deviation
+    1 (compaction) explicitly, as Hand-offs asks.
+  - **A child session's non-turn requests carry no parent.** `turn` sees `parentSessionID` only where the caller
+    passes it (a turn, `prompt.ts:3317`); a child's compaction, title or learner request passes none. A child is refused
+    at its first turn, so it never reaches one; a compaction the owner starts by hand on such a child would not be.
+    Review.run denies the task tool to review sessions, so no child is spawned while a review runs today.
+  - **Gemini's own Batch and Files paths, `cachedContent` and `fileData.fileUri`** are still not refused at the
+    transport (SF-35). The scope's zdr claim covers what Review.run sends, which uses none of them.
+  - **The review-memory helper.** The VS-11 review-memory consumer (`engine review/memory-outcome.ts`) has no caller
+    today and makes no model call, so no review-memory or Brain distillation request exists for a "zdr" review yet.
+    The proof here covers every `LLM.stream` caller: the title (`prompt.ts:652`), the learner (`prompt.ts:3753`), the
+    skill drafter (`skill-learn.ts:246`), compaction (through the processor) and the judge. The package that wires
+    `memory-outcome.ts` (the VS-11 remainder, the lead's decision) checks it again.
+  - `computerNative.wants` is no longer asked for a "zdr" turn; no mutation shows it, since a review turn has no
+    computer tool and `wants` answers false for it.
+
+- **Hand-offs.**
+  - The lead: confirm the dispatches' go for `session/llm.ts` and SF-12a's for `provider.ts` (the push was taken on the
+    commit gate's dispatch, Status); decide deviation 1 (A as built, or B); dispatch `test.yml` (below), and waive
+    `review-http-regression.yml` or dispatch it; root-cause the older `vector-at-mention.yml` probe failure (the CI
+    runs above, now read).
+  - SF-15 (VS-23d): register the desktop's review sessions with `agent`, set the desktop scope's route
+    (`ai-review.ts:1363`), flip the desktop half, and the released-set bound (Known limits; now an acceptance item in
+    the v2 plan's §4 wiring table). When the card's settings read the sourced keys, `workflowModel`'s zdr route
+    (`ai-review.ts:481-488`) starts to apply.
+  - SF-37 (the GitHub job reading the sourced keys through `mergeReviewConfig`): once the job reads `privacy`, the
+    card's prediction and the job agree only if the card reads it from the same sources; check `workflowModel` then.
+  - A later core package: a refusal code of its own for the session runtime's refusals (for example
+    "helper-request"), which are all `unknown-destination` today (Review round one).
+  - SF-35: the Gemini Batch, Files and `cachedContent` refusals, the Anthropic Messages fake server, and the Codium
+    route under "zdr".
+  - The package that wires `memory-outcome.ts` (VS-11 remainder): its model calls, if any, under "zdr".
+
+- **Critique points.**
+  1. Blocker, the llm.ts refusal could not be told from the transport's: taken. `Refused.site` is "session" for the
+     session runtime's refusals and every LLM-level row asserts it (`refusedInSession`), so dropping the llm.ts
+     refusal fails those rows even where the transport would refuse the same call; the native runtime rows also assert
+     the recording client saw nothing. The mutation table above was derived from actual runs, and a mutation is listed
+     as caught only where a named test failed.
+  2. The fast path cannot be reached in a shared process: taken. No test claims it; the parity case and route.test.ts
+     say they run past it, and "reads nothing" is dropped (`turn` takes plain values). No test-only reset was added.
+  3. Compaction as a behaviour choice: taken as deviation 1, with the I-3 reading, the known limit and the owner-visible
+     detail. No separate go request could be sent from this build, so the choice is recorded for the lead.
+  4. GitLab Duo workflow models: taken (llm.ts `:251-253`; a zdr-route.test.ts row on the bundled provider, with a
+     synthetic token in the instance's environment and the instance URL on the recorder, whose `duo-workflow-` model
+     the provider builds as a workflow model; and mutation m17).
+  5. SF-12a's hand-offs: the released-set bound is decided (declined, owner named, Known limits); SF-12a's CI is read
+     and recorded (above); the go for `provider.ts` and `llm.ts` is the lead's to confirm before the push.
+  6. More regression files: taken (`llm/computer-native*.test.ts`, `processor-computer.test.ts`, `prompt.test.ts`,
+     `prompt-routing.test.ts`, `prompt-guard.test.ts`, `llm-timing.test.ts`, at HEAD and after).
+  7. Whether an Anthropic body LLM.stream builds passes the transport's feature check: checked. The native-runtime row
+     sends a "zdr" turn on `anthropic` (`@ai-sdk/anthropic`, base URL on the recorder, admitted "loopback") through
+     LLM.stream, cache breakpoints included, and the recorder gets exactly one `POST /v1/messages` with the session's
+     `x-session-id`: the route kind is "loopback", and nothing in the body is refused.
+  8. The VectorScope identity and pinned reviews under "zdr": taken (a run.test.ts row registers and sends both; the
+     route.ts comment says every registrant must pass `agent`).
+  9. The memory helper: taken (Known limits, Not claimed).
+  10. The privacy-lowering guard as extra scope: rejected, kept. The engine replay is a typed boundary that cannot see
+      the registry, and `variantProblem` already checks there what the registry guarantees; a variant's keys go over the
+      base's review.json after `mergeReviewConfig`, so without the guard a variant could lower the raise-only privacy a
+      case's review.json set. It is one condition, one assertion and mutation m15.
+  11. `review-http-regression.yml`: recommended for the lead to waive. No HttpApi group, handler or review service
+      changes; the review service's model calls do pass through `turn`, which returns undefined for every session but a
+      "zdr" review's, so only a "zdr" review there would see a change. SF-11's reason for the run
+      (`executeLocalReview` under "zdr") still stands if the lead wants one run for SF-11 to SF-12b together.
+
+- **Review round one** (eleven findings, all non-blocking; findings 3 and 8, 4 and 7, 5 and 11 are the same point
+  twice):
+  1. `ai-review.ts:481`, the card's engine prediction without the zdr route: fixed by mirroring run.ts (What landed,
+     deviation 9, mutation 18), and the Desktop half text corrected. The failure the finding describes does not
+     happen today, since neither the card nor the GitHub job reads `privacy` yet (What landed); the mirror is for the
+     day they do.
+  2. Map a mid-review `Refused` to a `privacy` stop: declined (Known limits gives the reason: the instance never
+     reaches Review.run); the README's report section now says these are counted as failed passes, not route
+     refusals.
+  3. and 8. The README variant table's `privacy-zdr` Sets cell: fixed, word for word as asked ("enforced in
+     `Review.run`, at the transport and in the session runtime"), matching replay.ts's `planned`.
+  4. and 7. The lead's go for `session/llm.ts` and `provider.ts`: recorded under Status; the commit gate commits
+     locally and holds the push until the lead confirms both, and the follow-up entry records the confirmation's date
+     and source with the SHA and the CI runs. No message to the lead could be sent from this build.
+  5. and 11. Every session-site refusal is `unknown-destination`: the code is kept, and the README's report section
+     says the session runtime reports all its refusals with that code and that `Refused.site` and the message tell
+     them apart. A distinct code ("helper-request") is a change to core `privacy.ts`'s `RouteRefusal` (pinned), which
+     admission, `format.ts`'s `notePrivacyRefused` (its `PRIVACY_REFUSAL` text for each code) and core's privacy tests
+     read, so it is handed to a later core package (Hand-offs). The session-site message was left as it is: rewording
+     it alone would not help a count by code.
+  6. The parity case's 'alone' round and test order: the premise does not hold. The case registers a standard session
+     that stays registered through both rounds, so both always run past `turn`'s first line; a probe run alone with
+     `-t` confirmed it (Default and parity proof). No throwaway "zdr" session was added, since it would change nothing
+     the case checks; the test's comment, which gave the wrong reason, now gives this one.
+  9. The released-set bound as an SF-15 acceptance item: done in the v2 plan's §4 wiring table (VS-23 b/c/d row); no
+     code change.
+  10. A standalone fresh-process test of the fast path: not added. A separate file does not get a fresh process in CI,
+      where an engine shard runs about a quarter of the files in one Bun process without `--isolate` (`test.yml:773`)
+      and the route.ts registry is module state that other files fill. And `turn` and `zdr` return the same value
+      (undefined, false) on the fast path as past it for such a session, so the assertion could not tell the two paths
+      apart. The explicit statement under Default and parity proof stands.
+
+- **CI to dispatch** on `scope-finish` (each run's ID and result go in a later entry). The commit gate dispatches
+  `typecheck.yml`, `scope-directory-identity.yml`, `review-memory-fence.yml`, `scope-app-validation.yml` and
+  `vector-at-mention.yml`, the five its task names, and no other; `test.yml` and `review-http-regression.yml` stay the
+  lead's:
+  - `typecheck.yml`;
+  - `test.yml` (runtime code; it also covers SF-11's and SF-12a's runtime changes, which have not run there; not
+    dispatched by the gate);
+  - `scope-directory-identity.yml` (engine `src/review/**` and `test/review/**`);
+  - `review-memory-fence.yml` (`session/llm.ts` and `run.ts`; the Done line);
+  - `vector-at-mention.yml` (core `review/eval.ts` and `model-evidence.ts`);
+  - `review-http-regression.yml` with scope local only if the lead does not waive it (critique point 11).
+  - `scope-app-validation.yml` (review round one changed `packages/app`'s `ai-review.ts`, a VectorScope file).
+  - Deferred, CI only: the Windows and macOS legs of `test.yml`, the HTTP shard, and the private-Git cases.
+
+- **Not claimed.**
+  - No paid run, no model call off this computer, and no quality claim; no projection on dataset or benchmark cases,
+    so VS-23c's Phase A measurement ("0 non-compliant requests" over every dataset case under `engine:privacy-zdr`) is
+    not made here (owner and benchmark gated).
+  - No transport certification from compatible-only fixtures (`vectorscope-remaining.md:63`): every model server here
+    is a loopback fake.
+  - No default change, no key enabled, no attestation supplied and no model approved; `REVIEW_PIPELINE_REVISION`
+    unchanged.
+  - No claim for the desktop runner (VS-23d), for review-memory or Brain distillation requests (none exist for a review
+    yet), or for Gemini's Batch, Files and `cachedContent` paths.
+  - No `cat-file --batch`; no change to the spawn hot spots, the connect files or `provider.ts`. The only app change
+    is the card's prediction of the engine scope (review round one), unreachable until the app and the GitHub job read
+    the sourced keys.

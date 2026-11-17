@@ -167,9 +167,13 @@ export const VARIANTS = {
     engine: { from: "VS-06" },
     desktop: { from: "VS-06" },
   },
+  // The engine half: Review.run's admission (VS-23b), the transport and the session runtime (VS-23c) enforce it, and the
+  // scope records the zdr route. The eval attests nothing (Q7), so only a model server on this computer is admitted. The
+  // desktop's review sessions are not registered with the route rules until VS-23d.
   "privacy-zdr": {
-    planned: 'privacy: "zdr", enforced inside Review.run (VS-23b) and at the transport (VS-23c)',
-    engine: { pending: "VS-23c" },
+    planned: 'privacy: "zdr", enforced in Review.run (VS-23b), at the transport and in the session runtime (VS-23c)',
+    keys: { privacy: "zdr" },
+    engine: { from: "VS-23c" },
     desktop: { pending: "VS-23d" },
   },
   "trivial-skip": {

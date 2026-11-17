@@ -666,7 +666,7 @@ describe("report.ts", () => {
     writeFileSync(
       join(dir, "mislabeled.json"),
       JSON.stringify(
-        artifact({ label: "mislabeled", variant: { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" } } }),
+        artifact({ label: "mislabeled", variant: { name: "engine:impact-graph", keys: { verifyPolicy: "shared" } } }),
       ),
     )
     // A hand-edited record that is not an object is listed, not thrown on.
@@ -678,7 +678,7 @@ describe("report.ts", () => {
     const problems = loaded.problems.filter((problem) => problem.startsWith(dir))
     expect(problems).toHaveLength(4)
     expect(problems[0]).toStartWith(join(dir, "mislabeled.json"))
-    expect(problems[0]).toContain("engine:privacy-zdr is registered for VS-23c, which has not landed")
+    expect(problems[0]).toContain("engine:impact-graph is registered for VS-25b wiring, which has not landed")
     expect(problems[1]).toStartWith(join(dir, "mismatched.json"))
     expect(problems[1]).toContain("not the registry's")
     expect(problems[2]).toStartWith(join(dir, "pending.json"))

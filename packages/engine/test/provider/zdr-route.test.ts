@@ -1,18 +1,34 @@
 import { afterAll, afterEach, expect } from "bun:test"
 import type { LanguageModelV3, LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import { APICallError } from "ai"
-import { Effect, Layer, Stream } from "effect"
+import { eq } from "drizzle-orm"
+import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import { Database } from "@vectordevai/core/database/database"
+import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
+import { LayerNodePlatform } from "@vectordevai/core/effect/app-node-platform"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModels } from "@vectordevai/core/free-models"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import { ModelV2 } from "@vectordevai/core/model"
+import { ProjectTable } from "@vectordevai/core/project/sql"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import type { RouteRefusal } from "@vectordevai/core/review/privacy"
 import type { ZdrAttestedEntry } from "@vectordevai/core/review/types"
+import { AbsolutePath } from "@vectordevai/core/schema"
+import { SessionProjector } from "@vectordevai/core/session/projector"
+import { SessionTable } from "@vectordevai/core/session/sql"
+import { SessionV1 } from "@vectordevai/core/v1/session"
+import type { LLMRequest } from "@vectordevai/llm"
+import { LLMClient } from "@vectordevai/llm/route"
 import { FREE_MODEL_FALLBACKS, type FreeModelInfo } from "@vectordevai/schema/free-model"
+import { InstanceRef } from "@/effect/instance-ref"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Env } from "@/env"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Provider } from "@/provider/provider"
 import { ReviewRoutes } from "@/review/route"
-import { SessionID } from "@/session/schema"
+import { LLM } from "@/session/llm"
+import { MessageID, SessionID } from "@/session/schema"
 import { codiumCatalogV2, codiumGateway, codiumModel } from "../../../core/test/fixture/codium-gateway"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -24,6 +40,8 @@ import { testEffect } from "../lib/effect"
 // registered through the real admission (ReviewRoutes.decide); a case that shows the transport deciding on its own
 // registers what an admission that saw other options decided. Every server here is a loopback fake, and the strict
 // network guard sees no attempt to leave this computer.
+//
+// VS-23c (SF-12b): the session runtime (session/llm.ts), through LLM.stream, in the cases at the end of this file.
 
 const guard = NetworkGuard.use()
 
@@ -81,42 +99,43 @@ const laguna: FreeModelInfo = {
 const freeCalls = { catalog: 0, forKey: 0, trainingConsent: 0, credential: 0 }
 const freeCount = () => ({ ...freeCalls })
 
-const it = testEffect(
-  LayerNode.compile(Provider.node, [
-    [
-      FreeModels.node,
-      Layer.succeed(FreeModels.Service, {
-        catalog: () =>
-          Effect.sync(() => {
-            freeCalls.catalog++
-            return { enabled: true, updatedAt: 1, models: [...FREE_MODEL_FALLBACKS, laguna] }
-          }),
-        forKey: () => Effect.sync(() => (freeCalls.forKey++, [])),
-        trainingConsent: () => Effect.sync(() => (freeCalls.trainingConsent++, false)),
-        setTrainingConsent: (accepted) => Effect.succeed(accepted),
-        changes: Stream.empty,
-      }),
-    ],
-    [
-      FreeModels.credentialsNode,
-      Layer.succeed(FreeModels.CredentialsService, {
-        get: (provider) => Effect.sync(() => (freeCalls.credential++, provider === "vector" ? token : undefined)),
-      }),
-    ],
-    [
-      ModelPlans.node,
-      Layer.succeed(ModelPlans.Service, {
-        catalog: (value) => Effect.succeed(value === token ? codiumCatalogV2 : { enabled: false, models: [] }),
-        request: gateway.forward,
-      }),
-    ],
-  ]),
-)
+// The provider's catalogs and gateways, the same for both harnesses below.
+const fakes = [
+  [
+    FreeModels.node,
+    Layer.succeed(FreeModels.Service, {
+      catalog: () =>
+        Effect.sync(() => {
+          freeCalls.catalog++
+          return { enabled: true, updatedAt: 1, models: [...FREE_MODEL_FALLBACKS, laguna] }
+        }),
+      forKey: () => Effect.sync(() => (freeCalls.forKey++, [])),
+      trainingConsent: () => Effect.sync(() => (freeCalls.trainingConsent++, false)),
+      setTrainingConsent: (accepted) => Effect.succeed(accepted),
+      changes: Stream.empty,
+    }),
+  ],
+  [
+    FreeModels.credentialsNode,
+    Layer.succeed(FreeModels.CredentialsService, {
+      get: (provider) => Effect.sync(() => (freeCalls.credential++, provider === "vector" ? token : undefined)),
+    }),
+  ],
+  [
+    ModelPlans.node,
+    Layer.succeed(ModelPlans.Service, {
+      catalog: (value) => Effect.succeed(value === token ? codiumCatalogV2 : { enabled: false, models: [] }),
+      request: gateway.forward,
+    }),
+  ],
+] as const
+const it = testEffect(LayerNode.compile(Provider.node, fakes))
 
 afterEach(async () => {
   for (const id of registered.splice(0)) ReviewRoutes.release(SessionID.make(id))
   hits.length = 0
   bounced.length = 0
+  nativeRequests.length = 0
   await disposeAllInstances()
 })
 
@@ -176,7 +195,8 @@ const model = (providerID: string, modelID: string) =>
     return yield* provider.getModel(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID))
   })
 
-// A session registered as Review.run registers it, from the real admission's decision for `found`.
+// A session registered as Review.run registers it, with its pass's agent, from the real admission's decision for
+// `found`.
 const admitted = (found: Provider.Model, policy: ReviewRoutes.Policy, subject: Partial<ReviewRoutes.Subject> = {}) =>
   Effect.gen(function* () {
     const provider = yield* Provider.Service
@@ -186,7 +206,7 @@ const admitted = (found: Provider.Model, policy: ReviewRoutes.Policy, subject: P
       policy,
     )
     const id = fresh()
-    ReviewRoutes.register(id, { policy, ...decided })
+    ReviewRoutes.register(id, { policy, agent: "review", ...decided })
     return { id, decided }
   })
 
@@ -198,7 +218,7 @@ const admittedOnLoopback = (found: Provider.Model, policy: ReviewRoutes.Policy) 
     const decided = yield* ReviewRoutes.decide(mock, { providerID: found.providerID, modelID: found.id, found }, policy)
     expect(decided.decision).toEqual({ allowed: true, kind: "loopback" })
     const id = fresh()
-    ReviewRoutes.register(id, { policy, ...decided })
+    ReviewRoutes.register(id, { policy, agent: "review", ...decided })
     return id
   }).pipe(
     Effect.provide(
@@ -633,6 +653,280 @@ it.instance(
       const beside = yield* round
       expect(alone.generic).toHaveLength(3)
       expect(alone.plan).toHaveLength(3)
+      expect(beside).toEqual(alone)
+      expect(guard.outside()).toEqual([])
+    }),
+  options,
+)
+
+// VS-23c (SF-12b): the session runtime (session/llm.ts). LLM.stream asks ReviewRoutes.turn before it reads anything
+// or chooses a runtime: a "zdr" review session sends only its pass's own turns (the agent Review.run registered, at full
+// size), and only on the AI SDK runtime, whose fetch is the one above; every other request of it, and every request of a
+// session whose parent is one, is refused there with `site` "session", so neither the native client nor the fetch ever
+// sees it. Every other session's request takes the path it took before. The native runtime is on in this harness, and
+// its client records each request it is given and sends nothing; sessions are real ones in the harness's database, as
+// the review memory fence needs.
+const nativeRequests: LLMRequest[] = []
+const llmIt = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([LLM.node, Provider.node, Database.node, EventV2Bridge.node, SessionProjector.node, Env.node]),
+    [
+      ...fakes,
+      [Database.node, Database.layerFromPath(":memory:")],
+      [
+        LayerNodePlatform.llmClient,
+        Layer.succeed(
+          LLMClient.Service,
+          LLMClient.Service.of({
+            prepare: () => Effect.die(new Error("The recording client prepares nothing.")),
+            stream: (request) => {
+              nativeRequests.push(request)
+              return Stream.empty
+            },
+            generate: () => Effect.die(new Error("The recording client generates nothing.")),
+          }),
+        ),
+      ],
+      [RuntimeFlags.node, RuntimeFlags.layer({ experimentalNativeLlm: true })],
+    ],
+  ),
+)
+
+// A real session in the harness's database, published as the app creates one (llm.test.ts), so the review memory fence
+// (llm.ts `ordinary`) admits its requests.
+const ordinarySession = Effect.fnUntraced(function* (value: string) {
+  const sessionID = SessionID.make(value)
+  const database = yield* Database.Service
+  if (yield* database.db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
+    return
+  const instance = yield* InstanceRef
+  if (!instance) return yield* Effect.die("InstanceRef not provided")
+  yield* database.db
+    .insert(ProjectTable)
+    .values({ id: instance.project.id, worktree: AbsolutePath.make(instance.worktree), sandboxes: [] })
+    .onConflictDoNothing()
+    .run()
+  const events = yield* EventV2Bridge.Service
+  yield* events.publish(SessionV1.Event.Created, {
+    sessionID,
+    info: SessionV1.SessionInfo.make({
+      id: sessionID,
+      projectID: instance.project.id,
+      directory: instance.directory,
+      slug: "zdr-route-fixture",
+      title: "ZDR route fixture",
+      version: "test",
+      time: { created: 1, updated: 1 },
+    }),
+  })
+})
+
+// The kinds of request a session's runtime is asked for, shaped as their callers shape them: a pass's own turn (the
+// agent Review.run registers), the title (prompt.ts), the memory learner (prompt.ts modelLearn), a compaction summary
+// (compaction.ts, the compaction agent with no cache breakpoints), and the pass's own agent at the small size.
+type Shape = {
+  readonly agent?: string
+  readonly small?: true
+  readonly purpose?: "title" | "brain"
+  readonly cache?: false
+}
+const TURN: Shape = {}
+const TITLE: Shape = { agent: "title", small: true, purpose: "title" }
+const LEARNER: Shape = { agent: "brain.learn", small: true, purpose: "brain" }
+const COMPACTION: Shape = { agent: "compaction", cache: false }
+const SMALL_TURN: Shape = { small: true }
+const SHAPES = [TURN, TITLE, LEARNER, COMPACTION, SMALL_TURN]
+
+// One LLM.stream request of a session, drained as the processor drains it; the error it ended with, if any.
+const streamed = (found: Provider.Model, sessionID: string, shape: Shape = TURN, parentSessionID?: string) =>
+  Effect.gen(function* () {
+    yield* ordinarySession(sessionID)
+    const runtime = yield* LLM.Service
+    const agent = shape.agent ?? "review"
+    const exit = yield* runtime
+      .stream({
+        user: {
+          id: MessageID.make("msg_zdrroute"),
+          sessionID: SessionID.make(sessionID),
+          role: "user",
+          time: { created: 1 },
+          agent,
+          model: { providerID: found.providerID, modelID: found.id },
+        },
+        sessionID,
+        ...(parentSessionID ? { parentSessionID } : {}),
+        model: found,
+        agent: { name: agent, mode: "primary", options: {}, permission: [] },
+        system: ["Review the change you are given."],
+        messages: [{ role: "user", content: "Review src/list.ts" }],
+        tools: {},
+        ...(shape.small ? { small: true } : {}),
+        ...(shape.purpose ? { purpose: shape.purpose } : {}),
+        ...(shape.cache === false ? { cache: false } : {}),
+      })
+      .pipe(Stream.runDrain, Effect.exit)
+    return Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
+  })
+
+// Refused by the session runtime before it chose a runtime or built a request (`site` "session"), not by the fetch.
+const refusedInSession = (error: unknown) => {
+  refusedAs(error, "unknown-destination")
+  expect((error as ReviewRoutes.Refused).site).toBe("session")
+}
+
+llmIt.instance(
+  "the native runtime: other sessions go native, and a zdr session's turn goes out on the held fetch, its header named",
+  () =>
+    Effect.gen(function* () {
+      const claude = yield* model("anthropic", "claude-haiku-4-5")
+      expect(yield* streamed(claude, fresh())).toBeUndefined()
+      const standard = fresh()
+      ReviewRoutes.register(standard, { policy: STANDARD, agent: "review" })
+      expect(yield* streamed(claude, standard)).toBeUndefined()
+      expect(nativeRequests).toHaveLength(2)
+      expect(hits).toHaveLength(0)
+      const { id, decided } = yield* admitted(claude, zdr())
+      expect(decided.decision).toEqual({ allowed: true, kind: "loopback" })
+      expect(yield* streamed(claude, id)).not.toBeInstanceOf(ReviewRoutes.Refused)
+      expect(nativeRequests).toHaveLength(2)
+      expect(hits.map((hit) => [hit.method, hit.path, hit.headers["x-session-id"]])).toEqual([
+        ["POST", "/v1/messages", id],
+      ])
+      expect(guard.outside()).toEqual([])
+    }),
+  options,
+)
+
+llmIt.instance(
+  "a zdr session's title, memory learner, compaction summary and small request are refused before either runtime",
+  () =>
+    Effect.gen(function* () {
+      for (const found of [yield* model("anthropic", "claude-haiku-4-5"), yield* model("loop", "coder")]) {
+        const { id } = yield* admitted(found, zdr())
+        for (const shape of [TITLE, LEARNER, COMPACTION, SMALL_TURN])
+          refusedInSession(yield* streamed(found, id, shape))
+      }
+      expect(nativeRequests).toEqual([])
+      expect(hits).toEqual([])
+      expect(guard.outside()).toEqual([])
+    }),
+  options,
+)
+
+llmIt.instance(
+  "a child of a zdr session is refused at its first request, and a child of a standard one is sent",
+  () =>
+    Effect.gen(function* () {
+      const claude = yield* model("anthropic", "claude-haiku-4-5")
+      const loop = yield* model("loop", "coder")
+      const { id } = yield* admitted(loop, zdr())
+      for (const found of [claude, loop]) refusedInSession(yield* streamed(found, fresh(), TURN, id))
+      expect(nativeRequests).toEqual([])
+      expect(hits).toEqual([])
+      const standard = fresh()
+      ReviewRoutes.register(standard, { policy: STANDARD, agent: "review" })
+      expect(yield* streamed(claude, fresh(), TURN, standard)).toBeUndefined()
+      sentToRecorder(yield* streamed(loop, fresh(), TURN, standard))
+      expect(nativeRequests).toHaveLength(1)
+      expect(hits).toHaveLength(1)
+      expect(guard.outside()).toEqual([])
+    }),
+  options,
+)
+
+llmIt.instance(
+  "a released zdr session's own turn is refused before either runtime, and a released standard session's is sent",
+  () =>
+    Effect.gen(function* () {
+      const claude = yield* model("anthropic", "claude-haiku-4-5")
+      const loop = yield* model("loop", "coder")
+      const { id } = yield* admitted(loop, zdr())
+      ReviewRoutes.release(id)
+      // Nothing is registered now: every case releases what it registered.
+      for (const found of [claude, loop]) refusedInSession(yield* streamed(found, id))
+      refusedInSession(yield* streamed(loop, fresh(), TURN, id))
+      expect(nativeRequests).toEqual([])
+      expect(hits).toEqual([])
+      const standard = fresh()
+      ReviewRoutes.register(standard, { policy: STANDARD, agent: "review" })
+      ReviewRoutes.release(standard)
+      expect(yield* streamed(claude, standard)).toBeUndefined()
+      sentToRecorder(yield* streamed(loop, standard))
+      expect(nativeRequests).toHaveLength(1)
+      expect(hits).toHaveLength(1)
+      expect(guard.outside()).toEqual([])
+    }),
+  options,
+)
+
+llmIt.instance(
+  "a zdr session's GitLab Duo workflow model is refused: it sends on a connection of its own, which nothing holds",
+  () =>
+    Effect.gen(function* () {
+      // GitLab Duo is loaded, and its workflow models built, only with a token. Nothing here sends one anywhere.
+      const env = yield* Env.Service
+      yield* env.set("GITLAB_TOKEN", "synthetic-not-a-token")
+      const duo = yield* model("gitlab", "duo-workflow-zdr")
+      expect(duo.api.npm).toBe("gitlab-ai-provider")
+      // Registered as Review.run registers a pass. The route decision is admission's, which this check does not read.
+      const id = fresh()
+      ReviewRoutes.register(id, { policy: zdr(), agent: "review" })
+      refusedInSession(yield* streamed(duo, id))
+      expect(nativeRequests).toEqual([])
+      expect(hits).toEqual([])
+      expect(guard.outside()).toEqual([])
+    }),
+  {
+    trusted: true,
+    config: {
+      provider: {
+        ...config.provider,
+        gitlab: { options: { instanceUrl: origin }, models: { "duo-workflow-zdr": listed("duo-workflow-zdr") } },
+      },
+    },
+  },
+)
+
+// I-1 at the session runtime. The same requests of an unregistered session, a standard one, a released standard one and
+// a child of a standard one, in every shape above, on the AI SDK runtime ("loop") and the native one ("anthropic"), are
+// recorded with no zdr session registered and again beside two registered zdr sessions and a released one. The standard
+// session registered below stays registered through both rounds, so both run past `turn`'s and `zdr`'s first line (no
+// session registered and none released) whatever order the cases run in, `-t` alone included; their early return is
+// taken by no case here.
+llmIt.instance(
+  "other sessions send the same requests on both runtimes whether or not zdr sessions are registered or released",
+  () =>
+    Effect.gen(function* () {
+      const claude = yield* model("anthropic", "claude-haiku-4-5")
+      const loop = yield* model("loop", "coder")
+      const standard = fresh()
+      ReviewRoutes.register(standard, { policy: STANDARD, agent: "review" })
+      const released = fresh()
+      ReviewRoutes.register(released, { policy: STANDARD, agent: "review" })
+      ReviewRoutes.release(released)
+      const callers: (readonly [string, string | undefined])[] = [
+        [fresh(), undefined],
+        [standard, undefined],
+        [released, undefined],
+        [fresh(), standard],
+      ]
+      const round = Effect.gen(function* () {
+        hits.length = 0
+        nativeRequests.length = 0
+        for (const found of [loop, claude])
+          for (const [id, parent] of callers) for (const shape of SHAPES) yield* streamed(found, id, shape, parent)
+        // Two native requests built alike do not compare equal as objects (toEqual shows no printable difference), so
+        // they are compared as the JSON they serialize to.
+        return { sent: [...hits], native: nativeRequests.map((request) => JSON.stringify(request)) }
+      })
+      const alone = yield* round
+      yield* admitted(loop, zdr())
+      yield* admitted(claude, zdr())
+      ReviewRoutes.release((yield* admitted(loop, zdr())).id)
+      const beside = yield* round
+      expect(alone.sent).toHaveLength(callers.length * SHAPES.length)
+      expect(alone.native).toHaveLength(callers.length * SHAPES.length)
+      for (const request of alone.native) expect(request).toContain("Review src/list.ts")
       expect(beside).toEqual(alone)
       expect(guard.outside()).toEqual([])
     }),
