@@ -580,6 +580,54 @@ test("Windows Stop UIA lookup failures carry only closed lookup, actor, expiry a
   ).toThrow()
 })
 
+test("a failed UIA prepare ticket reports an existing stage and cause and no lookup facts", () => {
+  // HF-7 (1) candidate (a): the overlay driver's own prepare ticket adds no vocabulary. Its failure frame
+  // names an existing stage and cause only; uia-prepare-desktop and uia-actor-* still also come from a root
+  // ticket, which carries the uia object under the existing rules.
+  const line = (value: unknown) => COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value)
+  const frame = { id: 1, protocol: 1, check: "native-os-stop", ok: false, reason: "native_failure" }
+  const result = {
+    protocol: 1,
+    kind: "result",
+    phase: "exit",
+    stop: { ok: false, reason: "native_failure" },
+    exitCode: 1,
+  }
+  expect(COMPUTER_SMOKE_DRIVER_STAGES).toHaveLength(172)
+  const prepared = [
+    { stage: "uia-prepare-create", cause: "core_failure:no_ui_tree" },
+    { stage: "uia-prepare-property", cause: "core_failure:no_ui_tree" },
+    { stage: "uia-prepare-desktop", cause: "core_failure:secure_desktop" },
+    { stage: "uia-actor-queued", cause: "core_failure:no_ui_tree" },
+    { stage: "uia-actor-expired", cause: "core_failure:no_ui_tree" },
+    { stage: "uia-available", cause: "core_failure:no_ui_tree" },
+    { stage: "uia-available", cause: "core_failure:secure_desktop" },
+  ]
+  for (const located of prepared) {
+    expect(COMPUTER_SMOKE_DRIVER_STAGES as readonly string[]).toContain(located.stage)
+    expect(COMPUTER_SMOKE_DRIVER_CAUSES as readonly string[]).toContain(located.cause)
+    expect(computerSmokeDriverFailure({ ...frame, ...located })).toEqual(located)
+    expect(parseComputerSmokeDriverResultFrame({ ...frame, ...located }, "win32")).toEqual(located)
+    const parsed = parseComputerSmokeNativeDiagnostic(
+      line({ ...result, stop: { ...result.stop, ...located } }),
+      "win32",
+    )
+    expect(parsed).toEqual({ ...result, stop: { ...result.stop, ...located } })
+    expect(JSON.stringify(parsed)).not.toContain('"uia"')
+    // Never a skip: a prepare failure keeps native_failure and cannot ride on the uia_unavailable skip.
+    expect(() =>
+      computerSmokeDriverFailure({ ...frame, ...located, skipped: true, reason: "uia_unavailable" }),
+    ).toThrow()
+  }
+  // A uia object beside a prepare stage is judged only by the existing closed-fact rules.
+  const valid = { lookup: "first", call: "root", actor: "retired", expiry: "caller-wait", hresult: "unobserved" }
+  const located = { stage: "uia-prepare-desktop", cause: "core_failure:secure_desktop" }
+  expect(computerSmokeDriverFailure({ ...frame, ...located, uia: valid })).toEqual({ ...located, uia: valid })
+  expect(() => computerSmokeDriverFailure({ ...frame, ...located, uia: { ...valid, actor: "healthy" } })).toThrow()
+  expect(() => computerSmokeDriverFailure({ ...frame, ...located, uia: { ...valid, lookup: "prepare" } })).toThrow()
+  expect(() => computerSmokeDriverFailure({ ...frame, ...located, uia: { ...valid, call: "prepare" } })).toThrow()
+})
+
 test("only a win32 driver result frame may carry the closed failure location", () => {
   const frame = { id: 1, protocol: 1, check: "native-os-stop", ok: false, reason: "native_failure" }
   const located = { ...frame, stage: "files", cause: "std_exception" }

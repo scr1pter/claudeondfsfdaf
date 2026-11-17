@@ -314,6 +314,49 @@ size_t run_uia_native_tests() {
     require(!changed.security.editable() && !observer.same(first, changed), "uia-native.pattern-readonly-conflict-and-drift");
     fixture.state.read_only = false; fixture.state.text_read_only.reset(); require(!observer.focused(fixture.window).security.editable(), "uia-native.both-patterns-require-complete-proof");
   });
+  // HF-7 (1) candidate (a). These groups touch only the real system() actor and the observer, with no timing
+  // assumption: a slow runner may expire or refuse a ticket, and every closed outcome is accepted.
+  test([] {
+    const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>(); auto backend = WindowsUiaBackend::system(diagnostic);
+    struct Close { WindowsUiaBackend& backend; ~Close() { backend.close(); } } close{backend};
+    require(static_cast<bool>(backend.prepare) && !Fixture{}.backend.prepare, "uia-native.prepare-is-optional-and-system-only");
+  });
+  test([] {
+    Fixture fixture; size_t prepares = 0; fixture.backend.prepare = [&] { ++prepares; };
+    WindowsUiaObserver observer(fixture.backend, [&] { return fixture.clock; });
+    static_cast<void>(observer.focused(fixture.window)); static_cast<void>(observer.pointer(fixture.window, POINT{15, 15})); observer.close();
+    require(prepares == 0 && fixture.closed == 1, "uia-native.observer-never-prepares");
+  });
+  test([] {
+    const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>(); auto backend = WindowsUiaBackend::system(diagnostic);
+    struct Close { WindowsUiaBackend& backend; ~Close() { backend.close(); } } close{backend};
+    // Root lookup, provider, wrap, security, hit, children and parent phases. The prepare ticket's body is empty,
+    // so none of them can be its live phase or its timeout snapshot.
+    const auto provider = [](WindowsUiaPhase phase) {
+      return phase == WindowsUiaPhase::root_current ||
+        (static_cast<size_t>(phase) >= static_cast<size_t>(WindowsUiaPhase::root_availability) && static_cast<size_t>(phase) <= static_cast<size_t>(WindowsUiaPhase::parent_wrap));
+    };
+    try {
+      backend.prepare();
+      require(backend.available() && diagnostic->timeout_observation.load() == 0 && diagnostic->phase.load() == WindowsUiaPhase::actor_complete,
+          "uia-native.prepare-ticket-success-completes-without-expiry");
+    } catch (const Failure& failure) {
+      require(failure.code == L"no_ui_tree" || failure.code == L"secure_desktop", "uia-native.prepare-ticket-failure-is-a-closed-code");
+      const auto available = backend.available(); const auto phase = diagnostic->failure_phase(available);
+      // An actor-thread startup quarantine in place before admission refuses the job there and takes no snapshot.
+      if (!available && diagnostic->timeout_observation.load() == 0) {
+        require(phase == WindowsUiaPhase::none && diagnostic->phase.load() == WindowsUiaPhase::actor_admission, "uia-native.prepare-ticket-startup-refusal-is-at-admission");
+        return;
+      }
+      require(phase != WindowsUiaPhase::none && !provider(phase), "uia-native.prepare-ticket-never-reaches-a-provider-phase");
+    }
+  });
+  test([] {
+    const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>(); auto backend = WindowsUiaBackend::system(diagnostic);
+    backend.close(); refusal([&] { backend.prepare(); });
+    require(!backend.available() && diagnostic->phase.load() == WindowsUiaPhase::actor_admission && diagnostic->timeout_observation.load() == 0,
+        "uia-native.closed-actor-refuses-prepare");
+  });
   return groups;
 }
 }

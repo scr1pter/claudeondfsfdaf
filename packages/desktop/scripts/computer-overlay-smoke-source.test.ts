@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -413,6 +413,63 @@ describe("independent overlay source admission", () => {
     expect(driver).toContain("GetTickCount64() - started < 50")
     expect(driver).toContain("uia.overlay_belongs && uia.overlay_belongs(element, window, point(request))")
     expect(driver).not.toContain("uia.belongs(element, window)")
+  })
+  test("the overlay driver prepares UIA in its own admitted ticket before the first Stop lookup", async () => {
+    // HF-7 (1) candidate (a): an optional member that only the overlay driver calls. system() admits the same
+    // jobs, every ticket keeps its 50 ms and still runs prepare(), and no other caller of the factory prepares.
+    const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+    const header = await readFile(path.join(native, "uia_native.h"), "utf8")
+    const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
+    const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
+    expect(header.match(/std::function<void\(\)> prepare;/g)).toHaveLength(1)
+    expect(
+      implementation.match(
+        /backend\.prepare = \[native\] \{ static_cast<void>\(native->call\(\[\] \{ return true; \}\)\); \};/g,
+      ),
+    ).toHaveLength(1)
+    expect(implementation.match(/backend\.prepare\b/g)).toHaveLength(1)
+    expect(implementation).toContain("ticket->deadline = now_ms() + 50")
+    expect(implementation).toContain("put_ConnectionTimeout(50)")
+    expect(implementation).toContain("put_TransactionTimeout(50)")
+    expect(implementation.match(/self->prepare\(\);/g)).toHaveLength(1)
+    expect(implementation).toContain(
+      "current_call(); note(WindowsUiaPhase::prepare_desktop); desktop_ready(); if (automation_) return;",
+    )
+    const prepared = driver.indexOf("uia.prepare()")
+    expect(prepared).toBeGreaterThan(driver.indexOf("stage = Stage::uia_available;"))
+    expect(prepared).toBeLessThan(driver.indexOf("stage = Stage::window_observe;"))
+    expect(prepared).toBeLessThan(
+      driver.indexOf("observe_stop(uia, window, *request, stage, uia_diagnostic, OverlayDriverLookup::first"),
+    )
+    expect(driver).toContain(
+      'stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};',
+    )
+    expect(driver.match(/DriverSkip\{L"uia_unavailable"\}/g)).toHaveLength(1)
+    // A missing member is a driver failure, and a failed ticket only refines the stage before rethrowing.
+    const ticket = driver.slice(
+      driver.indexOf("stage = Stage::uia_available;"),
+      driver.indexOf("stage = Stage::window_observe;"),
+    )
+    expect(ticket).toContain("require(static_cast<bool>(uia.prepare));")
+    expect(ticket.indexOf("require(static_cast<bool>(uia.prepare));")).toBeLessThan(ticket.indexOf("uia.prepare()"))
+    expect(ticket).toContain("uia_diagnostic->failure_phase(uia.available())")
+    expect(ticket).toContain("throw;")
+    expect(ticket).not.toMatch(/OverlayDriverUiaFailure|uia_failure|failure_expiry|failure_status|phase\.load/)
+    expect(ticket.match(/DriverSkip/g)).toHaveLength(1)
+    const sources = (await readdir(native)).filter((file) => /\.(cpp|h)$/.test(file))
+    for (const file of [
+      "core.cpp",
+      "accessibility.cpp",
+      "accessibility.h",
+      "uia_input.cpp",
+      "uia_input.h",
+      "privileged_self_test.cpp",
+    ])
+      expect(sources).toContain(file)
+    for (const file of sources) {
+      const source = await readFile(path.join(native, file), "utf8")
+      expect([file, source.match(/\.prepare\(\)/g)?.length ?? 0]).toEqual([file, file === "overlay_driver.cpp" ? 1 : 0])
+    }
   })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))

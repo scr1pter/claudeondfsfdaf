@@ -242,6 +242,22 @@ size_t run_overlay_driver_tests() {
     }
   });
   test([] {
+    // HF-7 (1) candidate (a): a failed prepare ticket reports the existing stage and cause only, never a skip
+    // and never a uia object, whether the stage comes from a retired snapshot or a healthy live phase.
+    const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+    diagnostic->phase.store(WindowsUiaPhase::prepare_create); diagnostic->note_timeout(WindowsUiaExpiry::caller_wait); diagnostic->phase.store(WindowsUiaPhase::actor_expired);
+    struct Case { std::optional<OverlayDriverStage> stage; const wchar_t* code; const wchar_t* name; const wchar_t* cause; };
+    for (const auto& item : {Case{overlay_driver_uia_stage(diagnostic->failure_phase(false)), L"no_ui_tree", L"uia-prepare-create", L"core_failure:no_ui_tree"},
+           Case{overlay_driver_uia_stage(WindowsUiaPhase::prepare_desktop), L"secure_desktop", L"uia-prepare-desktop", L"core_failure:secure_desktop"},
+           Case{OverlayDriverStage::uia_available, L"no_ui_tree", L"uia-available", L"core_failure:no_ui_tree"}}) {
+      require(item.stage.has_value(), "overlay-driver.prepare-ticket-phase-has-an-existing-stage");
+      const auto result = overlay_driver_caught(OverlayDriverMode::stop, *item.stage, std::make_exception_ptr(Failure{item.code, L"PRIVATE NATIVE CONTENT"}));
+      const auto wire = result.wire();
+      require(!result.ok && !result.skipped && result.exit_code() == 1 && !result.uia && wire.Size() == 7 && !wire.HasKey(L"uia") && !wire.HasKey(L"skipped") &&
+          named(wire, L"reason") == L"native_failure" && named(wire, L"stage") == item.name && named(wire, L"cause") == item.cause, "overlay-driver.prepare-ticket-failure-is-a-failure-without-uia-detail");
+    }
+  });
+  test([] {
     for (const auto first : {WindowsUiaPhase::none, static_cast<WindowsUiaPhase>(255)}) {
       const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
       diagnostic->phase.store(first);

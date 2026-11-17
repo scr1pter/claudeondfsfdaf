@@ -647,6 +647,8 @@ WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic
   backend.close = [native] { native->close(); };
   backend.menu_shortcuts = [native](const auto& root) { try { return native->call([native, root] { return native->menus(root); }); } catch (...) { return std::optional<std::vector<UiaMenuShortcut>>{}; } };
   backend.available = [native] { return native->available(); };
+  // call() runs prepare() inside every ticket, so a no-op body gives that setup a ticket of its own.
+  backend.prepare = [native] { static_cast<void>(native->call([] { return true; })); };
   backend.commit = [native](const auto& observed, const auto& name, std::wstring_view action, const std::optional<std::wstring>& text,const std::function<bool()>& metadata_gate) {
     const auto attempted = std::make_shared<std::atomic_bool>(false);
     try { return native->call([native, observed, name, action = std::wstring(action), text, attempted,metadata_gate] { return native->commit(observed, name, action, text, attempted,metadata_gate); }); }

@@ -169,6 +169,10 @@ struct WindowsUiaBackend {
   std::function<void()> close;
   std::function<std::optional<std::vector<UiaMenuShortcut>>(const UiaElement&)> menu_shortcuts;
   std::function<bool()> available;
+  // Overlay Stop driver only: one ordinary admitted actor call whose 50 ms ticket runs only the setup every
+  // call already repeats (desktop check, one-time COM/UIA objects). No provider query. Production callers
+  // never call it.
+  std::function<void()> prepare;
   // One bounded native job repeats target facts and invokes the selected pattern; no nested UIA waits
   // or a sequence of independent RPC budgets is permitted inside the final authority fence.
   std::function<bool(const UiaObservation&, const UiaName&, std::wstring_view, const std::optional<std::wstring>&,

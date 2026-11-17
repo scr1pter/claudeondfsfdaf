@@ -288,6 +288,16 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::guardian_create; const auto guardian_diagnostic = std::make_shared<InputGuardianDiagnostic>(); auto guardian = InputGuardian::native(guardian_diagnostic); stage = Stage::backend_create; auto backend = InputBackend::system({}, guardian); stage = Stage::uia_create; const auto uia_diagnostic = std::make_shared<WindowsUiaDiagnostic>(); const auto uia = WindowsUiaBackend::system(uia_diagnostic);
   struct Close { InputBackend& backend; const WindowsUiaBackend& uia; std::shared_ptr<InputGuardian> guardian; ~Close() { guardian->close(); if (backend.close) backend.close(); if (uia.close) uia.close(); } } close{backend, uia, guardian};
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
+  // HF-7 (1) candidate (a): the one-time setup runs in its own admitted 50 ms ticket, so the first Stop root
+  // lookup's ticket holds what the refresh's holds. A missing member is a driver failure, never a skip. On
+  // failure, sample as observe_stop does (a retired actor's immutable snapshot only) and rethrow unchanged.
+  // No uia object: its closed lookups and calls name only the Stop root and hit lookups.
+  require(static_cast<bool>(uia.prepare));
+  try { uia.prepare(); }
+  catch (...) {
+    try { if (uia.available) if (const auto observed = overlay_driver_uia_stage(uia_diagnostic->failure_phase(uia.available()))) stage = *observed; } catch (...) {}
+    throw;
+  }
   stage = Stage::window_observe; const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
   require(window.hwnd == request->banner && window.surface == request->banner && window.owner.process.pid == options.parent && window.physical_owner.process.pid == options.parent && same_windows_process(window.owner.process, parent.process) && same_windows_process(window.physical_owner.process, parent.process));
   stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage, uia_diagnostic, OverlayDriverLookup::first, uia_failure); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current;
