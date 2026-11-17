@@ -554,7 +554,7 @@ export function unattendedWorktree(input: {
       })
       if (response.status === 403) {
         await response.body?.cancel().catch(() => undefined)
-        log("Vector everywhere held a job: its project must be listed, open in Vector and trusted on this computer.")
+        log("Vector everywhere held a job: its repository must be listed, open in Vector and trusted on this computer.")
         throw new WorktreeUnavailable()
       }
       const text = response.ok ? await responseText(response, 64 * 1024) : undefined
@@ -596,7 +596,7 @@ export function projectFolder(git: RunnerDeps["git"], log: (message: string) => 
     if (!directory) return undefined
     const repository = git(directory, project.repository, AbortSignal.timeout(10_000))
     if ((await repository.mapping()) !== "mapped") {
-      log("Vector everywhere left out a project folder git does not map to its repository.")
+      log("Vector everywhere left out a listed folder git does not map to its repository.")
       return undefined
     }
     const answer = await repository
@@ -605,7 +605,7 @@ export function projectFolder(git: RunnerDeps["git"], log: (message: string) => 
     const ref = answer.trim()
     const base = ref.startsWith("origin/") ? ref.slice("origin/".length) : ""
     if (BASE.test(base) && !base.includes("..")) return { directory, base }
-    log("Vector everywhere could not read a project's default branch.")
+    log("Vector everywhere could not read a listed repository's default branch.")
     return undefined
   }
 }

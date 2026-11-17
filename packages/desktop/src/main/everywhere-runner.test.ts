@@ -462,7 +462,7 @@ test("a project the engine will not give a worktree here is held with fixed text
   const refused = { count: 0 }
   await createEverywhereRunner({ ...f.deps, safeWorktree: { policy: "unattended-v1", create: async () => { refused.count += 1; throw new WorktreeUnavailable() } } }).offer("fixture-offer")
   expect(refused.count).toBe(1)
-  expect(f.results).toEqual([{ jid: f.job.jid, lease: f.job.lease.id, outcome: "held", summary: "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed." }])
+  expect(f.results).toEqual([{ jid: f.job.jid, lease: f.job.lease.id, outcome: "held", summary: "This computer could not take the job: its repository must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed." }])
   expect(f.calls.some((call) => ["create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
   // Any other worktree failure is a failed job, as before.
   const g = fixture()

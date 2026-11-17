@@ -1987,3 +1987,13 @@ Eleven findings, one blocking. All are taken; three pairs repeat one another. Li
 - **The engine test's import of the wiring widened F5** (two findings). Taken, the first option: everywhere-settings.ts (s). F5 stays open in the plan table, with the note.
 
 Mutations for this round (/tmp/vector-v2/everywhere/ev18-mut/round1/: mutate.py, one log per mutation, run.txt), each red: N1 (only `permission` checked), N1b (`tools` and `mode` left out of `RULE_KEYS`), N2 (only the agent's denies), N3 (`mode` ignored), N4 (`tools` ignored), N4b (`write` not read as `edit`), N4c (an undecodable `tools` map kept), N5 (wildcard asks dropped), N5b (wildcard asks after the denies), N5c (wildcard allows copied as well), N6 (a broken body a definite no), N6b (an over-long body no answer), N7 (the link state ignored) and N7b (`connecting` left out). N7b survived the first pass, because W29 had no `connecting` step; the step was added.
+
+### CI follow-up (2026-11-17): the repository wording check (EV-17 and EV-18)
+
+vector-codium.yml run 43992205101 (at `dcb93939`) failed one job, "Codium tests (shard 1/4)" (133735383740), step "Run the Codium test files": root test/no-project-wording.test.ts "no user-facing English text calls Vector's own concept a project" (1 pass, 1 fail) found two log lines EV-17 added to everywhere-wiring.ts `projectFolder`. The owner's rule (17 Oct 2026) is that what a user reads says repository; packages/desktop/src/main is one of the scanned sources, and its log lines count. main has no everywhere-wiring.ts, and EV-18 (`cf9195d0`) did not touch the lines. Run at `cf9195d0`, the same test also found three strings EV-18 added, so all five are reworded and no test assertion is weakened:
+
+- everywhere-wiring.ts `projectFolder`: "left out a project folder git does not map to its repository" is now "left out a listed folder git does not map to its repository", and "could not read a project's default branch" is now "could not read a listed repository's default branch".
+- everywhere-wiring.ts `unattendedWorktree` (the 403 log line) and everywhere-runner.ts `UNAVAILABLE_HERE` (the held job's fixed summary) say "its repository must be listed" for "its project must be listed"; `WorktreeUnavailable`'s message and doc comment say "this repository here".
+- everywhere-runner.test.ts and everywhere-wiring.test.ts pin the held summary as a literal, so both literals follow the new text; each still asserts the exact string.
+
+The config key `everywhere.projects` and the identifiers (`projectFolder`, `ProjectFolder`) are code, which the check allows, and stay. Receipts: vector-everywhere-progress.md, "EV-17 and EV-18, 2026-11-17: CI follow-up".

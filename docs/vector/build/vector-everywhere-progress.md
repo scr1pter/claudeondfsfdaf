@@ -3160,3 +3160,16 @@ Mutations for this round (/tmp/vector-v2/everywhere/ev18-mut/round1/), each red 
 - The commit `feat(desktop): wire the safe worktree, the offline shell and the shared keep-awake for Vector everywhere jobs`. It stages by path the thirteen code and test files above (everywhere-settings.ts is new) and the six lane documents (deviations, progress, spec, handoff, main-requests and v2-notes/v2-complete-plan.md, whose F5 and F6 rows are annotated). Its body says that no generated file, flag, env var, dependency, lockfile, workflow, route or config key changed.
 - Then the push gate: `git fetch origin everywhere-finish`, the full turbo typecheck and a fast-forward push.
 - Then workflow_dispatch runs of vector-everywhere.yml, typecheck.yml and vector-hosted-ci.yml (remote-runtime.ts changed) on everywhere-finish, with their run ids recorded here and on the F6 row. test.yml (desktop) covers keep-awake.ts at the lane end.
+
+### EV-17 and EV-18, 2026-11-17: CI follow-up
+
+The runs dispatched for `dcb93939` (the EV-16 CI fix, on top of EV-17): vector-everywhere 43992189171, vector-at-mention 43992199429 and typecheck 43992209804 passed; vector-hosted-ci 43992194193 was cancelled by the nested call's concurrency group (ci-triage, EV-14 check). vector-codium 43992205101 failed one job, "Codium tests (shard 1/4)" (133735383740), step "Run the Codium test files" (36 of 37 files passed): root test/no-project-wording.test.ts "no user-facing English text calls Vector's own concept a project" found two everywhere-wiring.ts log lines from EV-17. At `cf9195d0` (EV-18) the same test also finds three EV-18 strings. All five are reworded in packages/desktop/src/main/everywhere-wiring.ts and everywhere-runner.ts, and the two test literals that pin the held summary follow it (why: deviations log, EV-18 "CI follow-up (2026-11-17)"). Each through `vector-serial`, one file at a time (logs in /tmp/vector-v2/everywhere/ci-ev19/):
+
+| Check | Result |
+| --- | --- |
+| root test/no-project-wording.test.ts (from test/), at `cf9195d0` before the fix | 1 pass, 1 fail: five strings (everywhere-wiring.ts three, everywhere-runner.ts two) |
+| the same file with the fix | 2 pass, 0 fail, 16 expects |
+| packages/desktop src/main/everywhere-runner.test.ts (--no-env-file) | 56 pass, 0 fail, 457 expects |
+| packages/desktop src/main/everywhere-wiring.test.ts (--no-env-file) | 31 pass, 0 fail, 324 expects |
+| `bun typecheck` in packages/desktop | exit 0 |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |

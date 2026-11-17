@@ -1274,7 +1274,7 @@ test("each listed folder is resolved to its canonical path and default branch, o
 
 const SANDBOX = "/fixture/user-data/everywhere-worktree/project/job"
 const UNAVAILABLE =
-  "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed."
+  "This computer could not take the job: its repository must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed."
 const ENDED = "The unattended job ended without publishing changes."
 const answer =
   (body: unknown, status = 200): EngineRoute =>

@@ -112,14 +112,14 @@ export type SafeWorktree = {
   readonly create: (input: { directory: string; repository: string; jid: string; from: string; branch: string; signal: AbortSignal }) => Promise<{ directory: string; from: string; branch: string }>
 }
 
-/** The engine refused the checkout for this project here (it is not listed, open in Vector or trusted): the job is held. */
+/** The engine refused the checkout for this repository here (it is not listed, open in Vector or trusted): the job is held. */
 export class WorktreeUnavailable extends Error {
   constructor() {
-    super("The unattended worktree is not available for this project here")
+    super("The unattended worktree is not available for this repository here")
   }
 }
 
-const UNAVAILABLE_HERE = "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed."
+const UNAVAILABLE_HERE = "This computer could not take the job: its repository must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed."
 
 export type RunnerDeps = {
   readonly settings: () => Promise<RunnerSettings>
