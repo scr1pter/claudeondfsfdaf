@@ -1023,6 +1023,21 @@ describe("isolation from the reviewed repository (I-8)", () => {
   })
 })
 
+describe("the child() harness", () => {
+  test("a child that never finishes is killed at its own bound, and the error names the phases it reached", async () => {
+    const error = await child(`await new Promise(() => setInterval(() => {}, 1_000))`, undefined, 5_000).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    )
+    expect(error).toBeInstanceOf(Error)
+    const message = (error as Error).message
+    expect(message).toContain("killed at its 5000ms bound")
+    // Marks are synchronous writes, so the ones before the kill reach the pipe; the body never finished.
+    expect(message).toContain("child started")
+    expect(message).not.toContain("child ran")
+  })
+})
+
 describe("VS-24c's comment and string contract", () => {
   test("parsed ranges drive classifyTrivial, CRLF included", async () => {
     const base = "export function f() {\r\n  // old note\r\n  const s = `a\r\n  b`\r\n  return s\r\n}\r\n"
@@ -1110,32 +1125,83 @@ describe("BrainCode cross-check", () => {
 // Runs a script in a fresh process (its own module state), from a scratch directory (the engine's test tmpdir) that
 // `prepare` may fill, with NODE_PATH pointing into it. The script sees `Effect`, `ReviewParse` and `TreeSitter`; it
 // prints one JSON line.
-async function child(body: string, prepare?: (repo: string) => Promise<void>) {
+//
+// The child owns its own bound: a child still running at `limit` is SIGKILLed and the test fails here, with the exit
+// and signal codes, the elapsed time, both streams and the phase marks it reached. Without the bound, a stalled child
+// ran into Bun's 30 s test deadline, Bun killed it as a dangling process, and the body's later throw surfaced as an
+// "Unhandled error between tests" with an empty stderr (Windows shard 12, job 133679953818). The default limit leaves
+// room under the 30 s deadline for the scratch directory and script writes, and sits far above the slowest Windows
+// child seen (1.6 s). Each mark is a synchronous write, so a mark made before a kill reaches the pipe.
+async function child(body: string, prepare?: (repo: string) => Promise<void>, limit = 20_000) {
   await using tmp = await tmpdir()
   const repo = tmp.path
   await prepare?.(repo)
   const script = path.join(repo, "child.ts")
+  // Imported first, so "started" is written before the engine modules load: it separates Bun start-up from the imports.
+  await writeFile(
+    path.join(repo, "mark.ts"),
+    [
+      `import { writeSync } from "node:fs"`,
+      "export const mark = (phase: string) => writeSync(2, `child ${phase} at ${Math.round(performance.now())}ms\\n`)",
+      `mark("started")`,
+    ].join("\n"),
+  )
   await writeFile(
     script,
     [
+      `import { mark } from "./mark.ts"`,
       `import { Effect } from ${JSON.stringify(fileURLToPath(import.meta.resolve("effect")))}`,
       `import { ReviewParse } from ${JSON.stringify(path.join(ENGINE, "src/review/parse.ts"))}`,
       `import { TreeSitter } from ${JSON.stringify(path.join(ENGINE, "src/util/tree-sitter.ts"))}`,
+      `mark("imported")`,
+      `process.on("exit", () => mark("exiting"))`,
       body,
+      `mark("ran")`,
     ].join("\n"),
   )
+  // Windows: pass on SystemRoot and windir, which Windows programs expect, and point the profile, local-data and temp
+  // folders into `repo` like HOME, so Bun's Windows home and cache lookups stay inside the scratch directory (I-8).
+  const windows = process.platform === "win32"
+  if (windows) await mkdir(path.join(repo, "AppData", "Local", "Temp"), { recursive: true })
+  const started = performance.now()
   const proc = Bun.spawn([process.execPath, script], {
     cwd: repo,
-    env: { PATH: process.env.PATH ?? "", HOME: repo, NODE_PATH: path.join(repo, "node_modules") },
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: repo,
+      NODE_PATH: path.join(repo, "node_modules"),
+      ...(windows
+        ? {
+            ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+            ...(process.env.windir ? { windir: process.env.windir } : {}),
+            USERPROFILE: repo,
+            LOCALAPPDATA: path.join(repo, "AppData", "Local"),
+            TEMP: path.join(repo, "AppData", "Local", "Temp"),
+            TMP: path.join(repo, "AppData", "Local", "Temp"),
+          }
+        : {}),
+    },
     stdout: "pipe",
     stderr: "pipe",
+    timeout: limit,
+    killSignal: "SIGKILL",
   })
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ])
-  if (code !== 0) throw new Error(`child exited ${code}: ${stderr}`)
+  const elapsed = Math.round(performance.now() - started)
+  // Told by time alone: Bun's `killed` reads true after any exit, and a Windows kill may report no signal code.
+  const bounded = elapsed >= limit
+  if (code !== 0 || proc.signalCode)
+    throw new Error(
+      [
+        `child ${bounded ? `killed at its ${limit}ms bound` : `exited ${code}`} after ${elapsed}ms (exitCode ${proc.exitCode}, signalCode ${proc.signalCode})`,
+        `stderr:\n${stderr}`,
+        `stdout:\n${stdout}`,
+      ].join("\n"),
+    )
   return { ...JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}"), repo }
 }
 
