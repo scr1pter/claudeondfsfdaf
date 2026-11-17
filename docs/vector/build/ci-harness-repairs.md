@@ -202,3 +202,69 @@ The PowerShell action, the GitHub release download and the Windows and macOS job
 fix revision: the three Windows install steps print `ripgrep 15.2.0` and the following steps find `rg`; the plan job
 on a PR that touches test.yml reports extended=true in its summary; and mac-test (macos-15-intel, macos-26) and
 windows-arm64-test run and pass on that PR.
+
+## 2026-11-17: Windows review parse child bound and phase marks
+
+Branch `parse-test-windows` from `dabc4821`. Test harness only: `packages/engine/test/review/parse.test.ts`'s
+`child()` helper and one new test for it. No product code, assertion, test deadline, shard layout or flag changes.
+
+Failure. Main push run 43974310423, job 133679953818 ("engine (windows, shard 12/12)"): "parseMs times the parse
+alone, not the first file's grammar load" timed out at 30001.27 ms, the log printed "killed 1 dangling process", and
+then "# Unhandled error between tests: error: child exited 143: " (empty stderr) from parse.test.ts:1138 via :981. The
+one fail and the one error are the same event.
+
+Mechanism. `child()` spawned its own Bun process (env PATH, HOME=scratch, NODE_PATH only) and awaited stdout, stderr
+and `exited` with no bound of its own. On the runner that child was still running at the 30 s test deadline; Bun
+1.3.14 failed the test, SIGTERMed the leftover child as a dangling process (the same chain recorded for
+task-manage.test.ts in multiagent-parity-deviations.md), the child's `exited` resolved to 143, and the still-running
+body then threw after the test was already failed. Not the cause: the preceding wasm-trap test (its own child, exit 0,
+329 ms); the shard list (identical 55 files at 7e440a27, where parseMs passed in 263 ms); code changes (parse.ts,
+tree-sitter.ts, parse.test.ts, fixture.ts and preload.ts last changed Nov 6-12); a slow runner ("twenty large trees"
+took 23.0 s, inside its 20.8-29.5 s range). Why the child stalled is not in the log: the old helper dropped stdout and
+had no phase marks, so a stall in start-up, transpile, the wasm compile or process exit all looked the same.
+
+Change.
+
+- `child()` now bounds its own process: `Bun.spawn` `timeout` (default 20 s, far above the slowest Windows child seen,
+  1.6 s, and under the 30 s deadline) with `killSignal: "SIGKILL"`. Any non-zero exit or signal throws inside the
+  test with exitCode, signalCode, elapsed ms, "killed at its N ms bound" when the bound fired, and both streams.
+  The bound is told by the parent's clock (at or past the limit, or within 50 ms of it with no exit code, for a timer
+  that fires early), since Bun's `killed` reads true after any exit and a Windows kill may report no signal code.
+- The generated child writes synchronous `fs.writeSync(2, ...)` phase marks with its own clock: `started` (from
+  `mark.ts`, passed with `--preload`, so it runs before Bun resolves, transpiles or evaluates the script's static
+  imports), `imported`, `ran` (after the body) and `exiting`. A first static import would not do: ESM loads the whole
+  graph before any module body runs, so its mark would follow the engine modules' resolve and transpile (checked on
+  Bun 1.3.14: with `--preload` the mark prints at about 13 ms, before a missing-module error). No
+  grammar-ready mark: loading the grammar before the timed part would take it out of `wall`, which the parseMs
+  assertion relies on.
+- The child also gets SystemRoot and windir from the parent when they are set (on Windows), which Windows processes
+  expect. Nothing else in its env changes: the job argues against env as the cause (the I-8 child ran right after the
+  stall with the same minimal env in 325 ms, and more than 15 Windows child runs passed with it), so the profile,
+  local-data and temp folders are not redirected until the marks point at start-up. A green shard 12 after this change
+  does not tell the SystemRoot and windir pass-through apart from chance; only the marks of a repeat can.
+- New test "the child() harness > a child that never finishes is killed at its own bound, and the error names the
+  phases it reached" runs a never-ending child with a 5 s bound.
+
+This is diagnostic work: if the stall returns, Windows shard 12 still goes red, but the failure is owned by the test
+and names the phase. Next steps by phase: no marks at all is Bun start-up, before the preload runs (compare the
+child's PATH with a passing run first, since #41 added the pinned-ripgrep PATH entry, then consider the Windows
+profile and temp env); `started` without `imported` is resolve, transpile or top-level evaluation of the engine
+modules (consider a per-child BUN_RUNTIME_TRANSPILER_CACHE_PATH inside its scratch directory); a stall between
+`imported` and `ran` is the body,
+in practice the grammar's wasm read or compile; one between `ran` and `exiting` is a handle keeping the event loop
+alive; one after `exiting` is process exit. The last three go to Bun upstream with the marks, not to a workaround in
+parse.ts, which sets no timers, workers or handles.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock). With the new test and the old helper,
+the run reproduced the CI shape exactly: "killed 1 dangling process", a 30000 ms timeout, then "# Unhandled error
+between tests" with "child exited 143: ". With the change: `test/review/parse.test.ts` 60 pass, 0 fail; the shard-12
+ordered pair `test/review/dismissals.test.ts test/review/parse.test.ts` 63 pass, 0 fail; `packages/engine`
+`bun typecheck` exit 0. CI must show, on the next Windows shard-12 run, the trap, parseMs and I-8 children back in the
+263-401 ms range and the new harness test passing.
+
+Review revision (same branch, Linux, Bun 1.3.14, through the serial lock): `started` moved to a `--preload`, the
+Windows profile, local-data and temp redirection dropped, the early-timer allowance added to the bound check.
+`test/review/parse.test.ts` 60 pass, 0 fail; the ordered pair `test/review/dismissals.test.ts
+test/review/parse.test.ts` 63 pass, 0 fail; `packages/engine` `bun typecheck` exit 0. The harness test still costs
+about 5 s per shard that runs parse.test.ts; a 3 s bound would also sit above the slowest child start-up seen (1.6 s)
+if shard time becomes a problem.

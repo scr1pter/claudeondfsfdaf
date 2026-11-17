@@ -371,7 +371,15 @@ local ok, value = pcall(cjson.decode, ARGV[2])
 if not ok or type(value) ~= 'table' or type(value.expiresAt) ~= 'number' then return 'corrupt' end
 local ttl = value.expiresAt - tonumber(ARGV[5])
 if ttl <= 0 then return 'stale' end
-redis.call('SET', KEYS[1], ARGV[2], 'PX', ttl)
+-- Never extend the expiry PREPARE set, whatever this writer's clock says: the account index that erasure reads expires
+-- with the upload and must outlive it.
+local remaining = redis.call('PTTL', KEYS[1])
+-- -1 is a key with no expiry; -2 cannot follow the GET match above. Redis expires a key only once its time passes the
+-- expiry, so a live key reads 0 in its last millisecond: that is an expired upload, as when expiresAt has passed.
+if remaining < 0 then return 'corrupt' end
+if remaining == 0 then return 'stale' end
+local px = math.min(ttl, remaining)
+redis.call('SET', KEYS[1], ARGV[2], 'PX', px)
 return 'OK'
 `
 const PREPARE = `

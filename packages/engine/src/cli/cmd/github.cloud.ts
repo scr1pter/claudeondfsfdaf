@@ -9,10 +9,12 @@ import { GithubSecrets } from "./github.secrets"
 const SITE = "https://vectordev.ai"
 /** A one-time run ticket as `startCloudRun` writes it into a dispatch's `inputs.ticket` (2.5). */
 export const TICKET = /^vtk_[A-Za-z0-9_-]{43}$(?![\s\S])/
+/** A run id as mint writes it to VECTOR_RUN_ID: `gh-<repositoryId>-<runId>-<runAttempt>-<checkRunId>` (GithubAgents.runId). */
+export const MINTED_RUN_ID = /^gh-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}$(?![\s\S])/
 const Run = z
   .object({
     token: z.string().refine(GithubSecrets.validRunToken),
-    runId: z.string().regex(/^gh-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}$(?![\s\S])/),
+    runId: z.string().regex(MINTED_RUN_ID),
     deadline: z.number().int().positive().safe(),
     heartbeatSeconds: z.literal(GithubAgents.HEARTBEAT_SECONDS),
     idleSeconds: z.literal(GithubAgents.IDLE_SECONDS),
@@ -41,6 +43,59 @@ const Binding = z
     workflowUpdate: z.boolean(),
   })
   .strict()
+/** A Brain upload id as brain-download reads it from VECTOR_BRAIN_UPLOAD: `vbu_` and 32 base64url characters. */
+export const UPLOAD = /^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/
+/**
+ * The job's GITHUB_REPOSITORY_ID as the run's Brain context, restore and save use it: a positive safe integer without a
+ * leading zero, the bound the server's mint, binding and Brain routes and the desktop also apply. One rule, so a run
+ * never gets its conversation without its Brain context, or the other way round.
+ */
+export const isRepositoryId = (value: string | undefined) =>
+  /^[1-9]\d{0,15}$(?![\s\S])/.test(value ?? "") && Number.isSafeInteger(Number(value))
+const canonical = (value: string) => Buffer.from(value, "base64url").toString("base64url") === value
+// The same 32-byte key shape github.session.ts's keyBytes accepts, for the ordinary and the Brain conversation key.
+const Key = z
+  .object({
+    key: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{43}$(?![\s\S])/)
+      .refine(canonical),
+    keyId: z.string().regex(/^[0-9a-f]{16}$(?![\s\S])/),
+  })
+  .strict()
+// The largest approved upload (BrainRunBundle.MAX_BYTES, the server's BRAIN_UPLOAD_MAX) plus its 16-byte GCM tag, as
+// unpadded base64url. A literal, so the mint path never loads the Brain modules.
+const BRAIN_CIPHERTEXT = Math.ceil(((512 * 1024 + 16) * 4) / 3)
+// The answer's other fields take well under 1 KiB, so a 4 KiB margin holds them without admitting a larger envelope.
+const BRAIN_RESPONSE = BRAIN_CIPHERTEXT + 4096
+const BrainAnswer = z
+  .object({
+    uploadId: z.string().regex(UPLOAD),
+    key: Key.shape.key,
+    aad: z.string().min(1).max(256),
+    nonce: z.string().regex(/^[A-Za-z0-9_-]{16}$(?![\s\S])/),
+    // At least one approved byte and the tag.
+    ciphertext: z
+      .string()
+      .min(23)
+      .max(BRAIN_CIPHERTEXT)
+      .regex(/^[A-Za-z0-9_-]+$(?![\s\S])/),
+    sha256: z.string().regex(/^[0-9a-f]{64}$(?![\s\S])/),
+    bytes: z
+      .number()
+      .int()
+      .min(1)
+      .max(512 * 1024),
+    approvedAt: z.number().int().positive().safe(),
+    publicRepository: z.boolean(),
+    artifactKey: Key.optional(),
+  })
+  .strict()
+
+/** A live desktop Brain run's download answer, as `/api/cloud-agents/brain-download` builds it (spec 2.8). */
+export type BrainDownload = z.infer<typeof BrainAnswer>
+/** Every answer of the key and Brain clients other than "ok". None of them carries server text (P6, spec 2.13). */
+export type KeyStatus = "absent" | "brain-run" | "refused" | "expired" | "not-allowed" | "unavailable"
 
 export type Services = {
   oidc: (audience: string) => Promise<string>
@@ -61,7 +116,7 @@ const services: Services = {
   notice: console.log,
 }
 
-async function body(response: Response) {
+async function body(response: Response, maximum = 16_384) {
   const reader = response.body?.getReader()
   if (!reader) return
   const chunks: Uint8Array[] = []
@@ -71,7 +126,7 @@ async function body(response: Response) {
       const part = await reader.read()
       if (part.done) break
       size += part.value.byteLength
-      if (size > 16_384) {
+      if (size > maximum) {
         await reader.cancel()
         return
       }
@@ -111,10 +166,10 @@ async function post(
   credential: string,
   data: unknown,
   client: Services,
-  signal?: AbortSignal,
-  timeout = 20_000,
+  options: { signal?: AbortSignal; timeout?: number; maximum?: number } = {},
 ) {
-  const until = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout)
+  const timeout = AbortSignal.timeout(options.timeout ?? 20_000)
+  const until = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout
   return bounded(async () => {
     const response = await client.request(SITE + endpoint, {
       method: "POST",
@@ -133,7 +188,7 @@ async function post(
       await response.body?.cancel().catch(() => undefined)
       return
     }
-    return { response, body: await body(response) }
+    return { response, body: await body(response, options.maximum) }
   }, until).catch(() => undefined)
 }
 
@@ -252,7 +307,7 @@ export async function mintRunToken(input: {
         ...(env.VECTOR_TICKET ? { ticket: env.VECTOR_TICKET } : {}),
       },
       client,
-      operation(),
+      { signal: operation() },
     )
     input.signal?.throwIfAborted()
     if (expired()) return finish("at-once")
@@ -364,8 +419,7 @@ export async function heartbeat(input: {
     input.token,
     { state: input.state },
     input.services ?? services,
-    input.signal,
-    5000,
+    { signal: input.signal, timeout: 5000 },
   )
   const parsed = answer?.response.status === 200 ? Heartbeat.safeParse(answer.body) : undefined
   return parsed?.success ? parsed.data : ({ ok: false, stop: true } as const)
@@ -383,10 +437,97 @@ export async function settle(input: {
     input.token,
     { outcome: input.outcome },
     input.services ?? services,
-    input.signal,
-    5000,
+    { signal: input.signal, timeout: 5000 },
   )
   return answer?.response.status === 200 && Settled.safeParse(answer.body).success
+}
+
+const KEY_REFUSALS: Record<string, readonly [number, "refused" | "expired" | "not-allowed"]> = {
+  INVALID_REQUEST: [400, "refused"],
+  RUN_TOKEN_INVALID: [401, "refused"],
+  MODEL_PLAN_RUN_EXPIRED: [401, "expired"],
+  ARTIFACT_KEY_NOT_ALLOWED: [403, "not-allowed"],
+}
+const BRAIN_REFUSALS: Record<string, readonly [number, "refused" | "expired"]> = {
+  BRAIN_UPLOAD_INVALID: [400, "refused"],
+  RUN_TOKEN_INVALID: [401, "refused"],
+  MODEL_PLAN_RUN_EXPIRED: [401, "expired"],
+}
+
+/**
+ * The ordinary conversation key for this run's own thread (V27, spec 2.13). Only an authorized Codium run token asks,
+ * and only once: own key holds no run token, so it never reaches this route (INV-K1). A desktop Brain run, whose
+ * workflow sets VECTOR_BRAIN_UPLOAD, never asks: its conversation key comes only from brainDownload (deviations,
+ * "2026-11-15 BT03" item 4). It never throws, retries or prints, so a failure only costs the saved session (V27).
+ */
+export async function artifactKey(
+  input: {
+    env?: Readonly<Record<string, string | undefined>>
+    holder?: Pick<typeof GithubSecrets.credentials, "runToken">
+    services?: Services
+    signal?: AbortSignal
+  } = {},
+) {
+  const env = input.env ?? process.env
+  const token = (input.holder ?? GithubSecrets.credentials).runToken()
+  const thread = env.VECTOR_THREAD ?? ""
+  if (!token || !GithubSecrets.validRunToken(token) || !GithubAgents.THREAD_PATTERN.test(thread))
+    return { status: "absent" } as const
+  if (env.VECTOR_BRAIN_UPLOAD) return { status: "brain-run" } as const
+  const client = input.services ?? services
+  const answer = await post(GithubAgents.ENDPOINT.artifactKey, token, { thread }, client, { signal: input.signal })
+  if (!answer) return { status: "unavailable" } as const
+  if (answer.response.status !== 200)
+    return { status: refusal(KEY_REFUSALS, answer.response.status, answer.body) } as const
+  const key = Key.safeParse(answer.body)
+  if (!key.success) return { status: "unavailable" } as const
+  client.mask(key.data.key)
+  return { status: "ok", key: key.data } as const
+}
+
+/**
+ * The owner-approved Brain upload for this live desktop run (B08, spec 2.8): the opaque envelope, its content key, and
+ * the separately labelled Brain conversation key. Only an authorized Codium run token asks, once. The id comes only
+ * from VECTOR_BRAIN_UPLOAD, the variable that makes artifactKey answer brain-run, so a step that can download Brain
+ * context can never also ask for the ordinary key; an empty or malformed id is no request. GithubBrain.openUpload
+ * checks the envelope locally.
+ */
+export async function brainDownload(
+  input: {
+    env?: Readonly<Record<string, string | undefined>>
+    holder?: Pick<typeof GithubSecrets.credentials, "runToken">
+    services?: Services
+    signal?: AbortSignal
+  } = {},
+) {
+  const uploadId = (input.env ?? process.env).VECTOR_BRAIN_UPLOAD ?? ""
+  const token = (input.holder ?? GithubSecrets.credentials).runToken()
+  if (!token || !GithubSecrets.validRunToken(token) || !UPLOAD.test(uploadId)) return { status: "absent" } as const
+  const client = input.services ?? services
+  const answer = await post(GithubAgents.ENDPOINT.brainDownload, token, { uploadId }, client, {
+    signal: input.signal,
+    maximum: BRAIN_RESPONSE,
+  })
+  if (!answer) return { status: "unavailable" } as const
+  if (answer.response.status !== 200)
+    return { status: refusal(BRAIN_REFUSALS, answer.response.status, answer.body) } as const
+  const download = BrainAnswer.safeParse(answer.body)
+  if (!download.success || download.data.uploadId !== uploadId) return { status: "unavailable" } as const
+  client.mask(download.data.key)
+  if (download.data.artifactKey) client.mask(download.data.artifactKey.key)
+  return { status: "ok", download: download.data } as const
+}
+
+/** A refusal is one of the route's own codes at its own status; anything else, and every message, stays unread. */
+function refusal<T extends KeyStatus>(
+  table: Readonly<Record<string, readonly [number, T]>>,
+  status: number,
+  value: unknown,
+): T | "unavailable" {
+  const error = ErrorBody.safeParse(value)
+  if (!error.success || error.data.error.limit || error.data.error.perk) return "unavailable"
+  const known = table[error.data.error.code]
+  return known?.[0] === status ? known[1] : "unavailable"
 }
 
 /** The account gate's run-domain decision; it never consults saved/CLI credentials or grants offline grace. */

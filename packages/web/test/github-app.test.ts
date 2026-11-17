@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test"
 import { createPrivateKey } from "node:crypto"
+import { GithubAgents } from "@vectordevai/core/github-agents"
+import { buildAgentsWorkflow, type AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
 import { createGithubApp, githubAppConfiguration, githubTokenPermissions } from "../../../api/_lib/github-app"
 import { githubAppFixture } from "./github-app-fixture"
 import type { RepoBinding } from "../../../api/_lib/cloud-agents-binding"
@@ -566,4 +568,55 @@ test("a warm binder cache never substitutes for current actor and rerun-actor wr
   })
   expect(fixture.tokens.size).toBe(0)
   expect(fixture.state.storeCommands.filter((command) => command[0] === "GET")).toHaveLength(1)
+})
+
+// GitHub answers 422 to a dispatch that carries an input the installed workflow does not declare, so every input the
+// App can send must be declared by every Codium workflow the builder writes, and nothing it declares may drift away.
+test("every input the App dispatch sends is a declared Codium workflow input", async () => {
+  await using fixture = await githubAppFixture()
+  // The sent keys must cover every key the dispatch body can carry, so one call sets every optional field of the
+  // dispatch input. Required<> fails the typecheck when the input gains an optional field this call does not set.
+  const full: Required<Parameters<typeof fixture.app.dispatch>[1]> = {
+    ref: "refs/heads/main",
+    prompt: "Fix the build",
+    ticket: "vtk_" + "a".repeat(43),
+    ownerId: "456",
+    installationId: "600",
+    brainUpload: "vbu_" + "b".repeat(32),
+  }
+  await fixture.app.dispatch(fixture.repositoryId, { ...full, brainUpload: undefined })
+  await fixture.app.dispatch(fixture.repositoryId, full)
+  expect(fixture.state.dispatches.map((dispatch) => dispatch.inputs.brain_upload)).toEqual([
+    undefined,
+    full.brainUpload,
+  ])
+  const sent = [...new Set(fixture.state.dispatches.flatMap((dispatch) => Object.keys(dispatch.inputs)))].sort()
+  expect(sent).toEqual(["brain_upload", "mode", "prompt", "ticket"])
+  const codium: AgentsWorkflowOptions = {
+    mode: "codium",
+    provider: "vector",
+    model: "vector-plan",
+    keys: [],
+    autoReview: false,
+    version: GithubAgents.MIN_AGENTS_CLI,
+  }
+  for (const options of [
+    codium,
+    { ...codium, handle: "vector-dev", schedules: [{ id: "daily", cron: "17 9 * * 1-5", prompt: "Fix bugs" }] },
+  ]) {
+    const declared = (
+      Bun.YAML.parse(buildAgentsWorkflow(options)) as {
+        on: { workflow_dispatch: { inputs: Record<string, { options?: string[] }> } }
+      }
+    ).on.workflow_dispatch.inputs
+    expect(sent.filter((key) => !(key in declared))).toEqual([])
+    // pr and code are the review and bind dispatches' inputs, which the App never sends.
+    expect(
+      Object.keys(declared)
+        .filter((key) => !["pr", "code"].includes(key))
+        .sort(),
+    ).toEqual(sent)
+    for (const dispatch of fixture.state.dispatches) expect(declared.mode!.options).toContain(dispatch.inputs.mode)
+  }
+  expect(fixture.tokens.size).toBe(0)
 })

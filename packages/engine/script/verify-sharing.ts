@@ -481,7 +481,7 @@ try {
   const githubEnv = {
     GITHUB_RUN_ID: "12345",
     GITHUB_ACTIONS: "true",
-    VECTOR_WORKFLOW_VERSION: "2",
+    VECTOR_WORKFLOW_VERSION: "3",
     MODEL: `vector/${model}`,
     PROMPT: "Read notes.txt and answer without changing files.",
   }
