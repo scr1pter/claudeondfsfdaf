@@ -33,8 +33,8 @@ here.
 | F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
 | F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`) |
 | F4, erase registration and the sweep cron | Done: registration, and the cron by EV-04 (`dbf9bca1`); CI green: vector-everywhere 43678721793, vector-hosted-ci 43678724007, typecheck 43678728633. The cron runs after the owner's deploy | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`). EV-04: vercel.json:559-562 (`/api/everywhere/sweep`, `* * * * *`); api/_lib/everywhere/sweep.ts:29 (200 `{enabled: false}` after the 405 and 401 checks, before any switch, store or platform call); tests packages/web/test/everywhere-sweep.test.ts (the `counting` helper at :101, five cases at :125, :176, :204, :231, :251) | Request to review-fixes (FIT-4): add `vercel.json` to vector-everywhere.yml's `pull_request` paths (deviations log, EV-04, known gap) |
-| F5, an engine test imports desktop | Accepted; deviation entry | packages/engine/test/everywhere/unattended-session.test.ts:9 | done in EV-01 |
-| F6, a second keep-awake owner | Open (unwired) | packages/desktop/src/main/everywhere-awake.ts:2-13 calls `start`/`stop` itself; the shared blocker is keep-awake.ts:394 (`setDesktopWorkBlocker`) and :453 (`whileDesktopWorks`), set at index.ts:640-651 | EV-18 |
+| F5, an engine test imports desktop | Accepted; deviation entry. *2026-11-17 (EV-18): the import surface grew with `everywhereSettings`, imported from desktop everywhere-settings.ts (core and schema only), so the engine compiles three desktop files; still open* | packages/engine/test/everywhere/unattended-session.test.ts:9, :13 | done in EV-01; a later move of the pure settings and rules functions, or the client, into core/everywhere |
+| F6, a second keep-awake owner | Closed by EV-18 (2026-11-17; CI pending) | At `dcb93939`: everywhere-awake.ts:2-13 called `start`/`stop` itself. Now everywhere-awake.ts holds keep-awake.ts `holdDesktopWork()` (:471), the same `desktopWork` set as `whileDesktopWorks` (:455) under the one blocker index.ts:640-651 sets (`setDesktopWorkBlocker`, :396); it takes no blocker id, and holds only while the link can deliver offers. "One owner" means keep-awake.ts: engine-session keep-awake (`startKeepAwake`, which also keeps an unattended job's own session awake) keeps its own `powerSaveBlocker` id through the same `blocker` object, unchanged, so while a job runs two ids can be held, each released by its own holder. Tests: everywhere-awake.test.ts A1 to A5 (:58, :95, :108, :136, :151), everywhere-wiring.test.ts W28 (:1725) and W29 (:1794); deviations log, "2026-11-17, EV-18", (k) | the package commit's SHA and its CI run ids (the next receipt; a commit cannot name itself) |
 | `75532fc36` (not a finding) | Account authority wired | api/_lib/everywhere/runtime.ts:16-18 (`productionPorts` returns `codiumAccountAuthority`); adapters/account.ts:2 (`tombstoneKey`), :7-13 | none |
 
 ## Current software CI checkpoint (2026-11-12)
@@ -3003,3 +3003,160 @@ The first pass's other checks (schema, core, app, web, engine and root files, th
 | N8 the verifier ignores the sign-in's account | wiring | W1, W3, W19, W5 and 7 more |
 
 **Not done here (the task said not to commit).** The commit plan above stands: thirteen code and test files and the four lane documents, staged by path. The push gate and the workflow_dispatch runs follow it.
+
+## EV-18: the desktop adapters: safe worktree, offline shell and shared keep-awake (2026-11-17)
+
+VE-21, F6. Deviations log: "2026-11-17, EV-18".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `dcb93939` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. EV-13 `46471914` and `0d9f852c`, EV-16 `b0240ba2` and `dcb93939`, and EV-17 `c9275df0` are ancestors (`git merge-base --is-ancestor`). origin/main `dabc4821` holds PR #33 and touches none of this package's files; it is not merged here (the lead's). No review-fixes or brain-transport precondition applies.
+
+**Files** (line numbers after the change):
+
+- packages/desktop/src/main/keep-awake.ts: the desktop-work comment :388-389 and `holdDesktopWork` :471 (additive).
+- packages/desktop/src/main/everywhere-awake.ts (rewritten, 36 lines): `createEverywhereAwake({onBattery, changed})`.
+- packages/desktop/src/main/everywhere-engine.ts: `UnattendedShellPolicy` :12, `unattendedRules` :31 (`own` :32-39), `UnattendedCapabilities` :49, `SHELL_PROBE_MS` :54, `unattendedCapabilities` :64 (the size-only definite no :77), `localEngineOrigin` :88, `ResponseTooLarge` :111, the shell mark in `create()` :163.
+- packages/desktop/src/main/everywhere-settings.ts (new, 176 lines, review round one): `RunnerSettings` :13 (moved from the runner, with `shell` :23), `EverywhereSettings` :28, `ProjectFolder` :35, `everywhereSettings` :50, `unlocked` :77, `userRules` :90, `agentPermission` :111, `decodePermission` :117, `permissionRules` :126, `expand` :135, `resolveProjects` :144, `offSettings` :161.
+- packages/desktop/src/main/everywhere-runner.ts: `RunnerSettings` imported from everywhere-settings.ts :7, the `SafeWorktree` comment :105-109, `WorktreeUnavailable` :116, `UNAVAILABLE_HERE` :122, the single read :248, the typed hold :303-311, the ruleset :316.
+- packages/desktop/src/main/everywhere-wiring.ts (620 lines):
+  - `PROBE_RETRY_MS` :109, `RULE_KEYS` :116, `DELIVERING` :118, `Probes` :121;
+  - in `createEverywhereJobs`: `worktree` :193, `awake` :194, `keepAwake` :197-201, `capabilities` :207, the probe read and the lock check in `fetchSettings` :251-254, the `safeWorktree` getter :327, `keepAwake()` in `evaluate` :345, `sandbox` :400, the probe resets :437 and :494, `awake?.dispose()` :512;
+  - `unattendedWorktree` :535.
+- packages/desktop/src/main/remote-runtime.ts: :2 and :49-63 (`power`).
+- Tests: packages/desktop/src/main/everywhere-awake.test.ts (rewritten), everywhere-engine.test.ts, everywhere-wiring.test.ts, everywhere-runner.test.ts; packages/engine/test/everywhere/worktree.test.ts and unattended-session.test.ts (which imports `everywhereSettings` from everywhere-settings.ts, :13).
+- Lane documents: this receipt and the F6 row above, the deviations entry, dated notes in the spec (§3.5 steps 4, 5 and 10; §5 E7; §8 VE-21), handoff annotations and a status bullet, and main-requests.md annotations.
+
+**The new cases.**
+
+| Case | Where | What it pins |
+| --- | --- | --- |
+| A1 | everywhere-awake.test.ts:58 | the shared blocker (a fake set with `setDesktopWorkBlocker`) is held only with jobs and the option on and AC power; power is not watched until both are on; unplugging releases at the power event; jobs off and the option off release and unsubscribe; dispose releases |
+| A2 | :95 | on battery, or with the option off, nothing is ever held |
+| A3 | :108 | jobs plus a `whileDesktopWorks` run share one blocker, released only once both are idle, in either order |
+| A4 | :136 | a release works once and never releases another holder's hold |
+| A5 | :151 | a hold taken before index.ts sets the blocker is honoured when it is set |
+| E0 | everywhere-engine.test.ts:43 | the real loopback client sends both marks, `vector.unattended` and `vector.unattended.shell: "offline"`, and nothing else in `metadata` |
+| E1 | :127 | `bash` is denied without `offline-v1` (default and `none`) and allowed with it; `unsandboxed_shell`, terminals, browser, task, skill, web, external_directory, private_network, computer, vector_cloud, question, MCP, connect, network_command and unknown tools are denied either way; the only added rule is `bash` after every deny; the user's own `bash` deny and ask follow it |
+| E2 | :150 | the user's block as written and as the engine re-encodes it (`*` moved last) gives the same decisions: edit denied, `git status` allowed under an exact `bash` key, other commands denied, a wildcard allow never copied; a wildcard deny outranks an exact allow in any order |
+| E2b | :179 | (review round one) `{"*": "ask"}` asks on every editing id, and on `bash` with `offline-v1` (denied without); `{"*": "ask", "edit": "allow"}` asks for edit and bash in both orders; a wildcard deny beside a wildcard ask denies in both orders, and an exact deny under the wildcard ask is asked |
+| E3 | :208 | the probes: exact answers only; any other 200, an extra key, a non-JSON or oversized body, 404, 401 and 403 are definite noes; 503, a refused connection, a timeout, a redirect and a body that errors after its first chunk (review round one) give no answer; no query, no guest or directory header, `redirect: "error"`, the owner's authorization; a non-loopback address rejects |
+| E4 | :267 | the probes against a real loopback server carry no query; `localEngineOrigin` refuses https, a remote host, credentials, a query and a fragment |
+| R1 | everywhere-runner.test.ts:460 | a `WorktreeUnavailable` settles `held` with the fixed text and no session, prompt, commit or push; any other worktree error is `failed` |
+| R2 | :474 | the session's ruleset is `unattendedRules(rules, shell)` for an absent, `none` and `offline-v1` shell |
+| W23 | everywhere-wiring.test.ts:1314 | an engine whose probe answers 404: `pending` still says `jobs=1&sandbox=0`, a claimed job is held with the existing text, and only the two probes are sent; with `unattended-v1`: POST /experimental/worktree/unattended `{directory, base, branch, jid}` with no query, then GET /config/trust `?directory=<checkout>`, both as the owner without a guest header; the session is made in the returned checkout with bash denied; never POST /experimental/worktree |
+| W24 | :1397 | a 403 is held with the fixed text; a trusted checkout, an unreadable trust answer, an extra key, a relative folder and a 500 fail the job; no session in any |
+| W25 | :1502 | `offline-v1`: `pending` says `sandbox=1` and bash is allowed, also with unrelated locks only; with a company lock on `permission`, `agent`, `mode`, `tools` or `default_agent` (review round one: all but `permission`), or `none`: `sandbox=0` and bash denied; the user's bash deny holds and the unsandboxed shell, terminals, MCP and connect stay denied in all three |
+| W26 | :1567 | off: no probe; on: both probes once; a timed-out shell probe is not asked again within the minute; a minute later it is, its answer is used (`sandbox=1`), and the kept 404 still holds a job; with both answered nothing more is asked; `server.connected` asks afresh; off again asks nothing |
+| W27 | :1642 | `rules`: the legacy `tools` map's switched-off tools first (`write` as `edit`; a switched-on one adds nothing), the top-level block in order, `~/`, `~`, `$HOME/` and a bare `$HOME` prefix expanded as the engine does, a bare action as `*`, then the default agent's asks and denies, from `agent` and then `mode` (`build`, or `default_agent`); an undecodable top-level block, `tools` map, agent or mode block is off with no folder resolved (review round one: the tools map, `mode` and the asks) |
+| W28 | :1725 | the stay-awake option through the wiring: nothing held or watched with Remote off; held when jobs go on; released by the option going off with no state change; unplug and plug; Remote off releases; the jobs module's `stop()` alone releases and unsubscribes |
+| W29 | :1794 | (review round one) held while the link is online; a paused link releases it and stops watching power, with jobs still on; Remote off and on holds again; a reconnect in `connecting` keeps it; a revoked link releases it |
+| G1 | engine test/everywhere/worktree.test.ts:950 | through the real route: the trusted source's committed vector.json loads (`formatter: false`), the job's checkout is `trusted: false, ignored: true, settings: true`, keeps the user's formatter setting, and lists no formatter or language server; after a formatter, a language server and a .vector folder are written over it and the instance reloads, the same holds and the marker command never ran |
+| G2 | engine test/everywhere/unattended-session.test.ts:331 | through the real PATCH and GET /global/config: the answer puts `*` after `edit`; `everywhereSettings` plus `unattendedRules(…, "offline-v1")` on a real session (Permission.evaluate) deny edit, allow `git status`, deny other commands, deny the agent's `*.secret` read and allow other reads; the session carries the shell mark |
+| G3 | :374 | under bubblewrap (runs where `VECTOR_TEST_REQUIRE_BWRAP=1`): a session the desktop client creates with `offline-v1` runs `true` in the offline sandbox (the notice, the output); `curl` to a server on this computer exits 7 and reaches nothing; `cat /etc/hostname` is refused; no `permission.asked` at all |
+
+**Checks**, each through `vector-serial`, one file at a time from the owning package with `--timeout 30000`:
+
+- Desktop runs used `--no-env-file` and `TMPDIR=/tmp/vector-v2/everywhere/ev18-tmp`.
+- Engine runs used fresh XDG roots under /tmp/vector-v2/everywhere-finish/ev18-xdg-final-<file>/, with `VECTOR_TEST_REQUIRE_BWRAP=1`. This machine's bubblewrap is root-owned and starts, so G3 and offline-shell.test.ts's sandbox cases ran.
+- Logs are in /tmp/vector-v2/everywhere/ev18-logs/ (the final runs in final/).
+- "Before" is HEAD's test file (run here against the changed sources before the new cases were added, or the count at HEAD).
+
+| Check | Before | After |
+| --- | --- | --- |
+| desktop everywhere-awake.test.ts (vector-everywhere.yml) | 1 pass | 5 pass, 0 fail, 31 expects |
+| desktop everywhere-engine.test.ts (vector-everywhere.yml) | 7 pass, 529 expects | 11 pass, 0 fail, 642 expects |
+| desktop everywhere-wiring.test.ts (vector-everywhere.yml) | 24 pass, 169 expects | 30 pass, 0 fail, 266 expects |
+| desktop everywhere-runner.test.ts (vector-everywhere.yml) | 54 pass, 447 expects | 56 pass, 0 fail, 457 expects |
+| desktop keep-awake.test.ts, computer-keep-awake.test.ts, parallel-workspaces.follow-up.test.ts (test.yml, not a lane workflow; all import keep-awake.ts) | | 34, 4, 45 pass, 0 fail |
+| desktop everywhere-offer, -ledger, -git, -github, -pr, -scan | | 2, 7, 9, 6, 1, 4 pass, 0 fail |
+| desktop remote-link.test.ts (vector-hosted-ci.yml), config-skew.test.ts, cloud-naming.test.ts | | 32, 2, 1 pass, 0 fail |
+| engine test/everywhere/worktree.test.ts (vector-everywhere.yml) | 18 pass | 19 pass, 0 fail, 456 expects |
+| engine test/everywhere/unattended-session.test.ts (vector-everywhere.yml) | 5 pass | 7 pass, 0 fail, 246 expects |
+| engine test/everywhere/offline-shell.test.ts (vector-everywhere.yml; unchanged) | 15 pass, 1 skip | 15 pass, 1 skip (`liveIf(!offline)`), 0 fail, 211 expects |
+| `bun typecheck` in packages/desktop and packages/engine (the engine compiles the desktop modules its tests import) | | exit 0 each |
+| hosted API: `bun typecheck --project ../../tsconfig.json` from packages/engine | | exit 0 |
+| the four desktop test files, `bun x tsgo --noEmit -p /tmp/vector-v2/everywhere/ev18/tc/tsconfig.json` (EV-11's pattern; desktop's tsconfig excludes tests) | | exit 0 |
+| main-process bundle proxy: `bun build src/main/remote-runtime.ts --target=node --external electron` (nothing launched) | | exit 0, 2.0 MB |
+
+**Formatting.** prettier conforms for everywhere-wiring.ts, everywhere-wiring.test.ts, everywhere-awake.ts, everywhere-awake.test.ts, keep-awake.ts, remote-runtime.ts and engine worktree.test.ts, all formatted at HEAD. everywhere-engine.ts, everywhere-runner.ts, their tests and unattended-session.test.ts are hand-packed at HEAD and keep that style in this package's hunks. A diff scan found no personal path or email.
+
+**Mutations.** Thirty-nine, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev18-mut/: mutate.py, one log per mutation, run.txt). All 39 are red on the final sources. In the first pass three survived (M18b, M20's first form, M23); the fixes are in the deviations entry, "Mutations".
+
+| Mutation | File | Red |
+| --- | --- | --- |
+| M1 bash allowed without `offline-v1` | engine | E1 |
+| M2 the re-allow also opens `unsandboxed_shell` | engine | E1 |
+| M3 the user's bash rules dropped after the allow | engine | E1, E2 |
+| M4 / M4e the user's rules copied in the answer's key order (the old rule) | engine | E1, E2 / G2 |
+| M5 `create()` without the shell mark | engine | E0 |
+| M6 any 200 counts as the worktree answer | engine | E3 |
+| M7 the probe sends `directory` | engine | E3, E4 |
+| M8 a 5xx counts as a definite no | engine | E3 |
+| M16 a failed connection counts as a definite no | engine | W26 |
+| M9 the getter always gives the adapter | wiring | W1, W7b, W23 |
+| M10 a 403 is not WorktreeUnavailable | wiring | W24 |
+| M11 no trust check | wiring | W24 |
+| M11b a relative folder accepted | wiring | W24 |
+| M11c extra keys accepted | wiring | W24 |
+| M12 `sandbox` always 0 | wiring | W25, W26 |
+| M13 the company lock on `permission` ignored | wiring | W25 |
+| M14 the probes run while the block is off | wiring | W26 |
+| M15 a missing answer is never asked again | wiring | W26 |
+| M17 no one-minute limit on asking again | wiring | W26 |
+| M18 `server.connected` keeps the cache | wiring | W26 |
+| M18b a later answer replaces a kept one | wiring | W26 |
+| M19 / M19w the battery ignored | awake / wiring | A1, A2, A3 / W28 |
+| M20 a release clears every hold | keep-awake | A3, A4 |
+| M21 power watched while not armed | awake | A1 |
+| M22 the stay-awake hook only on a state change | wiring | W28 |
+| M23 `stop()` keeps the hold | wiring | W28 |
+| M24 an undecodable permission block stays on | wiring | W27 |
+| M25 `~/` not expanded | wiring | W27 |
+| M26 / M26e the agent's denies dropped | wiring | W27 / G2 |
+| M27 the agent's allows copied too | wiring | W27 |
+| M28 / M28w WorktreeUnavailable not held | runner | R1 / W24 |
+| M29 / M29w the runner ignores `settings.shell` | runner | R2 / W25 |
+| M30 formatters run in an untrusted folder (engine format/index.ts) | engine source | G1 |
+| M31 an untrusted folder's config kept (engine config.ts) | engine source | G1 |
+
+**Cross-lane probe.** At the time of writing, no lane tip touches any of this package's files since its merge base: hands-finish `8139e5fc`, codium-finish `732229c3`, connect-finish `19c48b89`, scope-finish `fb441eae`, brain-transport `0d18f750`, review-fixes `1433d105`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c` and main `dabc4821`.
+
+**Review round one (2026-11-17).** Eleven findings, one blocking, all taken; the deviations entry's "Review round one" lists each. In short: the shell needs every key that can carry permission rules unlocked (`RULE_KEYS`); the default agent's asks, its `mode` block and the legacy top-level `tools` map's switched-off tools are copied; wildcard asks are copied after the exact keys and before the wildcard denies; stay awake holds only while the link can deliver offers; only an over-long probe body is a definite no (`ResponseTooLarge`); the settings and rules functions moved to the new everywhere-settings.ts, so the engine's program compiles exactly three desktop files (`tsgo --listFiles` in packages/engine: everywhere-engine.ts, everywhere-scan.ts, everywhere-settings.ts). The case table above is updated (E2b and W29 are new; E3, W25 and W27 grew).
+
+| Check (round one, final sources; logs in /tmp/vector-v2/everywhere/ev18-logs/round1-final/) | Result |
+| --- | --- |
+| desktop everywhere-awake.test.ts | 5 pass, 0 fail, 31 expects (unchanged) |
+| desktop everywhere-engine.test.ts | 12 pass, 0 fail, 702 expects |
+| desktop everywhere-wiring.test.ts | 31 pass, 0 fail, 324 expects (also twice more before the docs, same counts) |
+| desktop everywhere-runner.test.ts | 56 pass, 0 fail, 457 expects |
+| engine test/everywhere/unattended-session.test.ts (fresh XDG roots and TMPDIR under /tmp/vector-v2/everywhere-finish/ev18-xdg-round1-final-unattended/, `VECTOR_TEST_REQUIRE_BWRAP=1`) | 7 pass, 0 fail, 245 expects. The count varies between runs (237, 240 and 245 here, 246 in the first pass) because `finished()` and `spend()` poll with an `expect` inside |
+| `bun typecheck` in packages/desktop and packages/engine | exit 0 each |
+| the four desktop test files, `bun x tsgo --noEmit -p /tmp/vector-v2/everywhere/ev18/tc/tsconfig.json` | exit 0 |
+| main-process bundle proxy (`bun build src/main/remote-runtime.ts --target=node --external electron`) | exit 0, 2.0 MB |
+| prettier `--check`: everywhere-settings.ts, everywhere-wiring.ts, everywhere-wiring.test.ts, everywhere-awake.ts, everywhere-awake.test.ts, keep-awake.ts, remote-runtime.ts | conforms |
+
+Not re-run in this round, as their sources and tests did not change: engine worktree.test.ts and offline-shell.test.ts, keep-awake.test.ts, computer-keep-awake.test.ts, parallel-workspaces.follow-up.test.ts, remote-link.test.ts and the hosted API typecheck.
+
+Mutations for this round (/tmp/vector-v2/everywhere/ev18-mut/round1/), each red on the final sources:
+
+| Mutation | File | Red |
+| --- | --- | --- |
+| N1 only `permission` checked for a lock | wiring | W25 |
+| N1b `tools` and `mode` left out of `RULE_KEYS` | wiring | W25 |
+| N2 only the default agent's denies | settings | W27 |
+| N3 the `mode` block ignored | settings | W27 |
+| N4 the `tools` map ignored | settings | W27 |
+| N4b `write` not read as `edit` | settings | W27 |
+| N4c an undecodable `tools` map kept on | settings | W27 |
+| N5 wildcard asks dropped | engine | E2b |
+| N5b wildcard asks after the wildcard denies | engine | E2b |
+| N5c wildcard allows copied as well | engine | E2 |
+| N6 a body that breaks off is a definite no | engine | E3 |
+| N6b an over-long body is no answer | engine | E3 |
+| N7 the link state ignored by stay awake | wiring | W29 |
+| N7b `connecting` left out of `DELIVERING` (survived until W29 got its `connecting` step) | wiring | W29 |
+
+**Not done here (the task said not to commit).**
+
+- The commit `feat(desktop): wire the safe worktree, the offline shell and the shared keep-awake for Vector everywhere jobs`. It stages by path the thirteen code and test files above (everywhere-settings.ts is new) and the six lane documents (deviations, progress, spec, handoff, main-requests and v2-notes/v2-complete-plan.md, whose F5 and F6 rows are annotated). Its body says that no generated file, flag, env var, dependency, lockfile, workflow, route or config key changed.
+- Then the push gate: `git fetch origin everywhere-finish`, the full turbo typecheck and a fast-forward push.
+- Then workflow_dispatch runs of vector-everywhere.yml, typecheck.yml and vector-hosted-ci.yml (remote-runtime.ts changed) on everywhere-finish, with their run ids recorded here and on the F6 row. test.yml (desktop) covers keep-awake.ts at the lane end.

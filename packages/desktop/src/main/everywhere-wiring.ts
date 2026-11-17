@@ -1,12 +1,20 @@
 import { realpath } from "node:fs/promises"
+import path from "node:path"
 import { Option, Schema } from "effect"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
-import { ConfigEverywhereV1 } from "@vectordevai/core/v1/config/everywhere"
 import { ACCOUNT_ID_PATTERN } from "@vectordevai/schema/everywhere"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
-import { createEverywhereEngine } from "./everywhere-engine"
+import { createEverywhereAwake } from "./everywhere-awake"
+import {
+  createEverywhereEngine,
+  localEngineOrigin,
+  responseText,
+  unattendedCapabilities,
+  type UnattendedCapabilities,
+  type UnattendedShellPolicy,
+} from "./everywhere-engine"
 import { createEverywhereGit } from "./everywhere-git"
 import { createLedger, ledgerFile, type JobLedger } from "./everywhere-ledger"
 import { createOfferVerifier, OFFER_KEYS } from "./everywhere-offer"
@@ -16,18 +24,25 @@ import {
   localAllows,
   type JobsClient,
   type RunnerDeps,
-  type RunnerSettings,
   type SafeWorktree,
+  WorktreeUnavailable,
 } from "./everywhere-runner"
+import {
+  everywhereSettings,
+  offSettings,
+  unlocked,
+  type EverywhereSettings,
+  type ProjectFolder,
+} from "./everywhere-settings"
 import type { LinkDependencies, RemoteLink, RemoteState, RemoteStatus } from "./remote-link"
 import { tokenClaims } from "./vector-account"
 
 // Vector everywhere in the running app (VE-21, R-C2, R-C3): the jobs subscriber Vector Remote's link takes, and the
 // runner behind it. Electron-free, so its tests run under Bun; remote-runtime.ts supplies the Electron pieces.
 //
-// - Settings come only from the engine's GET /global/config (the user's own files), read again whenever the engine
-//   says its global config changed (`global.disposed`) or its event stream (re)connects. A company lock on the key, a
-//   block that does not decode and an unreadable answer are all off.
+// - Settings come only from the engine's GET /global/config (the user's own files, everywhere-settings.ts), read again
+//   whenever the engine says its global config changed (`global.disposed`) or its event stream (re)connects. A company
+//   lock on the key, a block that does not decode and an unreadable answer are all off.
 // - "Takes jobs" (`want()`) is on only while the setting is on and Remote is on with an identity. Without an identity
 //   the state is `needs-remote` and nothing is created: the settings page asks for consent and turns Remote on.
 // - While on, waiting jobs are asked for (`pending`) when the link comes online, after every job the runner ran, after
@@ -35,16 +50,18 @@ import { tokenClaims } from "./vector-account"
 //   Remote the service paused, revoked or refused takes no job over HTTP either. Off stops every timer.
 // - Every offer, by relay or by `pending`, is verified against the pinned OFFER_KEYS (empty until the owner's key
 //   handoff, so every offer is refused) and the ledger's replay record before anything is sent (E9).
-// - The runner gets no safe worktree here (EV-18 supplies it), so a claimed job settles `held` before any session,
-//   fetch, commit or push.
+// - While the block is on, the engine is asked (as its owner, engine-wide) whether it creates unattended worktrees and
+//   runs an unattended session's commands offline (EV-18). The runner gets the worktree adapter only while the engine
+//   answers `unattended-v1`, otherwise a claimed job settles `held` before any session, commit or push. The session may
+//   run commands (`bash`) only while it answers `offline-v1` and no company lock holds a key that can carry
+//   permission rules (RULE_KEYS).
+// - The session's ruleset copies the user's own permission rules, and the asks and denies of their default agent, for
+//   the ids it allows (everywhere-engine.ts unattendedRules).
+// - The stay-awake option holds the desktop's shared work blocker while jobs are on and the link can deliver offers
+//   (online or connecting), the option is on and the computer is on AC power (everywhere-awake.ts, F6).
 
 export type EverywhereJobsState = "off" | "needs-remote" | "on"
 export type EverywhereLink = Pick<RemoteLink, "status" | "device" | "jobsChanged">
-export type EverywhereSettings = RunnerSettings & { readonly waitForComputer: boolean; readonly stayAwake: boolean }
-type Project = { readonly directory: string; readonly repository: string }
-export type ProjectFolder = (
-  project: Project,
-) => Promise<{ readonly directory: string; readonly base: string } | undefined>
 
 export type EverywhereJobsDeps = {
   /** The local engine over its authenticated loopback server, with the owner's credentials. */
@@ -57,6 +74,8 @@ export type EverywhereJobsDeps = {
   readonly ledgerPath: string
   /** Fixed text only. */
   readonly log?: (message: string) => void
+  /** Electron's powerMonitor, for the stay-awake option; absent, nothing is held. `changed` returns its unsubscribe. */
+  readonly power?: { readonly onBattery: () => boolean; readonly changed: (listener: () => void) => () => void }
   // Test seams; remote-runtime.ts passes none of them.
   /** Default OFFER_KEYS. */
   readonly keys?: Readonly<Record<string, string>>
@@ -64,15 +83,16 @@ export type EverywhereJobsDeps = {
   readonly ledger?: JobLedger
   /** The jobs service's address and fetcher. Default vectordev.ai through Egress. */
   readonly service?: { readonly url?: string; readonly fetcher?: typeof fetch }
-  /** The fetcher for the engine's config route. */
+  /** The fetcher for the engine's config route, its two capability probes and the unattended worktree adapter. */
   readonly fetcher?: typeof fetch
   readonly git?: RunnerDeps["git"]
   readonly runnerEngine?: RunnerDeps["engine"]
   /**
-   * EV-18's slot. Absent, every claimed job settles `held` before any session. It must not be passed until EV-16's
-   * three preconditions hold (formatters, LSP and config reloads off for an unattended session; the home folder's
-   * other secrets; GIT_HARDENING on every git call EV-18 adds), and RunnerSettings.rules is filled. EV-14's mark
-   * precondition is met: PATCH /session/:id refuses to drop `vector.unattended` (EV-16).
+   * Replaces the probe-gated adapter (unattendedWorktree), which the runner otherwise gets only while the engine answers
+   * `unattended-v1`. EV-16's preconditions: formatters, language servers and the checkout's config stay off because
+   * the engine never trusts a job's checkout (the adapter refuses one it reports trusted); EV-18 adds no git call; the
+   * home folder's other secrets matter for the push path, which is still stand-ins. EV-14's mark precondition is met
+   * (PATCH /session/:id refuses to drop `vector.unattended`, EV-16), and RunnerSettings.rules is filled.
    */
   readonly safeWorktree?: SafeWorktree
   readonly localPolicy?: RunnerDeps["localPolicy"]
@@ -83,10 +103,29 @@ const PENDING_EVERY_MS = 5 * 60_000
 const RETRY_EVENTS_MS = 5_000
 /** The runner's own base rule (everywhere-git.ts fetch). */
 const BASE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/
-/** The settings' own cap; the merged config could list more (EV-10, Coordination). */
-const MAX_PROJECTS = 64
 const PENDING_SLOTS = 32
 const PENDING_URL = "https://vectordev.ai/api/everywhere/jobs/pending"
+/** How soon a capability probe with no definite answer (a timeout, a 5xx) is asked again. */
+const PROBE_RETRY_MS = 60_000
+/**
+ * The config keys that can carry permission rules. Under a company lock on any of them the company's values are not in
+ * GET /global/config (it answers the user's own files), and the session's later `bash` allow would outrank their rules,
+ * so the shell stays off. The engine's Config.lockedKeys locks `mode` with `agent` and `tools` with `permission`; a
+ * company can also name either alone, or `default_agent`, which picks the agent whose rules apply.
+ */
+const RULE_KEYS = ["permission", "tools", "agent", "mode", "default_agent"]
+/** The link states in which offers can reach this computer: the relay is connected, or being connected to. */
+const DELIVERING: readonly RemoteState[] = ["online", "connecting"]
+
+/** The engine's answers to its two capability probes for one cache; a field with no definite answer yet is absent. */
+type Probes = {
+  worktree?: boolean
+  shell?: UnattendedShellPolicy
+  asked: boolean
+  probing?: Promise<void>
+  retryAt: number
+}
+const freshProbes = (): Probes => ({ asked: false, retryAt: 0 })
 
 /**
  * startRemote's composition (R-C3): the link's `jobs` subscriber, and its `changed` callback handing every status to
@@ -136,6 +175,7 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     client?: { readonly device: string; readonly jobs: JobsClient }
     listed: string
     folders: Map<string, ReturnType<ProjectFolder>>
+    probes: Probes
   } = {
     started: false,
     stopped: false,
@@ -146,9 +186,43 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     askAgain: false,
     listed: "",
     folders: new Map(),
+    probes: freshProbes(),
   }
   const offering = new Set<string>()
   const resolve = projectFolder(git, log)
+  const worktree = unattendedWorktree({ url: deps.engine.url, authorization, fetcher: deps.fetcher, log })
+  const awake = deps.power ? createEverywhereAwake(deps.power) : undefined
+  // Called with every state evaluation, and so with every link status: a stay_awake change, a state change and a link
+  // that can no longer deliver offers (signed out, paused, revoked, replaced, refused or Local-off) all apply at once.
+  const keepAwake = () =>
+    awake?.update(
+      current() === "on" && DELIVERING.includes(state.link?.status().state ?? "off"),
+      state.settings.stayAwake,
+    )
+
+  // EV-13's worktree and EV-16's shell, asked only while the block is on. A definite answer is kept until a new event
+  // stream (`server.connected`: an engine that may have restarted) or refresh(); a field with no definite answer counts
+  // as none and is asked again at most once a minute. Only a cache's first ask is waited for, so no later settings read
+  // (the runner's one-second check among them) waits on a slow probe.
+  const capabilities = async () => {
+    const probes = state.probes
+    const missing = probes.worktree === undefined || probes.shell === undefined
+    if (missing && !probes.probing && now() >= probes.retryAt)
+      probes.probing = unattendedCapabilities({ url: deps.engine.url, authorization, fetcher: deps.fetcher })
+        // It throws only for an engine address that is not loopback, which never changes.
+        .catch((): UnattendedCapabilities => ({ worktree: false, shell: "none" }))
+        .then((answer) => {
+          probes.worktree ??= answer.worktree
+          probes.shell ??= answer.shell
+          if (probes.worktree === undefined || probes.shell === undefined) probes.retryAt = now() + PROBE_RETRY_MS
+        })
+        .finally(() => {
+          probes.probing = undefined
+          probes.asked = true
+        })
+    if (!probes.asked) await probes.probing
+    return probes
+  }
 
   const fetchSettings = async () => {
     const global = await (deps.fetcher ?? fetch)(new URL("/global/config", deps.engine.url), {
@@ -168,12 +242,16 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     // answer came in, so a resolution that began before a change is never kept after it (the read that every change
     // asks for resolves that folder again).
     const cache = state.folders
-    state.settings = await everywhereSettings(global, (project) => {
+    const settings = await everywhereSettings(global, (project) => {
       const key = `${project.directory}\0${project.repository}`
       const found = cache.get(key) ?? resolve(project)
       cache.set(key, found)
       return found
     })
+    const probes = settings.enabled ? await capabilities() : undefined
+    const shell =
+      probes?.shell === "offline-v1" && RULE_KEYS.every((key) => unlocked(global, key)) ? "offline-v1" : "none"
+    state.settings = probes ? { ...settings, worktree: probes.worktree === true, shell } : settings
     evaluate()
     return state.settings
   }
@@ -244,7 +322,11 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     git,
     engine:
       deps.runnerEngine ?? ((directory) => createEverywhereEngine({ url: deps.engine.url, directory, authorization })),
-    safeWorktree: deps.safeWorktree,
+    // The probe-gated adapter, offered only while the engine's last definite answer is `unattended-v1`; the runner reads
+    // it once per job.
+    get safeWorktree() {
+      return deps.safeWorktree ?? (state.settings.worktree ? worktree : undefined)
+    },
     // Push-path stand-ins until the GitHub calls are wired: never private, so a committed branch stays held.
     privateRepository: async () => false,
     openPr: async () => undefined,
@@ -260,6 +342,7 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
 
   // Acts only on a change of state. The link is told in a microtask, never inside its own status emission.
   const evaluate = () => {
+    keepAwake()
     const next = current()
     const was = state.previous
     if (next === was) return
@@ -313,8 +396,8 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
       takesJobs: settings.enabled && Object.keys(keys).length > 0,
       remote: status.enabled && status.state === "online",
       localMode: !localAllows(policy),
-      // EV-18 sets it from the engine's offline shell probe.
-      sandbox: false,
+      // The engine's offline shell probe (EV-16), as the session's ruleset uses it.
+      sandbox: settings.shell === "offline-v1",
       waitForComputer: settings.waitForComputer,
       capsRoom: (await room(settings)) > 0,
       projects: settings.projects.length > 0,
@@ -350,6 +433,8 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
         for await (const event of deps.events(signal)) {
           if (event.payload.type !== "global.disposed" && event.payload.type !== "server.connected") continue
           state.folders = new Map()
+          // A new stream may be a new engine; a config change does not change what the engine can do.
+          if (event.payload.type === "server.connected") state.probes = freshProbes()
           void read()
         }
       })().catch(() => {
@@ -406,6 +491,7 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     /** Reads the settings again now (the settings page, after it writes while Remote is off). */
     async refresh() {
       state.folders = new Map()
+      state.probes = freshProbes()
       await read()
       return current()
     },
@@ -423,6 +509,7 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
       state.interval = undefined
       state.subscription?.abort()
       state.subscription = undefined
+      awake?.dispose()
       runner.stop()
     },
   }
@@ -431,33 +518,71 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
 
 export type EverywhereJobs = ReturnType<typeof createEverywhereJobs>
 
+const Created = Schema.fromJsonString(
+  Schema.Struct({ directory: Schema.String, branch: Schema.String, base: Schema.String }),
+)
+const Trust = Schema.fromJsonString(Schema.Struct({ trusted: Schema.Boolean }))
+
 /**
- * RunnerSettings from GET /global/config's answer (EV-10, Coordination for EV-17). Only the user's own files reach that
- * route. Locked, undecodable or absent is off, and an off block resolves no folder at all. Each listed folder goes
- * through `folder` (canonical path and default branch); one it cannot resolve is dropped, so its jobs decline
- * `not-mapped`. The same folder under two spellings is kept once.
+ * The runner's SafeWorktree (VE-21, EV-18) over the engine's owner-only POST /experimental/worktree/unattended (EV-13),
+ * sent without a guest header or a `directory`, so no instance is loaded for the project. A 403 (the folder is not
+ * listed, the project is not open in Vector or not trusted) is WorktreeUnavailable, which the runner settles `held`;
+ * anything else that is not exactly `{directory, branch, base}` with an absolute directory fails the job. The new
+ * checkout must then be one the engine does not trust (GET /config/trust): an untrusted folder loads none of its own
+ * config, formatters or language servers, which a command in it could otherwise rewrite and the engine run outside the
+ * sandbox. It never falls back to POST /experimental/worktree.
  */
-export async function everywhereSettings(global: unknown, folder: ProjectFolder): Promise<EverywhereSettings> {
-  const answer = typeof global === "object" && global !== null ? (global as Record<string, unknown>) : {}
-  // A company lock on the key turns it off; an answer without the list is read as locked.
-  const locked = !Array.isArray(answer.locked) || answer.locked.includes("everywhere")
-  const info = Option.getOrUndefined(Schema.decodeUnknownOption(ConfigEverywhereV1.Info)(answer.everywhere))
-  const enabled = info?.enabled === true && !locked
-  const defaults = ConfigEverywhereV1.Defaults
-  const model = info?.model
-  const slash = model?.indexOf("/") ?? -1
+export function unattendedWorktree(input: {
+  readonly url: string
+  readonly authorization: string
+  readonly fetcher?: typeof fetch
+  readonly log?: (message: string) => void
+}): SafeWorktree {
+  const fetcher = input.fetcher ?? fetch
+  const log = (message: string) => input.log?.(message)
+  const headers = { authorization: input.authorization, accept: "application/json" }
   return {
-    ...offSettings(),
-    enabled,
-    maxUsd: info?.max_usd ?? defaults.max_usd,
-    minutes: info?.minutes ?? defaults.minutes,
-    atOnce: info?.at_once ?? defaults.at_once,
-    perDay: info?.per_day ?? defaults.per_day,
-    push: info?.push ?? defaults.push,
-    waitForComputer: info?.wait_for_computer ?? defaults.wait_for_computer,
-    stayAwake: info?.stay_awake ?? defaults.stay_awake,
-    ...(model && slash > 0 ? { model: { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) } } : {}),
-    projects: enabled ? await resolveProjects(info?.projects ?? [], folder) : [],
+    policy: "unattended-v1",
+    async create(job) {
+      const origin = localEngineOrigin(input.url)
+      const response = await fetcher(new URL("/experimental/worktree/unattended", origin), {
+        method: "POST",
+        redirect: "error",
+        signal: AbortSignal.any([job.signal, AbortSignal.timeout(180_000)]),
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ directory: job.directory, base: job.from, branch: job.branch, jid: job.jid }),
+      })
+      if (response.status === 403) {
+        await response.body?.cancel().catch(() => undefined)
+        log("Vector everywhere held a job: its project must be listed, open in Vector and trusted on this computer.")
+        throw new WorktreeUnavailable()
+      }
+      const text = response.ok ? await responseText(response, 64 * 1024) : undefined
+      if (!response.ok) await response.body?.cancel().catch(() => undefined)
+      const created = Option.getOrUndefined(Schema.decodeUnknownOption(Created)(text, { onExcessProperty: "error" }))
+      if (!created || !path.isAbsolute(created.directory)) {
+        log("Vector everywhere could not create a job's worktree.")
+        throw new Error("The unattended worktree was not created")
+      }
+      const url = new URL("/config/trust", origin)
+      url.searchParams.set("directory", created.directory)
+      const answer = await fetcher(url, {
+        redirect: "error",
+        signal: AbortSignal.any([job.signal, AbortSignal.timeout(10_000)]),
+        headers,
+      })
+      const status = answer.ok
+        ? Option.getOrUndefined(Schema.decodeUnknownOption(Trust)(await responseText(answer, 64 * 1024)))
+        : undefined
+      if (!answer.ok) await answer.body?.cancel().catch(() => undefined)
+      if (status?.trusted === false) return { directory: created.directory, from: created.base, branch: created.branch }
+      log(
+        status?.trusted
+          ? "Vector everywhere did not use a job's worktree: Vector trusts it, so it would load the checkout's own settings."
+          : "Vector everywhere could not check a job's worktree.",
+      )
+      throw new Error("The unattended worktree is trusted, or its trust could not be read")
+    },
   }
 }
 
@@ -482,41 +607,6 @@ export function projectFolder(git: RunnerDeps["git"], log: (message: string) => 
     if (BASE.test(base) && !base.includes("..")) return { directory, base }
     log("Vector everywhere could not read a project's default branch.")
     return undefined
-  }
-}
-
-// One folder at a time, so a long list never starts dozens of git processes at once.
-async function resolveProjects(projects: readonly Project[], folder: ProjectFolder) {
-  const kept: RunnerSettings["projects"][number][] = []
-  const seen = new Set<string>()
-  for (const project of projects) {
-    if (kept.length >= MAX_PROJECTS) break
-    const found = await folder(project).catch(() => undefined)
-    if (!found) continue
-    // realpath resolves links; a case-insensitive disk (the macOS and Windows default) still has two spellings.
-    const key =
-      process.platform === "win32" || process.platform === "darwin" ? found.directory.toLowerCase() : found.directory
-    if (seen.has(key)) continue
-    seen.add(key)
-    kept.push({ directory: found.directory, repository: project.repository, base: found.base })
-  }
-  return kept
-}
-
-function offSettings(): EverywhereSettings {
-  const defaults = ConfigEverywhereV1.Defaults
-  return {
-    enabled: false,
-    // 2026-11-16 (EV-17): no up-front model check; a guest prompt to a model that may train is refused by the engine.
-    modelAllowed: true,
-    maxUsd: defaults.max_usd,
-    minutes: defaults.minutes,
-    atOnce: defaults.at_once,
-    perDay: defaults.per_day,
-    push: defaults.push,
-    waitForComputer: defaults.wait_for_computer,
-    stayAwake: defaults.stay_awake,
-    projects: [],
   }
 }
 

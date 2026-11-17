@@ -1818,3 +1818,172 @@ Twelve findings, all non-blocking; two repeat one another. Eleven are taken or r
 - **W6 pins the owner-gated constant.** Taken, the better option. W6 passes `keys: {}`. A separate, labelled guard case (W6g) asserts the shipped default and says it is meant to go red at the key handoff, and the Owner action line says so too.
 - **"Off means no ledger read or write" is true only while no offer verifies.** Taken: Safe by default is reworded as proposed.
 - **index.ts's comment above `startRemote` is stale.** Recorded: a Left open line for EV-21 or the final docs sweep. index.ts is untouched.
+
+## 2026-11-17, EV-18: the desktop adapters: the safe worktree, the offline shell and the shared keep-awake (VE-21, F6)
+
+Spec §8 VE-21; §3.5 steps 4, 5 and 10; §5 E5, E7; review findings "review:everywhere:fit" item 6 (F6); vector-everywhere-main-requests.md ("Safe unattended worktree creation", "R-M2"). Built at HEAD `dcb93939`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. EV-13 (`46471914`, `0d9f852c`), EV-16 (`b0240ba2`, with the node:util fix in `dcb93939`) and EV-17 (`c9275df0`) are ancestors. origin/main `dabc4821` holds PR #33 and touches none of this package's files; merging main stays the lead's, as in EV-15 to EV-17. docs/vector/build/v2-spawn-review.md was read first: this package adds no spawn site. Line numbers are after the change and after review round one (below). One package commit; a commit cannot name itself, so its SHA and the CI run ids go in the next progress receipt. The plan was corrected by its critique; where a point was not taken, the reason is in the item.
+
+This entry closes F6.
+
+### What changed
+
+- **packages/desktop/src/main/keep-awake.ts** (additive): `holdDesktopWork()` (:471), next to `whileDesktopWorks`, adds a holder to the same `desktopWork` set and returns its release. The set's comment (:388-389) now names this holder, the only one with no time limit, released by its caller. Nothing else in the file changed.
+- **packages/desktop/src/main/everywhere-awake.ts** (rewritten, F6): `createEverywhereAwake({onBattery, changed})` holds `holdDesktopWork()` while jobs are on, `stay_awake` is on and the computer is not on battery, and releases it otherwise. It has no `start`/`stop` and takes no blocker id, so the machine's sleep state has one owner, the blocker index.ts sets with `setDesktopWorkBlocker` (index.ts:640-651, untouched). `changed` (power events) is subscribed only while jobs and the option are on.
+- **packages/desktop/src/main/everywhere-engine.ts**:
+  - `UnattendedShellPolicy` (:12) and `unattendedRules(user, shell = "none")` (:31). The allowlist is unchanged, then, only on `offline-v1`, `bash` is allowed again after the denies, followed by the user's own `bash` rules. See (g) for how the user's rules are copied.
+  - `UnattendedCapabilities` (:49) and `unattendedCapabilities({url, authorization, fetcher})` (:64): the two owner-only probes (c). `responseText`'s over-limit refusal is now a `ResponseTooLarge` error (:111, same message), which the probes read as a definite no (:77).
+  - `localEngineOrigin(url)` (:88): the loopback check, moved out of `createEverywhereEngine` unchanged.
+  - `create()` (:163) puts `vector.unattended.shell: "offline"` (core everywhere/frame.ts `UNATTENDED_SHELL_KEY`) beside `vector.unattended` on every unattended session (b).
+- **packages/desktop/src/main/everywhere-settings.ts** (new, 176 lines; review round one, (s)): the settings and rules functions, moved out of the wiring. It imports only core, schema, effect, node:os and a type from everywhere-engine.ts.
+  - `RunnerSettings` (:13, moved from everywhere-runner.ts, with the new `shell` field :23), `EverywhereSettings` (:28, with `worktree`) and `ProjectFolder` (:35), moved from the wiring.
+  - `everywhereSettings` (:50) fills `rules` through `unlocked` (:77, exported for the wiring's lock check), `userRules` (:90), `agentPermission` (:111), `decodePermission` (:117), `permissionRules` (:126) and `expand` (:135) (f), (h).
+  - `resolveProjects` (:144) and `offSettings` (:161), moved unchanged.
+- **packages/desktop/src/main/everywhere-runner.ts** (a):
+  - `RunnerSettings` now comes from everywhere-settings.ts (:7), and the runner's unused `PermissionV1` import is gone;
+  - the `SafeWorktree` doc comment (:105-109) names EV-13's route and the probe;
+  - `WorktreeUnavailable` (:116) and the fixed summary `UNAVAILABLE_HERE` (:122);
+  - `deps.safeWorktree` is read once per job (:248);
+  - a `WorktreeUnavailable` from `create` settles `held` with that summary (:303-311) (l);
+  - the session is created with `unattendedRules(settings.rules, settings.shell)` (:316).
+- **packages/desktop/src/main/everywhere-wiring.ts** (620 lines):
+  - the header bullets; `EverywhereJobsDeps.power`; the `safeWorktree` and `fetcher` doc comments;
+  - `RULE_KEYS` (:116) and `DELIVERING` (:118);
+  - the probe cache (`Probes` :121, `capabilities` :207), read in `fetchSettings` while the block is on (:250-254), reset on `server.connected` (:437) and `refresh()` (:494) (c);
+  - the shell answer counts only with no company lock on a `RULE_KEYS` key (:252-253) (i);
+  - the runner's `safeWorktree` is a getter over the probe-gated adapter (:327) (d);
+  - `askOnce` sends `sandbox` from the shell answer (:400);
+  - the stay-awake hook (`awake` :194, `keepAwake` :197, called first in `evaluate` :345, `awake?.dispose()` in `stop` :512) (k);
+  - the new export `unattendedWorktree` (:535), the adapter over EV-13's route (e), (l), (m).
+- **packages/desktop/src/main/remote-runtime.ts** (additive, Codium-owned; Coordination): `powerMonitor` imported (:2) and passed as `power` (:49-63). `on-ac` fires on macOS and Windows and `on-battery` on macOS only, so a one-minute check runs beside them, and only while subscribed. The R-C3 spread (`...jobsForLink(jobs, broadcast)`) is untouched.
+- **Tests:** packages/desktop/src/main/everywhere-awake.test.ts (rewritten, five cases), everywhere-engine.test.ts (one assertion added to the client case, five new cases), everywhere-wiring.test.ts (seven new cases, and the fixture's engine fetcher answers named routes), everywhere-runner.test.ts (two new cases; `RunnerSettings` imported from everywhere-settings.ts), engine test/everywhere/worktree.test.ts (one new case, G1) and test/everywhere/unattended-session.test.ts (two new cases, G2 and G3; `everywhereSettings` imported from everywhere-settings.ts). The cases are listed in the progress receipt.
+
+### The sequence
+
+A job on this computer now goes:
+
+1. The offer is verified (still refused: `OFFER_KEYS` is empty).
+2. The settings come from GET /global/config. While the block is on, they also carry the engine's two answers and the user's rules.
+3. The claim, then the folder's mapping check.
+4. The runner reads `safeWorktree` once: the adapter only while the worktree probe answered `unattended-v1`, otherwise `held` with the existing text.
+5. A GitHub job still declines `trigger-changed` (no `githubThread` yet).
+6. `started` is reported, and the runner's hardened `git fetch` writes `refs/vector-everywhere/<jid>`.
+7. POST /experimental/worktree/unattended `{directory, base, branch, jid}` as the owner, with no guest header and no `directory` query. A 403 is `held`; anything but an exact `{directory, branch, base}` with an absolute directory fails the job.
+8. GET /config/trust?directory=<checkout>: only `trusted: false` goes on.
+9. The runner's own checks (same branch and base, the project folder unchanged, the checkout's HEAD).
+10. POST /session in the checkout with both marks and `unattendedRules(rules, shell)`.
+11. The guest-marked `prompt_async`, the watch, and the finish. The push path is still stand-ins, so a committed branch is held.
+
+### Deviations
+
+- **(a) Files outside the brief.** The brief names the wiring, engine and awake modules, keep-awake.ts and three test files.
+  - everywhere-runner.ts: a settings field, the typed hold (l), the single read (d) and the ruleset argument. Without them the brief's own scope cannot be met: the runner builds the session's ruleset.
+  - remote-runtime.ts: the `power` dependency (k). The awake module and the wiring are Electron-free, and remote-runtime.ts is where startRemote builds the jobs module.
+  - everywhere-runner.test.ts (two cases) and the engine's worktree.test.ts and unattended-session.test.ts (G1 to G3), asked for by the critique.
+  - everywhere-settings.ts (new; review round one): the settings and rules functions moved out of the wiring, so the engine's test does not compile the rest of the desktop (s).
+  - Not edited: api/_lib/everywhere/config.ts. The plan's comment on `LAPTOP_ROUTE_WIRED` is dropped (critique, taken); the spec's VE-21 note and the handoff say what keeps it false.
+- **(b) The shell mark is set in `create()`, not in core `unattendedMetadata`.** core test/everywhere/frame.test.ts pins that function's exact output, and @vector shares frame.ts. Every unattended session carries the mark, whatever the probe said. That is the engine's floor: its commands run only in the offline sandbox and are refused where it is missing, and its terminals and POST /session/:id/shell are refused.
+- **(c) The probes** (critique, major, taken):
+  - Scope: both are engine-wide. They go as the owner, with `accept: application/json`, `redirect: "error"`, no guest header and no `directory`, so no instance is loaded. They run only while the `everywhere` block is on, as two parallel GETs.
+  - Exact answers only: `{policy: "unattended-v1"}` and `{shell: "offline-v1" | "none"}`, with excess keys refused.
+  - Definite answers: a decoded answer, a 4xx (404 from an engine without the route, 401, 403), any other 2xx body, and a body over 4 KiB (a no).
+  - No answer: a refused connection, a timeout (also one that cuts the body off), a body that breaks off for any other reason (an engine restarting; review round one), a redirect and a 5xx. That field then counts as none for this read and is asked again at most once a minute. Only a cache's first ask is waited for, so no later settings read, the runner's one-second check among them, waits on a slow probe. The shell probe waits 20 s, above the engine's own 10-s bubblewrap self-test (unattended-shell.ts:168-184).
+  - The cache: a definite answer is kept until `server.connected` (a new event stream, which may be a restarted engine) or `refresh()`. A 404 therefore stays a no even if the route answers later, until one of those. Not reset by `global.disposed` (a change from the plan's D4): a config change does not change what the engine can do.
+- **(d) The getter.** `deps.safeWorktree` stays a test seam that replaces the probe-gated adapter, so the three existing tests that pass `WORKTREE` keep their meaning. The runner reads the dependency once per job, so the probe changing mid-job cannot make the second read fail (critique, minor; the plan accepted a `failed` settle there).
+- **(e) EV-16's first precondition: the job's checkout is never trusted** (plan D1, with a run-time check).
+  - `Worktree.createUnattended` never inherits trust (engine worktree/index.ts:173-178). Only task isolation calls `Config.inheritTrust` (task/isolation.ts:1342). Workspace trust is keyed by the canonical folder and a content fingerprint (core workspace-trust.ts:185-195), so a new `<data>/everywhere-worktree/<project>/<jid>` folder is untrusted.
+  - In an untrusted folder, formatters stay off (format/index.ts:128-137), language servers stay off (lsp/lsp.ts:236-241), and `projectExecutableConfig` drops the folder's `formatter`, `lsp`, `plugin`, `mcp`, `command`, `agent`, `shell`, `instructions` and the rest (config.ts:120-141). A rewritten config changes the fingerprint, so a reload keeps it untrusted.
+  - The adapter goes on only when GET /config/trust reports `trusted: false`.
+  - G1 (engine worktree.test.ts:950) pins the property through the real route. The trusted source project's committed vector.json loads there (`formatter: false` wins over the user's formatter), while the same file in the job's checkout does not. Neither formatters nor language servers are listed, and a vector.json and .vector folder written over the checkout stay unloaded after a reload, and their marker command never runs.
+  - The language-server check is weak: GET /lsp lists only started clients. The gate itself is the same `config.trust()` call the formatter check reads.
+  - Found while writing G1: a vector.json created in a folder after its instance first loaded was not discovered on the next reload (GET /config/trust kept `settings: false`), so G1 writes over the committed file instead. Engine behaviour, not investigated here; it does not weaken the property, since nothing in an untrusted folder loads.
+- **(f) The user's rules** (RunnerSettings.rules, EV-17 (o); everywhere-settings.ts `userRules`).
+  - Read from GET /global/config only, lowest first: the switched-off tools of the legacy top-level `tools` map, the top-level `permission` block, then the asks and denies of the default agent (`default_agent`, else `build`) from its `agent` block and its legacy `mode` block (h).
+  - The two legacy blocks were added in review round one. GET /global/config answers the user's files as they are, and the engine folds them in only when it loads the config (config.ts: `toolPermissions` under `permission`, `write` and `patch` as `edit`; `mode.<name>` merged into `agent.<name>`). Without them a user's `tools: {bash: false}` was outranked by the session's `bash` allow on `offline-v1`. A switched-on tool is not copied: it allows nothing the session does not allow already.
+  - Each permission block is decoded with core `ConfigPermissionV1.Info` and `propertyOrder: "original"`, and the `tools` map as a record of booleans. A block that does not decode, at any of the four places, turns the `everywhere` block off and resolves no folder (fail closed).
+  - `permissionRules` copies the engine's permission/index.ts `fromConfig`, which the desktop cannot import: a bare action becomes pattern `*`, and each key's patterns keep their order. `expand` is copied exactly, so any `$HOME` prefix is expanded, not only `$HOME/` (critique, taken).
+  - An agent's legacy `tools` map arrives inside that agent's `permission`: core v1/config/agent.ts `normalize` folds it in, and the encoding keeps it (checked with a script).
+- **(g) No rule depends on the order of the block's keys** (critique, major, taken).
+  - GET /global/config re-encodes `permission` with the named keys first: `{"*": "allow", edit: "deny", bash: {…}}` arrives as `{edit, bash, "*"}`. A script checked this, and G2 pins it through the real route. Only the order of patterns inside one key survives.
+  - So `unattendedRules` copies, for each id, the rules written under that id itself, in their own order. Of the rules under a wildcard key (`*`, `b*`) it then copies the asks, and after them the denies. A wildcard allow is never copied.
+  - No allow can outrank an ask or a deny whose position is unknown, and no wildcard deny is outranked at all: `{"*": "allow", "bash": "deny"}` denies bash, `{"*": "allow", "edit": "deny"}` denies edit, and `{"*": "ask", "edit": "allow"}` asks for edit, whatever the key order (E2, E2b, G2).
+  - The cost is stricter, never looser, than both the user's own config in any order of its keys and HEAD's copy (every matching rule in the answer's order). A wildcard deny outranks an exact allow wherever either was written, so a user whose config reads `{"*": "deny", "read": "allow"}` gets no reads in a job. A wildcard ask outranks an exact rule, a deny included, so `{"*": "ask", "edit": "allow"}` asks for every edit, and the runner refuses the ask (the job settles `needs-approval`, (j)). An exact deny under a wildcard ask becomes a refused ask: the call does not run either way.
+  - *Review round one:* the first build copied only the wildcard denies, so `{"*": "ask"}` gave edits, and on `offline-v1` commands, with no ask. That was looser than the user's config and than HEAD, which copied the wildcard ask in the answer's order, after the exact keys. The asks are now copied (E2b).
+  - The critique's second option (every deny after every allow and ask, per id) is not taken: it reorders the patterns inside one key, so `bash: {"*": "deny", "git status": "allow"}` would deny `git status`.
+- **(h) The default agent's asks and denies** (critique, minor, taken: the first option; widened in review round one). The session's `bash` allow would otherwise outrank an agent-level deny or ask, because session rules come last. That agent's asks and denies are copied, from its `agent` block and then its `mode` block, after the top-level rules. Its allows are not, since where they sit against the top-level rules is not known here. An ask copied there can only turn an allow into a refused ask, or a deny into one, so it is never looser. The first build copied only the denies, so `agent.build.permission.bash: "ask"` ran the command unasked.
+- **(i) A company lock on any key that can carry permission rules keeps the shell off** (plan (h); widened in review round one). The keys are `permission`, `tools`, `agent`, `mode` and `default_agent` (wiring `RULE_KEYS`). A locked key's values come only from company policy, and GET /global/config answers only the user's files, so the company's rules are not in the answer and the session's `bash` allow would outrank them. Under such a lock `shell` is `none` and `pending` says `sandbox=0` (W25, one case per key). The first build checked `permission` alone, so a company that locked `agent` with `agent.build.permission.bash: deny` was overridden on a Linux computer with a working bubblewrap. Config.lockedKeys locks `mode` with `agent` and `tools` with `permission`, and a company may name either alone. Still not seen (Left open): a company's managed config that sets rules without locking the key, and the engine's `VECTOR_PERMISSION` environment rules. Under a lock on `agent`, `mode` or `default_agent` the editing ids still copy the user's own default agent's rules, which may not be the agent or the rules the company set (the pre-existing class in Left open).
+- **(j) The user's shell rules follow the `bash` allow.** Their denies hold. Their asks stay asks, which the runner refuses at run time, so such a job settles `needs-approval`. The same holds for the asks copied from a wildcard key (g) and from the default agent (h).
+- **(k) Stay awake** (critique, minor, taken; narrowed in review round one).
+  - The computer stays awake "to take jobs" (spec §3.5 step 10): while the takes-jobs state is `on` and the link can deliver offers, that is while it is `online` or `connecting` (wiring `DELIVERING`). The brief's "idle" is read as "jobs not on, or no offer can arrive". The first build held it whenever the state was `on`, so a signed-out, revoked, replaced, paused, out-of-plan, fair-use, device-limit, unavailable or Local-off link kept the computer awake on AC indefinitely, though neither the relay nor `pending` would bring it a job. `evaluate` runs on every link status, so the hold follows the link at once (W29).
+  - The hold is released on battery, when the option goes off (no state change needed), when jobs go off (the setting, a lock, Remote off), when the link stops delivering, and at `stop()`.
+  - "One owner" means keep-awake.ts. The stay-awake hold joins the desktop-work set behind the one blocker index.ts sets (`setDesktopWorkBlocker`, index.ts:640-651), shared with `whileDesktopWorks` (A3). Engine-session keep-awake (`startKeepAwake`, which also keeps an unattended job's own session awake) keeps its own `powerSaveBlocker` id through the same `blocker` object, unchanged. So while a job runs two ids can be held, and each is released by its own holder.
+  - Power is Electron's `powerMonitor` (`on-ac`, `on-battery`) plus a one-minute check. Since electron.d.ts gives `on-battery` on macOS only, the check covers Windows and Linux. All of it is subscribed only while the hold is armed (jobs on with a link that delivers, and the option on), so with Vector everywhere off nothing watches power and no interval runs.
+- **(l) A project the engine refuses is held** (critique, minor, taken; spec §3.5 step 4's EV-13 note and main-requests.md say so). A 403 from the create route (not listed, not open in Vector, not trusted, or not the owner) is `WorktreeUnavailable`, and the runner settles `held` with fixed text: "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed." The engine's message is not parsed. There is no pre-check with `?directory=<project>`, which would load the project's instance and defeat EV-13's never-load rule. EV-13's 403s come before `createUnattended`, so nothing is reserved.
+- **(m) Other refusals fail the job**, with the generic summary: a checkout the engine reports trusted, a trust answer that cannot be read, an answer with an extra key or a relative folder, and a 5xx. A checkout that was created and then refused stays a registered sandbox with its branch (Left open).
+- **(n) `takesJobs` does not require the worktree** (critique, minor: its second option). With the worktree probe's no, `pending` still says `jobs=1`, and a claimed job settles `held` with the existing text (W23). The readiness answer has no worktree field, the spec keeps `held`, and a held reply tells the requester why. Requiring it would route those jobs elsewhere silently.
+- **(o) "The result says checks did not run"** (spec §3.5 step 5; critique, minor: its second option). No new text is added. Every laptop result carries `checks: "skipped"`, and the draft pull request's body says "Checks have not run: …" (core everywhere/publish.ts:199), with or without the shell. Step 5 carries a dated note.
+- **(p) The old awake test** is rewritten to the new API with the same sequence (A1), and four cases are added.
+- **(q) `localEngineOrigin`** is extracted because three callers use it: the engine client, the probes and the adapter.
+- **(r) `holdDesktopWork`'s release** deletes and syncs. Calling it twice does nothing, because `syncDesktopWork` is idempotent. The plan's early return was an equivalent mutant (M20's first form survived), so it is not used.
+- **(s) F5.** G2 and G3 import the desktop's everywhere-engine.ts and, since review round one, everywhere-settings.ts into an engine test. The first build imported `everywhereSettings` from everywhere-wiring.ts, which pulled keep-awake.ts (hands-finish edits it), everywhere-awake, -git, -ledger, -offer and -runner, remote-link.ts with remote-crypto and remote-passkey (codium-finish), vector-account.ts and github-api.ts into the engine's test and typecheck program, well beyond EV-01's accepted two files. The settings and rules functions now live in everywhere-settings.ts, which imports only core, schema, effect, node:os and a type from everywhere-engine.ts. `tsgo --listFiles` in packages/engine lists exactly three desktop files: everywhere-engine.ts, everywhere-scan.ts and everywhere-settings.ts. All three match vector-everywhere.yml's `packages/desktop/src/main/everywhere-*` path filter, so EV-01's mitigation still covers them. F5 stays open: a later fix moves the pure settings and rules functions, or the client, into core/everywhere.
+
+### Not changed
+
+- `OFFER_KEYS` (empty), `LAPTOP_ROUTE_WIRED` (false) and the push-path stand-ins.
+- index.ts, engine and core sources, api/, and keep-awake.ts's other functions.
+- No flag, env var, route, config key, generated file, dependency, lockfile or workflow.
+
+### Safe by default
+
+- `OFFER_KEYS` is empty, so no offer verifies: no claim, worktree or session.
+- `everywhere.enabled` defaults to false, so no probe runs, nothing is held and the settings tab stays hidden (EV-21).
+- `stay_awake` defaults to false, so nothing is held or watched.
+- Without the exact `offline-v1` answer (macOS, Windows, Linux without a root-only bubblewrap that starts, a probe that failed), or under a company lock on `permission`, `tools`, `agent`, `mode` or `default_agent`, bash is denied. The engine refuses a marked session's commands anyway where the sandbox is missing.
+- A trusted, malformed or unreadable checkout runs no session. The push stand-ins hold every committed branch, and the server flag is off.
+
+### Left open
+
+- Hardening or refusing `Worktree.remove` and `Worktree.reset` for `<data>/everywhere-worktree/**`, and the 7-day sweep (EV-12 (h)). Add to the sweep: a checkout the trust check refused stays registered with its branch (m).
+- A held job whose project is not open is not retried: the requester asks again once it is open.
+- Before the push path: other projects' `.env` files and credential stores in the home folder stay readable to a sandboxed command and could reach the summary or the pull request (EV-16's second precondition).
+- Company rules: a managed config's permission rules are not seen unless the key is locked, for the editing ids (pre-existing) and now for `bash`; nor are the engine's `VECTOR_PERMISSION` environment rules. Under a lock on `agent`, `mode` or `default_agent` the editing ids copy the user's own default agent's rules, not the company's (the shell is off then). The engine's own read defaults (asks for `.env` and `.ssh` files) are outranked by the session's `read` allow (pre-existing since VE-08).
+- The `testing` milestone (§3.5 step 7) is not built.
+- The macOS and Windows shell (not built; EV-16).
+- The owner can still trust a job's checkout by hand in the app. The adapter then refuses new checkouts for that folder only if the engine reports it trusted.
+
+### Mutations
+
+Thirty-nine, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev18-mut/: mutate.py, one log per mutation, run.txt). Three survived the first pass:
+- M18b (a later answer replaced a kept one): W26 now also runs a job after the kept 404 and sees it held.
+- M20 (the release's early return dropped): an equivalent mutant, so the guard is gone (r) and M20 is now "a release clears every hold".
+- M23 (stop() without the awake's dispose): the link's own stop had hidden it, so W28 now calls the jobs module's stop alone first.
+
+All three are red on the final sources. The table is in the progress receipt.
+
+### Coordination
+
+- remote-runtime.ts is in spec §6.4's Codium row ("desktop main {remote-*,…}.ts"): the change is one import name and one dependency, beside EV-17's R-C3 lines, and the R-C3 spread is untouched.
+- keep-awake.ts may also be edited by hands-finish (createComputerKeepAwake): the hunk is a comment and one function next to `whileDesktopWorks`. For hands-finish: the shared desktop-work set now has one holder with no time limit.
+- everywhere-settings.ts is new and matches the lane's `everywhere-*` names; the engine's typecheck and unattended-session.test.ts now compile it (s).
+- At the time of writing, no lane tip touches any of this package's files since its merge base: hands-finish `8139e5fc`, codium-finish `732229c3`, connect-finish `19c48b89`, scope-finish `fb441eae`, brain-transport `0d18f750`, review-fixes `1433d105`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c` and main `dabc4821`.
+
+### Deferred verification
+
+- The Electron side of `power` (powerMonitor's events and the interval) is covered by the typecheck and the main-process bundle proxy only.
+- macOS and Windows runs (test.yml at the lane end), and VE-50.
+- CI after the commit: workflow_dispatch runs of vector-everywhere.yml, typecheck.yml and vector-hosted-ci.yml (remote-runtime.ts changed) on everywhere-finish. test.yml (desktop) is the workflow that runs keep-awake.test.ts and computer-keep-awake.test.ts; vector-everywhere.yml does not.
+
+### Review round one (2026-11-17)
+
+Eleven findings, one blocking. All are taken; three pairs repeat one another. Line numbers above are after this round.
+
+- **Blocking: a company lock on `agent` (or `mode`, `tools`, `default_agent`) did not turn the shell off.** Taken and widened: `RULE_KEYS` (wiring :116) lists every key that can carry permission rules, and the shell counts only while all are unlocked (:252-253). W25 has one case per key and one with unrelated locks only (sandbox stays 1). (i) is extended.
+- **The default agent's asks were dropped, so `agent.build.permission.bash: "ask"` ran unasked.** Taken: everything but its allows is copied (`.filter((rule) => rule.action !== "allow")`). W27 now has agent asks on `bash` and `edit`. (h) is updated.
+  - Found while fixing it, and fixed the same way: GET /global/config answers the legacy top-level `tools` map and the `mode` block as written, and the engine folds them in only when it loads the config. So `tools: {bash: false}` was outranked by the session's `bash` allow on `offline-v1`, and a `mode.build` deny or ask was dropped. `userRules` now copies the switched-off tools first (as the engine's `toolPermissions` reads them) and the default agent's `mode` block after its `agent` block; an undecodable `tools` map or `mode` block is off (W27). (f) says so.
+- **A wildcard key's ask was dropped (`{"*": "ask"}` edited, and ran commands, unasked), and (g) called that a tightening** (two findings). Taken with the second finding's ordering: per id, the exact key's rules, then the wildcard asks, then the wildcard denies (everywhere-engine.ts :32-39). The first finding's "every non-allow wildcard rule in its written order, last" would let a wildcard ask outrank a wildcard deny written before it; this order keeps every wildcard deny last, and is never looser than HEAD or the user's config. E2b (everywhere-engine.test.ts:179) covers `{"*": "ask"}` on every editing id and `bash`, `{"*": "ask", "edit": "allow"}` in both orders, and a wildcard deny beside a wildcard ask in both orders. (g) is rewritten.
+- **Stay awake held while the link could deliver nothing.** Taken: the hold needs the link `online` or `connecting` (`DELIVERING`, wiring :118, :197-201). W29 (everywhere-wiring.test.ts:1794): held while online; paused releases with jobs still on and stops watching power; Remote off and on holds again; a reconnect in `connecting` keeps it; revoked releases. (k) is updated.
+- **A probe body that broke off counted as a definite no.** Taken, with a typed error rather than a message comparison: `responseText` throws `ResponseTooLarge` (everywhere-engine.ts :111, same message, so the existing size test is unchanged), and only that is a definite no (:77). E3 adds a body that errors after its first chunk: no answer.
+- **"One blocker for jobs plus engine work" was not explained** (two findings). Taken as docs: (k) and the progress F6 row say what "one owner" means, and that engine-session keep-awake keeps its own id on the same blocker object. The optional `startKeepAwake` case is not added: that code is unchanged, and it needs an engine event-source fake that this lane's tests do not have.
+- **"Not yet committed" goes stale at the commit.** Taken: removed from the plan's F6 row and the handoff bullet. A commit cannot name itself, so the SHA goes in the next progress receipt.
+- **The engine test's import of the wiring widened F5** (two findings). Taken, the first option: everywhere-settings.ts (s). F5 stays open in the plan table, with the note.
+
+Mutations for this round (/tmp/vector-v2/everywhere/ev18-mut/round1/: mutate.py, one log per mutation, run.txt), each red: N1 (only `permission` checked), N1b (`tools` and `mode` left out of `RULE_KEYS`), N2 (only the agent's denies), N3 (`mode` ignored), N4 (`tools` ignored), N4b (`write` not read as `edit`), N4c (an undecodable `tools` map kept), N5 (wildcard asks dropped), N5b (wildcard asks after the denies), N5c (wildcard allows copied as well), N6 (a broken body a definite no), N6b (an over-long body no answer), N7 (the link state ignored) and N7b (`connecting` left out). N7b survived the first pass, because W29 had no `connecting` step; the step was added.

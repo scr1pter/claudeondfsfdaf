@@ -84,6 +84,15 @@ instance for an allowed folder, then check trust) would start a trusted
 project's plugins and could install their dependencies, so choosing it would
 withdraw "delivered" here. See vector-everywhere-deviations.md, "2026-11-16,
 EV-13", (c).
+*Annotation 2026-11-17 (EV-18):* the port is wired. The desktop's
+`SafeWorktree` (packages/desktop/src/main/everywhere-wiring.ts
+`unattendedWorktree`) advertises `unattended-v1` only while the engine's probe
+answers exactly that, sends the route `{directory, base, branch, jid}` as the
+owner, and checks the answer is exactly `{directory, branch, base}` with the
+requested branch and base (the runner checks them again). A 403 holds the job
+with a fixed reply; the checkout must be one GET /config/trust reports
+untrusted. There is no fallback to `POST /experimental/worktree`. See
+vector-everywhere-deviations.md, "2026-11-17, EV-18".
 
 ## R-M2: session-scoped offline shell
 
@@ -128,6 +137,11 @@ means none). Other sessions are unaffected and there is no switch for the
 whole engine. Tests: packages/engine/test/everywhere/offline-shell.test.ts.
 EV-18 creates the runner's session with the shell mark and allows `bash` only
 on `offline-v1`; EV-21 wires the runner.
+*Annotation 2026-11-17 (EV-18):* done in the desktop: every unattended session
+carries the shell mark, and `bash` is allowed only on the probe's exact
+`offline-v1` with no company lock on a key that can carry permission rules
+(`permission`, `tools`, `agent`, `mode`, `default_agent`). The runner itself
+was wired by EV-17 and EV-18; what EV-21 still owes is the settings page.
 
 - **macOS: not built.** Seatbelt's offline profile lets this computer's
   servers and every Unix socket through, so it does not qualify. It needs a
@@ -146,5 +160,14 @@ on `offline-v1`; EV-21 wires the runner.
   the network. Formatters, LSP and config reloads must be off for an
   unattended session, or the project's config paths bound read-only, before
   the runner prompts one.
+  *Annotation 2026-11-17 (EV-18): closed for the job's checkout.* The engine
+  never trusts it (`createUnattended` inherits no trust, and trust is keyed by
+  folder and content), and an untrusted folder starts no formatter or language
+  server and loads none of its own config; the desktop adapter refuses a
+  checkout GET /config/trust reports trusted. Engine
+  test/everywhere/worktree.test.ts, "the job's checkout is never trusted",
+  writes a formatter, a language server and a .vector folder into the
+  checkout and shows none loaded after a reload. Residual: the owner can trust
+  a job's checkout by hand in the app.
 
 See vector-everywhere-deviations.md, "2026-11-16, EV-16".

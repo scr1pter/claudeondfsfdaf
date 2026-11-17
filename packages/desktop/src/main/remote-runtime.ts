@@ -1,5 +1,5 @@
 import path from "node:path"
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, powerMonitor } from "electron"
 import { EgressAttribution } from "@vectordevai/core/local-mode/attribution"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
@@ -46,6 +46,21 @@ export function startRemote(input: {
     events: (signal) => events.events(signal),
     ledgerPath: path.join(app.getPath("userData"), "everywhere", "runner.json"),
     log: (message) => input.log(message),
+    // The stay-awake option (everywhere-awake.ts) watches power only while jobs and the option are on. `on-ac` fires on
+    // macOS and Windows and `on-battery` on macOS alone, so a one-minute check covers the rest.
+    power: {
+      onBattery: () => powerMonitor.isOnBatteryPower(),
+      changed: (listener) => {
+        powerMonitor.on("on-ac", listener)
+        powerMonitor.on("on-battery", listener)
+        const timer = setInterval(listener, 60_000)
+        return () => {
+          powerMonitor.off("on-ac", listener)
+          powerMonitor.off("on-battery", listener)
+          clearInterval(timer)
+        }
+      },
+    },
   })
   const link = createRemoteLink({
     store: {

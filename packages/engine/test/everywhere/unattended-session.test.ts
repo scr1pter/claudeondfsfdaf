@@ -1,18 +1,21 @@
 import { afterEach, expect } from "bun:test"
 import { randomBytes } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Effect } from "effect"
 import { BrainPrivate } from "@vectordevai/core/brain/private"
-import { frameTask, UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
+import { frameTask, UNATTENDED_KEY, UNATTENDED_SHELL_KEY, UNATTENDED_SHELL_OFFLINE } from "@vectordevai/core/everywhere/frame"
+import { Global } from "@vectordevai/core/global"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { createJobId, randomId, type EverywhereJob } from "@vectordevai/schema/everywhere"
 import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
 import { createEverywhereEngine, unattendedRules } from "../../../desktop/src/main/everywhere-engine"
+import { everywhereSettings } from "../../../desktop/src/main/everywhere-settings"
 import { Permission } from "../../src/permission"
 import { Server } from "../../src/server/server"
 import { ServerAuth } from "../../src/server/auth"
 import { SessionMemory, taint } from "../../src/session/memory"
+import { Sandbox } from "../../src/tool/shell/sandbox"
 import { disposeAllInstances, tmpdir, trustWorkspace } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { TestLLMServer, reply } from "../lib/llm-server"
@@ -320,4 +323,85 @@ it.live("an unattended session hears only the screened digest, with no recall an
   expect(system(later)).toContain(SCREENED)
   for (const text of [PARTICULAR, RECALLED, ATTACHED, PERSONAL]) expect(JSON.stringify(later)).not.toContain(text)
   expect(heard(yield* history(h, session)).recall).toBeUndefined()
+}), 30_000)
+
+// EV-18: the desktop's ruleset with the user's own rules as GET /global/config really answers them, and the shell it
+// allows on `offline-v1`, run end to end in a session the desktop client creates.
+
+it.live("a user deny written after `*: allow` still holds, though GET /global/config moves the `*` key last", () => Effect.gen(function* () {
+  const llm = yield* TestLLMServer
+  const h = yield* harness(llm.url)
+  const files = ["config.json", "vector.json", "vector.jsonc"].map((name) => path.join(Global.Path.config, name))
+  const saved = yield* Effect.promise(() => Promise.all(files.map((file) => readFile(file, "utf8").catch(() => undefined))))
+  yield* Effect.addFinalizer(() => Effect.promise(async () => {
+    await Promise.all(files.map((file, index) => {
+      const original = saved[index]
+      return original === undefined ? rm(file, { force: true }) : writeFile(file, original)
+    }))
+    // An update that changes nothing drops the engine's cached global config, so the next case reads the files.
+    await h.send("/global/config", "PATCH", {})
+  }))
+  const patched = yield* Effect.promise(() => h.send("/global/config", "PATCH", {
+    everywhere: { enabled: true, projects: [] },
+    permission: { "*": "allow", edit: "deny", bash: { "*": "deny", "git status": "allow" } },
+    agent: { build: { permission: { read: { "*.secret": "deny" } } } },
+  }))
+  expect(patched.status).toBe(200)
+  const global = (yield* Effect.promise(async () => await (await h.send("/global/config", "GET")).json())) as { permission: Record<string, unknown> }
+  // The answer's keys are not in the order they were written: a `*` read first-to-last would outrank the edit deny.
+  expect(Object.keys(global.permission).indexOf("*")).toBeGreaterThan(Object.keys(global.permission).indexOf("edit"))
+  const settings = yield* Effect.promise(() => everywhereSettings(global, async () => undefined))
+  expect(settings.enabled).toBe(true)
+  const session = yield* Effect.promise(() => h.client.create(h.job(), unattendedRules(settings.rules, "offline-v1")))
+  const info = (yield* Effect.promise(async () => await (await h.send(`/session/${session}`, "GET")).json())) as { metadata: Record<string, unknown>; permission: PermissionV1.Ruleset }
+  expect(info.metadata[UNATTENDED_SHELL_KEY]).toBe(UNATTENDED_SHELL_OFFLINE)
+  const action = (permission: string, pattern: string) => Permission.evaluate(permission, pattern, [{ permission: "*", pattern: "*", action: "allow" }], info.permission).action
+  expect(action("edit", "src/index.ts")).toBe("deny")
+  expect(action("bash", "git status")).toBe("allow")
+  expect(action("bash", "curl https://example.test")).toBe("deny")
+  // The default agent's own deny holds too, and only it: the rest of reading stays allowed.
+  expect(action("read", "keys.secret")).toBe("deny")
+  expect(action("read", "README.md")).toBe("allow")
+  for (const permission of ["unsandboxed_shell", "terminal", "external_directory", "webfetch"]) expect(action(permission, "*")).toBe("deny")
+}), 30_000)
+
+// Where this engine runs an unattended session's commands offline (offline-shell.test.ts finds it the same way). The
+// lane's workflow sets VECTOR_TEST_REQUIRE_BWRAP, so there the case runs, and fails if bubblewrap does not work.
+const bwrap = process.platform === "linux" ? Bun.which("bwrap") : null
+const offline = bwrap !== null && Bun.spawnSync([bwrap, "--unshare-net", "--ro-bind", "/", "/", "true"]).exitCode === 0 && Sandbox.unattendedBinary() !== undefined
+const offlineIf = offline || process.env.VECTOR_TEST_REQUIRE_BWRAP === "1" ? it.live : it.live.skip
+
+offlineIf("on offline-v1 a check runs in the offline sandbox, and network or a folder outside the checkout gets nothing, unasked", () => Effect.gen(function* () {
+  const llm = yield* TestLLMServer
+  const h = yield* harness(llm.url)
+  const tcp = yield* Effect.acquireRelease(
+    Effect.sync(() => Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reached-tcp") })),
+    (server) => Effect.sync(() => void server.stop(true)),
+  )
+  const job = h.job()
+  const session = yield* Effect.promise(() => h.client.create(job, unattendedRules([{ permission: "*", pattern: "*", action: "allow" }], "offline-v1")))
+  const controller = new AbortController()
+  const asked: unknown[] = []
+  let ready!: () => void
+  const subscribed = new Promise<void>((resolve) => { ready = resolve })
+  const watcher = (async () => {
+    for await (const event of h.client.events(controller.signal, ready))
+      if (event.type === "permission.asked" && event.properties.sessionID === session) asked.push(event.properties.permission)
+  })().catch(() => undefined)
+  yield* Effect.addFinalizer(() => Effect.promise(async () => { controller.abort(); await watcher }))
+  yield* awaitWithTimeout(Effect.promise(() => subscribed), "The actual event stream never subscribed", "5 seconds")
+  yield* llm.tool("bash", { command: "true && echo ev18-check-ran", description: "Run the check" })
+  yield* llm.tool("bash", { command: `out=$(curl -s --noproxy '*' --max-time 5 http://127.0.0.1:${tcp.port}/); echo "exit=$? $out"`, description: "Reach this computer" })
+  yield* llm.tool("bash", { command: "cat /etc/hostname", description: "Read outside the checkout" })
+  yield* llm.text("done")
+  yield* Effect.promise(() => h.client.prompt(session, job, 1, MODEL))
+  const bash = (yield* finished(h, session)).flatMap((row) => row.parts).filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "bash")
+  expect(bash.map((part) => part.state.status)).toEqual(["completed", "completed", "error"])
+  const output = (part: SessionV1.ToolPart | undefined) => (part?.state.status === "completed" ? part.state.output : "")
+  expect(output(bash[0])).toStartWith(`${Sandbox.UNATTENDED_NOTICE}\n\n`)
+  expect(output(bash[0])).toContain("ev18-check-ran")
+  expect(output(bash[1])).toContain("exit=7 \n")
+  expect(output(bash[1])).not.toContain("reached-tcp")
+  // Nothing was asked: the folder outside the checkout was refused by the session's own ruleset.
+  expect(asked).toEqual([])
 }), 30_000)

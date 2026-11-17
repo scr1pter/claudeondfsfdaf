@@ -941,4 +941,72 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     expect(await present(gone)).toBe(false)
     await untouched(f)
   }, 30_000)
+
+  // EV-18 (EV-16's first precondition): a command in the job's checkout can write a formatter, language server or
+  // other config into it, and the engine would run that outside the sandbox. A checkout the route creates is never
+  // trusted (createUnattended inherits no trust, and trust is keyed by folder and content), so the repository's own
+  // config, and whatever is written over it, stays unloaded after a reload. The desktop adapter checks GET /config/trust
+  // for exactly this answer.
+  test("the job's checkout is never trusted, so its own config, or one written into it, loads no formatter or server", async () => {
+    // The repository commits a vector.json ({formatter: false, lsp: false}), and its owner trusts it.
+    const f = await repository(true)
+    const user = { "ev18-user": { command: ["true"], extensions: [".ev18"] } }
+    await writeGlobal({
+      everywhere: { enabled: true, projects: [{ directory: f.repo, repository: "acme/widgets" }] },
+      // Formatters are on for the user: only trust keeps them out of a folder.
+      formatter: user,
+    })
+    await open(f.repo)
+    const read = async (directory: string, route: string): Promise<unknown> => {
+      const response = await call(route, { headers: { ...owner, "x-vector-directory": directory } })
+      expect(response.status).toBe(200)
+      return response.body
+    }
+    const config = async (directory: string) => (await read(directory, "/config")) as { formatter?: unknown }
+    // The control: in the trusted project its own config loads, and its `formatter: false` wins over the user's.
+    expect(await read(f.repo, "/config/trust")).toMatchObject({ trusted: true, settings: true })
+    expect((await config(f.repo)).formatter).toBe(false)
+
+    const created = await post(f.input)
+    expect(created.status).toBe(200)
+    const checkout = created.body.directory as string
+    const state = async () => ({
+      trust: await read(checkout, "/config/trust"),
+      formatter: (await config(checkout)).formatter,
+      formatters: await read(checkout, "/formatter"),
+      servers: await read(checkout, "/lsp"),
+    })
+    // The same committed file in the job's checkout is not loaded, and neither formatters nor servers start there.
+    const untrusted = {
+      trust: expect.objectContaining({ trusted: false, ignored: true, settings: true }),
+      formatter: user,
+      formatters: [],
+      servers: [],
+    }
+    expect(await state()).toEqual(untrusted)
+
+    // What a sandboxed command can write: the checkout's config with a formatter and a language server that would
+    // leave a marker, and a .vector folder. A reload (the engine disposes the instance) reads the folder again.
+    const marker = path.join(f.markers, "ran")
+    const command = ["sh", "-c", `echo x > '${marker.replaceAll("\\", "/")}'`]
+    await writeFile(
+      path.join(checkout, "vector.json"),
+      JSON.stringify({
+        formatter: { "ev18-checkout": { command, extensions: [".txt"] } },
+        lsp: { "ev18-server": { command, extensions: [".txt"] } },
+      }),
+    )
+    await mkdir(path.join(checkout, ".vector"), { recursive: true })
+    await writeFile(
+      path.join(checkout, ".vector", "vector.json"),
+      JSON.stringify({ formatter: { "ev18-dot": { command } } }),
+    )
+    const dispose = await call("/instance/dispose", {
+      method: "POST",
+      headers: { ...owner, "x-vector-directory": checkout },
+    })
+    expect(dispose.status).toBe(200)
+    expect(await state()).toEqual(untrusted)
+    expect(await present(marker)).toBe(false)
+  }, 30_000)
 })

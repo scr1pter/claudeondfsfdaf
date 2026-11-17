@@ -1,29 +1,16 @@
 import { branchFor, commitMessage } from "@vectordevai/core/everywhere/publish"
 import { COMPUTER_CAPS, OFFER_PATTERN, PERMISSION_ID_PATTERN, READINESS_FIELDS, READINESS_QUERY, TIMING, decodeJob, decodeSettle, type DeclineCode, type EverywhereJob, type Milestone, type Outcome, type Readiness, type Settle } from "@vectordevai/schema/everywhere"
-import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
 import { responseText, unattendedRules, type RunnerEngine } from "./everywhere-engine"
 import type { RunnerGit } from "./everywhere-git"
 import type { JobLedger } from "./everywhere-ledger"
 import { checkedSummary, mayPushDiff } from "./everywhere-scan"
+import type { RunnerSettings } from "./everywhere-settings"
 import { frameTask, type FrameOptions } from "@vectordevai/core/everywhere/frame"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { Option, Schema } from "effect"
-
-export type RunnerSettings = {
-  readonly enabled: boolean
-  readonly modelAllowed: boolean
-  readonly maxUsd: number
-  readonly minutes: number
-  readonly atOnce: number
-  readonly perDay: number
-  readonly push: boolean
-  readonly projects: readonly { readonly directory: string; readonly repository: string; readonly base: string }[]
-  readonly rules?: readonly PermissionV1.Rule[]
-  readonly model?: { readonly providerID: string; readonly modelID: string }
-}
 
 export type JobsClient = {
   readonly claim: (jid: string) => Promise<EverywhereJob>
@@ -115,11 +102,24 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
   }
 }
 
-/** This capability is absent on main; see vector-everywhere-main-requests.md. No unsafe endpoint fallback exists. */
+/**
+ * The job's own checkout (vector-everywhere-main-requests.md): the engine's owner-only POST
+ * /experimental/worktree/unattended (EV-13), offered only while its probe answers `unattended-v1`
+ * (everywhere-wiring.ts unattendedWorktree, EV-18). There is no fallback to POST /experimental/worktree.
+ */
 export type SafeWorktree = {
   readonly policy: "unattended-v1"
   readonly create: (input: { directory: string; repository: string; jid: string; from: string; branch: string; signal: AbortSignal }) => Promise<{ directory: string; from: string; branch: string }>
 }
+
+/** The engine refused the checkout for this project here (it is not listed, open in Vector or trusted): the job is held. */
+export class WorktreeUnavailable extends Error {
+  constructor() {
+    super("The unattended worktree is not available for this project here")
+  }
+}
+
+const UNAVAILABLE_HERE = "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed."
 
 export type RunnerDeps = {
   readonly settings: () => Promise<RunnerSettings>
@@ -244,7 +244,9 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         settled = true
         return
       }
-      if (!deps.safeWorktree || deps.safeWorktree.policy !== "unattended-v1") {
+      // Read once: the wiring offers the worktree only while the engine's probe does, and that may change mid-job.
+      const worktree = deps.safeWorktree
+      if (!worktree || worktree.policy !== "unattended-v1") {
         await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "held", summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed." })
         settled = true
         return
@@ -298,12 +300,20 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       const original = await git.snapshot()
       const from = await git.fetch(original, project.base, jid)
       const branch = branchFor(jid, job.issue ? { key: job.issue.key, platform: job.platform } : undefined)
-      const placed = await deps.safeWorktree.create({ directory: project.directory, repository: project.repository, jid, from, branch, signal: controller.signal })
+      const placed = await worktree.create({ directory: project.directory, repository: project.repository, jid, from, branch, signal: controller.signal })
+        .catch((error: unknown) => {
+          if (error instanceof WorktreeUnavailable) return undefined
+          throw error
+        })
+      if (!placed) {
+        settled = await deliver({ jid, lease: job.lease.id, outcome: "held", summary: UNAVAILABLE_HERE })
+        return
+      }
       if (placed.from !== from || placed.branch !== branch || !placed.directory || placed.directory === project.directory || !await git.unchanged(original)) throw new Error("Invalid unattended worktree authority")
       const snapshot = await git.snapshot(placed.directory)
       if (snapshot.baseSha !== from) throw new Error("The unattended worktree has a different base")
       engine = deps.engine(placed.directory)
-      session = await engine.create(job, unattendedRules(settings.rules))
+      session = await engine.create(job, unattendedRules(settings.rules, settings.shell))
       await deps.ledger.update({ jid, lease: job.lease.id, sessionID: session, startedAt: now() })
       const sessions = new Set([session])
       let ready!: () => void

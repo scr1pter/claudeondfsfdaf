@@ -8,7 +8,8 @@ import { COMPUTER_CAPS, READINESS_FIELDS, READINESS_QUERY, TIMING, createJobId, 
 import { renderResult } from "@vectordevai/schema/everywhere-policy"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { createLedger, type RunnerLedger } from "./everywhere-ledger"
-import { createEverywhereJobsClient, createEverywhereRunner, localAllows, type RunnerDeps, type RunnerSettings } from "./everywhere-runner"
+import { createEverywhereJobsClient, createEverywhereRunner, localAllows, WorktreeUnavailable, type RunnerDeps } from "./everywhere-runner"
+import type { RunnerSettings } from "./everywhere-settings"
 import type { RunnerEngine } from "./everywhere-engine"
 import { unattendedRules } from "./everywhere-engine"
 import type { RunnerGit } from "./everywhere-git"
@@ -454,6 +455,30 @@ test("absence of the safe worktree capability never calls an unsafe engine endpo
   expect(f.results[0]?.outcome).toBe("held")
   expect(f.calls.some((call) => call.kind === "create")).toBe(false)
   expect(f.calls.some((call) => call.kind === "push")).toBe(false)
+})
+
+test("a project the engine will not give a worktree here is held with fixed text, before any session (EV-18)", async () => {
+  const f = fixture()
+  const refused = { count: 0 }
+  await createEverywhereRunner({ ...f.deps, safeWorktree: { policy: "unattended-v1", create: async () => { refused.count += 1; throw new WorktreeUnavailable() } } }).offer("fixture-offer")
+  expect(refused.count).toBe(1)
+  expect(f.results).toEqual([{ jid: f.job.jid, lease: f.job.lease.id, outcome: "held", summary: "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed." }])
+  expect(f.calls.some((call) => ["create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
+  // Any other worktree failure is a failed job, as before.
+  const g = fixture()
+  await createEverywhereRunner({ ...g.deps, safeWorktree: { policy: "unattended-v1", create: async () => { throw new Error("fixture") } } }).offer("fixture-offer")
+  expect(g.results.map((result) => result.outcome)).toEqual(["failed"])
+  expect(g.calls.some((call) => call.kind === "create")).toBe(false)
+})
+
+test("the session's ruleset allows the shell only when the settings carry the engine's offline-v1 (EV-18)", async () => {
+  const user = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "bash", pattern: "rm *", action: "deny" as const }]
+  for (const shell of [undefined, "none", "offline-v1"] as const) {
+    const f = fixture()
+    f.settings({ rules: user, ...(shell ? { shell } : {}) })
+    await createEverywhereRunner(f.deps).offer("fixture-offer")
+    expect(f.calls.find((call) => call.kind === "create")?.value).toEqual(unattendedRules(user, shell ?? "none"))
+  }
 })
 
 test("a public or newly public repository keeps its committed branch local", async () => {

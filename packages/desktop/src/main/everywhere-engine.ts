@@ -1,4 +1,5 @@
-import { everywhereSystemInstructions, frameTask, outsideMetadata, sessionTitle, unattendedMetadata, type FrameOptions } from "@vectordevai/core/everywhere/frame"
+import { Option, Schema } from "effect"
+import { everywhereSystemInstructions, frameTask, outsideMetadata, sessionTitle, unattendedMetadata, UNATTENDED_SHELL_KEY, UNATTENDED_SHELL_OFFLINE, type FrameOptions } from "@vectordevai/core/everywhere/frame"
 import { RUN_STEPS, type EverywhereJob } from "@vectordevai/schema/everywhere"
 import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
 import type { PostingCheck } from "./everywhere-scan"
@@ -7,16 +8,87 @@ import { Wildcard } from "@vectordevai/core/util/wildcard"
 const EDITING = ["read", "edit", "glob", "grep", "list", "lsp", "todowrite"] as const
 const DENIED = ["bash", "unsandboxed_shell", "terminal", "terminal_input", "browser*", "teammate", "workflow", "task", "skill", "learned_skill", "webfetch", "websearch", "research*", "external_directory", "private_network", "computer*", "vector_cloud*", "question", "plan_enter", "plan_exit", "mcp*", "connect*"] as const
 
-/** There is no shell-allow boolean: R-M2 must add an actual engine capability before any command is permitted. */
-export function unattendedRules(user: readonly PermissionV1.Rule[] = []): PermissionV1.Rule[] {
+/** What the local engine promises an unattended session's commands (GET /experimental/shell/unattended, EV-16). */
+export type UnattendedShellPolicy = "offline-v1" | "none"
+
+/**
+ * The session's ruleset (spec §3.5 step 5, E7): an allowlist that wins over the user's own config, `permission: "allow"`
+ * included, because the engine evaluates a session's rules last (findLast over Permission.merge(agent, session)).
+ *
+ * - First `*` denied, then for the editing ids `allow` followed by the user's own rules for that id, so their denies
+ *   still hold, then explicit denies for the shell, terminals and every other tool family.
+ * - `bash` is allowed again, after those denies, only when `shell` is the engine's `offline-v1`: the session then runs
+ *   every command in the offline sandbox (the engine refuses its commands anywhere that sandbox is missing). The
+ *   user's own shell rules follow that allow, so their denies hold and their asks are refused. `unsandboxed_shell`,
+ *   the terminals and the rest of the denied list are never allowed again.
+ * - The user's rules arrive through GET /global/config, which re-encodes the block with the known keys first, so the
+ *   order of its keys is not the user's. Only the order inside one key's own patterns survives. So for each id this
+ *   copies the rules written for that id itself, in their order, then of the rules under a wildcard key (`*`, `b*`)
+ *   the asks and then the denies, never the allows. No allow can outrank an ask or a deny whose position is not
+ *   known, and no wildcard deny is outranked at all; a wildcard ask may outrank an exact rule, which the runner then
+ *   refuses as it refuses every ask.
+ */
+export function unattendedRules(user: readonly PermissionV1.Rule[] = [], shell: UnattendedShellPolicy = "none"): PermissionV1.Rule[] {
+  const own = (permission: string) => {
+    const wildcard = user.filter((rule) => rule.permission !== permission && Wildcard.match(permission, rule.permission))
+    return [
+      ...user.filter((rule) => rule.permission === permission),
+      ...wildcard.filter((rule) => rule.action === "ask"),
+      ...wildcard.filter((rule) => rule.action === "deny"),
+    ].map((rule) => ({ ...rule, permission }))
+  }
   return [
     { permission: "*", pattern: "*", action: "deny" },
-    ...EDITING.flatMap((permission) => [
-      { permission, pattern: "*", action: "allow" as const },
-      ...user.filter((rule) => Wildcard.match(permission, rule.permission)).map((rule) => ({ ...rule, permission })),
-    ]),
+    ...EDITING.flatMap((permission) => [{ permission, pattern: "*", action: "allow" as const }, ...own(permission)]),
     ...DENIED.map((permission) => ({ permission, pattern: "*", action: "deny" as const })),
+    ...(shell === "offline-v1" ? [{ permission: "bash", pattern: "*", action: "allow" as const }, ...own("bash")] : []),
   ]
+}
+
+/** What the local engine offers an unattended job. A field it gave no definite answer for (yet) is absent. */
+export type UnattendedCapabilities = { readonly worktree?: boolean; readonly shell?: UnattendedShellPolicy }
+
+const WorktreePolicy = Schema.fromJsonString(Schema.Struct({ policy: Schema.Literal("unattended-v1") }))
+const ShellPolicy = Schema.fromJsonString(Schema.Struct({ shell: Schema.Literals(["offline-v1", "none"]) }))
+/** The engine's own bubblewrap self-test may take 10 s on the first ask, so the shell probe waits longer. */
+const SHELL_PROBE_MS = 20_000
+
+/**
+ * Asks the local engine, as its owner, whether it creates unattended worktrees (`unattended-v1`, EV-13) and runs an
+ * unattended session's commands offline (`offline-v1`, EV-16). Both probes are engine-wide: no `directory` is sent and
+ * no instance is loaded. Only the exact answers count. A 4xx (404 from an engine without the route, 401 or 403) or a
+ * 200 with any other body, an over-long one included, is a definite no; a timeout, a refused connection, a redirect, a
+ * 5xx or a body that breaks off leaves that field absent, so the caller asks again later and offers nothing meanwhile.
+ * It throws only for an address that is not this computer's loopback engine.
+ */
+export async function unattendedCapabilities(input: { readonly url: string; readonly authorization: string; readonly fetcher?: typeof fetch }): Promise<UnattendedCapabilities> {
+  const origin = localEngineOrigin(input.url)
+  const fetcher = input.fetcher ?? fetch
+  const ask = async (route: string, ms: number) => {
+    const signal = AbortSignal.timeout(ms)
+    const response = await fetcher(new URL(route, origin), { redirect: "error", signal,
+      headers: { authorization: input.authorization, accept: "application/json" } }).catch(() => undefined)
+    if (!response) return undefined
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined)
+      return response.status >= 500 ? undefined : ""
+    }
+    // An answer too long to be one of the exact answers is a no; one cut off (the timeout, a reset) is no answer.
+    return responseText(response, 4096).catch((error) => (error instanceof ResponseTooLarge ? "" : undefined))
+  }
+  const [worktree, shell] = await Promise.all([ask("/experimental/worktree/unattended", 10_000), ask("/experimental/shell/unattended", SHELL_PROBE_MS)])
+  const exact = { onExcessProperty: "error" } as const
+  return {
+    ...(worktree === undefined ? {} : { worktree: Option.isSome(Schema.decodeUnknownOption(WorktreePolicy)(worktree, exact)) }),
+    ...(shell === undefined ? {} : { shell: Option.getOrUndefined(Schema.decodeUnknownOption(ShellPolicy)(shell, exact))?.shell ?? "none" }),
+  }
+}
+
+/** The local engine's origin; anything but a plain loopback http address is refused before any request. */
+export function localEngineOrigin(url: string) {
+  const origin = new URL(url)
+  if (origin.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Everywhere requires the local engine")
+  return origin
 }
 
 export type EngineEvent = { readonly type: string; readonly properties: Record<string, unknown> }
@@ -35,6 +107,11 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+/** responseText's refusal past its limit, which the capability probes read as a definite no. */
+class ResponseTooLarge extends Error {
+  constructor() { super("The local engine response is too large") }
+}
+
 /** A response body as text, refused past `limit` bytes. The jobs client's `pending` answer uses it too. */
 export async function responseText(response: Response, limit: number) {
   if (!response.body) return ""
@@ -45,7 +122,7 @@ export async function responseText(response: Response, limit: number) {
     while (true) {
       const next = await reader.read()
       if (next.done) break
-      if (bytes + next.value.byteLength > limit) throw new Error("The local engine response is too large")
+      if (bytes + next.value.byteLength > limit) throw new ResponseTooLarge()
       buffer.set(next.value, bytes)
       bytes += next.value.byteLength
     }
@@ -59,8 +136,7 @@ export function createEverywhereEngine(input: {
   readonly authorization: string
   readonly fetcher?: typeof fetch
 }): RunnerEngine {
-  const origin = new URL(input.url)
-  if (origin.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Everywhere requires the local engine")
+  const origin = localEngineOrigin(input.url)
   const fetcher = input.fetcher ?? fetch
   const endpoint = (route: string) => {
     const url = new URL(route, origin)
@@ -82,7 +158,10 @@ export function createEverywhereEngine(input: {
   }
   return {
     async create(job, rules) {
-      const result = await call("POST", "/session", { title: sessionTitle(job), metadata: unattendedMetadata(job), permission: rules })
+      // Every unattended session carries the shell mark, whatever the probe said: its commands then run only in the
+      // engine's offline sandbox and are refused where that is missing, and its terminals and session shell are refused.
+      const metadata = { ...unattendedMetadata(job), [UNATTENDED_SHELL_KEY]: UNATTENDED_SHELL_OFFLINE }
+      const result = await call("POST", "/session", { title: sessionTitle(job), metadata, permission: rules })
       if (!record(result) || typeof result.id !== "string" || !/^ses[A-Za-z0-9_]+$/.test(result.id)) throw new Error("Invalid unattended session")
       return result.id
     },

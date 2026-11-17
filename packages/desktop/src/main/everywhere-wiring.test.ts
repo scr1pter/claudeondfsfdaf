@@ -1,5 +1,6 @@
 import { installFetchGuard } from "../../../web/test/lib/everywhere-fetch-guard"
 import { afterEach, expect, jest, test } from "bun:test"
+import os from "node:os"
 import { generateKeyPairSync, randomUUID } from "node:crypto"
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -7,15 +8,20 @@ import path from "node:path"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { ConfigEverywhereV1 } from "@vectordevai/core/v1/config/everywhere"
+import { Wildcard } from "@vectordevai/core/util/wildcard"
 import { CLOSE } from "@vectordevai/relay/protocol"
+import { branchFor } from "@vectordevai/core/everywhere/publish"
 import { createJobId, randomId, type EverywhereJob } from "@vectordevai/schema/everywhere"
+import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
 import { offerPublicKey, signOffer } from "../../../../api/_lib/everywhere/offer"
-import type { RunnerEngine } from "./everywhere-engine"
+import { unattendedRules, type RunnerEngine } from "./everywhere-engine"
 import type { RepositoryMapping, RunnerGit } from "./everywhere-git"
 import { createLedger, type RunnerLedger } from "./everywhere-ledger"
 import { OFFER_KEYS } from "./everywhere-offer"
 import type { RunnerDeps, SafeWorktree } from "./everywhere-runner"
-import { createEverywhereJobs, everywhereSettings, jobsForLink, projectFolder } from "./everywhere-wiring"
+import { everywhereSettings } from "./everywhere-settings"
+import { createEverywhereJobs, jobsForLink, projectFolder } from "./everywhere-wiring"
+import { setDesktopWorkBlocker } from "./keep-awake"
 import { createRemoteLink, type LinkDependencies, type RemoteStatus } from "./remote-link"
 import type { RemoteIdentity } from "./remote-pairing"
 import { createMemoryRelay, ticketFor } from "./remote-relay.fixture"
@@ -25,7 +31,11 @@ import { createMemoryRelay, ticketFor } from "./remote-relay.fixture"
 
 installFetchGuard()
 // One case sets this process's Vector Local policy, through the module's own API.
-afterEach(() => Egress.configure(LocalPolicy.OFF))
+afterEach(() => {
+  Egress.configure(LocalPolicy.OFF)
+  // EV-18's stay-awake cases set keep-awake.ts's process-wide blocker; each releases its holds before this.
+  setDesktopWorkBlocker(undefined)
+})
 
 const ORIGIN = "https://remote.vectordev.ai"
 const RELAY = "wss://relay.example.test/v1/connect"
@@ -100,7 +110,7 @@ async function folderFixture() {
   return { root, project, cleanup: () => rm(root, { recursive: true, force: true }) }
 }
 
-type Config = { everywhere?: Record<string, unknown>; locked?: unknown }
+type Config = { everywhere?: Record<string, unknown>; locked?: unknown; [key: string]: unknown }
 const on = (project: string, extra: Record<string, unknown> = {}): Config => ({
   everywhere: { enabled: true, projects: [{ directory: project, repository: "acme/app" }], ...extra },
   locked: [],
@@ -170,10 +180,34 @@ function jobsService() {
   return { requests, hooks, fetcher, of }
 }
 
-/** GET /global/config, answered from `value` as it is when the request arrives; `hold` keeps that answer back. */
-function engineConfig(value: Config) {
-  const config: { value: Config; status: number; gets: number; hold?: Promise<void> } = { value, status: 200, gets: 0 }
+type EngineRoute = (url: URL, init?: RequestInit) => Response | Promise<Response>
+type EngineCall = { method: string; path: string; search: string; headers: Headers; body?: Record<string, unknown> }
+
+/**
+ * GET /global/config, answered from `value` as it is when the request arrives; `hold` keeps that answer back. Any other
+ * request is refused (a network error to the caller) unless `routes` answers it, keyed `METHOD /path`; those are
+ * recorded in `calls`.
+ */
+function engineConfig(value: Config, routes: Record<string, EngineRoute> = {}) {
+  const config: { value: Config; status: number; gets: number; hold?: Promise<void>; calls: EngineCall[] } = {
+    value,
+    status: 200,
+    gets: 0,
+    calls: [],
+  }
   const fetcher = fetcherOf(async (url, init) => {
+    const route = routes[`${init?.method ?? "GET"} ${url.pathname}`]
+    if (route) {
+      const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined
+      config.calls.push({
+        method: init?.method ?? "GET",
+        path: url.pathname,
+        search: url.search,
+        headers: new Headers(init?.headers),
+        ...(body ? { body } : {}),
+      })
+      return route(url, init)
+    }
     if (url.pathname !== "/global/config" || init?.method) throw new Error("Only GET /global/config is read")
     if (new Headers(init?.headers).get("authorization") !== `Basic ${btoa("vector:owner-secret")}`)
       throw new Error("The owner's credentials are missing")
@@ -346,6 +380,10 @@ function computer(
     runnerEngine?: RunnerDeps["engine"]
     /** "process": this process's own Vector Local policy (Egress.policy), as in the app. */
     localPolicy?: "process"
+    /** The engine's other routes (EV-18's probes, the worktree route, the trust route). */
+    engine?: Record<string, EngineRoute>
+    power?: Parameters<typeof createEverywhereJobs>[0]["power"]
+    now?: () => number
   } = {},
 ) {
   const relay = createMemoryRelay()
@@ -357,7 +395,7 @@ function computer(
   const logs: string[] = []
   const gitCalls: GitCall[] = []
   const events = eventStream()
-  const engine = engineConfig(initial)
+  const engine = engineConfig(initial, options.engine)
   const service = jobsService()
   const memory = memoryLedger()
   const wiring = createEverywhereJobs({
@@ -377,6 +415,8 @@ function computer(
       }),
     safeWorktree: options.safeWorktree,
     ...(options.localPolicy === "process" ? {} : { localPolicy: () => LocalPolicy.OFF }),
+    ...(options.power ? { power: options.power } : {}),
+    ...(options.now ? { now: options.now } : {}),
     log: (message) => logs.push(message),
   })
   const link = createRemoteLink({
@@ -1226,6 +1266,591 @@ test("each listed folder is resolved to its canonical path and default branch, o
       })
     }
   } finally {
+    await folders.cleanup()
+  }
+})
+
+// EV-18: the probe-gated safe worktree, the offline shell and the shared keep-awake, through the same composition.
+
+const SANDBOX = "/fixture/user-data/everywhere-worktree/project/job"
+const UNAVAILABLE =
+  "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed."
+const ENDED = "The unattended job ended without publishing changes."
+const answer =
+  (body: unknown, status = 200): EngineRoute =>
+  () =>
+    Response.json(body, { status })
+const probes = (worktree: EngineRoute, shell: EngineRoute) => ({
+  "GET /experimental/worktree/unattended": worktree,
+  "GET /experimental/shell/unattended": shell,
+})
+const CAPABLE = probes(answer({ policy: "unattended-v1" }), answer({ shell: "offline-v1" }))
+/** The engine's create route: the job's own branch and base, in a folder under its data folder. */
+const created: EngineRoute = (_, init) => {
+  const body = JSON.parse(String(init?.body)) as { branch: string; base: string }
+  return Response.json({ directory: SANDBOX, branch: body.branch, base: body.base })
+}
+const untrusted = answer({ workspace: SANDBOX, trusted: false, ignored: true, settings: true, approvable: true })
+const decide = (rules: readonly PermissionV1.Rule[], permission: string, pattern = "*") =>
+  rules.findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern))?.action
+
+/** holdingEngine, recording each session's folder and ruleset. */
+function sessionEngine() {
+  const held = holdingEngine()
+  const sessions: { directory: string; rules: readonly PermissionV1.Rule[] }[] = []
+  const engine: RunnerDeps["engine"] = (directory) => {
+    const inner = held.engine(directory)
+    return {
+      ...inner,
+      create: (job, rules) => {
+        sessions.push({ directory, rules })
+        return inner.create(job, rules)
+      },
+    }
+  }
+  return { ...held, engine, sessions }
+}
+
+test("the safe worktree is offered only while the engine's probe reports unattended-v1, and never falls back", async () => {
+  const folders = await folderFixture()
+  const project = await realpath(folders.project)
+  const refused = () => {
+    throw new Error("POST /experimental/worktree is never called")
+  }
+  // An engine without the route: its probe answers 404.
+  const none = computer(on(folders.project), {
+    engine: {
+      ...probes(answer({}, 404), answer({ shell: "none" })),
+      "POST /experimental/worktree/unattended": created,
+      "POST /experimental/worktree": refused,
+    },
+  })
+  try {
+    await none.link.setEnabled(true)
+    none.begin()
+    await until(() => none.service.of("pending").length === 1)
+    // It still tells the service it takes jobs (deviations, EV-18 (n)), and a claimed job settles held.
+    expect(none.service.of("pending")[0]?.query).toEqual(READY)
+    const jid = createJobId(Date.now())
+    none.relay.offer(signed(jid))
+    await until(() => none.service.of("settle").length === 1)
+    expect(none.service.of("settle")[0]?.body).toEqual({
+      jid,
+      lease: expect.any(String),
+      outcome: "held",
+      summary: HELD,
+    })
+    expect(none.config.calls.map((call) => `${call.method} ${call.path}`).sort()).toEqual([
+      "GET /experimental/shell/unattended",
+      "GET /experimental/worktree/unattended",
+    ])
+  } finally {
+    none.stop()
+  }
+
+  // The probe says unattended-v1: the job's checkout comes from the owner-only route, then the trust check.
+  const session = sessionEngine()
+  const env = computer(on(folders.project), {
+    engine: {
+      ...probes(answer({ policy: "unattended-v1" }), answer({ shell: "none" })),
+      "POST /experimental/worktree/unattended": created,
+      "GET /config/trust": untrusted,
+      "POST /experimental/worktree": refused,
+    },
+    runnerEngine: session.engine,
+  })
+  try {
+    await env.link.setEnabled(true)
+    env.begin()
+    await until(() => env.service.of("pending").length === 1)
+    const jid = createJobId(Date.now())
+    env.relay.offer(signed(jid))
+    await session.prompted
+    const calls = env.config.calls.filter((call) => !call.path.endsWith("/unattended") || call.method === "POST")
+    expect(
+      calls.map((call) => ({ method: call.method, path: call.path, search: call.search, body: call.body })),
+    ).toEqual([
+      {
+        method: "POST",
+        path: "/experimental/worktree/unattended",
+        search: "",
+        body: { directory: project, base: "b".repeat(40), branch: branchFor(jid), jid },
+      },
+      { method: "GET", path: "/config/trust", search: `?directory=${encodeURIComponent(SANDBOX)}`, body: undefined },
+    ])
+    for (const call of env.config.calls) {
+      expect(call.headers.get("authorization")).toBe(`Basic ${btoa("vector:owner-secret")}`)
+      expect(call.headers.has("x-vector-guest-request")).toBe(false)
+    }
+    // The session is made in the checkout the route returned, with the shell denied (the probe said none).
+    expect(session.sessions.map((item) => item.directory)).toEqual([SANDBOX])
+    expect(decide(session.sessions[0]!.rules, "bash", "bun test")).toBe("deny")
+    expect(env.gitCalls.filter((call) => call.method === "fetch")).toEqual([
+      { directory: project, method: "fetch", args: ["main"] },
+    ])
+  } finally {
+    env.stop()
+    await folders.cleanup()
+  }
+})
+
+test("a project the engine refuses is held; a trusted, malformed or failed checkout is never used", async () => {
+  const folders = await folderFixture()
+  const cases: {
+    name: string
+    routes: Record<string, EngineRoute>
+    outcome: string
+    summary: string
+    trust: number
+  }[] = [
+    {
+      name: "not open in Vector",
+      routes: {
+        "POST /experimental/worktree/unattended": answer({ message: "This project is not open in Vector." }, 403),
+      },
+      outcome: "held",
+      summary: UNAVAILABLE,
+      trust: 0,
+    },
+    {
+      name: "trusted",
+      routes: {
+        "POST /experimental/worktree/unattended": created,
+        "GET /config/trust": answer({
+          workspace: SANDBOX,
+          trusted: true,
+          ignored: false,
+          settings: true,
+          approvable: true,
+        }),
+      },
+      outcome: "failed",
+      summary: ENDED,
+      trust: 1,
+    },
+    {
+      name: "trust unreadable",
+      routes: { "POST /experimental/worktree/unattended": created, "GET /config/trust": answer({}, 500) },
+      outcome: "failed",
+      summary: ENDED,
+      trust: 1,
+    },
+    {
+      name: "an extra key",
+      routes: {
+        "POST /experimental/worktree/unattended": (url, init) =>
+          Promise.resolve(created(url, init)).then(async (response) =>
+            Response.json({ ...((await response.json()) as object), start: "npm install" }),
+          ),
+        "GET /config/trust": untrusted,
+      },
+      outcome: "failed",
+      summary: ENDED,
+      trust: 0,
+    },
+    {
+      name: "a relative folder",
+      routes: {
+        "POST /experimental/worktree/unattended": (_, init) => {
+          const body = JSON.parse(String(init?.body)) as { branch: string; base: string }
+          return Response.json({ directory: "everywhere-worktree/job", branch: body.branch, base: body.base })
+        },
+        "GET /config/trust": untrusted,
+      },
+      outcome: "failed",
+      summary: ENDED,
+      trust: 0,
+    },
+    {
+      name: "an engine error",
+      routes: { "POST /experimental/worktree/unattended": answer({}, 500) },
+      outcome: "failed",
+      summary: ENDED,
+      trust: 0,
+    },
+  ]
+  try {
+    for (const item of cases) {
+      const session = sessionEngine()
+      const env = computer(on(folders.project), {
+        engine: { ...CAPABLE, ...item.routes },
+        runnerEngine: session.engine,
+      })
+      try {
+        await env.link.setEnabled(true)
+        env.begin()
+        await until(() => env.service.of("pending").length === 1)
+        const jid = createJobId(Date.now())
+        env.relay.offer(signed(jid))
+        await until(() => env.service.of("settle").length === 1)
+        expect({ name: item.name, settle: env.service.of("settle")[0]?.body }).toEqual({
+          name: item.name,
+          settle: { jid, lease: expect.any(String), outcome: item.outcome, summary: item.summary },
+        })
+        expect({ name: item.name, sessions: session.sessions }).toEqual({ name: item.name, sessions: [] })
+        expect(env.config.calls.filter((call) => call.path === "/config/trust")).toHaveLength(item.trust)
+        expect(env.config.calls.some((call) => call.path === "/experimental/worktree")).toBe(false)
+      } finally {
+        env.stop()
+      }
+    }
+  } finally {
+    await folders.cleanup()
+  }
+})
+
+test("bash is allowed only on the engine's offline-v1 with no company lock on a key with rules, and pending says so", async () => {
+  const folders = await folderFixture()
+  const permission = { "*": "allow", bash: { "rm *": "deny" } }
+  // A lock on any key that can carry permission rules: the company's values are not in the answer.
+  const cases = [
+    { name: "offline-v1", shell: "offline-v1", locked: [], sandbox: "1", bash: "allow" },
+    { name: "company lock on permission", shell: "offline-v1", locked: ["permission"], sandbox: "0", bash: "deny" },
+    { name: "company lock on agent", shell: "offline-v1", locked: ["agent"], sandbox: "0", bash: "deny" },
+    { name: "company lock on mode", shell: "offline-v1", locked: ["mode"], sandbox: "0", bash: "deny" },
+    { name: "company lock on tools", shell: "offline-v1", locked: ["tools"], sandbox: "0", bash: "deny" },
+    {
+      name: "company lock on default_agent",
+      shell: "offline-v1",
+      locked: ["default_agent"],
+      sandbox: "0",
+      bash: "deny",
+    },
+    { name: "other locks only", shell: "offline-v1", locked: ["share", "model"], sandbox: "1", bash: "allow" },
+    { name: "none", shell: "none", locked: [], sandbox: "0", bash: "deny" },
+  ] as const
+  try {
+    for (const item of cases) {
+      const session = sessionEngine()
+      const env = computer(
+        { ...on(folders.project), permission, locked: item.locked },
+        {
+          engine: {
+            ...probes(answer({ policy: "unattended-v1" }), answer({ shell: item.shell })),
+            "POST /experimental/worktree/unattended": created,
+            "GET /config/trust": untrusted,
+          },
+          runnerEngine: session.engine,
+        },
+      )
+      try {
+        await env.link.setEnabled(true)
+        env.begin()
+        await until(() => env.service.of("pending").length === 1)
+        expect({ name: item.name, query: env.service.of("pending")[0]?.query }).toEqual({
+          name: item.name,
+          query: { ...READY, sandbox: item.sandbox },
+        })
+        env.relay.offer(signed())
+        await session.prompted
+        const rules = session.sessions[0]!.rules
+        expect({ name: item.name, bash: decide(rules, "bash", "bun test") }).toEqual({
+          name: item.name,
+          bash: item.bash,
+        })
+        // The user's own shell deny holds, and nothing reopens the unsandboxed shell or a terminal.
+        expect(decide(rules, "bash", "rm -rf src")).toBe("deny")
+        for (const id of ["unsandboxed_shell", "terminal", "terminal_input", "mcp_fixture", "connect_write"])
+          expect({ id, action: decide(rules, id) }).toEqual({ id, action: "deny" })
+        // Exactly the ruleset built from the user's own rules, with the shell the engine's answer allows.
+        const user = await everywhereSettings({ ...on(folders.project), permission, locked: [] }, async () => undefined)
+        expect(rules).toEqual(unattendedRules(user.rules, item.bash === "allow" ? "offline-v1" : "none"))
+      } finally {
+        env.stop()
+      }
+    }
+  } finally {
+    await folders.cleanup()
+  }
+})
+
+test("the probes run only while the block is on; a definite answer is kept, and none is asked again a minute later", async () => {
+  const folders = await folderFixture()
+  const clock = { offset: 0 }
+  const answers = {
+    worktree: [answer({}, 404)] as EngineRoute[],
+    shell: [() => Promise.reject(new DOMException("The operation timed out.", "TimeoutError"))] as EngineRoute[],
+  }
+  const env = computer(off(folders.project), {
+    engine: probes(
+      (url, init) => (answers.worktree.shift() ?? answer({ policy: "unattended-v1" }))(url, init),
+      (url, init) => (answers.shell.shift() ?? answer({ shell: "offline-v1" }))(url, init),
+    ),
+    now: () => Date.now() + clock.offset,
+  })
+  const asked = () => env.config.calls.map((call) => call.path.split("/")[2])
+  try {
+    await env.link.setEnabled(true)
+    env.begin()
+    await until(() => env.config.gets >= 1)
+    await sleep(50)
+    // Off: the engine is not asked.
+    expect(env.config.calls).toEqual([])
+    env.config.value = on(folders.project)
+    env.events.push("global.disposed")
+    await until(() => env.service.of("pending").length === 1)
+    // A 404 is a definite no; the shell probe timed out, so no shell yet.
+    expect(asked().sort()).toEqual(["shell", "worktree"])
+    expect(env.service.of("pending")[0]?.query.sandbox).toBe("0")
+    // Within the minute, later reads ask nothing.
+    const reads = env.config.gets
+    env.events.push("global.disposed")
+    await until(() => env.config.gets > reads)
+    await sleep(50)
+    expect(asked()).toHaveLength(2)
+    // A minute on, the next read asks again: the shell answers, and the 404 is kept though the route now answers.
+    clock.offset = 61_000
+    env.events.push("global.disposed")
+    await until(() => asked().length === 4)
+    await sleep(50)
+    env.relay.drop(env.device(), CLOSE.TICKET_EXPIRED)
+    await until(() => env.service.of("pending").length === 2)
+    expect(env.service.of("pending")[1]?.query.sandbox).toBe("1")
+    // The kept 404 still gives no worktree, so a job is held before any checkout is asked for.
+    const jid = createJobId(Date.now())
+    env.relay.offer(signOffer(SIGNING, { account: ACCOUNT, jid, now: Date.now() + clock.offset }).offer)
+    await until(() => env.service.of("settle").length === 1)
+    expect(env.service.of("settle")[0]?.body).toEqual({
+      jid,
+      lease: expect.any(String),
+      outcome: "held",
+      summary: HELD,
+    })
+    expect(asked()).toHaveLength(4)
+    // Both answered: nothing more is asked, whatever is read.
+    const settled = env.config.gets
+    env.events.push("global.disposed")
+    env.events.push("global.disposed")
+    await until(() => env.config.gets >= settled + 2)
+    await sleep(50)
+    expect(asked()).toHaveLength(4)
+    // A new engine stream asks afresh, and waits for the answer.
+    env.events.push("server.connected")
+    await until(() => asked().length === 6)
+    // Off again: nothing is asked.
+    env.config.value = off(folders.project)
+    env.events.push("server.connected")
+    await until(() => env.wiring.state() === "off")
+    await sleep(50)
+    expect(asked()).toHaveLength(6)
+  } finally {
+    env.stop()
+    await folders.cleanup()
+  }
+})
+
+test("the rules are the user's own tools denies, permission block and their default agent's asks and denies; one that does not decode is off", async () => {
+  const folders = await folderFixture()
+  const calls: GitCall[] = []
+  const folder = projectFolder(fakeGit(calls))
+  const project = folders.project
+  const home = os.homedir()
+  try {
+    const settings = await everywhereSettings(
+      {
+        ...on(project),
+        tools: { write: false, webfetch: true, glob: false },
+        permission: {
+          "*": "allow",
+          edit: { "~/notes/*": "deny", "$HOME/keys": "deny", "$HOMEWORK/*": "deny", "~": "deny", "src/*": "allow" },
+          bash: "ask",
+        },
+        agent: {
+          build: {
+            permission: { bash: { "curl *": "deny", "git push*": "ask", "*": "allow" }, read: "deny", edit: "ask" },
+          },
+          plan: { permission: { edit: "deny" } },
+        },
+        mode: { build: { permission: { grep: { "dist/*": "ask", "*": "allow" } } } },
+      },
+      folder,
+    )
+    expect(settings.enabled).toBe(true)
+    expect(settings.rules).toEqual([
+      // The legacy tools map's switched-off tools, `write` as `edit`, under the block; a switched-on one adds nothing.
+      { permission: "edit", pattern: "*", action: "deny" },
+      { permission: "glob", pattern: "*", action: "deny" },
+      { permission: "*", pattern: "*", action: "allow" },
+      { permission: "edit", pattern: `${home}/notes/*`, action: "deny" },
+      { permission: "edit", pattern: `${home}/keys`, action: "deny" },
+      { permission: "edit", pattern: `${home}WORK/*`, action: "deny" },
+      { permission: "edit", pattern: home, action: "deny" },
+      { permission: "edit", pattern: "src/*", action: "allow" },
+      { permission: "bash", pattern: "*", action: "ask" },
+      // The default agent's own block, then its legacy `mode` block, give only their asks and denies.
+      { permission: "bash", pattern: "curl *", action: "deny" },
+      { permission: "bash", pattern: "git push*", action: "ask" },
+      { permission: "read", pattern: "*", action: "deny" },
+      { permission: "edit", pattern: "*", action: "ask" },
+      { permission: "grep", pattern: "dist/*", action: "ask" },
+    ])
+    // `default_agent` names the agent whose asks and denies count, in both blocks; a bare action is every pattern.
+    const plan = await everywhereSettings(
+      {
+        ...on(project),
+        permission: "deny",
+        default_agent: "plan",
+        agent: { plan: { permission: { edit: "deny" } }, build: { permission: { read: "deny" } } },
+        mode: { plan: { permission: { bash: "ask" } } },
+      },
+      folder,
+    )
+    expect(plan.rules).toEqual([
+      { permission: "*", pattern: "*", action: "deny" },
+      { permission: "edit", pattern: "*", action: "deny" },
+      { permission: "bash", pattern: "*", action: "ask" },
+    ])
+    // A block that does not decode, at the top, in the tools map, the agent or its mode, is off, and no folder is resolved.
+    calls.length = 0
+    for (const config of [
+      { ...on(project), permission: { bash: "sometimes" } },
+      { ...on(project), permission: ["allow"] },
+      { ...on(project), tools: { bash: "no" } },
+      { ...on(project), agent: { build: { permission: { edit: 1 } } } },
+      { ...on(project), mode: { build: { permission: { edit: 1 } } } },
+    ]) {
+      const off = await everywhereSettings(config, folder)
+      expect({ enabled: off.enabled, projects: off.projects, rules: off.rules }).toEqual({
+        enabled: false,
+        projects: [],
+        rules: undefined,
+      })
+    }
+    expect(calls).toEqual([])
+  } finally {
+    await folders.cleanup()
+  }
+})
+
+test("stay awake holds the desktop's shared blocker only while jobs and the option are on and the computer is plugged in", async () => {
+  const folders = await folderFixture()
+  const blocker: string[] = []
+  const ids = { next: 0 }
+  setDesktopWorkBlocker({
+    start: () => {
+      ids.next += 1
+      blocker.push(`start ${ids.next}`)
+      return ids.next
+    },
+    stop: (id) => void blocker.push(`stop ${id}`),
+  })
+  const listeners = new Set<() => void>()
+  const power = {
+    battery: false,
+    subscribed: 0,
+    set(battery: boolean) {
+      power.battery = battery
+      for (const listener of [...listeners]) listener()
+    },
+  }
+  const env = computer(on(folders.project, { stay_awake: true }), {
+    power: {
+      onBattery: () => power.battery,
+      changed: (listener) => {
+        power.subscribed += 1
+        listeners.add(listener)
+        return () => void listeners.delete(listener)
+      },
+    },
+  })
+  try {
+    // Remote off: jobs are not on, so nothing is held and power is not watched.
+    env.begin()
+    await until(() => env.wiring.state() === "needs-remote")
+    expect(blocker).toEqual([])
+    expect(power.subscribed).toBe(0)
+    await env.link.setEnabled(true)
+    await until(() => env.wiring.state() === "on")
+    expect(blocker).toEqual(["start 1"])
+    // The option turned off on the settings page: released with no state change.
+    env.config.value = on(folders.project, { stay_awake: false })
+    env.events.push("global.disposed")
+    await until(() => blocker.length === 2)
+    expect(blocker).toEqual(["start 1", "stop 1"])
+    expect(listeners.size).toBe(0)
+    env.config.value = on(folders.project, { stay_awake: true })
+    env.events.push("global.disposed")
+    await until(() => blocker.length === 3)
+    // Unplugged, then plugged in again.
+    power.set(true)
+    power.set(false)
+    expect(blocker).toEqual(["start 1", "stop 1", "start 2", "stop 2", "start 3"])
+    // Remote turned off: jobs are no longer on.
+    await env.link.setEnabled(false)
+    await until(() => blocker.length === 6)
+    expect(blocker.at(-1)).toBe("stop 3")
+    await env.link.setEnabled(true)
+    await until(() => blocker.length === 7)
+    // Stopping the jobs releases it and stops watching power, before the link stops.
+    env.wiring.stop()
+    expect(blocker).toEqual(["start 1", "stop 1", "start 2", "stop 2", "start 3", "stop 3", "start 4", "stop 4"])
+    expect(listeners.size).toBe(0)
+  } finally {
+    env.stop()
+    await folders.cleanup()
+  }
+})
+
+test("stay awake lets the computer sleep while its link cannot deliver offers, though jobs stay on", async () => {
+  const folders = await folderFixture()
+  const blocker: string[] = []
+  const ids = { next: 0 }
+  setDesktopWorkBlocker({
+    start: () => {
+      ids.next += 1
+      blocker.push(`start ${ids.next}`)
+      return ids.next
+    },
+    stop: (id) => void blocker.push(`stop ${id}`),
+  })
+  const listeners = new Set<() => void>()
+  const tickets: { hold?: Promise<void> } = {}
+  const env = computer(on(folders.project, { stay_awake: true }), {
+    tickets,
+    power: {
+      onBattery: () => false,
+      changed: (listener) => {
+        listeners.add(listener)
+        return () => void listeners.delete(listener)
+      },
+    },
+  })
+  try {
+    await env.link.setEnabled(true)
+    env.begin()
+    await until(() => env.link.status().state === "online")
+    expect(blocker).toEqual(["start 1"])
+    // Paused by the service: the relay delivers nothing, so the hold goes and power is not watched.
+    env.relay.drop(env.device(), CLOSE.REMOTE_PAUSED)
+    await until(() => env.link.status().state === "paused")
+    expect(env.wiring.state()).toBe("on")
+    expect(blocker).toEqual(["start 1", "stop 1"])
+    expect(listeners.size).toBe(0)
+    // Remote off and on again: held again from the moment the link connects.
+    await env.link.setEnabled(false)
+    await env.link.setEnabled(true)
+    await until(() => env.link.status().state === "online")
+    expect(blocker).toEqual(["start 1", "stop 1", "start 2"])
+    // A dropped connection being made again (connecting) can deliver offers again at any moment: the hold stays.
+    const minting = deferred()
+    tickets.hold = minting.promise
+    env.relay.drop(env.device(), CLOSE.TICKET_EXPIRED)
+    await until(() => env.link.status().state === "connecting")
+    await flush()
+    expect(blocker).toEqual(["start 1", "stop 1", "start 2"])
+    minting.resolve()
+    tickets.hold = undefined
+    await until(() => env.link.status().state === "online")
+    expect(blocker).toEqual(["start 1", "stop 1", "start 2"])
+    // Revoked: the first refusal is retried once (connecting, still held), the second is final and releases it.
+    env.relay.revoke(env.device())
+    env.relay.drop(env.device(), CLOSE.REMOTE_REVOKED)
+    await until(() => env.link.status().state === "revoked")
+    expect(env.wiring.state()).toBe("on")
+    expect(blocker).toEqual(["start 1", "stop 1", "start 2", "stop 2"])
+    expect(listeners.size).toBe(0)
+  } finally {
+    env.stop()
     await folders.cleanup()
   }
 })
