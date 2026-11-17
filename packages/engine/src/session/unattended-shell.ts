@@ -1,5 +1,6 @@
 export * as UnattendedShell from "./unattended-shell"
 
+import { isDeepStrictEqual } from "node:util"
 import { Effect, Exit, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -83,7 +84,7 @@ export function changes(
   current: Readonly<Record<string, unknown>> | undefined,
   next: Readonly<Record<string, unknown>>,
 ) {
-  return MARKS.some((key) => Object.hasOwn(next, key) && !Bun.deepEquals(current?.[key], next[key], true))
+  return MARKS.some((key) => Object.hasOwn(next, key) && !isDeepStrictEqual(current?.[key], next[key]))
 }
 
 /** Whether replacing a session's whole metadata (a replayed update) would add, change or remove a mark. */
@@ -91,7 +92,7 @@ export function differs(
   current: Readonly<Record<string, unknown>> | undefined,
   next: Readonly<Record<string, unknown>> | undefined,
 ) {
-  return MARKS.some((key) => !Bun.deepEquals(current?.[key], next?.[key], true))
+  return MARKS.some((key) => !isDeepStrictEqual(current?.[key], next?.[key]))
 }
 
 /**

@@ -2763,6 +2763,22 @@ Before the commit, on the final sources (HEAD `12b3ad09` = origin/everywhere-fin
 
 The commit title is the lead's (`feat(engine): run an unattended session's shell only in a no-network sandbox`); it stages exactly the 26 paths above. The workflow_dispatch run ids of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on everywhere-finish go in the next lane-docs commit; the handoff's EV-16 bullet keeps "CI pending" until then.
 
+### EV-16, 2026-11-17: CI follow-up
+
+EV-16's dispatched runs at `b0240ba2`: vector-everywhere 43968505228, vector-codium 43968523282 and typecheck 43968528893 passed; vector-hosted-ci 43968511507 was cancelled by the nested call's concurrency group (ci-triage, EV-14 check). vector-at-mention 43968518358 failed two jobs. "desktop engine bundle (node)" (133654195771), step "Build the desktop engine bundle": build-node.ts's Node guard found `Bun.deepEquals` twice in src/session/unattended-shell.ts. "engine and core" (133654195515), step "Run core GitHub tests": packages/core/test/review/model-evidence.test.ts "scope > the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION" (1354 pass, 1 fail), because handlers/session.ts is a pinned review pipeline file. main's newest completed at-mention run, 43974310184 at `dabc4821`, passed. Fixed in packages/engine/src/session/unattended-shell.ts (`isDeepStrictEqual` from node:util in `changes` and `differs`) and packages/core/src/review/model-evidence.ts (`REVIEW_PIPELINE_SOURCES` to adbd991bd9da14e1, `REVIEW_PIPELINE_REVISION` stays 5); why: deviations entry, EV-16 "CI follow-up (2026-11-17)". Each through `vector-serial`, one file at a time, at HEAD `c9275df0` (logs in /tmp/vector-v2/everywhere/ci-ev18/):
+
+| Check | Result |
+| --- | --- |
+| packages/core test/review/model-evidence.test.ts, before the fix | 29 pass, 1 fail (the pin, printing adbd991bd9da14e1), 392 expects |
+| the same file with the fix | 30 pass, 0 fail, 393 expects |
+| build-node.ts's `Bun.build` and `unguardedBunReferences` on a scratch copy of the build (same options; without `prepareGitLab`, whose in-place rewrite would reach a hardlinked dependency file; output under the scratch folder), before the fix | 2 unguarded references, both `Bun.deepEquals` in src/session/unattended-shell.ts |
+| the same with the fix | 0 unguarded references |
+| `node script/smoke-node-bundle.ts` on that bundle (Node v22.23.4, TMPDIR under /tmp/vector-v2/everywhere-finish/) | passed (Read tool, brain eval worker, search model wasm, computer bridge) |
+| packages/engine test/everywhere/offline-shell.test.ts (fresh XDG roots; PATCH and sync replay cases use `changes` and `differs`) | 14 pass, 2 skip (the bubblewrap-gated cases), 0 fail, 210 expects |
+| `Bun.deepEquals(a, b, true)` against `isDeepStrictEqual(a, b)` on 14 JSON-shaped pairs (strings, null and undefined, nested objects and arrays, key order, `{a: undefined}` and `{}`, `1` and `"1"`) | all agree |
+| `bun typecheck` in packages/engine and packages/core | exit 0, exit 0 |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
 ## EV-17: the desktop wiring: jobs module, `pending` client and Remote registration (2026-11-16)
 
 VE-21, R-C2, R-C3. Deviations log: "2026-11-16, EV-17".
