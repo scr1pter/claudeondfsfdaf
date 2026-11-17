@@ -23426,3 +23426,666 @@ This entry is also the lane's progress record for SF-11.
   - No `cat-file --batch`.
   - No change to provider.ts, session/llm.ts, the spawn hot spots, the
     connect files, the app or replay.ts VARIANTS.
+
+## 2026-11-17 · VS-23c ZDR transport backstop in provider resolution and request bodies (SF-12a)
+
+The transport half of VS-23 that runs in provider.ts (`vectorscope-upgrade.md`
+VS-23c `:430-441` items 1-3, and the integration-map row for provider.ts
+`:290`), with runner-wiring R1 (`vectorscope-upgrade-addendum-b.md` §2.1
+`:277`, VS-33b `:42`) and invariant I-3. It was built on `scope-finish` at
+`43e21b48` (SF-11) as lane package SF-12a, from the SF-12a plan as corrected
+by its critique. Where a critique point was taken in another form or
+rejected, the reason is under "Critique points". This entry is also the
+lane's progress record for SF-12a. VS-23c items 4 and 5 (the native runtime,
+helper requests, and the proof that every `vectorscope.*` request kind
+carries a parseable header) are SF-12b's.
+
+- **Status.** Built, reviewed once (review findings below), and committed on
+  `scope-finish` by the lane's commit gate on 2026-11-17 as `feat(review):
+  refuse non-compliant provider requests under zdr`, in the commit that
+  carries this entry. A commit cannot name its own SHA, so the SHA and each
+  dispatched workflow's run ID and result go in a later entry.
+  - The lead's go for the protected transport file `provider.ts`: the lane
+    workflow dispatched SF-12a on 2026-11-17 ("TASK: implement this
+    package"), and then this commit gate, whose task names the commit and the
+    push to `scope-finish`. The gate took that second dispatch as the go. No
+    separate message from the lead was received in either round. `main`
+    changes only through the lead's PR, so the lead can still hold the change
+    there (Hand-offs).
+  - The gate re-ran every new or changed test file one at a time through the
+    lock (pass, skip, fail, expects): core `privacy.test.ts` 57, 0, 0, 844
+    and `model-evidence.test.ts` 30, 0, 0, 393; engine `zdr-route.test.ts`
+    14, 0, 0, 171, `route.test.ts` 32, 0, 0, 117 and `run.test.ts` 71, 1, 4,
+    641. The 4 failures are the same sandbox-only ones as under "Tests run"
+    ("this host has no supported unprivileged Git verifier").
+  - `bun typecheck` passes in `packages/core` and `packages/engine`, `bun tsgo
+    -p ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`
+    passes, and the full TURBO typecheck (`--concurrency=2`) passes, 27 of 27
+    tasks. Prettier `--check` is clean on the touched source and test files
+    except `provider.ts`, whose only unformatted lines are the three unrelated
+    places at HEAD named under "Tests run".
+  - The gate dispatches its fixed set on `scope-finish`: `typecheck.yml`,
+    `scope-directory-identity.yml`, `review-memory-fence.yml`,
+    `scope-app-validation.yml` and `vector-at-mention.yml`. `test.yml` and
+    `review-http-regression.yml` (scope local), both under "CI to dispatch",
+    are not in that set and stay with the lead (Hand-offs).
+
+- **SF-11's CI on `43e21b48`** (SF-11's entry defers these to a later entry;
+  read on 2026-11-17 with the GitHub tools). Seven workflows were listed for
+  SF-11; five were dispatched:
+  - `typecheck.yml` 43978234875: success.
+  - `scope-directory-identity.yml` 43978240656: success.
+  - `review-memory-fence.yml` 43978244946: success. This is SF-11's Done-line
+    run (`run.ts`, `model.ts`).
+  - `scope-app-validation.yml` 43978250944: failure, one job ("VectorScope
+    local review (linux)", job 133687725620). The plan read it as one
+    Playwright failure, `e2e/regression/vectorscope-fix.spec.ts:276` "a
+    double-click on a step previews once and approves nothing", which is
+    SF-10b's spec. The same workflow passed on `4ca3ce5f` (43950022942) and
+    SF-11 changed no app code. It is not on the known-flake list, so it is the
+    lead's to root-cause; SF-12a changes no app code either.
+  - `vector-at-mention.yml` 43978256739: still queued as a run when read, but
+    its job "sandbox (codium, success, bun)" (133687745545) had already failed
+    at "Run the unprivileged probe", and the steps after it fail because that
+    step wrote no `observed.json`. "engine and core" (the core review/** and
+    engine GitHub tests) passed.
+  - `test.yml` and `review-http-regression.yml` (scope local): never
+    dispatched on `43e21b48`. SF-11's entry listed both under "CI to
+    dispatch" and its gate left them to the lead. SF-11's reason for the HTTP
+    shard (`executeLocalReview` changes under "zdr") still holds.
+- **The `vector-at-mention.yml` failure is older than SF-11.** The same job,
+  "sandbox (codium, success, bun)", failed on `4ca3ce5f` (run 43950029615,
+  SF-10b; job 133608097419). Its log: `error: The tool process probe
+  attempted external network access` at `probeToolProcesses`
+  (`/opt/vector-sandbox-probe-bun.mjs`), under Bun 1.3.14, after which
+  `summary.json` and `observed.json` are missing. The runs on `b6eaf122`
+  (43929293678) and `1b6df982` (43902906456) also concluded "failure"; their
+  job logs were not read. The node legs of the same matrix passed, and
+  `main`'s push runs passed (43974310184 on `dabc4821`). It is not on the
+  known-flake list and not a one-off, so it is a real failure for the lead to
+  root-cause; nothing in SF-11 or SF-12a touches the sandbox probe.
+
+- **Scope.**
+  - Engine `review/route.ts` (pinned): `hold`, `sendBody`, `Refused`, `Held`,
+    the bounded set of released "zdr" sessions, and `decidedOn` on `Decided`
+    and `Registered`; `verified` is the
+    `verify: "api"` rule moved out of `decide`, so admission and the
+    transport share it.
+  - Engine `provider/provider.ts` (protected, not pinned): the three fetches
+    resolveSDK builds call `hold`, and the generic V1 fetch calls `sendBody`
+    on its final body and sends a held call with `redirect: "error"`.
+  - Engine `review/run.ts` (pinned): one line, so the registry keeps
+    `decidedOn`.
+  - Core `review/privacy.ts` (pinned): `zdrBatchBodyRefusal`, R1's body-shape
+    check for direct routes, which `zdrBodyRefusal` now calls first; comments
+    in the present tense.
+  - Under privacy unset or "standard" nothing changes. No key is enabled and
+    no default changes.
+
+- **What landed** (line numbers in the working tree).
+  - Engine `review/route.ts`:
+    - `decide` `:116` binds `decidedOn = routeModel(...)` and returns
+      `{ key, decision: verified(decideRoute(decidedOn, policy)), decidedOn }`.
+      Its early returns are unchanged, so route.test.ts's
+      `toEqual({ decision })` still holds.
+    - `attempt` `:239` takes a string session ID (it is a string-keyed map).
+    - `hold` `:261`:
+      - no review session registered and no released "zdr" session
+        remembered: undefined, and neither the header nor the destinations
+        are read;
+      - no header: undefined (the owner's own call);
+      - a header that names no one session ID: "unattributed-request" while
+        any "zdr" session is registered (checked inline), else undefined;
+      - a "zdr" session its review released: "unknown-destination" `:276`
+        (review findings, below), whether or not any review is registered;
+      - an unregistered session, or one registered under "standard":
+        undefined;
+      - a "zdr" session: `decideRoute` again on the route model of the call's
+        model and the provider's options now, with destinations the union of
+        what admission decided on (`decidedOn.destinations`), what the
+        options name, and what the transport sees (provider.ts
+        `requestOrigins` with variables filled in, plus the request's URL);
+        `defaultOrigins` from admission (else `UNKNOWN_ORIGIN`); and
+        `freeModel` and `forwards` if either side saw them. Then `verified`.
+        That decision comes first, so Codium reads "codium-unaccepted", a free
+        model "free-model" and a LAN host "unattested-network-server"; then
+        `attempt` (the call's model must be the decided one). Allowed, it
+        returns the route's `kind`.
+    - `register` `:216` and `release` `:222`: `release` remembers a session
+      registered under "zdr" in `released` `:345`, an insertion-ordered set of
+      at most `RELEASED_LIMIT` (4096) IDs that forgets the oldest first;
+      `register` forgets the ID again, so a session registered anew is held
+      as it is then decided.
+    - `sendBody` `:315`: a body that is not a string, or a call whose input
+      is a `Request`, is "unreadable-body"; the string is parsed with
+      `Schema.decodeUnknownOption(Schema.UnknownFromJsonString)`, and one that
+      is not JSON is "unreadable-body" through the checks below.
+      - "openrouter-attested": `zdrPathRefusal(url)`, then `zdrRequestBody`,
+        whose JSON is sent (else `zdrBodyRefusal`'s reason);
+      - an Anthropic Messages SDK (`ANTHROPIC_FORMAT` `:349`:
+        `@ai-sdk/anthropic`, `@ai-sdk/google-vertex/anthropic`, and
+        `@ai-sdk/amazon-bedrock/anthropic`, which is not bundled but is
+        added so a configured copy is checked too): `zdrFeatureRefusal({
+        format: "anthropic", body: parsed, path: url })`;
+      - every other SDK: `zdrPathRefusal(url) ?? zdrBatchBodyRefusal(parsed)
+        ?? (Google ? zdrFeatureRefusal({ format: "google", body: parsed }) :
+        undefined)`;
+      - every route but OpenRouter's returns the body it was given, byte for
+        byte.
+    - `Refused` `:85` extends Error, as `ProviderError.HeaderTimeoutError`
+      does: `name` "ZdrRouteRefused", `refusal`, and the message `Vector did
+      not send this request: this review's privacy is "zdr", and the route
+      rules refused it (<refusal>). Nothing was sent.` The AI SDK rethrows a
+      non-network error from fetch as it is (provider-utils' `postToApi`),
+      so it is not retried as an APICallError.
+    - The header comment and the SDK_ORIGINS comment are in the present
+      tense.
+  - Engine `provider/provider.ts`:
+    - `import { ReviewRoutes } from "@/review/route"`. route.ts imports
+      Provider and SessionID as types only, so there is no runtime cycle.
+    - `sessionNamed` `:180-187` (module level): the session an
+      `x-session-id` names, undefined without the header and with no `id`
+      for anything but one session ID. `guestRequest` `:2430` now reads it;
+      its result is the same for every header (the free-catalog.test.ts
+      guest case and zdr-route.test.ts pass).
+    - `zdrHold` `:2442-2458` in resolveSDK, after `provider` is read: reads
+      the session as the generic fetch reads headers (`init.headers`, else a
+      `Request`'s own), lazily, and adds the call's URL to the destinations.
+    - Plan route `:2459-2482`: the gateway fetch is wrapped; a held call
+      throws `Refused` (Codium is always refused under "zdr":
+      "codium-unaccepted") before `ModelPlans` resolves a route, reads a
+      credential or calls the gateway. `preconnect` is kept.
+    - Free route `:2495-2497`: the same hold is the fetch's first statement,
+      before `FreeModels.resolveRoute` reads the catalog, credentials,
+      consent or guests ("free-model").
+    - Generic V1 fetch: `preconnect` is read before the options delete it
+      `:2624-2625`; `target` moves up from the Vector Local block (same value);
+      the hold runs right after `headers` `:2640-2645`, before any body is
+      read; and `sendBody` runs on the final body `:2687-2704`, after
+      `reasoningContextBody`, `promptCacheBreakpointBody` and the existing
+      OpenRouter block, and before plugin consent, Vector Local's
+      `holds.check` and `Egress.fetch`. It passes `provider.options`, not the
+      SDK's copy, whose `fetch` is this wrapper.
+    - A held call sets `opts.redirect = "error"` `:2703` after `sendBody`
+      (review findings, below). With Vector Local off (the default),
+      `Egress.fetch` sends the options as they are, and nothing else set
+      `redirect` on this path except plugin consent; a 307 or 308 from an
+      allowed origin would otherwise re-send the body to an origin `hold`
+      never saw. A `Request` input never gets here (it is "unreadable-body"),
+      so the init's mode is the one sent. Every other call keeps its options.
+    - session/llm.ts and the native runtime are not touched (SF-12b).
+  - Engine `review/run.ts` `:675`: `ReviewRoutes.register(session.id, {
+    policy: route, ...decided })`, so the registry keeps `decidedOn`.
+    Without it a route admission allows only because of the catalog's
+    shipped origin (an attested provider, or an OpenRouter account a
+    provider defined in configuration holds) would be refused at the
+    transport, as the new run.test.ts case shows.
+  - Core `review/privacy.ts`:
+    - `zdrBatchBodyRefusal` `:302`: "batch" for a top-level `requests` list
+      or a `callback_url`, "unreadable-body" for a body that is not an
+      object, else undefined. `zdrBodyRefusal` calls it first `:266`, with
+      the same results as before. `ROUTE_REFUSALS` is unchanged.
+    - Comments: the header (`:4-25`), the vocabulary (`:52-55`),
+      `extendedCacheOnly` (the pre-gpt-5.5 retention setting is VS-33's
+      runner wiring, rewrapped), `zdrFeatureRefusal`'s Google note,
+      `zdrPathRefusal`'s "Nothing calls it yet", and the `:online` note.
+      They name what is still not refused: Gemini's own Batch and Files
+      paths, `cachedContent` and `fileData.fileUri`.
+
+- **Deviations.**
+  1. **The check runs per call in each fetch, not once at the top of
+     resolveSDK** (VS-23c item 1, the brief). resolveSDK has no session: the
+     SDK it builds is cached in `s.sdk` by provider, `api.id`, `npm` and
+     options, and the language model in `s.models` by provider and model ID,
+     across sessions, so a check at build time would hold only whichever
+     session built the model first. `zdrHold` is defined at the top of
+     resolveSDK, before the plan and free branches, and every fetch the three
+     branches return calls it first.
+  2. **The body-type rules apply to a "zdr" session's calls, not to every
+     call while a "zdr" review is active** (VS-23c item 2 says "under an
+     active zdr review"). Attribution comes from the header: a call with no
+     header is the owner's own and stays unchanged (item 3), and an
+     unregistered or "standard" session's call is another review's or the
+     owner's. A malformed header is refused while a "zdr" review is active,
+     as item 3 asks.
+  3. **zdrFeatureRefusal is wired for Anthropic and Google requests.** The
+     brief lists the path and body-shape checks (R1) and `zdrRequestBody`;
+     privacy.ts and VS-33 name VS-23c as `zdrFeatureRefusal`'s caller, so it
+     is called here. The lead may move it to SF-35; it refuses only, and only
+     a "zdr" session's call.
+  4. **provider.ts does not join `REVIEW_PIPELINE_FILES`.** The decisions live
+     in the pinned route.ts and privacy.ts; provider.ts only calls them. But
+     provider.ts now decides whether a "zdr" review's request is sent, which
+     is why route.ts was pinned, and an edit that removes a hold would not
+     move the pin. This is the lead's choice: pin provider.ts (every unrelated
+     provider edit then moves the pin and needs a revision decision), or keep
+     the call sites guarded by `zdr-route.test.ts` and the mutation checks
+     below, as now.
+  5. **Two run.test.ts cases change where the model switch happens.** "a model
+     that changes after its first attempt is refused at the retry…" and "a
+     model that changes before the finalizer is refused at the finalizer's
+     attempt" switched `model.api.url` in the `observe` callback of the first
+     attempt's admission, which runs before that attempt is sent. The
+     transport now refuses that attempt ("unknown-destination", nothing
+     sent), so the first request never reached the server. They now switch
+     on the first attempt's `settle` observation, after it was sent and
+     before the next admission, which is what their names and assertions
+     describe. Every assertion is unchanged, and both pass at HEAD with the
+     new trigger (HEAD sources swapped in, then restored with every checksum
+     unchanged). No test is skipped or loosened.
+
+- **Default and parity proof (I-1).**
+  - With no review session registered and no released "zdr" session
+    remembered in the process (the normal case: no "zdr" review has run),
+    `hold` returns on the two sizes before the header or anything else is
+    read. Per call that leaves one closure and two size reads; the other
+    default-path edits are the `target` hoist (same value), one property read
+    of `preconnect`, and the `guestRequest` refactor (same result for every
+    header). The origins (`requestOrigins`, which calls the vars loader again)
+    are computed only for a "zdr" session's call, as the critique asked.
+  - With review sessions registered, or once a "zdr" review has ended in
+    the process, a call with no header, an unregistered session's or a
+    "standard" one's reads the header and returns undefined before any body
+    is read; its options, `redirect` included, are unchanged.
+  - route.test.ts's "no review registered" case now asserts only that the
+    destinations are not read: a "zdr" session released earlier in the same
+    process (another case or another file) makes `hold` read the header, so
+    the header half of that claim is shown by the code, not by a test.
+  - zdr-route.test.ts "a zdr session's call follows no redirect…": an
+    unregistered session's call and the owner's own still follow a 307 to a
+    second loopback origin, which receives the same body the first did.
+  - `zdr-route.test.ts` "the owner's own calls, unregistered and standard
+    sessions send the same bytes whether or not a zdr review runs": those
+    three callers on the generic route (method, path, headers, body at the
+    fake server) and the plan route (the Codium gateway's recorded path,
+    authorization, client, catalog, purpose and body) are identical with and
+    without two concurrently registered "zdr" sessions.
+  - `zdr-route.test.ts` "a zdr session on a model server on this computer
+    sends exactly the unregistered request": byte-identical but for the
+    header's value.
+  - run.test.ts D3 (unset, "standard" and "zdr" on this computer send the same
+    bodies and outcomes in the ok, retry, finalizer and verify scenarios),
+    and every zdr loopback case in eval, narrative-invariance, review-privacy
+    and the eval's replay.test.ts, pass unchanged.
+  - Every regression file has the same counts as at HEAD (below).
+
+- **Fail-closed by construction.** A non-string body, a `Request` input, an
+  unparseable body, an unknown or unfilled destination, a provider's own
+  fetch (`forwards`), a switched model, a Codium or free model, and a
+  released "zdr" session are each refused before anything is sent, and a
+  held call follows no redirect. Codium stays "codium-unaccepted";
+  `MODEL_PLANS_ENABLED` is untouched; no attestation source is added (SF-15);
+  `EvidenceScope.route` is not set (SF-12b, once the native runtime and
+  helpers are held).
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `86ab977f0b9734c6` -> `7abbcc78d5ff0f90`
+  (route.ts, run.ts and privacy.ts changed; model-evidence.test.ts printed it,
+  failing once before the pin was set). The first round's value,
+  `2c6e87d2480026e8`, was never committed; the review-findings round changed
+  route.ts again (the released set, the inlined check, `sendBody`'s body),
+  and model-evidence.test.ts printed the new digest. `REVIEW_PIPELINE_REVISION` stays 4:
+  with privacy unset nothing a review finds or posts changes. provider.ts is
+  not pinned (deviation 4). Recompute after every merge of main: the
+  connect-finish lane edits the pinned `hub.ts` and `adapters/vectorscope.ts`.
+
+- **Replay variant.** Unchanged. `engine:privacy-zdr` keeps engine
+  `{ pending: "VS-23c" }` until SF-12b holds the native runtime and the
+  helper requests, and desktop `{ pending: "VS-23d" }`. The README's
+  route-refusal line (`:1234-1236`, "the `engine:privacy-zdr` variant waits
+  for VS-23c") stays true until SF-12b.
+
+- **Desktop half.** A documented difference, left pending: `ai-review.ts`
+  sessions are not registered with ReviewRoutes, so the transport never
+  holds them until SF-15 (VS-23d).
+
+- **Tests run** (one file at a time through the lock, `bun test --timeout
+  30000` from the package directory; scratch and `TMPDIR` under
+  `/tmp/vector-v2/scope/sf12a/`, so the engine preload's per-process XDG roots
+  are fresh under it, and each `it.instance` case gets its own temporary
+  project directory). HEAD baseline at `43e21b48` -> after; pass, skip, fail,
+  expects.
+  - Core (`packages/core`):
+    - `test/review/privacy.test.ts`: 56, 0, 0, 810 -> 57, 0, 0, 844 (a
+      `zdrBatchBodyRefusal` case; the batch helper, the "reads only a
+      top-level requests list" case and the recorded-cassette walk now check
+      it too; the `:1354` comment);
+    - `test/review/model-evidence.test.ts`: 30, 0, 0, 393 -> 30, 0, 0, 393
+      (the pin).
+  - Engine (`packages/engine`), new or changed:
+    - `test/provider/zdr-route.test.ts` (new): 14, 0, 0, 171 (12, 0, 0, 141
+      in the first round; the review findings added cases 13 and 14 and the
+      fetch guard);
+    - `test/review/route.test.ts`: 20, 0, 0, 71 -> 32, 0, 0, 117 (31, 0, 0,
+      112 in the first round; the review findings added the released case and
+      the `afterEach` release);
+    - `test/review/run.test.ts`: 70, 1, 4, 637 -> 71, 1, 4, 641 (the new
+      VS-23c case, and deviation 5). The first after-run, before deviation 5,
+      was 69, 1, 6, 633: those two cases. The 4 failures are the ones at HEAD
+      and in SF-11's entry (the missing unprivileged Git verifier: "the durable
+      local runner…", "deletion without instance context…" (30 s timeout),
+      "nested service placement…", "a resolver-time symlink retarget…").
+  - Engine regressions, the same at HEAD and after:
+    - `test/provider/free-catalog.test.ts` 7, 0, 0, 23;
+      `model-plans.test.ts` 15, 0, 0, 70; `header-timeout.test.ts` 6, 0, 0, 8;
+      `local-fit.test.ts` 17, 0, 0, 82; `prompt-cache-default.test.ts` 6, 0,
+      0, 39; `response-stall.test.ts` 1, 0, 0, 9;
+      `prompt-cache-breakpoint.test.ts` 5, 0, 0, 21;
+      `free-model-stream.test.ts` 4, 0, 0, 13;
+      `custom-provider-runtime.test.ts` 1, 0, 0, 6;
+      `response-terminal.test.ts` 5, 0, 0, 11;
+    - `test/provider/provider.test.ts` 120, 0, 1, 289: at HEAD too, "defaultModel
+      skips a configured model whose provider this version no longer offers"
+      gets `amazon-bedrock` instead of `anthropic` (this sandbox's
+      environment);
+    - `test/provider/preconnect.test.ts` 1, 0, 2, 3: at HEAD too, both
+      speculative-connection cases time out waiting for the connection in this
+      sandbox;
+    - `test/session/llm-request.test.ts` 46, 0, 0, 139; `llm.test.ts` 63, 0,
+      0, 185; `llm-memory-fence.test.ts` 17, 0, 0, 115;
+    - `test/cli/github.provider-credentials.test.ts` 4, 0, 0, 12;
+      `test/server/local-app-models.test.ts` 2, 0, 0, 16 (Vector Local's
+      `holds.check` path);
+    - `test/review/model.test.ts` 27, 0, 0, 126; `eval.test.ts` 44, 0, 0, 520;
+      `narrative-invariance.test.ts` 3, 0, 0, 293;
+      `vectorscope-replay.test.ts` 29, 0, 0, 352;
+      `test/cli/review-privacy.test.ts` 6, 0, 0, 88.
+  - Engine files that fail in this sandbox, run at HEAD (HEAD sources swapped
+    in, then restored with every checksum unchanged) and after, identical test
+    for test: `test/review/service.test.ts` 4, 1, 9, 44;
+    `local-run.test.ts` 1, 1, 11, 33; `local-admission.test.ts` 2, 1, 2, 35;
+    `test/connect/vectorscope.test.ts` 7, 1, 19, 113 (the missing
+    unprivileged Git verifier, or what follows from it).
+  - Eval (`packages/script`, as test.yml runs it):
+    `../../script/vectorscope-eval/replay.test.ts` 49, 0, 0, 653 -> 49, 0, 0,
+    653.
+  - Typecheck: `bun typecheck` in `packages/core` and `packages/engine` (test
+    files included), and `bun tsgo -p ../../script/vectorscope-eval/
+    tsconfig.json` from `packages/engine`: clean, in both rounds.
+  - Re-run after the review findings (scratch `/tmp/vector-v2/scope/sf12a/
+    round2*`), with the counts above unless named: core
+    `model-evidence.test.ts` 30, 0, 0, 393 (new pin) and `privacy.test.ts`;
+    engine `zdr-route.test.ts` and `route.test.ts` (new counts above);
+    `run.test.ts` 71, 1, 4, 641 (the same 4 sandbox failures); provider
+    `model-plans`, `free-catalog`, `free-model-stream`,
+    `prompt-cache-breakpoint`, `header-timeout`, `response-terminal` and
+    `custom-provider-runtime`; `test/session/llm-request.test.ts`;
+    `test/cli/review-privacy.test.ts`; review `model.test.ts`,
+    `eval.test.ts`, `narrative-invariance.test.ts` and
+    `vectorscope-replay.test.ts`; and the eval's `replay.test.ts`. All match.
+  - Prettier `--check` on the touched source and test files: clean in every
+    hunk SF-12a wrote, in both rounds. `provider.ts` is not Prettier-clean at HEAD in three
+    unrelated places (`playbookModel`'s type `:1490`, the Codium estimate
+    `:3151`, `codiumUnits`/`playbookModel` `:3281`); `--write` reformatted
+    those, so the file was restored and only SF-12a's hunks are kept.
+    `vectorscope-deviations.md` is not Prettier-clean at HEAD and was not
+    reformatted.
+
+- **zdr-route.test.ts cases** (every server is a loopback fake: a recorder
+  that answers 400, and core's Codium gateway; `NetworkGuard.use()`, and
+  every case asserts `guard.outside()` is empty; sessions are registered
+  through the real `ReviewRoutes.decide`, and released after each case):
+  1. generic fetch, OpenRouter on an attested account: the body equals the
+     unregistered body plus `provider: { zdr: true, data_collection: "deny" }`
+     with no `models`, `route`, `preset` or `plugins`; a plugin list is
+     "plugins" and fallback models "fallback-models", neither sent;
+  2. a zdr session on a model server on this computer: byte-identical;
+  3. plan route: "codium-unaccepted" with no gateway request, also for the
+     SDK's fetch called with a `Request` that carries the header and no init
+     (critique point 1); the control reaches the gateway;
+  4. free route: "free-model", also for a `Request` that carries the header,
+     and a malformed header "unattributed-request" while the zdr session is
+     registered, with no catalog, `forKey`, consent or credential read; the
+     control resolves its route and is refused for the missing acceptance as
+     before;
+  5. a `Uint8Array` body, a `Request` input (also with a string body beside
+     it) and a string that is not JSON: "unreadable-body", nothing sent; the
+     controls are sent as they are;
+  6. a malformed header `ses_a, ses_b`: sent with no review and with only a
+     standard review registered, "unattributed-request" with a zdr review;
+     a call with no header is sent;
+  7. an unattested provider (`https://api.acme.invalid/v1`) and a base URL
+     moved to `192.168.1.50` (the live provider's options, as a configuration
+     change would; the provider list drops a provider this test's
+     configuration puts on your network), both admitted as if on this
+     computer: "unattested-provider" and "unattested-network-server", with no
+     connection attempt to either host;
+  8. Batch and Files paths: a provider defined in configuration on the
+     OpenRouter SDK at `/api/v1/batches` (admitted as "openrouter-attested"
+     with `catalogOrigins` []) and an OpenAI-compatible server at
+     `/v1/files/f-1`: "batch"; the controls are sent;
+  9. a direct OpenAI-compatible body with `callback_url` or `requests: []`
+     (spread from the call's provider options): "batch";
+  10. Anthropic Messages on this computer: sent byte-identical, and a code
+      execution tool "anthropic-non-zdr-feature"; Google: sent, and
+      `google_search` "grounding-tool";
+  11. a call on another model than its session was decided for:
+      "unknown-destination";
+  12. byte identity for the owner's, unregistered and standard callers, above;
+  13. a redirect: a loopback model server that answers 307 with a `Location`
+      on the recorder (a second loopback origin). The zdr session's call
+      fails with Bun's `UnexpectedRedirect` and the recorder gets nothing;
+      an unregistered session's call and the owner's own follow it, and the
+      recorder gets the same body the redirector did;
+  14. a released zdr session: refused "unknown-destination" though no review
+      is registered, nothing sent; a released standard session is sent; the
+      same ID registered again is held as decided and sent.
+  - `sdkFetch` reads the SDK's fetch from the language model's `config`
+    (AI SDK internals, `@ai-sdk/openai-compatible` 2.0.41 as
+    `packages/engine` pins it) and now asserts it is a function first, so a
+    rename in an upgrade fails there and not as an undefined call.
+  - `route.test.ts` adds `hold` (no review registered reads nothing; the
+    owner's, unregistered, standard and malformed cases; `decidedOn` and an
+    attested provider held only with admission's `defaultOrigins`; the union
+    of admission's and the transport's destinations; a new LAN destination; a
+    provider's own fetch; a switched model; Codium and free refusals before
+    the switch; `verify: "api"`) and `sendBody` (unreadable bodies, the
+    `Request` flag, byte-for-byte passthrough, the OpenRouter rewrite equal to
+    `zdrRequestBody`, plugins, fallback models and the Batch path, Files and
+    Batch paths and bodies on direct routes, Anthropic's path and features,
+    Google's tools), and a released zdr session refused while nothing is
+    registered, a released standard one not held, and the ID registered again
+    held as decided. Both of its registry `describe` blocks release every
+    session a case names in `afterEach`, so a failed assertion no longer
+    leaks a "zdr" registration into later cases or files.
+  - `run.test.ts` adds "VS-23c: an attested OpenRouter account the
+    configuration defines is sent the ZDR body by the transport" (critique
+    point 2): Review.run under "zdr" with `zdrAttested: ["myrouter"]` on a
+    provider defined in configuration on the OpenRouter SDK at the fake
+    server, `catalogOrigins` []. The pass is ok and every model request
+    carries the ZDR `provider` field.
+
+- **Mutation checks** (`/tmp/vector-v2/scope/sf12a/mutate.py`: each mutation
+  applied alone, the named files run through the lock, the file restored and
+  its checksum confirmed against the pre-mutation one). All 20 fail a test.
+  1-15 ran in the first round; the review-findings round re-ran 6 with its
+  new anchor (the inlined check) and added 16-20:
+  1. the plan route's hold dropped: zdr-route "plan route";
+  2. the free route's hold dropped: zdr-route "free route";
+  3. the generic fetch's hold dropped: 7 zdr-route cases (malformed header,
+     unattested and LAN, Batch and Files, R1 body, Anthropic and Google,
+     another model, and the byte-identity case through the file-wide network
+     guard, which then lists the blocked `api.acme.invalid` attempt);
+  4. `sendBody` dropped: 5 zdr-route cases (the OpenRouter ZDR body,
+     unreadable bodies, Batch and Files, R1 body, Anthropic and Google);
+  5. the `Request` refusal dropped (`input.request ||`): route.test.ts
+     "a body that is not a JSON string…", and zdr-route's case 5 once it gained
+     a `Request` with a string body beside it (the first run of this mutation
+     passed zdr-route, since a `Request` without init has no string body; the
+     case was added and the mutation run again);
+  6. a malformed header let through: zdr-route "free route" and "a malformed
+     session header…", route.test.ts's hold case;
+  7. `decidedOn` dropped from run.ts's registration: run.test.ts's VS-23c
+     case;
+  8. OpenRouter's `zdrPathRefusal` dropped: zdr-route "Batch and Files",
+     route.test.ts's OpenRouter case;
+  9. the direct routes' `zdrPathRefusal` dropped: the same two files' Batch
+     and Files cases;
+  10. the direct routes' `zdrBatchBodyRefusal` dropped: zdr-route's R1 body and
+      unreadable-body cases (a non-JSON string is refused by it), route.test.ts's
+      two;
+  11. the Anthropic `zdrFeatureRefusal` dropped: zdr-route "Anthropic and
+      Google", route.test.ts's Anthropic case;
+  12. the Google `zdrFeatureRefusal` dropped: the same, and route.test.ts's
+      Google case;
+  13. `attempt` before the transport's own decision: zdr-route "plan route"
+      and "free route" (they read "unknown-destination"), route.test.ts's
+      union case;
+  14. admission's destinations left out of the union: route.test.ts's union
+      case;
+  15. admission's `defaultOrigins` not used: zdr-route "Batch and Files" (the
+      configuration-defined OpenRouter account), route.test.ts's attested
+      provider and `verify: "api"` cases;
+  16. the held call's `opts.redirect = "error"` dropped: zdr-route's redirect
+      case;
+  17. `hold`'s released check dropped: zdr-route's and route.test.ts's
+      released cases;
+  18. the fast path back on `sessions.size` alone: the same two cases (no
+      review is registered when they call);
+  19. `release` remembering nothing: the same two cases;
+  20. `register` not forgetting a released ID: the same two cases (the ID
+      registered again).
+  - Results: `/tmp/vector-v2/scope/sf12a/mutations/results.json` (round
+    one), `results-round2.json` (6) and `results-round2b.json` (16-20).
+
+- **Known limits.**
+  - Two catalog models that share one SDK (same `api.id`, `npm` and options)
+    share its fetch closure, which holds the first model built: the other's
+    "zdr" call is refused as "unknown-destination" (fail-closed). Left as is
+    after the review findings: adding `model.id` to the SDK cache key would
+    build more SDKs on the default path, and the fetch cannot tell which
+    language model called it.
+  - The released set is bounded (`RELEASED_LIMIT`, 4096 IDs per process, the
+    oldest forgotten first). A call that names a "zdr" session forgotten
+    that way, more than 4096 released "zdr" sessions later, is an
+    unregistered session's again and is sent unchecked. No test exercises the
+    bound, since one would assert the fail-open side.
+  - Child sessions: a session spawned from a "zdr" review session (task or
+    subagent) names its own ID, which is not registered, so its calls are
+    sent unchecked. Review.run denies the task tool to review sessions, so
+    none is spawned while a review runs today; SF-12b's proof covers them.
+  - A `${VARIABLE}` base URL stays refused, though the transport sees the
+    filled URL, because the route model of the options still holds the
+    unfilled text.
+  - A transport refusal in the middle of a review surfaces as a failed pass
+    (the session's error), not as the privacy note. Nothing is sent either
+    way. Mapping `Refused` to `partial: "privacy"` is SF-12b's option.
+  - `provider.preconnect` (a speculative connection, no request) is not held.
+  - Gemini's own Batch and Files paths, `cachedContent` and
+    `fileData.fileUri` are not refused (SF-35, VS-33's runner wiring).
+  - VS-33's runner-wiring normalisation of `store`, `X-OpenRouter-Cache` and
+    `prompt_cache_retention` (addendum A `:202`), which follows VS-23c and is
+    not in the owner's list: recorded for the lead.
+  - A helper request of a "zdr" session on another model than the pass's
+    (a title or a summary on a small model) is now refused at the transport
+    as "unknown-destination"; which helpers a `vectorscope.*` session sends
+    is SF-12b's proof.
+
+- **Hand-offs.**
+  - SF-12b: the native runtime (`flags.experimentalNativeLlm`), helper,
+    title and compaction requests, the proof that every `vectorscope.*`
+    request kind carries a parseable header, `EvidenceScope.route`, the
+    `engine:privacy-zdr` engine half, and optionally `Refused` ->
+    `partial: "privacy"`. The proof also covers child sessions spawned from
+    a "zdr" review session (task or subagent: their own, unregistered ID)
+    and calls after release beyond the released set's bound (Known limits).
+  - SF-35: the Anthropic Messages fake server, the audit of bodies from the
+    OpenRouter SDK (R1), and the Codium route under "zdr".
+  - SF-15: desktop registration and the `zdrAttested` source.
+  - The lead: confirming the go for `provider.ts` that the commit gate took
+    from its dispatch, before the PR merges (Status); provider.ts pinning or
+    a structural guard (deviation 4, review findings); the
+    scope-app-validation and vector-at-mention failures above; and
+    dispatching `test.yml` and `review-http-regression.yml` (scope local),
+    which the commit gate's fixed set leaves out.
+
+- **Critique points.**
+  1. Plan and free routes read the header from `init` only: taken. `zdrHold`
+     reads `init.headers`, else a `Request`'s headers, on all three routes;
+     zdr-route.test.ts cases 3 and 4 call each fetch with a `Request`.
+  2. Nothing caught dropping `decidedOn` in run.ts: taken. The run.test.ts
+     VS-23c case is allowed only through admission's `defaultOrigins` ([]),
+     and the mutation below fails it.
+  3. resolveSDK placement and the body-type scope: taken as deviations 1 and
+     2.
+  4. The CI record: taken (SF-11's seven workflows and the older
+     vector-at-mention failure, above). `test.yml` is in SF-12a's dispatch
+     list and covers SF-11's runtime changes too. `review-http-regression.yml`
+     (scope local) is in the list for the commit gate, or for the lead to
+     waive; this package does not push.
+  5. `body: parsed` for Anthropic: taken.
+  6. The union with admission's destinations: taken, with a route.test.ts
+     case.
+  7. `requestOrigins` on the default path: taken; it is a thunk, and `hold`
+     returns before calling it unless the call is a "zdr" session's.
+  8. More regression files: taken (prompt-cache-breakpoint, free-model-stream,
+     custom-provider-runtime, response-terminal, server/local-app-models, the
+     four sandbox-failing files at HEAD and after, and the eval's
+     replay.test.ts).
+  9. provider.ts pinning as the lead's choice: taken (deviation 4).
+  10. More mutations: taken (below).
+  11. The VS-33 wording: taken (known limits).
+  12. One scratch directory and XDG roots: taken (`/tmp/vector-v2/scope/
+      sf12a/`, under "Tests run").
+
+- **Review findings (round one)**, fixed in the working tree on 2026-11-17
+  before the commit gate:
+  1. Blocking: a held call followed HTTP redirects (with Vector Local off,
+     `Egress.fetch` sends the options as they are), so a 307 or 308 from an
+     allowed origin re-sent the body to one `hold` never saw (I-3). Fixed:
+     `opts.redirect = "error"` after `sendBody`, zdr-route case 13, mutation
+     16.
+  2. Non-blocking, raised twice: `hold` treated a session Review.run had
+     released as unregistered, so a late helper request or a continued
+     session carrying a released "zdr" session's ID went out unchecked.
+     Fixed with the bounded released set (`register`, `release`, `hold`),
+     zdr-route case 14, a route.test.ts case and mutations 17-20; child
+     sessions and the bound go to SF-12b (Known limits, Hand-offs).
+  3. Non-blocking: `zdrHold` checks the model that built a cached SDK. Left
+     as documented (Known limits, with the reason).
+  4. Non-blocking, raised twice: route.test.ts's hold cases released their
+     sessions on their last line, so a failed assertion leaked a "zdr"
+     registration. Fixed: `afterEach` releases every session a case names,
+     in both registry `describe` blocks; the trailing release lines are
+     gone.
+  5. Non-blocking: `sdkFetch` reads AI SDK internals. Kept, with a
+     `typeof fetcher` guard and a comment naming 2.0.41.
+  6. Non-blocking (style): `zdrActive` had one caller and `sendBody` renamed
+     `input.body`. Both inlined.
+  7. Non-blocking, raised twice: the lead's go for `provider.ts` was inferred
+     from the dispatch. No message from the lead was received in this round
+     either; Status and Hand-offs now say the lead must confirm it before
+     the push.
+  8. Non-blocking: provider.ts is not pinned, and a structural guard
+     (exactly three `zdrHold(` calls and one `ReviewRoutes.sendBody(`) was
+     suggested. Left to the lead with deviation 4, and not added: zdr-route
+     cases already fail when any one hold or `sendBody` is dropped
+     (mutations 1-4) and run in `test.yml` on every push, and a source-text
+     count would also fail on a harmless rename while not moving the pin
+     either.
+
+- **CI to dispatch** (commit gate; it records each run's ID and result in a
+  later entry):
+  - `typecheck.yml`;
+  - `test.yml` (runtime code; it also covers SF-11's runtime changes, which
+    were never run there);
+  - `scope-directory-identity.yml` (engine `src/review/**`, engine
+    `test/review/**`, core review);
+  - `review-memory-fence.yml` (`run.ts`);
+  - `vector-at-mention.yml` (core `review/**`);
+  - `review-http-regression.yml` with scope local, unless the lead waives it:
+    no HttpApi group or handler changed, but SF-11's run is still outstanding
+    and the review service's provider calls pass through the new hold.
+  - Not needed: `scope-app-validation.yml` (no app change).
+  - Deferred, CI only: the Windows and macOS legs of `test.yml`, the HTTP
+    shard, and the private-Git cases.
+
+- **Not claimed.**
+  - No paid run, no model call off this computer, and no quality claim.
+  - No default change, no key enabled, no attestation supplied and no model
+    approved.
+  - No transport certification, and no claim that I-3 holds on every
+    transport: the native runtime and the helper requests are SF-12b's, and
+    VS-23's Done line needs them.
+  - No `cat-file --batch`.
+  - No change to session/llm.ts, the spawn hot spots, the connect files, the
+    app, replay.ts VARIANTS or the README.

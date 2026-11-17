@@ -2,13 +2,14 @@
 // may send code on while `privacy` is "zdr", and which requests it may send there. Pure and browser-safe.
 //
 // VS-23b's admission (engine review/route.ts, from model resolution and Review.run) calls decideRoute for every model a
-// review may use, before each pass's session and at every provider attempt. VS-23c's transport backstop is to call it
-// again at the top of resolveSDK and apply zdrRequestBody to the final body of a request on an "openrouter-attested"
-// route; the body, path and feature checks below have no caller until then. zdrBodyRefusal is the only body check that
-// route needs: it covers the Anthropic Messages fields OpenRouter's `/api/v1/messages` takes as well. Every other
-// allowed route sends its body unchanged: `provider` is OpenRouter's field, which a direct provider or a model server
-// does not read. On those routes the transport, which alone can tell a request's format, checks an Anthropic or Google
-// request with zdrFeatureRefusal, passing an Anthropic request's path.
+// review may use, before each pass's session and at every provider attempt. VS-23c's transport backstop (route.ts
+// `hold` and `sendBody`, which provider.ts calls in every model call's fetch) calls it again for each request of a
+// session registered under "zdr", and checks the final body of every request it allows. A request on an
+// "openrouter-attested" route is sent with zdrRequestBody; zdrBodyRefusal is the only body check that route needs: it
+// covers the Anthropic Messages fields OpenRouter's `/api/v1/messages` takes as well. Every other allowed route sends
+// its body unchanged: `provider` is OpenRouter's field, which a direct provider or a model server does not read. On
+// those routes the transport, which alone can tell a request's format, checks an Anthropic or Google request with
+// zdrFeatureRefusal, passing an Anthropic request's path.
 //
 // VS-33's Now part is here: the refusals from "server-tool" on, attestation objects in `zdrAttested`
 // (readZdrAttestation), and the `attestations` an allowed decision lists, which admission acts on. Until a verifier
@@ -16,11 +17,12 @@
 // OpenAI one included; Q20 may later approve an admin credential for it. Only a Vertex metadata call, which waits for
 // Q20 with the other `verify: "api"` checks, can give "durable-cache", so nothing gives it yet.
 //
-// VS-33b (addendum B §1.1) has no caller either. zdrPathRefusal refuses a Batch or stored-file path on an OpenRouter or
-// OpenAI-compatible route as "batch" (the Anthropic format keeps anthropicPathRefusal), and zdrBodyRefusal refuses
-// OpenRouter's batch body first. VS-23c's backstop is to call zdrPathRefusal on every OpenRouter and OpenAI-compatible
-// request (runner-wiring R1). The batch body check exists only inside zdrBodyRefusal, with its OpenRouter rules, so a
-// direct OpenAI-compatible route still gets no body check until R1 gives it one.
+// VS-33b (addendum B §1.1): zdrPathRefusal refuses a Batch or stored-file path on an OpenRouter or OpenAI-compatible
+// route as "batch" (the Anthropic format keeps anthropicPathRefusal), and zdrBatchBodyRefusal refuses a Batch API body,
+// zdrBodyRefusal's first check. The transport backstop calls zdrPathRefusal on every OpenRouter and other
+// non-Anthropic request, and zdrBatchBodyRefusal on every direct one (runner-wiring R1). Not refused yet: Gemini's own
+// Batch and Files paths, a Google `cachedContent` and a Files API upload in `fileData.fileUri` (SF-35 and VS-33's
+// runner wiring).
 //
 // ZDR reduces retention; it cannot rule it out (invariant I-3). A provider may keep content its safety systems flag
 // (Anthropic up to two years), legal holds override any agreement, and account settings Vector cannot see, such as
@@ -47,9 +49,10 @@ export type ReviewPrivacy = NonNullable<ReviewConfig["privacy"]>
 //   "anthropic-non-zdr-feature" for an Anthropic Messages feature in one, and "batch" for OpenRouter's batch body;
 // - zdrFeatureRefusal gives "grounding-tool" for a Google request, and "anthropic-non-zdr-feature" (or "batch") for an
 //   Anthropic one;
-// - zdrPathRefusal gives "batch" for a Batch or stored-file path on an OpenRouter or OpenAI-compatible route;
-// - the transport backstop (VS-23c) also refuses a Batch request, through zdrPathRefusal, and a request whose session
-//   cannot be told ("unattributed-request");
+// - zdrPathRefusal gives "batch" for a Batch or stored-file path on an OpenRouter or OpenAI-compatible route, and
+//   zdrBatchBodyRefusal for a Batch API body on any route but Anthropic's;
+// - the transport backstop (VS-23c, engine review/route.ts) also refuses a request whose session cannot be told
+//   ("unattributed-request"), and a body that is not a JSON string beside the URL ("unreadable-body");
 // - VS-23b's admission (engine review/route.ts) gives "attestation-unverified" for a route decideRoute allows whose
 //   decision lists an attestation with `verify: "api"`, which nothing can check yet (Q20), an OpenAI one included;
 // - "durable-cache", for a Vertex project whose cache config may keep prompts, needs the metadata call Q20 decides, so
@@ -225,14 +228,15 @@ export function readZdrAttestation(value: unknown): { attestation: ZdrAttestatio
 /**
  * Whether one of these model IDs is an OpenAI model whose prompt cache OpenAI keeps for up to 24 hours: gpt-5.5 and
  * later support only extended prompt caching, which holds KV tensors on GPU-local storage [G3-8, G4-11; OpenAI's
- * openai-openapi spec, `prompt_cache_retention`, read 2026-11-06]. The one model-version table: VS-23c reuses it for the
- * pre-gpt-5.5 retention setting. `gpt` and the version are matched anywhere in the ID, any case (`chatgpt-5.5`,
- * `openai/gpt-6`), with a `-`, a `_` or nothing between (`gpt5.5`, `gpt_5.5`). The minor version follows a dot, or a
- * `-` or `_` as one or two digits (`gpt-5-5`; a date such as `gpt-5-2025-08-07` is 5.0). A two-digit run without one is
- * major and minor, as the engine's gpt5OrNewer reads it (`gpt-55` is 5.5, Azure's `gpt-35-turbo` is 3.5, Venice's
- * `openai-gpt-54-pro` is 5.4), except from 10 to 29, which no OpenAI model has been, so a later `gpt-10` is 10. That
- * leans to refusal: an open model such as Cerebras-GPT-13B reads as 13. Update this when OpenAI names later models
- * otherwise. An ID that hides the model, such as an Azure deployment name, is not caught (admission metadata, VS-23b).
+ * openai-openapi spec, `prompt_cache_retention`, read 2026-11-06]. The one model-version table: VS-33's runner wiring
+ * is to reuse it for the pre-gpt-5.5 retention setting. `gpt` and the version are matched anywhere in the ID, any case
+ * (`chatgpt-5.5`, `openai/gpt-6`), with a `-`, a `_` or nothing between (`gpt5.5`, `gpt_5.5`). The minor version
+ * follows a dot, or a `-` or `_` as one or two digits (`gpt-5-5`; a date such as `gpt-5-2025-08-07` is 5.0). A
+ * two-digit run without one is major and minor, as the engine's gpt5OrNewer reads it (`gpt-55` is 5.5, Azure's
+ * `gpt-35-turbo` is 3.5, Venice's `openai-gpt-54-pro` is 5.4), except from 10 to 29, which no OpenAI model has been, so
+ * a later `gpt-10` is 10. That leans to refusal: an open model such as Cerebras-GPT-13B reads as 13. Update this when
+ * OpenAI names later models otherwise. An ID that hides the model, such as an Azure deployment name, is not caught
+ * (admission metadata, VS-23b).
  */
 export function extendedCacheOnly(ids: readonly unknown[]): boolean {
   const versions = ids.flatMap((id) => (typeof id === "string" ? [...id.toLowerCase().matchAll(GPT_VERSION)] : []))
@@ -259,9 +263,8 @@ export function extendedCacheOnly(ids: readonly unknown[]): boolean {
 export function zdrBodyRefusal(body: unknown, modelID: string): RouteRefusal | undefined {
   const fields = record(body)
   if (!fields) return "unreadable-body"
-  // OpenRouter's Batch API body: a top-level `requests` list, each request with its own `params`, and a `callback_url`.
-  // It has no top-level messages or tools for the checks below to refuse.
-  if (Array.isArray(fields.requests) || given(fields, "callback_url")) return "batch"
+  const batch = zdrBatchBodyRefusal(fields)
+  if (batch) return batch
   const named = idRefusal([modelID, fields.model])
   if (named) return named
   const routing = openRouterModelRouting(fields, undefined)
@@ -290,6 +293,19 @@ export function zdrBodyRefusal(body: unknown, modelID: string): RouteRefusal | u
 }
 
 /**
+ * Why a request body is a Batch API body, which the provider keeps beyond the request: "batch" for a top-level
+ * `requests` list (OpenRouter's and OpenAI-style batches, each request with its own `params`) or a `callback_url`;
+ * "unreadable-body" for a body that is not an object. Such a body has no top-level messages or tools for any other check
+ * to refuse. It is the body-shape check runner-wiring R1 gives direct OpenAI-compatible routes, and zdrBodyRefusal's
+ * first check on OpenRouter. A chat body that only mentions "requests" in its text is undefined.
+ */
+export function zdrBatchBodyRefusal(body: unknown): RouteRefusal | undefined {
+  const fields = record(body)
+  if (!fields) return "unreadable-body"
+  return Array.isArray(fields.requests) || given(fields, "callback_url") ? "batch" : undefined
+}
+
+/**
  * The body a request to OpenRouter sends on a ZDR route: `provider.zdr` true and `provider.data_collection` "deny",
  * whatever the configuration set there, and every other provider preference as it was (order, only, ignore,
  * allow_fallbacks, sort, max_price, quantizations, a require_parameters already set, and an empty `options`). It never
@@ -303,8 +319,8 @@ export function zdrRequestBody(body: unknown, modelID: string): Record<string, u
 }
 
 // The request formats with features of their own that zero data retention does not cover. The transport tells which
-// format a request has (VS-23c). A request to OpenRouter needs no check here: zdrBodyRefusal covers its Anthropic
-// Messages fields.
+// format a request has (VS-23c, from the request's SDK). A request to OpenRouter needs no check here: zdrBodyRefusal
+// covers its Anthropic Messages fields.
 export type ZdrRequestFormat = "anthropic" | "google"
 
 /**
@@ -314,8 +330,9 @@ export type ZdrRequestFormat = "anthropic" | "google"
  * endpoint is refused here.
  * - Google: every tool must be function calling (`functionDeclarations`, or an OpenAI-style `type: "function"` tool),
  *   so Search, Maps, URL context, retrieval, code execution and computer use are "grounding-tool" [G4 §4.2]. Nothing
- *   else is checked: the request's path, `cachedContent` and a stored Files API upload in `fileData.fileUri` are left
- *   to VS-23b and VS-23c.
+ *   else is checked here: the transport (VS-23c) checks a Google request's path with zdrPathRefusal, which does not
+ *   know Gemini's own Batch and Files paths, and nothing yet checks `cachedContent` or a stored Files API upload in
+ *   `fileData.fileUri` (SF-35 and VS-33's runner wiring).
  * - Anthropic: the path must be one of anthropicPathRefusal's Messages endpoints (Anthropic's, wherever the base URL
  *   puts it, and Claude's on Vertex and Bedrock), and Batch on any of them is "batch". The body may not set
  *   `mcp_servers` (the MCP connector), `container` (Agent Skills and code execution containers) or `thread` (message
@@ -356,8 +373,8 @@ export function zdrFeatureRefusal(request: {
  * body checks decide the rest. So an unusual spelling of a Batch path (another case, percent-encoding, a `;` parameter,
  * backslashes, or no `/v1/`) is not refused; the transport passes the URL the SDK built, which untrusted text never
  * chooses.
- * Nothing calls it yet. VS-23c's backstop is to call it on every OpenRouter and OpenAI-compatible request (runner-wiring
- * R1); the Anthropic format keeps anthropicPathRefusal, through zdrFeatureRefusal.
+ * VS-23c's backstop (engine review/route.ts sendBody) calls it on every OpenRouter and other non-Anthropic request
+ * (runner-wiring R1); the Anthropic format keeps anthropicPathRefusal, through zdrFeatureRefusal.
  */
 export function zdrPathRefusal(path: unknown): RouteRefusal | undefined {
   if (typeof path !== "string") return "unreadable-body"
@@ -367,7 +384,7 @@ export function zdrPathRefusal(path: unknown): RouteRefusal | undefined {
 
 // OpenRouter's `:online` variant turns on its web plugin, which sends the query to a search provider, wherever it sits
 // in a stacked variant (`:online:nitro`, `:nitro:online`). From OpenRouter's model variants as recalled: its docs could
-// not be read here, so VS-23c's fake server checks the wire.
+// not be read here, so VS-23c's fake server (SF-35) is to check the wire.
 const ONLINE = /:online(?:$|[:@])/
 // Anthropic's Covered Models need 30-day retention and are not available under ZDR unless Anthropic expressly
 // authorizes the organization: Claude Fable 5 and 5.1 and Mythos 5 and 5.1, read 2026-11-05 [enablers §1.6]. Matched

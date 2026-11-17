@@ -669,12 +669,10 @@ export const run: (
       yield* guard.ignoreLoops(session.id)
       tracks.set(session.id, track)
       sessionIDs.push(session.id)
-      // Every session is registered with the review's policy, and under "zdr" with the model its pass was decided for,
-      // which admission below and VS-23c's transport backstop hold each attempt to. Released when the review ends.
-      ReviewRoutes.register(session.id, {
-        policy: route,
-        ...(decided ? { key: decided.key, decision: decided.decision } : {}),
-      })
+      // Every session is registered with the review's policy, and under "zdr" with the model its pass was decided for
+      // and what it was decided on, which admission below and VS-23c's transport backstop (provider.ts) hold each
+      // attempt to. Released when the review ends.
+      ReviewRoutes.register(session.id, { policy: route, ...decided })
       yield* progress({ type: "specialist", name: spec.name, status: "running" })
 
       // One policy survives every processor instance, retry and prompt for this fresh owned session. It is never

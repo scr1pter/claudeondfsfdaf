@@ -1,8 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
-import { decideRoute, type RouteDecision, type RouteRefusal } from "@vectordevai/core/review/privacy"
+import { decideRoute, zdrRequestBody, type RouteDecision, type RouteRefusal } from "@vectordevai/core/review/privacy"
 import type { ZdrAttestedEntry } from "@vectordevai/core/review/types"
 import { Provider } from "@/provider/provider"
 import { ReviewRoutes } from "../../src/review/route"
@@ -357,7 +357,14 @@ describe("ReviewRoutes.decide", () => {
 })
 
 describe("ReviewRoutes session registry", () => {
-  const session = (suffix: string) => SessionID.make(`ses_routetest${suffix}`)
+  // The registry is process-global: every session a case names is released after it, whatever the case does.
+  const named: SessionID[] = []
+  const session = (suffix: string) => {
+    const id = SessionID.make(`ses_routetest${suffix}`)
+    named.push(id)
+    return id
+  }
+  afterEach(() => named.splice(0).forEach((id) => ReviewRoutes.release(id)))
   const found = model("lmstudio/test-model")
   const local = { models: [found], options: { baseURL: "http://127.0.0.1:1234/v1" }, asked: [] }
 
@@ -388,7 +395,6 @@ describe("ReviewRoutes session registry", () => {
       expect(ReviewRoutes.attempt(id, { ...found, providerID: ProviderV2.ID.make("other") })).toBe(
         "unknown-destination",
       )
-      ReviewRoutes.release(id)
     }),
   )
 
@@ -410,4 +416,248 @@ describe("ReviewRoutes session registry", () => {
         expect(ReviewRoutes.attempt(id, found)).toBe("unknown-destination")
       }),
   )
+})
+
+// VS-23c (SF-12a): the transport backstop provider.ts calls in every model call's fetch: hold decides a call of a
+// session registered under "zdr" again, on what admission decided on and what the transport sees, and sendBody checks
+// or rewrites its final body. zdr-route.test.ts covers the same through provider.ts's fetches.
+describe("ReviewRoutes.hold", () => {
+  // The registry is process-global: every session a case names is released after it, whatever the case does.
+  const named: SessionID[] = []
+  const session = (suffix: string) => {
+    const id = SessionID.make(`ses_holdtest${suffix}`)
+    named.push(id)
+    return id
+  }
+  afterEach(() => named.splice(0).forEach((id) => ReviewRoutes.release(id)))
+  const local = model("lmstudio/test-model")
+  const anthropic = model("anthropic/claude-sonnet-4-5", { npm: "@ai-sdk/anthropic" })
+  const LOOPBACK_OPTIONS = { baseURL: "http://127.0.0.1:1234/v1" }
+  const hold = (
+    id: string | undefined,
+    found: Provider.Model,
+    options: Record<string, unknown> = {},
+    destinations: string[] = [],
+  ) =>
+    ReviewRoutes.hold({
+      session: () => (id === "none" ? undefined : { id }),
+      model: found,
+      options,
+      destinations: () => destinations,
+    })
+  // A session registered from the real admission (decide), over a provider with these options.
+  const admit = (id: SessionID, found: Provider.Model, policy: ReviewRoutes.Policy, options = {}, subject = {}) =>
+    Effect.gen(function* () {
+      const decided = yield* decide(
+        `${found.providerID}/${found.id}`,
+        policy,
+        { models: [found], options, asked: [] },
+        subject,
+      )
+      ReviewRoutes.register(id, { policy, ...decided })
+      return decided
+    })
+
+  // A "zdr" session released earlier in this process (another case, or another file in the same process) makes hold
+  // read the header, so only the destinations are asserted unread.
+  test("no review registered: nothing is held and the call's destinations are never read", () => {
+    const read: string[] = []
+    const held = ReviewRoutes.hold({
+      session: () => {
+        read.push("header")
+        return { id: "ses_whatever" }
+      },
+      model: local,
+      options: LOOPBACK_OPTIONS,
+      destinations: () => {
+        read.push("destinations")
+        return []
+      },
+    })
+    expect(held).toBeUndefined()
+    expect(read).not.toContain("destinations")
+  })
+
+  it.effect(
+    "the owner's calls, unregistered and standard sessions are not held; a malformed header only under zdr",
+    () =>
+      Effect.gen(function* () {
+        const standard = session("standard")
+        ReviewRoutes.register(standard, { policy: { privacy: "standard", attested: [] } })
+        expect(hold("none", local, LOOPBACK_OPTIONS)).toBeUndefined()
+        expect(hold("ses_holdtestunregistered", local, LOOPBACK_OPTIONS)).toBeUndefined()
+        expect(hold(standard, local, LOOPBACK_OPTIONS)).toBeUndefined()
+        expect(hold(undefined, local, LOOPBACK_OPTIONS)).toBeUndefined()
+        const id = session("zdr")
+        yield* admit(id, local, zdr(), LOOPBACK_OPTIONS)
+        expect(hold(undefined, local, LOOPBACK_OPTIONS)).toEqual({ refusal: "unattributed-request" })
+        expect(hold(id, local, LOOPBACK_OPTIONS, ["http://127.0.0.1:1234/v1/chat/completions"])).toEqual({
+          kind: "loopback",
+        })
+      }),
+  )
+
+  it.effect(
+    "decide keeps what it decided on, and an attested provider holds only with admission's defaultOrigins",
+    () =>
+      Effect.gen(function* () {
+        const id = session("attested")
+        const decided = yield* admit(id, anthropic, zdr(["anthropic"]))
+        expect(decided.decidedOn).toEqual(
+          ReviewRoutes.routeModel({
+            providerID: "anthropic",
+            modelID: "claude-sonnet-4-5",
+            found: anthropic,
+            options: {},
+            line: undefined,
+          }),
+        )
+        const sent = ["https://api.anthropic.com", "https://api.anthropic.com/v1/messages"]
+        expect(hold(id, anthropic, {}, sent)).toEqual({ kind: "attested-provider" })
+        // Registered without what admission decided on, the provider's origins are unknown, so its attestation covers
+        // no host.
+        ReviewRoutes.register(id, { policy: zdr(["anthropic"]), key: decided.key, decision: decided.decision })
+        expect(hold(id, anthropic, {}, sent)).toEqual({ refusal: "unattested-provider" })
+      }),
+  )
+
+  it.effect("every origin either side saw must be allowed, and the transport's own decision comes first", () =>
+    Effect.gen(function* () {
+      const id = session("union")
+      // Admission saw a plugin's preconnect origin off this computer, which a host attestation allows; the
+      // transport no longer sees it, and the union still needs it allowed.
+      const options = { ...LOOPBACK_OPTIONS, preconnect: "https://relay.example.invalid" }
+      const decided = yield* admit(id, local, zdr(["relay.example.invalid"]), options)
+      expect(decided.decision).toEqual({ allowed: true, kind: "attested-host" })
+      expect(hold(id, local, LOOPBACK_OPTIONS)).toEqual({ kind: "attested-host" })
+      ReviewRoutes.register(id, { ...ReviewRoutes.registered(id)!, policy: zdr() })
+      expect(hold(id, local, LOOPBACK_OPTIONS)).toEqual({ refusal: "unattested-provider" })
+      // The transport sees a destination admission did not.
+      yield* admit(id, local, zdr(), LOOPBACK_OPTIONS)
+      expect(hold(id, local, LOOPBACK_OPTIONS, ["http://gpu-box:8080/v1/chat/completions"])).toEqual({
+        refusal: "unattested-network-server",
+      })
+      // A provider's own fetch now, or a model admission did not decide for.
+      expect(hold(id, local, { ...LOOPBACK_OPTIONS, fetch: () => undefined })).toEqual({
+        refusal: "unknown-destination",
+      })
+      expect(hold(id, { ...local, id: ModelV2.ID.make("other-model") }, LOOPBACK_OPTIONS)).toEqual({
+        refusal: "unknown-destination",
+      })
+      // Codium and a free model name their own refusal, not the switch of model.
+      expect(hold(id, model("vector-plan/vector-flash"), {})).toEqual({ refusal: "codium-unaccepted" })
+      expect(hold(id, model("vector/acme/coder:free"), {})).toEqual({ refusal: "free-model" })
+    }),
+  )
+
+  it.effect("a zdr session its review released is refused; a released standard one is unregistered", () =>
+    Effect.gen(function* () {
+      const id = session("released")
+      const decided = yield* admit(id, local, zdr(), LOOPBACK_OPTIONS)
+      const sent = ["http://127.0.0.1:1234/v1/chat/completions"]
+      expect(hold(id, local, LOOPBACK_OPTIONS, sent)).toEqual({ kind: "loopback" })
+      ReviewRoutes.release(id)
+      // Nothing else is registered, and the released session is still refused.
+      expect(hold(id, local, LOOPBACK_OPTIONS, sent)).toEqual({ refusal: "unknown-destination" })
+      expect(hold("ses_holdtestneverregistered", local, LOOPBACK_OPTIONS, sent)).toBeUndefined()
+      const standard = session("releasedstandard")
+      ReviewRoutes.register(standard, { policy: { privacy: "standard", attested: [] } })
+      ReviewRoutes.release(standard)
+      expect(hold(standard, local, LOOPBACK_OPTIONS, sent)).toBeUndefined()
+      // Registered again, it is held as decided.
+      ReviewRoutes.register(id, { policy: zdr(), ...decided })
+      expect(hold(id, local, LOOPBACK_OPTIONS, sent)).toEqual({ kind: "loopback" })
+    }),
+  )
+
+  it.effect("an attestation that asks Vector to check the account is refused at the transport too", () =>
+    Effect.gen(function* () {
+      const id = session("verify")
+      const decided = yield* admit(id, anthropic, zdr(["anthropic"]))
+      const checked = { id: "anthropic", operator: "anthropic", verify: "api" as const }
+      ReviewRoutes.register(id, { ...decided, policy: zdr([checked]) })
+      expect(hold(id, anthropic, {}, ["https://api.anthropic.com/v1/messages"])).toEqual({
+        refusal: "attestation-unverified",
+      })
+    }),
+  )
+})
+
+describe("ReviewRoutes.sendBody", () => {
+  const send = (input: Partial<Parameters<typeof ReviewRoutes.sendBody>[0]> & { body: unknown }) =>
+    ReviewRoutes.sendBody({
+      kind: "loopback",
+      npm: "@ai-sdk/openai-compatible",
+      url: "http://127.0.0.1:1234/v1/chat/completions",
+      request: false,
+      modelID: "coder",
+      ...input,
+    })
+  const chat = { model: "coder", messages: [{ role: "user", content: "Review the change in requests.ts" }] }
+
+  test("a body that is not a JSON string beside the URL is unreadable", () => {
+    expect(send({ body: new TextEncoder().encode(JSON.stringify(chat)) })).toEqual({ refusal: "unreadable-body" })
+    expect(send({ body: undefined })).toEqual({ refusal: "unreadable-body" })
+    expect(send({ body: JSON.stringify(chat), request: true })).toEqual({ refusal: "unreadable-body" })
+    expect(send({ body: "{not json" })).toEqual({ refusal: "unreadable-body" })
+    expect(send({ body: "[]" })).toEqual({ refusal: "unreadable-body" })
+  })
+
+  test("every route but OpenRouter's sends the body it was given, byte for byte", () => {
+    const spaced = '{ "model":"coder",  "messages": [] }'
+    expect(send({ body: spaced })).toEqual({ body: spaced })
+    expect(send({ body: spaced, kind: "attested-host" })).toEqual({ body: spaced })
+  })
+
+  test("OpenRouter's route sends zdrRequestBody, after its path, and refuses what zdrBodyRefusal names", () => {
+    const openrouter = { kind: "openrouter-attested" as const, npm: "@openrouter/ai-sdk-provider" }
+    const url = "https://openrouter.ai/api/v1/chat/completions"
+    expect(send({ ...openrouter, url, body: JSON.stringify(chat) })).toEqual({
+      body: JSON.stringify(zdrRequestBody(chat, "coder")),
+    })
+    expect(send({ ...openrouter, url, body: JSON.stringify({ ...chat, plugins: [] }) })).toEqual({
+      refusal: "plugins",
+    })
+    expect(send({ ...openrouter, url, body: JSON.stringify({ ...chat, models: ["acme/other"] }) })).toEqual({
+      refusal: "fallback-models",
+    })
+    expect(send({ ...openrouter, url: "https://openrouter.ai/api/v1/batches", body: JSON.stringify(chat) })).toEqual({
+      refusal: "batch",
+    })
+  })
+
+  test("direct OpenAI-compatible routes refuse Batch and Files paths and bodies (runner-wiring R1)", () => {
+    expect(send({ url: "http://127.0.0.1:1234/v1/files/f-1", body: JSON.stringify(chat) })).toEqual({
+      refusal: "batch",
+    })
+    expect(send({ url: "http://127.0.0.1:1234/v1/batches", body: JSON.stringify(chat) })).toEqual({ refusal: "batch" })
+    expect(send({ body: JSON.stringify({ ...chat, callback_url: "https://hook.invalid" }) })).toEqual({
+      refusal: "batch",
+    })
+    expect(send({ body: JSON.stringify({ requests: [] }) })).toEqual({ refusal: "batch" })
+  })
+
+  test("an Anthropic request needs a Messages path and no feature zero data retention does not cover", () => {
+    const anthropic = { npm: "@ai-sdk/anthropic", url: "http://127.0.0.1:1234/v1/messages" }
+    const messages = JSON.stringify({ model: "claude", messages: [{ role: "user", content: "hi" }] })
+    expect(send({ ...anthropic, body: messages })).toEqual({ body: messages })
+    expect(
+      send({ ...anthropic, body: JSON.stringify({ ...JSON.parse(messages), mcp_servers: [{ name: "x" }] }) }),
+    ).toEqual({ refusal: "anthropic-non-zdr-feature" })
+    expect(send({ ...anthropic, url: "http://127.0.0.1:1234/v1/messages/batches", body: messages })).toEqual({
+      refusal: "batch",
+    })
+    expect(send({ ...anthropic, url: "http://127.0.0.1:1234/v1/complete", body: messages })).toEqual({
+      refusal: "anthropic-non-zdr-feature",
+    })
+  })
+
+  test("a Google request may call functions only", () => {
+    const google = { npm: "@ai-sdk/google", url: "http://127.0.0.1:1234/v1beta/models/gemini:streamGenerateContent" }
+    const functions = JSON.stringify({ contents: [], tools: [{ functionDeclarations: [{ name: "read" }] }] })
+    expect(send({ ...google, body: functions })).toEqual({ body: functions })
+    expect(send({ ...google, body: JSON.stringify({ contents: [], tools: [{ googleSearch: {} }] }) })).toEqual({
+      refusal: "grounding-tool",
+    })
+  })
 })

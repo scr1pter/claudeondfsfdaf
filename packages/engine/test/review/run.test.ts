@@ -3555,8 +3555,10 @@ describe("VS-23b route admission", () => {
             config: zdr({ maxSteps: 2 }),
             observe: (event) => {
               observed.push(event)
-              // The first attempt is admitted; the session's model then names another URL, as a switch would.
-              if (event.type === "attempt" && event.admitted) model.api.url = "https://moved.example.invalid/v1"
+              // The first attempt is sent and settles; the session's model then names another URL, as a switch would.
+              // VS-23c (SF-12a): it changes once that attempt settled, not when it was admitted, since the transport
+              // refuses an admitted attempt whose model changes before it is sent (zdr-route.test.ts).
+              if (event.type === "settle") model.api.url = "https://moved.example.invalid/v1"
             },
           }),
         )
@@ -3591,7 +3593,8 @@ describe("VS-23b route admission", () => {
             config: zdr(),
             observe: (event) => {
               observed.push(event)
-              if (event.type === "attempt" && event.admitted) model.api.url = "https://moved.example.invalid/v1"
+              // Once the turn's attempt settled (VS-23c: not when it was admitted, as above).
+              if (event.type === "settle") model.api.url = "https://moved.example.invalid/v1"
             },
           }),
         )
@@ -3707,6 +3710,53 @@ describe("VS-23b route admission", () => {
         }
       }),
     120_000,
+  )
+
+  it.instance(
+    "VS-23c: an attested OpenRouter account the configuration defines is sent the ZDR body by the transport",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        // A provider defined in configuration on the OpenRouter SDK, at the fake server as its stand-in. The catalog
+        // ships it nowhere (`catalogOrigins` []), so its ID attests the owner's OpenRouter account. Only admission
+        // knows that; the transport decides on what admission decided on (`decidedOn`), and without it would refuse the
+        // route as "unattested-openrouter".
+        const base = testProviderConfig(llm.url)
+        const files = yield* FSUtil.Service
+        yield* files.writeWithDirs(
+          path.join(directory, "vector.json"),
+          JSON.stringify({
+            $schema: "https://vectordev.ai/config.json",
+            ...base,
+            provider: {
+              myrouter: {
+                ...base.provider.lmstudio,
+                id: "myrouter",
+                name: "My router",
+                npm: "@openrouter/ai-sdk-provider",
+                models: { "test-model": { ...base.provider.lmstudio.models["test-model"], cost: PRICE } },
+              },
+            },
+          }),
+        )
+        yield* Effect.promise(() => trustWorkspace(directory))
+        const model = {
+          providerID: ProviderV2.ID.make("myrouter"),
+          modelID: ref.modelID,
+          context: 100_000,
+          costKind: "priced" as const,
+          price: PRICE,
+          catalogOrigins: [],
+        }
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const outcome = yield* Review.run(input(directory, { model, config: zdr({ zdrAttested: ["myrouter"] }) }))
+        expect(outcome.specialists).toEqual([{ name: "review", status: "ok", steps: 1 }])
+        expect(outcome.partial).toBeUndefined()
+        const bodies = yield* modelRequests(llm)
+        expect(bodies.length).toBeGreaterThan(0)
+        for (const body of bodies) expect(body.provider).toEqual({ zdr: true, data_collection: "deny" })
+      }),
+    TIMEOUT,
   )
 })
 

@@ -1,13 +1,20 @@
 // VS-23b (SF-11): the zero data retention route rules (core privacy.ts) at admission. privacy.ts decides; this file
-// gathers what it decides on from the provider, and keeps the policy and the decided model of each session Review.run
-// creates, so that every provider attempt is admitted against the model its session was decided for. VS-23c's
-// transport backstop is to read the same registry by a request's `x-session-id`. Under privacy "standard" nothing here
-// asks the provider anything.
+// gathers what it decides on from the provider, and keeps the policy, the decided model and what admission decided on
+// for each session Review.run creates, so that every provider attempt is admitted against the model its session was
+// decided for. Under privacy "standard" nothing here asks the provider anything.
 //
-// What admission cannot see is VS-23c's: provider options changed between attempts, the request body and its features,
-// a `Request` body, the native runtime, and helper requests. A model whose destination is computed at send time (a
-// base URL with an unfilled `${VARIABLE}`, Vertex's and Bedrock's URLs from project and region) has none admission can
-// read, so it is refused as "unknown-destination".
+// VS-23c (SF-12a): the transport backstop. provider.ts calls `hold` at the top of every model call's fetch on the plan
+// route, the free route and the generic V1 fetch, with the request's `x-session-id`, and `sendBody` on the generic
+// fetch's final body; a refusal throws `Refused` before anything is sent. A request of a session registered under
+// "zdr" is decided again on what admission decided on plus every destination the transport sees, and its body must be
+// a JSON string the body, path and feature checks allow, and it follows no redirect. A request that names a "zdr"
+// session the review has released is refused. Every other request, the owner's own (no header), an unregistered
+// session's or a "standard" one's, is left exactly as it was.
+//
+// What neither sees yet is SF-12b's: the native runtime, and helper, title and compaction requests on another model
+// (refused here by the session's key). A model whose destination is computed at send time (a base URL with an
+// unfilled `${VARIABLE}`, Vertex's and Bedrock's URLs from project and region) has none admission can read, so it is
+// refused as "unknown-destination".
 
 import type { ModelV2 } from "@vectordevai/core/model"
 import type { ModelCatalog } from "@vectordevai/core/model-catalog"
@@ -16,13 +23,19 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { OllamaServer } from "@vectordevai/core/local-mode/servers/ollama"
 import {
   decideRoute,
+  zdrBatchBodyRefusal,
+  zdrBodyRefusal,
+  zdrFeatureRefusal,
+  zdrPathRefusal,
+  zdrRequestBody,
   type ReviewPrivacy,
   type RouteDecision,
+  type RouteKind,
   type RouteModel,
   type RouteRefusal,
 } from "@vectordevai/core/review/privacy"
 import type { CostKind, ReviewConfig, ZdrAttestedEntry } from "@vectordevai/core/review/types"
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
 import type { Provider } from "@/provider/provider"
 import type { SessionID } from "@/session/schema"
 
@@ -46,18 +59,37 @@ export interface Subject {
   readonly catalogOrigins?: readonly string[]
 }
 
-// A route decision, with the model it was made for (keyOf) when the provider has one.
+// A route decision, with the model it was made for (keyOf) and what it was decided on when the provider has one.
 export interface Decided {
   readonly key?: string
   readonly decision: RouteDecision
+  readonly decidedOn?: RouteModel
 }
 
 // What a session Review.run created runs under: the review's policy and, under "zdr", the model its pass was decided
-// for and that decision.
+// for, that decision, and what it was decided on, which the transport (hold) decides again with what it sees.
 export interface Registered {
   readonly policy: Policy
   readonly key?: string
   readonly decision?: RouteDecision
+  readonly decidedOn?: RouteModel
+}
+
+// What the transport does with a model call (hold): refuse it, or send it on a route of this kind.
+export type Held = { readonly refusal: RouteRefusal } | { readonly kind: RouteKind }
+
+/**
+ * VS-23c's refusal of a model call, thrown by provider.ts's fetch before anything is sent. A plain Error, so the AI SDK
+ * rethrows it as it is and the session does not retry it.
+ */
+export class Refused extends Error {
+  public override readonly name = "ZdrRouteRefused"
+
+  constructor(public readonly refusal: RouteRefusal) {
+    super(
+      `Vector did not send this request: this review's privacy is "zdr", and the route rules refused it (${refusal}). Nothing was sent.`,
+    )
+  }
 }
 
 /**
@@ -78,8 +110,8 @@ export function modelRefusal(subject: Subject, policy: Policy): RouteRefusal | u
  * Whether a review may send code to this model while `policy.privacy` is in effect, from what the provider says about
  * it: its catalog entry, its provider's options (base URL, a plugin's `preconnect` and `fetch`, `forwards`) and the line
  * its requests wait in. The model's own refusals come first, so admission never looks up a free or Codium model. A
- * route that privacy.ts allows is refused while any attestation it lists sets `verify: "api"`: nothing can check an
- * account yet (Q20), so an OpenAI attestation with it is refused the same way.
+ * route that privacy.ts allows is refused while any attestation it lists sets `verify: "api"` (verified). The result
+ * carries what it was decided on (`decidedOn`), which the session registry keeps for the transport (hold).
  */
 export const decide = Effect.fn("ReviewRoutes.decide")(function* (
   provider: Provider.Interface,
@@ -99,12 +131,13 @@ export const decide = Effect.fn("ReviewRoutes.decide")(function* (
   if (!found) return { decision: { allowed: false, refusal: "unknown-destination" } }
   // getProvider indexes the loaded providers by ID, so an unknown one is undefined, whatever its type says.
   const info = yield* provider.getProvider(found.providerID)
-  const decision = decideRoute(
-    routeModel({ ...subject, found, ...(info ? { options: info.options } : {}), line: yield* provider.line(found) }),
-    policy,
-  )
-  const unverified = decision.allowed && decision.attestations?.some((attestation) => attestation.verify === "api")
-  return { key: keyOf(found), decision: unverified ? { allowed: false, refusal: "attestation-unverified" } : decision }
+  const decidedOn = routeModel({
+    ...subject,
+    found,
+    ...(info ? { options: info.options } : {}),
+    line: yield* provider.line(found),
+  })
+  return { key: keyOf(found), decision: verified(decideRoute(decidedOn, policy)), decidedOn }
 })
 
 /**
@@ -181,11 +214,16 @@ export function shippedOrigins(input: {
 }
 
 export function register(sessionID: SessionID, entry: Registered) {
+  released.delete(sessionID)
   sessions.set(sessionID, entry)
 }
 
+// A "zdr" session is remembered as released (hold), the oldest forgotten first once there are RELEASED_LIMIT.
 export function release(sessionID: SessionID) {
+  if (sessions.get(sessionID)?.policy.privacy === "zdr") released.add(sessionID)
   sessions.delete(sessionID)
+  const oldest = released.values().next()
+  if (released.size > RELEASED_LIMIT && !oldest.done) released.delete(oldest.value)
 }
 
 export function registered(sessionID: string): Registered | undefined {
@@ -198,7 +236,7 @@ export function registered(sessionID: string): Registered | undefined {
  * that decision allowed it. A session that is not registered, was never decided, or now sends with another model (a
  * switch of model, URL or SDK) is "unknown-destination".
  */
-export function attempt(sessionID: SessionID, model: Provider.Model): RouteRefusal | undefined {
+export function attempt(sessionID: string, model: Provider.Model): RouteRefusal | undefined {
   const entry = sessions.get(sessionID)
   if (!entry) return "unknown-destination"
   if (entry.policy.privacy === "standard") return undefined
@@ -206,11 +244,121 @@ export function attempt(sessionID: SessionID, model: Provider.Model): RouteRefus
   return entry.decision.allowed ? undefined : entry.decision.refusal
 }
 
+/**
+ * VS-23c: what the transport does with a model call, from the session its `x-session-id` names (`session` gives
+ * undefined without the header, and no `id` when the header names no one session ID; it is read only while some review
+ * session is registered or a released "zdr" one is remembered). Undefined, so the call is sent exactly as before, for
+ * the owner's own calls, for a session that is not registered and for one registered under "standard". A malformed
+ * header is "unattributed-request" while any "zdr" review is registered in this process. A "zdr" session its review
+ * released is "unknown-destination": no review holds its route any more, and its history holds the reviewed code.
+ * A call of a "zdr" session is decided again before anything is read or sent, on what admission decided on together
+ * with what the transport sees: the provider's options now (`options`), the model it sends with, and every origin it
+ * sends to (`destinations`: provider.ts requestOrigins with variables filled in, and the request's own URL, read only
+ * here). Every origin either side saw must be allowed, and a free model or a forwarding provider either side saw is
+ * refused. This decision comes first, so a Codium, free or LAN route names its own refusal; then the call's model must
+ * be the one its session was decided for (attempt). Allowed, the kind is the route sendBody checks the body for.
+ */
+export function hold(input: {
+  readonly session: () => { readonly id?: string } | undefined
+  readonly model: Provider.Model
+  readonly options: Readonly<Record<string, unknown>>
+  readonly destinations: () => readonly string[]
+}): Held | undefined {
+  // No review is running and no "zdr" review has ended in this process: nothing to hold, and the header is not read.
+  if (!sessions.size && !released.size) return undefined
+  const session = input.session()
+  if (!session) return undefined
+  const id = session.id
+  if (id === undefined)
+    return [...sessions.values()].some((entry) => entry.policy.privacy === "zdr")
+      ? { refusal: "unattributed-request" }
+      : undefined
+  if (released.has(id)) return { refusal: "unknown-destination" }
+  const entry = sessions.get(id)
+  if (!entry || entry.policy.privacy !== "zdr") return undefined
+  const seen = routeModel({
+    providerID: input.model.providerID,
+    modelID: input.model.id,
+    found: input.model,
+    options: input.options,
+  })
+  const decidedOn = entry.decidedOn
+  const decision = verified(
+    decideRoute(
+      {
+        ...seen,
+        destinations: [...(decidedOn?.destinations ?? []), ...seen.destinations, ...input.destinations()],
+        // Where an attestation of the provider ID applies is what admission read from the catalog, which the
+        // transport cannot see; without it, nowhere.
+        defaultOrigins: decidedOn?.defaultOrigins ?? [UNKNOWN_ORIGIN],
+        freeModel: seen.freeModel === true || decidedOn?.freeModel === true,
+        forwards: seen.forwards === true || decidedOn?.forwards === true,
+      },
+      entry.policy,
+    ),
+  )
+  if (!decision.allowed) return { refusal: decision.refusal }
+  const refusal = attempt(id, input.model)
+  return refusal ? { refusal } : { kind: decision.kind }
+}
+
+/**
+ * VS-23c: the body a held call (hold) sends, or why it may not be sent. It must be a JSON string passed beside the URL,
+ * not inside a `Request`, or it is "unreadable-body". Then, by the route and the request's format:
+ * - "openrouter-attested": the path (zdrPathRefusal), then zdrRequestBody, whose body is sent (zdrBodyRefusal's reason
+ *   when it gives none);
+ * - an Anthropic Messages request: zdrFeatureRefusal with its URL, which checks the path too;
+ * - any other: the Batch and Files paths (zdrPathRefusal) and body (zdrBatchBodyRefusal), runner-wiring R1, and a Google
+ *   request's tools (zdrFeatureRefusal).
+ * Every route but OpenRouter's sends the body it was given, byte for byte.
+ */
+export function sendBody(input: {
+  readonly kind: RouteKind
+  readonly npm: string
+  readonly url: string
+  readonly body: unknown
+  readonly request: boolean
+  readonly modelID: string
+}): { readonly body: string } | { readonly refusal: RouteRefusal } {
+  if (input.request || typeof input.body !== "string") return { refusal: "unreadable-body" }
+  // A body that is not JSON reads as undefined, which every check below refuses as "unreadable-body".
+  const parsed = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(input.body))
+  if (input.kind === "openrouter-attested") {
+    const path = zdrPathRefusal(input.url)
+    if (path) return { refusal: path }
+    const sent = zdrRequestBody(parsed, input.modelID)
+    if (!sent) return { refusal: zdrBodyRefusal(parsed, input.modelID) ?? "unreadable-body" }
+    return { body: JSON.stringify(sent) }
+  }
+  const refusal = ANTHROPIC_FORMAT.includes(input.npm)
+    ? zdrFeatureRefusal({ format: "anthropic", body: parsed, path: input.url })
+    : (zdrPathRefusal(input.url) ??
+      zdrBatchBodyRefusal(parsed) ??
+      (GOOGLE_FORMAT.includes(input.npm) ? zdrFeatureRefusal({ format: "google", body: parsed }) : undefined))
+  return refusal ? { refusal } : { body: input.body }
+}
+
 // The sessions Review.run created and has not yet released, by session ID.
 const sessions = new Map<string, Registered>()
+// The "zdr" sessions Review.run released, oldest first: a call that still names one, such as a late helper request or
+// the session continued after its review, is refused (hold). Bounded, so a long-running server keeps the most recent.
+const released = new Set<string>()
+const RELEASED_LIMIT = 4096
+
+// The SDKs whose requests are Anthropic Messages requests, and Google's, for sendBody's feature checks.
+const ANTHROPIC_FORMAT = ["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic", "@ai-sdk/amazon-bedrock/anthropic"]
+const GOOGLE_FORMAT = ["@ai-sdk/google", "@ai-sdk/google-vertex"]
+
+// A route privacy.ts allows is refused while any attestation it lists sets `verify: "api"`: nothing can check an
+// account yet (Q20), so an OpenAI attestation with it is refused the same way.
+function verified(decision: RouteDecision): RouteDecision {
+  return decision.allowed && decision.attestations?.some((attestation) => attestation.verify === "api")
+    ? { allowed: false, refusal: "attestation-unverified" }
+    : decision
+}
 
 // Where these SDKs send requests when neither configuration nor the catalog names a base URL. A copy of provider.ts's
-// SDK_ORIGINS, which is private there; VS-23c's backstop checks again with provider.ts's own requestOrigins.
+// SDK_ORIGINS, which is private there; VS-23c's backstop (hold) also decides on provider.ts's own requestOrigins.
 const SDK_ORIGINS: Record<string, string> = {
   "@ai-sdk/openai": "https://api.openai.com",
   "@ai-sdk/anthropic": "https://api.anthropic.com",
