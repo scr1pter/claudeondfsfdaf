@@ -546,6 +546,72 @@ test("the test workflow runs the engine suite only in shards, on Linux and Windo
   }
 })
 
+// Chocolatey's community feed answered 504 and 503 with nothing installed and exit 0 (jobs 133556510297 and
+// 133557296076). Windows jobs install ripgrep through one action that downloads a pinned, checksum-verified release
+// from GitHub with retries. This reads only the repository's own files.
+test("Windows jobs install ripgrep from the pinned, verified release, never through Chocolatey", async () => {
+  const files = [...new Bun.Glob("*.yml").scanSync(`${root}/.github/workflows`)]
+  expect(files.length).toBeGreaterThan(0)
+  const choco = (
+    await Promise.all(
+      files.map(async (file) =>
+        (await read(`.github/workflows/${file}`)).includes("choco install ripgrep") ? [file] : [],
+      ),
+    )
+  ).flat()
+  expect(choco).toEqual([])
+
+  for (const [file, job, name, timeout] of [
+    ["test.yml", "unit", "Install ripgrep (Windows)", 10],
+    ["test.yml", "engine-windows", "Install ripgrep", 5],
+    ["windows-containment.yml", "native", "Install native ripgrep", 10],
+  ] as const) {
+    const workflow = Bun.YAML.parse(await read(`.github/workflows/${file}`)) as {
+      jobs: Record<string, { steps: Array<{ name?: string; uses?: string; "timeout-minutes"?: number }> }>
+    }
+    const step = workflow.jobs[job]?.steps.find((current) => current.name === name)
+    expect(step?.uses, `${file} ${job}`).toBe("./.github/actions/install-ripgrep-windows")
+    expect(step?.["timeout-minutes"], `${file} ${job}`).toBe(timeout)
+  }
+  const containment = Bun.YAML.parse(await read(".github/workflows/windows-containment.yml")) as {
+    on: { pull_request: { paths: string[] } }
+  }
+  expect(containment.on.pull_request.paths).toContain(".github/actions/install-ripgrep-windows/**")
+
+  const action = Bun.YAML.parse(await read(".github/actions/install-ripgrep-windows/action.yml")) as {
+    runs: { using: string; steps: Array<{ shell?: string; run?: string }> }
+  }
+  expect(action.runs.using).toBe("composite")
+  expect(action.runs.steps).toHaveLength(1)
+  expect(action.runs.steps[0]?.shell).toBe("pwsh")
+  const script = action.runs.steps[0]?.run ?? ""
+  expect(script).toContain("$ErrorActionPreference = 'Stop'")
+  expect(script).toContain("$version = '15.2.0'")
+  expect(script).toContain("https://github.com/BurntSushi/ripgrep/releases/download/$version/")
+  expect(script).not.toMatch(/choco/i)
+  const hashes = [...script.matchAll(/Sha256 = '([0-9a-f]{64})'/g)].map((match) => match[1])
+  expect(hashes).toEqual([
+    "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+    "e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+  ])
+  const steps = script.split("\n").map((line) => line.trim())
+  const at = (pattern: RegExp) => steps.findIndex((line) => pattern.test(line))
+  const download = at(/^curl\.exe .*--fail .*--retry \d+ .*--output \$zip \$url$/)
+  expect(download).toBeGreaterThanOrEqual(0)
+  expect(steps[download]).not.toContain("--retry-delay")
+  // Each check throws, and only a verified, working rg.exe reaches PATH.
+  const downloaded = at(/^if \(\$LASTEXITCODE -ne 0\) \{ throw "ripgrep \$version could not be downloaded from \$url/)
+  const hashed = at(/^\$actual = \(Get-FileHash -LiteralPath \$zip -Algorithm SHA256\)\.Hash\.ToLowerInvariant\(\)$/)
+  const compared = at(/^if \(\$actual -ne \$release\.Sha256\) \{ throw /)
+  const versioned = at(/^if \(.*-notmatch '\^ripgrep 15\\\.2\\\.0\( \|\$\)'\) \{ throw /)
+  const listed = at(/^\$folder \| Out-File -FilePath \$env:GITHUB_PATH /)
+  const order = [download, downloaded, hashed, compared, versioned, listed]
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(downloaded - download).toBe(1)
+  expect(steps.filter((line) => line.includes("GITHUB_PATH"))).toHaveLength(1)
+})
+
 // The Codium build's CI lane (codium-build-spec WP A00). Work packages run single test files on the owner's Mac, so
 // typechecks, suites with real services and browser specs run in vector-codium.yml, with no secrets. Stripe test mode
 // runs only in vector-codium-e2e.yml, by dispatch, behind the owner-approved codium-test environment.
