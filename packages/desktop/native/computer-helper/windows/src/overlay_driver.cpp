@@ -290,7 +290,8 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
   // HF-7 (1) candidate (a): the one-time setup runs in its own admitted 50 ms ticket, so the first Stop root
   // lookup's ticket holds what the refresh's holds. A missing member is a driver failure, never a skip. On
-  // failure, sample as observe_stop does (a retired actor's immutable snapshot only) and rethrow unchanged.
+  // failure, sample as observe_stop does (a healthy actor's live phase, a retired actor's immutable snapshot
+  // only) and rethrow unchanged.
   // No uia object: its closed lookups and calls name only the Stop root and hit lookups.
   require(static_cast<bool>(uia.prepare));
   try { uia.prepare(); }
