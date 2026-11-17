@@ -29,7 +29,7 @@ import { Git } from "@/git"
 import { Provider } from "@/provider/provider"
 import type { ResolvedModel } from "@/review/model"
 import type { Review } from "@/review/run"
-import type { SessionPrompt } from "@/session/prompt"
+import { SessionPrompt } from "@/session/prompt"
 import { MessageID, PartID, type SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
@@ -47,7 +47,7 @@ import {
   TestInstance,
   trustWorkspace,
 } from "../fixture/fixture"
-import { pollWithTimeout, testEffect } from "../lib/effect"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 
 // Background hand-offs (CW-08): a background review returns once its adapter's questions are behind it, runs as a
 // `connect` BackgroundJob, writes its ended run into the tool part that started it, and reports once through TaskNotify
@@ -844,8 +844,14 @@ describe("the note", () => {
 // priced model is capped from what the run has left, and a run stopped on its budget starts none.
 
 const reviewed: Review.RunInput[] = []
-// While set, VectorScope's review waits for it, so its caller has surely stopped waiting by then.
-const reviewGate: { wait?: Deferred.Deferred<void> } = {}
+// While `wait` is set, VectorScope's review waits for it, so its caller has surely stopped waiting by then. While
+// `between` is set, the review prompts two helpers through connect's bridge and pauses before the second.
+const reviewGate: {
+  wait?: Deferred.Deferred<void>
+  between?: { paused: Deferred.Deferred<void>; resume: Deferred.Deferred<void> }
+} = {}
+// The helper sessions whose prompt connect let through.
+const helped: SessionID[] = []
 
 const emptySelection = (): Selection => ({
   inline: [],
@@ -892,8 +898,30 @@ const adapter = VectorScopeAdapter.make({
     Effect.gen(function* () {
       if (reviewGate.wait) yield* Deferred.await(reviewGate.wait)
       reviewed.push(input)
-      return outcomeOf(input)
-    }),
+      const between = reviewGate.between
+      if (!between) return outcomeOf(input)
+      const sessions = yield* Session.Service
+      const prompts = yield* SessionPrompt.Service
+      for (const name of ["review", "security"] as const) {
+        if (name === "security") {
+          yield* Deferred.succeed(between.paused, undefined)
+          yield* Deferred.await(between.resume)
+        }
+        const session = yield* sessions.create({
+          title: `review ${name}`,
+          internal: `vectorscope.${name}`,
+          parentID: input.parentID,
+        })
+        yield* prompts.prompt({
+          sessionID: session.id,
+          agent: "vectorscope",
+          model: { providerID: input.model.providerID, modelID: input.model.modelID },
+          parts: [{ type: "text", text: "Review" }],
+        })
+        helped.push(session.id)
+      }
+      return { ...outcomeOf(input), sessions: [...helped] }
+    }).pipe(Effect.orDie),
   resolveModel: (input) => Effect.succeed(priced(input.exact ?? input.config ?? "lmstudio/test-model")),
   requirements: () => Effect.succeed(undefined),
   env: {},
@@ -1069,4 +1097,134 @@ describe("the VectorScope adapter in the background", () => {
     instance,
     120_000,
   )
+})
+
+// C5: Git's own stat-cache refreshes of the checkout's index (`git status`, or `git add` of a file whose content did not
+// change) do not stop a background review between its helper prompts. Staging a real change still stops it, also when the
+// file itself is then put back.
+describe("a background review and the checkout's index", () => {
+  const linux = process.platform === "linux" ? real.instance : real.instance.skip
+  const other = (directory: string) => path.join(directory, "src", "other.ts")
+  const rows = [
+    {
+      title: "keeps going when git status rewrites the index between helper prompts",
+      change: async (directory: string) => {
+        await fs.utimes(other(directory), 1_700_000_000, 1_700_000_000)
+        await $`git status --porcelain`
+          .cwd(directory)
+          .env({ ...process.env, GIT_OPTIONAL_LOCKS: "1" })
+          .quiet()
+      },
+      staged: "",
+      state: "completed",
+      helped: 2,
+    },
+    {
+      title: "keeps going when git add restages a file whose content did not change",
+      change: async (directory: string) => {
+        await fs.utimes(other(directory), 1_700_000_000, 1_700_000_000)
+        await $`git add src/other.ts`.cwd(directory).quiet()
+      },
+      staged: "",
+      state: "completed",
+      helped: 2,
+    },
+    {
+      title: "still refuses when a change is staged between helper prompts",
+      change: async (directory: string) => {
+        await fs.writeFile(other(directory), "export const other = 2\n")
+        await $`git add src/other.ts`.cwd(directory).quiet()
+      },
+      staged: "src/other.ts",
+      state: "refused",
+      helped: 1,
+    },
+    {
+      // The checkout's file ends as it was at the pause, so only the index check can see this change.
+      title: "still refuses when only the index changes between helper prompts",
+      change: async (directory: string) => {
+        await fs.writeFile(other(directory), "export const other = 2\n")
+        await $`git add src/other.ts`.cwd(directory).quiet()
+        await fs.writeFile(other(directory), "export const other = 1\n")
+      },
+      staged: "src/other.ts",
+      state: "refused",
+      helped: 1,
+    },
+  ] as const
+  for (const row of rows)
+    linux(
+      row.title,
+      () =>
+        Effect.gen(function* () {
+          reviewed.length = 0
+          helped.length = 0
+          const test = yield* TestInstance
+          const directory = test.directory
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(directory, "src"), { recursive: true })
+            await fs.writeFile(
+              path.join(directory, "src", "list.ts"),
+              "export const last = (a: number[]) => a[a.length - 1]\n",
+            )
+            await fs.writeFile(other(directory), "export const other = 1\n")
+          })
+          yield* git(directory, "add", "-A")
+          yield* git(directory, "commit", "-q", "-m", "base")
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(directory, "src", "list.ts"), "export const last = (a: number[]) => a[a.length]\n"),
+          )
+          yield* Effect.promise(() => trustWorkspace(directory))
+          const sessions = yield* Session.Service
+          const hub = yield* ConnectHub.Service
+          const guard = yield* SpendGuard.Service
+          const requester = yield* sessions.create({ title: "Requester" })
+          const message = yield* say(requester.id, "review in the background")
+          const call = yield* launch(requester.id, message.id)
+          yield* guard.begin(requester.id)
+          const between = { paused: yield* Deferred.make<void>(), resume: yield* Deferred.make<void>() }
+          reviewGate.between = between
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              delete reviewGate.between
+            }).pipe(Effect.andThen(Deferred.succeed(between.resume, undefined))),
+          )
+          const run = yield* hub.run({
+            request: review(requester.id, directory),
+            call: { ...asker(), promptOps: recorder().ops, part: { messageID: call.id, callID: "call_index" } },
+          })
+          expect(run.status).toBe("running")
+          yield* awaitWithTimeout(
+            Deferred.await(between.paused),
+            "The review never reached its second helper prompt.",
+            "30 seconds",
+          )
+          const index = path.join(directory, ".git", "index")
+          const before = yield* Effect.promise(() => fs.readFile(index))
+          yield* Effect.promise(() => row.change(directory))
+          // Each change really rewrote the checkout's index.
+          expect((yield* Effect.promise(() => fs.readFile(index))).equals(before)).toBe(false)
+          expect(yield* git(directory, "diff", "--cached", "--name-only")).toBe(row.staged)
+          yield* Deferred.succeed(between.resume, undefined)
+          const done = yield* pollWithTimeout(
+            hub.get(run.id).pipe(Effect.map((item) => (item?.status === "done" ? item : undefined))),
+            "The background review did not settle",
+            "30 seconds",
+          )
+          expect(done.result?.state).toBe(row.state)
+          expect(helped).toHaveLength(row.helped)
+          if (row.state === "completed") {
+            expect(done.result?.verdict).toBe("clean")
+            expect(done.result?.summary).not.toContain("cannot be inspected safely")
+          }
+          if (row.state === "refused") {
+            expect(done.result?.refusal).toBe("unavailable")
+            expect(done.result?.verdict).toBe("not-reviewed")
+            expect(done.result?.summary).toContain("cannot be inspected safely")
+          }
+          yield* guard.end(requester.id)
+        }),
+      instance,
+      120_000,
+    )
 })

@@ -1736,7 +1736,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 ### V16. Agent sandbox: separate user, secret channel, process cleanup, runner probe (amendment 3, O3)
 - **Files:** `packages/engine/src/cli/cmd/github.sandbox.ts` (new: `prepare`, `run`, `finish`, and the pure helpers `sandboxEnvironment(env)`, `secretChannel(env, files)`, `copyBundleFile(...)`); `github.ts` (register `sandbox` with `instance: false`); `packages/engine/test/cli/github.sandbox.test.ts` (new, pure parts); `.github/workflows/vector-at-mention.yml` (the `sandbox-probe` job); `packages/engine/test/fixture/sandbox-probe.ts` (new: the probe command).
 - **Changes:** 2.11.3 steps 6–8 and the secret channel (2.13).
-  - `prepare` and `finish` use the runner's `sudo -n` with fixed argument lists (`useradd`, `chown`, `systemctl`, `chmod`, `sysctl`, `pkill`, `rm`, `install`), never a shell string built from input.
+  - `prepare` and `finish` use the runner's `sudo -n` with fixed argument lists (`useradd`, `mkdir`, `chown`, `systemctl`, `chmod`, `sysctl`, `pkill`, `rm`, `install`), never a shell string built from input.
   - `run` resolves the absolute paths of `node` and the command before dropping privileges, and starts it with `sudo -n setpriv --reuid=<agent> --regid=<agent> --clear-groups -- env -i <SANDBOX_ENV_ALLOW> …`.
   - `finish` copies with `O_NOFOLLOW`, regular files only, within `PATCH_LIMITS`, then removes the checkout.
 - **Tests:**

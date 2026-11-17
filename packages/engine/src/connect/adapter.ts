@@ -14,14 +14,26 @@ import type { ConnectReviewService } from "./review-service"
 // How a member whose code lives elsewhere plugs into connected tools. An owner adds one file under connect/adapters/
 // and one line to its index. The hub checks effects, asks consent, records the run, emits events and keeps results;
 // an adapter only does the work. It cannot widen its own effects at run time, because the hub reads the effects the
-// member declared in `describe()` and checks them before anything starts.
+// member declared in `describe()` and checks them before anything starts. The `cloud` effect needs more: the action
+// must also be listed in `cloud`, which the hub reads once when it is built, and the hub asks `connect_cloud` itself.
 
 export interface Adapter {
   /** The member id, such as "vectorscope". */
   readonly id: string
   readonly owner: Connect.Owner
-  /** No model call and no new network destination. It may read the member's own cached availability. */
+  /**
+   * No model call and no new network destination. It may read the member's own cached availability. Its `place` is
+   * relative to this engine: `local` means in this engine, which the hub reports as `vector-cloud` in a Vector cloud
+   * workspace (ConnectMembers.located); an adapter words its own summary for that place.
+   */
   readonly describe: () => Effect.Effect<Connect.Member>
+  /**
+   * The actions that send your code or a screen to a Vector cloud service, each with that service's name in plain
+   * words. Vector code writes it, never a model. The hub reads it once, when its layer builds the adapter: an action
+   * whose effects name `cloud` is refused unless it is listed here, a listed action whose effects leave `cloud` out is
+   * refused too, and a listed one asks `connect_cloud`, naming the service, on every hand-off before the adapter starts.
+   */
+  readonly cloud?: Readonly<Partial<Record<Connect.ActionID, Connect.CloudDestination>>>
   /** Absent for a member that is only listed. */
   readonly handle?: (
     request: Connect.Request,
@@ -95,7 +107,8 @@ export interface HandoffContext {
   readonly abort: AbortSignal
   /**
    * Asks a consent in the requester's session. A rule's deny refuses with `permission`, the user's no with `denied`.
-   * `connect_model` is asked once per request for each model; `connect_write` every time, never saved.
+   * `connect_model` is asked once per request for each model; `connect_write` every time, never saved. Only the hub
+   * asks `connect_cloud`, before the adapter starts: an adapter that asks it is a defect, and its run fails.
    */
   readonly ask: (consent: Connect.Consent) => Effect.Effect<void, Connect.Refusal>
   readonly progress: (update: ProgressUpdate) => Effect.Effect<void>

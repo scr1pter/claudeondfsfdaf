@@ -45358,7 +45358,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "enum": ["disabled", "forbidden", "not_found", "invalid"]
+            "enum": ["disabled", "forbidden", "not_found", "invalid", "pending", "consumed"]
           },
           "message": {
             "type": "string"
@@ -55264,7 +55264,7 @@
       },
       "ConnectEffect": {
         "type": "string",
-        "enum": ["read", "write"]
+        "enum": ["read", "write", "cloud"]
       },
       "ConnectResultKind": {
         "type": "string",

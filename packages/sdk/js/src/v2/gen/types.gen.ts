@@ -4703,7 +4703,7 @@ export type MemoryResearchSourceText = {
 }
 
 export type ConnectApiError = {
-  code: "disabled" | "forbidden" | "not_found" | "invalid"
+  code: "disabled" | "forbidden" | "not_found" | "invalid" | "pending" | "consumed"
   message: string
 }
 
@@ -7929,7 +7929,7 @@ export type ConnectReach = "connect" | "ui" | "none" | string
 
 export type ConnectActionId = "review" | "fix"
 
-export type ConnectEffect = "read" | "write"
+export type ConnectEffect = "read" | "write" | "cloud"
 
 export type ConnectResultKind = "review" | "fix"
 

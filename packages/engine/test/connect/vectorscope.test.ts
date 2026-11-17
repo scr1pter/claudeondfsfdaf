@@ -1,10 +1,11 @@
 import { $ } from "bun"
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, spyOn } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer, Option } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
+import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Global } from "@vectordevai/core/global"
@@ -34,6 +35,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
+import { InstanceStore } from "@/project/instance-store"
 import { ReviewGit } from "@/review/git"
 import { ReviewModel, type ResolvedModel } from "@/review/model"
 import { Review } from "@/review/run"
@@ -43,7 +45,7 @@ import { Session } from "@/session/session"
 import { SessionSummary } from "@/session/summary"
 import type { TaskPromptOps } from "@/tool/task"
 import type { Tool } from "@/tool/tool"
-import { disposeAllInstances, TestInstance, trustWorkspace } from "../fixture/fixture"
+import { disposeAllInstances, requireInstance, TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -73,6 +75,8 @@ const script: {
   outcome?: (input: Review.RunInput) => Partial<ReviewOutcome>
   /** Replaces the whole fake review. */
   run?: VectorScopeAdapter.Deps["runReview"]
+  /** Runs first inside the fake review, while the collector's context is still in place. */
+  observe?: (input: Review.RunInput) => Effect.Effect<void>
 } = { kinds: {}, user: "lmstudio/test-model" }
 const calls: Review.RunInput[] = []
 const outcomes: ReviewOutcome[] = []
@@ -85,6 +89,7 @@ const reset = () => {
   delete script.resolve
   delete script.outcome
   delete script.run
+  delete script.observe
   calls.length = 0
   outcomes.length = 0
   resolved.length = 0
@@ -147,6 +152,7 @@ const outcomeOf = (input: Review.RunInput, extra: Partial<ReviewOutcome> = {}): 
 const fakeRun: NonNullable<VectorScopeAdapter.Deps["runReview"]> = (input) =>
   Effect.gen(function* () {
     if (script.run) return yield* script.run(input)
+    if (script.observe) yield* script.observe(input)
     calls.push(input)
     const sessions = yield* Session.Service
     const prompts = yield* SessionPrompt.Service
@@ -197,6 +203,7 @@ const it = testEffect(
       RuntimeFlags.node,
       Config.node,
       Git.node,
+      CrossSpawnSpawner.node,
     ]),
     [[RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true })]],
   ),
@@ -584,6 +591,161 @@ describe("a review through connect", () => {
       }),
     instance,
   )
+
+  // Every Git.Interface member by name: a member added there fails typecheck here until it is spied below too.
+  const gitMembers: { readonly [K in keyof Git.Interface]: K } = {
+    run: "run",
+    branch: "branch",
+    prefix: "prefix",
+    defaultBranch: "defaultBranch",
+    hasHead: "hasHead",
+    mergeBase: "mergeBase",
+    show: "show",
+    status: "status",
+    diff: "diff",
+    stats: "stats",
+    patch: "patch",
+    patchAll: "patchAll",
+    patchUntracked: "patchUntracked",
+    statUntracked: "statUntracked",
+    applyPatch: "applyPatch",
+  }
+  const NAMES = "--name-only --no-renames --no-ext-diff --no-relative -z"
+  // Connect's check 1 (`changes()`) read by read, commits masked. No read names a file: the batch read's go on stdin.
+  // A branch review's base is verified as `verified` spells it.
+  const checkOne = (verified?: string) => [
+    "rev-parse --show-toplevel",
+    "rev-parse --verify --quiet --end-of-options HEAD^{commit}",
+    ...(verified !== undefined
+      ? [`rev-parse --verify --quiet --end-of-options ${verified}^{commit}`, "merge-base <sha> <sha>"]
+      : []),
+    `diff ${NAMES} <sha> --`,
+    `diff --cached ${NAMES} <sha> --`,
+    "ls-files --others --exclude-standard -z",
+    "ls-files --others -z -- :(icase).vector :(icase).gitattributes",
+    ...(verified !== undefined ? [`diff ${NAMES} <sha> <sha> --`] : []),
+    "cat-file --batch --follow-symlinks",
+  ]
+
+  // Each row's target, the spelling check 1 verifies its base as, and the calls connect's view gets to members other
+  // than run(). The commit row's base is HEAD before the branch commit, known once the fixture exists.
+  for (const row of [
+    { title: "a connect review's", base: undefined, target: { kind: "uncommitted" }, verified: undefined, others: {} },
+    { title: "a connect branch review's", base: "commit", target: undefined, verified: "<sha>", others: { branch: 1 } },
+    {
+      title: "a named-base branch review's",
+      base: "name",
+      target: { kind: "branch", base: "main" },
+      verified: "main",
+      others: { branch: 1 },
+    },
+    {
+      title: "a default-base branch review's",
+      base: "default",
+      target: { kind: "branch" },
+      verified: "origin/main",
+      others: { branch: 1, defaultBranch: 2 },
+    },
+  ] as const)
+    it.instance(
+      `${row.title} collector reads are answered by VectorScope's ReviewGit view, never by connect's own Git view`,
+      () =>
+        Effect.gen(function* () {
+          if (process.platform !== "linux") return yield* unsupportedGit
+          const { directory, hub, requester } = yield* setup({
+            "src/probe.ts": 'export function computeConnectProbe() { return "A" }\n',
+            "src/call.ts":
+              'import { computeConnectProbe } from "./probe"\nexport const value = computeConnectProbe()\n',
+          })
+          yield* write(directory, { "src/probe.ts": 'export function computeConnectProbe() { return "B" }\n' })
+          const base = yield* git(directory, "rev-parse", "HEAD")
+          const target: Connect.Target = row.target ?? { kind: "branch", base }
+          // A branch review covers the same two edits, committed on the branch.
+          if (row.base !== undefined) {
+            yield* git(directory, "checkout", "-q", "-b", "feature")
+            yield* git(directory, "commit", "-qam", "Change the probe and last()")
+          }
+          if (row.base === "name") yield* git(directory, "branch", "-f", "main", base)
+          if (row.base === "default") {
+            yield* git(directory, "update-ref", "refs/remotes/origin/main", base)
+            yield* git(directory, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+          }
+          const layer = yield* Git.Service
+          const views: Git.Interface[] = []
+          const spies: { member: string; spy: { mock: { calls: readonly unknown[][] }; mockRestore: () => void } }[] =
+            []
+          yield* Effect.addFinalizer(() => Effect.sync(() => spies.forEach((item) => item.spy.mockRestore())))
+          const runs = () => spies.find((item) => item.member === "run")?.spy.mock.calls.length ?? 0
+          // Check 2 resolves the review model with connect's own Git view as Git.Service: after check 1 and before the
+          // review. From here on every call to any member of that view is recorded, and still answered by it.
+          script.resolve = (input) =>
+            Effect.gen(function* () {
+              const found = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+              if (found && found !== layer && !views.includes(found)) {
+                views.push(found)
+                for (const member of Object.values(gitMembers)) spies.push({ member, spy: spyOn(found, member) })
+              }
+              return modelOf(input.exact ?? input.config ?? script.user)
+            })
+          const inside: { view: boolean; fallback: boolean; separate: boolean }[] = []
+          const marks: number[] = []
+          script.observe = () =>
+            Effect.gen(function* () {
+              const current = yield* ReviewGit.Current
+              const found = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+              inside.push({
+                view: current !== undefined,
+                fallback: found !== undefined && views.includes(found),
+                separate: current?.client !== found,
+              })
+              marks.push(runs())
+            })
+          const run = yield* hub.run({
+            request: review(requester.id, directory, { target }),
+            call: { ...asker(), promptOps: recorder().ops },
+          })
+          expect(run.result?.state, run.result?.summary).toBe("completed")
+          expect(calls).toHaveLength(1)
+          expect(calls[0]!.files.map((file) => file.path).toSorted()).toEqual(["src/list.ts", "src/probe.ts"])
+          // The collector's grep, log and blame ran and were answered.
+          const related = calls[0]!.context.related ?? []
+          expect(related.flatMap((item) => item.hits.map((hit) => hit.path))).toContain("src/call.ts")
+          const history = (calls[0]!.context.history ?? []).map((entry) => entry.text).join("\n")
+          expect(history).toContain("Recent commits")
+          expect(history).toContain("Blame at the base")
+          // Inside the review, VectorScope's view is in place and is not connect's, which is only Git.Service there.
+          expect(inside).toEqual([{ view: true, fallback: true, separate: true }])
+          expect(views).toHaveLength(1)
+          expect(marks).toHaveLength(1)
+          // Connect's view saw only connect's own reads: check 1 again and, for a branch, where VectorScope keeps its
+          // state file, before the review; check 1 once more after it. Read for read, so a collector read that reached
+          // this view would show up even in a shape connect also uses (the quiet verify, merge-base, the git dir).
+          const reads = spies
+            .filter((item) => item.member === "run")
+            .flatMap((item) =>
+              item.spy.mock.calls.map((call) =>
+                Array.isArray(call[0])
+                  ? call[0].map((part: unknown) => String(part).replace(/[0-9a-f]{40}/g, "<sha>")).join(" ")
+                  : "",
+              ),
+            )
+          expect({ before: reads.slice(0, marks[0]), after: reads.slice(marks[0]) }).toEqual({
+            before: [
+              ...checkOne(row.verified),
+              ...(row.verified !== undefined ? ["rev-parse --absolute-git-dir"] : []),
+            ],
+            after: checkOne(row.verified),
+          })
+          // No other member was called, apart from the branch name stateFile() asks for once before a branch review and,
+          // with no base, the default branch each spied check 1 asks for: one before the review and one after, none
+          // inside it.
+          const others = spies
+            .filter((item) => item.member !== "run" && item.spy.mock.calls.length > 0)
+            .map((item) => [item.member, item.spy.mock.calls.length])
+          expect(Object.fromEntries(others)).toEqual(row.others)
+        }),
+      instance,
+    )
 
   it.instance(
     "a run with no prompt calls to build the helper handle from does not start",
@@ -1269,6 +1431,154 @@ describe("a review through connect", () => {
   )
 })
 
+// connect's mergeBase() resolves a branch review's base through ReadOnlyGit's `reference`, `resolve` and
+// `default-branch` reads; the review gets only the merge base it found.
+describe("branch bases through connect's Git view", () => {
+  // A feature branch one commit past `base`: setup()'s uncommitted change, committed.
+  const branched = Effect.gen(function* () {
+    const f = yield* setup()
+    const base = yield* git(f.directory, "rev-parse", "HEAD")
+    yield* git(f.directory, "checkout", "-q", "-b", "feature")
+    yield* git(f.directory, "commit", "-qam", "Index last() by length")
+    const head = yield* git(f.directory, "rev-parse", "HEAD")
+    const run = (target: Connect.Target) =>
+      f.hub.run({
+        request: review(f.requester.id, f.directory, { target }),
+        call: { ...asker(), promptOps: recorder().ops },
+      })
+    return { ...f, base, head, run }
+  })
+
+  it.instance(
+    "a base named by a branch is resolved in connect's view and reviewed from its merge base",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "branch", "-f", "main", f.base)
+        const target: Connect.Target = { kind: "branch", base: "main" }
+        const run = yield* f.run(target)
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+        expect(run.result?.head).toBe(f.head)
+        expect(run.result?.target).toEqual(target)
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.base).toBe(f.base)
+        expect(calls[0]!.files.map((file) => file.path)).toEqual(["src/list.ts"])
+      }),
+    instance,
+  )
+
+  it.instance(
+    "with no base, the branch origin/HEAD names is the base",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "update-ref", "refs/remotes/origin/main", f.base)
+        yield* git(f.directory, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        const run = yield* f.run({ kind: "branch" })
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.base).toBe(f.base)
+      }),
+    instance,
+  )
+
+  it.instance(
+    "with no base and no origin/HEAD, the review is refused for its input, though ordinary Git would pick a branch",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "branch", "-f", "main", f.base)
+        const ordinary = yield* Git.Service
+        expect(yield* ordinary.defaultBranch(f.directory)).toBeDefined()
+        const run = yield* f.run({ kind: "branch" })
+        expect(run.result?.state).toBe("refused")
+        expect(run.result?.refusal).toBe("input")
+        expect(run.result?.verdict).toBe("not-reviewed")
+        expect(run.result?.summary).toContain(
+          "Could not find the default branch to compare with. Pass one as the base.",
+        )
+        expect(calls).toEqual([])
+        expect(outcomes).toEqual([])
+      }),
+    instance,
+  )
+
+  it.instance(
+    "an origin/HEAD that names a missing origin branch falls back to the local branch of that name",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "branch", "trunk", f.base)
+        yield* git(f.directory, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+        const run = yield* f.run({ kind: "branch" })
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+      }),
+    instance,
+  )
+
+  it.instance(
+    "an abbreviated uppercase base resolves to its commit",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        // The prefix runs to a letter, so uppercasing changes it.
+        const short = f.base.slice(0, Math.max(7, f.base.search(/[a-f]/) + 1)).toUpperCase()
+        const run = yield* f.run({ kind: "branch", base: short })
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+        expect(calls[0]!.base).toBe(f.base)
+      }),
+    instance,
+  )
+
+  it.instance(
+    "a base that names nothing is refused for its input before any review",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        const run = yield* f.run({ kind: "branch", base: "no-such-branch" })
+        expect(run.result?.state).toBe("refused")
+        expect(run.result?.refusal).toBe("input")
+        expect(run.result?.verdict).toBe("not-reviewed")
+        expect(run.result?.summary).toContain(
+          "Could not find no-such-branch to compare with. Pass a branch or commit as the base.",
+        )
+        expect(calls).toEqual([])
+        expect(outcomes).toEqual([])
+      }),
+    instance,
+  )
+
+  it.instance(
+    "a missing short id or revision syntax as the base is refused as unavailable before any review",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        const objects = yield* git(f.directory, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
+        expect(objects.split("\n").some((id) => id.startsWith("deadbee"))).toBe(false)
+        for (const base of ["deadbee", "HEAD~1"]) {
+          const run = yield* f.run({ kind: "branch", base })
+          expect(run.result?.state).toBe("refused")
+          expect(run.result?.refusal).toBe("unavailable")
+          expect(run.result?.summary).toContain("Git reads cannot be inspected safely")
+        }
+        expect(calls).toEqual([])
+        expect(outcomes).toEqual([])
+      }),
+    instance,
+  )
+})
+
 describe("whether VectorScope can review", () => {
   const supported = process.platform === "linux" ? it.instance : it.instance.skip
   const unsupported = process.platform !== "linux" ? it.instance : it.instance.skip
@@ -1331,6 +1641,111 @@ describe("whether VectorScope can review", () => {
         expect(calls).toHaveLength(0)
       }),
     instance,
+  )
+})
+
+// A project reached through a link. The instance store opens the real folder, so a link to the project or to a folder
+// above it changes nothing. A worktree kept as written does not: TaskIsolation.loadWork loads a task worktree under the
+// data folder that way, and that folder may pass through a link. ConnectGit.use refuses such a worktree, so VectorScope
+// lists itself unavailable there, and the hub refuses its review with the same words before any model is checked.
+describe("a project opened through a link", () => {
+  const supported = process.platform === "linux" ? it.instance : it.instance.skip
+  const LINKED = "Open this project through its real folder path to use connected reviews."
+
+  // A repository at <outer>/project with src/list.ts committed and then changed, and a link to it or to <outer>.
+  const linked = (to: "folder" | "parent") =>
+    Effect.gen(function* () {
+      reset()
+      const outer = yield* tmpdirScoped()
+      const real = path.join(outer, "project")
+      yield* write(real, {
+        "vector.json": JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...instance.config }),
+        "src/list.ts": LIST,
+      })
+      yield* git(real, "init", "-q")
+      yield* git(real, "config", "core.fsmonitor", "false")
+      yield* git(real, "config", "commit.gpgsign", "false")
+      yield* git(real, "config", "user.email", "test@vector.test")
+      yield* git(real, "config", "user.name", "Test")
+      yield* git(real, "add", "-A")
+      yield* git(real, "commit", "-q", "-m", "base")
+      yield* write(real, { "src/list.ts": LIST_CHANGED })
+      yield* trust(real)
+      const link = path.join(yield* tmpdirScoped(), "link")
+      yield* Effect.promise(() => fs.symlink(to === "folder" ? real : outer, link, "dir"))
+      return { real, opened: to === "folder" ? link : path.join(link, "project") }
+    })
+
+  const requesterIn = Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const requester = yield* sessions.create({ title: "Requester" })
+    yield* say(requester.id, "review my changes")
+    return { sessions, hub: yield* ConnectHub.Service, requester }
+  })
+
+  for (const to of ["folder", "parent"] as const)
+    supported(
+      `opened through a link to its ${to === "folder" ? "folder" : "parent folder"}, the instance is the real folder, VectorScope lists ready and the review runs`,
+      () =>
+        Effect.gen(function* () {
+          const f = yield* linked(to)
+          const store = yield* InstanceStore.Service
+          yield* store.provide(
+            { directory: f.opened },
+            Effect.gen(function* () {
+              const ctx = yield* requireInstance
+              expect([ctx.directory, ctx.worktree]).toEqual([f.real, f.real])
+              const { hub, requester } = yield* requesterIn
+              const listed = (yield* hub.members()).find((item) => item.id === "vectorscope")
+              expect(listed?.state, listed?.reason).toBe("ready")
+              const run = yield* hub.run({
+                request: review(requester.id, ctx.directory),
+                call: { ...asker(), promptOps: recorder().ops },
+              })
+              expect(run.result?.state, run.result?.summary).toBe("completed")
+              expect(calls).toHaveLength(1)
+              expect(calls[0]!.files.map((file) => file.path)).toEqual(["src/list.ts"])
+              expect(calls[0]!.parentID).toBe(requester.id)
+            }),
+          )
+        }),
+      instance,
+      60_000,
+    )
+
+  supported(
+    "an instance whose worktree is a link, as a task worktree under a linked data folder opens, lists VectorScope unavailable, and the hub refuses its review with the same reason",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* requireInstance
+        const f = yield* linked("folder")
+        const store = yield* InstanceStore.Service
+        yield* store.provide(
+          { directory: f.opened, worktree: f.opened, project: home.project },
+          Effect.gen(function* () {
+            const ctx = yield* requireInstance
+            expect([ctx.directory, ctx.worktree]).toEqual([f.real, f.opened])
+            const { sessions, hub, requester } = yield* requesterIn
+            const listed = (yield* hub.members()).find((item) => item.id === "vectorscope")
+            expect(listed?.state).toBe("unavailable")
+            expect(listed?.reason).toBe(LINKED)
+            const { ops, prompts } = recorder()
+            const { asks, ask } = asker()
+            const run = yield* hub.run({ request: review(requester.id, ctx.directory), call: { ask, promptOps: ops } })
+            expect(run.result?.state).toBe("refused")
+            expect(run.result?.refusal).toBe("unavailable")
+            expect(run.result?.verdict).toBe("not-reviewed")
+            expect(run.result?.summary).toContain(LINKED)
+            expect(resolved).toEqual([])
+            expect(calls).toEqual([])
+            expect(prompts).toEqual([])
+            expect(asks).toEqual([])
+            expect(yield* sessions.children(requester.id)).toEqual([])
+          }),
+        )
+      }),
+    instance,
+    60_000,
   )
 })
 
@@ -1672,6 +2087,152 @@ describe("in process", () => {
           "WITHHELD_RENAMED_KEY",
         ])
           expect(payloads).not.toContain(marker)
+      }),
+    { git: true },
+    60_000,
+  )
+
+  // I11: Hands' screenshots and the requester's uploads stay in the requester's conversation. VectorScope's helper
+  // sessions are new hidden children, prompted with text only, so no image or file reaches the review's provider.
+  live.instance(
+    "a review's helper prompts carry no screenshot or file the requester holds (I11)",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const directory = test.directory
+        const llm = yield* TestLLMServer
+        const provider = testProviderConfig(llm.url)
+        const config = yield* Config.Service
+        const globalFile = path.join(Global.Path.config, "vector.json")
+        const original = yield* Effect.promise(() => fs.readFile(globalFile, "utf8").catch(() => undefined))
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(async () => {
+            if (original === undefined) await fs.rm(globalFile, { force: true })
+            else await fs.writeFile(globalFile, original)
+          }).pipe(Effect.andThen(config.invalidate())),
+        )
+        yield* write(Global.Path.config, {
+          "vector.json": JSON.stringify({ agent: { vectorscope: { model: "lmstudio/test-model" } } }),
+        })
+        yield* config.invalidate()
+        yield* write(directory, {
+          "vector.json": JSON.stringify({
+            $schema: "https://vectordev.ai/config.json",
+            ...provider,
+            model: "lmstudio/test-model",
+          }),
+          "src/list.ts": LIST,
+        })
+        yield* git(directory, "add", "-A")
+        yield* git(directory, "commit", "-q", "-m", "base")
+        yield* write(directory, { "src/list.ts": LIST_CHANGED })
+        yield* Effect.promise(() => trustWorkspace(directory))
+
+        const sessions = yield* Session.Service
+        const prompts = yield* SessionPrompt.Service
+        const hub = yield* ConnectHub.Service
+        const requester = yield* sessions.create({ title: "Requester" })
+        const message = yield* say(requester.id, "review my changes")
+        const SHOT = Buffer.from("HANDS_SCREENSHOT_OF_THE_USERS_SCREEN").toString("base64")
+        const UPLOAD = Buffer.from("THE_USERS_OWN_UPLOADED_IMAGE").toString("base64")
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: message.id,
+          sessionID: requester.id,
+          type: "file",
+          mime: "image/png",
+          filename: "upload.png",
+          url: `data:image/png;base64,${UPLOAD}`,
+        })
+        const assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          sessionID: requester.id,
+          mode: "build",
+          agent: "build",
+          path: { cwd: directory, root: directory },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.modelID,
+          providerID: model.providerID,
+          parentID: message.id,
+          time: { created: Date.now(), completed: Date.now() },
+        })
+        const computer = yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: requester.id,
+          type: "tool",
+          tool: "computer",
+          callID: "call_screenshot",
+          state: {
+            status: "completed",
+            input: { action: "screenshot" },
+            output: "Observed the app",
+            title: "Read the app",
+            time: { start: 1, end: 2 },
+            metadata: { providerResult: { content: [{ type: "image-data", mediaType: "image/png", data: SHOT }] } },
+            attachments: [
+              {
+                id: PartID.ascending(),
+                messageID: assistant.id,
+                sessionID: requester.id,
+                type: "file",
+                mime: "image/png",
+                url: `data:image/png;base64,${SHOT}`,
+              },
+            ],
+          },
+        })
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", { summary: "Nothing to flag.", risk: "low", files: [], findings: [] }),
+        )
+        const sent: SessionPrompt.PromptInput["parts"][] = []
+        const ops: TaskPromptOps = {
+          cancel: (sessionID) => prompts.cancel(sessionID),
+          resolvePromptParts: (template) => prompts.resolvePromptParts(template),
+          prompt: (input) =>
+            Effect.suspend(() => {
+              sent.push(input.parts)
+              return prompts.prompt(input).pipe(Effect.orDie)
+            }),
+        }
+        const { ask } = asker()
+        const run = yield* hub.run({ request: review(requester.id, directory), call: { ask, promptOps: ops } })
+        // The Linux branch needs an unprivileged user: ReadOnlyGit refuses root (CN-02), so run as root this case fails
+        // at its first assertion below.
+        if (process.platform !== "linux") {
+          // Off Linux connect cannot inspect Git reads safely, so it refuses before any helper or provider call.
+          expect(run.result?.refusal).toBe("unavailable")
+          expect(sent).toEqual([])
+          expect(yield* llm.inputs).toHaveLength(0)
+          expect(yield* sessions.children(requester.id)).toEqual([])
+          return
+        }
+        // What reached the helper sessions and the provider is checked before how the review ended.
+        expect(sent.length).toBeGreaterThan(0)
+        expect(sent.flat().map((part) => part.type)).toEqual(sent.flat().map(() => "text"))
+        const payloads = JSON.stringify(yield* llm.inputs)
+        for (const marker of [SHOT, UPLOAD, "image_url", "data:image"]) expect(payloads).not.toContain(marker)
+        expect(payloads).toContain("items[index]")
+        expect(run.result?.state).toBe("completed")
+        expect(run.result!.sessions.length).toBeGreaterThan(0)
+        for (const id of run.result!.sessions) {
+          const parts = (yield* sessions.messages({ sessionID: id })).flatMap((item) => item.parts)
+          expect(parts.some((part) => part.type === "file")).toBe(false)
+          expect(
+            parts.some(
+              (part) =>
+                part.type === "tool" && part.state.status === "completed" && (part.state.attachments?.length ?? 0) > 0,
+            ),
+          ).toBe(false)
+        }
+        // The requester's own screenshot is still where Hands put it.
+        const kept = (yield* sessions.messages({ sessionID: requester.id }))
+          .flatMap((item) => item.parts)
+          .find((part) => part.id === computer.id)
+        expect(kept?.type === "tool" && kept.state.status === "completed" ? kept.state.attachments : []).toHaveLength(1)
       }),
     { git: true },
     60_000,

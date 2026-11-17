@@ -1,9 +1,15 @@
 import { afterEach, expect } from "bun:test"
+import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import path from "node:path"
 import { ConfigProvider, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { Connect } from "@vectordevai/schema/connect"
+import { Hands } from "@vectordevai/schema/hands"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
+import { OpenApi } from "effect/unstable/httpapi"
 import { createVectorClient } from "@vectordevai/sdk/v2"
+import type { ConnectApiError } from "@vectordevai/sdk/v2/types"
+import { Global } from "@vectordevai/core/global"
 import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { SessionID } from "@/session/schema"
 import { tmpdirScoped, disposeAllInstances } from "../fixture/fixture"
@@ -13,7 +19,9 @@ import { testProviderConfig } from "../lib/test-provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { httpApiLayer } from "./httpapi-layer"
 import { routes, consentHttpApiLayer } from "./httpapi-connect-fixture"
+import { noSweep } from "../fixture/connect-sweep"
 import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
+import { PublicApi } from "@/server/routes/instance/httpapi/public"
 import { Session } from "@/session/session"
 
 const sessionID = SessionID.make("ses_connect_http_owner")
@@ -22,19 +30,26 @@ const basic = (username: string, password: string) =>
 const owner = { authorization: basic("vector", "fixture-owner") }
 const guest = { authorization: basic("guest", "fixture-guest") }
 const forwarded = { ...owner, [GUEST_REQUEST_HEADER]: "1" }
-const provider = ConfigProvider.layer(
-  ConfigProvider.fromUnknown({
-    VECTOR_SERVER_USERNAME: "vector",
-    VECTOR_SERVER_PASSWORD: "fixture-owner",
-    VECTOR_SERVER_GUEST_USERNAME: "guest",
-    VECTOR_SERVER_GUEST_PASSWORD: "fixture-guest",
-    VECTOR_SERVER_GUEST_SESSIONS: sessionID,
-    VECTOR_EXPERIMENTAL_CONNECT: true,
-    VECTOR_DISABLE_DEFAULT_PLUGINS: true,
-  }),
-)
+const settings = {
+  VECTOR_SERVER_USERNAME: "vector",
+  VECTOR_SERVER_PASSWORD: "fixture-owner",
+  VECTOR_SERVER_GUEST_USERNAME: "guest",
+  VECTOR_SERVER_GUEST_PASSWORD: "fixture-guest",
+  VECTOR_SERVER_GUEST_SESSIONS: sessionID,
+  VECTOR_DISABLE_DEFAULT_PLUGINS: true,
+}
+const provider = ConfigProvider.layer(ConfigProvider.fromUnknown({ ...settings, VECTOR_EXPERIMENTAL_CONNECT: true }))
 const it = testEffect(Layer.mergeAll(consentHttpApiLayer, TestLLMServer.layer).pipe(Layer.provide(provider)))
-const production = testEffect(Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(Layer.provide(provider)))
+const production = testEffect(
+  Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(Layer.provide(noSweep), Layer.provide(provider)),
+)
+// The production assembly with VECTOR_EXPERIMENTAL_CONNECT unset, as every build starts until the owner's Q1.
+const dormant = testEffect(
+  Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(
+    Layer.provide(noSweep),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(settings))),
+  ),
+)
 const call = <A>(run: () => Promise<A>) => Effect.promise(run)
 
 const fixture = (ask = false, transport: "node" | "web" = "node", conversation = true, actual = false) =>
@@ -54,9 +69,10 @@ const fixture = (ask = false, transport: "node" | "web" = "node", conversation =
       transport === "web"
         ? yield* Effect.acquireRelease(
             Effect.sync(() =>
-              HttpRouter.toWebHandler((actual ? HttpApiApp.createRoutes() : routes).pipe(Layer.provide(provider)), {
-                disableLogger: true,
-              }),
+              HttpRouter.toWebHandler(
+                (actual ? HttpApiApp.createRoutes() : routes).pipe(Layer.provide(noSweep), Layer.provide(provider)),
+                { disableLogger: true },
+              ),
             ),
             (web) => Effect.promise(() => web.dispose()),
           )
@@ -101,6 +117,36 @@ production.live("the production assembly does not qualify Windows Git or a proje
         ? "No VectorScope model is set"
         : "Connected VectorScope reviews currently require Linux",
     )
+    // The same assembly lists all three adapters while Connect is on, so the dormant case below is not vacuous.
+    expect(members.map((member) => member.id)).toEqual(
+      expect.arrayContaining(["vectorscope", Hands.ID, "github-agent"]),
+    )
+    expect((yield* call(() => f.client.permission.list())).data).toEqual([])
+    expect(yield* f.llm.inputs).toHaveLength(0)
+  }),
+)
+
+dormant.live("with VECTOR_EXPERIMENTAL_CONNECT unset, connections are off and no connected tool is listed", () =>
+  Effect.gen(function* () {
+    // The node transport serves this harness's Connect-off routes; the web transport builds its own Connect-on ones.
+    const f = yield* fixture(false, "node", false)
+    const capabilities = yield* f.raw("/experimental/capabilities")
+    expect(capabilities.status).toBe(200)
+    expect(yield* call(() => capabilities.json())).toMatchObject({ connections: false })
+    // The session variant names a conversation that does not exist, so the flag is checked before any lookup.
+    for (const route of [
+      "/experimental/connect",
+      `/experimental/connect?sessionID=${f.sessionID}`,
+      "/experimental/connect/runs",
+      "/experimental/connect/runs/cr_fixture",
+    ]) {
+      const response = yield* f.raw(route)
+      expect(response.status).toBe(400)
+      expect(yield* call(() => response.json())).toEqual({
+        code: "disabled",
+        message: "Connected tools are off in this build.",
+      })
+    }
     expect((yield* call(() => f.client.permission.list())).data).toEqual([])
     expect(yield* f.llm.inputs).toHaveLength(0)
   }),
@@ -334,6 +380,66 @@ it.live(
       expect((yield* call(() => f.client.permission.list())).data).toEqual([])
       expect(yield* f.llm.inputs).toHaveLength(0)
     }),
+)
+
+it.live(
+  "directory review keys answer pending and consumed on the wire without starting work",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(true, "web", false)
+      const created = yield* f.raw("/fixture/session", owner, {})
+      const project = { id: Schema.decodeUnknownSync(Session.Info)(yield* call(() => created.json())).projectID }
+      // Another real ledger process reserves the key first (and, with `refuse`, tombstones it), then exits.
+      const reserve = (input: Connect.DirectoryReviewInput, refuse?: "fence") =>
+        Effect.promise(
+          () =>
+            new Promise<{ code: number; output: string }>((resolve) => {
+              const proc = spawn(
+                process.execPath,
+                [
+                  path.join(import.meta.dir, "../fixture/directory-request-worker.ts"),
+                  JSON.stringify({
+                    data: Global.Path.data,
+                    scope: { projectID: project.id, directory: f.directory },
+                    input,
+                    ...(refuse ? { refuse } : {}),
+                  }),
+                ],
+                { cwd: path.join(import.meta.dir, "../..") },
+              )
+              const output: Buffer[] = []
+              proc.stdout.on("data", (value) => output.push(Buffer.from(value)))
+              proc.on("close", (code) => resolve({ code: code ?? 1, output: Buffer.concat(output).toString() }))
+            }),
+        )
+      const pending = { requestKey: randomUUID(), background: true }
+      expect((yield* reserve(pending)).output).toContain('"kind":"reserved"')
+      const waiting = yield* f.raw("/experimental/connect/review", owner, pending)
+      expect(waiting.status).toBe(400)
+      expect(yield* call(() => waiting.json())).toMatchObject({ code: "pending" })
+      const consumed = { requestKey: randomUUID(), background: true }
+      expect((yield* reserve(consumed, "fence")).output).toContain('"step":"refuse","kind":"ok"')
+      const refused = yield* f.raw("/experimental/connect/review", owner, {
+        ...consumed,
+        requestKey: consumed.requestKey.toUpperCase(),
+      })
+      expect(refused.status).toBe(400)
+      expect(yield* call(() => refused.json())).toMatchObject({
+        code: "consumed",
+        message: "This review start did not complete and no review ran. Start a new review.",
+      })
+      // The public spec the SDK is generated from names both answers, so a client can branch on them.
+      const codes = ["pending", "consumed"] satisfies ConnectApiError["code"][]
+      expect(OpenApi.fromApi(PublicApi).components.schemas.ConnectApiError).toMatchObject({
+        properties: { code: { enum: expect.arrayContaining(codes) } },
+      })
+      const sessions = (yield* call(() => f.client.session.list({ internal: true }))).data ?? []
+      expect(sessions.filter((row) => row.internal !== undefined)).toEqual([])
+      expect((yield* call(() => f.client.permission.list())).data).toEqual([])
+      expect((yield* call(() => f.client.connect.runs())).data).toEqual([])
+      expect(yield* f.llm.inputs).toHaveLength(0)
+    }),
+  30_000,
 )
 
 it.live("a directory header cannot attach a hand-off to another directory's conversation", () =>

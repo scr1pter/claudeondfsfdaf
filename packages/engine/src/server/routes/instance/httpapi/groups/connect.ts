@@ -12,7 +12,7 @@ import {
 
 export class ConnectApiError extends Schema.ErrorClass<ConnectApiError>("ConnectApiError")(
   {
-    code: Schema.Literals(["disabled", "forbidden", "not_found", "invalid"]),
+    code: Schema.Literals(["disabled", "forbidden", "not_found", "invalid", "pending", "consumed"]),
     message: Schema.String,
   },
   { httpApiStatus: 400 },

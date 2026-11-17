@@ -199,11 +199,13 @@ describe("connect contracts round-trip", () => {
 })
 
 describe("connect contracts refuse unknown literals", () => {
-  test("an effect other than read or write is refused", () => {
-    for (const effect of ["run", "network", "post", "screen", "cloud", "READ", ""]) {
+  test("an effect other than read, write or cloud is refused", () => {
+    for (const effect of ["run", "network", "post", "screen", "CLOUD", "READ", ""]) {
       refuses(Connect.Effect, effect)
       refuses(Connect.Action, { ...member.actions[0], effects: ["read", effect] })
     }
+    roundTrip(Connect.Effect, "cloud")
+    roundTrip(Connect.Action, { ...member.actions[0], effects: ["read", "cloud"] })
     refuses(Connect.Action, { ...member.actions[0], effects: [] })
     refuses(Connect.Action, { ...member.actions[0], effects: ["read", "read"] })
   })
@@ -246,9 +248,42 @@ describe("connect contracts refuse unknown literals", () => {
     refuses(Connect.Finding, finding(0, { source: "judge" }))
     refuses(Connect.Finding, finding(0, { bucket: "outsideDiff" }))
     refuses(Connect.Finding, finding(0, { status: "resolved" }))
-    refuses(Connect.Consent, { ...consent, permission: "connect_cloud" })
+    refuses(Connect.Consent, { ...consent, permission: "connect_run" })
     refuses(Connect.Run, { ...run, status: "lost" })
     refuses(Connect.Refusal, { _tag: "Connect.Refusal", code: "nope", message: "x" })
+  })
+})
+
+describe("connect_cloud is never saved and names where the code goes", () => {
+  const cloud = {
+    permission: "connect_cloud",
+    patterns: ["hosted.review"],
+    always: [],
+    message:
+      "Hosted sends your code or screen to Vector's test cloud. It leaves this computer, so connect asks every time.",
+    destination: "Vector's test cloud",
+  }
+
+  test("a consent that names its destination and offers no Always round-trips", () => {
+    roundTrip(Connect.Consent, cloud)
+  })
+
+  test("one that could be saved, or does not name where the code goes, is refused", () => {
+    refuses(Connect.Consent, { ...cloud, always: ["hosted.review"] })
+    refuses(Connect.Consent, without(cloud, "destination"))
+    refuses(Connect.Consent, { ...cloud, message: "Hosted sends your code somewhere." })
+    refuses(Connect.Consent, { ...cloud, destination: "" })
+    refuses(Connect.Consent, {
+      ...cloud,
+      destination: "Vector's\ntest cloud",
+      message: "Sends to Vector's\ntest cloud.",
+    })
+    roundTrip(Connect.CloudDestination, "d".repeat(200))
+    refuses(Connect.CloudDestination, "d".repeat(201))
+    refuses(Connect.CloudDestination, " ")
+    refuses(Connect.Consent, { ...cloud, destination: " " })
+    for (const hidden of ["\u200b", "\u200f", "\u202e", "\u2066", "\ufeff"])
+      refuses(Connect.CloudDestination, `Vector's${hidden}test cloud`)
   })
 })
 
@@ -442,6 +477,7 @@ test("connect public identifiers are unique and namespaced", () => {
     Connect.RunStatus,
     Connect.Progress,
     Connect.ConsentPermission,
+    Connect.CloudDestination,
     Connect.Consent,
     Connect.Run,
   ]

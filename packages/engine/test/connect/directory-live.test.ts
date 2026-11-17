@@ -30,6 +30,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { NpmTest } from "../fake/npm"
+import { noSweep } from "../fixture/connect-sweep"
 import { disposeAllInstances, trustWorkspace, tmpdirScoped } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
@@ -120,7 +121,7 @@ const live = testEffect(
       [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
       [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true, experimentalEventSystem: true })],
     ],
-  ),
+  ).pipe(Layer.provide(noSweep)),
 )
 const write = (directory: string, file: string, text: string) =>
   Effect.promise(async () => {

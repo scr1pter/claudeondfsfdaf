@@ -1,5 +1,3 @@
-import { runtimeModules as keymapRuntimeModules } from "@opentui/keymap/runtime-modules"
-import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support/configure"
 import {
   type TuiDispose,
   type TuiPlugin,
@@ -43,8 +41,9 @@ import { createCommandShim } from "@vectordevai/tui/plugin/command-shim"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Effect } from "effect"
 import { createPluginRuntime, type PluginRuntime, type TuiPluginHost } from "@vectordevai/tui/plugin/runtime"
+import { ensureTuiRuntimePluginSupport } from "./runtime-support"
 
-ensureRuntimePluginSupport({ additional: keymapRuntimeModules })
+ensureTuiRuntimePluginSupport()
 
 type PluginLoad = {
   options: ConfigPluginV1.Options | undefined

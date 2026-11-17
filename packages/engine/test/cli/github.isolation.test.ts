@@ -1420,7 +1420,7 @@ test("the sandbox refusal messages the witness driver classifies exist verbatim 
   expect(isolation).toContain(`const REFUSAL = "${RUN_REFUSALS["run-adapter"]}"`)
   expect(core).toContain(`throw new Error("${RUN_REFUSALS["run-engine-executable"]}")`)
   expect(sandbox).toContain(
-    "throw new Error(`Sandbox operation ${path.basename(operation ?? file)} failed or timed out; the run is refused.`)",
+    "throw new Error(`Sandbox operation ${path.basename(operation ?? file)} ${outcome}; the run is refused.`)",
   )
   for (const name of RUN_OPERATIONS) expect(sandbox).toContain(`"/usr/bin/${name}"`)
   expect(runError(new Error(RUN_REFUSALS["run-refused"]), ProcessIsolation.REFUSAL)).toBe("run-refused")

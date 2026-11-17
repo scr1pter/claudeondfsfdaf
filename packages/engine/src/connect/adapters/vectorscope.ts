@@ -375,6 +375,10 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
           })
         const ctx = yield* InstanceState.context
         const root = ctx.worktree === "/" ? ctx.directory : ctx.worktree
+        // A review reads at these paths as written and never through a link, so say so before any model is checked.
+        // A folder that has gone fails into the catch below, with its generic reason.
+        if (!(yield* Effect.tryPromise(() => ConnectGit.canonical(ctx.directory, root))))
+          return member({ state: "unavailable", reason: ConnectGit.LINKED })
         const exit = yield* plan(root).pipe(Effect.exit)
         if (Exit.isFailure(exit))
           return member(
