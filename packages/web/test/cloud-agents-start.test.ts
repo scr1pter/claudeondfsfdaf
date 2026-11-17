@@ -839,9 +839,10 @@ function integrationTests() {
     try {
       await f.bind(f.account, "")
       expect((await bindingFor(f.github.repositoryId))?.installationId).toBeUndefined()
-      const before = await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])
+      // KEYS order follows hash-table buckets and can change across a rehash; compare the key sets.
+      const before = ((await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])) as string[]).sort()
       expect(await f.start()).toEqual({ ok: false, reason: "app-required" })
-      expect(await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])).toEqual(before)
+      expect(((await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])) as string[]).sort()).toEqual(before)
       expect(f.github.state.requests).toEqual([])
       await f.bind()
       expect((await f.start()).ok).toBe(true)
