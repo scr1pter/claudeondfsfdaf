@@ -28,6 +28,9 @@ export function start(handler: Handler = () => ({})): Bridge {
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
+    // Research tests can leave the pooled keep-alive socket idle for seconds between bridge calls; the default idle
+    // timeout could close it just as the next call reuses it, which reads as a desktop browser that did not answer.
+    idleTimeout: 0,
     fetch: async (request) => {
       const path = new URL(request.url).pathname
       if (request.method !== "POST" || (path !== "/command" && path !== "/research"))
