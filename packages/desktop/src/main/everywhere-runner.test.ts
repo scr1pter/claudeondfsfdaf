@@ -4,7 +4,7 @@ import { branchFor } from "@vectordevai/core/everywhere/publish"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
-import { COMPUTER_CAPS, TIMING, createJobId, randomId, type EverywhereJob, type Settle } from "@vectordevai/schema/everywhere"
+import { COMPUTER_CAPS, READINESS_FIELDS, READINESS_QUERY, TIMING, createJobId, randomId, type EverywhereJob, type Readiness, type Settle } from "@vectordevai/schema/everywhere"
 import { renderResult } from "@vectordevai/schema/everywhere-policy"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { createLedger, type RunnerLedger } from "./everywhere-ledger"
@@ -331,6 +331,77 @@ test("the jobs client labels its requests everywhere, so Vector Local refuses th
     device: "fixture-device",
     body: { jid, device: "fixture-device", reason: "local-mode" },
   }])
+})
+
+/** A loopback stand-in for the pending route: the actual jobs client, every request recorded. */
+function pendingServer(answer: () => Response, url?: string) {
+  const sent: { url: URL; method?: string; headers: Headers; body: unknown }[] = []
+  const client = createEverywhereJobsClient({
+    url,
+    device: "fixture-device",
+    token: async () => "fixture-desktop-token",
+    fetcher: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push({ url: new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url), method: init?.method, headers: new Headers(init?.headers), body: init?.body })
+        return answer()
+      },
+      { preconnect: () => undefined },
+    ),
+  })
+  return { client, sent }
+}
+
+const NOT_READY: Readiness = { takesJobs: false, remote: false, localMode: false, sandbox: false, waitForComputer: false, capsRoom: false, projects: false }
+
+test("pending asks with the readiness flags and maps the service's off answers to no jobs", async () => {
+  const offer = (fill: string) => `vef1.${Buffer.from(fill).toString("base64url")}.${"s".repeat(86)}`
+  const valid = offer("first")
+  const other = offer("second")
+  let reply = () => Response.json({ offers: [], waiting: 0 })
+  const server = pendingServer(() => reply(), "http://127.0.0.1")
+  // The server's own names, now shared from the schema (jobs-api.ts re-exports them).
+  expect(Object.keys(READINESS_QUERY).sort()).toEqual([...READINESS_FIELDS].sort())
+  for (const field of READINESS_FIELDS) {
+    await server.client.pending({ ...NOT_READY, [field]: true })
+    const query = Object.fromEntries(server.sent.at(-1)!.url.searchParams)
+    expect(query).toEqual(Object.fromEntries(READINESS_FIELDS.map((name) => [READINESS_QUERY[name], name === field ? "1" : "0"])))
+  }
+  const asked = server.sent.at(-1)!
+  expect({ path: asked.url.pathname, method: asked.method, body: asked.body, device: asked.headers.get("x-vector-device"), authorization: asked.headers.get("authorization") })
+    .toEqual({ path: "/api/everywhere/jobs/pending", method: "GET", body: undefined, device: "fixture-device", authorization: "Bearer fixture-desktop-token" })
+  reply = () => Response.json({ offers: [valid, "x", 5, other], waiting: 2 })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [valid, other], waiting: 2 })
+  reply = () => Response.json({ offers: Array.from({ length: 40 }, (_, index) => offer(`job-${index}`)), waiting: 40 })
+  expect((await server.client.pending(NOT_READY)).offers).toHaveLength(32)
+  // The route's answer while the feature or its switch is off.
+  reply = () => Response.json({ offers: [valid], waiting: 1, action: "stop" })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [], waiting: 0 })
+  // A platform route's EVERYWHERE_OFF, and a deployment without the route.
+  reply = () => Response.json({ error: { code: "EVERYWHERE_OFF", message: "Vector everywhere is off." } }, { status: 404 })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [], waiting: 0 })
+  reply = () => new Response("<html>Not found</html>", { status: 404, headers: { "content-type": "text/html" } })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [], waiting: 0 })
+  reply = () => Response.json({ error: { code: "UNAVAILABLE" } }, { status: 503 })
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Everywhere service unavailable")
+  reply = () => Response.json({ error: { code: "CLI_TOKEN_INVALID" } }, { status: 401 })
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Everywhere service unavailable")
+  for (const body of [{ offers: [valid], waiting: -1 }, { offers: "x", waiting: 0 }, { offers: [], waiting: 1.5 }, [valid]]) {
+    reply = () => Response.json(body)
+    await expect(server.client.pending(NOT_READY)).rejects.toThrow("Invalid Everywhere pending answer")
+  }
+  reply = () => new Response("not json")
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Invalid Everywhere pending answer")
+  // A body past the bound is refused, not parsed.
+  reply = () => Response.json({ offers: [valid], waiting: 1, padding: "p".repeat(128 * 1024) })
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Invalid Everywhere pending answer")
+})
+
+test("pending is labelled everywhere, so Vector Local refuses it before anything is sent", async () => {
+  const server = pendingServer(() => Response.json({ offers: [], waiting: 0 }))
+  Egress.configure(LOCAL_ON)
+  await expect(server.client.pending(NOT_READY)).rejects.toBeInstanceOf(EgressGuard.EgressBlocked)
+  expect(server.sent).toEqual([])
+  expect(Egress.events().at(-1)).toMatchObject({ source: "everywhere", purpose: "account", origin: "https://vectordev.ai", method: "GET", decision: "block" })
 })
 
 test("an unmapped repository declines under its exact lease", async () => {

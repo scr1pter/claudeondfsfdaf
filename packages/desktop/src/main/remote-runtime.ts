@@ -1,7 +1,9 @@
-import { BrowserWindow } from "electron"
+import path from "node:path"
+import { app, BrowserWindow } from "electron"
 import { EgressAttribution } from "@vectordevai/core/local-mode/attribution"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
+import { createEverywhereJobs, jobsForLink, type EverywhereJobs } from "./everywhere-wiring"
 import { engineEventSource } from "./keep-awake"
 import { createRemoteLink, type RemoteLink, type RemoteSocket, type RemoteStatus } from "./remote-link"
 import { createRemoteNotify, type RemoteNotify } from "./remote-notify"
@@ -20,7 +22,7 @@ import { broadcastRendererStatus } from "./renderer-status"
 
 const STORE = "vector-remote"
 const PURPOSE = "vector-remote-identity"
-const state: { link?: RemoteLink; notify?: RemoteNotify; stopAccount?: () => void } = {}
+const state: { link?: RemoteLink; notify?: RemoteNotify; jobs?: EverywhereJobs; stopAccount?: () => void } = {}
 
 function broadcast(status: RemoteStatus) {
   broadcastRendererStatus(BrowserWindow.getAllWindows(), "remote-changed", status)
@@ -37,6 +39,14 @@ export function startRemote(input: {
   const authorization = `Basic ${Buffer.from(`vector:${input.engine.password}`).toString("base64")}`
   const store = () => getStore(STORE)
   const events = engineEventSource({ url: input.engine.url, username: "vector", password: input.engine.password })
+  // Vector everywhere's jobs (R-C3): the link takes them as its subscriber, and they read the link back once started.
+  const jobs = createEverywhereJobs({
+    engine: input.engine,
+    token: () => vectorAccount.token(),
+    events: (signal) => events.events(signal),
+    ledgerPath: path.join(app.getPath("userData"), "everywhere", "runner.json"),
+    log: (message) => input.log(message),
+  })
   const link = createRemoteLink({
     store: {
       read: async () => {
@@ -74,10 +84,11 @@ export function startRemote(input: {
     computerName: () => computerName(),
     relayName: () => relayName(),
     watchingChanged: input.watchingChanged,
-    changed: broadcast,
+    ...jobsForLink(jobs, broadcast),
     log: input.log,
   })
   state.link = link
+  state.jobs = jobs
   state.notify = createRemoteNotify({
     token: () => vectorAccount.token(),
     alertKey: () => link.alertKey(),
@@ -89,11 +100,14 @@ export function startRemote(input: {
     else link.signedOut()
   })
   void link.start()
+  jobs.start(link)
   return link
 }
 
 export function stopRemote() {
   state.stopAccount?.()
+  state.jobs?.stop()
+  state.jobs = undefined
   state.link?.stop()
   state.link = undefined
   state.notify = undefined

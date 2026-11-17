@@ -2762,3 +2762,228 @@ Before the commit, on the final sources (HEAD `12b3ad09` = origin/everywhere-fin
 | `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
 
 The commit title is the lead's (`feat(engine): run an unattended session's shell only in a no-network sandbox`); it stages exactly the 26 paths above. The workflow_dispatch run ids of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on everywhere-finish go in the next lane-docs commit; the handoff's EV-16 bullet keeps "CI pending" until then.
+
+## EV-17: the desktop wiring: jobs module, `pending` client and Remote registration (2026-11-16)
+
+VE-21, R-C2, R-C3. Deviations log: "2026-11-16, EV-17".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `b0240ba2` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. EV-10 `7146a98f`, EV-11 `901d9e4b` and EV-15 `bc254e85` are ancestors. origin/main moved from `7e440a27` to `dabc4821` during the package and holds PR #33. It touches none of this package's files and is not merged here: that is the lead's merge, as EV-15's commit gate recorded.
+
+**Files** (line numbers after the change):
+
+Updated for review round one (2026-11-17); its receipt is at the end of this section.
+
+- packages/desktop/src/main/everywhere-wiring.ts (new, 530 lines):
+  - `jobsForLink` :96, `createEverywhereJobs` :109 (`fetchSettings` :153, `read` :183, the runner's `settings` gate :224, the verifier :230, `current` :256, `evaluate` :262, `room` :287, `askOnce` :298, `requestPending` :330, `listen` :346, `syncEvents` :369, `offer` :388, `changed` :397, `refresh` :407, `start` :412, `stop` :419);
+  - `everywhereSettings` :440, `projectFolder` :468, `resolveProjects` :489, `serviceAllowed` :524.
+- packages/desktop/src/main/everywhere-wiring.test.ts (new, 1231 lines, 24 cases).
+- packages/desktop/src/main/everywhere-runner.ts: `JobsClient.pending` :37, `PENDING_OFFERS`/`PENDING_BYTES` :41-43, `PendingAnswer` :46, `pending()` :89, `RunnerDeps.jobs` :129. `LOCAL_NEEDS` is unchanged.
+- packages/desktop/src/main/everywhere-runner.test.ts: C1 :356, C2 :399.
+- packages/desktop/src/main/vector-account.ts: `tokenClaims` :655 (was the private `tokenClient`), read at :578.
+- packages/desktop/src/main/everywhere-engine.ts: `responseText` exported (:39).
+- packages/desktop/src/main/remote-link.ts: `device()` (:875).
+- packages/desktop/src/main/remote-runtime.ts: :1-2, :6, :25, :42-49, :87, :91, :103, :109-110.
+- packages/schema/src/everywhere.ts: `Readiness`, `READINESS_FIELDS`, `READINESS_QUERY` (:404-444).
+- api/_lib/everywhere/jobs.ts: the import (:19, :40) and the re-export (:1482-1484).
+- api/_lib/everywhere/jobs-api.ts: the import (:3) and the re-export (:69-70).
+- api/_lib/everywhere/config.ts: the `LAPTOP_ROUTE_WIRED` comment (:239-247).
+- packages/core/src/local-mode/sources.ts: the `everywhere` source's `sends` and `note` (:401-407).
+- Lane documents: this receipt, the deviations entry, dated notes in the spec, and handoff annotations.
+
+**The new cases.** everywhere-wiring.test.ts:
+
+| Case | Line | What it pins |
+| --- | --- | --- |
+| W1 | :441 | an offer frame reaches the runner; one claim with the identity's device and the sign-in; one `held` settle with the fixed text; no decline, report, fetch, commit, push or session; one more ask after the job |
+| W2 | :478 | want() true keeps a connection for jobs alone: one socket, one mint, only pings, nothing binary |
+| W3 | :502 | asks on the first connect, on a reconnect and after a job, each a GET with no body, the device, the sign-in and `jobs=1&remote=1&local=0&sandbox=0&wait=1&room=1&projects=1`; after "Disconnect all" the ask names the new device |
+| W4 | :529 | fake clock, the app's own link timing: asks at connect, 5 and 10 minutes; off by `global.disposed` closes the link and sends nothing for 10 minutes; no timer left while off, nor after stop |
+| W17 | :565 | fake clock: the relay closes `REMOTE_PAUSED`; jobs stay `on`, the five-minute ask sends nothing while the link is `paused`, and once the link is online again an ask says `remote=1` |
+| W18 | :595 | fake clock, Vector Local allowing `everywhere` but not `remote`: the link reads `local-off` with no ticket minted, and eleven minutes pass with no request |
+| W19 | :614 | the ticket held so the link stays `connecting` after a drop: a job that ends asks with `remote=0`; once online the next ask is `READY` |
+| W5 | :639 | toggle off during a running job (test-seam worktree and a holding engine): the runner's tick aborts it, settle `cancelled`, the engine aborted, no commit or push, the jobs connection closed, `ready`, `off`, no ask after |
+| W6g | :668 | guard, meant to go red at the owner's key handoff: `OFFER_KEYS` is empty and is the module's default; the ask says `jobs=0` and an offer is refused with no ledger write |
+| W6 | :688 | with `keys: {}`, a relay offer, a `pending` offer and a direct offer are all refused; only the ask is sent, with `jobs=0`; no ledger write |
+| W7 | :711 | absent, off, locked, no lock list, an unknown key and a 500: no socket, mint, request, ledger read or write, or git; then on, a stored lease is settled `interrupted` first and the ask follows |
+| W7b | :773 | an offer that arrives while recovery's settle is held waits for it and is claimed, not declined `busy` |
+| W8 | :812 | setting off: a verified offer on a pairing's connection is declined `off` (EV-11 (b)) and nothing is claimed |
+| W9 | :839 | jobs on with Remote off is `needs-remote`, creates no identity, socket, request, ledger use or event stream; the listed folder is resolved by git's mapping check and one `symbolic-ref` only, and again at a second `refresh()`; `refresh()` reads a change; Remote on then connects and asks once |
+| W10 | :882 | the same offer twice at once: one verification (`useOnce` attempt), one claim |
+| W16 | :900 | Vector Local allowing `remote` only: the link is online, no ask, no `everywhere` Egress event; allowing `everywhere` and `remote`, the ask says `local=1`. Only this case's own network-log events are read |
+| W12 | :931 | a sign-in that cannot be read: no request, offers refused, no error logged |
+| W13/W14 | :954 | room for two: both offers of one answer claimed while the first job still runs; room for one: one claim and no decline |
+| W20 | :995 | a reconnect while the first offer's verification is held: the ask says `room=0`, nothing more is verified, and after the release one claim and no decline |
+| W21 | :1029 | `at_once` 2, two jobs that end together: the asks after them hand on at most two held offers, and after the release every one is claimed with no decline |
+| W15 | :1059 | a settings change that lands while a read is held open is read again (two GETs), and jobs go off |
+| W22 | :1089 | origin/HEAD moves and `global.disposed` lands while a branch read is held: the folder is read again, and a job claimed afterwards fetches the new base |
+| W11a | :1123 | defaults; every non-default field mapped; the model split; off, locked, no lock list, an unknown key, 70 folders and no answer are off with no folder resolved |
+| W11b | :1188 | a folder and a link to it are one folder; a missing folder is dropped before git; an unmapped folder is dropped with no branch read; origin/HEAD's base rule |
+
+everywhere-runner.test.ts:
+
+| Case | Line | What it pins |
+| --- | --- | --- |
+| C1 | :356 | for each `READINESS_FIELDS` key only its own name is `1`; the request; offers filtered and capped at 32; `action: "stop"`, a 404 `EVERYWHERE_OFF` and an HTML 404 are no jobs; 503 and 401 reject; malformed, non-JSON and over-128-KiB bodies are invalid |
+| C2 | :399 | under Vector Local `pending` rejects `EgressBlocked` with nothing sent, logged as `everywhere` GET |
+
+**Checks** (first pass; review round one's re-runs are in its receipt below), each through `vector-serial`, one file at a time from the owning package with `--timeout 30000`:
+
+- Desktop runs used `--no-env-file`, app runs `--isolate`, and `TMPDIR=/tmp/vector-v2/everywhere/ev17-tmp`.
+- Engine runs used fresh XDG roots under /tmp/vector-v2/everywhere-finish/ev17-xdg-<file>/.
+- Logs are in /tmp/vector-v2/everywhere/ev17/.
+- "Before" is HEAD, run here for the three changed or near files and taken from EV-15 and EV-16's receipts for the unchanged test files.
+
+| Check | Before | After |
+| --- | --- | --- |
+| desktop everywhere-wiring.test.ts (new; vector-everywhere.yml) | none | 17 pass, 0 fail, 137 expects (three more runs: 17 pass each) |
+| desktop everywhere-runner.test.ts (vector-everywhere.yml) | 52 pass | 55 pass, 0 fail, 456 expects |
+| desktop everywhere-offer, -ledger, -git, -engine, -github, -pr, -scan, -awake | offer 2 pass | 2, 7, 9, 7, 6, 1, 4, 1 pass, 0 fail |
+| desktop remote-link.test.ts (vector-hosted-ci.yml) | 32 pass | 32 pass, 0 fail, 196 expects |
+| desktop remote-phone-app, remote-routes, remote-crypto, remote-notify (vector-hosted-ci.yml) | | 15, 15, 15, 6 pass, 0 fail |
+| desktop config-skew.test.ts, cloud-naming.test.ts (scan desktop sources) | | 2 pass (38 expects), 1 pass |
+| core test/local-mode/sources.test.ts (no lane workflow) | 16 pass, 55 expects | 16 pass, 0 fail, 55 expects |
+| engine test/compliance/egress-inventory.test.ts (no lane workflow) | 5 pass, 12 expects | 5 pass, 0 fail, 12 expects |
+| engine test/everywhere/config.test.ts (boots the engine) | | 19 pass, 0 fail, 68 expects |
+| app src/features/local/local-model.test.ts (no lane workflow) | 39 pass, 1030 expects | 39 pass, 0 fail, 1030 expects |
+| app src/components/settings-v2/local-model.test.ts (no lane workflow) | 15 pass, 36 expects | 15 pass, 0 fail, 36 expects |
+| root test/hosted-clients.test.ts (run from test/) | 8 pass, 50 expects | 8 pass, 0 fail, 50 expects |
+| web test/everywhere-lane.test.ts | 13 pass | 13 pass, 0 fail, 152 expects (the new test file is found by the lane's globs) |
+| web test/everywhere-jobs-api.test.ts, everywhere-jobs.test.ts (the moved names) | | 22 pass; 43 pass and 9 skip (real-Redis cases, which run in the Valkey job) |
+| web test/everywhere-remote-adapter.test.ts, everywhere-config.test.ts | | 20 pass, 24 pass |
+| `bun typecheck` in packages/schema, core, desktop, app, web and engine (every package that imports schema everywhere.ts) | | exit 0 each |
+| hosted API: `bun typecheck --project ../../tsconfig.json` from packages/engine | | exit 0 |
+| the two desktop test files, `bun x tsgo --noEmit -p /tmp/vector-v2/everywhere/ev17/tc/tsconfig.json` (EV-11's pattern; desktop's tsconfig excludes tests) | | exit 0 |
+| main-process bundle proxy: `bun build src/main/remote-runtime.ts --target=node --external electron` (nothing launched) | | exit 0, 389 modules, 2.0 MB; everywhere-wiring.ts alone 1.18 MB |
+
+**Formatting and hygiene.**
+
+- prettier conforms for everywhere-wiring.ts, everywhere-wiring.test.ts, remote-runtime.ts, remote-link.ts, sources.ts and jobs-api.ts.
+- schema everywhere.ts, api jobs.ts, api config.ts and everywhere-engine.ts are hand-packed at HEAD. Their prettier drift is unchanged: 44, 520, 20 and 188 lines before and after.
+- The runner and its test keep their hand-packed style in this package's hunks, as EV-15 recorded: drift 407 → 449 and 540 → 612 lines.
+- The only added code line over 120 columns in a non-test file is the runner's modified import (already 240 columns at HEAD).
+- A diff scan found no personal path or email.
+
+**Mutations** (first pass; review round one's re-run is in its receipt below): 28, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev17-mut/: mutate.py, a log per mutation, final-run.txt). All 28 are red on the final sources. In the first round M5b survived: the interval kept running while off but sent nothing. W4 now checks that no timer is left while off, and M5b is red.
+
+| Mutation | File | Red |
+| --- | --- | --- |
+| M1 want() ignores the setting | wiring | W4, W5, W7, W8 and two more |
+| M2 want() ignores Remote and the identity | wiring | W9 |
+| M3 no ask on connect | wiring | 11 cases, W1 and W3 among them |
+| M4 no ask after a job | wiring | W1, W3, W13/W14 |
+| M5 no five-minute interval | wiring | W4 |
+| M5b the interval not cleared when off | wiring | W4 |
+| M6 toggle off does not tell the link | wiring | W4, W5, W15 |
+| M7 `takesJobs` ignores whether a key is pinned | wiring | W6 |
+| M7b verify skips the signature check | wiring | W6, W10 |
+| M8 the company lock ignored | wiring | W7, W11a |
+| M11 the `local` flag not inverted | wiring | W3, W6, W16 |
+| M12 no in-flight dedupe | wiring | W10 |
+| M13 recovery at start | wiring | W7, W9 |
+| M14 the ask awaits each offer in turn | wiring | W13/W14 |
+| M15 the wiring turns Remote on itself | wiring | W9 |
+| M16 the dedupe not canonical | wiring | W11b |
+| M18 a read joins the one in flight, no rerun | wiring | W15 |
+| M19 folders resolved while off | wiring | W7, W11a |
+| M20 every offer of an answer handed on | wiring | W13/W14 |
+| M21 reservations not held back for recovery | wiring | W7b |
+| M24 no quiet skip while Vector Local blocks the service | wiring | W16 |
+| M25 the event stream kept open with Remote off | wiring | W9 |
+| M26 the branch read before git maps the folder | wiring | W11b |
+| M9 a pending 404 throws | runner | C1 |
+| M10 `action: "stop"` ignored | runner | C1 |
+| M17 `remote` dropped from the needs | runner | R6 |
+| M22 the pending body read unbounded | runner | C1 |
+| M23 pending not labelled `everywhere` | runner | C2 |
+
+**Cross-lane probe** over this package's files:
+
+- codium-finish `a078c20b` touches core local-mode/sources.ts. `git merge-file` of the working tree's file with codium-finish's over the merge base `67ec3a60` exits 0 (clean).
+- review-fixes `1433d105`, connect-finish `19c48b89`, hands-finish `8139e5fc`, brain-transport `27913ae3`, scope-finish `43e21b48`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c` and main `dabc4821` touch none of them.
+
+**Not done here (the task said not to commit).**
+
+- The commit `feat(desktop): wire Vector everywhere jobs to the Remote link`. It stages by path the thirteen code and test files above (vector-account.ts among them) and the four lane documents (deviations, progress, spec, handoff).
+- Its body says that no generated file, flag, env var, dependency, lockfile, workflow, route or config key changed.
+- Then the push gate: `git fetch origin everywhere-finish`, the full turbo typecheck and a fast-forward push.
+- Then workflow_dispatch runs of vector-everywhere.yml, vector-hosted-ci.yml and typecheck.yml on everywhere-finish. Their run ids go in a follow-up lane-docs commit.
+- Not vector-codium.yml: main is not merged into this branch.
+
+### EV-17 review round one (2026-11-17)
+
+Twelve findings, all non-blocking. How each was taken is in the deviations log, "2026-11-16, EV-17", "Review round one". Nothing is committed (the task said so).
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `b0240ba2` still equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`. origin/main is still `dabc4821`. Nothing was merged.
+
+**Code changed in the round:**
+
+- everywhere-wiring.ts:
+  - `room` (:287) subtracts the offers handed on and not yet reserved, and `askOnce` counts it again after the answer;
+  - `askOnce` asks only while the link is `online` or `connecting`, and sends `remote` as `enabled && online`;
+  - the folder cache lives in `state.folders`, replaced rather than cleared, and each read keeps the cache that was current when its answer came in;
+  - the verifier reads the account with vector-account.ts `tokenClaims`, and `accountOf` and its schema are gone.
+- everywhere-runner.ts: `LOCAL_NEEDS` is back to HEAD (three needs, not exported).
+- everywhere-runner.test.ts: R6 (the `remote` pin), R2's extra policy and the `LocalSources` and `LOCAL_NEEDS` imports are removed.
+- everywhere-wiring.test.ts:
+  - new cases W6g, W17 to W22, and W9's git assertion;
+  - W6 now uses `keys: {}`;
+  - W16 is restructured: `remote` allowed only, then both, and it reads only the network-log events it caused;
+  - fixture changes: the link's ticket request goes through `Egress.fetch("remote", …)`, git takes `base`/`hold` read at each call and records fetch's base, the ledger can hold `useOnce`, the ticket request can be held, and shared `minutes()` and `allowing()` helpers.
+- Lane docs: the deviations entry ((f), (h), (j), (s), (z), Safe by default, Left open, Owner action, Mutations, the review round), the spec's EV-17 notes on §3.5 and the VE-21 row, and the handoff's EV-17 bullet and EV-15 item annotation.
+
+**Checks**, each through `vector-serial`, one file at a time from packages/desktop with `--no-env-file --timeout 30000` and `TMPDIR=/tmp/vector-v2/everywhere/ev17-tmp`. Logs are in /tmp/vector-v2/everywhere/ev17-fix/.
+
+| Check | Result |
+| --- | --- |
+| desktop everywhere-wiring.test.ts (vector-everywhere.yml) | 24 pass, 0 fail, 169 expects; four final runs, 24 pass each |
+| desktop everywhere-runner.test.ts (vector-everywhere.yml) | 54 pass, 0 fail, 447 expects (HEAD's 52 plus C1 and C2) |
+| desktop remote-link.test.ts (vector-hosted-ci.yml) | 32 pass, 0 fail, 196 expects |
+| desktop vector-account.test.ts, vector-account-lifecycle.test.ts (`tokenClaims`; no lane workflow) | 30 pass (318 expects), 1 pass (3 expects) |
+| desktop `bun typecheck` | exit 0 |
+| the two desktop test files, `bun x tsgo --noEmit -p /tmp/vector-v2/everywhere/ev17/tc/tsconfig.json` | exit 0 |
+| prettier `--check` on everywhere-wiring.ts and everywhere-wiring.test.ts | conforms |
+| `git diff --check` over docs/ and packages/desktop/ | clean (one trailing-space line from the first pass, in (r), removed) |
+
+The first pass's other checks (schema, core, app, web, engine and root files, the hosted-API typecheck and the bundle proxy) cover files this round did not touch, and are not re-run.
+
+**Mutations.** 35, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev17-fix/mut/: mutate.py, one log per mutation, run.txt, results.json rebuilt from the logs). They are the first pass's 27 (M17 went with the `remote` need, and M10's anchor follows the schema decode) and eight new ones. All 35 are red on the final sources. N7 survived the first run, because no case refreshed twice. W9 now calls `refresh()` a second time and expects the folder resolved again, and N7 is red. Under N3, W16 also failed, but only through W18's mutated asks, which reached the process's shared network log. W16 now reads only the events it caused, and M24 and N3 were re-run afterwards: M24 is red on W16, and N3 on W17 and W18.
+
+| Mutation | File | Red |
+| --- | --- | --- |
+| M1 want() ignores the setting | wiring | W4, W5, W7, W8 and 2 more |
+| M2 want() ignores Remote and the identity | wiring | W9 |
+| M3 no ask on connect | wiring | W1, W3, W4, W17 and 13 more |
+| M4 no ask after a job | wiring | W1, W3, W19, W13/W14 and 2 more |
+| M5 no five-minute interval | wiring | W4 |
+| M5b the interval not cleared when off | wiring | W4 |
+| M6 toggle off does not tell the link | wiring | W4, W5, W15 |
+| M7 `takesJobs` ignores whether a key is pinned | wiring | W6g, W6 |
+| M7b verify skips the signature check | wiring | W6g, W6, W10, W20, W21 |
+| M8 the company lock ignored | wiring | W7, W11a |
+| M11 the `local` flag not inverted | wiring | W3, W19, W6g, W6 and 2 more |
+| M12 no in-flight dedupe | wiring | W10 |
+| M13 recover at start, not at the first on | wiring | W7, W9 |
+| M14 the ask awaits each offer in turn | wiring | W13/W14, W20, W21 |
+| M15 the wiring turns Remote on itself | wiring | W9 |
+| M16 the dedupe is not canonical | wiring | W11b |
+| M18 a read joins the one in flight without a rerun | wiring | W15, W22 |
+| M19 folders resolved while off | wiring | W7, W9, W11a |
+| M20 every offer of an answer handed on | wiring | W13/W14, W20, W21 |
+| M21 reservations not held back for recovery | wiring | W7b |
+| M24 no quiet skip while Vector Local blocks the service | wiring | W16 |
+| M25 the event stream kept open with Remote off | wiring | W9 |
+| M26 the folder's branch read before git maps it | wiring | W9, W22, W11b |
+| M9 a pending 404 throws | runner | C1 |
+| M10 the off answer `action: stop` ignored | runner | C1 |
+| M22 the pending body read unbounded | runner | C1 |
+| M23 pending not labelled everywhere | runner | C2 |
+| N1 in-flight offers not counted in the room | wiring | W20, W21 |
+| N2 the answer sliced to one offer, whatever the room | wiring | W13/W14, W20, W21 |
+| N3 the ask ignores the link's refused states | wiring | W17, W18 |
+| N4 the ask only while online | wiring | W19 |
+| N5 `remote` sent from enabled alone | wiring | W19 |
+| N6 the folder cache kept across `global.disposed` | wiring | W22 |
+| N7 the folder cache kept by refresh() | wiring | W9 |
+| N8 the verifier ignores the sign-in's account | wiring | W1, W3, W19, W5 and 7 more |
+
+**Not done here (the task said not to commit).** The commit plan above stands: thirteen code and test files and the four lane documents, staged by path. The push gate and the workflow_dispatch runs follow it.

@@ -16,6 +16,7 @@ import {
   PLATFORMS,
   PR_URL_PATTERN,
   RANDOM_ID_PATTERN,
+  READINESS_FIELDS,
   REFUSAL_CODES,
   REPLY_FORMAT,
   SERVER_CAPS,
@@ -36,6 +37,7 @@ import {
   type Milestone,
   type Outcome,
   type PlatformId,
+  type Readiness,
   type RefusalCode,
   type Report,
   type Settle,
@@ -1477,33 +1479,9 @@ export async function sweepDue(
 // Computers: when they were last seen and what they last said about themselves
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** The readiness booleans a computer sends with each `pending` call (3.1 `status`). Nothing else about it is kept. */
-export type Readiness = {
-  /** "This computer takes jobs" is on. */
-  readonly takesJobs: boolean
-  /** Vector Remote is on. */
-  readonly remote: boolean
-  /** Vector Local is on (the runner then declines every job, E15). */
-  readonly localMode: boolean
-  /** The shell sandbox the runner needs for commands exists on this computer. */
-  readonly sandbox: boolean
-  /** "Wait for my computer" (default on). */
-  readonly waitForComputer: boolean
-  /** Today's caps on this computer have room. */
-  readonly capsRoom: boolean
-  /** At least one project is allowed. */
-  readonly projects: boolean
-}
-
-export const READINESS_FIELDS = [
-  "takesJobs",
-  "remote",
-  "localMode",
-  "sandbox",
-  "waitForComputer",
-  "capsRoom",
-  "projects",
-] as const
+// The readiness vocabulary lives in packages/schema/src/everywhere.ts, which the desktop's jobs client shares
+// (2026-11-16, EV-17).
+export { READINESS_FIELDS, type Readiness } from "../../../packages/schema/src/everywhere.js"
 
 type Seen = { readonly at: number; readonly device: string }
 

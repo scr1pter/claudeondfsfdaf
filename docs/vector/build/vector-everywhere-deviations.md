@@ -1641,3 +1641,171 @@ Eighteen findings, all non-blocking; several repeat one another. Each is taken o
 - **(d) leaves out workspace sync** (deviations :1530). Taken: (d) names workspace.ts :422 and :473 and why they are not checked.
 - **The commit plan's counts are wrong** (progress :2698). Taken: the receipt lists every path to stage.
 - **`vector.unattended: null` passes admission** (unattended-shell.ts :65). Taken: null counts as none, and the creation case gets the 400 ((p); N6).
+
+## 2026-11-16, EV-17: the desktop wiring: the jobs module, the `pending` client and the Remote registration (VE-21, R-C2, R-C3)
+
+Spec §8 VE-21; §11 R-C2, R-C3; §3.4 `waiting`; §3.5 steps 1 to 3; §5 E8, E9, E10, E15. Built at HEAD `b0240ba2`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. EV-10 (`7146a98f`), EV-11 (`901d9e4b`) and EV-15 (`bc254e85`) are ancestors. origin/main (`dabc4821` at the end of the package) holds PR #33 and touches none of this package's files; merging main stays the lead's. Line numbers are after the change.
+
+Lane numbering: the older notes (EV-11 to EV-16) say "EV-21" for all of the desktop wiring. In the lead's list the wiring is EV-17 (this package) and EV-18 (the adapters: safe worktree, offline shell, keep-awake/F6), and EV-21 is the settings page. EV-17 takes, of those "EV-21" items: the registration (R-C3), the `jobs` subscriber, the `pending` call and its `local` flag, the `remote` decision, the `off` decline pin, the verifier against `OFFER_KEYS`, and reading RunnerSettings (EV-10's Coordination). What it leaves is listed under Left open.
+
+### What changed
+
+- **New packages/desktop/src/main/everywhere-wiring.ts** (530 lines, Electron-free, so Bun tests import it):
+  - `createEverywhereJobs(deps)` (:109) returns `{want, state, offer, changed, refresh, start, stop}`. `want()` (:382) is `state() === "on"`; `state()` (:256) is `off` unless the setting is on, `needs-remote` unless Remote is on with an identity (`link.status().enabled` and `link.device()`), else `on`. It never creates an identity or turns Remote on.
+  - `jobsForLink(jobs, changed)` (:96): the link's `jobs` field and its `changed` callback, which hands each status to `changed` (the renderer's broadcast) and then to the jobs. startRemote spreads it into createRemoteLink's dependencies, and the tests compose the link through the same function.
+  - `everywhereSettings(global, folder)` (:440) and `projectFolder(git, log)` (:468): RunnerSettings from GET /global/config (Coordination of EV-10).
+  - Settings reads (`read`, :183) are one in flight plus at most one after it. The runner's `settings` dependency (:224) waits for the first run's recovery before it answers.
+  - The ask for waiting jobs (`askOnce` :298, `requestPending` :330) is also one in flight plus one after it. `room` (:287) counts the caps left.
+  - The engine's event stream is read only while Remote is on (`syncEvents` :369, `listen` :346).
+  - The verifier's account is the sign-in's `sub`, read with vector-account.ts `tokenClaims` (:230).
+- **packages/desktop/src/main/everywhere-runner.ts**:
+  - `JobsClient.pending(readiness)` (:37), implemented at :89: GET /api/everywhere/jobs/pending with each readiness boolean as `1` or `0` under the schema's `READINESS_QUERY` names. It uses the same `everywhere` label, sign-in, device header and ten-second bound as the POST routes.
+    - A 404 of any kind, and 200 `action: "stop"`, are no jobs.
+    - Another non-ok status is "Everywhere service unavailable".
+    - The body is read with a 128 KiB bound (`PENDING_BYTES` :43) and decoded with one schema (`PendingAnswer` :46, `Schema.fromJsonString` through `Schema.decodeUnknownOption`). Anything else is "Invalid Everywhere pending answer".
+    - Only `OFFER_PATTERN` strings are kept, at most 32 (`PENDING_OFFERS` :41).
+  - `RunnerDeps.jobs` is `Omit<JobsClient, "pending">` (:129).
+  - `LOCAL_NEEDS` is unchanged (three needs; see (f)).
+- **packages/desktop/src/main/vector-account.ts**: `tokenClient` becomes the exported `tokenClaims(token)` (:655), returning the unverified `{client?, sub?}` of a `vct_` token. The sign-in's desktop check reads `.client` (:578) and the wiring's verifier `.sub`, so the token-format rules live in one place.
+- **packages/desktop/src/main/everywhere-engine.ts**: `responseText` (:39) is exported, so `pending` reuses the bounded reader.
+- **packages/desktop/src/main/remote-link.ts**: one additive accessor, `device()` (:875).
+- **packages/desktop/src/main/remote-runtime.ts** (R-C3), all additive:
+  - `createEverywhereJobs(...)` (:43) beside the link, with the ledger at `<userData>/everywhere/runner.json`;
+  - `...jobsForLink(jobs, broadcast)` (:87) in place of `changed: broadcast`;
+  - `state.jobs` (:91);
+  - `jobs.start(link)` after `link.start()` (:103);
+  - `state.jobs?.stop()` in stopRemote (:109).
+- **packages/schema/src/everywhere.ts**: `Readiness`, `READINESS_FIELDS` and `READINESS_QUERY` (:404-444) moved here from api/_lib/everywhere/jobs.ts and jobs-api.ts. Those two files re-export them (jobs.ts :1484, jobs-api.ts :70), so every server import is unchanged.
+- **packages/core/src/local-mode/sources.ts**: the `everywhere` source's `sends` names the readiness answers, and its `note` names the `pending` route.
+- **api/_lib/everywhere/config.ts**: the comment on `LAPTOP_ROUTE_WIRED` (:239-248) now names what keeps it false. The value is unchanged (`false`).
+- **Tests**: new packages/desktop/src/main/everywhere-wiring.test.ts (24 cases, W1 to W22 in the progress receipt), and two new cases in everywhere-runner.test.ts (C1, C2).
+
+### Deviations
+
+- **(a) R-C3 is more than one line.** remote-runtime.ts gains an import, the `createEverywhereJobs` call, one spread in place of `changed: broadcast`, the `jobs` slot and the start and stop calls. The glue itself is `jobsForLink` in the wiring module, so the tests run it; startRemote itself needs Electron and is covered by the typecheck and the bundle proxy only (Deferred verification).
+- **(b) remote-link.ts gains `device()`.** The brief's file list does not name the file. The alternative, reading the sealed identity from the vault in remote-runtime, would repeat the link's own identity handling and could disagree with it during "Disconnect all".
+- **(c) pending's off answer is 200 `action: "stop"`** (jobs-api.ts pending), not 404 `EVERYWHERE_OFF`, which only the platform routes answer. Both, and every 404, map to no jobs.
+- **(d) The readiness vocabulary lives in the schema** (critique, taken as the primary path). The plan's desktop copy pinned by importing api jobs-api.ts into a desktop test is not used: jobs-api loads the store, switches and adapters at import time.
+- **(e) `local` is `!localAllows(policy)`.** The server's flag now means "Vector Local blocks laptop jobs", not "Vector Local is on". Until the runner's GitHub calls are labelled the two agree whenever Vector Local is on. The schema's `Readiness.localMode` doc comment and the spec (§3.1 `status`, §3.4) carry dated notes.
+- **(f) `localAllows` does not require `remote`; `pending` follows the link instead** (review round one, 2026-11-17). EV-15's review asked whoever builds `pending` to decide whether it may bypass Vector Remote, since it reaches jobs through `everywhere` alone. It does not bypass it. The ask goes only while the link is online or connecting ((z)). A link whose `remote` source Vector Local blocks reads `local-off`: startRemote decides its ticket request and its relay address as `remote`. So no ask goes (W18), and relay offers are gated by the link's own `allowed(url)`. The first draft added `remote` to `LOCAL_NEEDS` instead. That is dropped, with its pin case and R2's extra policy: it was outside the brief, and once the `github` guard goes it would also make the runner's one-second check cancel a running job when `remote` is blocked mid-job. Left open names the decision for EV-21.
+- **(g) `modelAllowed` is true.** An up-front check needs the model's free-model data policy, which only the instance-scoped provider routes give, and they load an instance (EV-13 refused that for unattended work). A guest prompt to a model that may train is refused by the engine (handlers/session.ts `refuseTrainingFreeModels`), so such a job fails at the prompt instead of declining `model-not-allowed`. Vector Local's model decision is the same and is moot under the `github` guard.
+- **(h) Settings, folders and the base.**
+  - Only GET /global/config is read (the user's own files). Its `everywhere` block is decoded with `ConfigEverywhereV1.Info`, which refuses unknown keys. `locked` naming `everywhere`, or an answer with no `locked` list, is off.
+  - Fields map one by one: `max_usd`→`maxUsd`, `at_once`→`atOnce`, `per_day`→`perDay`, `wait_for_computer`→`waitForComputer`, `stay_awake`→`stayAwake`, and `minutes` and `push` as they are. `model` splits at the first `/` into `{providerID, modelID}`.
+  - An off, locked or undecodable block resolves no folder at all: no realpath and no git (critique, taken).
+  - Each listed folder is realpath'd, then put through the runner's own hardened `mapping()`. Only a mapped folder has its branch read: `git symbolic-ref --short refs/remotes/origin/HEAD`, accepted only as `origin/<name>` under the runner's base rule (critique, taken).
+  - A folder that fails any step is dropped, with a fixed log line, so its jobs decline `not-mapped`. That includes a clone with no origin/HEAD (`git remote set-head origin -a` makes one).
+  - A wrong-remote origin/HEAD only fails the fetch, which goes to `https://github.com/<repository>.git`.
+  - The same canonical folder (case-folded on win32 and darwin) is kept once. The 64 cap after the dedupe is belt and braces: the schema already refuses more than 64 entries or a repeated spelling, which turns the block off (critique, taken; the 70-folder case pins that).
+  - Each folder's answer is cached, so the runner's one-second check spawns no git. A changed list, `global.disposed`, `server.connected` and `refresh()` start a new cache (review round one: the map is replaced, never cleared). A read keeps the cache that was current when its answer came in, so a resolution that began before a change never lands in the cache after it, and the read every change asks for resolves the folder again (W22).
+  - Folders are resolved whenever the block is on, `needs-remote` included (review round one, recorded rather than gated). That is git's read-only mapping check and `symbolic-ref` in each listed folder, once per cache, and nothing fetched (W9 pins it). Gating it on Remote would leave `projects` empty whenever Remote is off, and the runner's push-time mapping check would then hold a running job's push when Remote is turned off mid-job, while the job itself keeps running. That is a new, inconsistent rule. The folders are the user's own list, read only by git's local commands.
+- **(i) How settings changes are heard** (critique, taken: the plan's wording was wrong).
+  - A write through PATCH /global/config is heard through `global.disposed`, and a new event stream through `server.connected`. Both are heard only while Remote is on (see (v)).
+  - GET /global/config answers the engine's cached global config: Config.getGlobal is `cachedInvalidateWithTTL(..., Duration.infinity)`. So a hand edit to the global file takes effect only after the engine reloads it (a changing PATCH, a dispose or a restart), not at the next read.
+- **(j) What a computer sends.**
+  - Jobs off: nothing but the `off` decline of a verified offer that arrived on a phone's or pairing's connection, after its single-use id is recorded (a ledger write). While `OFFER_KEYS` is empty no offer verifies, so not even that.
+  - Jobs on with no pinned key: `pending` says `jobs=0` (critique, taken: the plan sent `jobs=1`, which would make the server re-offer and re-sign every waiting job every five minutes only to be refused here). The server then offers nothing (jobs-api.ts pending).
+  - `want()` still follows the setting, so the job-only connection is kept and the relay path is exercised as specified. Review round one proposed `want()` false while no key is pinned, to save the relay's awake meter (R-C2). Not taken: the brief defines `want()` without the key. Before the handoff only a hand-edited config can turn the setting on, since the tab stays hidden (EV-21) until the owner approves the perk. `jobs=0` already stops the server's re-offers. A `state()` that read `off` with the setting on would also mislead the settings page.
+- **(k) The same offer text twice at once is verified once** (`offering`). The ledger's replay record would refuse the second anyway; this saves the second signature check and ledger read (pinned by the `useOnce` attempt count).
+- **(l) Recovery.**
+  - `runner.recover()` runs once per process, at the first `on`, not at start, so a computer with jobs off sends nothing for a stored lease.
+  - Until it ends, the runner's `settings` dependency and the ask for waiting jobs wait for it. So an offer that arrives at the same moment is not declined `busy` by a stale reservation (critique, taken).
+  - recover() releases every reservation, so it never runs again while a job may be active. A publication receipt whose delivery fails stays in the ledger until the next process start.
+- **(m) Push-path stand-ins.** `privateRepository` answers false, `openPr` answers nothing and there is no `githubThread`. git has a blank identity, so `commit` refuses, and no authentication. With no safe worktree none of them is reached. Once EV-18 supplies one, a committed branch is held, and a GitHub job declines `trigger-changed`, until the push path is wired.
+- **(n) Test seams**: `keys`, `ledger`, `service`, `fetcher`, `git`, `runnerEngine`, `safeWorktree`, `localPolicy` and `now`. remote-runtime.ts passes none of them.
+- **(o) `RunnerSettings.rules` is left undefined**, for EV-18.
+- **(p) The device id is the Remote identity's.** After "Disconnect all phones" the jobs client follows the new device. A job claimed under the old one stops at its next report (409), and recovery's settles for it fail and are logged.
+- **(q) The `sends` and `note` text** of the `everywhere` source (critique, taken for `note` too). `callSites` stays everywhere-runner.ts: the wiring itself only talks to the loopback engine.
+- **(r) Waiting jobs are asked for:**
+  - when the link comes online;
+  - after each job the runner ran: after its settle and its reservation release (`offer()` resolving true);
+  - after the first run's recovery;
+  - every five minutes while on.
+
+  The brief's "after every settle" is read as "after every job that ended". A settle-time trigger is not used (critique, taken): the runner's `offer()` resolves only when its job ends, and a trigger inside `settle` would run before the reservation is released, so `room` would read false and a returned offer would be declined `busy`. A declined offer starts no ask, so an offer cannot loop.
+- **(s) Offers are handed on and never awaited by the ask** (critique, taken). One answer hands at most as many offers as there is room for: the least of `atOnce` minus the reservations, `perDay` minus today's count, and 32 minus the stored receipts, each less the offers already handed on and not yet reserved (review round one, `room` :287). Every reservation is one of the offers in `offering` until its job ends, so the unreserved ones are `offering.size` less the reservations. Without that, a reconnect or a second job's end landing while an offer is still being verified saw too much room, and the runner declined the extra offer `busy` (W20, W21). The room is counted for `capsRoom` and again once the answer is in, so a relay offer that arrived meanwhile counts too. The rest expire back to waiting on the server after 30 s and come again at the next ask. The server records `capsRoom` but does not limit its answer by it.
+- **(t) A failed settings read is off** (fail closed, logged once per streak). It is read again at the next event, ask, offer or `refresh()`, not on a timer of its own.
+- **(u) Vector Local.** The ask is skipped quietly while Vector Local blocks the `everywhere` source itself; otherwise it would be refused and logged every five minutes (critique, taken). The critique proposed `Egress.decide` for the check, but that function records an event while Vector Local is on (egress.ts `decide` calls `record`). The pure `LocalPolicy.decide` is used, as `localAllows` does. With `everywhere` allowed the ask goes and says `local=1`.
+- **(v) The engine's event stream is kept open only while Remote is on** (critique, taken). It carries every session event and is needed only for `global.disposed`, and without Remote no job can run. `refresh()` reads the settings on request, for the settings page while Remote is off.
+- **(w) A sign-in that cannot be read counts as none** (critique, taken): `deps.token()` is wrapped with `.catch(() => undefined)` for the verifier, the ask and the jobs client.
+- **(x) `LAPTOP_ROUTE_WIRED` stays false** (critique, taken). The desktop now decodes and verifies offers, but no customer job can finish on a laptop: `OFFER_KEYS` is empty and there is no safe worktree. The comment names that condition. The spec's VE-20 and VE-21 notes say so.
+- **(y) EV-14's precondition** (critique, partly rejected). The critique asked to gate EV-18 on it. It is already met: EV-16 made PATCH /session/:id and POST /sync/replay refuse to add, change or remove `vector.unattended` (handoff, EV-14 bullet, EV-16 annotation). The `safeWorktree` doc comment says so and names EV-16's three preconditions, which are not met. The handoff's EV-14 bullet is annotated.
+- **(z) The ask follows the link's refused states** (review round one, E10). `askOnce` sends nothing unless the link's state is `online` or `connecting`. So a Remote the relay paused (`CLOSE.REMOTE_PAUSED`), revoked, replaced or capped, or one that is out of plan, signed out, `unavailable` or `local-off`, takes no job over HTTP either, until the link connects again (W17, W18). `connecting` still asks: a relay that drops must not stop the HTTP fallback (W19). The `remote` flag is `enabled && state === "online"`, so it says 0 while connecting. `want()` and `state()` do not change: the link decides its own retries.
+
+### Not changed
+
+- `OFFER_KEYS` (empty) and `LAPTOP_ROUTE_WIRED` (false).
+- No flag, env var, route, generated file, dependency, lockfile, workflow or config key.
+- Not changed in index.ts: startRemote's signature is unchanged.
+- The link's behaviour for phones. Its tests pass unchanged (32).
+- The runner's flow. Its existing 52 cases pass unchanged.
+- The server's `pending` contract. Only the names moved.
+
+### Safe by default
+
+- `everywhere.enabled` defaults false and the settings tab stays hidden (EV-21). Off means no connection kept for jobs, no ask, no recovery and no git (W7). A verified offer that still arrives over a phone's or pairing's connection records its single-use id and is declined `off` (W8); none verifies while `OFFER_KEYS` is empty.
+- `OFFER_KEYS` is empty, so every relay or `pending` offer is refused before any request or replay write (W6, and the guard case W6g on the module's default), and `pending` says `jobs=0`.
+- No safe worktree, so a claimed job settles `held` before any session, fetch, commit or push (W1).
+- The push path is stand-ins that fail closed (m).
+- Under Vector Local, `localAllows` refuses (the `github` guard), and `everywhere` is blocked by default, so nothing is sent (W16). `remote` is blocked by default too, and a link Vector Local blocks reads `local-off`, so no ask goes even with `everywhere` allowed (W18).
+- A paused, revoked or otherwise refused Remote takes no job over `pending` (W17).
+- The wiring never creates a Remote identity or turns Remote on (W9, M15).
+- The server is off (VECTOR_EVERYWHERE_ENABLED), so `pending` answers `stop`.
+
+### Left open
+
+- **No brief yet covers the push path.** EV-18 covers the safe worktree, the shell and keep-awake, and EV-21 the settings page. Unassigned, for the lead before VE-50:
+  - git identity and authentication with the user's GitHub sign-in (resolveGithubAccess, Electron);
+  - `githubThread`, `privateRepository` and `openPr` over the existing everywhere-github.ts and everywhere-pr.ts;
+  - labelling desktop github-api.ts calls `github` and removing the `localAllows` guard.
+- **For EV-18:**
+  - fill `RunnerSettings.rules` with the user's own rules for the editing ids before any session;
+  - send `sandbox` from the engine's `offline-v1` probe;
+  - meet EV-16's three preconditions before passing `safeWorktree` (named in its doc comment);
+  - harden or refuse Worktree.remove and Worktree.reset for unattended worktrees, and the 7-day cleanup sweep (EV-12);
+  - stay awake (`stayAwake` is read and unused) and F6.
+- **For EV-21:**
+  - consent and Remote on through `setEnabled(true)`, show `needs-remote`, call `refresh()` after a write while Remote is off, the config-skew decision for writing `everywhere`, and the job-only link that reads `online` (VE-41);
+  - when it labels the GitHub calls and removes the `github` guard, decide whether `localAllows` should require `remote` too ((f)). Today `pending` follows the link, which Vector Local's `remote` decision already stops, and a running job does not stop if `remote` is blocked mid-job. Requiring it would add that stop;
+  - update index.ts's comment above `startRemote`, which still says Remote "connects only while Remote is on and a phone is paired or pairing". It should add "or this computer takes Vector everywhere jobs (everywhere-wiring.ts)". index.ts is outside EV-17's file list, so this waits for EV-21 or the final docs sweep.
+- **For the lead (R-C4, R-C6):** the server's `pending` route checks only the everywhere switch (jobs-api.ts), not Codium's `remote` switch. The desktop's gate ((z)) covers an honest client only. Making the route also honour the `remote` switch belongs with R-C4's presence fix and R-C6's switch.
+- **Not yet built:**
+  - an up-front `modelAllowed` check (g);
+  - a project whose clone has no origin/HEAD is dropped (h): a GitHub default-branch read belongs with the push path;
+  - background residency (§3.5 step 10, R-M4).
+- **Owner action:** the offer public key for `OFFER_KEYS` (the build stays neutral). `LAPTOP_ROUTE_WIRED` then waits for EV-18 too. The wiring test's guard case W6g ("guard: OFFER_KEYS ships empty …") is meant to go red at that handoff. Whoever pins the key updates that one case, which is not a loosened test: W6 keeps testing an empty key set through `keys: {}`.
+
+### Mutations
+
+Twenty-eight in the first pass, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev17-mut/: mutate.py, one log per mutation, final-run.txt). All 28 were red on those sources. M5b survived the first round (the interval kept running while off, but sent nothing); the five-minute case now checks that no timer is left while off, before `stop()`, and it is red. The plan's M14 had nothing to mutate and is replaced by the hand-off, settle-trigger, read and resolution mutations (critique, taken).
+
+Review round one re-ran the set on the final sources (/tmp/vector-v2/everywhere/ev17-fix/mut/: mutate.py, one log per mutation, run.txt): 27 of the first pass (M17 went with the `remote` need, and M10's anchor follows the schema decode) and eight new ones, N1 to N8. The table is in the progress receipt.
+
+### Coordination
+
+- Cross-lane, over this package's files: only codium-finish (`a078c20b`) touches one, core local-mode/sources.ts (brain-vault's `sends`). `git merge-file` of the working tree's file with codium-finish's, over their merge base `67ec3a60`, is clean.
+- review-fixes, connect-finish, hands-finish, brain-transport, scope-finish, workspaces-finish, native-qualify and main touch none of these files.
+- The schema move touches api/_lib/everywhere/jobs.ts and jobs-api.ts, which no other lane edits.
+
+### Deferred verification
+
+- startRemote under Electron, and electron-vite's main build. Both need Electron or the CLI server dist. A Bun bundler proxy resolves remote-runtime.ts's graph (389 modules, 2.0 MB, Electron external) without launching anything.
+- A packaged app against the real relay and engine.
+- VE-50.
+- CI after the commit and push: vector-everywhere.yml, vector-hosted-ci.yml (remote-runtime.ts changed) and typecheck.yml as workflow_dispatch on everywhere-finish.
+
+### Review round one (2026-11-17)
+
+Twelve findings, all non-blocking; two repeat one another. Eleven are taken or recorded, and one optional proposal is not taken ((j)). Left in the working tree, not committed (the task said so).
+
+- **The room ignores offers still being verified** (two findings, everywhere-wiring.ts `slots`, at the first `askOnce` line and at `askAgain`). Taken. `room` subtracts the offers handed on and not yet reserved from all three caps, and is counted again once the answer is in ((s)). W20: a reconnect while an offer's verification is held asks with `room=0` and hands on nothing. W21: two jobs that end together hand on at most the two the caps allow. No `busy` decline in either.
+- **A clear does not stop a running resolution** (`folders.clear()`). Taken, the second option: the cache map is replaced, and each read keeps its own ((h)). The described path did not occur in this code, because `folders.set` stores the promise in the same turn it is made, never after the result arrives. And every clear is followed by a read that replaces the in-flight read's settings. Taken anyway, since it makes the rule hold by construction. W22 holds a branch read open across a change and checks that a job claimed afterwards fetches the new base.
+- **`pending` hand-parses its body.** Already so in the working tree when the round began: one `Schema.fromJsonString` struct through `Schema.decodeUnknownOption` (`PendingAnswer`), with the `action: "stop"` short-circuit and the `OFFER_PATTERN` filter kept (C1).
+- **Two copies of the `vct_` claim parsing.** Taken. vector-account.ts imports no Electron (its dependencies are injected), so it exports `tokenClaims` (`{client?, sub?}`), and both the sign-in check and the verifier use it. `accountOf` is gone.
+- **`remote` in `LOCAL_NEEDS` is outside the brief.** Taken, the "otherwise" branch. Dropped with its pin case and R2's extra policy. The pending path instead follows the link ((f), (z)), and Left open names the decision for EV-21.
+- **The job-only connection is kept while no key is pinned.** Not taken (optional); the reasons are in (j).
+- **Folders resolve, and git starts, in `needs-remote`.** Recorded, the second option ((h)). W9 pins the calls: git's mapping check and one `symbolic-ref`, in the listed folder, and nothing fetched, committed or pushed. It also pins that a second `refresh()` resolves the folder again (N7).
+- **The `pending` path ignores the link's refused states** (E10-adjacent). Taken ((z)). W17: a relay pause, then no ask at the five-minute mark; asks resume once the link is online. W18: Vector Local blocking `remote` gives `local-off`, then no ask in eleven minutes. W19: while connecting the ask still goes with `remote=0`. The test fixture's ticket request now goes through `Egress.fetch("remote", …)` as startRemote's does. W16's first half therefore allows `remote` (the jobs service stays blocked), and its second half allows both. W16 also reads only the network-log events it caused. The server-side half, the route honouring Codium's `remote` switch, is a Left open request on R-C4 and R-C6.
+- **W6 pins the owner-gated constant.** Taken, the better option. W6 passes `keys: {}`. A separate, labelled guard case (W6g) asserts the shipped default and says it is meant to go red at the key handoff, and the Owner action line says so too.
+- **"Off means no ledger read or write" is true only while no offer verifies.** Taken: Safe by default is reworded as proposed.
+- **index.ts's comment above `startRemote` is stale.** Recorded: a Left open line for EV-21 or the final docs sweep. index.ts is untouched.

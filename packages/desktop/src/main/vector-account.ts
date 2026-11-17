@@ -575,7 +575,7 @@ export function createVectorAccount(deps: Dependencies) {
           !("email" in payload.user) ||
           typeof payload.user.email !== "string" ||
           // Only a grant minted for this app: a CLI grant, or an unmarked token, is never kept here.
-          tokenClient(payload.token) !== "desktop"
+          tokenClaims(payload.token)?.client !== "desktop"
         ) {
           state.pending = undefined
           fail("Vector could not complete sign-in. The link may have expired; start sign-in again.")
@@ -646,14 +646,16 @@ function scheduledChange(answer: object) {
   return { plan: scheduled.plan, at: scheduled.at }
 }
 
-// The client a vct_ sign-in token was minted for, read without verifying it: only vectordev.ai can verify the
-// signature, and this decides only what the desktop keeps.
-const Claims = Schema.fromJsonString(Schema.Struct({ client: Schema.optional(Schema.String) }))
-function tokenClient(token: string) {
-  const parts = token.startsWith("vct_") ? token.slice(4).split(".") : []
-  if (parts.length !== 2) return
+// The claims of a vct_ sign-in token (api/_lib/cli-token.ts mintCliToken), read without verifying it: only vectordev.ai
+// can verify the signature. They decide only what the desktop keeps (`client`) and which account's job offers it
+// checks (`sub`, everywhere-wiring.ts), and an offer for another account is refused by its own signature check.
+const Claims = Schema.fromJsonString(
+  Schema.Struct({ client: Schema.optional(Schema.String), sub: Schema.optional(Schema.String) }),
+)
+export function tokenClaims(token: string | undefined) {
+  const parts = token?.startsWith("vct_") ? token.slice(4).split(".") : []
+  if (parts.length !== 2) return undefined
   return Option.getOrUndefined(Schema.decodeUnknownOption(Claims)(Buffer.from(parts[0]!, "base64url").toString("utf8")))
-    ?.client
 }
 
 /** vectordev.ai's `{ error: { code, message } }`, with the message kept to a line the app can show. */

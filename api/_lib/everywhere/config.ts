@@ -239,9 +239,11 @@ export function sponsorListed(config: EverywhereConfig, account: string): boolea
 /**
  * Whether production can run a paying customer's job. VE-20 and the plan check are built (EV-09): with the flag and the
  * offer key set, productionPorts (runtime.ts) uses the relay adapter (adapters/remote.ts), whose plan check joins the
- * allowlist only while this is true. It stays false because no desktop decodes an offer or pins `OFFER_KEYS` yet
- * (VE-21, EV-11); the package that wires that sets it true. It lives here, not in runtime.ts, because Codium's listing
- * imports this module and runtime.ts builds the platform routes when it loads.
+ * allowlist only while this is true. 2026-11-16 (EV-17): the desktop now decodes and verifies offers (VE-21), but it
+ * stays false while no customer job can finish on a laptop: `OFFER_KEYS` (desktop everywhere-offer.ts) is empty until
+ * the owner's key handoff, so every offer is refused, and the runner has no safe worktree until EV-18, so a claimed job
+ * is held. The package that pins the key and wires the worktree sets it true. It lives here, not in runtime.ts,
+ * because Codium's listing imports this module and runtime.ts builds the platform routes when it loads.
  */
 export const LAPTOP_ROUTE_WIRED: boolean = false
 

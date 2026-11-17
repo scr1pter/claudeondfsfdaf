@@ -1,7 +1,7 @@
 import { branchFor, commitMessage } from "@vectordevai/core/everywhere/publish"
-import { COMPUTER_CAPS, PERMISSION_ID_PATTERN, TIMING, decodeJob, decodeSettle, type DeclineCode, type EverywhereJob, type Milestone, type Outcome, type Settle } from "@vectordevai/schema/everywhere"
+import { COMPUTER_CAPS, OFFER_PATTERN, PERMISSION_ID_PATTERN, READINESS_FIELDS, READINESS_QUERY, TIMING, decodeJob, decodeSettle, type DeclineCode, type EverywhereJob, type Milestone, type Outcome, type Readiness, type Settle } from "@vectordevai/schema/everywhere"
 import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
-import { unattendedRules, type RunnerEngine } from "./everywhere-engine"
+import { responseText, unattendedRules, type RunnerEngine } from "./everywhere-engine"
 import type { RunnerGit } from "./everywhere-git"
 import type { JobLedger } from "./everywhere-ledger"
 import { checkedSummary, mayPushDiff } from "./everywhere-scan"
@@ -10,6 +10,7 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
+import { Option, Schema } from "effect"
 
 export type RunnerSettings = {
   readonly enabled: boolean
@@ -29,7 +30,24 @@ export type JobsClient = {
   readonly decline: (jid: string, reason: DeclineCode, lease?: string) => Promise<void>
   readonly report: (job: EverywhereJob, seq: number, milestone: Milestone, files?: number) => Promise<"continue" | "stop" | "lost">
   readonly settle: (result: Settle) => Promise<void>
+  /**
+   * Waiting jobs for this computer (3.4 `pending`), asked with its readiness booleans: fresh signed offers, verified
+   * and claimed like a relay's. The service's off answers (200 `action: "stop"`, and any 404) are no jobs.
+   */
+  readonly pending: (readiness: Readiness) => Promise<{ readonly offers: readonly string[]; readonly waiting: number }>
 }
+
+/** The most offers kept from one `pending` answer; the server keeps at most three jobs live (SERVER_CAPS). */
+const PENDING_OFFERS = 32
+/** 32 offers of at most 2,140 characters each, with room for the JSON around them. */
+const PENDING_BYTES = 128 * 1024
+const NO_JOBS = { offers: [], waiting: 0 } as const
+/** The pending answer, from the network: the off answer, or offers and a count. Other keys are ignored. */
+const PendingAnswer = Schema.fromJsonString(Schema.Struct({
+  action: Schema.optional(Schema.String),
+  offers: Schema.optional(Schema.Array(Schema.Unknown)),
+  waiting: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+}))
 
 export function createEverywhereJobsClient(input: { readonly token: () => Promise<string>; readonly device: string; readonly fetcher?: typeof fetch; readonly url?: string }): JobsClient {
   const origin = new URL(input.url ?? "https://vectordev.ai")
@@ -68,6 +86,32 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
       if (!checked.ok) throw new Error("Invalid Everywhere result")
       await call("settle", checked.value)
     },
+    async pending(readiness) {
+      // The same label, sign-in, device and ten-second bound as the POST routes; a GET with the booleans as `1` or `0`.
+      const url = new URL("/api/everywhere/jobs/pending", origin)
+      for (const field of READINESS_FIELDS) url.searchParams.set(READINESS_QUERY[field], readiness[field] ? "1" : "0")
+      const response = await Egress.fetch("everywhere", url, {
+        method: "GET", redirect: "error", signal: AbortSignal.timeout(10_000),
+        headers: { authorization: `Bearer ${await input.token()}`, "x-vector-device": input.device,
+          accept: "application/json" },
+      }, input.fetcher)
+      // 404: a deployment without the route, or a platform route's EVERYWHERE_OFF. Either way there is nothing to take.
+      if (response.status === 404) {
+        await response.body?.cancel().catch(() => undefined)
+        return NO_JOBS
+      }
+      if (!response.ok) throw new Error("Everywhere service unavailable")
+      // A longer body is refused unread, so a misbehaving service cannot make this process parse an unbounded answer.
+      const answer = Option.getOrUndefined(Schema.decodeUnknownOption(PendingAnswer)(
+        await responseText(response, PENDING_BYTES).catch(() => undefined)))
+      if (!answer) throw new Error("Invalid Everywhere pending answer")
+      // While the feature or its Codium switch is off the route answers 200 `action: "stop"` (jobs-api.ts pending).
+      if (answer.action === "stop") return NO_JOBS
+      if (!answer.offers || answer.waiting === undefined) throw new Error("Invalid Everywhere pending answer")
+      const offers = answer.offers.filter((offer): offer is string => typeof offer === "string" &&
+        OFFER_PATTERN.test(offer))
+      return { offers: offers.slice(0, PENDING_OFFERS), waiting: answer.waiting }
+    },
   }
 }
 
@@ -81,7 +125,8 @@ export type RunnerDeps = {
   readonly settings: () => Promise<RunnerSettings>
   readonly verify: (offer: unknown) => Promise<{ jid: string } | undefined>
   readonly ledger: JobLedger
-  readonly jobs: JobsClient
+  /** The runner never asks for waiting jobs; everywhere-wiring.ts does. */
+  readonly jobs: Omit<JobsClient, "pending">
   readonly safeWorktree?: SafeWorktree
   readonly git: (directory: string, repository: string, signal: AbortSignal) => RunnerGit
   readonly engine: (directory: string) => RunnerEngine

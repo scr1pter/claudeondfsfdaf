@@ -397,6 +397,52 @@ export const COMPUTER_CAPS = {
   perDay: { default: 20, max: 100 },
 } as const
 
+/**
+ * The readiness booleans a computer sends with each `pending` call (3.1 `status`, 3.4). Nothing else about it is kept.
+ * Shared by the server (api/_lib/everywhere/jobs.ts, jobs-api.ts) and the desktop's jobs client (everywhere-runner.ts).
+ */
+export type Readiness = {
+  /** "This computer takes jobs" is on. */
+  readonly takesJobs: boolean
+  /** Vector Remote is on. */
+  readonly remote: boolean
+  /**
+   * Vector Local is on (the runner then declines every job, E15). 2026-11-16 (EV-17): the desktop sends whether Vector
+   * Local blocks laptop jobs (`!localAllows(policy)`, everywhere-runner.ts), which is true whenever Vector Local is on
+   * until the runner's GitHub calls are labelled.
+   */
+  readonly localMode: boolean
+  /** The shell sandbox the runner needs for commands exists on this computer. */
+  readonly sandbox: boolean
+  /** "Wait for my computer" (default on). */
+  readonly waitForComputer: boolean
+  /** Today's caps on this computer have room. */
+  readonly capsRoom: boolean
+  /** At least one project is allowed. */
+  readonly projects: boolean
+}
+
+export const READINESS_FIELDS = [
+  "takesJobs",
+  "remote",
+  "localMode",
+  "sandbox",
+  "waitForComputer",
+  "capsRoom",
+  "projects",
+] as const satisfies readonly (keyof Readiness)[]
+
+/** The query names of the readiness booleans on `pending`, each sent as `1` or `0`. */
+export const READINESS_QUERY: Readonly<Record<keyof Readiness, string>> = {
+  takesJobs: "jobs",
+  remote: "remote",
+  localMode: "local",
+  sandbox: "sandbox",
+  waitForComputer: "wait",
+  capsRoom: "room",
+  projects: "projects",
+}
+
 /** The step budget an unattended prompt carries (3.5 step 6). */
 export const RUN_STEPS = 200
 

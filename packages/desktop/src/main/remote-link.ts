@@ -868,6 +868,11 @@ export function createRemoteLink(deps: LinkDependencies) {
     refresh: () => evaluate(),
     /** Whether this computer takes jobs changed (R-C2): connect or close for it, and pick the ticket cadence again. */
     jobsChanged: () => evaluate(),
+    /**
+     * This computer's Remote device id once its identity is loaded (R-C2): the jobs routes' `x-vector-device`. It
+     * follows the new identity after "Disconnect all phones".
+     */
+    device: () => state.identity?.device,
     /** Signed out of Vector: the connection closes until a sign-in. */
     signedOut() {
       clearRetry()

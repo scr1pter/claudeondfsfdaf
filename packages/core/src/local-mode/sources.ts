@@ -399,12 +399,12 @@ export const SOURCES: readonly Source[] = [
     purpose: "account",
     hosts: VECTOR,
     sends:
-      "Your Vector sign-in and this computer's device id, and for each job offered to it: the job's id and lease, a reason when it declines, progress steps with a count of changed files, and the result: an outcome, a short summary, the permissions the job was refused, and the branch, commit, file count and pull request link",
+      "Your Vector sign-in and this computer's device id; whether it is ready for jobs (yes-or-no answers: it takes jobs, Remote is on, Vector Local blocks them, a shell sandbox, wait for this computer, room under its limits, a project ticked); and for each job offered to it: the job's id and lease, a reason when it declines, progress steps with a count of changed files, and the result: an outcome, a short summary, the permissions the job was refused, and the branch, commit, file count and pull request link",
     why: "Takes the jobs vectordev.ai offers this computer and reports how each one went",
     local: "blocked",
     where: ["desktop"],
     callSites: ["packages/desktop/src/main/everywhere-runner.ts"],
-    note: "Offers come over Vector Remote's link (remote); a job's git fetch and push to GitHub are git-remote, decided before git starts",
+    note: "Offers come over Vector Remote's link (remote) and in answer to this computer's own ask for waiting jobs; a job's git fetch and push to GitHub are git-remote, decided before git starts",
   },
   {
     id: "brain-vault",

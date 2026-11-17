@@ -35,7 +35,8 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-async function responseText(response: Response, limit: number) {
+/** A response body as text, refused past `limit` bytes. The jobs client's `pending` answer uses it too. */
+export async function responseText(response: Response, limit: number) {
   if (!response.body) return ""
   const reader = response.body.getReader()
   const buffer = new Uint8Array(limit)
