@@ -576,6 +576,15 @@ export const COMPUTER_SMOKE_DRIVER_STAGES = [
   "probe-mode",
   "probe-move",
   "guardian-observe-reply-negative-low32-tag-candidate",
+  "guardian-observe-reply-negative-up-not-released",
+  "guardian-observe-reply-negative-up-release-blocked",
+  "guardian-observe-reply-negative-up-release-blocked-callbacks",
+  "guardian-observe-reply-negative-up-release-refused",
+  "guardian-observe-reply-negative-up-release-slow",
+  "guardian-observe-reply-negative-up-release-slow-callbacks",
+  "guardian-observe-reply-negative-up-pump-stalled",
+  "guardian-observe-reply-negative-up-callbacks-without-up",
+  "guardian-observe-reply-negative-up-no-callback",
 ] as const
 export const COMPUTER_SMOKE_DRIVER_NATIVE_CODES = [
   "unavailable",
