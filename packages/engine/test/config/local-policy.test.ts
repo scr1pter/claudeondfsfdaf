@@ -76,7 +76,11 @@ const it = testEffect(
 afterEach(() => {
   // A test that leaves company policy in the managed folder without the fixture reads it, on Windows, through the real
   // PowerShell ACL reader, whose start a busy runner can push past its timeout (job 136322673267).
-  const unfixed = existsSync(managedDirectory) && managedFixture.restore === undefined
+  // Only policy files count: an empty managed folder, which another test file in the same process may leave behind, is
+  // never read.
+  const unfixed =
+    managedFixture.restore === undefined &&
+    ["vector.json", "vector.jsonc"].some((name) => existsSync(path.join(managedDirectory, name)))
   managedFixture.restore?.()
   managedFixture.restore = undefined
   ENVIRONMENT.forEach((key) => {
@@ -1263,7 +1267,7 @@ describe("sources Vector cannot read", () => {
     ])
   })
 
-  test("on Windows the fixture lets only SYSTEM change a company policy folder named vector.json, so reading it fails", () => {
+  test("the Windows fixture reader trusts a company policy folder named vector.json, so the folder test's warnings come from reading it", () => {
     const file = path.join(managedDirectory, "vector.json")
     mkdirSync(file, { recursive: true })
     managedFixture.restore ??= useManagedPolicyFixture(managedDirectory)
@@ -1271,8 +1275,14 @@ describe("sources Vector cannot read", () => {
     expect(ConfigManaged.check(file, { platform: "win32", acl: managedPolicyAcl(managedDirectory), user: true })).toBe(
       undefined,
     )
+    // It answers only for its own managed paths that exist: not for vector.jsonc, which is absent here, or other.json.
     expect(
-      managedPolicyAcl(managedDirectory)([managedDirectory, file, path.join(managedDirectory, "other.json")]),
+      managedPolicyAcl(managedDirectory)([
+        managedDirectory,
+        file,
+        path.join(managedDirectory, "vector.jsonc"),
+        path.join(managedDirectory, "other.json"),
+      ]),
     ).toEqual({
       entries: { [managedDirectory]: { owner: "S-1-5-18", rules: [] }, [file]: { owner: "S-1-5-18", rules: [] } },
     })

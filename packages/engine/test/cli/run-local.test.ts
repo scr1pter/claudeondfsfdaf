@@ -22,7 +22,7 @@ afterEach(() => {
   delete process.env.VECTOR_LOCAL
   delete process.env.VECTOR_LOCAL_POLICY
   delete process.env[ChildEnvironment.AGENT_MARKER]
-  rmSync(path.join(process.env.VECTOR_TEST_MANAGED_CONFIG_DIR!, "vector.json"), { force: true })
+  rmSync(process.env.VECTOR_TEST_MANAGED_CONFIG_DIR!, { recursive: true, force: true })
   managedFixture.restore?.()
   managedFixture.restore = undefined
   rmSync(file, { force: true })
