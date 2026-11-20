@@ -32,6 +32,29 @@ const usage = (references: boolean) =>
       "",
     ].join("\n"),
   )
+// The port's path rule, which a caller checks before asking for a path-scoped read (ReviewGit.ignoredPaths, SF-13b).
+test("repositoryPath accepts only plain repository-relative paths", () => {
+  for (const file of ["probe.txt", "src/a b.ts", ":colon", "-v", "é.local.json", "a\tb", 'q"uote', "x".repeat(4096)])
+    expect(ReadOnlyGit.repositoryPath(file)).toBe(true)
+  for (const file of [
+    "",
+    "/abs",
+    "a\\b",
+    "../x",
+    "a/../b",
+    "./a",
+    "a//b",
+    "a/",
+    ".git/config",
+    "sub/.GIT/x",
+    "a\rb",
+    "a\nb",
+    "a\u0000b",
+    "x".repeat(4097),
+  ])
+    expect(ReadOnlyGit.repositoryPath(file)).toBe(false)
+})
+
 test("fsck supports only known versions with matching advertised full graph and reference capabilities", () => {
   for (const version of ["2.43.0", "2.49.1"])
     expect(ReadOnlyGit.fsckProfile(Buffer.from(`git version ${version}\n`), usage(false))).toEqual({
@@ -882,6 +905,23 @@ local("the scoped typed port covers review collection and refuses option-shaped 
     await fs.writeFile(path.join(f.directory, "extra.txt"), "new untracked contents\n")
     expect((await repository.read({ kind: "untracked" })).bytes.toString()).toContain("extra.txt")
     expect((await repository.read({ kind: "added-diff", file: "extra.txt" })).bytes.toString()).toContain("b/extra.txt")
+    // VS-34 item 4 (SF-13b): the work tree's ignore rules, index or not, each path echoed as given ("./" keeps a leading
+    // ":" a path, as check-ignore takes no pathspec magic); a path none ignores exits 1.
+    await fs.writeFile(path.join(f.directory, ".gitignore"), "*.local.json\n")
+    const ignored = await repository.read({
+      kind: "check-ignore",
+      files: ["config.local.json", "probe.txt", ":colon.local.json"],
+    })
+    expect(ignored.code).toBe(0)
+    expect(ignored.bytes.toString()).toBe("./config.local.json\n./:colon.local.json\n")
+    expect(await repository.read({ kind: "check-ignore", files: ["probe.txt"] })).toEqual({
+      code: 1,
+      bytes: Buffer.alloc(0),
+    })
+    // An option-shaped name is a path after "--" and "./".
+    expect((await repository.read({ kind: "check-ignore", files: ["--stdin"] })).code).toBe(1)
+    for (const files of [["../counter"], [], Array.from({ length: 1025 }, (_, index) => `f${index}.txt`)])
+      await expect(repository.read({ kind: "check-ignore", files })).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
     await fs.writeFile(path.join(f.base, "outside.txt"), "PRIVATE-UNREACHABLE-BYTES")
     await fs.symlink(path.join(f.base, "outside.txt"), path.join(f.directory, "linked.txt"))
     await expect(repository.read({ kind: "added-diff", file: "linked.txt" })).rejects.toBeInstanceOf(

@@ -871,6 +871,31 @@ describe("runReview", () => {
     )
   })
 
+  // VS-34 (SF-13b): the desktop half is a documented difference until SF-15. The desktop reads parseReviewConfig, which
+  // ignores holdback, so review.json's "secrets" changes nothing here: the same prompts, the credential file in them,
+  // and no held-back skip or holdback note. Engine reviews hold it back (engine test/review/run.test.ts).
+  test("holdback in review.json changes nothing on the desktop until SF-15 brings it onto mergeReviewConfig", async () => {
+    const netrcDiff = fileDiff("deploy/.netrc", [
+      "@@ -1 +1 @@",
+      "-machine example.test login old",
+      "+machine example.test login ci",
+    ])
+    const files = { "src/list.ts": HEAD, "deploy/.netrc": "machine example.test login ci\n" }
+    const runs = await Promise.all(
+      ['{"verify":"off"}', '{"verify":"off","holdback":"secrets"}'].map(async (json) => {
+        const fake = fakeClient({ files: { ...files, ".vector/review.json": json } })
+        const outcome = await run(fake.client, { diff: join(listDiff, netrcDiff) })
+        return { prompts: fake.calls.prompt.map((call) => call.parts?.[0]?.text ?? ""), outcome }
+      }),
+    )
+    expect(runs[1].prompts).toEqual(runs[0].prompts)
+    expect(runs[1].prompts.some((text) => text.includes("deploy/.netrc"))).toBe(true)
+    expect(runs[1].prompts.some((text) => text.includes("were removed before sending"))).toBe(false)
+    expect(runs[1].outcome?.skipped).toEqual(runs[0].outcome?.skipped)
+    expect(runs[1].outcome?.skipped.some((file) => file.reason === "held-back")).toBe(false)
+    expect(runs[1].outcome?.notes).toEqual(runs[0].outcome?.notes)
+  })
+
   test("reads review.json from the checkout, unless the pull request changes it", async () => {
     const strict = { "src/list.ts": HEAD, ".vector/review.json": '{"minConfidence":0.99}' }
     const checkout = await run(fakeClient({ files: strict }).client)

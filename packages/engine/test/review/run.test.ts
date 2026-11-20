@@ -23,16 +23,22 @@ import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { parseReviewConfig } from "@vectordevai/core/review/config"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
-import { PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
+import { INPUT_REDACTION, PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { certificateProblems, evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import {
+  noteHeldBack,
+  noteIgnoreUnchecked,
+  noteIgnoredCommitted,
   notePrivacyRefused,
+  noteRedacted,
   noteTriageFixedUnchecked,
   noteTriageUnchecked,
   noteVerifySkipped,
   noteVerifyUnfinished,
 } from "@vectordevai/core/review/format"
 import { reviewVerdict } from "@vectordevai/core/review/verdict"
+import { decideSkip } from "@vectordevai/core/review/skip"
+import { nextState } from "@vectordevai/core/review/state"
 import {
   DEFAULT_REVIEW_CONFIG,
   type ModelFinding,
@@ -3956,7 +3962,7 @@ describe("VS-23b route admission", () => {
   )
 })
 
-describe("VS-34 holdback key (SF-13a)", () => {
+describe("VS-34 holdback payload (SF-13b)", () => {
   // A credential file holdbackFiles holds back under "secrets" (CREDENTIAL_NAMES) that is not a sensitive path, so the
   // plan stays the review pass alone.
   const NETRC = parseUnifiedDiff(
@@ -3969,13 +3975,51 @@ describe("VS-34 holdback key (SF-13a)", () => {
       "+machine registry.example.test login ci",
     ].join("\n"),
   )
+  const ENV_DELETION = parseUnifiedDiff(
+    [
+      "diff --git a/.env b/.env",
+      "deleted file mode 100644",
+      "--- a/.env",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-API_URL=https://api.example.test",
+    ].join("\n"),
+  )
+  // Token shapes the shapes reading redacts, assembled at run time so no token-like literal sits in the source: one per
+  // untrusted block, so each block's redaction is asserted on its own.
+  const T = {
+    related: "ghp_" + "r1E2".repeat(9),
+    history: "glpat-" + "h1I2s3T4o5R6y7Z8w9X0",
+    comment: "xoxb-" + "1234567890-" + "c1O2m3M4e5N6",
+    title: "sk-" + "t1I2".repeat(8),
+    body: "AKIA" + "B7Q2W4E6R8T0Y1U3",
+    commit: "npm_" + "c7O8".repeat(9),
+    requirements: "hf_" + "q9R0".repeat(8),
+    head: "ghp_" + "h3E4".repeat(9),
+    diff: "sk-proj-" + "d7I8".repeat(8),
+  }
+  const added = (file: string, lines: string[]) =>
+    parseUnifiedDiff(
+      [
+        `diff --git a/${file} b/${file}`,
+        "new file mode 100644",
+        "--- /dev/null",
+        `+++ b/${file}`,
+        `@@ -0,0 +1,${lines.length} @@`,
+        ...lines.map((line) => `+${line}`),
+      ].join("\n"),
+    )
+  const strip = (outcome: ReviewOutcome) => {
+    const { durationMs: _duration, sessions: _sessions, ...rest } = outcome
+    return rest
+  }
 
-  // I-1 at the wire: mergeReviewConfig parses holdback (review.json, REVIEW_HOLDBACK), but no runner applies it until
-  // VS-34 wiring (UNAPPLIED_REVIEW_KEYS), so unset, "off" and "secrets" send the same requests under the same permission
-  // rules and return the same outcome, and the credential file still reaches the model. SF-13b changes the "secrets"
-  // leg when Review.run holds the file back.
+  // I-1 at the wire: unset and "off" send byte-identical requests under the same permission rules and return the same
+  // outcome, with no input-redaction sentence. Under "secrets" the credential file is held back (absent from every
+  // request body), recorded as a held-back skip with its status, never unreviewed, the review and security prompts
+  // carry the sentence, and the permission rules are still unset's (SF-14 adds the read rules).
   it.instance(
-    "D3: unset, off and secrets send the same requests and rules and return the same outcome",
+    "D3: unset and off send what they did, and secrets holds the credential file back",
     () =>
       Effect.gen(function* () {
         const { llm, directory } = yield* useServer(PRICE)
@@ -4024,20 +4068,440 @@ describe("VS-34 holdback key (SF-13a)", () => {
               const rules = yield* Effect.forEach(outcome.sessions, (id) =>
                 sessions.get(SessionID.make(id)).pipe(Effect.map((session) => session.permission)),
               )
-              const { durationMs: _duration, sessions: _sessions, ...rest } = outcome
-              return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), rules, outcome: rest }
+              return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), rules, outcome }
             }),
           )
-          expect({ name: scenario.name, run: runs[1] }).toEqual({ name: scenario.name, run: runs[0] })
-          expect({ name: scenario.name, run: runs[2] }).toEqual({ name: scenario.name, run: runs[0] })
-          expect(runs[0].bodies.length).toBeGreaterThan(0)
-          expect(runs[0].rules.length).toBeGreaterThan(0)
-          expect(runs[2].bodies.some((body) => body.includes("deploy/.netrc"))).toBe(true)
-          expect(runs[2].outcome.skipped).toEqual([])
-          expect(runs[0].outcome.specialists.map((entry) => entry.name)).not.toContain("security")
+          const [unset, off, secrets] = runs
+          expect({ name: scenario.name, run: { ...off, outcome: strip(off.outcome) } }).toEqual({
+            name: scenario.name,
+            run: { ...unset, outcome: strip(unset.outcome) },
+          })
+          expect(unset.bodies.length).toBeGreaterThan(0)
+          expect(unset.rules.length).toBeGreaterThan(0)
+          expect(unset.bodies.some((body) => body.includes("deploy/.netrc"))).toBe(true)
+          expect([...unset.bodies, ...off.bodies].some((body) => body.includes(INPUT_REDACTION))).toBe(false)
+          expect(unset.outcome.skipped).toEqual([])
+          expect(unset.outcome.held).toBeUndefined()
+          // Secrets: the same rules, the same passes, the credential file nowhere in what was sent.
+          expect({ name: scenario.name, rules: secrets.rules }).toEqual({ name: scenario.name, rules: unset.rules })
+          expect(secrets.bodies.length).toBe(unset.bodies.length)
+          expect(secrets.bodies.some((body) => body.includes(INPUT_REDACTION))).toBe(true)
+          expect(secrets.bodies.filter((body) => body.includes("deploy/.netrc") || body.includes("login ci"))).toEqual(
+            [],
+          )
+          expect(secrets.outcome.skipped).toEqual([{ path: "deploy/.netrc", reason: "held-back" }])
+          expect(secrets.outcome.held).toEqual([
+            { path: "deploy/.netrc", status: "modified", reason: "credential-file" },
+          ])
+          expect(secrets.outcome.unreviewed).toEqual([])
+          expect(secrets.outcome.specialists).toEqual(unset.outcome.specialists)
+          expect(secrets.outcome.stats).toEqual(unset.outcome.stats)
+          // No ignore list was passed, so the review says it could not check one. Holdback's notes come before the
+          // cost and evidence notes.
+          expect(secrets.outcome.notes).toEqual([
+            noteHeldBack(["deploy/.netrc"])!,
+            noteIgnoreUnchecked(),
+            ...unset.outcome.notes,
+          ])
+          expect(unset.outcome.specialists.map((entry) => entry.name)).not.toContain("security")
+          expect(reviewVerdict({ kind: "outcome", outcome: secrets.outcome }).causes).toContain("held-back")
         }
       }),
     120_000,
+  )
+
+  // Design item 3 at the wire: a token planted in each untrusted block, the diff of a file that is sent and an
+  // untrusted head file included, reaches no request body under "secrets" (the review, security and verify passes),
+  // where "[redacted]" stands in; unset, every one of them is sent as before.
+  it.instance(
+    "secrets redacts every untrusted block in every pass's request, and unset sends them as before",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const files = [...AUTH, ...LIST, ...added("src/config.ts", [`export const key = "${T.diff}"`])]
+        const runs = yield* Effect.forEach([undefined, "secrets"] as const, (holdback) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+            yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report()))
+            yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
+            const outcome = yield* Review.run(
+              input(directory, {
+                model: priced,
+                trust: "untrusted",
+                files,
+                anchors: files,
+                headFiles: [{ path: "src/list.ts", text: `${LIST_SOURCE}// ${T.head}\n`, exact: true }],
+                context: {
+                  related: [
+                    {
+                      symbol: "last",
+                      path: "src/list.ts",
+                      hits: [{ path: "src/use.ts", line: 3, text: `last(load("${T.related}"))` }],
+                    },
+                  ],
+                  history: [{ path: "src/list.ts", text: `abc1234 octo 2026-11-01 Use ${T.history}` }],
+                  humanComments: [{ author: "octo", path: "src/list.ts", line: 2, body: `Try ${T.comment}` }],
+                  requirements: `The list reads ${T.requirements}.`,
+                },
+                pr: { number: 7, title: `Fix ${T.title}`, body: `Uses ${T.body}`, author: "octo", commits: [T.commit] },
+                config: config({ verify: "blocking", ...(holdback ? { holdback } : {}) }),
+              }),
+            )
+            return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), outcome }
+          }),
+        )
+        const [unset, secrets] = runs
+        // The review, security and verify passes ran both times.
+        for (const run of runs)
+          expect(run.outcome.specialists.map((entry) => entry.name)).toEqual(["review", "security", "verify"])
+        for (const [name, value] of Object.entries(T)) {
+          expect({ name, unset: unset.bodies.some((body) => body.includes(value)) }).toEqual({ name, unset: true })
+          expect({ name, secrets: secrets.bodies.filter((body) => body.includes(value)).length }).toEqual({
+            name,
+            secrets: 0,
+          })
+        }
+        // The security prompt names the placeholder for the model's own output either way; holdback adds its own.
+        const placeholders = (bodies: string[]) => bodies.join("").split("[redacted]").length - 1
+        expect(placeholders(secrets.bodies)).toBeGreaterThan(placeholders(unset.bodies) + Object.keys(T).length)
+        // Nothing was held, so nothing is skipped; the redacted files are noted.
+        expect(secrets.outcome.skipped).toEqual([])
+        expect(secrets.outcome.held).toBeUndefined()
+        expect(secrets.outcome.notes).toContain(noteRedacted(["src/list.ts", "src/config.ts"])!)
+      }),
+    120_000,
+  )
+
+  // Design item 5: a held file is skipped, never unreviewed, however the run ends, so a re-trigger on the same head
+  // still takes the already-reviewed skip.
+  it.instance(
+    "a held file is skipped and never unreviewed, on a full, partial or failed run",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const file = path.join(directory, "src/list.ts")
+        const files = [...LIST, ...NETRC]
+        const scenarios: { name: string; config: Partial<ReviewConfig>; push: () => Effect.Effect<void> }[] = [
+          { name: "ok", config: {}, push: () => llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report())) },
+          {
+            name: "steps, finalized",
+            config: { maxSteps: 2 },
+            push: () =>
+              llm
+                .pushMatch(REVIEW, reply().tool("read", { filePath: file }))
+                .pipe(
+                  Effect.andThen(llm.pushMatch(REVIEW, reply().tool("read", { filePath: file }))),
+                  Effect.andThen(llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report()))),
+                ),
+          },
+          {
+            name: "no report",
+            config: { maxSteps: 1 },
+            push: () =>
+              llm
+                .pushMatch(REVIEW, httpError(503, { error: "temporary failure" }))
+                .pipe(Effect.andThen(llm.pushMatch(FINALIZE, httpError(503, { error: "temporary failure" })))),
+          },
+        ]
+        for (const scenario of scenarios) {
+          yield* llm.reset
+          yield* scenario.push()
+          const outcome = yield* Review.run(
+            input(directory, {
+              model: priced,
+              files,
+              anchors: files,
+              config: config({ ...scenario.config, holdback: "secrets" }),
+            }),
+          )
+          expect({ name: scenario.name, skipped: outcome.skipped }).toEqual({
+            name: scenario.name,
+            skipped: [{ path: "deploy/.netrc", reason: "held-back" }],
+          })
+          expect(outcome.unreviewed).not.toContain("deploy/.netrc")
+          const state = nextState(undefined, {
+            head: outcome.head,
+            base: outcome.base,
+            mode: "full",
+            now: 1,
+            unreviewed: outcome.unreviewed,
+          })
+          const skip = decideSkip({
+            trigger: "auto",
+            config: DEFAULT_REVIEW_CONFIG,
+            state,
+            head: outcome.head,
+            pr: { draft: false, author: "octo", labels: [], headBranch: "feature", fork: false },
+            size: { files: files.length, changedLines: 4 },
+          })
+          expect({ name: scenario.name, reason: skip.skip ? skip.reason : undefined }).toEqual({
+            name: scenario.name,
+            reason: outcome.unreviewed.length ? undefined : "already-reviewed",
+          })
+        }
+      }),
+    120_000,
+  )
+
+  // Design item 4: the collector's check-ignore list becomes a note, never a drop: the ignored file is still sent, with
+  // its values redacted. A held deletion beside it sent nothing, so VS-32 reads the review complete.
+  it.instance(
+    "names a committed ignored file, still sends it redacted, and a held deletion reads complete",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const local = added("config.local.json", [`{ "token": "${T.diff}" }`])
+        const files = [...LIST, ...local, ...ENV_DELETION]
+        // A held .env is still a sensitive path, so the plan keeps its security pass: holdback never lowers the passes.
+        const push = () =>
+          llm
+            .pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+            .pipe(Effect.andThen(llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report()))))
+        yield* push()
+        const outcome = yield* Review.run(
+          input(directory, {
+            model: priced,
+            files,
+            anchors: files,
+            ignored: ["config.local.json"],
+            config: config({ holdback: "secrets" }),
+          }),
+        )
+        const bodies = (yield* modelRequests(llm)).map((body) => JSON.stringify(body))
+        expect(outcome.specialists).toEqual([
+          { name: "review", status: "ok", steps: 1 },
+          { name: "security", status: "ok", steps: 1 },
+        ])
+        expect(bodies.some((body) => body.includes("config.local.json"))).toBe(true)
+        expect(bodies.some((body) => body.includes(T.diff) || body.includes("API_URL"))).toBe(false)
+        expect(outcome.skipped).toEqual([{ path: ".env", reason: "held-back" }])
+        expect(outcome.held).toEqual([{ path: ".env", status: "deleted", reason: "env-file" }])
+        // Holdback's notes, before the cost note the fake provider's missing usage adds.
+        const own = (notes: string[]) => notes.filter((note) => !note.startsWith("Reported cost may be incomplete"))
+        expect(own(outcome.notes)).toEqual([
+          noteHeldBack([".env"])!,
+          noteRedacted(["config.local.json"])!,
+          noteIgnoredCommitted(["config.local.json"])!,
+        ])
+        expect(reviewVerdict({ kind: "outcome", outcome })).toEqual({
+          verdict: "clean-complete",
+          causes: [],
+          notes: ["held-back-deletion"],
+        })
+        // An empty list means the collector checked and found none: no note either way.
+        yield* llm.reset
+        yield* push()
+        const checked = yield* Review.run(
+          input(directory, {
+            model: priced,
+            files,
+            anchors: files,
+            ignored: [],
+            config: config({ holdback: "secrets" }),
+          }),
+        )
+        expect(own(checked.notes)).toEqual([noteHeldBack([".env"])!, noteRedacted(["config.local.json"])!])
+      }),
+    TIMEOUT,
+  )
+
+  // When every changed file is held back nothing is left to send, so no pass runs and nothing is spent: the files are
+  // skipped, and with no reviewer VS-32 reads the review incomplete, a deletion-only change included (decided in the
+  // SF-13b entry). Unset, the same change runs its review pass.
+  it.instance(
+    "a change whose every file is held back runs no pass",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        for (const files of [NETRC, ENV_DELETION]) {
+          yield* llm.reset
+          const outcome = yield* Review.run(
+            input(directory, { model: priced, files, anchors: files, config: config({ holdback: "secrets" }) }),
+          )
+          expect(yield* modelRequests(llm)).toEqual([])
+          expect(outcome.specialists).toEqual([])
+          expect(outcome.sessions).toEqual([])
+          expect(outcome.unreviewed).toEqual([])
+          expect(outcome.skipped).toEqual([{ path: files[0].path, reason: "held-back" }])
+          expect(outcome.held?.map((file) => file.status)).toEqual([files[0].status])
+          const verdict = reviewVerdict({ kind: "outcome", outcome })
+          expect(verdict.verdict).toBe("incomplete")
+          expect(verdict.causes).toEqual(files === NETRC ? ["held-back", "no-reviewer"] : ["no-reviewer"])
+        }
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const unset = yield* Review.run(input(directory, { model: priced, files: NETRC, anchors: NETRC }))
+        expect(unset.specialists.map((entry) => entry.name)).toEqual(["review"])
+      }),
+    TIMEOUT,
+  )
+
+  // A finding the reviewer reports on a held path is never quoted to the verify pass, and selection drops it.
+  it.instance(
+    "a finding on a held path never reaches verify, and is not listed",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const files = [...LIST, ...NETRC]
+        const held = finding({ path: "deploy/.netrc", line: 1, title: "Committed registry login for HELDMARK" })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding(), held])))
+        yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
+        const outcome = yield* Review.run(
+          input(directory, {
+            model: priced,
+            files,
+            anchors: files,
+            config: config({ verify: "blocking", holdback: "secrets" }),
+          }),
+        )
+        const verify = (yield* llm.inputs).filter((body) => VERIFY({ body })).map((body) => JSON.stringify(body))
+        expect(verify).toHaveLength(1)
+        expect(verify[0]).toContain("Returns undefined for the last item")
+        expect(verify[0]).not.toContain("HELDMARK")
+        expect(listedCount(outcome)).toBe(1)
+        expect(outcome.selection.dropped).toContainEqual({ reason: "ignored-path", count: 1 })
+      }),
+    TIMEOUT,
+  )
+  // Design item 3 for the earlier findings the review prompt lists as open: one on a held path is in no request body
+  // and gets no status from the model, so neither an untriaged run (whose word the CLI settles) nor a triaged one (whose
+  // claim the verify pass checks) can close it; another has its model-written title redacted. Selection keeps both open
+  // from the input. Unset, both are listed and the model's word stands, as before.
+  it.instance(
+    "an earlier finding on a held path is never quoted to the model, and the model's status for it is dropped",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        // A cheaper triage model beside the review model, as the triage tests above set one up.
+        const fsUtil = yield* FSUtil.Service
+        const provider = testProviderConfig(llm.url)
+        provider.provider.lmstudio.models["test-model"].cost = PRICE
+        Object.assign(provider.provider.lmstudio.models, {
+          "cheap-model": { ...provider.provider.lmstudio.models["test-model"], id: "cheap-model", name: "Cheap" },
+        })
+        yield* fsUtil.writeWithDirs(
+          path.join(directory, "vector.json"),
+          JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...provider }),
+        )
+        yield* Effect.promise(() => trustWorkspace(directory))
+        const cheap = { ...ref, modelID: ModelV2.ID.make("cheap-model"), context: 100_000, costKind: "free" as const }
+        const files = [...LIST, ...NETRC]
+        const earlier = (id: string, file: string, title: string) => ({
+          id,
+          where: "inline" as const,
+          path: file,
+          line: 1,
+          side: "RIGHT" as const,
+          severity: "blocking" as const,
+          category: "security" as const,
+          title,
+          sha: "1111111",
+          status: "open" as const,
+        })
+        const prior = [
+          earlier("aaaaaaaaaaaa", "src/list.ts", `Hard-coded ${T.title}`),
+          earlier("bbbbbbbbbbbb", "deploy/.netrc", "Committed registry login for HELDMARK"),
+        ]
+        const claimed = {
+          ...report(),
+          priorStatus: prior.map((entry) => ({ id: entry.id, status: "fixed", reason: "looks fine" })),
+        }
+        const runs = yield* Effect.forEach([undefined, "secrets"] as const, (holdback) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", claimed))
+            const outcome = yield* Review.run(
+              input(directory, {
+                model: priced,
+                files,
+                anchors: files,
+                prior,
+                config: config(holdback ? { holdback } : {}),
+              }),
+            )
+            return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), outcome }
+          }),
+        )
+        const [unset, secrets] = runs
+        expect(unset.bodies.some((body) => body.includes("bbbbbbbbbbbb") && body.includes("HELDMARK"))).toBe(true)
+        expect(unset.bodies.some((body) => body.includes(T.title))).toBe(true)
+        expect(unset.outcome.report.priorStatus?.map((entry) => entry.id)).toEqual(["aaaaaaaaaaaa", "bbbbbbbbbbbb"])
+        expect(secrets.bodies.length).toBeGreaterThan(0)
+        expect(secrets.bodies.filter((body) => body.includes("bbbbbbbbbbbb") || body.includes("HELDMARK"))).toEqual([])
+        expect(secrets.bodies.filter((body) => body.includes(T.title))).toEqual([])
+        expect(secrets.bodies.some((body) => body.includes("Hard-coded [redacted]"))).toBe(true)
+        expect(secrets.outcome.report.priorStatus?.map((entry) => entry.id)).toEqual(["aaaaaaaaaaaa"])
+        expect(secrets.outcome.selection.stillOpen).toEqual(unset.outcome.selection.stillOpen)
+
+        // After a cheaper triage pass a fixed claim goes to the verify pass: only the listed one, with its title as
+        // listed, and the held one's claim is dropped before it.
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", claimed))
+        yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
+        const triaged = yield* Review.run(
+          input(directory, {
+            model: priced,
+            triage: cheap,
+            files,
+            anchors: files,
+            prior,
+            config: config({ verify: "all", holdback: "secrets" }),
+          }),
+        )
+        const verify = (yield* llm.inputs).filter((body) => VERIFY({ body })).map((body) => JSON.stringify(body))
+        expect(verify).toHaveLength(1)
+        expect(verify[0]).toContain('untrusted_fixed_claim id=\\"aaaaaaaaaaaa\\"')
+        expect(verify[0]).toContain("Hard-coded [redacted]")
+        expect(verify[0]).not.toContain("bbbbbbbbbbbb")
+        expect(verify[0]).not.toContain(T.title)
+        expect(triaged.report.priorStatus ?? []).toEqual([])
+      }),
+    120_000,
+  )
+
+  // An incremental review whose every new hunk is on a held path has nothing new to send: the files it would send carry
+  // nothing new, so it runs no pass rather than a full review of them, and nothing is unreviewed. With a new hunk in a
+  // sent file too, the pass runs with that hunk alone in focus. Unset, the held path's hunk is reviewed as before.
+  it.instance(
+    "an incremental review whose only new hunk is on a held path runs no pass",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const files = [...LIST, ...NETRC]
+        const incremental = (focus: { path: string; start: number; end: number }[], holdback?: "secrets") =>
+          input(directory, {
+            model: priced,
+            mode: "incremental",
+            since: "3".repeat(40),
+            files,
+            anchors: files,
+            focus,
+            config: config(holdback ? { holdback } : {}),
+          })
+        const heldHunk = { path: "deploy/.netrc", start: 1, end: 1 }
+        const outcome = yield* Review.run(incremental([heldHunk], "secrets"))
+        expect(yield* modelRequests(llm)).toEqual([])
+        expect(outcome.specialists).toEqual([])
+        expect(outcome.sessions).toEqual([])
+        expect(outcome.unreviewed).toEqual([])
+        expect(outcome.skipped).toEqual([{ path: "deploy/.netrc", reason: "held-back" }])
+        expect(reviewVerdict({ kind: "outcome", outcome }).verdict).toBe("incomplete")
+
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const mixed = yield* Review.run(incremental([heldHunk, { path: "src/list.ts", start: 1, end: 4 }], "secrets"))
+        expect(mixed.specialists.map((entry) => entry.name)).toEqual(["review"])
+        const text = lastUserText((yield* llm.hits).find(REVIEW)!.body)
+        expect(text).toContain("src/list.ts:1-4")
+        expect(text).not.toContain("deploy/.netrc")
+
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const unset = yield* Review.run(incremental([heldHunk]))
+        expect(unset.specialists.map((entry) => entry.name)).toEqual(["review"])
+        expect(lastUserText((yield* llm.hits).find(REVIEW)!.body)).toContain("deploy/.netrc:1-1")
+      }),
+    TIMEOUT,
   )
 })
 

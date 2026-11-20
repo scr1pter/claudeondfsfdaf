@@ -599,6 +599,40 @@ export function noteGeneratedHeaders(paths: readonly string[]): string | undefin
   return `${names} gained a generated-file header in this pull request, so Vectorscope reviewed them anyway.`
 }
 
+// VS-34 (`holdback: "secrets"`): the files Review.run held back whole, the files it sent with values redacted, and the
+// changed files the repository's ignore rules exclude although they are committed (design items 4 and 6). Each is one
+// line for any number of files. Until SF-14 restricts the reviewer's read and grep tools, they say what left the
+// review prompt, not what never left the machine.
+export function noteHeldBack(paths: readonly string[]): string | undefined {
+  if (!paths.length) return undefined
+  return paths.length === 1
+    ? `${codeSpan(paths[0])} may hold credentials, so Vector left it out of the review prompt.`
+    : `${listPaths(paths)} may hold credentials, so Vector left them out of the review prompt.`
+}
+
+export function noteRedacted(paths: readonly string[]): string | undefined {
+  if (!paths.length) return undefined
+  return `Vector redacted secret-shaped values in ${listPaths(paths)} from the review prompt.`
+}
+
+export function noteIgnoredCommitted(paths: readonly string[]): string | undefined {
+  if (!paths.length) return undefined
+  return paths.length === 1
+    ? `${codeSpan(paths[0])} is committed although the repository's ignore rules exclude it.`
+    : `${listPaths(paths)} are committed although the repository's ignore rules exclude them.`
+}
+
+export function noteIgnoreUnchecked(): string {
+  return "Vector could not check which changed files the repository's ignore rules exclude, so none is listed as committed although ignored."
+}
+
+// At most three names, then how many more.
+function listPaths(paths: readonly string[]) {
+  const shown = paths.slice(0, 3).map(codeSpan)
+  const rest = paths.length - shown.length
+  return rest ? `${shown.join(", ")} and ${formatCount(rest)} more` : joinWords(shown)
+}
+
 export function noteMoved(count: number): string {
   return `Vector could not attach ${count} ${count === 1 ? "comment" : "comments"} to lines; ${count === 1 ? "it is" : "they are"} listed under Outside the changed lines.`
 }

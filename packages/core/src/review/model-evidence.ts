@@ -59,7 +59,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "ecaf367fe2a68482"
+export const REVIEW_PIPELINE_SOURCES = "3d46608aa4c6898c"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -77,8 +77,8 @@ export const MAX_CERTIFICATE_DAYS = 90
 // then only as non-default values, `lenses` only under `depth: "auto"`. POLICY_ONLY_WITH holds the strict and the
 // `depth: "auto"` conditions. VS-30's `runtime` is one (a runtime confirmation changes what is verified, and so what is
 // posted), counted from the VS-30 executor on, and then only as "ask". VS-34's `holdback` is one (a held-back file is
-// not reviewed, and redacted values change what the model reads), counted from VS-34 wiring on, and then only as
-// "secrets".
+// not reviewed, and redacted values change what the model reads), counted since SF-13b applied its payload half, and
+// then only as "secrets".
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -436,8 +436,10 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // (prompt.ts), so a lens-only branch added to build() must add the inputs that reach it here. Under `runtime: "ask"`,
 // VS-30's trusted instruction and its <untrusted_runtime_evidence> block come last, standalone like the owner's block:
 // no prompt builder renders them before the VS-30 executor, whose repro or verify prompt joins here under the key.
+// Under `holdback: "secrets"`, VS-34's input-redaction sentence comes after them: the review and security prompts with
+// every input set and their inputs marked redacted, for both trusts. The verify and judge prompts carry no sentence.
 export function canonicalPrompts(
-  keys: Partial<Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime">> = {},
+  keys: Partial<Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime" | "holdback">> = {},
 ): string[] {
   const impact =
     keys.impact === "graph"
@@ -472,6 +474,12 @@ export function canonicalPrompts(
     ...impact,
     ...lenses,
     ...(keys.runtime === "ask" ? [RUNTIME_EVIDENCE_INSTRUCTION, runtimeEvidenceBlock(CANONICAL_RUNTIME, [])] : []),
+    ...(keys.holdback === "secrets"
+      ? (["trusted", "untrusted"] as const).flatMap((trust) => {
+          const input: PromptInput = { ...POPULATED_INPUT, trust, inputsRedacted: true }
+          return [buildReviewPrompt(input), buildSecurityPrompt(input)]
+        })
+      : []),
   ]
 }
 
@@ -499,10 +507,13 @@ const prompts = new Map<string, string>()
 // strict, so it joins the memo key only there. VS-44's `verifyEvidence: "certificate"` adds the certificate verify schema
 // (verifyCertJsonSchema) after them, also only under strict. VS-28's lens prompts join canonicalPrompts only under
 // `depth: "auto"` with `lenses: "high"`, so only that pair joins the memo key. VS-30's runtime block joins only under
-// `runtime: "ask"`.
+// `runtime: "ask"`, and VS-34's input-redaction sentence only under `holdback: "secrets"`.
 export function promptsDigest(
   keys: Partial<
-    Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate" | "verifyEvidence" | "depth" | "lenses" | "runtime">
+    Pick<
+      ReviewConfig,
+      "impact" | "guardrail" | "scopeGate" | "verifyEvidence" | "depth" | "lenses" | "runtime" | "holdback"
+    >
   > = {},
 ): string {
   const strict = keys.guardrail === "strict"
@@ -513,6 +524,7 @@ export function promptsDigest(
     strict && keys.verifyEvidence === "certificate" ? "verifyEvidence:certificate" : "",
     keys.depth === "auto" && keys.lenses === "high" ? "lenses:high" : "",
     keys.runtime === "ask" ? "runtime:ask" : "",
+    keys.holdback === "secrets" ? "holdback:secrets" : "",
   ]
     .filter(Boolean)
     .join(",")
@@ -602,6 +614,8 @@ export function evidenceScope(input: {
       ...(input.config.runtime === "ask" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "runtime")
         ? { runtime: "ask" as const }
         : {}),
+      // VS-34's input-redaction sentence, which Review.run adds under "secrets" since SF-13b.
+      ...(input.config.holdback === "secrets" ? { holdback: "secrets" as const } : {}),
     }),
     policy: policyDigest(input.config),
     ...(input.triage ? { triage: input.triage } : {}),

@@ -4,6 +4,7 @@ import path from "node:path"
 import { FREE_MODEL_TRAINING_LABEL } from "@vectordevai/core/free-model-choice"
 import { DEFAULT_GATE, gateDigest } from "@vectordevai/core/review/eval-report"
 import { fnv1a64 } from "@vectordevai/core/review/fingerprint"
+import { INPUT_REDACTION } from "@vectordevai/core/review/prompt"
 import {
   assessReview,
   canonicalPrompts,
@@ -552,6 +553,8 @@ describe("scope", () => {
       { minConfidence: 0.5 },
       { maxComments: 3 },
       { nits: true },
+      // VS-34's holdback, which Review.run applies since SF-13b, counts as "secrets".
+      { holdback: "secrets" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).not.toBe(base)
     for (const change of [
@@ -590,9 +593,8 @@ describe("scope", () => {
       // Nor VS-30's runtime, which no runner applies before the VS-30 executor.
       { runtime: "off" as const },
       { runtime: "ask" as const },
-      // Nor VS-34's holdback, which no runner applies before VS-34 wiring.
+      // VS-34's holdback "off" is its default, which never counts.
       { holdback: "off" as const },
-      { holdback: "secrets" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -733,26 +735,82 @@ describe("scope", () => {
     expect(policyDigest({ ...ask, nits: true })).not.toBe(policyDigest(ask))
   })
 
-  // VS-34 (SF-13a): `holdback` is a policy key (a held-back file is not reviewed, and redacted values change what the
-  // model reads) that no runner applies before VS-34 wiring, so neither the policy digest nor the prompts digest of a
-  // scope moves with it yet. Once a runner applies it, only "secrets" counts, and its input-redaction sentence enters
-  // the prompts only then (addendum A, VS-34 item 3).
-  test("the scope leaves out VS-34's holdback until a runner applies it", () => {
+  // VS-34: `holdback` is a policy key (a held-back file is not reviewed, and redacted values change what the model
+  // reads). Review.run applies its payload half since SF-13b, so it left UNAPPLIED_REVIEW_KEYS: the policy digest counts
+  // it as "secrets" only, and the prompts digest adds its input-redaction sentence (addendum A, VS-34 item 3) under
+  // that key only. "off" or unset keeps every scope as it was.
+  test("the scope counts VS-34's holdback only as secrets", () => {
     const base = policyDigest(DEFAULT_REVIEW_CONFIG)
     expect(base).toBe("70512122f41ec160")
     expect(EVIDENCE_POLICY_KEYS).toContain("holdback")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("holdback")
-    for (const holdback of ["secrets", "off", undefined] as const)
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("holdback")).toBe(false)
+    for (const holdback of ["off", undefined] as const) {
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, holdback })).toBe(base)
+      expect(evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, holdback } })).toEqual(SCOPE)
+    }
     const held: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" }
-    expect(evidenceScope({ adapter: "engine", config: held })).toEqual(SCOPE)
-    expect(evidenceScope({ adapter: "engine", config: held }).prompts).toBe(promptsDigest())
-    // Beside the route setting and VS-30's runtime, neither of which the scope reads from the config either.
+    expect(policyDigest(held)).not.toBe(base)
+    const scope = evidenceScope({ adapter: "engine", config: held })
+    expect(scope).toEqual({
+      ...SCOPE,
+      prompts: promptsDigest({ holdback: "secrets" }),
+      policy: policyDigest(held),
+    })
+    expect(scope.prompts).not.toBe("5d59e9ee06077c23")
+    expect(scope.pipeline).toBe(SCOPE.pipeline)
+    // Beside the route setting and VS-30's runtime, which the scope does not read from the config: only holdback moves.
     const beside: ReviewConfig = { ...held, privacy: "zdr", runtime: "ask" }
     expect(evidenceScope({ adapter: "desktop", config: beside })).toEqual(
-      evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+      evidenceScope({ adapter: "desktop", config: held }),
     )
     expect(policyDigest({ ...held, nits: true })).not.toBe(policyDigest(held))
+  })
+
+  // VS-34 item 3: the input-redaction sentence renders only under `holdback: "secrets"`, in the review and security
+  // prompts with every input set, for both trusts, appended last; "off", and every other set of keys, keeps its digest.
+  test("the prompts digest covers VS-34's input-redaction sentence under holdback: secrets only", () => {
+    expect(promptsDigest({ holdback: "off" })).toBe(promptsDigest())
+    expect(canonicalPrompts({ holdback: "off" })).toEqual(canonicalPrompts())
+    expect(canonicalPrompts().join("\n")).not.toContain(INPUT_REDACTION)
+    const held = canonicalPrompts({ holdback: "secrets" })
+    expect(held.slice(0, -4)).toEqual(canonicalPrompts())
+    expect(held.slice(-4).every((text) => text.split(INPUT_REDACTION).length === 2)).toBe(true)
+    expect(held.slice(-4).map((text) => text.startsWith("You are Vector's security reviewer"))).toEqual([
+      false,
+      true,
+      false,
+      true,
+    ])
+    // With the other keys, the sentence's prompts still come last.
+    const all = canonicalPrompts({
+      impact: "graph",
+      depth: "auto",
+      lenses: "high",
+      runtime: "ask",
+      holdback: "secrets",
+    })
+    expect(all.slice(0, -4)).toEqual(
+      canonicalPrompts({ impact: "graph", depth: "auto", lenses: "high", runtime: "ask" }),
+    )
+    const secrets = promptsDigest({ holdback: "secrets" })
+    expect(promptsDigest({ holdback: "secrets" })).toBe(secrets)
+    expect(
+      new Set([
+        promptsDigest(),
+        secrets,
+        promptsDigest({ impact: "graph" }),
+        promptsDigest({ impact: "graph", holdback: "secrets" }),
+        promptsDigest({ guardrail: "strict" }),
+        promptsDigest({ guardrail: "strict", holdback: "secrets" }),
+        promptsDigest({ runtime: "ask" }),
+        promptsDigest({ runtime: "ask", holdback: "secrets" }),
+      ]).size,
+    ).toBe(8)
+    // Every earlier digest holds.
+    expect(promptsDigest()).toBe("5d59e9ee06077c23")
+    expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
+    expect(promptsDigest({ guardrail: "strict" })).toBe("b98afb0e878dfe26")
+    expect(promptsDigest({ runtime: "ask" })).toBe("7d9147298f5cdbaf")
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

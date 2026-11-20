@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  HOLDBACK_TOOLS,
   MAX_RULES_BYTES,
   mergeReviewConfig,
   parseReviewConfig,
@@ -1441,18 +1442,22 @@ describe("VS-30's runtime key", () => {
 })
 
 // VS-34 (SF-13a): `holdback` is raise-only, as `privacy` is (addendum A §1): the strictest of the global config (SF-15
-// adds its hidden source), review.json and REVIEW_HOLDBACK. No runner applies it before VS-34 wiring (SF-13b), so every
-// mergeReviewConfig surface warns that "secrets" is not applied, and parseReviewConfig's surfaces ignore it.
+// adds its hidden source), review.json and REVIEW_HOLDBACK. Review.run applies its payload half since SF-13b, so every
+// mergeReviewConfig surface warns only that the reviewer's tools are not covered yet (HOLDBACK_TOOLS, until SF-14), and
+// parseReviewConfig's surfaces ignore it.
 describe("VS-34's holdback key", () => {
-  const HOLD =
-    '"holdback": "secrets" is not applied yet: changed credential files and secret values are still sent to the model as before.'
+  const HOLD = HOLDBACK_TOOLS
   const ASK = '"runtime": "ask" is not applied yet: no runtime checks run, and --checks works as before.'
   const SECRETS = '{"holdback": "secrets"}'
   const invalid = (label: string) => `${label} must be "off" or "secrets"; using "secrets", the stricter setting.`
 
-  test("is sourced, raise-only and unapplied, with no default entry", () => {
+  test("is sourced, raise-only and applied, with no default entry", () => {
     expect(SOURCED_REVIEW_KEYS).toContain("holdback")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("holdback")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("holdback")).toBe(false)
+    // The warning says what "secrets" does not cover yet, and no longer that it is not applied.
+    expect(HOLD).toContain("not yet the reviewer's read and grep tools")
+    expect(HOLD).toContain("values Vector redacted")
+    expect(HOLD).not.toContain("not applied")
     expect(OPTIONAL_REVIEW_DEFAULTS.holdback).toBe("off")
     expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "holdback")).toBe(false)
     expect(Object.hasOwn(parseReviewConfig().config, "holdback")).toBe(false)

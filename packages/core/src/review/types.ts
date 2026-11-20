@@ -303,7 +303,8 @@ export interface ReviewState {
 // Why a changed file was not reviewed. `held-back` is VS-34's (addendum A, design item 5): a file held back whole from
 // the model because its new or old path names key material or credentials (holdback.ts). It is not reviewed (I-7,
 // verdict.ts), and it never enters ReviewState.unreviewed, so a re-trigger on the same head still takes the
-// `already-reviewed` skip (skip.ts). No runner records it before VS-34 wiring (SF-13b).
+// `already-reviewed` skip (skip.ts). Review.run records it under `holdback: "secrets"` since SF-13b, with the file's
+// status in ReviewOutcome.held.
 export const SKIPPED_FILE_REASONS = [
   "ignored",
   "lockfile",
@@ -320,6 +321,19 @@ export interface SkippedFile {
   path: string
   reason: (typeof SKIPPED_FILE_REASONS)[number]
   additions?: number
+}
+
+// Why holdback.ts held a changed file back whole (VS-34 design item 2): its path is one the read tool denies as a
+// secret (SECRET_FILES), an env file, or a credential file only the payload list names.
+export const HOLDBACK_REASONS = ["secret-file", "env-file", "credential-file"] as const
+export type HoldbackReason = (typeof HOLDBACK_REASONS)[number]
+
+// A changed file held back whole, with its change's status, which VS-32's verdict reads: a held deletion sent nothing.
+export interface HeldFile {
+  path: string
+  oldPath?: string // only on renames
+  status: "added" | "modified" | "deleted" | "renamed"
+  reason: HoldbackReason
 }
 
 export interface ReviewCost {
@@ -374,6 +388,9 @@ export interface ReviewOutcome {
   passes?: ReviewPass[]
   // The strict guardrail's result, set only under `guardrail: "strict"` (VS-27c).
   strict?: StrictResult
+  // VS-34: the files Review.run held back under `holdback: "secrets"`, one per `held-back` skip, same path and order.
+  // Absent when nothing was held.
+  held?: HeldFile[]
 }
 
 export interface ReviewPass {
@@ -487,15 +504,15 @@ export interface ReviewConfig {
   // and the eval's replay call that from VS-23b, whose admission enforces it in model resolution and Review.run. The
   // desktop (VS-23d) and the GitHub job (SF-37) still read parseReviewConfig, which ignores it.
   privacy?: "standard" | "zdr"
-  // VS-34's opt-in (addendum A §1, Q23). Under "secrets", Review.run will hold back from the model each changed file
-  // whose new or old path names key material or credentials (holdback.ts holdbackFiles), record it as a `held-back`
-  // skip, and replace secret-shaped values in what it does send with `[redacted]`. Raise-only, as `privacy` is: the
-  // strictest of the global config (VS-23d's hidden source, SF-15), review.json and REVIEW_HOLDBACK, and no pull
-  // request text sets it. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so
-  // every config and its digest stay as they were. Only mergeReviewConfig reads it; parseReviewConfig ignores it, and
-  // so do the desktop, the GitHub job (SF-37) and connect's consent preview, which read that. Read by no runner until
-  // VS-34 wiring (UNAPPLIED_REVIEW_KEYS), so mergeReviewConfig warns that "secrets" is not applied. Independent of
-  // `privacy`: whether "zdr" requires it is Q23, still open.
+  // VS-34's opt-in (addendum A §1, Q23). Under "secrets", Review.run holds back from the model each changed file whose
+  // new or old path names key material or credentials (holdback.ts holdbackFiles), records it as a `held-back` skip,
+  // and replaces secret-shaped values in every untrusted block it does send with `[redacted]` (SF-13b). The read and
+  // grep tools are not restricted yet (SF-14), so mergeReviewConfig warns that "secrets" covers only the prompt.
+  // Raise-only, as `privacy` is: the strictest of the global config (VS-23d's hidden source, SF-15), review.json and
+  // REVIEW_HOLDBACK, and no pull request text sets it. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and
+  // DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they were. Only mergeReviewConfig reads
+  // it; parseReviewConfig ignores it, and so do the desktop, the GitHub job (SF-37) and connect's consent preview, which
+  // read that. Independent of `privacy`: whether "zdr" requires it is Q23, still open.
   holdback?: "off" | "secrets"
   // The routes the owner attests are zero data retention (Q2): provider IDs, `openrouter` for an OpenRouter account,
   // and model server hosts. A text entry is the legacy form and keeps its meaning; an attestation object (VS-33) adds
@@ -594,8 +611,9 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
-// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42, VS-44,
-// VS-28 or VS-34 wiring, or the VS-30 executor, takes a key off this list when a runner applies it.
+// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42, VS-44
+// or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
+// with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
   "trivial",
   "maxInputTokens",
@@ -606,7 +624,6 @@ export const UNAPPLIED_REVIEW_KEYS = [
   "depth",
   "lenses",
   "runtime",
-  "holdback",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:

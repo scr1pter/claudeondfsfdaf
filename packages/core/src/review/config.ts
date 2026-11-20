@@ -147,7 +147,8 @@ function attestedEntry(
 // it. mergeReviewConfig is their only reader.
 // - Raise-only: each level is stricter than the one before. Any source may raise the key and none may lower it, and a
 //   value that is not a level reads as the strictest. VS-34's `holdback` (addendum A §1) is the strictest of the global
-//   config, review.json and REVIEW_HOLDBACK, as `privacy` is; SF-15 adds the global source, hidden.
+//   config, review.json and REVIEW_HOLDBACK, as `privacy` is; SF-15 adds the global source, hidden. Review.run applies
+//   its payload half since SF-13b.
 const RAISE_ONLY = {
   privacy: { levels: ["standard", "zdr"], env: "REVIEW_PRIVACY" },
   holdback: { levels: ["off", "secrets"], env: "REVIEW_HOLDBACK" },
@@ -281,13 +282,14 @@ const UNAPPLIED: Record<
     applies: (config) => config.runtime === "ask",
     warning: '"runtime": "ask" is not applied yet: no runtime checks run, and --checks works as before.',
   },
-  // A sourced key (RAISE_ONLY), so mergeReviewConfig gives this warning too.
-  holdback: {
-    applies: (config) => config.holdback === "secrets",
-    warning:
-      '"holdback": "secrets" is not applied yet: changed credential files and secret values are still sent to the model as before.',
-  },
 }
+
+// VS-34: what `holdback: "secrets"` does not cover until SF-14 adds the read tool's deny rules and redacts tool output.
+// Review.run holds credential files back from the prompt and redacts secret-shaped values in what it sends, but the
+// reviewer's read and grep tools still open the files as they are on disk. mergeReviewConfig gives it in place of the
+// "not applied" warning; SF-14 removes it.
+export const HOLDBACK_TOOLS =
+  '"holdback": "secrets" covers the review prompt, not yet the reviewer\'s read and grep tools: a held-back credential file the read tool allows (such as .envrc or .netrc), and the values Vector redacted from the diff and context, are still in the files the reviewer can open.'
 
 function assign(config: ReviewConfig, key: PlainKey, value: unknown, label: string, warnings: string[]) {
   const parsed = FIELDS[key].parse(value)
@@ -359,8 +361,9 @@ export function parseReviewConfig(
  * Every key outside RAISE_ONLY and TRUSTED_ONLY is read exactly as parseReviewConfig reads it. `privacy` is the
  * strictest of the global config, review.json and REVIEW_PRIVACY, and a review.json that cannot be read but mentions it
  * counts as "zdr". VS-34's `holdback` is the strictest of the global config, review.json and REVIEW_HOLDBACK in the
- * same way ("secrets" for one that cannot be read but mentions it), and "secrets" warns that it is not applied yet
- * (UNAPPLIED_REVIEW_KEYS). No pull request text is a source of either, and a pull request's own review.json can only
+ * same way ("secrets" for one that cannot be read but mentions it); Review.run applies it to the prompt since SF-13b,
+ * and "secrets" warns that the reviewer's tools are not covered yet (HOLDBACK_TOOLS, until SF-14). No pull request
+ * text is a source of either, and a pull request's own review.json can only
  * raise them. `zdrAttested` and VS-30's `runtime` come from the trusted source alone: the global config on "local"
  * (your own branch can hold other people's commits), review.json at the base on "github" (a pull request can edit the
  * workflow and its environment). Neither has an environment variable, and a value from any other source is ignored with
@@ -450,6 +453,8 @@ export function mergeReviewConfig(input: {
       (key) => SOURCED_REVIEW_KEYS.some((item) => item === key) && UNAPPLIED[key].applies(config),
     ).map((key) => UNAPPLIED[key].warning),
   )
+  // SF-14 removes this once the read and grep tools are covered.
+  if (config.holdback === "secrets") warnings.push(HOLDBACK_TOOLS)
   return { config, warnings }
 }
 

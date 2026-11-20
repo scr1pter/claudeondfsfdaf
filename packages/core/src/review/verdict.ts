@@ -12,9 +12,8 @@
 // $GITHUB_OUTPUT and exits 1 on not-reviewed, incomplete and blocking. It closes unfinished reviews only: it does not
 // hold against a same-repository author who edits the workflow, and a job the workflow's `if:` skips never reaches it.
 
-import type { HeldFile } from "./holdback"
 import type { SkipReason } from "./skip"
-import type { ReviewOutcome, Severity, SkippedFile } from "./types"
+import type { HeldFile, ReviewOutcome, Severity, SkippedFile } from "./types"
 
 // In the order reviewVerdict tests them. They move to types.ts with ReviewState.verdict when the job stores one.
 export const REVIEW_VERDICTS = [
@@ -61,12 +60,14 @@ export function postingPlan(
 // - `specialists[].name` also takes the contract's `lens` and `repro` and codium's `judge`, likewise;
 // - `trivial` marks VS-24's zero-attempt trivial outcome from Review.run;
 // - `strict` is VS-27a's StrictResult, which no runner sets before VS-27c;
-// - `held` is VS-34's held-back files.
+// - `held` is VS-34's held-back files, which Review.run sets under `holdback: "secrets"` (SF-13b). `skipped` and
+//   `held` take a path, so a held deletion accounts for its own `held-back` skip only; fixtures without one keep the
+//   count rule (unfinishedCauses).
 // The unions repeated below are redundant since VS-27a and harmless; VS-32 wiring may simplify them.
 export interface VerdictOutcome {
   partial?: NonNullable<ReviewOutcome["partial"]> | "privacy" | "budget-estimate"
   unreviewed: readonly string[]
-  skipped: readonly Pick<SkippedFile, "reason">[]
+  skipped: readonly (Pick<SkippedFile, "reason"> & { path?: string })[]
   specialists: readonly {
     name: ReviewOutcome["specialists"][number]["name"] | "lens" | "repro" | "judge"
     status: ReviewOutcome["specialists"][number]["status"]
@@ -74,7 +75,7 @@ export interface VerdictOutcome {
   selection: Record<VerdictList, readonly { severity: Severity }[]>
   trivial?: true
   strict?: { complete: boolean }
-  held?: readonly Pick<HeldFile, "status">[]
+  held?: readonly (Pick<HeldFile, "status"> & { path?: string })[]
 }
 
 // What a run covered, without what it found: the parts of a VerdictOutcome that unfinishedCauses reads apart from the
@@ -244,15 +245,17 @@ export function unfinishedCauses(outcome: VerdictCoverage & Pick<VerdictOutcome,
     Object.hasOwn(SKIPPED_FILE_CAUSES, file.reason) ? (SKIPPED_FILE_CAUSES[file.reason] ?? []) : [],
   )
   // VS-32: a held-back file whose change is a deletion only, with nothing sent, adds a note and leaves the review
-  // complete. A `held-back` skip carries no status, so each one counts unless a held deletion accounts for it: one
-  // without `held`, or beyond its deletions, fails closed. Skips and deletions are matched by count, not by path (both
-  // Picks carry no path), so this fails closed only when `skipped` and `held` record the same files: a held deletion
-  // recorded as a `deleted` skip, beside a held-back skip with no `held` entry of its own, reads complete. Nothing
-  // records a held-back skip before VS-34 wiring (SF-13b), which keys the match by path.
-  const deletions = outcome.held?.filter((file) => file.status === "deleted").length ?? 0
+  // complete. A `held-back` skip carries no status, so each one counts unless a held deletion accounts for it, and any
+  // held file that is not a deletion counts. When every held-back skip and held deletion names its path, as Review.run
+  // records them (SF-13b), a skip counts unless a held deletion has its path. An input without paths keeps the count
+  // rule: one without `held`, or with more held-back skips than held deletions, fails closed.
+  const heldBack = outcome.skipped.filter((file) => file.reason === "held-back")
+  const deletions = outcome.held?.filter((file) => file.status === "deleted") ?? []
+  const keyed = [...heldBack, ...deletions].every((file) => typeof file.path === "string")
+  const deleted = new Set(deletions.map((file) => file.path))
   const held =
     outcome.held?.some((file) => file.status !== "deleted") ||
-    skipped.filter((cause) => cause === "held-back").length > deletions
+    (keyed ? heldBack.some((file) => !deleted.has(file.path)) : heldBack.length > deletions.length)
   return [
     ...(outcome.partial ? [outcome.partial] : []),
     ...(outcome.unreviewed.length ? ["unreviewed" as const] : []),

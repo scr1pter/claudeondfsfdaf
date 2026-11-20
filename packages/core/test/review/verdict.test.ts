@@ -298,7 +298,8 @@ describe("reviewVerdict over outcomes", () => {
 
   // VS-34 wiring records a held-back file in `skipped` (addendum A :836) beside its `held` entry, which carries the
   // status. A skip counts unless a held deletion accounts for it, so VS-32's deletion rule stays expressible and a skip
-  // with nothing to account for it fails closed.
+  // with nothing to account for it fails closed. These inputs carry no `held` paths, so the count rule decides; Review.run
+  // records both with paths (SF-13b), and the next test keys the match by path.
   test("held-back skips: incomplete unless a held deletion accounts for each one", () => {
     const skip = (path: string) => ({ path, reason: "held-back" as const })
     // A held change and its skip give the cause once.
@@ -328,6 +329,40 @@ describe("reviewVerdict over outcomes", () => {
       [{ path: "big.ts", reason: "size-limit" as const }, skip(".env")],
     ])
       expect(judge(outcome({ skipped }))).toEqual(verdict("incomplete", ["size-limit", "held-back"]))
+  })
+
+  // SF-13b: when every held-back skip and held deletion names its path, as Review.run records them, a skip counts unless
+  // a held deletion has its path, so a held deletion of one file never accounts for another file's skip.
+  test("held-back skips with paths: a held deletion accounts only for its own skip", () => {
+    const skip = (path: string) => ({ path, reason: "held-back" as const })
+    const deleted = (path: string) => ({ path, status: "deleted" as const })
+    // The same file: a note, and the review is complete.
+    expect(judge({ ...outcome({ skipped: [skip(".env")] }), held: [deleted(".env")] })).toEqual(
+      verdict("clean-complete", [], ["held-back-deletion"]),
+    )
+    // A held deletion of .env beside a held-back skip for id_rsa, whose own held entry is missing: one of each, which
+    // the count rule would read complete, is incomplete by path.
+    expect(
+      judge({
+        ...outcome({ skipped: [{ path: ".env", reason: "deleted" }, skip("id_rsa")] }),
+        held: [deleted(".env")],
+      }),
+    ).toEqual(verdict("incomplete", ["held-back"], ["held-back-deletion"]))
+    // Two deletions account for their two skips, in any order.
+    expect(
+      judge({ ...outcome({ skipped: [skip("id_rsa"), skip(".env")] }), held: [deleted(".env"), deleted("id_rsa")] }),
+    ).toEqual(verdict("clean-complete", [], ["held-back-deletion"]))
+    // A held change counts whatever its path.
+    expect(
+      judge({
+        ...outcome({ skipped: [skip(".env"), skip("deploy/.netrc")] }),
+        held: [deleted(".env"), { path: "deploy/.netrc", status: "modified" }],
+      }),
+    ).toEqual(verdict("incomplete", ["held-back"], ["held-back-deletion"]))
+    // One held deletion without a path falls back to the count rule for all of them.
+    expect(judge({ ...outcome({ skipped: [skip("id_rsa")] }), held: [{ status: "deleted" }] })).toEqual(
+      verdict("clean-complete", [], ["held-back-deletion"]),
+    )
   })
 
   test("a strict result that is not complete leaves the review incomplete", () => {

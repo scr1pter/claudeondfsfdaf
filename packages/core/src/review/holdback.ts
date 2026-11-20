@@ -10,28 +10,26 @@
 // this same function before runner-wiring adopts a tier. A reading that does not keep a text's lines (the generic one
 // replaces a key whole) has each line read on its own.
 //
-// Pure: it never reads process.env (`env` defaults to none) and makes no git call (the engine computes `ignored`). Its
-// imports are browser-safe, but `Wildcard.match` reads `process.platform` when called, which a sandboxed renderer has
-// to provide or the desktop half records as a difference. Nothing calls it yet. Runner-wiring calls it in Review.run
-// before prompt building under `holdback: secrets`, and only prompt rendering (the diff and the head files) may use
-// what it returns: skips, review state, anchors, suggestions and patch IDs keep the files as they are.
+// holdbackContext does the same for the other untrusted blocks a prompt quotes (design item 3): the pull request's
+// title, body and commit subjects, related-code hits, history, human comments, requirements, CI log excerpts and the
+// earlier findings the review prompt lists as open. What quotes a held path, or a path holdback would hold, is dropped,
+// and every other text has its values redacted.
+//
+// Pure: neither function reads process.env (`env` defaults to none) or makes a git call (the collector computes
+// `ignored`). Their imports are browser-safe, but `Wildcard.match` reads `process.platform` when called, which a
+// sandboxed renderer has to provide or the desktop half records as a difference. Review.run calls both before prompt
+// building under `holdback: "secrets"` (SF-13b), and only prompt rendering (the diff, the head files and the context
+// blocks) may use what they return: skips, review state, anchors, suggestions and patch IDs keep the files as they are.
+// Tool results (the read and grep tools) are SF-14's.
 
 import { BrainScan } from "../brain/scan"
 import { Wildcard } from "../util/wildcard"
 import { matchPostImage, parseUnifiedDiff, type DiffFile, type DiffHunk, type DiffLine } from "./diff"
 import { isCodePath } from "./ignore"
 import { ENV_FILES, SECRET_FILES } from "./permission"
-import type { HeadFile } from "./prompt"
+import type { HeadFile, PromptInput } from "./prompt"
 import { REDACTED } from "./redact"
-
-export type HoldbackReason = "secret-file" | "env-file" | "credential-file"
-
-export interface HeldFile {
-  path: string
-  oldPath?: string // only on renames
-  status: DiffFile["status"]
-  reason: HoldbackReason
-}
+import type { HeldFile, HoldbackReason } from "./types"
 
 // The `[redacted]` placeholders holdback added to one path: in its diff (hunk headers and lines) and in its head file.
 export interface HoldbackRedaction {
@@ -85,6 +83,14 @@ const SHAPES = { shapes: true } as const
 // A text with its values redacted.
 type Read = (text: string) => string
 
+// The untrusted blocks holdbackContext reads. `impact` is not one: no runner sets it before VS-25b wiring, which
+// builds the slice from the files holdback sends and redacts it. `prior` is: an earlier finding's title is a model's
+// text from an earlier review, which may have been made without holdback and quote a value.
+export type HoldbackContext = Pick<
+  PromptInput,
+  "pr" | "related" | "history" | "humanComments" | "requirements" | "checks" | "prior"
+>
+
 export function holdbackFiles(
   files: readonly DiffFile[],
   input: {
@@ -94,7 +100,7 @@ export function holdbackFiles(
     reading?: BrainScan.Reading
   },
 ): HoldbackResult {
-  const read = (text: string) => BrainScan.named(text, input.env ?? {}, input.reading ?? SHAPES).text
+  const read = reader(input)
   const held = files.flatMap((file): HeldFile[] => {
     const reason = heldReason(file.path) ?? (file.oldPath ? heldReason(file.oldPath) : undefined)
     if (!reason) return []
@@ -149,6 +155,81 @@ export function holdbackFiles(
       .filter((file) => file.status !== "deleted" && ignored.has(file.path))
       .map((file) => file.path),
   }
+}
+
+// The context blocks a prompt quotes, as holdbackFiles treats the diff: a related-code entry or hit, a history entry
+// (its blame quotes the lines), a human comment and an earlier finding anchored on a held path, or on a path holdback
+// would hold (an unchanged `config/prod/.envrc` a grep hit quotes), are dropped; every other text, the pull request's
+// title, body and commit subjects, requirements, CI log excerpts and earlier findings' titles included, has its values
+// redacted. Authors, paths, lines, symbols, check names and earlier findings' ids and statuses are kept. A block the
+// input leaves out stays out, and the result has only the input's keys.
+export function holdbackContext(
+  context: HoldbackContext,
+  input: {
+    held: readonly Pick<HeldFile, "path" | "oldPath">[]
+    env?: Record<string, string | undefined>
+    reading?: BrainScan.Reading
+  },
+): HoldbackContext {
+  const read = reader(input)
+  const paths = new Set(input.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
+  const dropped = (path: string) => paths.has(path) || heldReason(path) !== undefined
+  const pr = context.pr
+  return {
+    ...(pr
+      ? {
+          pr: {
+            ...pr,
+            title: read(pr.title),
+            body: read(pr.body),
+            ...(pr.commits ? { commits: pr.commits.map(read) } : {}),
+          },
+        }
+      : {}),
+    ...(context.related
+      ? {
+          related: context.related
+            .filter((entry) => !dropped(entry.path))
+            .map((entry) => ({
+              ...entry,
+              hits: entry.hits.filter((hit) => !dropped(hit.path)).map((hit) => ({ ...hit, text: read(hit.text) })),
+            })),
+        }
+      : {}),
+    ...(context.history
+      ? {
+          history: context.history
+            .filter((entry) => !dropped(entry.path))
+            .map((entry) => ({ ...entry, text: read(entry.text) })),
+        }
+      : {}),
+    ...(context.humanComments
+      ? {
+          humanComments: context.humanComments
+            .filter((comment) => comment.path === undefined || !dropped(comment.path))
+            .map((comment) => ({ ...comment, body: read(comment.body) })),
+        }
+      : {}),
+    ...(context.requirements !== undefined ? { requirements: read(context.requirements) } : {}),
+    ...(context.checks
+      ? {
+          checks: context.checks.map((check) =>
+            check.excerpt === undefined ? check : { ...check, excerpt: read(check.excerpt) },
+          ),
+        }
+      : {}),
+    ...(context.prior
+      ? {
+          prior: context.prior
+            .filter((entry) => !dropped(entry.path))
+            .map((entry) => ({ ...entry, title: read(entry.title) })),
+        }
+      : {}),
+  }
+}
+
+function reader(input: { env?: Record<string, string | undefined>; reading?: BrainScan.Reading }): Read {
+  return (text) => BrainScan.named(text, input.env ?? {}, input.reading ?? SHAPES).text
 }
 
 // Lowercased first, as every pattern is, so a path is judged alike on every platform: Wildcard ignores case only on

@@ -1202,17 +1202,24 @@ export type Read =
     }
   | { readonly kind: "tree"; readonly revision: string; readonly file: string }
   | { readonly kind: "subjects"; readonly from: string; readonly to: string }
+  // VS-34 item 4: which of these work-tree paths the work tree's .gitignore files and the copied info/exclude ignore,
+  // index or not (`check-ignore --no-index`). Global excludes are /dev/null here.
+  | { readonly kind: "check-ignore"; readonly files: readonly string[] }
+
+/** Whether the port accepts a path as repository-relative; a caller checks before asking, as a refused read poisons. */
+export function repositoryPath(file: string) {
+  return (
+    file.length > 0 &&
+    file.length <= 4096 &&
+    !/[\x00\r\n]/.test(file) &&
+    !path.isAbsolute(file) &&
+    !file.includes("\\") &&
+    file.split("/").every((part) => part && part !== "." && part !== ".." && part.toLowerCase() !== ".git")
+  )
+}
 
 function relative(file: string) {
-  requireValue(
-    file.length > 0 &&
-      file.length <= 4096 &&
-      !/[\x00\r\n]/.test(file) &&
-      !path.isAbsolute(file) &&
-      !file.includes("\\") &&
-      file.split("/").every((part) => part && part !== "." && part !== ".." && part.toLowerCase() !== ".git"),
-    "repository-relative path is unsupported",
-  )
+  requireValue(repositoryPath(file), "repository-relative path is unsupported")
   return file
 }
 
@@ -1734,6 +1741,14 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             "--format=%s",
             revision(operation.from) + ".." + revision(operation.to),
           ])
+        case "check-ignore":
+          requireValue(
+            operation.files.length > 0 && operation.files.length <= 1024,
+            "ignore check scope is unsupported",
+          )
+          // check-ignore takes no pathspec magic, so "./" keeps a leading ":" a path; git echoes each path as given,
+          // one per line, C-quoted when it must be.
+          return run(["check-ignore", "--no-index", "--", ...operation.files.map((file) => "./" + relative(file))])
         default:
           throw new Unavailable("Git operation is not supported by the read-only port")
       }

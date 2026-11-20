@@ -707,6 +707,15 @@ describe("strictSelect: completeness", () => {
       "held-back",
     ])
     expect(coverage({ skipped: [{ reason: "held-back" }], held: [{ status: "deleted" }] }).complete).toBe(true)
+    // With paths, as Review.run records them (SF-13b), a held deletion accounts only for its own skip.
+    expect(
+      coverage({ skipped: [{ path: ".env", reason: "held-back" }], held: [{ path: ".env", status: "deleted" }] })
+        .complete,
+    ).toBe(true)
+    expect(
+      coverage({ skipped: [{ path: "id_rsa", reason: "held-back" }], held: [{ path: ".env", status: "deleted" }] })
+        .incomplete,
+    ).toEqual(["held-back"])
     expect(
       coverage({
         specialists: [

@@ -25,7 +25,8 @@ import {
   type ReviewOutcome,
   UNAPPLIED_REVIEW_KEYS,
 } from "@vectordevai/core/review/types"
-import { parseReviewConfig } from "@vectordevai/core/review/config"
+import { HOLDBACK_TOOLS, parseReviewConfig } from "@vectordevai/core/review/config"
+import { noteHeldBack } from "@vectordevai/core/review/format"
 import { estimateDispatch } from "@vectordevai/core/review/dispatch"
 import { findingKey, type SliceUtilisation } from "@vectordevai/core/review/eval"
 import { evidenceScope, policyDigest, promptsDigest } from "@vectordevai/core/review/model-evidence"
@@ -1634,17 +1635,22 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { zdrAttested: ["openrouter"], runtime: "ask" } })).toContain(
           "config sets zdrAttested, a route setting a replay cannot apply",
         )
-        // Nor VS-34's holdback (SF-13a), which is raise-only and which VS-34 wiring applies: it gets the unwired
-        // message too, alone or beside another unapplied key.
-        // @ts-expect-error VS-34's holdback is sourced and applied by no runner, so a typed caller cannot set it.
+        // Nor VS-34's holdback, which Review.run applies since SF-13b and a replay takes only from the case's own
+        // review.json: it gets its own message, alone or beside an unapplied key, and a route setting beside it keeps
+        // the route message. Its variant waits for the tool rules (SF-14), so a variant cannot set it either.
+        // @ts-expect-error VS-34's holdback is a sourced key, so a typed caller cannot set it.
         const holdback: ReplayInput["config"] = { holdback: "secrets" }
         expect(holdback).toBeDefined()
-        expect(yield* refused({ config: { holdback: "secrets" } })).toContain(
-          "config sets holdback, which no runner applies yet (VS-34 wiring), so the artifact would record a setting the run did not have.",
+        const HOLD =
+          "config sets holdback, which a replay takes only from the case's own review.json: the engine:holdback-secrets variant waits for VS-34's tool rules (SF-14)."
+        expect(yield* refused({ config: { holdback: "secrets" } })).toContain(HOLD)
+        expect(yield* refused({ config: { holdback: "off", depth: "auto" } })).toContain(HOLD)
+        expect(yield* refused({ config: { holdback: "secrets", zdrAttested: ["openrouter"] } })).toContain(
+          "config sets zdrAttested, a route setting a replay cannot apply",
         )
-        expect(yield* refused({ config: { holdback: "off", depth: "auto" } })).toContain(
-          "config sets depth, holdback, which no runner applies yet (VS-28 wiring for depth; VS-34 wiring for holdback)",
-        )
+        expect(
+          yield* refused({ variant: { name: "engine:holdback-secrets", keys: { holdback: "secrets" } } }),
+        ).toContain("engine:holdback-secrets sets holdback, which this replay does not apply")
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
           "engine:trivial-skip sets trivial, which this replay does not apply",
@@ -2932,6 +2938,130 @@ describe("cost fidelity (VS-21e)", () => {
         expect(artifact.passes.length).toBeGreaterThan(0)
         for (const pass of artifact.passes) expect(pass).not.toHaveProperty("reasoning")
         expect(artifact.outcome?.cost?.reasoning).toBe(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+})
+
+// VS-34 (SF-13b): a case whose base review.json raises holdback runs, and is recorded, under it. Tokens are planted in
+// the pull request's title and body, a commit subject (which history quotes), an unchanged-path related hit and a
+// changed file, beside two credential files; none reaches a wire body, the held files are recorded as skipped, and
+// the related-code locations list only what the prompt quoted. A first review has no human comments and the eval
+// gathers no requirements, so those blocks are run.test.ts's.
+describe("VS-34 holdback in the replay and projection (SF-13b)", () => {
+  const T = {
+    related: "ghp_" + "e1V2".repeat(9),
+    history: "glpat-" + "e1H2s3T4o5R6y7Z8w9X0",
+    title: "sk-" + "e1T2".repeat(8),
+    body: "AKIA" + "E7Q2W4E6R8T0Y1U3",
+    envrc: "npm_" + "e7N8".repeat(9),
+  }
+  const tally = "export function tallyItems(items: number[]) {\n  return items.length\n}\n"
+  const held = Effect.gen(function* () {
+    const checked = yield* checkout({
+      base: {
+        ".vector/review.json": JSON.stringify({ holdback: "secrets" }),
+        "src/list.ts": LIST_BASE,
+        "deploy/.netrc": "machine registry.example.test login old-ci\n",
+      },
+      head: {
+        "src/list.ts": LIST_BASE + tally,
+        "src/use.ts": `import { tallyItems } from "./list"\nexport const count = tallyItems([1, 2]) // ${T.related}\n`,
+        "deploy/.netrc": "machine registry.example.test login ci\n",
+        "config/prod/.envrc": `export TOKEN=${T.envrc} # tallyItems\n`,
+      },
+      price: PRICE,
+    })
+    // A second commit whose subject history quotes.
+    const head = yield* commit(checked.directory, `Tune tallyItems with ${T.history}`, {
+      "src/list.ts": LIST_BASE + tally + "// tuned\n",
+    })
+    const item = replayCase(checked.directory, checked.base, head, {
+      pr: { number: 7, title: `Fix ${T.title}`, body: `Uses ${T.body}`, author: "alice" },
+    })
+    return { ...checked, head, item }
+  })
+  const HELD = ["deploy/.netrc", "config/prod/.envrc"]
+  const leaks = (text: string) => [...Object.values(T), "login ci", ...HELD].filter((value) => text.includes(value))
+
+  it.instance(
+    "projects every pass without a planted token or a held file, and records the held files as skipped",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* held
+        const anchors = yield* ReviewSource.prDiff({
+          directory: checked.directory,
+          mergeBase: checked.base,
+          head: checked.head,
+        })
+        yield* checked.llm.respond(projectionReplies({ files: anchors }))
+        const record = yield* ReviewEval.project({
+          case: checked.item,
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          server: checked.llm.url,
+          received: received(checked.llm),
+          egress: guard.attempts,
+        })
+        const bodies = record.passes.flatMap((pass) => pass.requests.map((request) => request.body))
+        expect(record.passes.map((pass) => pass.pass)).toContain("review")
+        expect(bodies.length).toBeGreaterThan(0)
+        expect(bodies.flatMap(leaks)).toEqual([])
+        expect(bodies.some((body) => body.includes("[redacted]"))).toBe(true)
+        expect(record.files.reviewed.toSorted()).toEqual(["src/list.ts", "src/use.ts"])
+        expect(
+          record.files.skipped
+            .filter((file) => file.reason === "held-back")
+            .map((file) => file.path)
+            .toSorted(),
+        ).toEqual(HELD.toSorted())
+        const config: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" }
+        expect(record.scope.prompts).toBe(promptsDigest({ holdback: "secrets" }))
+        expect(record.scope.policy).toBe(policyDigest(config))
+        expect(record.scope.policy).not.toBe(policyDigest(DEFAULT_REVIEW_CONFIG))
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "replays under the base's holdback, posts the held files as skipped, and counts them out of a partial banner",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* held
+        const file = path.join(checked.directory, "src/list.ts")
+        // Two reads hit the step cap, and the finalizer reports: a partial review that saw every file it was sent.
+        yield* checked.llm.pushMatch(REVIEW, reply().tool("read", { filePath: file }))
+        yield* checked.llm.pushMatch(REVIEW, reply().tool("read", { filePath: file }))
+        yield* checked.llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report()))
+        const posting = ReviewEval.recordingPosting()
+        const artifact = yield* ReviewEval.replay({
+          case: checked.item,
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off", maxSteps: 2 },
+          posting,
+          check: recordingCheck().check,
+        })
+        expect(artifact.config.value.holdback).toBe("secrets")
+        expect(artifact.config.warnings).toContain(HOLDBACK_TOOLS)
+        expect(artifact.outcome?.partial).toBe("steps")
+        expect(artifact.outcome?.unreviewed).toEqual([])
+        expect(artifact.outcome?.held?.map((entry) => entry.path).toSorted()).toEqual(HELD.toSorted())
+        expect(artifact.files.reviewed.toSorted()).toEqual(["src/list.ts", "src/use.ts"])
+        // The prompt quoted the import and the call site in src/use.ts, the call redacted, and not the held .envrc's hit,
+        // which the gathered context still holds.
+        expect(artifact.context.locations).toEqual(["src/use.ts:1", "src/use.ts:2"])
+        expect(artifact.context.related).toBe(1)
+        const hits = (yield* checked.llm.hits).map((hit) => hit.text)
+        expect(hits.flatMap(leaks)).toEqual([])
+        const summary = artifact.posted.flatMap((write) => (write.write === "createIssueComment" ? [write.body] : []))
+        expect(summary).toHaveLength(1)
+        for (const path of HELD) expect(summary[0]).toContain(`\`${path}\` held back`)
+        // In the diff's order.
+        expect(summary[0]).toContain(noteHeldBack(["config/prod/.envrc", "deploy/.netrc"])!)
+        // Four files changed, two were held back, none is unreviewed: the banner counts two of four reviewed.
+        expect(summary[0]).toContain("Stopped at the 2-step limit after 2 of 4 files")
       }),
     GIT,
     TIMEOUT,

@@ -12,6 +12,7 @@ import {
   IMPACT_TIERS_INSTRUCTION,
   impactBlock,
   INJECTION_TITLE,
+  INPUT_REDACTION,
   ownerBlock,
   RUNTIME_EVIDENCE_INSTRUCTION,
   runtimeEvidenceBlock,
@@ -400,6 +401,41 @@ describe("buildLensPrompt", () => {
     )
     expect(count(text, "<review_rules")).toBe(0)
     expect(text).toContain("<untrusted_pr_title>")
+  })
+})
+
+// VS-34 design item 3: the one input-redaction sentence joins the "## Untrusted text" section of the review, security
+// and lens prompts only when Review.run redacted their inputs (holdback "secrets"); without the flag the prompts are
+// what they were, and with it they differ by that one line.
+describe("the input-redaction sentence", () => {
+  test("says what the placeholder is", () => {
+    expect(INPUT_REDACTION).toBe(
+      `Values shown as ${REDACTED} were removed before sending; do not report the placeholder itself.`,
+    )
+  })
+
+  test("appears once, in the untrusted-text section, only with inputsRedacted", () => {
+    const builders = [
+      buildReviewPrompt,
+      buildSecurityPrompt,
+      ...REVIEW_LENSES.map((lens) => (value: PromptInput) => buildLensPrompt(value, lens)),
+    ]
+    for (const build of builders)
+      for (const trust of ["trusted", "untrusted"] as const) {
+        const plain = build(input({ trust }))
+        const redacted = build(input({ trust, inputsRedacted: true }))
+        expect(count(plain, INPUT_REDACTION)).toBe(0)
+        expect(count(redacted, INPUT_REDACTION)).toBe(1)
+        const section = redacted.split("\n\n").find((part) => part.startsWith("## Untrusted text")) ?? ""
+        expect(section.split("\n").at(-1)).toBe(INPUT_REDACTION)
+        expect(redacted.replace("\n" + INPUT_REDACTION, "")).toBe(plain)
+      }
+  })
+
+  test("is never in the verify or finalize prompts", () => {
+    const verify = buildVerifyPrompt({ trust: "untrusted", head: HEAD, candidates: [] })
+    expect(count(verify, INPUT_REDACTION)).toBe(0)
+    expect(count(buildFinalizePrompt(), INPUT_REDACTION)).toBe(0)
   })
 })
 

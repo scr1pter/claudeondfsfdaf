@@ -178,6 +178,46 @@ describe("retained local review result decoding", () => {
     expect(result().verdict.verdict).toBe("clean-complete")
   })
 
+  // SF-13b: Review.run records each held file in `skipped` and its status in `held`, so a held deletion only reads
+  // clean-complete with its note. The decoder takes `held`, so that retained result survives a round trip; without it
+  // the recomputed verdict would be incomplete and the result dropped.
+  test("round-trips a held deletion's clean result through `held`, and refuses a held entry it cannot read", async () => {
+    const deletion = outcome()
+    deletion.skipped = [{ path: ".env", reason: "held-back" }]
+    deletion.held = [{ path: ".env", status: "deleted", reason: "env-file" }]
+    const stored = result(deletion)
+    expect(stored.verdict).toEqual({ verdict: "clean-complete", causes: [], notes: ["held-back-deletion"] })
+    const decoded = await decode(await info(JSON.parse(JSON.stringify(stored))))
+    expect(decoded?.result?.outcome?.held).toEqual([{ path: ".env", status: "deleted", reason: "env-file" }])
+    expect(decoded?.verdict).toEqual(stored.verdict)
+    const renamed = outcome()
+    renamed.skipped = [{ path: "notes.txt", reason: "held-back" }]
+    renamed.held = [{ path: "notes.txt", oldPath: "id_rsa", status: "renamed", reason: "credential-file" }]
+    expect(decodeLocalResult(result(renamed), target)?.verdict).toEqual({
+      verdict: "incomplete",
+      causes: ["held-back"],
+      notes: [],
+    })
+    // An unknown status or reason, or an excess field, is refused rather than read.
+    for (const entry of [
+      { path: ".env", status: "copied", reason: "env-file" },
+      { path: ".env", status: "deleted", reason: "token-file" },
+      { path: ".env", status: "deleted", reason: "env-file", sent: false },
+      { status: "deleted", reason: "env-file" },
+    ])
+      expect(decodeLocalResult({ ...stored, outcome: { ...deletion, held: [entry] } }, target)).toBeUndefined()
+    // A held-back skip with no `held` still decodes only as incomplete.
+    const bare = outcome()
+    bare.skipped = [{ path: ".env", reason: "held-back" }]
+    expect(decodeLocalResult({ ...result(bare), verdict: stored.verdict }, target)).toBeUndefined()
+    // And a skip for another file than the held deletion is incomplete by path.
+    const other = outcome()
+    other.skipped = [{ path: "id_rsa", reason: "held-back" }]
+    other.held = [{ path: ".env", status: "deleted", reason: "env-file" }]
+    expect(decodeLocalResult({ ...result(other), verdict: stored.verdict }, target)).toBeUndefined()
+    expect(decodeLocalResult(result(other), target)?.verdict.verdict).toBe("incomplete")
+  })
+
   test("binds a valid result to its expected parent, retry request and known run identity", async () => {
     const run = await info()
     for (const expected of [

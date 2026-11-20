@@ -9,6 +9,7 @@ import {
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
   FINDING_SCOPES,
+  HOLDBACK_REASONS,
   REVIEW_LENSES,
   SEVERITIES,
   SKIPPED_FILE_REASONS,
@@ -229,6 +230,17 @@ const Outcome = Schema.Struct({
       dropped: many(Schema.Struct({ reason: Schema.Literals(STRICT_DROPS), count: NonNegativeInt })),
       fixUnchecked: NonNegativeInt,
     }),
+  ),
+  // VS-34 (SF-13b): the held-back files, so the recomputed verdict keeps a held deletion's note and completeness.
+  held: optional(
+    many(
+      Schema.Struct({
+        path: text,
+        oldPath: optional(text),
+        status: Schema.Literals(["added", "modified", "deleted", "renamed"]),
+        reason: Schema.Literals(HOLDBACK_REASONS),
+      }),
+    ),
   ),
 })
 

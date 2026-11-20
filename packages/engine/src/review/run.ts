@@ -5,7 +5,8 @@
 // estimates; reported usage can exceed them, so they are not a hard billing cap. An eval projection (VS-21b,
 // ReviewEval.project) may run what the dollar cap alone refuses, against a fake provider on this computer; nothing
 // else sets it, and unset it changes nothing. Under privacy "zdr" (VS-23b) admission also holds every model and every
-// provider attempt to the route rules (route.ts), before any reservation; a refusal stops the review unreviewed.
+// provider attempt to the route rules (route.ts), before any reservation; a refusal stops the review unreviewed. Under
+// holdback "secrets" (VS-34, SF-13b) the prompts leave out credential files and carry redacted values (holdback.ts).
 
 import path from "path"
 import { Billing } from "@vectordevai/schema/billing"
@@ -22,11 +23,16 @@ import {
   type DiffFile,
 } from "@vectordevai/core/review/diff"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
+import { holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
 import { checkedLabs, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import {
+  noteHeldBack,
+  noteIgnoreUnchecked,
+  noteIgnoredCommitted,
   notePrivacyRefused,
+  noteRedacted,
   noteTriageFixedUnchecked,
   noteTriageUnchecked,
   noteVerifySkipped,
@@ -166,6 +172,10 @@ export interface RunInput {
   // VS-21b: asked about each decision the dollar cap would refuse. Off unless set, and only ReviewEval.project sets
   // it, after refusing any provider that sends off this computer.
   projection?: Projection
+  // VS-34 item 4: the changed paths the repository's ignore rules exclude although committed, which the collector
+  // asks git for (ReviewGit.ignoredPaths) under holdback "secrets" only. Absent means it was not checked, which the
+  // review notes; Review.run itself makes no git call.
+  ignored?: readonly string[]
 }
 
 type Name = ReviewOutcome["specialists"][number]["name"]
@@ -878,23 +888,37 @@ export const run: (
   }
 
   const body = Effect.gen(function* () {
+    // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
+    // untrusted block the prompts quote (holdback.ts). Only what the model is shown changes: anchors, the plan, stats,
+    // findings' suggestions and review state keep the change as it is. Unset, nothing here runs.
+    const hold = config.holdback === "secrets" ? holdback(input) : undefined
+    const files = hold?.files ?? input.files
+    const headFiles = hold ? hold.headFiles : input.headFiles
+    const heldPaths = new Set(hold?.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
+    const focus = hold ? input.focus?.filter((hunk) => !heldPaths.has(hunk.path)) : input.focus
+    // Nothing to send: holdback held every changed file back or, in an incremental review, every hunk new since the
+    // last one, so no pass runs (the files sent would carry nothing new and go out as a full review).
+    const nothingToSend =
+      hold !== undefined && (!files.length || (input.mode === "incremental" && !!input.focus?.length && !focus?.length))
+    // A finding on a held path is never quoted to the verify or judge pass; selection drops it.
+    const sendable = (finding: { path: string }) => !heldPaths.has(finding.path)
+    // The earlier findings the prompts list: under holdback those on a held path left out, titles redacted. One left
+    // out gets no status from the model (see `unshown`), and selection still keeps it open from `input.prior`.
+    const prior = hold?.context.prior ?? input.prior
     // Prompts: the diff that fits the model's context, focus files first in incremental mode.
-    const focused = new Set((input.focus ?? []).map((hunk) => hunk.path))
+    const focused = new Set((focus ?? []).map((hunk) => hunk.path))
     const ordered =
       input.mode === "incremental"
-        ? [
-            ...input.files.filter((file) => focused.has(file.path)),
-            ...input.files.filter((file) => !focused.has(file.path)),
-          ]
-        : input.files
+        ? [...files.filter((file) => focused.has(file.path)), ...files.filter((file) => !focused.has(file.path))]
+        : files
     const split = budgetDiff(ordered, diffBudgetChars(Math.min(model.context, triage.context), config.maxDiffChars))
     // Each changed file once: annotated when its pull request text is at hand, and only its changed lines when an
     // incremental review has nothing new in it.
     const packed = packChanges({
       inline: split.inline,
-      changed: input.files,
-      ...(input.headFiles ? { headFiles: input.headFiles } : {}),
-      ...(input.mode === "incremental" && input.focus ? { focus: input.focus } : {}),
+      changed: files,
+      ...(headFiles ? { headFiles } : {}),
+      ...(input.mode === "incremental" && focus ? { focus } : {}),
     })
     const promptInput: PromptInput = {
       mode: input.mode,
@@ -910,22 +934,25 @@ export const run: (
         additions: file.additions,
         deletions: file.deletions,
       })),
-      ...(input.focus ? { focus: input.focus } : {}),
+      ...(focus ? { focus } : {}),
       ...(packed.settled.length ? { settled: packed.settled } : {}),
-      ...(input.headFiles ? { headFiles: packed.headFiles } : {}),
+      ...(headFiles ? { headFiles: packed.headFiles } : {}),
       ...input.context,
+      ...hold?.context,
+      ...(hold ? { inputsRedacted: true as const } : {}),
       rules: input.rules,
       rulesSource:
         input.rulesSource ??
         (input.trigger === "local" || input.trigger === "desktop" ? "working tree" : "base branch"),
-      prior: input.prior,
+      prior,
       maxComments: config.maxComments,
       nits: wantsNits(config),
     }
 
-    // 1–5. The specialists, in parallel, one session each.
+    // 1–5. The specialists, in parallel, one session each. When holdback left nothing to send no pass runs: the held
+    // files are skipped, nothing is unreviewed, and no reviewer leaves the verdict incomplete.
     const asked = yield* Effect.forEach(
-      planSpecialists(input.files, config),
+      nothingToSend ? [] : planSpecialists(input.files, config),
       (name) =>
         ask({
           name,
@@ -951,7 +978,7 @@ export const run: (
     // or above is confirmed on the review model, whatever `verify` says.
     const shared = config.verifyPolicy === "shared"
     const candidates = verifyCandidates(
-      normalized,
+      normalized.filter(sendable),
       {
         verify: config.verify,
         policy: config.verifyPolicy,
@@ -965,12 +992,15 @@ export const run: (
     // only the review model closes a finding and resolves its thread. A claim about a finding the first pass reported
     // again contradicts itself and is dropped.
     const reported = new Set(normalized.map((finding) => finding.id))
-    const open = new Map(input.prior.filter((prior) => prior.status === "open").map((prior) => [prior.id, prior]))
+    // Only an earlier finding the prompts listed can be claimed fixed, and its claim quotes the title they listed.
+    const open = new Map(prior.filter((entry) => entry.status === "open").map((entry) => [entry.id, entry]))
+    const shown = new Set(prior.map((entry) => entry.id))
+    const unshown = new Set(input.prior.flatMap((entry) => (shown.has(entry.id) ? [] : [entry.id])))
     const claims = triaged
       ? (report.priorStatus ?? []).flatMap((entry) => {
-          const prior = open.get(entry.id)
-          return entry.status === "fixed" && prior && !reported.has(prior.id)
-            ? [{ ...prior, reason: entry.reason }]
+          const listed = open.get(entry.id)
+          return entry.status === "fixed" && listed && !reported.has(listed.id)
+            ? [{ ...listed, reason: entry.reason }]
             : []
         })
       : []
@@ -981,7 +1011,7 @@ export const run: (
             head: input.head,
             candidates,
             ...(claims.length ? { fixed: claims } : {}),
-            headFiles: verifyHeadFiles(input.files, input.headFiles, [...candidates, ...claims]),
+            headFiles: verifyHeadFiles(files, headFiles, [...candidates, ...claims]),
           })
         : ""
     const verifyPrice = priceOf(model)
@@ -1033,7 +1063,7 @@ export const run: (
             head: input.head,
             candidates,
             checks: verify.value ?? [],
-            headFiles: verifyHeadFiles(input.files, input.headFiles, candidates),
+            headFiles: verifyHeadFiles(files, headFiles, candidates),
           })
         : ""
     const judgePrice = judgeModel ? priceOf(judgeModel) : undefined
@@ -1094,12 +1124,18 @@ export const run: (
     const rejected = normalized.length - kept.length
     const unconfirmed = kept.length - findings.length
     const fixed = new Set(claims.filter((claim) => verdicts.get(claim.id) === "confirmed").map((claim) => claim.id))
+    // A status for an earlier finding the prompts left out (holdback) is dropped, so a held file's earlier finding is
+    // never settled fixed on the model's word; unset, `unshown` is empty and the report is as it was.
     const checked: ModelReport = triaged
       ? {
           ...report,
-          priorStatus: (report.priorStatus ?? []).filter((entry) => entry.status !== "fixed" || fixed.has(entry.id)),
+          priorStatus: (report.priorStatus ?? []).filter(
+            (entry) => !unshown.has(entry.id) && (entry.status !== "fixed" || fixed.has(entry.id)),
+          ),
         }
-      : report
+      : unshown.size && report.priorStatus
+        ? { ...report, priorStatus: report.priorStatus.filter((entry) => !unshown.has(entry.id)) }
+        : report
 
     // 8. Select. Paths outside the diff are checked against the repository first; selection is synchronous. A review
     // the route rules stopped (VS-23b) is not reviewed, so it lists no finding, not even one a pass before the refusal
@@ -1117,7 +1153,7 @@ export const run: (
         ),
       ),
     )
-    const skipped = new Set(input.skipped.map((file) => file.path))
+    const skipped = new Set([...input.skipped.map((file) => file.path), ...heldPaths])
     const selection = selectFindings({
       findings: listed,
       anchors: input.anchors,
@@ -1148,9 +1184,10 @@ export const run: (
       ? ("privacy" as const)
       : (asked.find((entry) => entry.stop)?.stop ??
         (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined))
-    const unreviewed =
-      refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
-        ? input.files.map((file) => file.path)
+    const unreviewed = nothingToSend
+      ? []
+      : refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
+        ? files.map((file) => file.path)
         : partial && partial !== "model-error"
           ? yield* uncovered(asked.flatMap((entry) => (entry.value && entry.sessionID ? [entry.sessionID] : [])))
           : []
@@ -1170,7 +1207,7 @@ export const run: (
           const read = part.state.input["filePath"]
           if (typeof read === "string") covered.add(path.isAbsolute(read) ? path.relative(input.directory, read) : read)
         }
-        return input.files.map((file) => file.path).filter((file) => !covered.has(file))
+        return files.map((file) => file.path).filter((file) => !covered.has(file))
       })
     }
 
@@ -1231,10 +1268,21 @@ export const run: (
           "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",
         ]
       : []
+    // VS-34's deterministic notes: what was held back, what was sent redacted, and what is committed although ignored.
+    const holdNotes = hold
+      ? [
+          noteHeldBack(hold.held.map((file) => file.path)),
+          noteRedacted(hold.redactions.map((row) => row.path)),
+          input.ignored ? noteIgnoredCommitted(hold.ignoredCommitted) : noteIgnoreUnchecked(),
+        ].filter((note) => note !== undefined)
+      : []
     return {
       report: refused ? { summary: "", risk: "low", files: [], findings: [] } : checked,
       selection,
-      skipped: input.skipped,
+      // A held file is skipped, never unreviewed, so a re-trigger on the same head still takes already-reviewed.
+      skipped: hold?.held.length
+        ? [...input.skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))]
+        : input.skipped,
       cost: { ...cost, ...(labs ? { labs } : {}) },
       ...(spentByPass.length ? { passes: spentByPass } : {}),
       durationMs: Date.now() - started,
@@ -1263,15 +1311,18 @@ export const run: (
               ...refused,
               attempts: [...tracks.values()].reduce((sum, track) => sum + track.attempts + track.finalizeAttempts, 0),
             }),
+            ...holdNotes,
             ...incomplete,
           ]
         : [
             ...picked.notes,
+            ...holdNotes,
             ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
             ...verifyNotes,
             ...incomplete,
             ...evidenceNotes,
           ],
+      ...(hold?.held.length ? { held: hold.held } : {}),
     } satisfies ReviewOutcome
   })
 
@@ -1287,6 +1338,23 @@ export const run: (
     Effect.ensuring(Effect.sync(() => sessionIDs.forEach((id) => ReviewRoutes.release(id)))),
   )
 })
+
+// VS-34: what the prompts quote under holdback "secrets": the files and head files sent (credential files held back,
+// values redacted), and the untrusted context blocks the same way, with the pull request's text and the earlier
+// findings among them.
+function holdback(input: RunInput) {
+  const result = holdbackFiles(input.files, {
+    ...(input.headFiles ? { headFiles: input.headFiles } : {}),
+    ignored: input.ignored ?? [],
+  })
+  return {
+    ...result,
+    context: holdbackContext(
+      { ...input.context, ...(input.pr ? { pr: input.pr } : {}), prior: input.prior },
+      { held: result.held },
+    ),
+  }
+}
 
 type Chosen = ResolvedModel & { lab?: string }
 

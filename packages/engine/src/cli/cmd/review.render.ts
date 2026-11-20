@@ -80,9 +80,14 @@ export function renderLocalReview(input: RenderInput): string {
       `Vectorscope review · ${plain(target.label)} vs ${plain(target.baseRef)} (${at}) · ${files} ${files === 1 ? "file" : "files"}, +${outcome.stats.additions} −${outcome.stats.deletions}`,
     ),
   )
-  // A review the route rules stopped (VS-23b) assessed nothing, so it names no risk.
+  // A review the route rules stopped (VS-23b) assessed nothing, so it names no risk; nor does one that holdback left
+  // nothing to send (VS-34), which ran no reviewer at all (I-7).
   lines.push(
-    outcome.partial === "privacy" ? "Not reviewed" : `Risk: ${capitalize(selection.risk)} · ${counts(outcome)}`,
+    outcome.partial === "privacy"
+      ? "Not reviewed"
+      : !outcome.specialists.length && outcome.held?.length
+        ? `Not reviewed: ${outcome.mode === "incremental" ? "everything new since the last review is in files" : "every changed file was"} held back from the model.`
+        : `Risk: ${capitalize(selection.risk)} · ${counts(outcome)}`,
   )
   const partial = partialLine(input)
   if (partial) lines.push(partial)

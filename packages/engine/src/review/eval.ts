@@ -74,6 +74,7 @@ import { VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "@vectordevai/
 import type { ImpactRecord } from "@vectordevai/core/review/impact"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import { estimateCostUsd, nextStepCostUsd, type ReviewPrice } from "@vectordevai/core/review/plan"
+import { holdbackContext } from "@vectordevai/core/review/holdback"
 import { MAX_HITS, MAX_SYMBOLS, type RelatedCode } from "@vectordevai/core/review/prompt"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { sendsToOpenRouter } from "@vectordevai/core/free-model-catalog"
@@ -103,6 +104,7 @@ import { Provider } from "@/provider/provider"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { ReviewContext } from "./context"
+import { ReviewGit } from "./git"
 import type { ResolvedModel } from "./model"
 import { Review, type Observation } from "./run"
 import { ReviewSource } from "./source"
@@ -141,14 +143,15 @@ export interface ReplayInput {
   // The eval's own settings, applied over the base's review.json: its limits, and settings a test fixes. Its
   // maxCostUsd must be a positive cap, and it alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
-  // it set a route setting (privacy, zdrAttested; SOURCED_REVIEW_KEYS also holds VS-30's runtime and VS-34's holdback,
-  // refused below as unapplied), which comes only from the sources mergeReviewConfig tags: the base's review.json may
-  // raise privacy (VS-23b, whose admission enforces it in Review.run), and so may the engine:privacy-zdr variant
-  // (VS-23c); the eval attests no route (owner Q7), so under "zdr" only a server on this computer is admitted. Nor a
-  // key no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's trivial and maxInputTokens, VS-25b's impact,
-  // VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is
-  // also trusted-only, and VS-34's holdback, which is also raise-only but not a route setting). The type says so, and
-  // step 0b refuses any of them from an untyped caller.
+  // it set a route setting (privacy, zdrAttested; SOURCED_REVIEW_KEYS also holds VS-30's runtime, refused below as
+  // unapplied, and VS-34's holdback, refused with its own message), which comes only from the sources
+  // mergeReviewConfig tags: the base's review.json may raise privacy (VS-23b, whose admission enforces it in
+  // Review.run), and so may the engine:privacy-zdr variant (VS-23c); the eval attests no route (owner Q7), so under
+  // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
+  // applies to the prompt since SF-13b; the engine:holdback-secrets variant waits for its tool rules (SF-14). Nor a key
+  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's
+  // guardrail, VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is also
+  // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
   >
@@ -808,6 +811,14 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     instructions: (file) => show(item.base, file).pipe(Effect.provideService(Git.Service, git)),
   })
   const known = yield* ReviewSource.knownPath({ directory, rev: item.head })
+  // VS-34 item 4: under holdback "secrets", the changed files this checkout's ignore rules exclude although committed.
+  const ignoredPaths =
+    config.holdback === "secrets"
+      ? yield* ReviewGit.ignoredPaths(
+          directory,
+          files.filter((file) => file.status !== "deleted").map((file) => file.path),
+        )
+      : undefined
 
   // 6. The review. A projection runs every decision the dollar cap refuses and keeps it; one made at admission is
   // followed at once by the attempt it admitted, so that attempt's seq is the next one.
@@ -839,6 +850,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     baseRef: item.baseRef ?? "base",
     rulesSource: "base branch",
     inlinePosted: 0,
+    ...(ignoredPaths ? { ignored: ignoredPaths } : {}),
     observe: (event) => observed.push(event),
     ...(projecting
       ? {
@@ -897,7 +909,8 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       ? [
           notePartial({
             reason: outcome.partial,
-            reviewed: files.length - outcome.unreviewed.length,
+            // A held-back file (VS-34) is neither reviewed nor unreviewed.
+            reviewed: files.length - outcome.unreviewed.length - (outcome.held?.length ?? 0),
             total: files.length,
             unreviewed: outcome.unreviewed,
             maxCostUsd: config.maxCostUsd,
@@ -939,7 +952,8 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       report: outcome.report,
       selection,
       files: files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
-      skipped,
+      // Review.run's, which add its held-back files (VS-34) to the eval's own.
+      skipped: outcome.skipped,
       banners,
       notes,
       ...(outcome.cost ? { cost: outcome.cost } : {}),
@@ -1013,15 +1027,23 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     }),
   )
 
+  // VS-34: under holdback "secrets" a held file was not reviewed, and the prompt quoted related code without the hits
+  // holdback drops (holdbackContext), so a location is listed only when the model saw it.
+  const held = new Set(outcome.held?.map((file) => file.path))
   const artifact: ReplayArtifact = {
     ...common,
+    files: { reviewed: files.flatMap((file) => (held.has(file.path) ? [] : [file.path])), skipped: outcome.skipped },
     context: {
       digest: digest({ gathered, headFiles: headFiles ?? [] }),
       related: gathered.related.length,
       history: gathered.history.length,
       instructions: gathered.instructions !== undefined,
       headFiles: headFiles?.length ?? 0,
-      locations: quotedLocations(gathered.related),
+      locations: quotedLocations(
+        config.holdback === "secrets"
+          ? (holdbackContext({ related: gathered.related }, { held: outcome.held ?? [] }).related ?? [])
+          : gathered.related,
+      ),
     },
     // Every session of a pass counts toward it. One pass event per pass name today; VS-28's lenses add several "lens"
     // passes and must match them by lens too.
@@ -1223,7 +1245,6 @@ const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
   depth: "VS-28 wiring",
   lenses: "VS-28 wiring",
   runtime: "the VS-30 executor",
-  holdback: "VS-34 wiring",
 }
 
 // Why a replay's settings cannot name its run, if they cannot: a variant's key set through `config`, which would leave
@@ -1240,13 +1261,19 @@ function variantProblem(input: ReplayInput) {
   if (misplaced.length)
     return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
   // A replay's route settings come from the case's own review.json alone (VS-23b), so its artifact never records one the
-  // eval set. A sourced key that no runner applies yet (VS-30's runtime, VS-34's holdback) gets the unwired message
-  // below, which names what applies it.
+  // eval set. A sourced key that no runner applies yet (VS-30's runtime) gets the unwired message below, which names
+  // what applies it, and VS-34's holdback, which is no route setting, its own.
   const sourced = SOURCED_REVIEW_KEYS.filter(
-    (key) => input.config && Object.hasOwn(input.config, key) && !UNAPPLIED_REVIEW_KEYS.some((item) => item === key),
+    (key) =>
+      key !== "holdback" &&
+      input.config &&
+      Object.hasOwn(input.config, key) &&
+      !UNAPPLIED_REVIEW_KEYS.some((item) => item === key),
   )
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
+  if (input.config && Object.hasOwn(input.config, "holdback"))
+    return "config sets holdback, which a replay takes only from the case's own review.json: the engine:holdback-secrets variant waits for VS-34's tool rules (SF-14)."
   const unwired = UNAPPLIED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
   if (unwired.length) {
     const packages = [...new Set(unwired.map((key) => WIRING[key]))]

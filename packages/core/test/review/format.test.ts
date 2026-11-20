@@ -19,6 +19,9 @@ import {
   noteForcePush,
   noteGeneratedHeader,
   noteGeneratedHeaders,
+  noteHeldBack,
+  noteIgnoreUnchecked,
+  noteIgnoredCommitted,
   noteInlineCap,
   noteLowConfidence,
   noteMonthBudget,
@@ -28,6 +31,7 @@ import {
   notePrBudget,
   notePrivacyRefused,
   noteRebase,
+  noteRedacted,
   noteSuperseded,
   noteTooLarge,
   sanitizeModelMarkdown,
@@ -949,6 +953,47 @@ describe("capBody", () => {
     expect(body).toMatch(/- …and \d+ more\n<\/details>/)
     expect(body).toContain("Elsewhere 49")
     expect(readState(body)).toEqual(STATE)
+  })
+
+  // VS-34 (SF-13b): one line each for any number of files. Until SF-14 they say what left the review prompt, never
+  // that a value never left the machine, and none says a deleted file's credential "is committed".
+  test("holdback's notes name at most three files, and say only what left the review prompt", () => {
+    const paths = ["deploy/.netrc", ".env", "id_rsa", "config/prod/.envrc", "a.pem"]
+    expect(noteHeldBack([])).toBeUndefined()
+    expect(noteHeldBack(paths.slice(0, 1))).toBe(
+      "`deploy/.netrc` may hold credentials, so Vector left it out of the review prompt.",
+    )
+    expect(noteHeldBack(paths.slice(0, 3))).toBe(
+      "`deploy/.netrc`, `.env` and `id_rsa` may hold credentials, so Vector left them out of the review prompt.",
+    )
+    expect(noteHeldBack(paths)).toBe(
+      "`deploy/.netrc`, `.env`, `id_rsa` and 2 more may hold credentials, so Vector left them out of the review prompt.",
+    )
+    expect(noteRedacted([])).toBeUndefined()
+    expect(noteRedacted(["src/client.ts"])).toBe(
+      "Vector redacted secret-shaped values in `src/client.ts` from the review prompt.",
+    )
+    expect(noteRedacted(["a.ts", "b.ts", "c.ts"])).toBe(
+      "Vector redacted secret-shaped values in `a.ts`, `b.ts` and `c.ts` from the review prompt.",
+    )
+    expect(noteRedacted(paths)).toBe(
+      "Vector redacted secret-shaped values in `deploy/.netrc`, `.env`, `id_rsa` and 2 more from the review prompt.",
+    )
+    expect(noteIgnoredCommitted([])).toBeUndefined()
+    expect(noteIgnoredCommitted(["config.local.json"])).toBe(
+      "`config.local.json` is committed although the repository's ignore rules exclude it.",
+    )
+    expect(noteIgnoredCommitted(["a.log", "b.log", "c.log"])).toBe(
+      "`a.log`, `b.log` and `c.log` are committed although the repository's ignore rules exclude them.",
+    )
+    expect(noteIgnoredCommitted(paths)).toBe(
+      "`deploy/.netrc`, `.env`, `id_rsa` and 2 more are committed although the repository's ignore rules exclude them.",
+    )
+    expect(noteIgnoreUnchecked()).toBe(
+      "Vector could not check which changed files the repository's ignore rules exclude, so none is listed as committed although ignored.",
+    )
+    for (const note of [noteHeldBack(paths), noteRedacted(paths), noteHeldBack([".env"])])
+      expect(note).not.toMatch(/not sent|never left|is committed in/)
   })
 
   test("many generated-header notes are one line, and notes are trimmed before the file table", () => {

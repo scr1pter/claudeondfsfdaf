@@ -342,10 +342,14 @@ export function executeLocalReview<RunR, ModelR>(
         else yield* print(note + "\n")
         return { exitCode: countAtOrAbove(left, failOn) ? 1 : 0, target } satisfies LocalReviewResult
       })
-    // A review the route rules stopped (VS-23b) reviewed nothing: it is shown as not reviewed, never as clean, and fails
-    // as a review that could not run does, so a --fail-on hook cannot pass the change. As that failure does, it leaves
-    // the "since last review" state alone, so the next run reviews the change again. Nothing is applied or posted.
-    const notReviewed = (outcome: ReviewOutcome) =>
+    // A review the route rules stopped (VS-23b), or one holdback left nothing to send (VS-34), reviewed nothing (I-7):
+    // it is shown as not reviewed, never as clean, and fails as a review that could not run does, so a --fail-on hook
+    // cannot pass the change. As that failure does, it leaves the "since last review" state alone, so the next run
+    // reviews the change again. Nothing is applied or posted.
+    const notReviewed = (
+      outcome: ReviewOutcome,
+      error = 'Vector did not review this change: privacy is "zdr", and a model this review would use has no zero data retention route Vector may use.',
+    ) =>
       Effect.gen(function* () {
         if (options.json)
           yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
@@ -362,13 +366,7 @@ export function executeLocalReview<RunR, ModelR>(
               color: deps.color,
             }),
           )
-        return {
-          exitCode: 2,
-          error:
-            'Vector did not review this change: privacy is "zdr", and a model this review would use has no zero data retention route Vector may use.',
-          target,
-          outcome,
-        } satisfies LocalReviewResult
+        return { exitCode: 2, error, target, outcome } satisfies LocalReviewResult
       })
 
     if (!range.files.length) {
@@ -618,6 +616,16 @@ export function executeLocalReview<RunR, ModelR>(
           ? { title: branch, body: "", commits }
           : undefined
 
+    // VS-34 item 4: under holdback "secrets", which changed files the repository's ignore rules exclude although they
+    // are committed, read before the last preflight so the bound view's read is checked like the others.
+    const ignoredPaths =
+      config.holdback === "secrets"
+        ? yield* ReviewGit.ignoredPaths(
+            root,
+            review.filter((file) => file.status !== "deleted").map((file) => file.path),
+          )
+        : undefined
+
     // 7. The review.
     if (options.context?.stopSignal?.aborted)
       return yield* new LocalReviewError({ message: "The review was cancelled before it started." })
@@ -664,6 +672,7 @@ export function executeLocalReview<RunR, ModelR>(
       },
       baseRef: target.baseRef,
       rulesSource: options.context || trust !== "trusted" ? "base branch" : "working tree",
+      ...(ignoredPaths ? { ignored: ignoredPaths } : {}),
     })
     const reviewed = withheld.length
       ? {
@@ -673,6 +682,13 @@ export function executeLocalReview<RunR, ModelR>(
         }
       : result
     if (reviewed.partial === "privacy") return yield* notReviewed(reviewed)
+    // Under holdback "secrets" a change whose every file, or in an incremental review every new hunk, was held back
+    // from the model runs no pass (Review.run): no reviewer failed, but nothing was reviewed either.
+    if (!reviewed.specialists.length && reviewed.held?.length)
+      return yield* notReviewed(
+        reviewed,
+        `Vector did not review this change: ${reviewed.mode === "incremental" ? "everything new since the last review is in files" : "every changed file was"} held back from the model (holdback "secrets").`,
+      )
     const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
     if (!reviewers.some((entry) => entry.status !== "failed")) {
       const detail = (reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no report").replace(

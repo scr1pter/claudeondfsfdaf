@@ -52,6 +52,100 @@ export const preflight = Effect.gen(function* () {
   if (current) yield* current.preflight()
 })
 
+// VS-34 item 4: which of a review's changed paths the repository's ignore rules exclude although they are committed,
+// from `git check-ignore --no-index` in the work tree: its .gitignore files and info/exclude, never the user's global
+// excludes (the bound view's are /dev/null, and the fallback's are set to it). A collector asks only under
+// `holdback: "secrets"`, before its last preflight, so the bound view's read is checked like the others. Undefined
+// when it cannot tell, and the review then notes that it could not check: a path the read-only port would refuse
+// (asking would poison the view), an exit other than 0 or 1, truncated output, or an echoed line that is not a path
+// asked about. Git exits 128 for the whole call when one path lies below a work-tree symbolic link or inside a
+// submodule, so one such path leaves every batch's answer unknown; a retry path by path is not made, as it could run
+// a thousand reads against the bound view's execution bound. In the bound view a read the port refuses, or one past
+// its execution bound, does not give undefined quietly: it poisons the view, and the collector's last preflight then
+// refuses the review. Each call takes at most 1024 paths (the view's bound) and about 8,000 characters of them, well
+// under Windows' 32,767-character command line.
+export const ignoredPaths = Effect.fn("ReviewGit.ignoredPaths")(function* (
+  directory: string,
+  paths: readonly string[],
+) {
+  if (!paths.length) return []
+  if (!paths.every(ReadOnlyGit.repositoryPath)) return undefined
+  const current = yield* Current
+  const git = current?.client ?? (yield* Git.Service)
+  const results = yield* Effect.forEach(batches(paths), (batch) =>
+    git.run(
+      [
+        ...(current ? [] : ["-c", "core.excludesFile=/dev/null"]),
+        "check-ignore",
+        "--no-index",
+        "--",
+        ...batch.map((file) => "./" + file),
+      ],
+      { cwd: directory, maxOutputBytes: 1024 * 1024 },
+    ),
+  )
+  if (results.some((result) => (result.exitCode !== 0 && result.exitCode !== 1) || result.truncated)) return undefined
+  const echoed = results.flatMap((result) => (result.exitCode === 0 ? echoedPaths(result.text()) : []))
+  const given = new Set(paths.map((file) => "./" + file))
+  // Git echoes each path as it was given; anything else means this read misparsed it, so nothing is claimed.
+  if (echoed.some((line) => !given.has(line))) return undefined
+  const ignored = new Set(echoed)
+  return paths.filter((file) => ignored.has("./" + file))
+})
+
+function batches(paths: readonly string[]) {
+  const out: { files: string[]; chars: number }[] = []
+  for (const file of paths) {
+    const last = out.at(-1)
+    const chars = file.length + 3
+    if (last && last.files.length < 1024 && last.chars + chars <= 8_000) {
+      last.files.push(file)
+      last.chars += chars
+      continue
+    }
+    out.push({ files: [file], chars })
+  }
+  return out.map((batch) => batch.files)
+}
+
+// check-ignore's answer: one line per ignored path, as it was given, C-quoted when git quotes it. Exported so the
+// bound view's form (the port's default core.quotepath writes a non-ASCII name as octal bytes) is tested on any host;
+// the fallback's core.quotepath=false writes it raw.
+export function echoedPaths(text: string) {
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => unquote(line.replace(/\r$/, "")))
+}
+
+// Git's C-style quoting of a path (quote.c): a name with a double quote, a backslash, a control character or, under
+// core.quotepath, a non-ASCII byte is written in double quotes with backslash escapes and octal bytes.
+const ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 }
+function unquote(line: string) {
+  if (!(line.length >= 2 && line.startsWith('"') && line.endsWith('"'))) return line
+  const bytes: number[] = []
+  // By code point: under core.quotepath=false (the fallback's) a quoted name keeps its non-ASCII characters as text.
+  const chars = Array.from(line.slice(1, -1))
+  for (let index = 0; index < chars.length; index++) {
+    const char = chars[index]
+    if (char !== "\\") {
+      bytes.push(...Buffer.from(char, "utf8"))
+      continue
+    }
+    const octal = /^[0-3][0-7]{2}$/.exec(chars.slice(index + 1, index + 4).join(""))?.[0]
+    if (octal) {
+      bytes.push(parseInt(octal, 8))
+      index += 3
+      continue
+    }
+    const next = chars[index + 1] ?? ""
+    // An escape git never writes reads as itself, so the path cannot match one asked about.
+    bytes.push(ESCAPES[next] ?? 92)
+    if (Object.hasOwn(ESCAPES, next)) index++
+  }
+  return Buffer.from(bytes).toString("utf8")
+}
+
 export function within<A, E, R>(placement: ReadOnlyGit.Metadata, expectedHead: string, body: Effect.Effect<A, E, R>) {
   const admitted = { ...placement }
   return Effect.acquireUseRelease(
@@ -223,6 +317,14 @@ function readOperation(args: readonly string[]): ReadOnlyGit.Read | undefined {
   }
   if (args[0] === "rev-list" && args[1] === "--max-parents=0" && args.length === 3)
     return { kind: "roots", revision: args[2]! }
+  // VS-34 item 4 (ignoredPaths): one to 1024 work-tree paths, each written "./<path>". Every other check-ignore form
+  // (--stdin, -z, -v, without --no-index) is refused.
+  if (args[0] === "check-ignore" && args[1] === "--no-index" && args[2] === "--") {
+    const paths = args.slice(3)
+    return paths.length > 0 && paths.length <= 1024 && paths.every((value) => value.startsWith("./"))
+      ? { kind: "check-ignore", files: paths.map((value) => value.slice(2)) }
+      : undefined
+  }
   if (
     args[0] === "log" &&
     args.slice(1, 6).join("\0") === ["-n", "5", "--no-color", "--date=short", "--format=%h %an %ad %s"].join("\0") &&
