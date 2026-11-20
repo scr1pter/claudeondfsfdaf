@@ -65,6 +65,13 @@ on:
       - packages/engine/src/cli/cmd/github.run-helpers.ts
       - packages/engine/src/cli/cmd/github.policy.ts
       - packages/engine/test/cli/github.agent-fixture.ts
+      # The @vector modules the Actions fallback adapter reads (VE-30a), the run sources it gates on, and the App
+      # fixture its test drives the real attachmentRepository through.
+      - api/_lib/cloud-agents-binding.ts
+      - api/_lib/cloud-agents-start.ts
+      - api/_lib/github-app.ts
+      - packages/schema/src/codium-run-trigger.ts
+      - packages/web/test/github-app-fixture.ts
   workflow_dispatch:
 
 concurrency:

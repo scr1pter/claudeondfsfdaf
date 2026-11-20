@@ -3480,6 +3480,7 @@ Four findings, none blocking. Code: one type-level change and one comment line i
 
 - **The live mode read (EV-30, hard requirement).** Before each dispatch, read `.github/workflows/vector.yml` at the default branch with the App's single-repository token, by `workflowModeOf`'s rule, and dispatch only on `codium`; a failed read means no Actions route (spec §8 VE-30 note). The alternative the plan offered, a mint-time refresh, could only ever prove `codium` (own-key runs make no cloud-agents call, INV-K1) and is not the requirement.
 - **The port mapping (EV-29/EV-31):** `codiumMode = workflowMode === "codium"`, `appInstalled = installationId !== undefined`, `laptopFirst` false until Q13/R-A6. Its tests must show that a stored `codium` with a live read of `own-key`, or with a failed live read, gives no Actions route (review round one, finding 9).
+  *2026-11-20 annotation (EV-29):* built as written in api/_lib/everywhere/adapters/cloud-agents.ts (the `binding` port and `createHandoffBinding`). The live half is pinned at the seam EV-30 fills: P7 in packages/web/test/everywhere-cloud-adapter.test.ts shows that a stored `codium` with a live read of `own-key`, of no mode, or that fails gives no Actions route. See "2026-11-20, EV-29", (a).
 - **For the lead to forward to @vector:** vector-at-mention-spec 2.5 (the binding shape gains `workflowMode`), 2.7 bind (the best-effort contents read at the verified SHA, which never fails a bind; the one extra GitHub request per App-verified bind; and that this read can add up to 10 s to a bind when GitHub stalls, under `api()`'s shared timeout, (b)) and the rollback hazard in (h). If @vector wants a shorter timeout for this read, it is a per-call option on `api()` in its own file.
 - **A systematic read failure shows only downstream (review round two, finding 4).** The best-effort read counts nothing, so a lost contents permission or a changed answer shape would record no mode on every bind, silently. EV-30's tests and VE-50's GitHub acceptance check that a known codium binding has `workflowMode: "codium"` stored (spec §8 VE-30 note).
 - **The commit gate.** The precondition is met (the lead's ruling of 2026-11-20 under "Commit precondition"). What remains: one package commit whose body says a client's mode is "refused (400)", never "ignored"; the push; and the vector-at-mention.yml and typecheck.yml dispatches on everywhere-finish (progress receipt).
@@ -3612,12 +3613,14 @@ packages/web/test/everywhere-body-api.test.ts (B7's cases are in the "ending and
   - So EV-30's settle listener must do one of two things. It can get the account from @vector's run record (`runRecordKey(rid)`), which needs an exported reader and is a lead decision. Or it can keep its own settle index that holds only the jid and does not end with the body. That index is allowed, because it holds no platform text.
 - **EV-30's reconciliation** must treat a `running` job with the same rid as already linked. `startDispatched` is not idempotent ((k)).
 - **A minimum body life for the Actions route.** EV-29's and EV-30's router should refuse the Actions route unless `bodyExpiresAt − now` exceeds `TIMING.dispatchStartMs` plus the run's own start. `dispatchJob` refuses only a body that has already ended ((n)), and answers it `body-gone`, so the router can tell it from a lost race (`wrong-state`). Today's router (api/_lib/everywhere/router.ts:79-80) abandons the dispatch on any refusal, which is right for both.
+  *2026-11-20 annotation (EV-29):* not built in EV-29; deferred to EV-30, which owns the dispatch path that could run late. routeJob's only caller is the intake, right after createJob, so a body has about 1 h 59 min left when it routes. See "2026-11-20, EV-29", (k).
 - **EV-28's recovery.** On any answer other than 200 from this route (after the 404 retry above), the agent phase settles at once with a failed outcome, so EV-30's settle listener ends the job promptly ((i)). The read is spent before the answer is delivered, on purpose, so a lost 200 or a 503 for a body that does not open leaves the job `running` until the Actions overdue sweep unless EV-28 does this. EV-28's tests must include: a 503, a 410, and a 404 that outlasts the retry each settle the run at once with a failed outcome, and no second read is made (review round one).
   *2026-11-20 annotation (EV-28):* built. Every answer but a 200 that is exactly the body, after the 404 retry, ends the run with one fixed line, exit 1 and no bundle, so `withRunHeartbeat` settles `failed` at once; nothing is read a second time. packages/engine/test/everywhere/github-agent-body.test.ts has the 503s, the 410 and the lasting 404. See "2026-11-20, EV-28", (c).
 - **EV-28's framing.** The answer has no `kind` or `repository`, which `FrameJob` (packages/core/src/everywhere/frame.ts:58) and `everywhereSystemInstructions` need. EV-28 passes the repository from GITHUB_REPOSITORY and a fixed kind. That is correct, because `kind` matters only for an empty task, and `decodeJob` refuses an empty task on every non-GitHub job at creation (packages/schema/src/everywhere.ts:864).
   *2026-11-20 annotation (EV-28):* built as written: kind `mention` and the repository from GITHUB_REPOSITORY, with `FrameJob`'s repository narrowed to its `fullName` so nothing is invented. See "2026-11-20, EV-28", (e).
 - **Live visibility at the read (E11).** Visibility is read live only before dispatch. A repository made public between the dispatch and the read still receives the platform text, because the route can only check the record's `repository.shared` snapshot. A re-read needs the App's single-repository token, which belongs to EV-30's port. It is not built here. **For EV-30:** once the cloud-agents visibility port exists, `readRunBody` (or the route, before the EVAL) takes a live visibility read through it, where a failed read counts as public, and answers the same 404 without setting the marker. Add a B8-style case whose fake port reports public, and one whose port fails (review round one).
 - **No everywhere run can exist yet.** Until R-C8/R-A8 (owner-gated), run tokens accept only `github-*` sources and ENABLED_SOURCES reserves slack, linear and jira. Even with the flag on, production answers 404 to every caller: nothing writes `run:<rid>` until EV-30 registers the start listener, and nothing dispatches (EV-29 is not built).
+  *2026-11-20 annotation (EV-29):* still true. EV-29 built the adapter, but production has no `prepareCloud`: it needs an enabled platform source (R-C8/R-A8) and EV-30's live mode read, so nothing dispatches. See "2026-11-20, EV-29", "Safe by default".
 - **The documents.** Spec §3.13's ticket row and the TIMING.dispatchStartMs comment's wording are annotated, not rewritten.
 - **For the lead:**
   - add the route to test/api-module-loading.test.ts's second test (critique 1);
@@ -3810,6 +3813,7 @@ packages/schema/test/everywhere.test.ts ("an Actions run's job (R-A4)"): the exa
   - whether 503 `EVERYWHERE_BUSY` should be read again ((d)); today it ends the run;
   - to forward to @vector: INV-S14's R-A4 exception (vector-at-mention-spec's contract text is unchanged although the code now has the exception), the new fixed line EVERYWHERE_UNREAD, `ChatContext.outside` and `taskPart`'s new parameter, `send`, and the two paths github.agent.ts now imports, packages/core/src/everywhere/frame.ts and packages/schema/src/everywhere.ts, for vector-at-mention.yml's pull_request paths (the lane cannot edit that workflow), so a change to them runs @vector's github*.test.ts.
 - **EV-30** builds the dispatch prompt as `${ACTIONS_JOB_PROMPT}${jid}` with no surrounding whitespace (a test there should pin it), and dispatches only to a workflow whose pinned CLI includes EV-28, read live with the mode: an older agent phase treats the line as an untrusted service prompt and spends @vector hours on it.
+  *2026-11-20 annotation (EV-29):* the prompt is built in EV-29's adapter, exactly `${ACTIONS_JOB_PROMPT}${jid}`, and pinned (P9 and R1 in packages/web/test/everywhere-cloud-adapter.test.ts; mutation M9). The CLI-version check stays with EV-30's live read: the `liveMode` seam's contract says "codium" means the pinned CLI reads the job body. See "2026-11-20, EV-29", (a).
 - **A lost start event still loses the job** (EV-27): the run reads 404 seven times and settles `failed`.
 - **Shipping needs a published CLI** (owner-gated). Nothing here reaches production before then.
 
@@ -3888,3 +3892,176 @@ The receipts are in vector-everywhere-progress.md, "EV-28 review round one".
 
 - vector-at-mention.yml, vector-everywhere.yml and typecheck.yml on everywhere-finish, after the commit gate's push.
 - Live use, after EV-29, EV-30, R-C8/R-A8 and a published CLI.
+
+## 2026-11-20, EV-29: the Actions fallback adapter: route gating and dispatch (VE-30a)
+
+Spec §8 VE-30; §3.4 step 6; §3.6; §5 E8, E11; §6.1 `binding`, `visibility`, `prepareCloud`. Base: HEAD `d605eaed` (EV-28), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` is an ancestor. Preconditions, all ancestors of HEAD: EV-25 `7a806f91`, EV-26 `5b040d39`, EV-27 `c1112608`, EV-28 `d605eaed`, and review-fixes' FIT-4 `f251ac2c` and SEC-1/PUB-5 `e417c44d`. No engine, shell, sandbox, worktree or relay file is touched, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+**origin/main.** origin/main `15f3ba77` (#51, #52) is not an ancestor. The lane convention says to merge it before a package now that PR #33 is merged (critique, taken), but this build's task forbids commits, and a merge is a commit. So the merge is left to the commit step: a separate `chore(everywhere): merge main after #52` merge commit before the package commit. `git merge-tree --write-tree HEAD origin/main` is clean, and none of main's 11 changed files is a file this package touches.
+
+### What changed
+
+- **New api/_lib/everywhere/adapters/cloud-agents.ts** (177 lines):
+  - `CloudPortsDeps` (:24-47): `store` (default persistentStore), `app` (an `attachmentRepository` reader; default github-app.ts's), `prepare` (default prepareCloudRun), `liveMode` (EV-30's seam, no default) and `sources` (default ENABLED_SOURCES).
+  - `createCloudPorts(deps)` (:49-117) returns `cloudSource`, `binding`, `visibility` and, only when `liveMode` is given and at least one platform is an enabled source (:72), `prepareCloud`.
+  - `prepareCloud`, in order, with no I/O before step 2: the source is enabled, `bodyReference` is the jid, the jid and the sponsor are well formed; then the binding is active, stored `codium` and the sponsor's; then the live visibility read says `private` (:88); then `liveMode` says `codium`; then prepareCloudRun with `{source, account, requestedBy, target: {kind: "github-run", repositoryId}, prompt: ACTIONS_JOB_PROMPT + jid, purpose: "task", jobId}` (:97 the prompt). Anything but `ok: true`, and any throw, answers undefined. The answer's `commit` calls `dispatch()` and rejects with the reason code on `{ok: false}`; `cancel` reaches prepareCloudRun's.
+  - `createHandoffBinding(deps)` (:124-138): EV-31's `GithubHandoffBinding` port. Nothing wires it.
+  - Helpers below: `currentBinding` (:145-148: a missing, suspended or unreadable binding, an id bindingFor refuses, or a binding module that fails to load answers none, so the `binding` port never rejects) over `readBinding` (:150-153, the lazy `bindingFor`), `liveVisibility` (:159-165), `defaultApp` and `defaultPrepare` (lazy imports of github-app.js and cloud-agents-start.js). `cloudSource` (:54) narrows the platform inline.
+- **api/_lib/everywhere/ports.ts** (the lane's own file): `Ports.cloudSource?: (platform) => boolean` (:31-35, new); the `prepareCloud` comment (:36); the `safePorts` comment names the cloud ports (:64-65).
+- **api/_lib/everywhere/router.ts** (the lane's own file): `routeFacts` computes `sourceEnabled` from `cloudSource` (:34-35) and reads the binding, and so the visibility, only when it is true (:36-37); the `actions` facts use it (:58). Before, `sourceEnabled` was every platform but GitHub whenever `prepareCloud` existed ((b2)). `actions()` checks `cloudSource` itself before `prepareCloud` (:74), and both binding reads (:37, :85) catch a rejection as none, as the visibility reads already did (review round one).
+- **api/_lib/everywhere/runtime.ts:** `productionPorts` adds `createCloudPorts()` only when `config.enabled` (:24-30), before the remote ports, with the JSDoc rewritten (:17-23).
+- **New packages/web/test/everywhere-cloud-adapter.test.ts** (68 cases, one of them real-Redis; the case table below). P5, P6 and B3 drive @vector's real attachmentRepository through @vector's existing App fixture, packages/web/test/github-app-fixture.ts (`githubAppFixture`, an injected transport and its own in-memory store); it is the one fake reused from outside the lane's list, and every case that uses it asserts the fetch guard clean.
+- Outside the brief's list ((j)): packages/web/test/everywhere-router.test.ts (three cases that set `prepareCloud` now set `cloudSource` too, :81, :93, :110, so they keep testing what they name); .github/workflows/vector-everywhere.yml (five `pull_request` paths, :68-74); packages/web/test/everywhere-lane.test.ts (two `helpers` entries, :314-317); docs/vector/owner-actions/vector-everywhere-{github,slack,linear,jira}.md (the same "Before you start" line in all four, byte-identical).
+- No generated file, flag, env var, switch, dependency or lockfile changes. Nothing is regenerated (no HttpApi route, no config schema, no SDK).
+
+### Decisions
+
+- **(a) The live-mode seam.** `prepareCloud` exists only when EV-30's `liveMode` reader is given. EV-26 made the live mode read a hard requirement, and the brief does not build it, so the adapter cannot route on the stored mode alone: production has no Actions route until EV-30. The seam's contract (its JSDoc): `codium` means the workflow at the default branch is in Codium mode by github-app.ts `workflowModeOf`'s rule *and* its pinned CLI reads the job body (EV-28); anything else, or a failed read, is no route. P7 pins that contract.
+  - *Critique, not taken: one combined `live(binding) => {visibility, mode}` port.* The brief fixes the visibility read on the existing github-app helper, which the `visibility` port also serves outside prepareCloud (the facts and the router's recheck); a combined port would make that port's source depend on whether EV-30 is wired. EV-30 can still answer both from one single-repository token inside github-app.ts; the adapter's seams do not prevent it.
+- **(b) The source gate, at construction, per call and in the facts.**
+  - `prepareCloud` is absent unless one platform is in `sources` (P1), and each call checks its own source again (P1, M1).
+  - **(b2) The facts (critique, taken).** Before EV-29, `routeFacts` set `sourceEnabled` for every non-GitHub platform whenever `prepareCloud` existed, so once one platform went live a job from another would mint an App token and make about six GitHub requests during the facts, and the refusal would say "bind this repository for GitHub Actions" for a platform with no Actions route. `Ports.cloudSource` carries the enabled set; `routeFacts` reads no binding or visibility for a platform it does not enable, and the policy answers `actions: "none"` (R0, M22, M23). An absent `cloudSource` enables nothing, so a port set with `prepareCloud` but no source answer routes nothing to Actions; the three router cases that set `prepareCloud` now set it too.
+- **(c) Visibility is private only when GitHub says `visibility: "private"` (critique's blocker, taken).**
+  - GitHub's `private` is also true for an internal repository, and every member of the enterprise can read an internal repository's Actions logs. The policy refuses `internal` (packages/schema/src/everywhere-policy.ts `actionsState`: "internal and a failed read are not private"; pinned in packages/schema/test/everywhere-policy.test.ts), the router's recheck requires `"private"`, and spec §3.6 reads both `private` and `visibility`.
+  - github-app.ts `attachmentRepository` answers only `publicRepository: !repository.private`, so it cannot tell private from internal. The port therefore answers `public` for `publicRepository: true`, `private` only when the read also carries `visibility: "private"`, `internal` for any other `publicRepository: false` read, and undefined for a failed read (:158-164). Through today's helper no repository reads `private`, so there is no Actions route; that costs nothing while production has no `prepareCloud`. B2 and B3 pin it; M8 is red.
+  - **For the lead (EV-30, lead approval):** one additive field on attachmentRepository's result in @vector's github-app.ts, `visibility: repository.visibility`, preferably inside EV-30's single live read. The adapter already reads it.
+  - **For the lead, a question:** the brief's "private or internal" conflicts with the policy. The build takes the strict reading; keeping `internal` out is the default until the lead rules otherwise. *Lead ruling: none yet at review round one; record it here, under this entry, before the commit.* If the lead allows `internal`, three places change together, not only `liveVisibility`: the policy's `actionsState` (packages/schema/src/everywhere-policy.ts), the router's recheck (router.ts `actions()`, `!== "private"`) and this port. Until a ruling, P12, B2, B3 and R3 are the tripwires a relaxation must turn red.
+  - The helper's other refusals (App off, not installed, installation suspended or another owner's, binder without write access, archived or disabled, the default branch moved, the binder cache unreadable or refused for a revoked CLI session) are failed reads, which count as public (P6).
+- **(d) The ticket link is dispatchJob's write.** The adapter writes no `ticket:<hash>` key: `dispatchJob` (jobs.ts) writes `ticket:<hash> → jid` under the job's guards just before its fenced transition (jobs.ts `SET` before `change()`). A dispatch abandoned before dispatchJob leaves none (R2, R3, R5, R8). One whose fenced transition loses (a laptop claim lands between the router's recheck and dispatchJob, which answers wrong-state) leaves a link to a cancelled ticket until the body ends; that is harmless, because the start hook (`startDispatched`) takes a ticket only for a job that is `dispatched` with that hash, so no run link and no body read can follow (R7). A link from prepareCloud instead would outlive every abandoned dispatch. R1 and R6 read the link back. *Corrected at review round one:* the first wording said an abandoned dispatch leaves none, which held only before dispatchJob.
+- **(e) "Refused `public-repository`" is the policy's `no-place` with `why.actions: "public"` (critique, taken as a lead decision).** `decideRoute` never answers `public-repository`: a job the Actions step refuses goes on to the queue (step 7), so a public repository either waits for the computer (R2's twin: computer seen recently, wait on) or is refused `no-place` with `why: {computer, actions: "public"}` when the queue is blocked too (R2: the sponsor's computer never seen). `refuseJob` keeps only the code, so the posted text is the generic no-place line, without the "not private" sentence `why` would add. Not fixed here. **For the lead:** keep `no-place` with `why` (and carry `why` to the reply), or have the policy answer `public-repository` when the Actions state is `public` and the queue is blocked. E11's named test is R2 under the current policy. Until the lead rules, R2 and R3 are the tripwires a change back to the brief's wording must turn red; record the ruling under this entry.
+- **(f) Lazy imports.** cloud-agents-binding.js, github-app.js and cloud-agents-start.js load on first use (AGENTS.md form, destructured at the top of the narrowest scope), so the platform intake routes, which import runtime.ts, do not load the App's JWT library, effect or Codium's entitlement reads at cold start. The schema modules are light and stay static. A Node ESM probe of the compiled tree shows each lazy target resolves outside Bun (progress receipt).
+- **(g) commit rejects with only the reason code.** The router ignores a failed commit, as before: an uncertain dispatch is never handed back to a laptop, and the 900 s start rule ends the job `not-started`.
+- **(h) Reads per dispatch.** A dispatch makes three live visibility reads: the facts, prepareCloud's own, and the router's recheck before the fenced transition (R1 counts them). Each is seven GitHub requests, measured on the fixture: the installation read, the single-repository token's mint (metadata read) and its scope check, the repository read, the binder's user and permission reads, and the token's revocation; plus two commands on @vector's store. Each read also *writes*: the fresh binder check (`verifyBinder(..., true)`) reads `vector:cloud-agents:binder-ok:<id>` and saves it again for an hour, refused for a revoked CLI session (P5 asserts the write; P6 the refusal). prepareCloud's own read is kept (critique: "consider dropping, or justify"): it keeps prepareCloudRun from issuing a ticket for a repository that is no longer private, and prepareCloud is a port whose contract must hold for any caller (EV-30's paths included), not only for today's router, which rechecks. The adapter also reads the binding five times per dispatch (the facts' binding and visibility, prepareCloud, the recheck's visibility and binding), and prepareCloudRun reads it twice more (at prepare and at dispatch). About 21 App requests per Actions dispatch is bounded, but it is a rate-limit and cost multiplier that EV-30 inherits: when EV-30 adds the `visibility` field and `liveMode`, it should consider letting one single-repository token serve the visibility and mode reads inside prepareCloud, and record the new count in its receipt (review round one, left for EV-30).
+- **(i) The handoff's `shared` is true until EV-31 reads visibility live (critique, taken).** The stored `RepoBinding.visibility` is a bind-time snapshot, and it is `"private"` whenever the bind token carried no visibility claim (cloud-agents-binding.ts `recordRepoBinding`), so reading it could call a public repository unshared. `shared: true` is the safe direction (outcome and link only). H1 pins `shared: true` for a binding stored private, internal or public; M20 is red.
+- **(j) Files outside the brief.** ports.ts and router.ts ((b2)); the router test's three `cloudSource` lines; the workflow paths, without which everywhere-lane.test.ts is red (the server-import scan finds the type imports of cloud-agents-binding.ts and cloud-agents-start.ts and the value import of codium-run-trigger.ts); github-app.ts in the paths and the lane test's `helpers`, because the adapter reaches it only by a lazy import, which the scan does not see (critique: the type-only entries would be redundant, so only this one is added, with that reason); packages/web/test/github-app-fixture.ts in both too (review round one), because the new test imports it and the scan reads only server code, so a change to it on main or on @vector's lane would otherwise not start the lane (EV-28 added github.agent-fixture.ts for the same reason); the four guides' line, stale since EV-27 and EV-28.
+- **(k) The minimum body life is deferred to EV-30.** routeJob's only caller is the intake, right after `createJob`, so a body has about 1 h 59 min left when it routes; a later path (EV-30's retries or reconciliation) is where a short body could reach a dispatch.
+
+### Critique of the plan (2026-11-20)
+
+Taken: internal is not private ((c)); the source gate reaches the facts ((b2)); `shared` true ((i)); no-place versus `public-repository` as a lead decision, with R2's queue-blocking facts named and a queue twin ((e)); the seam's JSDoc ((a)); the merge of main by convention, left to the commit step because this build may not commit (above); the Node probe made to exercise every lazy import (progress receipt); P12 restated (the adapter's `sources` never reaches prepareCloudRun, which reads ENABLED_SOURCES itself). Rejected in part:
+- **The fixture's store.** githubAppFixture's default store is its own in-memory store (packages/web/test/github-app-fixture.ts, `input.store ?? …`), not persistentStore: it answers the binder cache GET and the save EVAL. So the fixture-backed reads work without a shared stub, and bindingFor gets its own stub store. Taken from the finding: the binder-ok write is asserted (P5), a store that refuses the save for a revoked CLI session counts as public (P6, through the fixture's `store` option), so does a store that is down (P6), and the write is described in (h).
+- **The combined live port** ((a)).
+- **The four `helpers` entries** ((j)).
+
+### Case table
+
+| Code | Cases | What it shows |
+| --- | --- | --- |
+| P1 | 1 | the default sources give no prepareCloud; with `sources={linear}`, a Slack or Jira job reads nothing (0 store, 0 App, 0 prepare); `cloudSource` answers only linear |
+| P2 | 1 | no `liveMode`, no prepareCloud, even with every platform enabled |
+| P3 | 2 | no stored mode, or own-key: no route and no GitHub, live mode or prepare call |
+| P4 | 7 | missing, suspended, another account's, no installation, store down, a corrupt stored mode; and ids bindingFor refuses (0, -1, 1.5, NaN, 2^53) with no store command |
+| P5 | 1 | E11: a binding stored private whose repository is live public: no route, no mode read, no prepare; one metadata-read token for exactly that repository, revoked; the binder cache written; the fetch guard clean |
+| P6 | 9 | a private repository whose read fails: App off, not installed, installation suspended, binder lost write, the repository read fails, archived, default branch moved, the binder cache store down, a revoked CLI session (the save refused): each counts as public, no prepare, no live token, the fetch guard clean |
+| P7 | 3 | stored codium with a live read of own-key, no mode, or a failure: no prepare |
+| P8 | 1 | a body reference other than the jid, a bad jid, a bad sponsor: nothing read |
+| P9 | 1 | every gate holds: prepareCloudRun gets exactly the trigger, prompt `Vector everywhere job <jid>` with no whitespace, `jobOfActionsPrompt` names the jid, `jobId` the jid, an upper-case sponsor matched case-insensitively; one binding, one visibility and one mode read; no dispatch |
+| P10 | 3 | prepareCloudRun answering `not-binder`, `source-unavailable`, or throwing: no route |
+| P11 | 1 | commit dispatches once and rejects with `dispatch-failed`; cancel reaches prepareCloudRun's |
+| P12 | 1 | tripwire: ENABLED_SOURCES holds none of slack, linear, jira; the real prepareCloudRun, every earlier gate passed, refuses a Linear job before its ticket (one store command, the binding read) |
+| B1 | 7 | the binding port: codium, own-key, no mode, no installation map; suspended, missing, unreadable answer none (and visibility none) |
+| B2 | 5 | the visibility port: public; private and internal by GitHub's field; `private:true` with no field reads internal; a failure and a binding with no installation answer none (no App call) |
+| B3 | 2 | through the real helper and the fixture, `private:true` with `visibility` private or internal reads internal, so there is no route; the fetch guard clean |
+| R0 | 1 | through routeFacts and routeJob: a platform that is not an enabled source reads no binding or visibility, and the refusal names `actions: "none"` |
+| R1 | 1 | E8: a dispatch writes `ticket:<hash> → jid`, the job is `dispatched` with that hash before the dispatch, a late claim loses, the trigger carries the line and the jid, the `actions` milestone is posted, three visibility reads |
+| R2 | 2 | E11: stored private, live public, the computer never seen: `{refuse, no-place, why: {not-seen, public}}`, refused, no prepare, no ticket key; the twin with the computer seen recently waits, no prepare, no ticket key |
+| R3 | 3 | a visibility read that fails, says internal, or says `private:true` with no field: refused as public, no prepare, no ticket key |
+| R4 | 1 | no stored mode: `why.actions: "bind"` |
+| R5 | 1 | the switch at stop after prepare: cancel once, no dispatch, not dispatched, no ticket key |
+| R6 | 1 | R1 on a real Redis (skips without VECTOR_TEST_REDIS_URL) |
+| R7 | 1 | a laptop claim that lands inside the recheck (offer, then claim, in the `binding` port) wins: `{action: "laptop"}`, cancel once, no dispatch, the job `claimed` with no ticket hash; the one `ticket:` link dispatchJob wrote names the cancelled ticket, and `startDispatched` with it answers not ok and leaves the job `claimed` |
+| R8 | 1 | a `binding` port that rejects: in the facts, `actions.binding` none and `{refuse, no-place, why: {not-seen, bind}}` with no prepare; in the recheck only, cancel once, no dispatch, not dispatched, no ticket key |
+| R9 | 1 | the router's own source gate: facts built with the source enabled, then `cloudSource` answering false: the adapter's prepareCloud is never called, not dispatched, no ticket key |
+| H1 | 4 | the handoff binding: stored private, internal or public all give `shared: true`, `laptopFirst: false`, numbers and the repository; own-key gives `codiumMode: false` |
+| H2 | 4 | no installation, suspended, missing, store down: none |
+| S1 | 1 | flag off: productionPorts has no prepareCloud, visibility or cloudSource, safePorts' binding, no KV request, the fetch guard clean |
+| S2 | 1 | flag on, App off: no prepareCloud, no platform enabled, the binding mapped from a loopback KV (two binding reads), visibility none with no GitHub request |
+
+### Mutations
+
+27 mutations, one source edit at a time, each with packages/web/test/everywhere-cloud-adapter.test.ts run alone through vector-serial, without Redis (/tmp/vector-v2/everywhere/ev29/mut/: mutate.py, run.log, one log per mutation, before.sha256). Every mutation turned its named cases red, and `sha256sum -c` matched all three source files after the run. "Result" is pass/fail of the file's 64 cases that run without Redis.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 the per-call source check dropped | cloud-agents.ts | 63/1 | P1 |
+| M2 the construction gate ignores the sources | cloud-agents.ts | 63/1 | P1 |
+| M3 the construction gate ignores liveMode | cloud-agents.ts | 63/1 | P2 |
+| M4 the live mode read ignored | cloud-agents.ts | 60/4 | P7, P9 |
+| M5 the stored mode ignored | cloud-agents.ts | 62/2 | P3 |
+| M6 the sponsor check dropped | cloud-agents.ts | 63/1 | P4 |
+| M7 a failed read answers private | cloud-agents.ts | 52/12 | B2, P6, R3, S2 |
+| M8 `private:true` answers private without GitHub's field | cloud-agents.ts | 58/6 | B2, B3, R3 |
+| M9 a newline after the prompt | cloud-agents.ts | 62/2 | P9, R1 |
+| M10 `jobId` dropped | cloud-agents.ts | 62/2 | P9, R1 |
+| M11 the body reference ignored | cloud-agents.ts | 63/1 | P8 |
+| M12 prepareCloudRun's rejection not caught | cloud-agents.ts | 63/1 | P10 |
+| M13 commit resolves on a failed dispatch | cloud-agents.ts | 63/1 | P11 |
+| M14 cancel does not reach prepareCloudRun | cloud-agents.ts | 62/2 | P11, R5 |
+| M15 productionPorts' flag gate dropped | runtime.ts | 63/1 | S1 |
+| M16 `laptopFirst` true | cloud-agents.ts | 61/3 | H1 |
+| M17 the binding port's `codiumMode` inverted | cloud-agents.ts | 52/12 | B1, R1 to R5, S2 |
+| M18 the handoff's `codiumMode` inverted | cloud-agents.ts | 60/4 | H1 |
+| M19 `appInstalled` always true | cloud-agents.ts | 63/1 | B1 |
+| M20 `shared` from the stored visibility | cloud-agents.ts | 63/1 | H1 |
+| M21 a suspended binding admitted | cloud-agents.ts | 61/3 | B1, H2, P4 |
+| M22 the facts ignore `cloudSource` | router.ts | 63/1 | R0 |
+| M23 `cloudSource` ignores the sources | cloud-agents.ts | 61/3 | P1, R0, S2 |
+| M24 the App read without an installation | cloud-agents.ts | 62/2 | B2, P4 |
+| M25 prepareCloud skips its own visibility read | cloud-agents.ts | 50/14 | B3, P4, P5, P6, P9, R1 |
+| M26 the default sources open every platform | cloud-agents.ts | 62/2 | P1, S2 |
+| M27 a store failure not caught | cloud-agents.ts | 59/5 | B1, H2, P4 |
+
+Review round one added four more, the same way, with the 67 cases that run without Redis (/tmp/vector-v2/everywhere/ev29/fix1/mut/: mutate.py, run.log, before.sha256; `sha256sum -c` matched router.ts and cloud-agents.ts afterwards):
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M28 the router's own source gate in `actions()` dropped | router.ts | 66/1 | R9 |
+| M29 the facts' binding read not caught | router.ts | 66/1 | R8 |
+| M30 the recheck's binding read not caught | router.ts | 66/1 | R8 |
+| M31 `currentBinding`'s guarded read not caught | cloud-agents.ts | 62/5 | B1, H2, P4 (three) |
+
+The guard over `readBinding`'s `import()` has no case of its own: making a module fail to load would need a module mock, which the lane does not use. M31 shows the catch that covers it is load-bearing, since the import and `bindingFor` now reject through the same promise.
+
+Two checks were removed before the mutation run because they were equivalent to others: `prepareCloud`'s own `installationId` check (a binding with no installation has no visibility read, so it never reads private; P4 still covers it) and `currentBinding`'s id check (bindingFor refuses a non-decimal id before any store command; P4 asserts no store command).
+
+### Review round one (2026-11-20)
+
+Ten findings, none blocking. Taken:
+- **The fixture path** (vector-everywhere.yml): packages/web/test/github-app-fixture.ts is in the `pull_request` paths and the lane test's `helpers`, with a reason ((j)).
+- **The ticket link wording** (cloud-agents.ts module comment and (d)): corrected; the suggested router case is R7. The wording differs from the finding's in one place: the finding said the *body route* ignores the stale link, but the body route reads `run:<rid>`, never `ticket:<hash>`; the ticket reaches only the start hook, which refuses it (jobs.ts `startDispatched`: `dispatched` with that hash). R7 asserts that.
+- **The unguarded import** (`currentBinding`): the import and `bindingFor` now run in `readBinding`, and `currentBinding` catches both, so the `binding` port never rejects. The router also catches a rejecting `binding` port in `routeFacts` and `actions()`, as it already did for `visibility`, so any Ports set answers no Actions route instead of throwing (R8; M29, M30, M31).
+- **The single-use guard**: `actionsSource` and the `ActionsSource` alias are gone; `cloudSource` narrows inline (:54).
+- **The router's own source gate**: `actions()` returns false unless `cloudSource` answers true (router.ts :74), before `prepareCloud`. It is a separate line rather than the finding's `||` on the existing return, to keep the line under 120 characters. R0 and the router cases stay green; R9 and M28 pin it.
+- **The env in productionPorts' cases**: the describe-wide `beforeAll`/`afterAll` is replaced by `withLoopbackKv(run)`, which each of S1 and S2 calls; it starts its own loopback KV and restores the five names in a `finally`, so a failing case cannot leave the env for a later one. The env stays the seam (productionPorts reads persistentStore's env), as the finding says; `useKv` itself is not reused because it points at a fixed fake origin, not a loopback server.
+- **The fetch guard in P5, P6 and B3**: each asserts `guard.violations` empty, and the fixture is named as the reused @vector fake ("What changed").
+Recorded, no code change:
+- **Visibility, private or internal** ((c)) and **`no-place` versus `public-repository`** ((e)): kept strict, waiting for the lead's ruling, which is to be recorded under this entry before the commit; the tripwires are named in (c) and (e).
+- **The read count** ((h)): left for EV-30, as recorded there.
+
+### Left open
+
+- **EV-30:**
+  - the `liveMode` reader, in github-app.ts (lead approval), by `workflowModeOf`'s rule at the default branch, including the pinned CLI version check (EV-28);
+  - the additive `visibility` field on attachmentRepository's result ((c)), without which no repository reads private;
+  - the listeners, the reconciliation and the settle index (EV-25, EV-27 Left open);
+  - the body route's live visibility through this adapter's `visibility` port, a failed read counted as public (EV-27 Left open);
+  - the minimum body life for any path that can dispatch late ((k)).
+- **EV-31:** wire `createHandoffBinding` with R-A5, and read `shared` live before laptop-first ((i)).
+- **For the lead:** the brief's "private or internal" versus the policy ((c)); `no-place` with `why` versus `public-repository`, and whether the reply carries `why` ((e)); the read count ((h)); the main merge, which the commit gate of 2026-11-20 did not make: its brief merges only origin/everywhere-finish, so origin/main `15f3ba77` is left for the lead.
+- **Owner:** R-C8/R-A8 (RESERVED in packages/schema/src/codium-run-trigger.ts). Until then no platform is an enabled source, and P12 is the tripwire.
+
+### Safe by default
+
+- VECTOR_EVERYWHERE_ENABLED off: productionPorts is safePorts plus the account authority, exactly as before (S1, M15).
+- Flag on: `binding` and `visibility` are @vector's, but there is no `prepareCloud`, for two reasons, each sufficient: no platform is an enabled source (R-C8/R-A8) and no `liveMode` reader exists (EV-30). `cloudSource` answers false for every platform, so routing reads no binding, no visibility and writes no ticket (S2).
+- Past both gates, prepareCloudRun itself still refuses reserved sources (P12), and through today's helper no repository reads private ((c)).
+- Every failure is no route, and nothing in the adapter logs.
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14` and brain-transport `0d18f750`. The vector-everywhere.yml hunk (:68-72) sits after EV-28's five entries, in the block FIT-4 rewrote, which has already merged.
+
+### Deferred verification
+
+- vector-everywhere.yml (the new file; R6 in its Valkey job), vector-at-mention.yml and typecheck.yml on everywhere-finish, after the commit step's push. vector-hosted-ci.yml is not needed for these files.
+- Live use, after EV-30, R-C8/R-A8 and a published CLI.

@@ -311,6 +311,10 @@ describe("the lane's shape", () => {
       "packages/engine/src/cli/cmd/github.run-helpers.ts",
       "packages/engine/src/cli/cmd/github.policy.ts",
       "packages/engine/test/cli/github.agent-fixture.ts",
+      // The Actions fallback adapter (VE-30a) reaches the App only by a lazy import, which serverImports does not see.
+      "api/_lib/github-app.ts",
+      // @vector's App fixture, which everywhere-cloud-adapter.test.ts imports; serverImports scans only server code.
+      "packages/web/test/github-app-fixture.ts",
     ]
     expect(helpers.filter((file) => !matches(file))).toEqual([])
     // A helper that moves on main would silently stop starting the lane.
