@@ -4231,3 +4231,91 @@ Ten findings, none blocking; the dispositions are in the deviations entry, "Revi
 | mutations (/tmp/vector-v2/everywhere/ev27/review1/mut/) | 11, one at a time, test file alone without Redis: all red; `sha256sum -c` matched jobs.ts and body.ts |
 
 **Not run here:** the commit, the push gate's full turbo typecheck, and the vector-everywhere.yml and typecheck.yml dispatches, which still belong to the commit gate.
+
+## EV-28: the agent phase reads a job's request by reference (R-A4, runner half) (2026-11-20)
+
+Spec §11 R-A4; §3.5.1; §3.6; §5 E1, E4, E11, E13; §8 VE-30. Deviations log: "2026-11-20, EV-28".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `c1112608` (EV-27) equals origin/everywhere-finish; origin/release-finish `67ec3a60` and origin/main `8e34d05e` are ancestors, so nothing was merged. Precondition: origin/brain-transport `0d18f750` is an ancestor (BT02 and BT05 to BT07b included). Built uncommitted.
+
+**Files** (line numbers in the deviations entry, "What changed"):
+
+- packages/schema/src/everywhere.ts (`ACTIONS_JOB_PROMPT`, `jobOfActionsPrompt`, `ActionsJobBody`, `decodeActionsJobBody`);
+- packages/core/src/everywhere/frame.ts (types only: `FrameRepository`);
+- @vector's files, additively: packages/engine/src/cli/cmd/github.agent.ts, github.cloud.ts (`send`, `everywhereJobBody`), github.run-helpers.ts (`ChatContext.outside`, `taskPart`'s parameter);
+- new packages/engine/test/everywhere/github-agent-body.test.ts (13 cases);
+- outside the brief's list: packages/schema/test/everywhere.test.ts (4 cases), packages/web/test/everywhere-body-api.test.ts (B1's cross-check), .github/workflows/vector-everywhere.yml (five paths), packages/web/test/everywhere-lane.test.ts (the same five in `helpers`);
+- the lane documents: the deviations entry and dated annotations on EV-27's three EV-28 Left open items; this receipt; spec notes (§3.5.1, §3.6, E1, E11, §6.4, §8 VE-30, §11 R-A1 and R-A4); the handoff's status bullet, an annotation in the EV-27 block and an EV-28 loose-ends block.
+
+github.policy.ts and test/cli/github.agent-fixture.ts are not edited. No generated file, flag, env var, switch, dependency or lockfile changes; nothing is regenerated (no HttpApi route, no config schema, no SDK).
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from the owning package; engine files with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev28/tmp`, so every engine boot gets fresh XDG roots; desktop with `--no-env-file`; logs and summaries in /tmp/vector-v2/everywhere/ev28/{base,after,rerun,docs,runs}/). "pass/fail (expects)":
+
+| Check | Result |
+| --- | --- |
+| baselines at HEAD, before any source edit: the 38 engine test/cli/github*.test.ts files, engine everywhere/unattended-session and compliance/egress-inventory, core everywhere/frame, schema everywhere, desktop everywhere-engine, web everywhere-body-api and everywhere-lane, packages/cloud workflow-compliance | all exit 0 (/tmp/vector-v2/everywhere/ev28/base/summary.txt) |
+| the same 46 files after the change | every pass, fail and skip count equals its baseline except schema everywhere.test.ts, 54/0 (412) → 58/0 (460), the four new cases. Expect totals equal the baseline for 42 of them; web body-api is 327 → 329 (B1's cross-check), and two untouched files vary from run to run (next row) |
+| the 38 test/cli/github*.test.ts files, after | github-action 17/0 (22); github-remote 16/0 (28); github.agent-channel 2/0 (6); github.agent-cli 2/0 (15); github.agent-codium 45/0 (1,485); github.agent-phase 18/0 (221); github.agents-journey 8/0 (378); github.app 3/0 (19); github.auth 33/0 (209); github.brain 6/0 (54); github.bundle 24/0 (2 skip, 825); github.cloud-lifecycle 2/0 (9); github.cloud 75/0 (1 skip, 897); github.codium-cli 2/0 (10); github.codium-status 1/0 (1); github.evidence 24/0 (112); github.git 1/0 (12); github.install 8/0 (42); github.isolation 36/0 (4,174); github.lifecycle 8/0 (22); github.mcp-framing 2/0 (8); github.output 1/0 (2); github.policy 10/0 (82); github.provider-credentials 4/0 (12); github.publish 26/0 (176); github.review-api 3/0 (17); github.review-codium 4/0 (20); github.review-gateway 3/0 (23); github.review 46/0 (280); github.route-script 17/0 (529); github.route 11/0 (69); github.run-routing 17/0 (71); github.sandbox-build 4/0 (20); github.sandbox 23/0 (2 skip, 157); github.schedule 2/0 (11); github.secrets-stdin 4/0 (8); github.session 13/0 (71); github.workflow 42/0 (873). github.review.test.ts passed and would have been treated as a real failure; the known flake is test/cli/review.test.ts:1050, which is outside this glob and was not run or edited |
+| expect totals that vary with timing | github.agent-codium.test.ts: 1,456 (HEAD), 1,485 and 1,452 (two runs after), each 45/0: its lifecycle cases assert every heartbeat of a 20 ms real-time beat. unattended-session.test.ts: 276 (HEAD), 296 and 279, each 7/0 |
+| after the last code change (readRequest's two redundant stop checks removed): engine github-agent-body, github.agent-codium, -agent-phase, -agents-journey, -run-routing, -agent-channel, -agent-cli, everywhere/unattended-session | 13/0 (228); 45/0 (1,452); 18/0 (221); 8/0 (378); 17/0 (71); 2/0 (6); 2/0 (15); 7/0 (279) |
+| engine test/everywhere/github-agent-body.test.ts | 13 pass, 0 fail, 228 expects (six client cases, seven agent-phase cases; about 25 s) |
+| core frame.test.ts; desktop everywhere-engine.test.ts; engine egress-inventory.test.ts; packages/cloud workflow-compliance.test.ts | 18/0 (467); 12/0 (702); 5/0 (12); 58/0 (1,104): equal to the baseline |
+| web everywhere-body-api.test.ts | 24 pass, 5 skip (R1 to R3 and two hooks need Redis), 0 fail, 329 expects |
+| after the lane document edits: web everywhere-lane.test.ts, everywhere-docs.test.ts; root test/no-personal-paths.test.ts and no-project-wording.test.ts (from test/) | 13/0 (159); 17/0 (215); 1/0 (2); 2/0 (16) |
+| `bun typecheck`: packages/schema, core, engine (twice, the second after the last edit), desktop | exit 0 |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 305 files, 0 errors, 0 warnings, 451 hints (as after EV-27) |
+| prettier `--check` | clean for the new test, github.agent.ts, github.cloud.ts, github.run-helpers.ts, the web tests and the workflow. frame.ts, schema everywhere.ts and its test were not prettier-clean at HEAD (3, 36 and 16 differing lines); none of prettier's changes falls on a line this package changed |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over every touched file for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify, brain-transport and process-finish | empty for every lane |
+
+**Mutations** (/tmp/vector-v2/everywhere/ev28/mut/: mutate.py, run.log, before.sha256, before2.sha256, one log per mutation): 25 mutations, one at a time, each with github-agent-body.test.ts run alone. 22 turned their named cases red. M18 and M22 survived, because the run's stop joined to the read's signal already covers both explicit stop checks, which were then removed; M25 (the frame's catch) survives by design, because nothing can reach it. M10, M14, M20 and M25 were re-run after that change. `sha256sum -c` matched all five source files after both rounds. The table is in the deviations entry.
+
+**Not run here:** the commit, the push gate's full turbo typecheck, and the vector-at-mention.yml, vector-everywhere.yml and typecheck.yml dispatches, which belong to the commit gate. Nothing was dispatched: vector-codium.yml is not dispatched before PR #33's merge into this branch (lane rule).
+
+**For the commit gate:**
+- One package commit, staging explicit paths: `feat(everywhere): read an Actions job's request by reference in the agent phase`. The body names @vector's three files (github.agent.ts, github.cloud.ts, github.run-helpers.ts), the files outside the brief's list (the schema test, the web body-api and lane tests, the workflow paths), and says that nothing was regenerated. It also says that the vector-everywhere.yml `paths:` hunk sits beside review-fixes' FIT-4 rewrite of the same block, so the merge with review-fixes keeps these five entries (review round one, finding 8). Vector identity and the trailers.
+- origin/main moved after the build, from `8e34d05e` to `c776fb60` (#52: three desktop Windows-helper commits). None of them touches a file this package changed (`git diff --name-only 8e34d05e c776fb60`). PR #33 is merged, so the commit gate merges origin/main (merge, never rebase) after the package commit and before the push.
+- Then `git fetch origin everywhere-finish`, the full `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2`, and `git push origin HEAD:everywhere-finish`.
+- Dispatch vector-at-mention.yml (the 38 github*.test.ts files), vector-everywhere.yml (the new engine file, the schema and web files) and typecheck.yml on everywhere-finish. Record the run ids here and in the handoff.
+
+### EV-28 review round one (2026-11-20)
+
+Eight findings, none blocking; the dispositions are in the deviations entry, "2026-11-20, EV-28", "Review round one". Built uncommitted.
+
+**Files:** packages/engine/src/cli/cmd/github.agent.ts (everywhereRequest answers `"cancelled"` when the run's signal ended the read, begin returns `{cancelled: true}`, runTask returns `CANCELLED`, `Start` excludes it, and the doc comments say so); github.run-helpers.ts (`ChatContext.outside` and `taskPart`'s `outside` typed `PlatformId`, a type import); packages/core/src/everywhere/frame.ts (header comment only); packages/engine/test/everywhere/github-agent-body.test.ts (`Answer` gets the RequestInit; B4's first stop sub-case relabelled, its new wait sub-case, its title; new B8, last in the file, so B1 to B7 keep their names); the lane documents (the deviations entry, dated EV-28 notes under spec §5 E6 and E7, the handoff's status bullet and loose ends, this receipt).
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from the owning package; engine files with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev28/review1/tmp`; logs in /tmp/vector-v2/everywhere/ev28/review1/logs/):
+
+| Check | Result |
+| --- | --- |
+| engine test/everywhere/github-agent-body.test.ts | 14 pass, 0 fail, 251 expects (six client cases, eight agent-phase cases; about 25 s) |
+| engine test/cli/github.agent-phase.test.ts; github.agent-codium.test.ts; github.run-routing.test.ts | 18/0 (221); 45/0 (1,460); 17/0 (71): pass and fail counts equal the baseline; agent-codium's expect total varies with timing (1,452 to 1,485 before) |
+| engine test/tool/memory.test.ts (reads `taskPart`'s metadata); test/everywhere/unattended-session.test.ts | 18/0 (110); 7/0 (267; its total varies with timing, 267 to 296 seen) |
+| core test/everywhere/frame.test.ts | 18/0 (467), equal to the baseline |
+| web everywhere-lane.test.ts, everywhere-docs.test.ts; root test/no-personal-paths.test.ts and no-project-wording.test.ts | 13/0 (159); 17/0 (215); 1/0 (2); 2/0 (16) |
+| `bun typecheck`: packages/engine, packages/core | exit 0 |
+| prettier `--check`: github.agent.ts, github.run-helpers.ts, github-agent-body.test.ts | clean. frame.ts's one prettier difference (:109) is HEAD's, not on the edited lines |
+| `git diff --check` | clean |
+| mutations (/tmp/vector-v2/everywhere/ev28/review1/mut/), one at a time, the test file alone | R-M20 (the stop not joined to the read's signal) 12/2, B4 and B5 red; in a scratch run with B4's first two sub-cases removed, the new wait sub-case alone is red. R-M26 (no `cancelled` answer for a signal) 13/1, B8 red. A scratch run of B8 against the unfixed code, expecting the line, passed with a `cancelled` settle (R-M26-settle.log): the settle was already right, the line and runTask's result were not. `sha256sum -c` matched all four touched files after each |
+
+**Not run here:** the commit, the push gate's full turbo typecheck, and the vector-at-mention.yml, vector-everywhere.yml and typecheck.yml dispatches, which belong to the commit gate.
+
+### EV-28 commit gate (2026-11-20)
+
+**Base.** `git fetch origin everywhere-finish main release-finish`: HEAD `c1112608` equals origin/everywhere-finish; origin/release-finish `67ec3a60` is an ancestor. origin/main is now `15f3ba77` (#51 and #52 since the lane's last main merge, touching none of this package's files); the gate's brief merges only origin/everywhere-finish, so main is left for the lead's next main merge. `git status` showed only this package's fourteen files, nothing unrelated.
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from the owning package; engine files with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev28/gate/tmp`; logs in /tmp/vector-v2/everywhere/ev28/gate/logs/):
+
+| Check | Result |
+| --- | --- |
+| engine test/everywhere/github-agent-body.test.ts | 14/0 (251) |
+| the 38 engine test/cli/github*.test.ts files | every pass, fail and skip count equals the EV-28 receipt above; expect totals equal too (github.agent-codium 1,452, within its timing range) |
+| engine test/tool/memory.test.ts; test/everywhere/unattended-session.test.ts | 18/0 (110); 7/0 (280, within its timing range) |
+| schema test/everywhere.test.ts; core test/everywhere/frame.test.ts | 58/0 (460); 18/0 (467) |
+| web everywhere-body-api.test.ts; everywhere-lane.test.ts; everywhere-docs.test.ts | 24/0, 5 skip (329); 13/0 (159); 17/0 (215) |
+| after this receipt and the handoff edits: web everywhere-lane.test.ts, everywhere-docs.test.ts; root test/no-personal-paths.test.ts and no-project-wording.test.ts (from test/) | 13/0 (159); 17/0 (215); 1/0 (2); 2/0 (16) |
+| `bun typecheck`: packages/schema, core, engine, web; the hosted API (`--project ../../tsconfig.json`) | exit 0 (web: 0 errors, 0 warnings, 451 hints) |
+| full `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2` | 27 of 27 tasks successful |
+
+**Commit.** One package commit, `feat(engine): frame an everywhere job body in the GitHub agent phase` (the gate brief's title, in place of the planned `feat(everywhere): …`), Vector identity and the trailers; its body says the vector-everywhere.yml paths hunk sits beside review-fixes' FIT-4, so the merge with review-fixes keeps these five entries. Then the push to everywhere-finish and the dispatches of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on that ref. Their run ids and results go in the next receipt.

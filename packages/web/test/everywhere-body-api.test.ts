@@ -26,7 +26,7 @@ import { storeUnavailable, type Store, type StoreCommand } from "../../../api/_l
 import type { SwitchState } from "../../../api/_lib/everywhere/switch"
 import { ApiError } from "../../../api/_lib/http"
 import route, { config, createJobBodyRoute, type BodyRouteDeps } from "../../../api/everywhere/jobs/[jid]/body"
-import { TIMING, createJobId, type PlatformId } from "../../../packages/schema/src/everywhere"
+import { TIMING, createJobId, decodeActionsJobBody, type PlatformId } from "../../../packages/schema/src/everywhere"
 import { RouteHarness, everywhereEnv } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { seedJobAuthority } from "./lib/everywhere-job-authority"
@@ -491,6 +491,9 @@ describe("the body route", () => {
       })
       expect(Object.keys(answer.body ?? {}).sort()).toEqual(["context", "outside", "task"])
       expect(answer.body?.context?.map((item) => Object.keys(item).sort())).toEqual([["from", "text"]])
+      // The agent phase's own decoder (EV-28) accepts exactly this answer, so the two ends hold one contract.
+      const kept: unknown = decodeActionsJobBody(JSON.parse(answer.text))
+      expect(kept).toEqual({ ok: true, value: answer.body })
       // No label, account, reply reference, sealed text, ticket, run, job id or lease.
       for (const kept of [
         "Alice",

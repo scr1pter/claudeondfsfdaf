@@ -244,6 +244,19 @@ export function isJobId(value: unknown): value is string {
   return typeof value === "string" && JOB_ID_PATTERN.test(value)
 }
 
+/**
+ * The whole workflow prompt of the Actions run that serves a Vector everywhere job (3.6, R-A4): this line and the job
+ * id, with nothing before, between or after them. The prompt only names the job; the body route's answer is the proof.
+ */
+export const ACTIONS_JOB_PROMPT = "Vector everywhere job "
+
+/** The job id `value` names when it is exactly ACTIONS_JOB_PROMPT and a job id, with no space or newline around it. */
+export function jobOfActionsPrompt(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith(ACTIONS_JOB_PROMPT)) return undefined
+  const jid = value.slice(ACTIONS_JOB_PROMPT.length)
+  return isJobId(jid) ? jid : undefined
+}
+
 export function isIssueKey(value: unknown): value is string {
   return typeof value === "string" && ISSUE_KEY_PATTERN.test(value)
 }
@@ -453,6 +466,16 @@ export const RUN_STEPS = 200
 export type UntrustedItem = {
   readonly from: "requester" | "teammate" | "external" | "bot" | "platform"
   readonly text: string // ≤ 4,000 chars each
+}
+
+/**
+ * What the Actions run that serves a Vector everywhere job reads by reference (R-A4): the requester's words, the
+ * untrusted context and the platform they came from, its outside marker. Never a GitHub job's.
+ */
+export type ActionsJobBody = {
+  readonly task: string
+  readonly context: readonly UntrustedItem[]
+  readonly outside: Exclude<PlatformId, "github">
 }
 
 export const GITHUB_EVENTS = ["issue_comment", "issues", "pull_request_review_comment"] as const
@@ -899,6 +922,28 @@ export function decodeJob(input: unknown): Decoded<EverywhereJob> {
       limits,
       reply,
       lease,
+    }
+  })
+}
+
+const ACTIONS_PLATFORMS = PLATFORMS.filter(
+  (platform): platform is Exclude<PlatformId, "github"> => platform !== "github",
+)
+
+/**
+ * What the body route answers an Actions run (R-A4): exactly `{task, context, outside}`, a task that is not blank and
+ * within its limit, the envelope's context, and the platform the job came from, never GitHub (a GitHub job's laptop
+ * reads the thread itself). Unlike decodeJob, it refuses unknown fields: nothing else may reach the run's prompt.
+ */
+export function decodeActionsJobBody(input: unknown): Decoded<ActionsJobBody> {
+  return run(() => {
+    const fields = object(input, "body", ["task", "context", "outside"])
+    const task = string(field(fields, "task"), "task", LIMITS.taskChars, 1)
+    if (task.trim() === "") refuse("task", "empty")
+    return {
+      task,
+      context: context(field(fields, "context"), "context"),
+      outside: member(field(fields, "outside"), "outside", ACTIONS_PLATFORMS),
     }
   })
 }

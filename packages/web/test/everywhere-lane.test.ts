@@ -305,6 +305,12 @@ describe("the lane's shape", () => {
       "api/_lib/cloud-agents-run-token.ts",
       "packages/desktop/src/main/github-auth.ts",
       "packages/desktop/src/main/github-api.ts",
+      // The @vector agent phase that reads an Actions job's request (R-A4): engine test/everywhere/ tests it.
+      "packages/engine/src/cli/cmd/github.agent.ts",
+      "packages/engine/src/cli/cmd/github.cloud.ts",
+      "packages/engine/src/cli/cmd/github.run-helpers.ts",
+      "packages/engine/src/cli/cmd/github.policy.ts",
+      "packages/engine/test/cli/github.agent-fixture.ts",
     ]
     expect(helpers.filter((file) => !matches(file))).toEqual([])
     // A helper that moves on main would silently stop starting the lane.

@@ -59,6 +59,12 @@ on:
       - integrations/linear/**
       - packages/desktop/src/main/github-auth.ts
       - packages/desktop/src/main/github-api.ts
+      # The @vector agent phase that reads an Actions job's request by reference (R-A4), and its test fixture.
+      - packages/engine/src/cli/cmd/github.agent.ts
+      - packages/engine/src/cli/cmd/github.cloud.ts
+      - packages/engine/src/cli/cmd/github.run-helpers.ts
+      - packages/engine/src/cli/cmd/github.policy.ts
+      - packages/engine/test/cli/github.agent-fixture.ts
   workflow_dispatch:
 
 concurrency:

@@ -3601,6 +3601,7 @@ packages/web/test/everywhere-body-api.test.ts (B7's cases are in the "ending and
 ### Left open
 
 - **The start listener and the agent phase can race.** The start listener runs after the mint's answer, within its 5 s budget, so the agent phase can ask before its run is linked and get 404. EV-28 should retry a 404 for about 6 s, or the lead decides otherwise.
+  *2026-11-20 annotation (EV-28):* built. The agent phase reads again only after the route's own 404 `NOT_FOUND`, 1 s apart, up to seven reads in all (about 6 s). See "2026-11-20, EV-28", (d).
 - **A lost start event loses the job (decision for the lead).**
   - EV-25's start event is at most once. If it is lost, the job stays `dispatched` with no rid, and this route answers 404 for the whole run. EV-30's reconciliation acts only at the 900 s mark, long after the agent phase has given up, so the job then fails with the "no start hook" help although its run did start.
   - A concrete option: when the link is missing, the route calls @vector's exported `liveRun(claims.sub, claims.rid)`. The token's CHECK has just proven that run live, and `liveRun` returns its `ticketHash`. The route maps `ticket:<hash>` to the jid, requires it to equal the path's jid, and calls an idempotent `startDispatched` before reading.
@@ -3612,7 +3613,9 @@ packages/web/test/everywhere-body-api.test.ts (B7's cases are in the "ending and
 - **EV-30's reconciliation** must treat a `running` job with the same rid as already linked. `startDispatched` is not idempotent ((k)).
 - **A minimum body life for the Actions route.** EV-29's and EV-30's router should refuse the Actions route unless `bodyExpiresAt − now` exceeds `TIMING.dispatchStartMs` plus the run's own start. `dispatchJob` refuses only a body that has already ended ((n)), and answers it `body-gone`, so the router can tell it from a lost race (`wrong-state`). Today's router (api/_lib/everywhere/router.ts:79-80) abandons the dispatch on any refusal, which is right for both.
 - **EV-28's recovery.** On any answer other than 200 from this route (after the 404 retry above), the agent phase settles at once with a failed outcome, so EV-30's settle listener ends the job promptly ((i)). The read is spent before the answer is delivered, on purpose, so a lost 200 or a 503 for a body that does not open leaves the job `running` until the Actions overdue sweep unless EV-28 does this. EV-28's tests must include: a 503, a 410, and a 404 that outlasts the retry each settle the run at once with a failed outcome, and no second read is made (review round one).
+  *2026-11-20 annotation (EV-28):* built. Every answer but a 200 that is exactly the body, after the 404 retry, ends the run with one fixed line, exit 1 and no bundle, so `withRunHeartbeat` settles `failed` at once; nothing is read a second time. packages/engine/test/everywhere/github-agent-body.test.ts has the 503s, the 410 and the lasting 404. See "2026-11-20, EV-28", (c).
 - **EV-28's framing.** The answer has no `kind` or `repository`, which `FrameJob` (packages/core/src/everywhere/frame.ts:58) and `everywhereSystemInstructions` need. EV-28 passes the repository from GITHUB_REPOSITORY and a fixed kind. That is correct, because `kind` matters only for an empty task, and `decodeJob` refuses an empty task on every non-GitHub job at creation (packages/schema/src/everywhere.ts:864).
+  *2026-11-20 annotation (EV-28):* built as written: kind `mention` and the repository from GITHUB_REPOSITORY, with `FrameJob`'s repository narrowed to its `fullName` so nothing is invented. See "2026-11-20, EV-28", (e).
 - **Live visibility at the read (E11).** Visibility is read live only before dispatch. A repository made public between the dispatch and the read still receives the platform text, because the route can only check the record's `repository.shared` snapshot. A re-read needs the App's single-repository token, which belongs to EV-30's port. It is not built here. **For EV-30:** once the cloud-agents visibility port exists, `readRunBody` (or the route, before the EVAL) takes a live visibility read through it, where a failed read counts as public, and answers the same 404 without setting the marker. Add a B8-style case whose fake port reports public, and one whose port fails (review round one).
 - **No everywhere run can exist yet.** Until R-C8/R-A8 (owner-gated), run tokens accept only `github-*` sources and ENABLED_SOURCES reserves slack, linear and jira. Even with the flag on, production answers 404 to every caller: nothing writes `run:<rid>` until EV-30 registers the start listener, and nothing dispatches (EV-29 is not built).
 - **The documents.** Spec §3.13's ticket row and the TIMING.dispatchStartMs comment's wording are annotated, not rewritten.
@@ -3706,3 +3709,182 @@ The receipts are in vector-everywhere-progress.md, "EV-27", "Review round one".
 - The real CHECK script with this route: the route's token check uses a stand-in store, and the script itself is covered by cloud-agents-run-token.test.ts.
 - vector-everywhere.yml and typecheck.yml on everywhere-finish, after the commit gate's push (R1 to R3 run there in the Valkey job).
 - Live use, after EV-28, EV-29, EV-30 and R-C8/R-A8.
+
+## 2026-11-20, EV-28: the agent phase reads a job's request by reference (R-A4, runner half)
+
+Spec §11 R-A4 (the INV-S14 exception); §3.5.1; §3.6 ("After R-A4"); §5 E1, E4, E11, E13; §8 VE-30. Base: HEAD `c1112608` (EV-27), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` and origin/main `8e34d05e` are ancestors, so nothing was merged. Precondition: origin/brain-transport `0d18f750` is an ancestor, so BT02 and BT05 to BT07b (and the review fix `27913ae3`) are in. No worktree, shell, sandbox or process-spawn file is touched, so v2-spawn-review.md does not apply; no relay file is touched, so codium-build-spec §4.17 does not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+### What changed
+
+- **packages/schema/src/everywhere.ts** (the lane's file; it still imports nothing):
+  - `ACTIONS_JOB_PROMPT = "Vector everywhere job "` and `jobOfActionsPrompt(value)` (:247-259): the job id when `value` is exactly the line and a job id, otherwise undefined;
+  - the type `ActionsJobBody` `{task, context, outside}`, where `outside` is never `github` (:471-480);
+  - `ACTIONS_PLATFORMS` (PLATFORMS without github) and `decodeActionsJobBody` (:929-950): exactly the three fields, a non-blank task within `LIMITS.taskChars`, the envelope's `context()` and an `outside` from ACTIONS_PLATFORMS. Errors name the field, never the value.
+- **packages/core/src/everywhere/frame.ts** (types only): `FrameRepository` (`fullName` only) and `FrameJob`'s `repository` narrowed to it (:58-65); `everywhereSystemInstructions` takes the same (:76-78). The header no longer says "later", and says the two runtimes write the same block, the Actions run's with no `Thread:` line ((e); review round one). Every existing caller passes whole jobs and still compiles.
+- **packages/engine/src/cli/cmd/github.cloud.ts** (@vector's file):
+  - `post` keeps its signature and now sends through a new `send` (:164-215), which is `post`'s old body with the method chosen by whether a body is given: a GET carries no body and no Content-Type. Every POST is byte for byte what it was;
+  - `EVERYWHERE_BODY_ATTEMPTS = 7`, `EVERYWHERE_BODY_RETRY_MS = 1000`, the private `EVERYWHERE_BODY_RESPONSE = 256 KiB` and `everywhereJobBody` (:543-603);
+  - one import of `decodeActionsJobBody`, `isJobId` and the type `ActionsJobBody` from @vectordevai/schema/everywhere (:6).
+- **packages/engine/src/cli/cmd/github.run-helpers.ts** (@vector's file): a type import of `PlatformId` from @vectordevai/schema/everywhere (:35); `ChatContext.outside?: PlatformId` (:576-582); `taskPart(text, outside: PlatformId = "github")` (:592-599); `chat` passes `ctx.outside` (:621).
+- **packages/engine/src/cli/cmd/github.agent.ts** (@vector's file, additive hunks):
+  - the header's new sentences (:17-22) and two imports (:34, :44), `everywhereJobBody` in the ./github.cloud list (:70);
+  - `EVERYWHERE_UNREAD` (:107-109): "Vector could not read this Vector everywhere job's request, so it made no changes." It names no plan or price and uses no INV-H1 word;
+  - begin (:530-539, :549): `everywhere` is read after every one of begin's checks, a signal during the read returns `{cancelled: true}`, the pinned instructions become GitHub's policy, a blank line and the everywhere policy, and `everywhere` is returned;
+  - runTask (:481) returns `CANCELLED` for that answer, and `Start` (:498) excludes it (review round one);
+  - `everywhereRequest` and `readRequest` (:553-605);
+  - gather's first branch (:609-617): the framed request is the message as it stands;
+  - work's chat context (:730-731): `outside: start.everywhere?.outside`;
+  - saveConversation (:866-868): `if (start.everywhere) return` right after the first `clear()`.
+- **Outside the brief's list ((l)):**
+  - .github/workflows/vector-everywhere.yml: five pull_request paths (:62-67): github.agent.ts, github.cloud.ts, github.run-helpers.ts, github.policy.ts and test/cli/github.agent-fixture.ts;
+  - packages/web/test/everywhere-lane.test.ts: the same five in `helpers` (:308-313);
+  - packages/web/test/everywhere-body-api.test.ts B1: `decodeActionsJobBody` of the route's answer text is `{ok: true, value: body}` (:494-496), so the server and the agent phase are pinned to one contract from both ends;
+  - packages/schema/test/everywhere.test.ts: four cases (below).
+- **New packages/engine/test/everywhere/github-agent-body.test.ts:** 14 cases (6 client, 8 agent phase; B8 since review round one).
+- Nothing is regenerated: no HttpApi route, no config schema, no SDK. No dependency, flag, env var, switch or lockfile changes. The fixture (test/cli/github.agent-fixture.ts) is not edited.
+
+### Decisions
+
+- **(a) What "the run context carries a job id" means.** The ticket's `jobId` (R-A1) never leaves the server (cloud-agents-start.ts:57-61), so the agent phase sees only the dispatch. The read path is taken only for a Codium ticket dispatch (`route.ticket`: VECTOR_MODE codium, the App bot `<slug>[bot]` of MENTIONS' handle, a well-formed `inputs.ticket`, which mint step 8 verified) whose raw VECTOR_PROMPT is exactly `ACTIONS_JOB_PROMPT` and a `vej_` id. No server-side check is added to prepareCloudRun: EV-25's cases (packages/web/test/cloud-agents-start.test.ts:1167-1184) pin that a job id never reaches GitHub for an arbitrary prompt, and EV-30's adapter will build the prompt from the shared constant. Whether prepareCloudRun should enforce the line is left to the lead.
+- **(b) The line selects the read; only a 200 makes the run an everywhere job** (critique, taken; EV-27 (b) at :3518 and the handoff's annotation at :220 say "EV-28 must never decide from the prompt line alone").
+  - The line only chooses to read. Framing, the everywhere policy and the platform's outside marker follow only a 200 that `decodeActionsJobBody` accepts.
+  - Every other outcome ends the run with EVERYWHERE_UNREAD. That is deliberate: the run cannot tell a run no job links from a job whose body was spent (a lost 200, EV-27 (i)) or whose start event is late or lost, and it must never run an everywhere job's line as a service task, which would spend @vector hours on a no-op while the job stays `running`.
+  - The cost: a ticket whose own prompt is exactly the line, which only the desktop could send if its user typed it, is refused after seven reads where it would run today as a SERVICE_TASK. The case "a job line that no linked job answers, such as a desktop user's ticket that typed it" pins that refusal. Left open asks the lead whether prepareCloudRun should refuse the exact line when no `jobId` is given, so it cannot arise.
+- **(c) Where the read sits, and how it fails.** At the end of begin(), after the route, the thread, the repository name, the run id, the GitHub token and the checked-out head, and before LLMRequestPrep.pin, provider.list, sessions.create and any GitHub read. A throw there takes runTask's existing begin-crash path: `deps.error(line)` and `{exitCode: 1}` with no bundle, so withRunHeartbeat settles `failed` at once and EV-30's settle listener can end the job promptly (EV-27 (i)). The one exception is the run's own signal (SIGINT or SIGTERM) ending the read or its wait: everywhereRequest then answers `"cancelled"`, begin `{cancelled: true}` and runTask `CANCELLED`, with no line, as every other signal-aware step does (2.13; review round one, finding 1). `everywhereRequest` catches anything `readRequest` throws, the frame calls included, and throws only EVERYWHERE_UNREAD, so no other text can be printed (critique, taken). frameTask and the policy cannot throw on a body the decoder accepted and GITHUB_REPOSITORY that passed `isRepositoryName`; the catch is defence in depth (M25 survives; see Mutations).
+- **(d) The retry.** Only the route's own 404 `{error: {code: "NOT_FOUND"}}` is read again, `EVERYWHERE_BODY_RETRY_MS` (1 s) later, up to `EVERYWHERE_BODY_ATTEMPTS` (7) reads in all, about 6 s: that read is unspent, and the start listener runs after the mint's answer (EV-27 Left open). 503 `EVERYWHERE_BUSY` is not read again (following EV-27: a busy store may already have spent the read); nor are 404 `EVERYWHERE_OFF`, 410, 401, 5xx, a 404 that is not the route's JSON, a network error, a redirect, an answer over the cap or malformed JSON. The wait goes through `bounded`, and the read's signal is the run's signal joined with the run's stop (`deps.halt.onHalt`, which fires at once for a run that has already stopped), so the deadline or a heartbeat stop before the read, during the wait or during a read ends it at once with no further request (critique, taken: the earlier plan checked only the signal). That one mechanism replaced two explicit `deps.halt.reason()` checks before and after the read, which the mutations showed were redundant (M18 and M22 below).
+- **(e) The frame.** Kind `mention` and the repository from GITHUB_REPOSITORY (EV-27 Left open): kind matters to frameTask only for an empty task, which the decoder refuses and no intake writes (Linear fills "Work on this issue."). `FrameJob.repository` and `everywhereSystemInstructions`' parameter now need only `fullName`, so the run invents no repository id or `shared` value. The pinned system text is GitHub's policy and untrusted-data rule, a blank line, then the everywhere work policy and untrusted rule for the platform; no user turn carries either. No thread link is written: the answer carries none.
+- **(f) The outside marker.** `ChatContext.outside` marks every task turn of the run with the platform, the title turn (`summarize`) included, since it shares the context and repeats the reply. The default stays "github", so every other caller and every other run is unchanged.
+- **(g) The phase's own E11 check.** Nothing is read unless the event payload says `repository.private: true` (the same `PrivateRepository` begin uses for its visibility). That is the dispatch-time view, defence in depth; the route checks the job's own `repository.shared`, and a live read before the body is EV-30's (EV-27 Left open).
+- **(h) No Brain context and no saved conversation** (critique, taken in its reasoning). A session.vsa would hold the platform's text in an artifact that outlives the body's 2 hours (E4) and that erasing the job (E13) cannot reach, so a job run never saves its conversation and asks for no key; a planted session.vsa is still removed. A job line with a Brain upload (VECTOR_BRAIN_UPLOAD set) reads nothing and ends with the fixed line, rather than running stripped of its Brain context (critique, taken): prepareCloudRun accepts an upload only for a desktop run, so the two never come together for a real job. The conversation restore needs no change: a ticket run without an upload already restores nothing.
+- **(i) No `vector.unattended` mark.** The Actions session is not marked: R-M2's offline shell and R-M3's audience gate are the laptop's, and the Actions sandbox and @vector's own policy govern this run. The everywhere work policy still tells the model it is unattended.
+- **(j) The schema names.** `decodeActionsJobBody` and `ActionsJobBody` live in the import-free schema module, beside the envelope. The type is not named `RunBody`, which api/_lib/everywhere/jobs.ts:1175 already uses for the server's verdict with `outside: PlatformId` (critique, taken); jobs.ts is unchanged, and B1's cross-check ties the two. The outside list is derived from PLATFORMS (critique, taken).
+- **(k) The answer cap.** 256 KiB. The largest legal answer is about 193 KB (32,000 characters, each at most six bytes once JSON escapes it); `body()`'s default 16 KiB would refuse real bodies (M16), and no cap would read any size (M17).
+- **(l) Files outside the brief, and @vector's files.** The brief names github.agent.ts and github.policy.ts. The read is in github.cloud.ts because every vectordev.ai call of the run goes through its `Services` seam and egress label (githubFetch, `github`); the marker is in github.run-helpers.ts because `taskPart` lives there. github.policy.ts is not edited. `post`'s body moved into `send` so the GET shares it (critique, taken: no copied request helper). The workflow paths and the lane test's `helpers` follow EV-27 (l), so a change to these @vector files runs this lane's test. The web and schema test edits are the lane's.
+- **(m) Logging.** Only fixed lines: EVERYWHERE_UNREAD, or begin's earlier lines. The body, its context and the platform never reach a log; the B1 case checks every logged line of a job run.
+- **(n) Static imports.** github.agent.ts imports core's frame and schema's everywhere statically; both were already in the engine's graph (session/prompt.ts, worktree/index.ts), and schema's module imports nothing, so a dynamic import buys nothing.
+- **(o) Whitespace near-misses fail closed** (critique, taken in its first form). A ticket prompt that is the line only once trimmed (a space before, a newline after) reads nothing and ends with EVERYWHERE_UNREAD and a failed settle, instead of running as a service task. This is the one narrow exception to "without a job id, behaviour is byte-identical": only a prompt that is exactly the line (`jobOfActionsPrompt` of the trimmed trigger) is affected. Every other prompt, including the line with words after it, two spaces, other casing or a malformed id, runs exactly as before.
+- **(p) The test harness** (critique, taken). vectordev.ai is the fixture's `cloudRecorder` behind the cloud client's Services seam; the test file wraps its `request` so a script answers the body route, and sees each RequestInit as the client sends it (method, redirect, credentials, cache, headers, body). No new server is started and the fixture is not edited. `codiumFakes` and the other helpers come from test/cli/github.agent-fixture.ts; only `runtime` and `setup` come from test/lib/research.ts.
+
+### Critique of the plan (2026-11-20)
+
+All nine points were taken.
+
+1. **The known flake** (major). Taken: the only known flake is packages/engine/test/cli/review.test.ts:1050 (the "987" SHA), which is not in the `github*` glob and is not run here. github.review.test.ts is one of the 38 files run, and any failure there would be treated as real. Neither file is edited.
+2. **The harness** (major). Taken: (p).
+3. **EV-27's note** (major). Taken: (b), with the refusal pinned and the question in Left open.
+4. **Only the fixed line, and the stop during the retry** (minor). Taken: (c) and (d); the case "… a stop during a read or the wait ends it at once" (B4, retitled in review round one, when its wait sub-case was added), and M20.
+5. **The reason for not saving** (minor). Taken: (h) cites E4 and E13.
+6. **Whitespace near-misses** (minor). Taken in its first form: (o), M21.
+7. **Documentation the design contradicts** (minor). Taken: dated notes on spec §11 R-A1 and §6.4, and a Left open item for @vector's INV-S14 text.
+8. **Smaller points** (minor). Taken: the shared `send`, the outside list from PLATFORMS, the type renamed `ActionsJobBody`, and the Brain upload fails closed.
+9. **CI coverage** (minor). Taken: Left open forwards the two paths to @vector's workflow; the receipt states the precondition as origin/brain-transport `0d18f750` being an ancestor.
+
+### The cases
+
+packages/engine/test/everywhere/github-agent-body.test.ts (vectordev.ai behind the seam, the fixture's fake gateway in front of test/lib/llm-server.ts, the fixture's loopback GitHub, a fake clock, the strict network guard):
+
+| Case | What it pins |
+| --- | --- |
+| A1 | one GET to `https://vectordev.ai/api/everywhere/jobs/<jid>/body` with `Bearer vrt_…` and Accept json only, no body, `redirect: error`, `credentials: omit`, `cache: no-store`, a signal; the answer is exactly the body; nothing masked or printed |
+| A2 | `absent` and no request for an unauthorized Codium holder, an own-key holder, a short id, an upper-case id and an id followed by a newline |
+| A3 | 404 `NOT_FOUND` then 200: two reads, waits `[1000]`; a lasting 404: seven reads, six waits; one read and no wait for 404 `EVERYWHERE_OFF`, 410, 503 store, 503 busy, 401, 500, a 404 that is not the route's, and `NOT_FOUND` at status 400 |
+| A4 | one read and `unavailable` for a 200 with an extra label or jid, no context, a GitHub or unknown outside, an empty, blank or over-long task, 31 items, an item over 4,000, context over 24,000, an item with another field or `from` "owner", text that is not JSON, and a valid body padded past 256 KiB |
+| A5 | the largest legal body (every character a control character) is over 192,000 bytes, under 256 KiB, and read |
+| A6 | a request that throws, a 302 and a signal that fires during the wait each end the read after one request; an already-fired signal sends nothing |
+| B1 | a Slack job: exit 0 `no-changes`; vectordev.ai sees exactly the GET and the settle, GitHub nothing; every model request's system text holds GitHub's policy, a blank line and the Slack everywhere policy, and no user text holds either policy or SERVICE_TASK; the stored task turn is exactly frameTask's block with `{"vector.outside": "slack"}`, and every stored task turn carries the marker; the block's one raw `</everywhere_request>` is its last line, no line starts `SYSTEM`, and every context line parses back to its item; no log line holds the platform's text |
+| B2 | 404, 404, then a Linear 200: three reads, waits `[1000, 1000]`, the Linear policy pinned and the turn marked `linear` |
+| B3 | 410, 503 store, 503 busy, 404 `EVERYWHERE_OFF`, 401, 500, a 200 with an extra field, a 200 for GitHub, a 302 and a throw: each exit 1 with exactly `error: EVERYWHERE_UNREAD`, one read and a `failed` settle, no bundle; no model or gateway request and no GitHub request across the table |
+| B4 | the line with no linked job (a desktop user's typed line, or a lost start): seven reads, six waits, the fixed line, a `failed` settle; the deadline during the first read, answered 404: one read, no wait; the deadline during the wait after the route's 404, which then ends as usual: one read, waits `[1000]`, the fixed line, a `failed` settle, no bundle (review round one, finding 2); the deadline during a read answered 200: the fixed line and no bundle |
+| B5 | no read, only a `failed` settle, for a payload without a repository, a public repository, a Brain upload, a stop time already passed, the line after a space and before a newline (the fixed line), and another thread (THREAD_MISMATCH); no model request |
+| B6 | a job run with the runner's session proof: `changes`; vector-out holds only patch.diff and summary.json (the model's session.vsa is gone); no key request, export or attestation; no SESSION_* line |
+| B7 | the line with more words, a short id, lower-case words, an upper-case id, an id with a letter the alphabet leaves out and two spaces: no read, the task starts with SERVICE_TASK and holds the prompt as `Prompt (untrusted): <untrustedJson>`, no everywhere policy, the marker `github`; a writer's dispatch of the exact line reads nothing and its task is the line as written; own key refuses the ticket with BOT_REFUSED and sends nothing |
+| B8 | SIGTERM during the read (which then answers a valid 200) and during the wait after the route's 404 (a wait that never ends by itself): the phase hands back nothing and the exit code is 143; once the deadline timer is cleared, no line at all (no EVERYWHERE_UNREAD), one read (waits `[]` and `[1000]`), a `cancelled` settle, no bundle, the SIGTERM listeners restored; no model, gateway or GitHub request (review round one, finding 1) |
+
+packages/schema/test/everywhere.test.ts ("an Actions run's job (R-A4)"): the exact line gives the jid, and thirteen near misses and five non-strings give undefined; the decoder keeps the three fields for each platform, an empty context and a task at its limit; seventeen refusals each name their path; five refusals never repeat the refused value. The module-shape test still sees no imports.
+
+### Left open
+
+- **For the lead:**
+  - whether prepareCloudRun should refuse a prompt that is exactly the job line when no `jobId` is given ((b)), so a desktop user's typed line cannot be refused after seven reads; when it is built, packages/web/test/cloud-agents-start.test.ts pins that refusal (review round one, finding 7, which keeps the agent phase's fail-closed answer as it is);
+  - whether prepareCloudRun should also require the line when a `jobId` is given (EV-30 builds it from `ACTIONS_JOB_PROMPT`; (a));
+  - whether 503 `EVERYWHERE_BUSY` should be read again ((d)); today it ends the run;
+  - to forward to @vector: INV-S14's R-A4 exception (vector-at-mention-spec's contract text is unchanged although the code now has the exception), the new fixed line EVERYWHERE_UNREAD, `ChatContext.outside` and `taskPart`'s new parameter, `send`, and the two paths github.agent.ts now imports, packages/core/src/everywhere/frame.ts and packages/schema/src/everywhere.ts, for vector-at-mention.yml's pull_request paths (the lane cannot edit that workflow), so a change to them runs @vector's github*.test.ts.
+- **EV-30** builds the dispatch prompt as `${ACTIONS_JOB_PROMPT}${jid}` with no surrounding whitespace (a test there should pin it), and dispatches only to a workflow whose pinned CLI includes EV-28, read live with the mode: an older agent phase treats the line as an untrusted service prompt and spends @vector hours on it.
+- **A lost start event still loses the job** (EV-27): the run reads 404 seven times and settles `failed`.
+- **Shipping needs a published CLI** (owner-gated). Nothing here reaches production before then.
+
+### Safe by default
+
+- VECTOR_EVERYWHERE_ENABLED stays off, and no flag, switch, env var or dependency changes.
+- Production cannot reach the new path: no router dispatches platform jobs to Actions (EV-29 and EV-30 are not built); ENABLED_SOURCES reserves slack, linear and jira (R-C8/R-A8, owner-gated), so no such ticket or run token exists; the body route answers 404 until EV-30 registers the start listener; and the CLI ships only with a release.
+- A run whose prompt is not the job line takes exactly today's path: `taskPart` defaults to "github" and every new branch is skipped (B7, and the 38 test/cli/github*.test.ts files with their counts unchanged).
+- Every failure fails closed before any model request: one fixed line, exit 1, no bundle, a `failed` settle, and never a second read of a body that may be spent.
+- Own key never reads (no ticket route and no run token), and a payload that does not say private reads nothing.
+
+### Mutations
+
+25 mutations, one source edit at a time, each with packages/engine/test/everywhere/github-agent-body.test.ts run alone through vector-serial (/tmp/vector-v2/everywhere/ev28/mut/: mutate.py, run.log, one log per mutation, before.sha256 and before2.sha256). Every file was restored from its saved bytes, and `sha256sum -c` matched all five source files after each round. "Red" is the number of the file's 13 cases that failed.
+
+| Mutation | File | Red | Red cases |
+| --- | --- | --- | --- |
+| M1 the ticket requirement dropped | github.agent.ts | 1 | B7 (the writer's dispatch of the line reads) |
+| M2 the prompt trimmed before the match | github.agent.ts | 1 | B5 (the line after a space and before a newline read) |
+| M3 every route 404 retried | github.cloud.ts | 2 | A3, B3 |
+| M4 503 `EVERYWHERE_BUSY` retried | github.cloud.ts | 2 | A3, B3 |
+| M5 no retry | github.cloud.ts | 4 | A3, A6, B2, B4 |
+| M6 eight reads | github.cloud.ts | 2 | A3, B4 |
+| M7 the SERVICE_TASK line kept | github.agent.ts | 2 | B1, B2 |
+| M8 the policy in the user turn | github.agent.ts | 2 | B1, B2 |
+| M9 `taskPart` ignores `outside` | github.run-helpers.ts | 2 | B1, B2 |
+| M10 the private check dropped | github.agent.ts | 1 | B5 |
+| M11 extra fields allowed | schema everywhere.ts | 2 | A4, B3 |
+| M12 a GitHub outside allowed | schema everywhere.ts | 1 | A4 |
+| M13 the save skip removed | github.agent.ts | 1 | B6 |
+| M14 the Brain upload refusal removed | github.agent.ts | 1 | B5 |
+| M15 a failed read falls back to the service task | github.agent.ts | 3 | B3, B4, B5 |
+| M16 the answer cap left at `body()`'s 16 KiB | github.cloud.ts | 1 | A5 |
+| M17 the answer cap removed | github.cloud.ts | 1 | A4 |
+| M18 the explicit stop check before the read dropped | github.agent.ts | 0 | survived: the joined signal already ends an already-stopped read with no request. The check was removed |
+| M19 frame.ts writes `JSON.stringify` instead of `untrustedJson` | core frame.ts | 1 | B1 |
+| M20 the stop not joined to the read's signal | github.agent.ts | 1 (2 after the simplification) | B4; then B4 and B5 |
+| M21 a line that matches only once trimmed runs as a service task | github.agent.ts | 1 | B5 |
+| M22 the explicit stop check after the read dropped | github.agent.ts | 0 | survived: no stop can land between the read's answer and the check (only microtasks run there), and a stop during the read aborts it. The check was removed |
+| M23 M20 and M22 together | github.agent.ts | 1 | B4 (the deadline during a read answered 200 then goes on to the model): the post-read check mattered only without the joined signal |
+| M24 any 404 retried, whatever its body | github.cloud.ts | 2 | A3, B3 |
+| M25 the frame's catch removed | github.agent.ts | 0 | survives, by design: no case can make frameTask or the policy throw after the decoder and `isRepositoryName` accepted the input, so the catch is defence in depth (critique item 4) |
+
+After M18 and M22, readRequest's two `deps.halt.reason()` checks were removed (the joined signal is the one mechanism), and M10, M14, M20 and M25 were re-run against the new code: M10, M14 and M20 red as before (M20 now also turns B5's "a stop time already passed" red), M25 still survives.
+
+### Review round one (2026-11-20)
+
+Eight findings, none blocking. Five are taken in code or tests (3 and 6 are one change), one in the lane documents, and two are kept as built, with the reason here. Built uncommitted.
+
+| Finding | Taken |
+| --- | --- |
+| 1. A cancelled run is settled `failed`, not `cancelled`: a signal during the body read or its wait made everywhereRequest throw EVERYWHERE_UNREAD, so runTask logged that line and returned `{exitCode: 1}` | Taken in code, in the read path only, so a run with no job line is unchanged: when the read answers nothing and `deps.signal` has fired, everywhereRequest answers `"cancelled"`, begin `{cancelled: true}` (excluded from `Start`) and runTask `CANCELLED`, with no line ((c)). One correction to the finding: on SIGINT or SIGTERM withRunHeartbeat's own listener already settled `cancelled`, so the settle was right before the fix (a scratch run of B8 against the unfixed code, expecting the line, passed with a `cancelled` settle: R-M26-settle.log); what was wrong was the EVERYWHERE_UNREAD line logged after the cancel, and runTask's result. B8 pins both stages (the read, and the wait after a 404) under a real SIGTERM, as the Brain read's case does: the phase hands back nothing, so B8 asserts the exit code 143, no line once the phase's timer is cleared, one read, a `cancelled` settle and no bundle; runTask's `{exitCode: 1, outcome: "cancelled"}` is not observable from outside the phase (withGithubSignals' race returns first) |
+| 2. B4's middle sub-case fired the deadline inside the first read, not during the wait | Taken in the test: that sub-case is relabelled "during the first read, answered 404", and a new sub-case fires the deadline from the site's `wait` after the route's 404. That wait then ends as usual, so only the joined signal around the wait keeps the run from reading again: one read, waits `[1000]`, the fixed line, a `failed` settle and no bundle. A wait that never ends would not tell the joined signal from the 2 s pause timeout without a timing assertion, so the agent-phase case lets it end; client case A6 keeps the never-ending wait. B4's title now says "a stop during a read or the wait" |
+| 3 and 6. `ChatContext.outside` and `taskPart`'s `outside` accept any string, so a later caller could stamp memory's trusted markers ("file", BrainSchema.PASTE) on a task turn | Taken in code: both are `PlatformId` (a type import from @vectordevai/schema/everywhere, already in the engine's graph), "github" still the default. `PlatformId` rather than `"github" \| ActionsJobBody["outside"]`: the two are the same set |
+| 4. frame.ts's header said the two runtimes write exactly the same text | Taken: it now says they write the same block, and that the Actions run's has no `Thread:` line, since the body route answers no thread link, pointing to (e) |
+| 5. E6 says every triggered session is guest-marked; (i) leaves the Actions session unmarked | Taken in the lane documents: dated EV-28 notes under spec §5 E6 and E7 say an Actions job's session is not marked `vector.unattended`, that the Actions runner's sandbox, @vector's own run policy and the pinned everywhere policy govern it, that the runner keeps no personal memory, and that the run reads no Brain context and restores no conversation, pointing here ((h), (i)) |
+| 7. A ticket prompt that is exactly the job line used to run as a SERVICE_TASK and now fails after seven reads | Kept, as the finding advises: failing closed is the safer direction ((b), (o)). Left open now says that when the lead builds prepareCloudRun's refusal of the exact line with no `jobId`, packages/web/test/cloud-agents-start.test.ts pins it |
+| 8. vector-at-mention.yml's paths miss frame.ts and schema/everywhere.ts; this lane's paths hunk sits beside FIT-4's rewrite | Kept, as the finding advises: the two paths stay in Left open for @vector (this lane cannot edit vector-at-mention.yml). The commit body is to say that the vector-everywhere.yml paths hunk sits beside review-fixes' FIT-4, so the merge with review-fixes keeps these five entries (Coordination) |
+
+Mutations for the changed code, one at a time, each with packages/engine/test/everywhere/github-agent-body.test.ts run alone through vector-serial (/tmp/vector-v2/everywhere/ev28/review1/mut/: R-M20.log, R-M26.log, R-M26-settle.log, before.sha256). `sha256sum -c` matched all four touched source and test files after each.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| R-M20 the stop not joined to the read's signal (M20 again, on the new B4) | github.agent.ts | 12/2 | B4, B5 (as M20 after the simplification). In a scratch run of B4 with its first two sub-cases removed, the new wait sub-case alone is red (it goes on to read again) |
+| R-M26 a signal during the read no longer answers `cancelled` | github.agent.ts | 13/1 | B8 (the line EVERYWHERE_UNREAD is logged after the SIGTERM) |
+
+The `PlatformId` typing has no runtime mutation; M9 (taskPart ignores `outside`) still covers the marker.
+
+The receipts are in vector-everywhere-progress.md, "EV-28 review round one".
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, brain-transport `0d18f750` and process-finish `3ec7fb14`. One overlap remains by location, not content: the vector-everywhere.yml `paths:` hunk (:62-67) sits in the block that review-fixes' FIT-4 rewrites (its dead push triggers and the non-existent path filter), so the merge with review-fixes must keep these five entries; the commit body says so (review round one, finding 8).
+
+### Deferred verification
+
+- vector-at-mention.yml, vector-everywhere.yml and typecheck.yml on everywhere-finish, after the commit gate's push.
+- Live use, after EV-29, EV-30, R-C8/R-A8 and a published CLI.
