@@ -129,9 +129,10 @@ if(VECTOR_COMPUTER_OVERLAY_DRIVER)
   list(APPEND VECTOR_COMPUTER_TARGETS computer-overlay-driver)
 endif()
 foreach(TARGET IN LISTS VECTOR_COMPUTER_TARGETS)
-  # Compile independent translation units with two workers while bounding CI memory use.
+  # Compile independent translation units with four workers, the hosted Windows runner's vCPU count, while bounding
+  # memory use. Keep an explicit count so the worker count, and memory, never follow a larger host's processor count.
   target_compile_options(${TARGET} PRIVATE
-    "$<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/EHsc;/utf-8;/guard:cf;/sdl;/Brepro;/Zc:__cplusplus;/MP2>")
+    "$<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/EHsc;/utf-8;/guard:cf;/sdl;/Brepro;/Zc:__cplusplus;/MP4>")
   if(NOT "${TARGET}" STREQUAL "computer-core" AND NOT "${TARGET}" STREQUAL "overlay-driver-support")
     target_link_options(${TARGET} PRIVATE /guard:cf /Brepro "/PDBALTPATH:%_PDB%")
     if(CMAKE_VS_PLATFORM_NAME STREQUAL "x64")

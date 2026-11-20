@@ -675,7 +675,11 @@ jobs:
       - name: Build both channel helper architectures
         if: ${{ steps.restore.outputs.restored != 'true' }}
         timeout-minutes: 20
+        env:
+          # CMake passes this to MSBuild as /m:2 so the small one-file projects overlap after computer-core.
+          CMAKE_BUILD_PARALLEL_LEVEL: "2"
         run: |
+          Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"
           bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
           if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }
       - name: Run Windows unit and fresh version/probe checks
