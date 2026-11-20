@@ -418,8 +418,8 @@ export function withCliFixture<A, E>(
       // the child starts. Output goes to files, not the shell's capture: Bun 1.3.14 drops the end of a
       // captured stream when more than 128 KiB arrives together with its hangup, so the shell promise
       // never settles after both processes have exited. The files also show how far each side got. The
-      // shell takes one redirect per command, so the reader's own stderr stays captured; the readers
-      // these tests pass write nothing there.
+      // shell takes one redirect per command, so the reader's own stderr stays captured: a reader passed
+      // here must keep its stderr well under 128 KiB or it can hang the same way.
       // A shell pipeline cannot be killed, so a timeout leaves the CLI to its own exit.
       const id = `pipe-${Date.now()}`
       const out = path.join(home, `${id}.out`)
@@ -432,12 +432,17 @@ export function withCliFixture<A, E>(
           .quiet(),
       ).pipe(
         Effect.flatMap((result) =>
-          Effect.promise(async () => ({
-            exitCode: result.exitCode,
-            stdout: normalizeLines(await readText(out)),
-            stderr: normalizeLines((await readText(cliErr)) + result.stderr.toString()),
-            durationMs: Date.now() - start,
-          })),
+          Effect.promise(async () => {
+            const readerErr = result.stderr.toString()
+            return {
+              exitCode: result.exitCode,
+              stdout: normalizeLines(await readText(out)),
+              stderr: normalizeLines(
+                (await readText(cliErr)) + (readerErr ? `\n--- reader stderr ---\n${readerErr}` : ""),
+              ),
+              durationMs: Date.now() - start,
+            }
+          }),
         ),
         Effect.timeoutOrElse({
           duration: Duration.millis(timeoutMs),

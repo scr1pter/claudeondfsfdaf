@@ -608,3 +608,18 @@ Upstream. A Bun report with the standalone repro above (the fault is in `readWit
 `src/io/PipeReader.zig`, which returns without `done()` when `onReadChunk(.eof)` returns false) is not filed: filing is
 a public action left to the lead or owner. Any other test that captures a 128 KiB to 208 KB burst through Bun's shell
 `.quiet()` or `.text()` can hang the same way.
+
+Review follow-up.
+
+- Margin. At 512,000 characters the Linux run now depends on the CLI's five-second flush at exit, which 160,000 never
+  reached. The reader starts reading about 3 s after the pipeline starts and the window opens when the CLI finishes, so
+  the margin is about 2 s. If a starved runner wakes the reader after the window, the CLI exits with output still
+  queued and the test fails fast with truncated JSON, not a timeout. That is the case the test exists to check (Windows
+  already runs it). If it ever flakes as truncated stdout, look at the 3 s reader sleep against the 5 s flush bound
+  before suspecting the helper; the timeout report tells the two cases apart.
+- Reader stderr. It is still captured by the shell, so a reader passed to `vector.pipe` must keep its stderr well under
+  128 KiB; the helper's comment says so. If Bun's shell ever allows two redirects per command, send it to a file too.
+- On success the CLI's stderr and the reader's captured stderr are now separated by a `--- reader stderr ---` line
+  (only when the reader wrote any), as the timeout report already separates its parts.
+- Windows. Only Linux was validated locally. Check the Windows engine shard that runs `piped-output.test.ts` on the
+  PR's CI (the `2>` and `>` redirects and the 512 KB size) before merging.
