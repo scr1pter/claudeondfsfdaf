@@ -21,7 +21,8 @@ describe("parseReviewConfig", () => {
     config.ignore.push("mutated")
     expect(DEFAULT_REVIEW_CONFIG.skipLabels).toEqual(["vector:skip", "no-review"])
     expect(DEFAULT_REVIEW_CONFIG.ignore).toEqual([])
-    // The route settings (VS-23a) have no default entry, so the defaults and every digest of them stay as they were.
+    // The sourced keys (VS-23a's route settings, VS-30's runtime, VS-34's holdback) are never in the defaults, so the
+    // defaults and every digest of them stay as they were.
     for (const key of SOURCED_REVIEW_KEYS) {
       expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
       expect(Object.hasOwn(config, key)).toBe(false)
@@ -891,6 +892,7 @@ describe("VS-24's keys", () => {
       depth: "fixed",
       lenses: "off",
       runtime: "off",
+      holdback: "off",
     })
   })
 
@@ -1435,5 +1437,162 @@ describe("VS-30's runtime key", () => {
     expect(result.config).toEqual(DEFAULT_REVIEW_CONFIG)
     expect(result.warnings).toHaveLength(1)
     expect(result.warnings[0]).toStartWith(`${REVIEW_CONFIG_PATH} is not valid JSON`)
+  })
+})
+
+// VS-34 (SF-13a): `holdback` is raise-only, as `privacy` is (addendum A §1): the strictest of the global config (SF-15
+// adds its hidden source), review.json and REVIEW_HOLDBACK. No runner applies it before VS-34 wiring (SF-13b), so every
+// mergeReviewConfig surface warns that "secrets" is not applied, and parseReviewConfig's surfaces ignore it.
+describe("VS-34's holdback key", () => {
+  const HOLD =
+    '"holdback": "secrets" is not applied yet: changed credential files and secret values are still sent to the model as before.'
+  const ASK = '"runtime": "ask" is not applied yet: no runtime checks run, and --checks works as before.'
+  const SECRETS = '{"holdback": "secrets"}'
+  const invalid = (label: string) => `${label} must be "off" or "secrets"; using "secrets", the stricter setting.`
+
+  test("is sourced, raise-only and unapplied, with no default entry", () => {
+    expect(SOURCED_REVIEW_KEYS).toContain("holdback")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("holdback")
+    expect(OPTIONAL_REVIEW_DEFAULTS.holdback).toBe("off")
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "holdback")).toBe(false)
+    expect(Object.hasOwn(parseReviewConfig().config, "holdback")).toBe(false)
+  })
+
+  // The GitHub job (SF-37), the desktop (SF-13b, SF-15) and connect's consent preview still read parseReviewConfig, so
+  // this is what they do with the key: a review.json copy gets the generic unknown-key warning, and REVIEW_HOLDBACK is
+  // not read at all, without a word.
+  test("parseReviewConfig ignores it in review.json, as before, and reads no environment variable", () => {
+    expect(parseReviewConfig({ json: SECRETS })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [`${REVIEW_CONFIG_PATH}: unknown key "holdback" is ignored.`],
+    })
+    expect(parseReviewConfig({ env: { REVIEW_HOLDBACK: "secrets" } })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [],
+    })
+    expect(parseReviewConfig({ json: '{"holdback": "secrets",' }).config).toEqual(DEFAULT_REVIEW_CONFIG)
+  })
+
+  test("review.json raises it on every surface, the desktop's base blob included", () => {
+    const raised = { config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" as const }, warnings: [HOLD] }
+    for (const surface of ["local", "github"] as const)
+      for (const at of ["base", "working-tree"] as const)
+        expect(mergeReviewConfig({ surface, json: { at, text: SECRETS } })).toEqual(raised)
+    // The desktop's base blob, when a pull request changes review.json, raises it and changes nothing else.
+    const blob = mergeReviewConfig({
+      surface: "local",
+      json: { at: "base", text: '{"holdback": "secrets", "maxComments": 1, "nits": true}', privacyOnly: true },
+      trigger: "desktop",
+    })
+    expect(blob).toEqual({
+      config: { ...parseReviewConfig({ trigger: "desktop" }).config, holdback: "secrets" },
+      warnings: [HOLD],
+    })
+  })
+
+  test("REVIEW_HOLDBACK raises it, without case or surrounding space", () => {
+    for (const value of ["secrets", " Secrets\n", "SECRETS"])
+      for (const surface of ["local", "github"] as const)
+        expect(mergeReviewConfig({ surface, env: { REVIEW_HOLDBACK: value } })).toEqual({
+          config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+          warnings: [HOLD],
+        })
+    // A blank value is unset, as for every other variable.
+    expect(mergeReviewConfig({ surface: "local", env: { REVIEW_HOLDBACK: "  " } })).toEqual(
+      parseReviewConfig({ env: { REVIEW_HOLDBACK: "  " } }),
+    )
+  })
+
+  // I-2: a pull request's own review.json (the working tree locally, or any review.json a surface reads from the head)
+  // can only raise the key, so no source a pull request controls lowers one that another source set.
+  test("is raised by any source and lowered by none", () => {
+    const values = [undefined, "off", "secrets"] as const
+    for (const surface of ["local", "github"] as const)
+      for (const at of ["base", "working-tree"] as const)
+        for (const global of values)
+          for (const json of values)
+            for (const env of values) {
+              const result = mergeReviewConfig({
+                surface,
+                ...(global === undefined ? {} : { global: { holdback: global } }),
+                json: { at, text: json === undefined ? undefined : JSON.stringify({ holdback: json }) },
+                env: env === undefined ? {} : { REVIEW_HOLDBACK: env },
+              })
+              const secrets = [global, json, env].includes("secrets")
+              expect(result.config.holdback).toBe(secrets ? "secrets" : undefined)
+              expect(result.warnings).toEqual(secrets ? [HOLD] : [])
+            }
+  })
+
+  test("an explicit off from every source is left out, like its default, so the result is the defaults", () => {
+    for (const surface of ["local", "github"] as const)
+      expect(
+        mergeReviewConfig({
+          surface,
+          global: { holdback: "off" },
+          json: { at: "base", text: '{"holdback": "off"}' },
+          env: { REVIEW_HOLDBACK: "off" },
+        }),
+      ).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
+  })
+
+  test("a value that is not off or secrets fails closed to secrets, with a warning", () => {
+    for (const value of ["on", true, 1, null, "", ["secrets"]])
+      expect(
+        mergeReviewConfig({ surface: "github", json: { at: "base", text: JSON.stringify({ holdback: value }) } }),
+      ).toEqual({
+        config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+        warnings: [invalid(`${REVIEW_CONFIG_PATH}: "holdback"`), HOLD],
+      })
+    expect(mergeReviewConfig({ surface: "local", env: { REVIEW_HOLDBACK: "maybe" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+      warnings: [invalid("REVIEW_HOLDBACK"), HOLD],
+    })
+    expect(mergeReviewConfig({ surface: "local", global: { holdback: 3 } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+      warnings: [invalid("review.holdback in the global config"), HOLD],
+    })
+  })
+
+  test("a review.json that cannot be read fails closed only when it mentions holdback", () => {
+    const result = mergeReviewConfig({
+      surface: "local",
+      json: { at: "working-tree", text: '{"holdback": "secrets",' },
+    })
+    expect(result.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" })
+    expect(result.warnings).toHaveLength(3)
+    expect(result.warnings[0]).toStartWith(`${REVIEW_CONFIG_PATH} is not valid JSON`)
+    expect(result.warnings.slice(1)).toEqual([
+      `${REVIEW_CONFIG_PATH} could not be read and mentions "holdback"; using "secrets", the stricter setting.`,
+      HOLD,
+    ])
+    const text = '{"maxComments": 4,}'
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text } })).toEqual(
+      parseReviewConfig({ json: text }),
+    )
+  })
+
+  test("beside the other sourced keys and the unapplied ones, each keeps its own rule", () => {
+    // privacy raises nothing here but itself: "zdr" does not imply "secrets" (Q23 is open), nor the reverse.
+    expect(mergeReviewConfig({ surface: "local", global: { privacy: "zdr", holdback: "secrets" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, privacy: "zdr", holdback: "secrets" },
+      warnings: [HOLD],
+    })
+    expect(mergeReviewConfig({ surface: "local", global: { privacy: "zdr" } }).config.holdback).toBeUndefined()
+    expect(mergeReviewConfig({ surface: "local", env: { REVIEW_HOLDBACK: "secrets" } }).config.privacy).toBeUndefined()
+    expect(mergeReviewConfig({ surface: "local", global: { runtime: "ask", holdback: "secrets" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, runtime: "ask", holdback: "secrets" },
+      warnings: [ASK, HOLD],
+    })
+    // settle's own "not applied" warnings come first, then the sourced keys'.
+    expect(
+      mergeReviewConfig({
+        surface: "github",
+        json: { at: "base", text: '{"trivial": "skip", "holdback": "secrets"}' },
+      }),
+    ).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, trivial: "skip", holdback: "secrets" },
+      warnings: ['"trivial": "skip" is not applied yet: every change is still reviewed.', HOLD],
+    })
   })
 })

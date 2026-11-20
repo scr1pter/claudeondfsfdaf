@@ -204,6 +204,19 @@ describe("renderLocalReview", () => {
     )
   })
 
+  // VS-34 (SF-13a): the label only. No runner records a held-back skip before VS-34 wiring (SF-13b).
+  test("names a file held back from the model as not reviewed", () => {
+    const text = render({
+      outcome: outcome({
+        skipped: [
+          { path: "config/prod/.envrc", reason: "held-back" },
+          { path: "bun.lock", reason: "lockfile" },
+        ],
+      }),
+    })
+    expect(text).toContain("Not reviewed: config/prod/.envrc (held back) · bun.lock (lockfile)")
+  })
+
   test("words the subscription and unknown costs as the summary comment does", () => {
     const plan = render({ outcome: outcome({ cost: { ...outcome().cost!, kind: "plan", model: "openai/gpt-5" } }) })
     expect(plan).toContain("openai/gpt-5 · subscription sign-in, no per-token price · 48.2k in / 3.1k out")

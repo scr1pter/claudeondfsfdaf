@@ -53,6 +53,7 @@ const SKIP_REASON: Record<SkippedFile["reason"], string> = {
   binary: "binary",
   deleted: "deleted",
   "size-limit": "too large",
+  "held-back": "held back",
 }
 
 const ANSI = {

@@ -701,6 +701,12 @@ describe("strictSelect: completeness", () => {
     expect(coverage({ skipped: [{ reason: "size-limit" }] }).incomplete).toEqual(["size-limit"])
     expect(coverage({ skipped: [{ reason: "lockfile" }] }).complete).toBe(true)
     expect(coverage({ held: [{ status: "modified" }] }).incomplete).toEqual(["held-back"])
+    // VS-34's held-back skip: once alone, once beside its held change, and not for a held deletion only (VS-32).
+    expect(coverage({ skipped: [{ reason: "held-back" }] }).incomplete).toEqual(["held-back"])
+    expect(coverage({ skipped: [{ reason: "held-back" }], held: [{ status: "modified" }] }).incomplete).toEqual([
+      "held-back",
+    ])
+    expect(coverage({ skipped: [{ reason: "held-back" }], held: [{ status: "deleted" }] }).complete).toBe(true)
     expect(
       coverage({
         specialists: [

@@ -157,6 +157,7 @@ const SKIP_REASON: Record<SkippedFile["reason"], string> = {
   binary: "binary",
   deleted: "deleted",
   "size-limit": "too large",
+  "held-back": "held back",
 }
 
 // What the panel knows about a pull request, from GitHub's API.

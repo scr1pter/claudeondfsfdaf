@@ -195,8 +195,9 @@ const SKIP_VERDICTS: Record<Exclude<VerdictSkip, StoredSkip>, "not-reviewed" | "
 }
 
 // What a skipped file leaves unfinished, or null when skipping it is part of a complete review. Exhaustive, so a new
-// SkippedFile reason (VS-34 wiring's `held-back`) fails typecheck here until it is classified; until then, a file that
-// arrives with it at runtime reads as `skipped-unknown`.
+// SkippedFile reason fails typecheck here until it is classified; a reason this map does not name at runtime reads as
+// `skipped-unknown`. VS-34's `held-back` leaves the review incomplete (I-7) unless `held` accounts for it as a deletion
+// only, with nothing sent (unfinishedCauses).
 const SKIPPED_FILE_CAUSES: Record<SkippedFile["reason"], UnfinishedCause | null> = {
   ignored: null,
   lockfile: null,
@@ -206,6 +207,7 @@ const SKIPPED_FILE_CAUSES: Record<SkippedFile["reason"], UnfinishedCause | null>
   binary: null,
   deleted: null,
   "size-limit": "size-limit",
+  "held-back": "held-back",
 }
 
 // The verdicts a gate fails on, which an earlier review can hand on unchanged.
@@ -238,18 +240,27 @@ function storedVerdict(reason: StoredSkip, stored: ReviewVerdict | undefined): V
 // Every reason the run is unfinished, in a fixed order. guardrail.ts reads the same causes for StrictResult.complete
 // (VS-27b), so strict completeness and VS-32's verdict cannot disagree about what finished.
 export function unfinishedCauses(outcome: VerdictCoverage & Pick<VerdictOutcome, "strict">): UnfinishedCause[] {
+  const skipped = outcome.skipped.flatMap((file) =>
+    Object.hasOwn(SKIPPED_FILE_CAUSES, file.reason) ? (SKIPPED_FILE_CAUSES[file.reason] ?? []) : [],
+  )
+  // VS-32: a held-back file whose change is a deletion only, with nothing sent, adds a note and leaves the review
+  // complete. A `held-back` skip carries no status, so each one counts unless a held deletion accounts for it: one
+  // without `held`, or beyond its deletions, fails closed. Skips and deletions are matched by count, not by path (both
+  // Picks carry no path), so this fails closed only when `skipped` and `held` record the same files: a held deletion
+  // recorded as a `deleted` skip, beside a held-back skip with no `held` entry of its own, reads complete. Nothing
+  // records a held-back skip before VS-34 wiring (SF-13b), which keys the match by path.
+  const deletions = outcome.held?.filter((file) => file.status === "deleted").length ?? 0
+  const held =
+    outcome.held?.some((file) => file.status !== "deleted") ||
+    skipped.filter((cause) => cause === "held-back").length > deletions
   return [
     ...(outcome.partial ? [outcome.partial] : []),
     ...(outcome.unreviewed.length ? ["unreviewed" as const] : []),
-    ...new Set(
-      outcome.skipped.flatMap((file) =>
-        Object.hasOwn(SKIPPED_FILE_CAUSES, file.reason) ? (SKIPPED_FILE_CAUSES[file.reason] ?? []) : [],
-      ),
-    ),
+    ...new Set(skipped.filter((cause) => cause !== "held-back")),
     ...(outcome.skipped.some((file) => !Object.hasOwn(SKIPPED_FILE_CAUSES, file.reason))
       ? ["skipped-unknown" as const]
       : []),
-    ...(outcome.held?.some((file) => file.status !== "deleted") ? ["held-back" as const] : []),
+    ...(held ? ["held-back" as const] : []),
     // oxlint-disable-next-line no-unnecessary-boolean-literal-compare -- a decoded strict result can carry a non-boolean
     ...(outcome.strict && outcome.strict.complete !== true ? ["strict-incomplete" as const] : []),
     ...(outcome.specialists.some((entry) => entry.status !== "ok") ? ["specialist" as const] : []),

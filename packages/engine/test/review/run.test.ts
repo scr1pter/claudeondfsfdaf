@@ -3956,6 +3956,91 @@ describe("VS-23b route admission", () => {
   )
 })
 
+describe("VS-34 holdback key (SF-13a)", () => {
+  // A credential file holdbackFiles holds back under "secrets" (CREDENTIAL_NAMES) that is not a sensitive path, so the
+  // plan stays the review pass alone.
+  const NETRC = parseUnifiedDiff(
+    [
+      "diff --git a/deploy/.netrc b/deploy/.netrc",
+      "--- a/deploy/.netrc",
+      "+++ b/deploy/.netrc",
+      "@@ -1 +1 @@",
+      "-machine registry.example.test login old-ci",
+      "+machine registry.example.test login ci",
+    ].join("\n"),
+  )
+
+  // I-1 at the wire: mergeReviewConfig parses holdback (review.json, REVIEW_HOLDBACK), but no runner applies it until
+  // VS-34 wiring (UNAPPLIED_REVIEW_KEYS), so unset, "off" and "secrets" send the same requests under the same permission
+  // rules and return the same outcome, and the credential file still reaches the model. SF-13b changes the "secrets"
+  // leg when Review.run holds the file back.
+  it.instance(
+    "D3: unset, off and secrets send the same requests and rules and return the same outcome",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const sessions = yield* Session.Service
+        const files = [...LIST, ...NETRC]
+        const scenarios: { name: string; config: Partial<ReviewConfig>; push: () => Effect.Effect<void> }[] = [
+          { name: "ok", config: {}, push: () => llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report())) },
+          {
+            name: "retry",
+            config: { maxSteps: 2 },
+            push: () =>
+              llm
+                .pushMatch(REVIEW, httpError(503, { error: "temporary failure" }))
+                .pipe(Effect.andThen(llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report())))),
+          },
+          {
+            name: "finalizer",
+            config: {},
+            push: () =>
+              llm
+                .pushMatch(REVIEW, reply().text("I looked around.").stop())
+                .pipe(Effect.andThen(llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report())))),
+          },
+          {
+            name: "verify",
+            config: { verify: "blocking" },
+            push: () =>
+              llm
+                .pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+                .pipe(Effect.andThen(llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] })))),
+          },
+        ]
+        for (const scenario of scenarios) {
+          const runs = yield* Effect.forEach([undefined, "off", "secrets"] as const, (holdback) =>
+            Effect.gen(function* () {
+              yield* llm.reset
+              yield* scenario.push()
+              const outcome = yield* Review.run(
+                input(directory, {
+                  model: priced,
+                  files,
+                  anchors: files,
+                  config: config({ ...scenario.config, ...(holdback ? { holdback } : {}) }),
+                }),
+              )
+              const rules = yield* Effect.forEach(outcome.sessions, (id) =>
+                sessions.get(SessionID.make(id)).pipe(Effect.map((session) => session.permission)),
+              )
+              const { durationMs: _duration, sessions: _sessions, ...rest } = outcome
+              return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), rules, outcome: rest }
+            }),
+          )
+          expect({ name: scenario.name, run: runs[1] }).toEqual({ name: scenario.name, run: runs[0] })
+          expect({ name: scenario.name, run: runs[2] }).toEqual({ name: scenario.name, run: runs[0] })
+          expect(runs[0].bodies.length).toBeGreaterThan(0)
+          expect(runs[0].rules.length).toBeGreaterThan(0)
+          expect(runs[2].bodies.some((body) => body.includes("deploy/.netrc"))).toBe(true)
+          expect(runs[2].outcome.skipped).toEqual([])
+          expect(runs[0].outcome.specialists.map((entry) => entry.name)).not.toContain("security")
+        }
+      }),
+    120_000,
+  )
+})
+
 // How many findings a review lists, wherever it lists them.
 function listedCount(outcome: ReviewOutcome) {
   const selection = outcome.selection

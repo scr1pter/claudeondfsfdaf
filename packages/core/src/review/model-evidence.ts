@@ -59,7 +59,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "4a530700aa9a8f83"
+export const REVIEW_PIPELINE_SOURCES = "ecaf367fe2a68482"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -76,7 +76,9 @@ export const MAX_CERTIFICATE_DAYS = 90
 // VS-28's `depth` and `lenses` are two (they choose which passes look for defects), counted from VS-28 wiring on, and
 // then only as non-default values, `lenses` only under `depth: "auto"`. POLICY_ONLY_WITH holds the strict and the
 // `depth: "auto"` conditions. VS-30's `runtime` is one (a runtime confirmation changes what is verified, and so what is
-// posted), counted from the VS-30 executor on, and then only as "ask".
+// posted), counted from the VS-30 executor on, and then only as "ask". VS-34's `holdback` is one (a held-back file is
+// not reviewed, and redacted values change what the model reads), counted from VS-34 wiring on, and then only as
+// "secrets".
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -96,6 +98,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "depth",
   "lenses",
   "runtime",
+  "holdback",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"

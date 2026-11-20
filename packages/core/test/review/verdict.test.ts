@@ -9,6 +9,7 @@ import {
   type ReviewState,
   type Selection,
   type Severity,
+  SKIPPED_FILE_REASONS,
   type SkippedFile,
 } from "@vectordevai/core/review/types"
 import {
@@ -242,6 +243,8 @@ describe("reviewVerdict over outcomes", () => {
       binary: verdict("clean-complete"),
       deleted: verdict("clean-complete"),
       "size-limit": verdict("incomplete", ["size-limit"]),
+      // VS-34: a held-back file is not reviewed (I-7), and a skip alone says nothing of a deletion.
+      "held-back": verdict("incomplete", ["held-back"]),
     }
     const reasons: SkippedFile["reason"][] = [
       "ignored",
@@ -252,8 +255,10 @@ describe("reviewVerdict over outcomes", () => {
       "binary",
       "deleted",
       "size-limit",
+      "held-back",
     ]
     expect(Object.keys(expected).toSorted()).toEqual(reasons.toSorted())
+    expect(reasons.toSorted()).toEqual([...SKIPPED_FILE_REASONS].toSorted())
     for (const reason of reasons) expect(judge(outcome({ skipped: [{ path: "x", reason }] }))).toEqual(expected[reason])
     // One cause however many files share the reason.
     expect(
@@ -289,6 +294,40 @@ describe("reviewVerdict over outcomes", () => {
       verdict("not-reviewed", ["privacy"], ["held-back-deletion"]),
     )
     expect(judge({ ...outcome(), held: [] })).toEqual(verdict("clean-complete"))
+  })
+
+  // VS-34 wiring records a held-back file in `skipped` (addendum A :836) beside its `held` entry, which carries the
+  // status. A skip counts unless a held deletion accounts for it, so VS-32's deletion rule stays expressible and a skip
+  // with nothing to account for it fails closed.
+  test("held-back skips: incomplete unless a held deletion accounts for each one", () => {
+    const skip = (path: string) => ({ path, reason: "held-back" as const })
+    // A held change and its skip give the cause once.
+    expect(judge({ ...outcome({ skipped: [skip("config/prod/.envrc")] }), held: [{ status: "modified" }] })).toEqual(
+      verdict("incomplete", ["held-back"]),
+    )
+    // A held deletion only, with nothing sent, accounts for its skip: a note, and the review is complete.
+    expect(judge({ ...outcome({ skipped: [skip(".env")] }), held: [{ status: "deleted" }] })).toEqual(
+      verdict("clean-complete", [], ["held-back-deletion"]),
+    )
+    // A skip with no held entry, or more skips than held deletions, leaves the review incomplete.
+    expect(judge(outcome({ skipped: [skip(".env")] }))).toEqual(verdict("incomplete", ["held-back"]))
+    expect(judge({ ...outcome({ skipped: [skip(".env")] }), held: [] })).toEqual(verdict("incomplete", ["held-back"]))
+    expect(judge({ ...outcome({ skipped: [skip(".env"), skip("id_rsa")] }), held: [{ status: "deleted" }] })).toEqual(
+      verdict("incomplete", ["held-back"], ["held-back-deletion"]),
+    )
+    // Beside a held change, the deletion keeps its note.
+    expect(
+      judge({
+        ...outcome({ skipped: [skip(".env"), skip("id_rsa")] }),
+        held: [{ status: "deleted" }, { status: "renamed" }],
+      }),
+    ).toEqual(verdict("incomplete", ["held-back"], ["held-back-deletion"]))
+    // Its cause keeps its fixed place after the size limit, whatever order the files come in.
+    for (const skipped of [
+      [skip(".env"), { path: "big.ts", reason: "size-limit" as const }],
+      [{ path: "big.ts", reason: "size-limit" as const }, skip(".env")],
+    ])
+      expect(judge(outcome({ skipped }))).toEqual(verdict("incomplete", ["size-limit", "held-back"]))
   })
 
   test("a strict result that is not complete leaves the review incomplete", () => {
@@ -779,20 +818,20 @@ const INHERITED = ["toString", "constructor", "__proto__", "hasOwnProperty", "va
 
 describe("values the types do not name fail closed at runtime", () => {
   test("a skipped-file reason it does not name leaves the review incomplete", () => {
-    for (const reason of ["held-back", "", ...INHERITED])
+    for (const reason of ["withheld", "", ...INHERITED])
       expect(
         reviewVerdict(decodeInput({ kind: "outcome", outcome: { ...outcome(), skipped: [{ path: "x", reason }] } })),
       ).toEqual(verdict("incomplete", ["skipped-unknown"]))
     // Once, after the known causes, whatever order the files come in.
     for (const skipped of [
       [
-        { path: "a", reason: "held-back" },
+        { path: "a", reason: "withheld" },
         { path: "b", reason: "size-limit" },
       ],
       [
         { path: "b", reason: "size-limit" },
         { path: "c", reason: "lockfile" },
-        { path: "a", reason: "held-back" },
+        { path: "a", reason: "withheld" },
         { path: "d", reason: "toString" },
       ],
     ])

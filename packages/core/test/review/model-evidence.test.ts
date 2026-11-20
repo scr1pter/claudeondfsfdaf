@@ -590,6 +590,9 @@ describe("scope", () => {
       // Nor VS-30's runtime, which no runner applies before the VS-30 executor.
       { runtime: "off" as const },
       { runtime: "ask" as const },
+      // Nor VS-34's holdback, which no runner applies before VS-34 wiring.
+      { holdback: "off" as const },
+      { holdback: "secrets" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -728,6 +731,28 @@ describe("scope", () => {
       }),
     ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
     expect(policyDigest({ ...ask, nits: true })).not.toBe(policyDigest(ask))
+  })
+
+  // VS-34 (SF-13a): `holdback` is a policy key (a held-back file is not reviewed, and redacted values change what the
+  // model reads) that no runner applies before VS-34 wiring, so neither the policy digest nor the prompts digest of a
+  // scope moves with it yet. Once a runner applies it, only "secrets" counts, and its input-redaction sentence enters
+  // the prompts only then (addendum A, VS-34 item 3).
+  test("the scope leaves out VS-34's holdback until a runner applies it", () => {
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    expect(base).toBe("70512122f41ec160")
+    expect(EVIDENCE_POLICY_KEYS).toContain("holdback")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("holdback")
+    for (const holdback of ["secrets", "off", undefined] as const)
+      expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, holdback })).toBe(base)
+    const held: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" }
+    expect(evidenceScope({ adapter: "engine", config: held })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "engine", config: held }).prompts).toBe(promptsDigest())
+    // Beside the route setting and VS-30's runtime, neither of which the scope reads from the config either.
+    const beside: ReviewConfig = { ...held, privacy: "zdr", runtime: "ask" }
+    expect(evidenceScope({ adapter: "desktop", config: beside })).toEqual(
+      evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+    )
+    expect(policyDigest({ ...held, nits: true })).not.toBe(policyDigest(held))
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

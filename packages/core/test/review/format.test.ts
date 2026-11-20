@@ -359,6 +359,20 @@ describe("the summary comment", () => {
     expect(body).toContain(`## Vectorscope review · Risk: High\n\n> ${banner}\n\n`)
   })
 
+  // VS-34 (SF-13a): the label only. No runner records a held-back skip before VS-34 wiring (SF-13b).
+  test("a held-back file is listed as not reviewed (VS-34)", async () => {
+    const body = buildSummaryBody({
+      ...FULL,
+      skipped: [
+        { path: "config/prod/.envrc", reason: "held-back" },
+        { path: "package-lock.json", reason: "lockfile" },
+      ],
+    })
+    await golden("held-back", body)
+    expect(body).toContain("<details><summary>Not reviewed (2 files)</summary>")
+    expect(body).toContain("`config/prod/.envrc` held back · `package-lock.json` lockfile")
+  })
+
   test("no findings, with a known zero-dollar cost", async () => {
     const body = buildSummaryBody(NO_FINDINGS)
     await golden("no-findings", body)

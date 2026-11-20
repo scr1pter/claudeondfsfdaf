@@ -24632,3 +24632,309 @@ engine runner; the desktop half is VS-23d (SF-15).
   - No `cat-file --batch`; no change to the spawn hot spots, the connect files or `provider.ts`. The only app change
     is the card's prediction of the engine scope (review round one), unreachable until the app and the GitHub job read
     the sourced keys.
+
+## 2026-11-20 · VS-34 Holdback key, held-back skip reason and labels (SF-13a)
+
+VS-34 part a1 (`vectorscope-upgrade-addendum-a.md` VS-34 `:207-258`, design items 2-8 as far as they touch the key and
+the skip reason; the §1 keys table `:36`, `holdback: off | secrets`, `REVIEW_HOLDBACK`, raise-only; `remaining.md`'s
+VS-34 row). Built on `scope-finish` at `16e398a6` (SF-12b) as lane package SF-13a, from the SF-13a plan as corrected by
+its critique; where a critique point was taken in another form or rejected, the reason is under "Critique points". This
+entry is also the lane's progress record for SF-13a. Nothing applies the key or the reason yet: the payload is SF-13b,
+the tool rules SF-14, the hidden global source SF-15.
+
+- **Status.** Built and tested in the working tree on `scope-finish` at `16e398a6`, not committed: the lane's commit
+  gate commits it (planned title `feat(review): parse the opt-in holdback key and held-back skips`) and pushes it. A
+  commit cannot name its own SHA, so the SHA and each dispatched run's ID and result go in a later entry. The commit
+  gate re-ran every new or changed test file one at a time through the lock (fresh XDG roots under
+  `/tmp/vector-v2/scope/sf-13a/gate/xdg/`), with the counts under Tests run: core `config` 84/0, `model-evidence`
+  31/0, `verdict` 46/0, `guardrail` 59/0, `local-result` 8/0, `format` 61/0, connect `findings` 16/0; engine
+  `review.render` 12/0, `eval` 45/0, `run` 76 pass, 1 skip, 4 fail (the same four sandbox-only tests by name); app
+  `ai-review` 122/0. `bun typecheck` in core, engine and app, the eval tsconfig, and the full TURBO typecheck (27 of
+  27) were clean.
+
+- **SF-12b's CI, read with the GitHub tools** (SF-12b's entry left the runs to a later entry; this is it). On
+  `16e398a6`, the five runs its commit gate dispatched: `typecheck.yml` 44011945757 success;
+  `scope-directory-identity.yml` 44011950474 success; `review-memory-fence.yml` 44011954633 success;
+  `scope-app-validation.yml` 44011958659 success; `vector-at-mention.yml` 44011962693 failure, in one job of ten,
+  "sandbox (codium, success, bun)" (job 133800842397): "Run the unprivileged probe" failed, and "Observe the synthetic
+  probe report" then stops on `ENOENT ... vector-probe-tools/observed.json`. That is the older probe failure SF-12b's
+  entry records for `7796084c` and `fb441eae` (seen on `scope-finish` since before SF-09; the lead's to root-cause),
+  not SF-12b's: "engine and core" (job 133800841985: the engine GitHub tests, session retry tests and core GitHub
+  tests) passed, and so did the other eight jobs. `test.yml` and `review-http-regression.yml` were not dispatched on
+  `16e398a6` (the lead's, as SF-12b's entry says).
+
+- **Scope** (line numbers in the working tree).
+  - Key. `ReviewConfig.holdback?: "off" | "secrets"` (core `types.ts:490-499`), `OPTIONAL_REVIEW_DEFAULTS.holdback:
+    "off"` (`:589`), and `"holdback"` appended to `UNAPPLIED_REVIEW_KEYS` (`:609`). `DEFAULT_REVIEW_CONFIG` is
+    unchanged. `config.ts` `RAISE_ONLY` gains `holdback: { levels: ["off", "secrets"], env: "REVIEW_HOLDBACK" }`
+    (`:153`), so `SourcedReviewKey`, `SOURCED_REVIEW_KEYS` and `mergeReviewConfig`'s `global` parameter take it with
+    no other logic change: the strictest of the global config (no caller passes one until SF-15), review.json and
+    `REVIEW_HOLDBACK`; a value that is not a level reads as "secrets" with a warning; an unreadable review.json that
+    mentions "holdback" fails closed to "secrets"; "off" sets nothing. `UNAPPLIED` gains its "not applied" warning
+    (`:285-289`), which `mergeReviewConfig`'s final loop gives (a sourced key never reaches `settle`).
+    `parseReviewConfig` never sees it: a review.json copy stays `unknown key "holdback" is ignored`, and
+    `REVIEW_HOLDBACK` is not read. There is no pull-request-text source (design item 7). Comments at `config.ts:145-150`
+    and `:355-364` say so, and that `privacyOnly` may raise the raise-only keys (privacy, holdback) and nothing else.
+  - Policy key. `"holdback"` appended to `EVIDENCE_POLICY_KEYS` (`model-evidence.ts:101`, doc `:79-81`). It is
+    default-stable twice over: it has an `OPTIONAL_REVIEW_DEFAULTS` entry, and it is unapplied, so `policyDigest`
+    reads it as absent whatever its value. Nothing joins `POLICY_ONLY_WITH`, and `evidenceScope`'s prompts are
+    unchanged (no input-redaction sentence before VS-34 wiring, design item 3).
+  - Skip reason. `SKIPPED_FILE_REASONS` (`types.ts:303-317`, with what `held-back` is) and `SkippedFile.reason` typed
+    from it (`:321`). Labels in the three maps the brief names: core `format.ts:76` `"held back"` (the GitHub summary
+    and the desktop summary render through it: `` `config/prod/.envrc` held back `` under "Not reviewed (N files)"),
+    engine `cli/cmd/review.render.ts:56` `"held back"` ("Not reviewed: config/prod/.envrc (held back)"), app
+    `ai-review.ts:160` `"held back"` (`skippedText`; `local-review-panel.tsx` already renders
+    `reason.replaceAll("-", " ")`, so it needs no edit).
+  - Sites beyond the brief. Typecheck forces three: core `verdict.ts` `SKIPPED_FILE_CAUSES` (`:201-211`), core
+    `connect/findings.ts` `SKIP_WORDS` (`:141`, "held back from the model"), and engine `review/eval.ts` `WIRING`
+    (`:1226`, "VS-34 wiring"; `ReplayInput` comment `:141-151` and `variantProblem` comment `:1242-1244`). Two are
+    choices: `verdict.ts` `unfinishedCauses` (`:242-263`, decision 2) with connect's `verdict()` (`findings.ts:123`,
+    decision 5), and the `local-result.ts` decoder (`:150`, decision 4). One test beyond the brief: the engine
+    `test/review/run.test.ts` D3 case (`:3959-4042`, review round one, finding 5).
+  - Unchanged: `VARIANTS` (`engine:holdback-secrets` stays `{ pending: "VS-34 wiring" }` on both halves),
+    `VARIANT_KEYS`, `run.ts` (its D3 test is new; the runner is not), `cli/cmd/review.ts`, `github.review.ts`, the connect adapter, `holdback.ts`,
+    `permission.ts`, `prompt.ts`, every prompt file, `skip.ts`, `state.ts`, and every generated file. No regeneration:
+    the global schema field is SF-15's.
+
+- **Default and parity proof (I-1).**
+  - With holdback unset everywhere, `mergeReviewConfig` sets nothing (level 0), and the existing parity tests pass
+    unchanged ("with neither route setting it is parseReviewConfig, on every surface"; "VS-23b: the local surfaces'
+    calls are parseReviewConfig while no sourced key is named"). An explicit "off" from every source gives exactly
+    `{ config: DEFAULT_REVIEW_CONFIG, warnings: [] }` (new test).
+  - `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`, with holdback "secrets", "off" or unset (new
+    test), and the engine and desktop scopes, prompts digest included, equal the default scopes under "secrets".
+  - D3 at the wire (review round one, finding 5): engine `test/review/run.test.ts` "VS-34 holdback key (SF-13a) > D3:
+    unset, off and secrets send the same requests and rules and return the same outcome" runs `Review.run` with the
+    fake provider over `src/list.ts` plus a changed `deploy/.netrc` (a credential file `holdbackFiles` holds back under
+    "secrets", and not a sensitive path, so the plan stays the review pass alone), in the ok, retry, finalizer and
+    verify scenarios of the privacy D3 case, with holdback unset, "off" and "secrets". Each run's model request bodies,
+    each review session's permission rules (`Session.get(...).permission`) and the outcome (less `durationMs` and the
+    session IDs) are equal across the three, the `.netrc` path is in the "secrets" run's request bodies, nothing is
+    skipped, and no security pass ran: the key is parsed and not applied. It is `Review.run`-level, so it covers every `mergeReviewConfig`
+    surface that hands the merged config to the runner (`vector review` with `REVIEW_HOLDBACK=secrets`, the local
+    review service through the CLI, the eval's replay, which drops the key before the run in any case); the env and
+    review.json parsing into that config is the config tests'. A mutation that drops `.netrc` from the prompt's files
+    under "secrets" (`run.ts:889`) fails it (Mutation checks). SF-13b changes its "secrets" leg.
+  - No runner reads holdback: `rg -n holdback` over `run.ts`, `cli/cmd/review.ts`, `github.review.ts`, `ai-review.ts`,
+    `connect/adapters/vectorscope.ts`, `route.ts`, `local-run.ts`, `service.ts`, `permission.ts` and `prompt.ts`
+    finds only a comment at `permission.ts:10` that predates this package. The eval drops it with the other unapplied
+    keys (`eval.ts:633`), and refuses it from an untyped `config` with the unwired message.
+  - Nothing produces "held-back": every source match is a label, the classification or the constant (`types.ts`,
+    `verdict.ts`, `format.ts`, `connect/findings.ts`, `review.render.ts`, `ai-review.ts`).
+  - Permission rules, prompts and request bodies are byte-identical for every input: no prompt or permission file
+    changed, and `promptsDigest` is unchanged. Nothing hashes or serializes a whole merged config (`rg`), so a config
+    that now carries `holdback: "secrets"` changes nothing but its warnings.
+  - What does change for existing inputs, all on `mergeReviewConfig` surfaces (`vector review`, the local review
+    service through the CLI, the eval's replay) and none in what is sent: a review.json `"holdback"` is read instead of
+    `unknown key "holdback" is ignored` (and "secrets" warns that it is not applied); `REVIEW_HOLDBACK` is read; an
+    unreadable review.json that mentions "holdback" now also warns that it reads as "secrets".
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `4a530700aa9a8f83` -> `ecaf367fe2a68482`: the pinned `ai-review.ts` (its label
+  line) and `local-result.ts` (the decoder) changed. Computed after Prettier and after the last edit to a pinned file,
+  and re-run green at the end (Tests run). `REVIEW_PIPELINE_REVISION` stays 4 on this branch: nothing produces the
+  reason, nothing applies the key, and the decoder accepts only what the union names. Merge note for the lead: main
+  (and connect-finish, codium-finish and brain-transport, which carry main's value) set the pin to `76ac36bb67f9ca9d`,
+  and everywhere-finish changes both lines, `REVIEW_PIPELINE_REVISION` 4 -> 5 and the pin to `adbd991bd9da14e1`.
+  Expect a conflict on the pin line, and on the revision line once everywhere-finish is in main: keep the higher
+  revision and recompute the pin after the merge. No other file SF-13a touches differs between this branch's merge
+  base and main or everywhere-finish (`git diff --stat`).
+
+- **Replay variant.** None changes: `engine:holdback-secrets` stays `{ pending: "VS-34 wiring" }` on both halves
+  (`script/vectorscope-eval/replay.ts:232-236`). A key no runner applies has no half to flip; the engine half waits for
+  SF-13b and SF-14.
+
+- **Desktop half.** A documented difference for now, the half left pending. The desktop reads `parseReviewConfig`
+  (`ai-review.ts:728`, `:727` at HEAD), which ignores holdback, and keeps no warnings; only its label landed. SF-13b
+  decides whether the desktop calls `holdbackFiles` or records `variant.applied: false`; SF-15 brings the desktop onto
+  `mergeReviewConfig` (the `privacyOnly` base blob raises holdback already, tested) and adds the hidden global source.
+
+- **Silent-ignore surfaces** (critique point 2). Only `mergeReviewConfig` callers warn that "secrets" is not applied.
+  Three surfaces still read `parseReviewConfig` and ignore the key: the GitHub job (`github.review.ts:295`, SF-37), the
+  desktop (`ai-review.ts:728`, SF-13b and SF-15) and connect's consent preview (`connect/adapters/vectorscope.ts:276`).
+  A review.json copy there gets only the generic `unknown key "holdback" is ignored`, and `REVIEW_HOLDBACK` is ignored
+  without a word: a GitHub Action that sets `REVIEW_HOLDBACK=secrets` gets no signal that credential files still reach
+  the model. The `ReviewConfig.holdback` comment names all three, as `privacy`'s does, and a config test pins
+  `parseReviewConfig`'s behaviour for both review.json and `REVIEW_HOLDBACK`. Nothing here changes those surfaces:
+  `github.review.ts` is @vector-owned (SF-37), and the desktop's halves are SF-13b's and SF-15's.
+
+- **Decisions and deviations.**
+  1. The brief's "engine github review render" is `cli/cmd/review.render.ts`: the engine has no other skip-reason map,
+     and its GitHub summary renders through core `format.ts`.
+  2. **Verdict rule** (critique point 1, taken in a refined form). A `held-back` skip counts as incomplete (I-7) unless
+     a held deletion in `outcome.held` accounts for it: the cause is set when any held file is not a deletion, or when
+     the skips outnumber the held deletions (`verdict.ts:252-255`). So VS-32's rule holds once SF-13b records held
+     files in `skipped` as addendum A `:836` requires (a held deletion only, with nothing sent, gives
+     `clean-complete` with the `held-back-deletion` note), and a skip with nothing to account for it (no `held`, an
+     empty `held`, or more skips than deletions) fails closed. The critique's simpler form (count a skip only when
+     `held` is absent) was not taken: an empty `held` beside a held-back skip would read clean; the mutation
+     "held-absent-only" fails the new test. The causes keep their fixed order (`held-back` after `size-limit` and
+     `skipped-unknown`), and `held-back` appears once when both `skipped` and `held` carry it. `guardrail.ts` (pinned)
+     is untouched and follows through `unfinishedCauses`. The plan's test asserting incomplete for a skip beside a held
+     deletion was not written; its opposite is. The match is by count, not by path (review round one, findings 1 and
+     4): `VerdictOutcome.skipped` is `Pick<SkippedFile, "reason">` and `held` is `Pick<HeldFile, "status">`, so the
+     rule fails closed only while `skipped` and `held` record the same files. `held: [{ status: "deleted" }]` for a
+     held deletion recorded as a `deleted` skip, beside a `held-back` skip whose `held` entry is missing (a modified
+     `.envrc`), reads complete (one skip, one deletion). No runner records a held-back skip or passes `held` before
+     SF-13b, so this cannot happen yet; the `unfinishedCauses` comment now says so (`verdict.ts:246-251`), and the
+     path-keyed match is SF-13b's (Hand-offs), where `ReviewOutcome` gains its held statuses and paths. Not done here:
+     widening both Picks to carry `path` changes `VerdictOutcome`, `VerdictCoverage` (guardrail's `StrictInput`) and
+     every verdict and guardrail fixture before any runner fills them, and SF-13b decides the shape `held` takes on
+     `ReviewOutcome`.
+  3. `privacyOnly` (the desktop's base blob) may raise holdback, as it raises privacy: the raise loop reads it for
+     every raise-only key, which is what the SF-15 brief expects.
+  4. The decoder (`local-result.ts:150`) now reads `Schema.Literals(SKIPPED_FILE_REASONS)` (critique point 6: a
+     choice, not forced; a narrower decoded union is still assignable). Kept, so the decoder cannot drift from the
+     union again; its cost is a pinned-file change, taken in the same pin move as `ai-review.ts`. A held-back row
+     decodes only beside the verdict `reviewVerdict` recomputes (`sameVerdict` refuses a forged clean label; new
+     test). Its other consumers ran unchanged (Tests run).
+  5. Connect's `verdict()` reads a held-back skip as incomplete, never clean. Its `OutcomeFacts` has no `held`
+     (`ReviewOutcome` has none yet), so under decision 2's rule every held-back skip counts there; it may disagree with
+     VectorScope's own verdict only in the conservative direction (a held deletion), until SF-13b gives the outcome
+     its held statuses.
+  6. Q23 (whether "zdr" requires "secrets") stays open: nothing couples the keys, and a test shows each raises only
+     itself.
+  7. Citation drift from the addendum's VS-34 text: `types.ts:157` is now `SkippedFile` at `:319`, `format.ts:61` is
+     `:67`, `review.render.ts:44` is `:47`, `ai-review.ts:147` is `:151`, `skip.ts:66-67` is `:69-70`, and
+     `state.unreviewed` (`types.ts:147`) is `ReviewState.unreviewed` at `:294`.
+  8. Scratch is `/tmp/vector-v2/scope/sf-13a/` (with XDG roots under `xdg/`), as the task text names
+     `/tmp/vector-v2/scope/`; the lane notes say `/tmp/vector-v2/scope-finish/` (critique point 8).
+
+- **Critique points.** 1 taken in a refined form (decision 2). 2 taken (Silent-ignore surfaces; the claim is "every
+  `mergeReviewConfig` surface warns"). 3 taken (Pin). 4 taken: Prettier ran on every changed file before the pin was
+  computed, and `model-evidence.test.ts` ran again after the last edit to a pinned file. 5 taken: the golden was
+  written with `UPDATE_GOLDEN=1 -t "held-back file is listed"` (1 pass, 60 filtered out), `git status` showed only
+  `fixtures/format-held-back.golden.txt` new, it differs from `format-full.golden.txt` only in the "Not reviewed"
+  block, and the file then passed without the variable. 6 taken (decision 4, and the regression runs). 7 taken: the
+  plan's test (j) was dropped, and the matrix test (e) carries the I-2 comment (a pull request's own review.json can
+  only raise the key). 8 taken (decision 8; each mutation restore was checked with `cmp`, and the tree's `git diff`
+  hash was the same before and after the mutation run).
+
+- **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory, XDG roots
+  under `/tmp/vector-v2/scope/sf-13a/xdg/`; app files with `--isolate --preload ./happydom.ts`). HEAD baseline at
+  `16e398a6` before any edit -> the final working tree; pass, skip, fail, expects.
+  - Core, new or changed: `test/review/config.test.ts` 75, 0, 0, 966 -> 84, 0, 0, 1224 (the new describe "VS-34's
+    holdback key", nine tests: sourced and unapplied; `parseReviewConfig`'s silent ignore; review.json raises on both
+    surfaces, at base and in the working tree, and from the desktop's base blob; `REVIEW_HOLDBACK` raises; the
+    global × review.json × env matrix over unset/off/secrets on both surfaces and both `at` values, where neither
+    lowers; explicit off; invalid values; the unreadable mention; beside privacy, runtime and trivial);
+    `test/review/model-evidence.test.ts` 30, 0, 0, 393 -> 31, 0, 0, 405 (with the old pin 30, 0, 1 and the new digest
+    printed); `test/review/verdict.test.ts` 45, 0, 0, 9103 -> 46, 0, 0, 9113; `test/review/guardrail.test.ts` 59, 0,
+    0, 9102 -> 59, 0, 0, 9105; `test/review/local-result.test.ts` 7, 0, 0, 62 -> 8, 0, 0, 66;
+    `test/review/format.test.ts` 60, 0, 0, 308 -> 61, 0, 0, 311 (golden `fixtures/format-held-back.golden.txt`);
+    `test/connect/findings.test.ts` 16, 0, 0, 68 -> 16, 0, 0, 70.
+  - Core, unchanged: `test/review/holdback.test.ts` 16, 0, 0, 144 -> 16, 0, 0, 144.
+  - Engine, new or changed: `test/cli/review.render.test.ts` 11, 0, 0, 28 -> 12, 0, 0, 29;
+    `test/review/eval.test.ts` 45, 0, 0, 528 -> 45, 0, 0, 531 (three assertions in the refusal test);
+    `test/review/run.test.ts` 75, 1, 4, 708 -> 76, 1, 4, 736 (review round one: the new D3 case; the HEAD count is
+    SF-12b's commit gate at `16e398a6`, not re-run here; the four failures are the sandbox-only ones SF-12b names,
+    by name: "the durable local runner preserves actual provider output…", "deletion without instance context joins
+    the actual provider…" (a 30 s timeout), "nested service placement roots relative denials…" and "a resolver-time
+    symlink retarget cannot release…").
+  - App, changed: `src/features/pull-requests/ai-review.test.ts` 121, 0, 0, 510 -> 122, 0, 0, 511.
+  - Decoder consumers and the connect adapter, unchanged (critique point 6): app
+    `src/features/vectorscope/local-review.test.ts` 12, 0, 0, 63 -> 12, 0, 0, 63. Engine files that fail in this
+    sandbox ("Read-only Git inspection is unavailable: this host has no supported unprivileged Git verifier", and "The
+    repository's physical review-memory scope could not be verified." that follows from it), with the same failing
+    tests by name at HEAD and after: `test/connect/vectorscope.test.ts` 7, 1, 19, 113 -> 7, 1, 19, 113;
+    `test/review/local-run.test.ts` 1, 1, 11, 33 -> 1, 1, 11, 33; `test/review/memory-outcome.test.ts` 1, 0, 18, 5 ->
+    1, 0, 18, 5; `test/review/service.test.ts` 4, 1, 9, 44 -> 4, 1, 9, 44 (the first, second and fourth match SF-12b's
+    entry). CI's `scope-directory-identity.yml` and `test.yml` run them on a host with the verifier.
+  - Never run: `test/cli/review.test.ts` (lane rule).
+  - Typecheck: `bun typecheck` in `packages/core` (after fixing three test-only type errors the first run found),
+    `packages/engine` and `packages/app`, and `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`: clean. The full TURBO typecheck (`--concurrency=2`, `TURBO_CACHE_DIR` in the worktree, run on
+    the final tree): 27 of 27 tasks successful. Review round one re-ran `bun typecheck` in `packages/core` and
+    `packages/engine` and the eval tsconfig, clean; not the full TURBO typecheck, which the commit gate runs before
+    the push.
+  - Prettier: `--check` on every changed TypeScript file is clean; `--write` changed only SF-13a's own hunks
+    (`config.test.ts`, five rewraps; `findings.test.ts`, one). `vectorscope-deviations.md` and
+    `v2-notes/vectorscope-v2-plan.md` are not Prettier-clean at HEAD and were not reformatted. oxlint on the twenty
+    changed TypeScript files: 0 errors, and none of its warnings is on a line this package added.
+  - Mutation checks (`/tmp/vector-v2/scope/sf-13a/mut/mutate.py`, mutations in `mutations.json`; each applied alone,
+    the named file run, the file restored by copy and checked with `cmp`): 19 of 19 killed, each restored, and in
+    review round one a twentieth by hand (`run.ts:889` drops `.netrc` from the prompt's files under "secrets"):
+    `run.test.ts -t "D3: unset, off and secrets"` 0 pass, 1 fail (80 filtered out), `run.ts` restored and checked with
+    `cmp`. Removing
+    holdback from `RAISE_ONLY` (config: 8 failed); taking the minimum level (11); `REVIEW_HOLDBAK` (3); a warning that
+    never applies (6); dropping it from `UNAPPLIED_REVIEW_KEYS` (model-evidence 2, config 7); dropping it from
+    `EVIDENCE_POLICY_KEYS` (1); mapping `SKIPPED_FILE_CAUSES["held-back"]` to null (verdict 2, guardrail 1); removing
+    the `!== "held-back"` filter (2); ignoring held deletions (1); the critique's held-absent-only rule (1); removing
+    held-back from connect's `verdict()` (1); connect's label (1); the old literal decoder list (1); the format,
+    render and app labels (1 each); the eval's `WIRING` text (1).
+
+- **Review round one** (six non-blocking findings; none blocking).
+  1. and 4. `unfinishedCauses` matches held-back skips to held deletions by count, not by path, so inconsistent
+     `skipped` and `held` can read complete. Taken in the first finding's first form: the comment
+     (`verdict.ts:246-251`) now says the rule fails closed only when both record the same files, and decision 2 says
+     why. The path-keyed match, the one-`held`-entry-per-skip requirement and the different-file test are SF-13b's
+     (Hand-offs). Not taken here: widening the Picks before any runner fills them (decision 2).
+  2. The `ReplayInput` comment's `SOURCED_REVIEW_KEYS: privacy, zdrAttested` was stale. Fixed in the finding's
+     wording (`eval.ts:144-151`): it names the route settings and says `SOURCED_REVIEW_KEYS` also holds VS-30's
+     runtime and VS-34's holdback, refused as unapplied. Comment only; `eval.ts` is not a pinned file.
+  3. The `local-result.ts` decoder accepts `held-back` but its `Outcome` has no `held`, so once SF-13b records held
+     deletions a retained result would be refused and silently dropped. Taken as an explicit SF-13b hand-off line
+     (Hand-offs); unreachable today, and the decoder is unchanged in this round.
+  5. No wire-level proof that "secrets" sends what unset sends. Taken: the run.test.ts D3 case (Default and parity
+     proof), with a mutation that kills it.
+  6. The GitHub job, the desktop and connect's preview ignore `REVIEW_HOLDBACK` without a warning. No change, as the
+     finding says: the gap stays in Silent-ignore surfaces and in SF-37's hand-off, with the warning option and the
+     @vector co-sign it needs.
+  The pin is unchanged by this round (`verdict.ts`, `eval.ts` and `run.test.ts` are not in `REVIEW_PIPELINE_FILES`;
+  `test/review/model-evidence.test.ts` 31, 0, 0, 405 after the last edit). Re-run after the last edit, one file at a
+  time through the lock: core `test/review/verdict.test.ts` 46, 0, 0, 9113, `test/review/guardrail.test.ts` 59, 0, 0,
+  9105 and `test/review/model-evidence.test.ts` 31, 0, 0, 405; engine `test/review/eval.test.ts` 45, 0, 0, 531 and
+  `test/review/run.test.ts` 76, 1, 4, 736. Prettier `--check` on the three edited source and test files is clean, and
+  oxlint reports nothing on the new test's lines.
+
+- **Hand-offs.**
+  - SF-13b (VS-34 payload wiring): record each held file in `skipped` as `held-back` and pass its status in `held`, so
+    the VS-32 deletion rule applies (decision 2); give `ReviewOutcome` its held statuses (the decoder and connect's
+    `OutcomeFacts` then take them); decide the desktop half; take holdback off `UNAPPLIED_REVIEW_KEYS` and its
+    warning. Then eval.ts `variantProblem`'s sourced-key branch would call holdback "a route setting a replay cannot
+    apply": reword it, or give holdback its own message (critique hand-off). From review round one:
+    - Key the verdict's match by path (findings 1 and 4): widen `VerdictOutcome.held` (and so `VerdictCoverage`) to
+      `Pick<HeldFile, "path" | "status">` and `skipped` to `Pick<SkippedFile, "path" | "reason">`, and set the
+      `held-back` cause when some held file is not a deletion or some `held-back` skip's path is not a held deletion's
+      path; keep the count rule only for inputs with no paths. Until then a runner must give one `held` entry per
+      `held-back` skip, for the same file and in the same order. Add a verdict test where a held deletion and a
+      `held-back` skip for a different file give incomplete, and correct the `unfinishedCauses` comment.
+    - In the same change that records held deletions, the `local-result.ts` `Outcome` schema must decode `held`
+      (status, and path once the verdict is path-keyed) (finding 3). Otherwise a run whose verdict is
+      `clean-complete` with the `held-back-deletion` note is recomputed on decode as incomplete `[held-back]`,
+      `sameVerdict` refuses it, and the retained local result is silently dropped. Add a decode round-trip test of a
+      held deletion. (`local-result.ts` is pinned: recompute the pin.)
+    - The run.test.ts D3 case's "secrets" leg (Default and parity proof) becomes the applied case: the `.netrc` file
+      held back, recorded as a `held-back` skip, and absent from the request bodies.
+  - SF-14: the read-tool deny rules under "secrets" (design item 2).
+  - SF-15: the hidden global `review.holdback` source and the regeneration that goes with it, and the desktop's move
+    onto `mergeReviewConfig`.
+  - SF-37: the GitHub job's move onto `mergeReviewConfig`, which ends its silent ignore of `REVIEW_HOLDBACK`. Until
+    then the gap stays listed here (review round one, finding 6): a workflow that sets `REVIEW_HOLDBACK=secrets` gets no
+    sign that credential files still reach the model. A warning when `REVIEW_HOLDBACK` is set, in the job, the
+    desktop and connect's preview, could come before SF-37 or SF-13b; in `github.review.ts` it needs the @vector
+    owner's co-sign (I-9), so this package adds none.
+  - The lead: the pin on merge (Pin), and the older `vector-at-mention.yml` probe failure.
+
+- **CI to dispatch** on `scope-finish` once the gate pushes (each run's ID and result go in a later entry). The commit
+  gate dispatches `typecheck.yml`, `scope-directory-identity.yml`, `review-memory-fence.yml`,
+  `scope-app-validation.yml` and `vector-at-mention.yml`, the five its task names, and no other; `test.yml` and
+  `review-http-regression.yml` stay the lead's, as on `16e398a6`:
+  - `typecheck.yml`;
+  - `test.yml` (runtime code in core, engine and app; it is the only workflow that runs the app unit files; not
+    dispatched by the gate);
+  - `scope-directory-identity.yml` (core `src/review/**` and engine `test/review/**`);
+  - `vector-at-mention.yml` (core `review/**`);
+  - `scope-app-validation.yml` (`ai-review.ts`);
+  - `review-http-regression.yml` with scope local (the `local-result.ts` decoder the review service's results pass
+    through; not dispatched by the gate);
+  - `review-memory-fence.yml` is not required (`run.ts`, `model.ts` and `session/llm.ts` are untouched); the gate
+    dispatches it because its task names it;
+  - deferred, CI only: the Windows and macOS legs of `test.yml`, the HTTP shard, the private-mount cases and the app
+    end-to-end runs.
+
+- **Not claimed.** No paid run, no model call, no projection on dataset or benchmark cases, and no quality claim; no
+  default change and no key enabled (holdback is absent from the defaults and applied by nothing); no redaction or
+  holdback applied anywhere; no global config schema field and no regeneration; no `cat-file --batch`; no spawn hot
+  spot, no pinned connect file (`connect/hub.ts`, `adapters/vectorscope.ts`) and no @vector-owned file touched (core
+  `connect/findings.ts` changed only its label and its held-back verdict, and connect-finish has not changed it since
+  the merge base); `REVIEW_PIPELINE_REVISION` unchanged.

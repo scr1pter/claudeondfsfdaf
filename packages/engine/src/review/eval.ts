@@ -141,13 +141,14 @@ export interface ReplayInput {
   // The eval's own settings, applied over the base's review.json: its limits, and settings a test fixes. Its
   // maxCostUsd must be a positive cap, and it alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
-  // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from the sources
-  // mergeReviewConfig tags: the base's review.json may raise privacy (VS-23b, whose admission enforces it in
-  // Review.run), and so may the engine:privacy-zdr variant (VS-23c); the eval attests no route (owner Q7), so under
-  // "zdr" only a server on this computer is admitted. Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
-  // VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence,
-  // VS-28's depth and lenses, and VS-30's runtime, which is also trusted-only). The type says so, and step 0b refuses
-  // any of them from an untyped caller.
+  // it set a route setting (privacy, zdrAttested; SOURCED_REVIEW_KEYS also holds VS-30's runtime and VS-34's holdback,
+  // refused below as unapplied), which comes only from the sources mergeReviewConfig tags: the base's review.json may
+  // raise privacy (VS-23b, whose admission enforces it in Review.run), and so may the engine:privacy-zdr variant
+  // (VS-23c); the eval attests no route (owner Q7), so under "zdr" only a server on this computer is admitted. Nor a
+  // key no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's trivial and maxInputTokens, VS-25b's impact,
+  // VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is
+  // also trusted-only, and VS-34's holdback, which is also raise-only but not a route setting). The type says so, and
+  // step 0b refuses any of them from an untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
   >
@@ -1222,6 +1223,7 @@ const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
   depth: "VS-28 wiring",
   lenses: "VS-28 wiring",
   runtime: "the VS-30 executor",
+  holdback: "VS-34 wiring",
 }
 
 // Why a replay's settings cannot name its run, if they cannot: a variant's key set through `config`, which would leave
@@ -1238,8 +1240,8 @@ function variantProblem(input: ReplayInput) {
   if (misplaced.length)
     return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
   // A replay's route settings come from the case's own review.json alone (VS-23b), so its artifact never records one the
-  // eval set. A sourced key that no runner applies yet (VS-30's runtime) gets the unwired message below, which names
-  // what applies it.
+  // eval set. A sourced key that no runner applies yet (VS-30's runtime, VS-34's holdback) gets the unwired message
+  // below, which names what applies it.
   const sourced = SOURCED_REVIEW_KEYS.filter(
     (key) => input.config && Object.hasOwn(input.config, key) && !UNAPPLIED_REVIEW_KEYS.some((item) => item === key),
   )

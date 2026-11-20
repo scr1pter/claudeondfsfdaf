@@ -1634,6 +1634,17 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { zdrAttested: ["openrouter"], runtime: "ask" } })).toContain(
           "config sets zdrAttested, a route setting a replay cannot apply",
         )
+        // Nor VS-34's holdback (SF-13a), which is raise-only and which VS-34 wiring applies: it gets the unwired
+        // message too, alone or beside another unapplied key.
+        // @ts-expect-error VS-34's holdback is sourced and applied by no runner, so a typed caller cannot set it.
+        const holdback: ReplayInput["config"] = { holdback: "secrets" }
+        expect(holdback).toBeDefined()
+        expect(yield* refused({ config: { holdback: "secrets" } })).toContain(
+          "config sets holdback, which no runner applies yet (VS-34 wiring), so the artifact would record a setting the run did not have.",
+        )
+        expect(yield* refused({ config: { holdback: "off", depth: "auto" } })).toContain(
+          "config sets depth, holdback, which no runner applies yet (VS-28 wiring for depth; VS-34 wiring for holdback)",
+        )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
           "engine:trivial-skip sets trivial, which this replay does not apply",

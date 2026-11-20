@@ -11,6 +11,7 @@ import {
   FINDING_SCOPES,
   REVIEW_LENSES,
   SEVERITIES,
+  SKIPPED_FILE_REASONS,
   STRICT_DROPS,
   STRICT_FIX_KINDS,
   VERIFIED_BY,
@@ -146,16 +147,7 @@ const Outcome = Schema.Struct({
   skipped: many(
     Schema.Struct({
       path: text,
-      reason: Schema.Literals([
-        "ignored",
-        "lockfile",
-        "generated",
-        "vendored",
-        "build-output",
-        "binary",
-        "deleted",
-        "size-limit",
-      ]),
+      reason: Schema.Literals(SKIPPED_FILE_REASONS),
       additions: optional(NonNegativeInt),
     }),
   ),

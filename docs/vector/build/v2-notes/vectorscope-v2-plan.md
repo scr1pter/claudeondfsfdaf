@@ -192,9 +192,9 @@ Every package below stays off by default and sends nothing to a hosted model unl
 | VS-26 Brain cards | `upgrade.md:534-561`, `addendum-a.md:1027-1032`, `remaining.md:66` | An engine `review/context.ts` `cards` gatherer next to `requirements` (`:224`), using read-only `BrainKnowledge.links` and `search`. At most 3 cards, each at most 160 characters, 200 tokens in total. Rules for personal items under ZDR and shared reviews. Core `prompt.ts` `<untrusted_context_cards>`. A local-only eval with base-seeded Brain fixtures. The `dispatch.ts:70-74` shrink lever. | Key off (enabling it needs a funded ablation, Q9) | `knowledge.test.ts`, `prompt.test.ts`, a posting-guard test with a quoted card, 0 personal items in shared reviews |
 
 **Wire into the shared runner, with defaults unchanged.** The approach comes from `remaining.md:107-110`. Today these keys are parsed but not applied:
-- the keys `trivial`, `maxInputTokens`, `impact`, `guardrail`, `scopeGate`, `verifyEvidence`, `depth`, `lenses` and `runtime` (`core/src/review/types.ts:555-569`);
-- with defaults at `types.ts:541-551`;
-- and "not applied yet" warnings at `core/src/review/config.ts:235-279`.
+- the keys `trivial`, `maxInputTokens`, `impact`, `guardrail`, `scopeGate`, `verifyEvidence`, `depth`, `lenses`, `runtime` and, since SF-13a, `holdback` (`core/src/review/types.ts:599-610` at SF-13a);
+- with defaults at `types.ts:579-590`;
+- and "not applied yet" warnings at `core/src/review/config.ts:239-290`.
 
 Wiring a key means: apply it in `engine/src/review/run.ts`, remove it from `UNAPPLIED_REVIEW_KEYS` and drop its warning, keep the default value, and prove request parity with the key unset (I-1: payload and permission rules byte-identical) using a fake provider wire test. The desktop path goes through the consolidated service, or states its difference explicitly.
 
@@ -205,7 +205,7 @@ Wiring a key means: apply it in `engine/src/review/run.ts`, remove it from `UNAP
 | VS-25 | `impact: grep` | `core/review/impact.ts`, `engine/review/impact.ts`, `parse.ts` | Prompt context (`run.ts:771-784`) through the private Git object port |
 | VS-27 c | `guardrail: off` | `guardrail.ts:372` `strictSelect` | After verify, at select (`run.ts:939-951`). Strict outcome and JSON format. |
 | VS-28 | `depth: fixed`, `lenses: off` | `plan.ts:126` `planDepth`, `risk.ts` | Pass planning. Bounded parallel lens sessions. |
-| VS-34 | `holdback: off \| secrets`, not parsed yet (`addendum-a.md:215-235`) | `holdback.ts:88` `holdbackFiles` | Before the payload (`run.ts:771-784`) and in the read-tool rules under the key only |
+| VS-34 | `holdback: off \| secrets` (`addendum-a.md:215-235`), parsed raise-only from review.json and `REVIEW_HOLDBACK` since SF-13a (`config.ts` `RAISE_ONLY`), applied by no runner (`UNAPPLIED_REVIEW_KEYS`, with its "not applied" warning on every `mergeReviewConfig` surface; the desktop, the GitHub job and connect's preview still read `parseReviewConfig`, which ignores it). The `held-back` `SkippedFile` reason and its labels landed with it (`deviations.md`, SF-13a entry). SF-13b the payload, SF-14 the tool rules, SF-15 the hidden global source | `holdback.ts:88` `holdbackFiles` | Before the payload (`run.ts:771-784`) and in the read-tool rules under the key only |
 | VS-42 | `scopeGate: off` (only under strict) | `guardrail.ts:169` `preExistingSuspect` | At select |
 | VS-43 | `ruleCheck: off \| strict`, not parsed yet (`addendum-a.md:650,677`) | `citation.ts:137` `ruleCited` | At select. Exact sent rule sources. |
 | VS-44 | `verifyEvidence: off` (only under strict) | `guardrail.ts` certificate checker | The verify pass (`run.ts:843-930`) |

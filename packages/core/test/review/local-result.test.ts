@@ -166,6 +166,18 @@ describe("retained local review result decoding", () => {
     expect(await decode({ ...(await info()), status: "future-status" })).toBeUndefined()
   })
 
+  // VS-34 (SF-13a): the decoder takes every SkippedFile reason the types name, so a held-back row decodes, but only
+  // beside the verdict reviewVerdict recomputes for it: a forged clean label is refused.
+  test("decodes a held-back skip only beside its canonical incomplete verdict", () => {
+    const held = outcome()
+    held.skipped = [{ path: "config/prod/.envrc", reason: "held-back" }]
+    const decoded = decodeLocalResult(result(held), target)
+    expect(decoded?.outcome?.skipped).toEqual([{ path: "config/prod/.envrc", reason: "held-back" }])
+    expect(decoded?.verdict).toEqual({ verdict: "incomplete", causes: ["held-back"], notes: [] })
+    expect(decodeLocalResult({ ...result(held), verdict: result().verdict }, target)).toBeUndefined()
+    expect(result().verdict.verdict).toBe("clean-complete")
+  })
+
   test("binds a valid result to its expected parent, retry request and known run identity", async () => {
     const run = await info()
     for (const expected of [

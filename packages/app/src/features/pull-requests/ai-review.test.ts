@@ -39,6 +39,7 @@ import {
   reviewSpendText,
   type ReviewSpend,
   runReview,
+  skippedText,
   trackReviewSpend,
   verificationChip,
   workflowModel,
@@ -1231,6 +1232,16 @@ describe("models", () => {
 })
 
 describe("showing and posting", () => {
+  // VS-34 (SF-13a): the label only. The desktop runner records no held-back skip yet (SF-13b decides its half).
+  test("names a file held back from the model among the files not reviewed", () => {
+    expect(
+      skippedText([
+        { path: "config/prod/.envrc", reason: "held-back" },
+        { path: "bun.lock", reason: "lockfile" },
+      ]),
+    ).toBe("config/prod/.envrc (held back) · bun.lock (lockfile)")
+  })
+
   test("groups findings by severity, with each fix as a diff against the anchored code", async () => {
     // In its own file: a nit within 3 lines of the blocking finding would be deduped into it by location.
     const namesDiff = fileDiff("src/names.ts", ["@@ -1 +1 @@", "-export const i = 0", "+export const index = 0"])
