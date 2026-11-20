@@ -21,6 +21,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import type { Stats } from "node:fs"
+import { setTimeout } from "node:timers/promises"
 import { Cause, Context, Effect, Layer, Option, RcMap, Schema, Scope, Stream } from "effect"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -371,7 +372,7 @@ async function cleared<A>(run: () => Promise<A>, start = performance.now(), dela
       performance.now() - start >= LockFs.TRANSIENT_WINDOW_MS
     )
       throw cause
-    await Bun.sleep(delay)
+    await setTimeout(delay)
     return cleared(run, start, LockFs.nextDelay(delay))
   })
 }
