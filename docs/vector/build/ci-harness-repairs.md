@@ -330,3 +330,117 @@ ran locally.
 Open check: the root cause counts as confirmed only once Windows CI on this branch's PR shows every Windows engine
 shard green and ownership's two deferred cases back near 2 s. That PR does not exist yet (the branch is not pushed);
 record its run ID, the shard jobs' IDs and both cases' durations here when they finish.
+
+## 2026-11-20: Windows patch-limit listing row and its after-test rejection
+
+Branch `windows-engine-timeouts` from `56b2862b`. Test-only change in `packages/engine/test/cli/github.bundle.test.ts`.
+No product code, assertion, 2,001-path count, 30 s test deadline, retry, skip or shard layout changes.
+
+Failure. `writeBundle > patch-limit refusal: files, counted in the listing` timed out at its 30 s deadline twice on
+Windows: main `dc89e4ec` run 44006980544, job 133785925116 ("engine (windows, shard 12/12)"), and PR #46 run
+44666752560, job 136057825295 ("engine (windows, shard 1/12)"). In PR #46 Bun printed `killed 1 dangling process`,
+then `(fail) ... counted in the listing [30011.98ms]`, then `Unhandled error between tests` with "Vector could not
+record the run's changes." at `src/cli/cmd/github.bundle.ts:776:41` <- `#maybeClose` <- `#handleOnExit`. In `dc89e4ec`
+no git child was running at the deadline; the dropped row body kept running alongside the next row instead, and
+"files, deletions counted" took 27,765 ms against about 9.5 s normally. Linux and most Windows runs pass.
+
+What the row does. `repository()` wrote README.md plus 1,001 distinct `tracked/<i>.txt` files, then ran `git add -A`
+(about 1,002 loose objects) and `git commit` through Bun `$`. `make()` rewrote the 1,001 tracked files and wrote 1,000
+new ones. `writeBundle` (no `timeoutMs`, so its own `GIT_TIMEOUT_MS` = 120 s) runs one git child per step:
+`rev-parse`, `read-tree` into a private index, `ls-files --others` (1,000 paths), `update-index -q --refresh` and
+`ls-files --modified` (1,001 paths); 2,001 is over `PATCH_LIMITS.files`, so it refuses before the add. The read-tree
+index has no stat data, so the refresh and the listing each hash the 1,001 changed files. No other child process.
+
+Timing (passing Windows runs, from the two investigations' job logs, e.g. main `4bb9bcb2` run 44007029816 job
+133786559895 and codium-finish run 44009826105 attempt 2 job 136042932366): "files" (README plus 2,001 new files)
+1.3-1.8 s, "deletions counted" (same 1,002-file base, little for writeBundle to read) 7.9-9.5 s, the listing row
+8.4-13.2 s. So the base build (1,002 writes, `add -A`, commit) is about 6-7 s of the row and the product's hashing about
+0-2 s: only 2.3x-3.5x headroom. In both failing jobs the first writeBundle rows ran 1.7x-10x slower for a short
+stretch (in PR #46 "files" took 3,291 ms against 1,340 ms, and the next row ran a normal 9,211 ms). The logs do not
+show what slowed the runner. On Linux the listing row takes about 144 ms, about 80% of it fixture.
+
+Why the error lands after the test. When Bun times a test out it drops the test body's promise but lets its async work
+run on, and kills the processes it still holds. Bun killed the git child `writeBundle` was waiting on; its `close` event
+had a non-zero code, so `github.bundle.ts:776` rejected FAILED. That rejection travels `git()` -> `stage()` ->
+`writeBundle` -> the row's `await bundle(...)`, whose promise Bun had already dropped, so it surfaces as an unhandled
+error between tests. Reproduced locally with a scratch Bun test that mirrors `git()` (a `git hash-object --stdin`
+child that never gets EOF, 1 s test timeout): with a 120 s signal Bun printed `killed 1 dangling process`, the test
+failed at 1,001 ms and `Unhandled error between tests` followed with the close-handler FAILED via `#maybeClose`; with a
+300 ms signal the same test failed inside itself with the abort FAILED and nothing landed between tests. The product
+behaves as designed: a killed git is a failure, and `writeBundle` deliberately takes no signal.
+
+Change. (1) A new `trackedRepository(count)` builds the two heavy rows' base cheaply: `git init`, README.md written
+and added normally, one `hash-object -w --stdin` blob ("base\n"), all `tracked/<i>.txt` entries in a single
+`update-index --index-info` call on stdin (1,001 `--cacheinfo` arguments would pass the Windows command-line limit),
+then `commit`. 5 objects instead of about 1,005, and the tracked files are never written to disk; README.md stays on
+disk, or `ls-files --modified` would count it and give 2,002. "deletions counted" no longer runs `fs.rm` of the
+never-written `tracked/`. `sh()` gained an optional stdin `input`. The product path is unchanged: same 1,001-path base
+tree, same read-tree, and the same refresh and listing hashing of 1,001 changed or deleted paths. Locally the base
+build fell from 770-1,084 ms to 23-29 ms (5 runs each); on Windows the row should fall from 8.4-13.2 s to about 3-4 s.
+(2) Every patch-limit row passes `writeBundle` its own `timeoutMs`, the 25 s left of a budget taken at the row's start
+(at least 1 ms), so on a slow runner the product's git is stopped inside the row and the row fails with its own
+error instead of a git child outliving it. This only tightens a bound and applies to these five rows only, not the
+shared `bundle()` helper. It does not cover setup git run through Bun `$` that is still running at the deadline; step
+(1)'s headroom is what prevents the flake. Not changed: `countChanges` hashes changed files twice on a fresh read-tree
+index; the later add relies on the refresh's stat data, so leave it unless measured.
+
+Validation (Linux, Bun 1.3.14, through the serial lock): `packages/engine`
+`bun test --timeout 30000 test/cli/github.bundle.test.ts` 24 pass, 2 skip (the existing platform-selected cases), 0
+fail; `packages/engine` `bun typecheck` exit 0.
+
+Open check: confirmed only once Windows CI on this branch's PR shows every Windows engine shard green and the listing
+and "deletions counted" rows near 3-4 s. The branch is not pushed yet; record the run ID, shard job IDs and both rows'
+durations here when they finish.
+
+## 2026-11-20: Windows isolated save renamed over an open record
+
+Failure. PR #46 run 44666752560, engine (windows) shard 4/12, job
+[136057825288](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44666752560/job/136057825288):
+`packages/engine/test/tool/task.test.ts` "task isolation saves > stopping the parent while a foreground isolated
+child's normal save runs does not wait on Git" failed after 26,327 ms with "the save never finished after the Stop".
+That is about 6.3 s of setup plus the whole 20 s `ISOLATED` wait; neighbouring isolated-save tests in the same job took
+6.3-7.7 s, and the same test passed in 10.2 s on a slower runner (job 133427562994), so the deadline is not short: the
+record never reached "changed". The rerun at the same SHA passed. Searches of engine (windows) jobs since `2034e1da`
+found no other failure of this test.
+
+Cause (the most likely one, not reproduced: Linux renames over an open file). The writer side of the race that
+`20efba16` and `4435beab` fixed on the reader side. `TaskIsolation.find` reads record.json without the per-task lock
+(the test polls it every 20 ms), and `privateRead` keeps the file open through stat, read and close. Every save goes
+through `privateJSON`, which writes a temp file and renames it over the record with no retry, and Windows refuses a
+rename over a file another handle has open with EPERM. Whichever save lost (markSettling's, settle's settling save or
+`save(final)`) made settle's catch write `failed`, through the same rename; if that collided too, the error only
+reached `BackgroundJob.finished`'s warning. The log shows no EPERM because settle stores the error in the record. Job
+[133427562994](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43900984996/job/133427562994) (codium-finish
+`0b9f8337`) showed the mechanism: its stress test's own `record.json.0.tmp` rename over a record held open by `find`
+loops failed with EPERM, and `4435beab` removed that stress test and keeps the replace-under-open-handle case off
+Windows, which hid the writer side. The parent's Stop is not involved: the job had ended, so `cancel` only joins it, and
+the save runs in the uninterruptible `onExit`. A residual alternative leaves the same signature: `retire(final)`
+failing after "changed" was written, which settle also turns into `failed`.
+
+Change. `packages/engine/src/task/isolation.ts`: a new `cleared()` retries, on win32 only, an error
+`LockFs.isTransient` accepts (EBUSY, EPERM, ENOTEMPTY, EMFILE, ENFILE) with LockFs's schedule (10 ms doubling to
+250 ms, 2 s window), then reports it. `privateJSON`'s rename uses it (still removing the temp file on a final failure),
+and so does `privateRead`'s open, which can meet a delete-pending record. Each retried open first re-runs the path
+guard: Windows has no O_NOFOLLOW, so the path's lstat is the only symbolic link check there, and a retry would
+otherwise stretch the gap between that check and the open from microseconds to up to 2 s. Readers still take no lock: Stop and the
+Changes view must never wait behind a save that holds the task lock across Git. Other platforms are unchanged. `place()`
+renames (merge and rollback) are not changed here. Tests: `packages/engine/test/task/isolation.test.ts` gains "a save
+over a record another handle holds open waits for the handle and then replaces the record" (on Windows it is expected
+to fail with EPERM without the fix; that rests on job 133427562994's EPERM and has not been run) and "a save over a record held open past the retry window fails on Windows, keeping the old
+record and no temp file" (on other platforms the save replaces the record). In `task.test.ts` every "changed" wait in
+"task isolation saves" now goes through `reached()`, `saveStarted`'s diagnostic generalised, so a timeout reports the
+record's state, attempt, settled attempt and saved error, and names a failed save (EPERM rename) or a retire failure.
+No deadline changed.
+
+Validation (Linux, Bun 1.3.14, through the serial lock): `packages/engine` `bun test --timeout 30000
+test/task/isolation.test.ts` 94 pass, 0 fail; `bun test --timeout 30000 test/tool/task.test.ts` 161 pass, 0 fail;
+`bun typecheck` exit 0. After the per-retry path guard, the same three runs again: 94 pass, 161 pass, exit 0.
+
+Open check: the Windows half of both new tests runs only on Windows CI, and neither Windows-only branch has run yet:
+the old record staying "running" while the handle is open, and the EPERM failure after the retry window. Linux renames
+over an open file at once, so local passes do not exercise them, and this branch has not yet shown the named cause (a
+rename blocked by `find`). The branch is not pushed yet; record the run ID, the Windows engine shard job IDs and both
+new isolation tests' results here when they finish, re-running the shards a few times. If the first test ever flakes on
+Windows, look first at its one timing gap: once the poll sees the .tmp file, the save retries for at most 2 s while
+the test does one more `find` and closes the handle, and the test's own deadline does not cover that gap. Do not
+lengthen any deadline for it.
