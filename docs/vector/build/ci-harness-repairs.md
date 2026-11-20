@@ -624,6 +624,100 @@ Review follow-up.
 - Windows. Only Linux was validated locally. Check the Windows engine shard that runs `piped-output.test.ts` on the
   PR's CI (the `2>` and `>` redirects and the 512 KB size) before merging.
 
+## 2026-11-20: Windows company policy folder test reached the real PowerShell ACL reader
+
+Branch `policy-acl-timeout` from `8e34d05e`. Changes: `packages/engine/test/config/local-policy.test.ts` and
+`packages/engine/test/fixture/managed-policy.ts`. `packages/core/src/config/managed.ts` is unchanged: a failed or
+timed-out PowerShell read still yields no entries, an `unreadable` verdict and Vector Local on with Web access None.
+No deadline, assertion, skip or retry changed, and the 20 s PowerShell timeout stays.
+
+Failure. main push run 44746217530 at `8e34d05e`, engine (windows, shard 9/12), job 136322673267:
+`local-policy.test.ts:1254` "sources Vector cannot read > a company policy file that is a folder turns Local on with
+Web access None" took 20831.45 ms and its first warning was `Vector could not read who may change <managed>.` instead
+of `Vector could not read <managed>\vector.json.` The second warning, `enabled: true` and `web: "none"` held. Every
+shard passed at `14cb9720`, and `14cb9720..8e34d05e` touches only `cli-process.ts`, `piped-output.test.ts` and a doc.
+
+Cause. A test-isolation gap. This was the only test in the file that made the managed path itself (`mkdirSync(file)`)
+instead of calling `writeManaged()`, so it never installed `useManagedPolicyFixture`. On Windows `ConfigManaged.read()`
+then went `check()` -> `windowsCheck()` -> `cachedAcl()` -> the real `powershellAcl()`, a `spawnSync` of
+`powershell.exe` with a 20,000 ms timeout. Process starts on this runner were slow at the time, and the cold PowerShell
+start (normally 2 to 3.5 s) most likely ran past the timeout; a non-zero status gave `{ entries: {} }`, and
+`windowsCheck` reported the first missing entry, the folder. The product failed closed as designed. The slow start is
+inferred from the timing below, not observed directly: the log shows nothing from inside the 20 s window.
+
+Evidence.
+
+- 20831.45 ms is the 20,000 ms timeout plus about 0.8 s.
+- The same shard, 20 to 47 s earlier, ran neighbours 3.5 to 6.7 times slower than a passing run (44736225208): "the
+  policy is resolved before the first catalog fetch" 25379.50 ms against 5222 ms (finished 14:03:40), "the environment
+  turned on ..." 11554.31 ms against 1720 ms (14:03:51), "a nested vector keeps Local on ..." 12220.72 ms against
+  3498 ms (14:04:07). All three spawn child Bun processes. The folder test started at about 14:04:27.3; the tests just
+  before it (14:04:24 to 14:04:27) and just after it (from 14:04:48.17) ran at their usual millisecond times. That points to slow process creation on this runner, not a slow PowerShell path in `managed.ts`.
+- In 14 sampled runs this test took 1819 to 5415 ms except the one failure. A product cause (a stdin wait, the minimal
+  environment, the script blocking) would slow every call, not one in 14.
+- `test/fixture/managed-policy.ts` exists so policy-semantics tests skip Windows ACL discovery. Its reader answers SYSTEM
+  as owner, with no rules, for the managed folder and every managed file in it that exists, a folder named
+  `vector.json` included, so the verdict is trusted and the read of the folder then fails with exactly the two warnings
+  the test asserts, the same path the passing runs took through real PowerShell.
+
+Change.
+
+- The folder test installs the fixture right after `mkdirSync`, with the same line `writeManaged()` uses:
+  `managedFixture.restore ??= useManagedPolicyFixture(managedDirectory)`. The existing `afterEach` restores it. Both
+  exact assertions stay.
+- The fixture's reader is now the exported `managedPolicyAcl(directory)`; `useManagedPolicyFixture` installs it on
+  Windows as before and is still a no-op elsewhere.
+- Pins that run on Linux too: the file's `afterEach` now fails a test that leaves a company policy file
+  (`vector.json` or `vector.jsonc`, a folder of that name included) in the managed folder without the fixture
+  installed, and a new test checks, with `platform: "win32"`, that the fixture's reader makes `check()` trust a folder
+  named `vector.json` and answers only for its own managed paths that exist (not an absent `vector.jsonc`, not
+  `other.json`).
+
+Validation (Linux, Bun 1.3.14, through the serial lock, from the package directories):
+
+- `local-policy.test.ts` 69 pass, 2 skip, 0 fail; `core` `managed.test.ts` 3 pass, 1 skip; `bun typecheck` exit 0 in
+  `packages/core` and `packages/engine`.
+- `managed-trust.test.ts` 25 pass, 3 skip, 1 fail: "POSIX ownership > checks the real file and every folder above it"
+  expects a file the test user made not to be root's, and this sandbox runs as root (uid 0). The file is not touched
+  here; CI runs it as a standard user.
+- Mutations, each red on Linux, then restored with matching sha256: dropping the new fixture line from the folder test
+  (the `afterEach` guard fails), removing `vector.json` from the fixture's owned paths, and changing the fixture's owner
+  to Users (`S-1-5-32-545`) (the new check test fails on both).
+
+What Windows CI must show.
+
+- The engine (windows) shard holding `local-policy.test.ts` (shard 9 at `8e34d05e`'s file list) passes, with the folder
+  test unchanged and exact. That test takes milliseconds with no PowerShell start and never logs "could not read who
+  may change".
+- The shard holding `managed-trust.test.ts` (shard 12) still passes its real PowerShell tests ("checks a real file's
+  access rules with PowerShell" and the trusted managed file tests).
+- Linux and macOS engine shards are unchanged.
+
+Note. `managed-trust.test.ts` still runs real PowerShell on purpose; it is where the fixture contract puts the Windows
+allow/deny integration. A runner stall of the same size could fail it the same way. That would be runner contention,
+not a product bug: check the shard's neighbouring test times before suspecting `managed.ts`. Optional follow-ups, not
+part of this fix: `-InputFormat None` on the PowerShell call (tested only in `managed-trust`), and a review of the
+synchronous 20 s `spawnSync` blocking the desktop's 30-second policy refresh.
+
+Review follow-up.
+
+- The first `afterEach` guard failed any test that ran while the managed folder existed. An empty folder is harmless
+  (`ConfigManaged.read()` checks only the policy files that exist), but `test/cli/run-local.test.ts` left one behind:
+  its `afterEach` removed only `managed/vector.json`. `preload.ts` picks the managed folder once per process and a shard
+  runs its files in one process, so had the two files landed on the same shard, or run in one local `bun test`, the
+  first local-policy test (which uses no managed policy) would have failed the guard. The guard now looks only for
+  `vector.json` and `vector.jsonc`, and `run-local.test.ts` removes the whole managed folder after each test.
+- `managed-trust.test.ts` gains a Windows-only real PowerShell test that a folder named `vector.json` in the policy
+  file's place is read (trusted with `user: true`), the `[System.IO.Directory]::Exists` branch of `ACL_SCRIPT` that the
+  folder test in `local-policy.test.ts` used to cover through real PowerShell before it moved to the fixture. It runs
+  only on Windows CI (shard 12 at `8e34d05e`) and was not run locally.
+- Validation (Linux, through the serial lock): `local-policy.test.ts` 69 pass, 2 skip; `run-local.test.ts` 5 pass;
+  `managed-trust.test.ts` 25 pass, 4 skip, 1 fail (the same root-uid sandbox failure as above); `bun typecheck` exit 0
+  in `packages/core` and `packages/engine`. Mutations, each restored with matching sha256: an empty managed folder
+  made at load time stays green with the new guard and turns "the policy is resolved before the first catalog fetch"
+  red with the old one; dropping the fixture line from the folder test still fails the guard; dropping the fixture
+  reader's `existsSync` filter fails the renamed fixture test.
+
 ## 2026-11-20: Windows helper compile at the 300 s cmake deadline
 
 Branch `native-build-parallel` from `8e34d05e`. Changes: `/MP2` to `/MP4` in the shared compile options of
