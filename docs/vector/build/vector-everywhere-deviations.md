@@ -2002,6 +2002,8 @@ The config key `everywhere.projects` and the identifiers (`projectFolder`, `Proj
 
 Spec §8 VE-22; §9 (fakes, FakeRelay into the desktop's offer source, the forged offer); §5 E4, E8, E12, E17. Depends on EV-09 (`735d592b`) and EV-17 (`c9275df0`), both ancestors, as is EV-18 (`cf9195d0`). Built at HEAD `503bab3b`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main `7c7508d2` holds PR #33 (release-finish is its ancestor) and is 144 commits ahead; the brief says to merge main once #33 is merged, but its later note and the EV-14 precedent (progress, EV-14: "The lead also owns merging origin/main") leave that merge to the lead, so it is not merged here. Among the 148 repository files the journey compiles, main changed only packages/core/src/github-agents.ts (reached through core child-environment.ts; 20 lines added). The plan was corrected by its critique; where a point was not taken, the item says why. One package commit; a commit cannot name itself, so its SHA, the push and the CI run ids go in the next progress receipt. Line numbers are after review round one (below).
 
+*2026-11-20 (EV-20):* the platform-neutral half of this harness (the hooks, the relay, `bounded`, `gate`, the Codium fetcher, `seedPlan`, the slow store, the ports, the jobs routes and the sweep, the desktop half, `turn`, the teardown, `onlyJob`, the settle checks and the E8 checks) moved to packages/web/test/lib/everywhere-journey.ts, and this file runs on it with the same assertions in the same order (211 expects locally, 329 with a loopback Redis). The line numbers in this entry are from before that move; the current ones are in the EV-20 entry, (a). Committed as `6d5c1afc`; its CI is in the progress log, EV-20's receipt.
+
 ### What changed
 
 - **New packages/web/test/everywhere-journey-laptop.test.ts** (894 lines): five cases that run locally (J1 to J5) and two against a real Redis (R1, R2). The Slack event route, the intake, the router, the relay adapter (against the relay Worker on 127.0.0.1), the jobs routes, the result outbox and the sweep are the real API code on in-process loopback servers; on the computer, the desktop's own `createEverywhereJobsClient`, `createOfferVerifier`, `createLedger` and `createEverywhereRunner`. The engine, git, the worktree, the visibility check and the pull request are the journey's stand-ins, with gates.
@@ -2060,7 +2062,7 @@ The one production edit is an optional dependency production never sets, so the 
 ### Left open
 
 - No production `repository` port (i): a separate package, for the lead.
-- VE-22b: the Linear and Jira journeys on the same harness (`world()` is Slack-shaped; the jobs, relay and desktop halves carry over).
+- VE-22b: the Linear and Jira journeys on the same harness (`world()` is Slack-shaped; the jobs, relay and desktop halves carry over). *Built by EV-20 (2026-11-20).*
 - The lane's path filter misses the relay, the Codium fakes and core local-mode (l).
 - A shared, exported runner fixture (for example packages/desktop/src/main/everywhere-runner.fixture.ts), so the journey and everywhere-runner.test.ts use one pair of engine and git stand-ins (e).
 
@@ -2106,3 +2108,193 @@ Eight findings, none blocking; two repeat each other (J5's request to vectordev.
 - **The journey's engine and git stand-ins can drift from the runner test's** (optional). Not done here: the finding leaves it to a later package; (e) and Left open name it.
 
 Receipts: vector-everywhere-progress.md, "EV-19 review round one".
+
+## 2026-11-20, EV-20: the Linear and Jira laptop journeys (VE-22b)
+
+Spec §8 VE-22; §9 (fakes, FakeRelay into the desktop's offer source); §5 E1, E4, E5, E8, E12, E17; §3.2 step 6; §4.2 (Linear) and §4.4 (Jira). Depends on EV-19 (`6d5c1afc`, HEAD). Built at HEAD `6d5c1afc`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60` (the brief's base `0ee486e3` is older; `67ec3a60` is what was checked), so nothing was merged. origin/main `56b2862b` holds PR #33 and is 188 commits ahead. The brief says both "once PR #33 is merged, merge origin/main" and "the lead merges main into this branch; until then never merge main yourself"; the second rule is followed, as in EV-14 and EV-19, so main is not merged here. Main's commits after `b5cbad1c` change only engine installation files, none of the 152 repository files the two journeys compile. No review-fixes or brain-transport precondition applies. A test-only package: no production file changed. The plan was corrected by its critique; where a point was not taken, the item says why. The package's build step leaves it uncommitted; the commit, the push and the CI run ids go in the next receipt. Line numbers are after review round one (below).
+
+### What changed
+
+- **New packages/web/test/lib/everywhere-journey.ts** (556 lines), the platform-neutral half of EV-19's harness, behaviour unchanged: the constants (:47-56), `installJourney(natives)` (:64: the fetch guard, the RouteHarness, the relay Worker on 127.0.0.1 and the hooks; `relay()` :81 throws a named error outside a test instead of a module-level Harness), `bounded` (:178), `gate` (:185), `slowStore` (:202), `journeyPorts` (:218), `mountJourney` (:240: the platform's routes, the five jobs routes and the sweep), `journeyComputer` (:289: the desktop half, `turn` :455, `close` :476), `onlyJob` (:494), `expectSettled` (:508) and `expectNoReclaim` (:538).
+- **packages/web/test/everywhere-journey-laptop.test.ts** (EV-19's, 894 to 495 lines) runs on the lib: `world()` (:70) keeps only the Slack parts, and the settle and E8 blocks call `expectSettled` (:300) and `expectNoReclaim` (:304). Same assertions in the same order (a).
+- **New packages/web/test/everywhere-journey-laptop-tracker.test.ts** (1,022 lines): `linearWorld` (:80), `jiraWorld` (:186), the Linear journey (`linearAdmit` :331, `linearJourney` :410, `linearOfflineJourney` :596), the Jira journey (`jiraAdmit` :694, `jiraJourney` :713, `jiraOfflineJourney` :851), the E17, activity and E4/E5 checks (`expectLinearShared` :355, `expectLinearActivities` :369, `expectLinearKept` :390, `expectJiraShared` :659, `expectJiraKept` :673) and nine cases.
+- **packages/web/test/lib/everywhere-linear.ts** `linearFixture(native, options: {store?} = {})` (:109) and **lib/everywhere-jira.ts** `jiraFixture(native, {installed?, linked?, store?})` (:90) pass the store to `routerFixture`. Both keep their hand-packed style; no caller changes (everywhere-control, -jira-a2a, -jira-render, -linear-oauth, -linear-render, -linear-webhook).
+
+### The journeys
+
+**Linear (L1).** The creator is linked; the team is mapped to acme/app (101) and acme/tools (102); one computer is on the relay.
+
+1. The signed `created` webhook is answered 200 `{received: true}` before any store command or Linear call.
+2. The first Linear call is the ephemeral `thought` "Received your request. Checking the connection and workspace.", within Linear's first-activity budget on the server's clock with 100 ms per store command (e). A thought the adapter gives up on fails a named check (`firstThought`), not the case timeout.
+3. The repository choice: `create`, `user`, `create`, the last a `select` elicitation listing exactly the two mapped repositories with opaque `ve1:` values that name no repository (E17); no job yet, one presence call.
+4. The creator answers with the first option (`prompted`): `user`, `history`, then the `finding` thought ("Working on your request.") and plan. The job is `claimed`, route `laptop`, kind `followup`, issue ENG-123, `shared`, repository 101, inside the offer window. Its task is the creator's earlier prompt "Fix the login button" (E1), and the edited issue description is context, never the task.
+5. Presence twice, one job-offer, one 2-second poll, one JOB_OFFER frame verified with the test key, one jti, one claim; the latest plan is `laptop`'s (k).
+6. `started`: `issue`, `states`, `start` (the issue moves to the team's first started state), the thought ("Working on your request.") and the plan ("Read the workspace" in progress, the other two steps pending); the runner fetched `main`, asked for the worktree with `expectedBranch` (`vector/ve-eng-123-…`), and created the session with `unattendedRules()`.
+7. `editing` and `pushing`, each a thought ("Working on the requested changes.", "Preparing the result.") and a plan. The prompt is the creator's task with the issue's context and the lower `maxUsd`. The commit is "ENG-123 Vector: …" with `[skip ci]`, and nothing is pushed before the `pushing` acknowledgement.
+8. Settle `changes` (`expectSettled`).
+9. The session gets the completed plan with the job page and the draft PR (`addedExternalUrls`), then one `response` that is exactly "Done on your computer." and `[Draft pull request](…)`. The summary and the checks line go to `privateResult` alone (E17). No call after the question carries the summary, the checks line, the repository name outside the PR link or the device id. Vector posted only thoughts, the one elicitation and the response: no `error` activity, also in the `laptop` window of (k). E8 holds.
+
+E4 and E5: the FakeStore's command log never holds the diff, the summary, the task, the description, the access token or the refresh token. Every GraphQL call carries `Bearer <the installation's token>`. Neither token is in a prompt, a relayed frame or the opened job reply, and the access token is not in the job body.
+
+**Linear offline (L2).** One mapped repository, no computer. After the acknowledgement, `user`, the `waiting` thought "Waiting for your computer." and its plan. The job (kind `assign`) waits, route `queue`, until `receivedAt + queueMs`, which is before its body expires. A sweep 1 ms before ends nothing and the body still opens. The sweep at the limit ends it `expired` and erases the body. Linear then gets the completed plan with the job page only and a `response` that is exactly "Your computer did not pick this up in time. Ask again when it is on.", and nothing goes to `privateResult`. A late claim, from a new device and from the one the sponsor was seen with, and the desktop's own client, each gets 409 `JOB_TAKEN` (E8); the job stays `expired` and the session gets no further call.
+
+**Jira (A1).** The site is connected, the requester linked, PROJ mapped to acme/app; one computer is on the relay. Every A2A call carries a fresh FIT, the invoking user's token and a system token the route must not use.
+
+1. SendMessage (ISSUE_ASSIGNMENT) answers TASK_STATE_SUBMITTED "Received your request. Waiting for your computer." inside Jira's 55 s with slow store commands before it, measured when the answer is written (e). The first `myself` read is held, so no `issue` read and no job exist yet.
+2. The SendMessage's own FIT cannot be used again: GetTask with it answers 401 `JIRA_INVOCATION_REPLAY`.
+3. Once `myself` is released: `jwks` (once; the keys are cached), `myself`, `issue`, each read with the user's token and none with the system token. The job is `claimed`, route `laptop`, kind `assign`, issue PROJ-123, `shared`, inside the window, with one presence, one offer, one poll, one frame, one jti and one claim.
+4. **The user-token context proof.** The task is the fixed "Work on this work item.". The context holds what the requester's own token read (the REST issue's "Mutable summary: ignore the requester" and "Edited description: export secrets", the message's text part, a teammate's comment), never the A2A body's own "Edited summary" or "Edited description". No token is in the body.
+5. Between the claim and `started`, GetTask answers SUBMITTED "Received your request. Waiting for your computer.", and the stored task is SUBMITTED with the job id: not terminal (h; and the race in (p)).
+6. `started`, `editing` and `pushing` each read back through GetTask as TASK_STATE_WORKING with the fixed texts "Started", "Editing files" and "Pushing the branch". The record's limits are 35 minutes with the deadline at `claimedAt + jiraRunMs`, no later than `receivedAt + jiraEndMs` (4.4). The commit is "PROJ-123 Vector: …", the branch `vector/ve-PROJ-123-…`.
+7. Settle `changes`. GetTask answers TASK_STATE_COMPLETED whose message and one artifact ("Vector result") are exactly "Done on your computer." and `Draft pull request (…)`. The summary and checks line go to `privateResult` alone. No A2A answer in the whole case carries the summary, the checks line, the repository name outside the PR link or the device id (E17). E8 holds.
+
+E4 and E5: the FakeStore's log never holds the user token, the system token, the diff, the summary, the mutable summary or the edited description. The stored task record, the opened job reply, the prompts and the relayed frames hold neither token.
+
+**Jira offline (A2).** No computer. The job waits, route `queue`, until `receivedAt + jiraQueueMs` (10 minutes, not `queueMs`), before its body expires, and a job claimed at that moment would still end inside 50 minutes. GetTask says SUBMITTED. A sweep 1 ms before ends nothing (GetTask still SUBMITTED, the body opens). The sweep at the limit ends it `expired` with ending `jira-waiting` and erases the body. GetTask then answers TASK_STATE_FAILED with "Your computer did not pick this up in time; assign it again when it is on." as the message and the artifact (g). Nothing goes to `privateResult`. Late claims get 409 `JOB_TAKEN` as in L2 (E8), the job stays `expired` and GetTask still answers FAILED.
+
+| Case | Line | What it pins |
+| --- | --- | --- |
+| L1 | :896 | a Linear agent session runs on the computer after the creator's own prompt and an opaque repository choice, and the session gets only the outcome and the link (E1, E4, E5, E8, E12, E17) |
+| L2 | :912 | with no computer online a delegated Linear issue waits until the queue limit, then expires with Linear's own text |
+| A1 | :922 | a Jira assignment over A2A runs on the computer: FIT-verified calls, the FIT replay refused, the user-token context proof with no token stored, milestones in GetTask, and only the outcome and the link in the result (E4, E5, E8, E12, E17) |
+| A2 | :932 | with no computer online a Jira job waits only 10 minutes, then GetTask ends with Jira's own text |
+| G1 | :940 | the fetch guard is the fetch in place and stops a probe to `guard-probe.invalid`; FakeLinear's and NativeJira's `fetch` throw on a foreign address before sending anything |
+| R1 | :962 | L1 on Valkey (`testEverywhereStore(redis.fetch)`): the job settled and `shared` there, the FakeStore untouched |
+| R2 | :982 | A1 on Valkey, through the Jira task store's script: the job settled, the task COMPLETED with its job id, the FakeStore untouched |
+| R3 | :999 | L2's wait and expiry on Valkey |
+| R4 | :1011 | A2's wait and expiry on Valkey, the task failed through the task store's script |
+
+Every journey case runs under `CASE_MS` (15 s). Locally: 5 pass, 4 skip; with a loopback redis-server, 9 pass.
+
+### Deviations
+
+- **(a) The shared harness lives in lib/everywhere-journey.ts.** Both journey files use it, so it is extracted, as the brief allows. EV-19's file runs on it with the same assertions in the same order: 5 pass, 2 skip, 211 expects locally, three runs; 7 pass and 329 expects against a loopback redis-server, as before the move. EV-19's mutations M2, M7 and M14 are red again, in the same cases and at the same assertions: the E12 time bound (now :202), the `pushing` milestone (now :287) and the E8 claim (now in the lib, :549). The relay Harness is made in beforeEach, and `relay()` and the relay server's handler throw a named error if one is used outside a test, so a hook-order mistake cannot hide behind a non-null assertion (critique, taken).
+- **(b) One tracker file covers both platforms.** It stays readable at 949 lines: the Linear and Jira halves share only the harness and the fixture patterns.
+- **(c) `privateResult` is a stand-in.** Production sets none, so a Linear or Jira summary for a shared place is held: the adapter answers 503 `LINEAR_PRIVATE_DELIVERY_UNAVAILABLE` or `JIRA_PRIVATE_DELIVERY_UNAVAILABLE` after the public post, and the outbox retries each minute (the existing private-result surface, deviations :222). That production path is pinned by everywhere-linear-render.test.ts:55 and everywhere-jira-render.test.ts:36 through `createJobEvents`. The optional journey variant without `privateResult` (critique) is not added: it would duplicate those unit tests through a longer path; Left open.
+- **(d) L1 admits through the selection proof**, with two mapped repositories, so its job's kind is `followup`. L2 is a plain delegation with one mapped repository (kind `assign`).
+- **(e) E12, measured at EV-19's 100 ms per store command (not changed). For Linear, the asserted bound is the spec's first-activity budget, not the adapter's `ackMs`: the critique's point is partly rejected.** Measured at HEAD: 44 store commands before Linear's first thought, so 4,400 ms. That is past the adapter's declared `ackMs` (4,000; linear/adapter.ts:150) and inside Linear's budget for a first activity (10 s: §3.2 step 6 "Linear 5 s with a first activity within 10 s", §4.2 "The server posts a thought within 10 s of `created`", VE-12). The webhook's own 5 s is met by the 200 before any store command.
+  - The critique asked for the bound to be `ackMs`, with a red result treated as an E12 finding and escalated. It is escalated: Left open, the handoff, and the package report.
+  - The test asserts `LINEAR_FIRST_ACTIVITY_MS = 10_000` (:67) instead, because no production code reads `ackMs` (only the adapters declare it), the spec's budget is the E12 invariant, and an `ackMs` bound would leave the file red at HEAD.
+  - The first measurement was taken against `ackMs`, and it is recorded here as red rather than hidden. The latency stays 100 ms.
+  - The 44 commands are mostly the adapter's repeated authority reads, through `receipt()`, `client()`, `linearAccess`, `installGuards` and `beforeRequest`: the install and hold keys read ten times each, the account-closed keys ten times, the Codium tombstone four times. That is the production work to shrink if `ackMs` is to hold (a probe log in /tmp/vector-v2/everywhere/ev20/e12-linear-commands.log).
+  - With 10 s, mutation T3 (the acknowledgement after `routeFacts`) is caught by the order check (the first call becomes `user`, :346), not by the time bound as Slack's M2 is.
+  - **Jira:** the A2A answer is the first signal: 10 store commands, 1,000 ms, inside 55 s. It is measured when the answer is written. The test wraps the response's `end` and reads the clock and ends the slow store there (critique, taken), so the background work after the answer cannot move the clock first. `signalAt` is also checked to be past the send.
+  - **`prompted` (critique, observation):** Linear's `acknowledge` acts only on `reply.initial`, which is false for `prompted` (linear/parse.ts:44, adapter.ts:154), so a creator's answer gets no immediate activity. In a probe with the slow store on for the `prompted` event, the first activity after it (the `finding` thought) came after 198 store commands (19.8 s at the model): prepare, history, link, sweep, counts, routing, reservation, admission, delivery, offer. §4.2 names `created` only, and §3.2 step 6 does not say. Whether Linear's 10 s applies to `prompted` is open, for the lead (Left open).
+- **(f) Jira is observed through GetTask**, each poll with a fresh FIT; the SendMessage's own FIT is refused 401 `JIRA_INVOCATION_REPLAY` (`consume`).
+- **(g) A Jira expiry from the cron sweep ends TASK_STATE_FAILED**, because `jiraJobState` maps `expired` to FAILED (jira/render.ts:12). The 50-minute fallback in a2a.ts `resolve` completes the task instead (COMPLETED with `jira-waiting` or `jira-running`). Both are pinned as they are; which one Jira should see is a wording question, not a gate.
+- **(h) Observation: between the claim and `started` the Jira task reads "Received your request. Waiting for your computer."** (render.ts `jiraTask`: a claimed job maps to SUBMITTED and no milestone text). The computer has the job by then, so "Waiting for your computer" is stale for up to the runner's fetch and worktree time. Not a gate.
+- **(i) Observation: an expired Linear job's plan is set to all `completed`** (adapter.ts `finish` uses `linearPlan("pushing", "completed")` for every ending but cancellation) while its response says the computer did not pick it up. Not a gate.
+- **(j) The 50-minute Jira texts stay pinned by everywhere-jira-a2a.test.ts.** The journey's runner has no heartbeat ticker, so its lease would lapse before 50 minutes; a journey that waits that long would test the sweep, not the cap.
+- **(k) Linear's two `laptop` posts.** The claim's event and the router both post `laptop`, and the native-resource lock (adapter.ts `locked`) may skip one, so the step asserts at least one thought and one plan after `finding`'s, only those operations, and the latest plan (which equals `finding`'s plan). Jira's two `laptop` writes are unlocked compare-and-sets; in the journey they overlap and both succeed only because they write identical records: see (p).
+- **(l) EV-19 (i)'s repository stand-in, and what it means for Linear** (critique, taken). The router fixture's `repository` port answers id 101 for every name, so L1 works because it picks the first option (acme/app, 101). Choosing acme/tools (102) fails intake.ts's id check (:51) and the intake asks again, which is also why mutation T5 (the selection picks the last mapped repository) is red. In production there is no `repository` port at all, so after a verified Linear selection the intake would ask for the repository again, and again. This sits under the existing gate on the production repository port (handoff, "Current gates"); it is not a new gate.
+- **(m) The fixtures' store option and the Valkey cases.** `linearFixture` and `jiraFixture` take `{store}` as `routerFixture` does (EV-19 (c)). R1 to R4 assert that the FakeStore saw no command, so a fixture that ignored the option goes red (T16, R1 and R3, against a loopback redis-server). R3 and R4 (the waits and expiries) are added beyond the plan's R1 and R2 (critique, taken), so Jira's expiry path (the sweep, `events.ended`, the task store's script ending FAILED) and Linear's 115-minute wait also run on a real Redis.
+- **(n) No workflow change.** The lib and the test match vector-everywhere.yml's `packages/web/test/**/everywhere*` paths, and its picker (`(^|/)everywhere[^/]*(/.*)?\.test\.tsx?$`) selects the tracker file once it is tracked. EV-19 (l)'s path-filter gap is unchanged.
+- **(o) Critique points taken as written:**
+  - the five jobs routes and the sweep;
+  - `recordSeen` for every world, with a random device when there is no computer;
+  - `renderMilestone` for all three Jira milestones;
+  - the handoff bullet after EV-19's gate bullet;
+  - an E5 mutation for each platform (T18, T19), plus checks on the opened records, since a sealed leak passes the log check (T19 is caught only by the opened reply, :369);
+  - the relay guard (a);
+  - the Jira answer clock (e);
+  - the `prompted` observation (e);
+  - the `laptop` race investigated before A1 was written (p);
+  - the cancelled and breached CI runs recorded (progress, EV-20 receipt).
+- **(p) Finding (production): a lost compare-and-set on the router's Jira `laptop` write marks the task FAILED while the laptop runs** (critique, confirmed).
+  - After a claim, jobs-api.ts:245 runs `events.claimed`, which calls `progress("laptop")` in the background, and `routeJob` (router.ts:110) calls it too. Jira's `progress` is `persist` (jira/adapter.ts:57), an unlocked compare-and-set through `writeJiraTask` with `expected`, which throws `JiraFailure` on a mismatch.
+  - In the journey the two `laptop` persists overlap: both read the SUBMITTED record before either wrote (probe log /tmp/vector-v2/everywhere/ev20/probe.log). Both succeed only because they write the identical record.
+  - The runner's `started` report writes a different one (WORKING). In a forced interleaving (scratch probe /tmp/vector-v2/everywhere/ev20/race-probe.test.ts: the two `laptop` task writes held until `started`'s write lands, with no mapping gate), both `laptop` writes return `changed`. The router's error reaches a2a.ts `nativeWork`, whose catch marks the task FAILED "The request could not be verified or completed. Send your task again." while the job is `running` on the computer (log probe-race-forced.log).
+  - `finish` then keeps a terminal record that has a job id (jira/adapter.ts:103), so the result is never shown in Jira.
+  - In production the window is the router's ~10 store round trips between its read and its write, which the runner's `started` can land in. It is not pinned here (a test asserting the loss would pin the bug; one asserting the fix would be red), and A1 asserts the task is not terminal between the claim and `started`. Mutation T20 (the `laptop` progress throws, as a lost compare-and-set does) turns A1 red at that check (:768).
+  - Fix options for the lead: Jira `progress` takes the native-resource lock as Linear's `locked()` does; or a lost compare-and-set in `progress` re-reads and skips when the task has moved on; or `nativeWork`'s catch leaves a task alone once a job owns it. It should be fixed before Jira's laptop route goes live (`LAPTOP_ROUTE_WIRED` is false, so it cannot happen in production now). Left open and handoff.
+
+### Not changed
+
+No production file, `OFFER_KEYS` (empty), `LAPTOP_ROUTE_WIRED` (false), any workflow, env var, flag, route, config key, dependency or lockfile, and any generated file. Nothing becomes reachable on vectordev.ai.
+
+### Safe by default
+
+The only edits are tests and two fixtures whose new option defaults to the old behaviour. Every key and credential is generated in the test; the offer key reaches the computer only through the verifier's `keys` parameter. VECTOR_EVERYWHERE_ENABLED and the Remote settings exist only in the test env objects, between `codiumTestEnvironment` and its restore. `privateResult` exists only in the test deps. The fetch guard is armed for the file and G1 proves it. Linear and Jira hosts reach only the loopback fakes, and the file's only other request goes to a reserved `.invalid` name.
+
+### Left open
+
+- **Linear's acknowledgement costs 44 store commands** (e): 4,400 ms at the 100 ms model, past the adapter's own 4,000 ms target. It is within Linear's 10 s, and the work to shrink it is the repeated authority reads. For the lead. Once the reads are trimmed, either the journey asserts `w.adapter.ackMs` for Linear as its Jira half does (:704), or Linear's `ackMs` changes to the spec's budget, so the declared value and the asserted bound agree (review round one).
+- **A `prompted` event gets no activity until the `finding` thought** (e): 198 commands at the model. Whether Linear's 10 s applies to `prompted` is for the lead.
+- **The Jira `laptop` compare-and-set race** (p): before Jira's laptop route goes live.
+- The Jira task's "Waiting for your computer" between the claim and `started` (h), and the all-`completed` plan of an expired Linear job (i): wording, not gates.
+- A journey variant without `privateResult`, showing the held production path end to end (c), if the unit tests are not enough.
+- EV-19's open items stand: the production `repository` port (now also a Linear re-prompt loop, (l)), the path filter, and the shared runner fixture.
+
+### Mutations
+
+Each applied by /tmp/vector-v2/everywhere/ev20-mut/mutate.py, the file run alone under `timeout`, then restored by sha256 (all restored; a log per mutation in ev20-mut/logs/). T16 ran against a disposable loopback redis-server. The lines are after review round one: T3 to T20 were run again on the edited file and are red in the same cases at the same assertions (T1 and T2, which fail by timeout, were not; see the round).
+
+| Mutation | Red | First failing line |
+| --- | --- | --- |
+| T1 linear/routes.ts drops `sleep: deps.sleep` | L1 by the 15-s timeout; L2, A1, A2 then wait on its leaked poll | timeout |
+| T2 jira/a2a.ts intake drops `sleep` | A1 by timeout; A2 then waits on its leaked poll | timeout |
+| T3 intake.ts acknowledges after `routeFacts` | L1, L2 | :346, the first call is `user`, not `create` (the 10 s bound holds; (e)) |
+| T4 linear/parse.ts takes the issue description as the task | L1, L2 | :439 (L1, the routing operations), :618 (L2, the task) |
+| T5 linear/selection.ts picks the last mapped repository | L1 | :439 (the stand-in's id mismatch asks again; (l)) |
+| T6 linear/adapter.ts finish posts `privateText ?? text` | L1 | :575, the response body |
+| T7 jira/adapter.ts finish seals `privateText ?? text` | A1 | :838, the COMPLETED text |
+| T8 jira/parse.ts takes the A2A body's summary in place of the REST read | A1 | :760, the user-token context proof |
+| T9 jira/a2a.ts `consume` records nothing | A1 | :721, the FIT replay |
+| T10 everywhere-policy.ts `queueDeadline` ignores Jira | A2 | :858, `jiraQueueMs` |
+| T11 jobs.ts `expire` always uses `expired` | A2 | :880, ending `jira-waiting` |
+| T12 jira/render.ts `jiraJobState` running → SUBMITTED | A1 | :780, `started` in GetTask |
+| T13 linear/adapter.ts skips the issue start | L1 | :492, the `started` operations |
+| T14 jira/a2a.ts awaits the native work before answering | A1, A2 | :729 (A1), :707 (A2) |
+| T15 events.ts renders `shared: false` | L1, A1 | :575 (L1), :834 (A1, the private surface) |
+| T16 lib/everywhere-linear.ts ignores `options.store` | R1, R3 (loopback redis-server) | :976, :1005 |
+| T17 jobs.ts claimJob gives a settled job back to the same device | L1, A1 | lib :549, the E8 claim |
+| T18 jira/a2a.ts stores the user token in the task record (E5) | A1 | :683, the FakeStore log |
+| T19 linear/adapter.ts stores the access token in the job reply (E5) | L1 | :405, the opened reply (the log check passes: it is sealed) |
+| T20 jira/adapter.ts `laptop` progress throws (a lost compare-and-set) | A1 | :768, the task is not terminal before `started` (p) |
+| M2, M7, M14 (EV-19's) against EV-19's file on the lib | J1 to J4 (M2), J1 and J2 (M7, M14) | :202, :287, lib :549 (a) |
+
+### Coordination
+
+The cross-lane probe at HEAD: review-fixes `1433d105`, connect-finish `19c48b89`, scope-finish `8c36d06b` and workspaces-finish `e37ec1b5` touch none of this package's paths; codium-finish `58663f5b`, brain-transport `0d18f750` and main `56b2862b` each change docs/vector/build/v2-notes/v2-complete-plan.md at :219-221 only, and this package annotates the F5 row at :197. Repeat the probe at the commit.
+
+### Deferred verification
+
+The Valkey job of vector-everywhere.yml (R1 to R4) and the CI runs, after the commit; VE-50's live acceptance for Linear and Jira once the owner has registered the Linear app and deployed Forge; a real relay, desktop and workspaces; macOS and Windows; the production repository port and the private-result surface (existing gates).
+
+### Review round one (2026-11-20)
+
+Eight findings, none blocking. Seven are taken; the eighth (Linear's `ackMs` against the measured first thought) stays with the lead, as the finding asks. The line numbers in this entry are after this round. Each check the round adds was shown to catch something with a mutation that is red now and was green (or hung) against the file before the round (N1 to N8, below).
+
+- **A missed first thought hung the case** (finding at :340). Taken. `linearAdmit` now waits for the first thought or the intake's end, at most five seconds (`bounded(Promise.race([w.ack.promise, drainAfter()]))`, :341), then asserts `firstThought: "posted"` (:342). The adapter gives up on the thought 8 s after `acknowledge` starts, and the intake then ends, so a missed thought fails at that named check. N1 (the acknowledge deadline already past) is red in L1 and L2 at :342 within 40 ms; against the file before the round it hung the run until `timeout` stopped it at 240 s. The optional bound against the adapter's 8 s is not added: that deadline counts from the start of `acknowledge`, which the test does not observe, and measured from the send it would be a new bound stricter than either the adapter's or the spec's. The 10 s check (:344) and (e) stay.
+- **A stray Linear `error` activity could pass** (finding at :410). Taken. `expectLinearActivities` (:369) asserts that every activity Vector posted is a thought, elicitation or response, and that every other one is the creator's prompt. L1 calls it with two prompts (:588), L2 with one (:639). N2 (the `laptop` thought posted as `error`, in the window (k) leaves open) is red in L1 at :381.
+- **Most expected texts came from the code under test** (finding at :712). Taken, beyond the minimum, because no other test pinned most of these texts: the policy test pins only `editing` with a file count, and nothing pinned the Linear thoughts or the endings. Now literals:
+  - every Linear thought (`finding`, `started`, `editing`, `pushing`) and the `started` plan;
+  - Jira's three milestones ("Started", "Editing files", "Pushing the branch");
+  - both shared results ("Done on your computer." and the link, in each platform's link form, :579 and :842);
+  - both offline endings.
+
+  `linearThought`, `renderMilestone` and `renderEnd` are no longer imported. `renderResult` stays for the private text (the summary and the checks line), and `linearPlan` for the other plans, whose shapes everywhere-linear-render.test.ts pins. N5 ("Started" reworded), N6 (Linear's "Working on your request." reworded), N7 (Linear's expiry text cut) and N8 (the `changes` outcome line extended) are red at :780, :440, :635, and :579 with :842.
+- **The case table's A1 row did not quote the test title.** Taken by renaming the test to include "the FIT replay refused", which the case asserts (:717-724), so the row now quotes the title exactly. The progress receipt quotes no titles.
+- **E8 was checked only for settled jobs** (finding at :549). Taken. L2 and A2 end with `expectNoReclaim` for the expired job (:642, :889): a fresh device, the device the sponsor was seen with, then the desktop's own client. Each gets 409 `JOB_TAKEN`, which claimJob answers for every state but `offered` and `waiting` (jobs.ts). Then the claim count is 3, the job is still `expired`, Linear's session gets no further call and Jira's GetTask still answers FAILED. N3 (a late claim gets the expired job) is red in L2 and A2 at lib :549. The lib's `expectNoReclaim` doc line now says an ended job (settled or expired); its line numbers are unchanged.
+- **Two secrets were missing from the E5 checks** (finding at :364). Taken:
+  - `expectLinearKept` checks the installation's refresh token alongside the access token in the FakeStore log, the prompts, the relayed frames and the opened reply;
+  - `expectJiraKept` checks the system token alongside the user's token in the log, the stored task record (`readJiraTask(...).raw`), the opened reply, the prompts and the frames.
+
+  N4 (the task record keeps the `x-forge-oauth-system` header) is red in A1 at :683.
+- **The spec note called VE-22 complete.** Taken: it now says VE-22b is built for Linear and Jira, CI pending, with the receipt in the progress log. It becomes "complete" in the receipt that has a green vector-everywhere.yml run.
+- **Linear's E12 bound is the spec's 10 s, not the adapter's `ackMs`** (finding at :66). Left for the lead, as the finding asks. (e) and Left open now also say what happens once the repeated authority reads are trimmed: either the journey asserts `w.adapter.ackMs` for Linear, as its Jira half does (:704), or Linear's `ackMs` changes to the spec's budget.
+
+| Mutation | Now | Before the round |
+| --- | --- | --- |
+| N1 linear/adapter.ts `acknowledge` deadline `ctx().now - 1` | L1, L2 at :342 (`firstThought`), 40 ms | the run hung; `timeout` stopped it at 240 s |
+| N2 linear/adapter.ts the `laptop` thought posted as `error` | L1 at :381 | 5 pass |
+| N3 jobs.ts claimJob gives an expired job to a late claim | L2, A2 at lib :549 | 5 pass |
+| N4 jira/a2a.ts the task record keeps the system token | A1 at :683 | 5 pass |
+| N5 everywhere-policy.ts `started` reads "Started work" | A1 at :780 | 5 pass |
+| N6 linear/render.ts "Working on your request." reworded | L1 at :440 | 5 pass |
+| N7 everywhere-policy.ts the `expired` ending shortened | L2 at :635 | 5 pass |
+| N8 everywhere-policy.ts the `changes` line extended | L1 at :579, A1 at :842 | 5 pass |
+
+They were applied by /tmp/vector-v2/everywhere/ev20-fix/mutate.py, with the file run alone and each source restored by sha256 (logs in ev20-fix/mut/). `BEFORE=1` swaps the pre-round copy of the tracker file in for the run and restores it by sha256. T3 to T20 were re-run on the edited file (ev20-fix/tmutate.py, logs in ev20-fix/tmut/; T16 against the loopback redis-server). Each is red in the same cases and at the same assertions as before, and the mutation table above gives their new lines. T1 and T2 were not re-run: they fail by the case timeout and have no line to move, and nothing on their path changed (the routes' `sleep`, the poll).
+
+Receipts: vector-everywhere-progress.md, "EV-20 review round one".
