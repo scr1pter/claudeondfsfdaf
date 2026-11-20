@@ -2,7 +2,7 @@ import { Option, Schema } from "effect"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { VaultCrypto } from "@vectordevai/core/vault/crypto"
-import { isVaultError } from "@vectordevai/core/vault/error"
+import { isVaultError, VaultError } from "@vectordevai/core/vault/error"
 import { VaultGitHub } from "@vectordevai/core/vault/github"
 import { VaultRemote } from "@vectordevai/core/vault/remote"
 import type { VaultStore } from "@vectordevai/core/vault/store"
@@ -62,8 +62,9 @@ export const KeyRecord = Schema.Struct({
 })
 export type KeyRecord = typeof KeyRecord.Type
 
-export function decodeKeyRecord(input: unknown): KeyRecord | undefined {
-  return Option.getOrUndefined(Schema.decodeUnknownOption(KeyRecord)(input))
+/** The record the runtime opened (JSON text), or undefined when it is not one. */
+export function decodeKeyRecord(text: string): KeyRecord | undefined {
+  return Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(KeyRecord))(text))
 }
 
 /** What Settings → Memory → Backup reads. No key, code, content or amount. */
@@ -82,6 +83,8 @@ export type VaultStatus = {
   readonly storedBytes?: number
   /** When the nightly backup is next due, while it is on and a vault exists. */
   readonly nextAt?: number
+  /** Brain Vault has not started yet (the engine is not up); nothing else here is this computer's. */
+  readonly starting?: true
 }
 
 /** A file of the engine's backup (GET /memory/backup). */
@@ -130,7 +133,14 @@ export type VaultVersions =
 export type VaultRestoreResult = VaultResult & {
   /** The vault there is not this computer's: the recovery code opens it. */
   readonly needsCode?: boolean
-  readonly totals?: RestoreCounts & { readonly unreadable: number; readonly version: string; readonly newer: boolean }
+  readonly totals?: RestoreCounts & {
+    readonly unreadable: number
+    readonly version: string
+    readonly newer: boolean
+    /** B10: learned skills and workflow insights brought back, each a proposal waiting for review. */
+    readonly skills: number
+    readonly insights: number
+  }
 }
 
 export type VaultDeps = {
@@ -232,9 +242,10 @@ export function restoreParts(text: string) {
   return { parts, documents: Array.isArray(documents) ? documents.length : 0 }
 }
 
+// Only a VaultError carries copy written for the person. Any other error's text (a path, a store or crypto error) is
+// never shown or kept in the settings; the fallback says what failed instead.
 function message(error: unknown, fallback: string) {
   if (isVaultError(error)) return error.message
-  if (error instanceof Error && error.message) return error.message
   return fallback
 }
 
@@ -304,18 +315,20 @@ export function createVaultBackup(deps: VaultDeps) {
   /** The store `backend` names. A backup to Vector's backend first checks the status lists it (H1). */
   const storeFor = async (backend: Backend, write: boolean) => {
     const blocked = deps.blocked?.(backend)
-    if (blocked) throw new Error(blocked)
+    if (blocked) throw new VaultError("unavailable", blocked)
     if (backend.type === "github") return deps.githubStore(backend.repo)
     const token = await deps.token()
     if (!token)
-      throw new Error(
+      throw new VaultError(
+        "unavailable",
         "Sign in to Vector to use Brain Vault on Vector, or back up to a private GitHub repository you own.",
       )
     if (write) {
       const plan = await deps.codium()
-      if (plan.error) throw new Error(plan.error)
+      if (plan.error) throw new VaultError("unavailable", plan.error)
       if (!vectorOffered(plan))
-        throw new Error(
+        throw new VaultError(
+          "unavailable",
           "Brain Vault on Vector is not available on this account. Back up to a private GitHub repository you own instead.",
         )
     }
@@ -527,6 +540,8 @@ export function createVaultBackup(deps: VaultDeps) {
             active: 0,
             pinned: 0,
             waiting: 0,
+            skills: 0,
+            insights: 0,
             known: 0,
             refused: 0,
             documents: 0,
@@ -555,11 +570,17 @@ export function createVaultBackup(deps: VaultDeps) {
                 break
               }
               totals.restored += done.restored
+              totals.known += done.known
+              totals.refused += done.refused
+              // The engine brings learned sections back as proposals whatever they were, so they are counted apart
+              // from memory's in use, pinned and waiting (B10).
+              if (file.section === "skills" || file.section === "insights") {
+                totals[file.section] += done.restored
+                continue
+              }
               totals.active += done.active
               totals.pinned += done.pinned
               totals.waiting += done.waiting
-              totals.known += done.known
-              totals.refused += done.refused
             }
           }
           return {
@@ -618,8 +639,13 @@ export function createVaultBackup(deps: VaultDeps) {
           const store = await storeFor(backend, false)
           const [held, record] = await Promise.all([store.readKey(), deps.keys.read()])
           await store.destroy()
-          if (record && (!held || held.vault === record.vault)) {
-            await deps.keys.clear()
+          // The vault deleted was this computer's when the record names it or, while no record reads, when the
+          // settings do: they name the vault of the key written with them.
+          const mine = !held || held.vault === (record?.vault ?? current.vault)
+          // A record that reads is kept only when it opens another vault. One that does not read is cleared only while
+          // the credential store is open, where it never opens; with the store locked it may open at the next launch.
+          if (record ? mine : deps.keys.secure()) await deps.keys.clear()
+          if (mine)
             write({
               ...settings(),
               enabled: false,
@@ -630,7 +656,6 @@ export function createVaultBackup(deps: VaultDeps) {
               warning: undefined,
               storedBytes: undefined,
             })
-          }
           return {
             ok: true,
             message:
@@ -667,6 +692,8 @@ export function createVaultBackup(deps: VaultDeps) {
     const backend = input.backend === "vector" || input.backend === "github" ? input.backend : current.backend
     const githubRepo = typeof input.githubRepo === "string" ? repo?.full : current.githubRepo
     const moved = backend !== current.backend || githubRepo !== current.githubRepo
+    // A backup running now would record its version against the new place; the switch alone may change meanwhile.
+    if (moved && state.running) return busy()
     write({
       ...current,
       enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,

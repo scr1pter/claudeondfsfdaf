@@ -14,6 +14,37 @@ async function sources() {
   return Promise.all(files.map(async (file) => ({ file, text: await read(`src/${file}`) })))
 }
 
+/** The source with its comments taken out, so a comment that names a call is not counted as one. */
+function code(text: string) {
+  return text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")
+}
+
+/**
+ * A call's arguments, from the text just after its opening parenthesis: split at its top-level commas and ended at its
+ * own closing parenthesis, counting nested parentheses, brackets and braces and skipping quoted strings. Undefined when
+ * the call never closes.
+ */
+function callArguments(after: string) {
+  const args = [""]
+  let depth = 0
+  let quote = ""
+  for (let index = 0; index < after.length; index++) {
+    const char = after[index]!
+    if (quote) {
+      args[args.length - 1] += char === "\\" ? char + (after[++index] ?? "") : char
+      if (char === quote) quote = ""
+      continue
+    }
+    if (char === '"' || char === "'") quote = char
+    if (depth === 0 && char === ")") return args.map((arg) => arg.trim())
+    if ("([{".includes(char)) depth++
+    if (")]}".includes(char)) depth--
+    if (depth === 0 && char === ",") args.push("")
+    else args[args.length - 1] += char
+  }
+  return undefined
+}
+
 describe("source", () => {
   test("only relative imports: no Bun, Node or package module reaches the Worker", async () => {
     for (const { file, text } of await sources()) {
@@ -30,8 +61,7 @@ describe("source", () => {
 
   test("no Bun or Node globals, and no logging", async () => {
     for (const { file, text } of await sources()) {
-      const code = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")
-      expect({ file, found: code.match(/\b(?:Bun|process|Buffer|__dirname|console)\s*\./g) ?? [] }).toEqual({
+      expect({ file, found: code(text).match(/\b(?:Bun|process|Buffer|__dirname|console)\s*\./g) ?? [] }).toEqual({
         file,
         found: [],
       })
@@ -43,11 +73,49 @@ describe("source", () => {
   })
 
   test("every outbound fetch refuses to follow redirects", async () => {
-    for (const { file, text } of await sources()) {
-      const calls = text.match(/\b(?:fetcher|deps\.fetch)\(/g) ?? []
-      const manual = text.match(/redirect:\s*"manual"/g) ?? []
-      expect({ file, manual: manual.length >= calls.length }).toEqual({ file, manual: true })
-    }
+    // Every call of `fetch(` or `fetcher(` (bare, or as a member such as `deps.fetch(`) must pass a second (options)
+    // argument that says redirect: "manual". Not outbound, so left out: a method or interface definition (its first
+    // parameter has a type), and `stub.fetch(`, the call to the account's Durable Object. runtime.ts's forwarder is
+    // left out too, since it hands each caller's own options to the platform unchanged; it is pinned to exactly that
+    // below.
+    const outbound = (await sources()).flatMap(({ file, text }) =>
+      [...code(text).matchAll(/(\bstub\.)?\b(?:fetcher|fetch)\s*\(/g)].flatMap((match) => {
+        const after = code(text).slice(match.index + match[0].length)
+        if (match[1] || /^\s*\w+\??\s*:/.test(after)) return []
+        if (file === "runtime.ts" && after.startsWith("input, init)")) return []
+        return [{ file, args: callArguments(after) }]
+      }),
+    )
+    for (const { file, args } of outbound)
+      expect({ file, args, manual: /redirect:\s*"manual"/.test(args?.[1] ?? "") }).toEqual({ file, args, manual: true })
+    expect(outbound.map((entry) => entry.file).sort()).toEqual(["check.ts", "internal.ts", "ssrf.ts"])
+    const runtime = code(await read("src/runtime.ts"))
+    expect(runtime.match(/\bfetch\s*\(/g)).toHaveLength(2)
+    expect(runtime).toContain("fetch: (input, init) => fetch(input, init),")
+  })
+
+  test("the entry module exports only the default handler and functions the runtime takes", () => {
+    // workerd refuses a module whose exports are not handlers or classes: a string export (025d75da removed KILL_KEY)
+    // failed only in the CI smoke before this test.
+    expect(Object.keys(worker).sort()).toEqual(["OpsAccount", "default", "handleRequest"])
+    expect(Object.keys(worker.default)).toEqual(["fetch"])
+    for (const [name, value] of Object.entries(worker))
+      if (name !== "default") expect({ name, type: typeof value }).toEqual({ name, type: "function" })
+  })
+
+  test("the kill flag is written in one place: one put and one delete, both inside flags()", async () => {
+    const writes = (await sources()).flatMap(({ file, text }) =>
+      [...code(text).matchAll(/OPS_FLAGS\.(put|delete)\s*\(/g)].map((match) => ({ file, write: match[1] })),
+    )
+    expect(writes).toEqual([
+      { file: "ops-account.ts", write: "put" },
+      { file: "ops-account.ts", write: "delete" },
+    ])
+    const account = code(await read("src/ops-account.ts"))
+    const start = account.indexOf("  private async flags(")
+    const body = account.slice(start, account.indexOf("\n  }\n", start))
+    expect(start).toBeGreaterThan(0)
+    expect(body.match(/OPS_FLAGS\.(?:put|delete)\s*\(/g)).toHaveLength(2)
   })
 
   test("the Worker exports its fetch handler and the Durable Object class with its alarm", () => {
@@ -76,6 +144,8 @@ describe("wrangler.jsonc", () => {
     expect(value.durable_objects.bindings).toEqual([{ name: "OPS_ACCOUNT", class_name: "OpsAccount" }])
     expect(value.migrations).toEqual([{ tag: "v1", new_sqlite_classes: ["OpsAccount"] }])
     expect(value.kv_namespaces.map((entry: { binding: string }) => entry.binding)).toEqual(["OPS_FLAGS"])
+    // Workers Logs and traces stay off until the owner turns them on here (owner-actions/hosted-ops.md).
+    expect(value.observability).toEqual({ enabled: false })
   })
 
   test("holds no secret: the only variable is the API's public origin, and the keys are set with wrangler secret put", async () => {

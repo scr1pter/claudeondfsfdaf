@@ -4,17 +4,21 @@ import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entit
 import { Hosted } from "../../packages/schema/src/hosted.js"
 import { codiumKey } from "./codium-keys.js"
 import { readSwitch } from "./codium-switches.js"
+import { readSnapshot } from "./codium-snapshot.js"
+import { deletingRefusal, requireAccountOpen } from "./codium-tombstone.js"
 import {
   hostedAccess,
   hostedBrowserAllowed,
   hostedCaps,
+  hostedDownloadAccess,
   hostedOpen,
   hoursUsedShare,
+  requireHostedDownload,
   requireHostedStart,
   unavailable,
   type HostedCaps,
 } from "./hosted-entitlement.js"
-import { closeBlock, hostedAccount, hostedLedgerConfigured, openBlock } from "./hosted-ledger.js"
+import { chargeRetention, closeBlock, hostedAccount, hostedLedgerConfigured, openBlock } from "./hosted-ledger.js"
 import {
   MAX_COMPUTERS,
   TIMEOUT_GRACE_MS,
@@ -27,7 +31,7 @@ import {
   stopHostedComputer,
   type ProviderOptions,
 } from "./hosted-provider.js"
-import { HOLD_MINUTES } from "./hosted-rates.js"
+import { BLOCK_MINUTES, HOLD_MINUTES, HOSTED_DISK_GB_MAX } from "./hosted-rates.js"
 import {
   hostedRunSigningConfigured,
   hostedViewerConfigured,
@@ -40,6 +44,7 @@ import {
   type HostedRunClaims,
 } from "./hosted-tokens.js"
 import { ApiError, type ApiRequest } from "./http.js"
+import { readEntitlement } from "./model-plan-account.js"
 import { stripeMode } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
 import { presignR2, r2Configured } from "./r2-presign.js"
@@ -62,6 +67,21 @@ import { runTokenRevoked } from "./codium-provisioners.js"
  * single use; a request carrying a run token is refused when it looks like a browser's (`Origin`, `Sec-Fetch-*`,
  * cookies), so no web page the computer's browser opens can borrow it.
  *
+ * Download-only sessions (H1a). An account whose plan ended (or no longer includes a cloud computer) may start
+ * download-only sessions, one at a time on each computer whose disk is still kept for download (`hosted:disk-due`,
+ * §4.4): `mode: "download"`. Each gets no job, browser, live view, take-over or recording; its heartbeat answers ask
+ * only to pack and upload the disk; it lasts one block, held like any block from the plan's final period; its run
+ * token is refused at chat and /models (S3). The first start for a computer charges that disk's retention to the final
+ * period, once per kept window (`chargeRetention`), and Vector pays at most one archive's worth of each computer's
+ * uploads.
+ *
+ * Image floor (H2a). Each computer keeps the image generation its daemon last reported in a signed heartbeat, for as
+ * long as the provider keeps its disk after that beat. With `VECTOR_HOSTED_MIN_GENERATION` set, a job start passes over
+ * an included computer that reported a lower generation and is refused, before any lease, hold or provider call, when
+ * every included computer did (409 `HOSTED_REBUILD_REQUIRED`). A computer that never reported one, or whose report
+ * lapsed, is allowed. Download-only starts, running sessions and their renewals are never checked. Only deleting the
+ * computer's disk rebuilds it (`eraseHostedComputer`).
+ *
  * Store keys (all under the Codium prefix; §4.6 names `hosted:running:<id>`, `hosted:jobs:due` and
  * `hosted:minutes:<id>:<epoch>`, the rest are this package's):
  * - `hosted:session:<sid>`       the session record (JSON, compare-and-set), kept 35 days after it ends;
@@ -75,8 +95,18 @@ import { runTokenRevoked } from "./codium-provisioners.js"
  * - `hosted:handoff-alert:<sid>` a hand-over alert went out in the last 10 minutes (WP A56's phone alert);
  * - `hosted:viewer:<jti>`        viewer tokens issued (5 minutes);
  * - `hosted:computers:<account>` SET of computer numbers the account has had; `hosted:names` HASH name → account;
+ * - `hosted:generation:<account>` HASH computer number → `<generation>:<until>`, the image generation its daemon last
+ *   reported (signed beats only, H2a) and when that lapses with the disk (the beat plus the session's `diskDays`),
+ *   deleted with the computer, read only for numbers `hosted:computers:<account>` still holds and dropped when a start
+ *   adds the number to it again;
  * - `hosted:suspend:<account>`, `hosted:suspended`  fair-use or owner holds on the account's cloud computer;
  * - `hosted:egress:<account>:<day>`, `hosted:pages:<account>:<hour>`  fair-use counters;
+ * - `hosted:download-egress:<account>:<n>`  bytes download-only sessions uploaded from computer n that the nightly
+ *   egress charge has not set against its reading yet (H1a: Vector pays that upload, up to `ARCHIVE_MAX_BYTES` per
+ *   computer and kept window);
+ * - `hosted:download-uploaded:<account>:<n>`  every byte download-only sessions uploaded from computer n, kept until
+ *   its disk's deletion date (the bound on what Vector pays); both deleted with the computer (`eraseHostedComputer`)
+ *   and, for every number an account could have, with its disks and on account deletion (hosted-crons.ts);
  * - `hosted:recent`              ZSET of accounts by their last session activity (the drift check's list).
  */
 
@@ -96,6 +126,13 @@ export const START_STALE_MS = 10 * 60_000
 export const STOP_GIVE_UP_MS = 30 * 60_000
 /** S3's largest single upload, which R2 shares: the packed files must fit one PUT. */
 const ARCHIVE_MAX_BYTES = 5 * 1024 ** 3
+/**
+ * A download-only start needs this long before the disk's deletion date (H1a): its one block, and an hour for the
+ * person to fetch the files before the disk and its packed copy are deleted.
+ */
+const DOWNLOAD_START_MARGIN_MS = BLOCK_MINUTES * 60_000 + Hosted.DOWNLOAD_LINK_MS / 24
+/** The highest image generation a heartbeat may report, and the highest floor (H2a). */
+const GENERATION_MAX = 1_000_000
 
 export type SessionOptions = ProviderOptions & { fetcher?: typeof fetch; clock?: () => number }
 
@@ -113,12 +150,19 @@ export const hostedHandoffAlertKey = (id: string) => codiumKey("hosted", "handof
 export const hostedModelKey = (id: string) => codiumKey("hosted", "model", id)
 export const hostedViewerKey = (jti: string) => codiumKey("hosted", "viewer", jti)
 export const hostedComputersKey = (account: string) => codiumKey("hosted", "computers", account)
+export const hostedGenerationKey = (account: string) => codiumKey("hosted", "generation", account)
 export const hostedNamesKey = () => codiumKey("hosted", "names")
+/** The nightly job's last provider readings per computer (HASH name → JSON); deleted with the computer. */
+export const hostedUsageKey = () => codiumKey("hosted", "usage")
 export const hostedSuspendKey = (account: string) => codiumKey("hosted", "suspend", account)
 export const hostedSuspendedKey = () => codiumKey("hosted", "suspended")
 export const hostedEgressKey = (account: string, day: string) => codiumKey("hosted", "egress", account, day)
 export const hostedPagesKey = (account: string, hour: string) => codiumKey("hosted", "pages", account, hour)
 export const hostedRecentKey = () => codiumKey("hosted", "recent")
+export const hostedDownloadEgressKey = (account: string, computer: number) =>
+  codiumKey("hosted", "download-egress", account, computer)
+export const hostedDownloadUploadedKey = (account: string, computer: number) =>
+  codiumKey("hosted", "download-uploaded", account, computer)
 
 // ── Records ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -127,6 +171,11 @@ const Download = Schema.Struct({
   requestedAt: Schema.Number,
   readyAt: Schema.optional(Schema.Number),
   bytes: Schema.optional(Schema.Number),
+  /**
+   * When the packed files were deleted with the disk: by the nightly deletion pass (§4.4) or with the computer
+   * (`eraseHostedComputer`). No link is given or followed after it.
+   */
+  erasedAt: Schema.optional(Schema.Number),
 })
 const SessionRecord = Schema.Struct({
   v: Schema.Literal(1),
@@ -135,6 +184,8 @@ const SessionRecord = Schema.Struct({
   computer: Schema.Int,
   size: Schema.Literals(Hosted.SIZES),
   source: Schema.Literals(Hosted.SESSION_SOURCES),
+  /** What the session is for (H1a); absent means a job. */
+  mode: Schema.optional(Schema.Literals(Hosted.SESSION_MODES)),
   title: Schema.optional(Schema.String),
   state: Schema.Literals(Hosted.SESSION_STATES),
   /** Why the session wraps up or ended. */
@@ -165,6 +216,11 @@ const SessionRecord = Schema.Struct({
   stoppedAt: Schema.optional(Schema.Number),
   endedAt: Schema.optional(Schema.Number),
   download: Schema.optional(Download),
+  /**
+   * How many days the provider keeps the computer's disk after this session stops (the start's `diskDays`). The image
+   * generation's record lives that long from each beat (H2a); absent on a record from before H2a.
+   */
+  diskDays: Schema.optional(Schema.Int),
 })
 export type SessionRecord = typeof SessionRecord.Type
 
@@ -177,12 +233,13 @@ const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(SessionRec
 const SAVE = `local current = redis.call('GET', KEYS[1]) if not current then current = '' end if current ~= ARGV[1] then return 0 end redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3]) return 1`
 
 /**
- * CLAIM. Computers at once, by lease: the session ARGV[1] takes the lowest of computers 1..ARGV[2] whose lease is free
- * or lapsed (until ≤ ARGV[4]), holding it until ARGV[3]; a session that already holds one keeps it. The hash lives at
- * least ARGV[5] ms. Answers the computer, or 0 when every one is leased.
+ * CLAIM. Computers at once, by lease: the session ARGV[1] takes the lowest of computers ARGV[6]..ARGV[2] (ARGV[6] is 1
+ * when absent; a download-only start names its one computer, H1a) whose lease is free or lapsed (until ≤ ARGV[4]),
+ * holding it until ARGV[3]; a session that already holds one keeps it. The hash lives at least ARGV[5] ms. Answers the
+ * computer, or 0 when every one is leased.
  */
 const CLAIM = `local now = tonumber(ARGV[4]) local free = nil
-for n = 1, tonumber(ARGV[2]) do
+for n = tonumber(ARGV[6] or '1'), tonumber(ARGV[2]) do
   local v = redis.call('HGET', KEYS[1], tostring(n))
   if v then
     local s, u = string.match(v, '^([^:]+):(%d+)$')
@@ -283,6 +340,7 @@ export function sessionView(record: SessionRecord): Hosted.SessionView {
           },
         }
       : {}),
+    ...(record.mode === "download" ? { mode: "download" as const } : {}),
   }
 }
 
@@ -304,6 +362,40 @@ export function hostedSessionProblems(options: Pick<SessionOptions, "provider"> 
 
 export function hostedSessionsConfigured(options: Pick<SessionOptions, "provider"> = {}) {
   return hostedSessionProblems(options).length === 0
+}
+
+/**
+ * The image floor (H2a, `VECTOR_HOSTED_MIN_GENERATION`): the oldest image generation a computer may have reported for a
+ * job to start on it. Blank, unset or 0 is no floor. Anything but a whole number up to `GENERATION_MAX` is "invalid",
+ * which stops job starts (503) and never asks anyone to rebuild. Downloads never read it, so it is not one of
+ * `hostedSessionProblems`.
+ */
+function hostedMinGeneration() {
+  const configured = process.env.VECTOR_HOSTED_MIN_GENERATION?.trim()
+  if (!configured) return undefined
+  const value = Number(configured)
+  if (!/^\d+$/.test(configured) || value > GENERATION_MAX) return "invalid" as const
+  return value === 0 ? undefined : value
+}
+
+/**
+ * The computers among `known` (numbers the account still has, `knownComputers`) whose daemon last reported an image
+ * generation below `floor`. Each entry is `<generation>:<until>`; one past its `until` (its disk may have lapsed at the
+ * provider, R12) reads as never reported, and so does an entry for a number the account no longer has (its disk was
+ * deleted), whatever is left in the hash.
+ */
+async function computersBelow(account: string, known: number[], floor: number, now: number, fetcher: typeof fetch) {
+  const flat = await store(["HGETALL", hostedGenerationKey(account)], fetcher)
+  const pairs = Array.isArray(flat) ? flat : []
+  const reported = new Map(
+    pairs.flatMap((field, index) => (index % 2 === 0 ? [[Number(field), String(pairs[index + 1])] as const] : [])),
+  )
+  return new Set(
+    known.filter((computer) => {
+      const entry = /^(\d+):(\d+)$/.exec(reported.get(computer) ?? "")
+      return entry !== null && Number(entry[2]) > now && Number(entry[1]) > 0 && Number(entry[1]) < floor
+    }),
+  )
 }
 
 // ── Suspensions ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -373,9 +465,10 @@ async function claimComputer(
   until: number,
   now: number,
   fetcher: typeof fetch,
+  first = 1,
 ) {
   const claimed = await store(
-    ["EVAL", CLAIM, 1, hostedLeaseKey(account), session, computers, until, now, until - now + DAY_MS],
+    ["EVAL", CLAIM, 1, hostedLeaseKey(account), session, computers, until, now, until - now + DAY_MS, first],
     fetcher,
   )
   const computer = Number(claimed)
@@ -390,7 +483,7 @@ async function renewLease(record: SessionRecord, until: number, now: number, fet
   )
 }
 
-async function releaseLease(record: SessionRecord, fetcher: typeof fetch) {
+async function releaseLease(record: Pick<SessionRecord, "account" | "computer" | "id">, fetcher: typeof fetch) {
   await store(["EVAL", LEASE, 1, hostedLeaseKey(record.account), record.computer, record.id, "", 0], fetcher)
 }
 
@@ -463,9 +556,10 @@ function diskDays(caps: HostedCaps) {
 /**
  * Starts a cloud computer session for `account` (§WP A53's start checks, in order): the owner's switch, the provider
  * and the rest of the hosted configuration, the plan from the snapshot (state, size, job length, hours: WP A51's
- * `requireHostedStart`), a hold on the account, computers at once by lease, the first block's hold, creating or
- * resuming the computer with its run token, and the boot step. Anything that fails after the hold gives it back (or
- * charges only what the computer ran). Answers the session.
+ * `requireHostedStart`), a hold on the account, the image floor (H2a: refused when every included computer reported
+ * an image below it), computers at once by lease (passing over a computer below the floor), the first block's hold,
+ * creating or resuming the computer with its run token, and the boot step. Anything that fails after the hold gives it
+ * back (or charges only what the computer ran). Answers the session.
  */
 export async function startHostedSession(
   account: string,
@@ -478,19 +572,32 @@ export async function startHostedSession(
   const suspension = await readSuspension(account, fetcher)
   if (suspension) throw suspendedError(suspension)
   const start = await requireHostedStart(account, { size: input.size, jobMinutes: input.jobMinutes }, { fetcher, clock })
+  const floor = hostedMinGeneration()
+  if (floor === "invalid") throw unavailable()
+  const below =
+    floor === undefined
+      ? new Set<number>()
+      : await computersBelow(account, await knownComputers(account, fetcher), floor, clock(), fetcher)
+  const included = Array.from({ length: start.caps.computers }, (_, index) => index + 1)
+  const stale = included.filter((computer) => below.has(computer))
+  if (stale.length > 0 && stale.length === included.length) throw rebuildRequired(stale)
   const now = clock()
   const id = newSessionId()
-  const computer = await claimComputer(
-    account,
-    id,
-    start.caps.computers,
-    now + HOLD_MINUTES * 60_000 + LEASE_SLACK_MS,
-    now,
-    fetcher,
-  )
+  const until = now + HOLD_MINUTES * 60_000 + LEASE_SLACK_MS
+  // A computer below the floor is passed over: its lease goes back at once and the next free one is claimed (H2a).
+  // Each claim starts above the last, so there are at most MAX_COMPUTERS of them.
+  const claim = async (first: number): Promise<number> => {
+    const claimed = await claimComputer(account, id, start.caps.computers, until, now, fetcher, first)
+    if (!below.has(claimed)) return claimed
+    await releaseLease({ account, computer: claimed, id }, fetcher).catch(() => undefined)
+    return claim(claimed + 1)
+  }
+  const computer = await claim(1)
+  if (computer === 0 && stale.length > 0)
+    throw new ApiError(429, "HOSTED_BUSY", "Every cloud computer your plan includes is running or needs to be rebuilt.")
   if (computer === 0)
     throw new ApiError(429, "HOSTED_BUSY", "All the cloud computers your plan includes are running. Stop one first.")
-  let record: SessionRecord = {
+  const record: SessionRecord = {
     v: 1,
     id,
     account,
@@ -507,13 +614,16 @@ export async function startHostedSession(
     blockStartedAt: now,
     endsAt: now,
     stopBy: now,
+    diskDays: diskDays(start.caps),
   }
   try {
     await createRecord(record, fetcher, now)
     await store(["ZADD", hostedSessionsKey(account), now, id], fetcher)
     await store(["ZADD", hostedLiveKey(), now, id], fetcher)
     await store(["ZADD", hostedRecentKey(), now, account], fetcher)
-    await store(["SADD", hostedComputersKey(account), computer], fetcher)
+    // A number the account does not have now is a computer made anew: a generation left for it is not this one's (H2a).
+    if (Number(await store(["SADD", hostedComputersKey(account), computer], fetcher)) > 0)
+      await store(["HDEL", hostedGenerationKey(account), computer], fetcher)
     await store(["HSET", hostedNamesKey(), computerName(account, computer), account], fetcher)
     await store(
       ["SET", hostedJobKey(id), JSON.stringify({ prompt: input.prompt, ...(input.title ? { title: input.title } : {}) }), "PX", start.jobMinutes * 60_000 + DAY_MS],
@@ -523,20 +633,56 @@ export async function startHostedSession(
     await abandonSession(record, fetcher, clock).catch(() => undefined)
     throw error
   }
+  return launchSession(record, { jobMinutes: start.jobMinutes, diskDays: diskDays(start.caps) }, options)
+}
+
+/**
+ * The second half of a start, for both kinds of session: the first block's hold (`openBlock`), the record's times, the
+ * computer's lease, its run token, creating or resuming the computer and the boot step. A download-only start (H1a)
+ * holds its block from the plan's final period and, once the hold is placed and before the provider is asked, charges
+ * the computer's kept disk to that period (`chargeRetention`: once per computer and kept window, `due` being the
+ * window's deletion date, held and settled from the same pool, `final` saying whether that is the ended plan's final
+ * period, checked against the daily share of the snapshot the start decided with, and shortened to what is left after
+ * the block's hold). Anything that fails after the hold gives it back (or charges only what the computer ran).
+ */
+async function launchSession(
+  record: SessionRecord,
+  launch: {
+    jobMinutes: number
+    diskDays: number
+    download?: { final: boolean; snapshot: EntitlementSnapshot; due: number }
+  },
+  options: SessionOptions,
+): Promise<Hosted.SessionView> {
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
+  const account = record.account
+  const id = record.id
   let block: Awaited<ReturnType<typeof openBlock>>
   try {
-    block = await openBlock(account, { session: id, size: start.size }, { fetcher, clock })
+    block = await openBlock(
+      account,
+      { session: id, size: record.size, ...(launch.download ? { download: true as const } : {}) },
+      { fetcher, clock },
+    )
   } catch (error) {
     await abandonSession(record, fetcher, clock).catch(() => undefined)
+    if (launch.download && error instanceof ApiError && error.code === "MODEL_PLAN_EXHAUSTED")
+      throw new ApiError(
+        402,
+        "MODEL_PLAN_EXHAUSTED",
+        "Your Vector Codium plan cannot cover getting this computer's files ready.",
+      )
     throw error
   }
-  const deadline = block.startedAt + start.jobMinutes * 60_000
+  const deadline = block.startedAt + launch.jobMinutes * 60_000
   const tokenUntil = tokenExpiry(block.stopBy, deadline)
+  let current: SessionRecord
   try {
-    record = await updateSessionRecord(
+    current = await updateSessionRecord(
       id,
-      (current) => ({
-        ...current,
+      (value) => ({
+        ...value,
         deadline,
         block: block.block,
         blockStartedAt: block.startedAt,
@@ -547,44 +693,178 @@ export async function startHostedSession(
       }),
       { fetcher, clock },
     )
+    if (launch.download)
+      await chargeRetention(
+        account,
+        {
+          computer: computerName(account, record.computer),
+          gb: HOSTED_DISK_GB_MAX,
+          days: Hosted.ENDED_DISK_DAYS,
+          final: launch.download.final,
+          snapshot: launch.download.snapshot,
+          due: launch.download.due,
+        },
+        { fetcher, clock },
+      )
   } catch (error) {
     // Nothing was asked of the provider yet: the block closes at its own start, so nothing is charged (P8 review).
     await failSession({ ...record, block: block.block }, block.startedAt, options).catch(() => undefined)
     throw error
   }
-  await renewLease(record, block.stopBy + LEASE_SLACK_MS, clock(), fetcher).catch(() => undefined)
+  await renewLease(current, block.stopBy + LEASE_SLACK_MS, clock(), fetcher).catch(() => undefined)
   let started: Awaited<ReturnType<typeof startHostedComputer>>
   try {
-    const runToken = mintHostedRunToken({ account, session: id, source: input.source, iat: clock(), exp: tokenUntil })
+    const runToken = mintHostedRunToken({ account, session: id, source: record.source, iat: clock(), exp: tokenUntil })
     started = await startHostedComputer(
       account,
-      { computer, session: id, size: start.size, deadline, runToken, diskDays: diskDays(start.caps) },
+      { computer: record.computer, session: id, size: record.size, deadline, runToken, diskDays: launch.diskDays },
       options,
     )
   } catch (error) {
     // Whether a computer started is not known from the error (a timeout may hide one that did): failSession asks the
     // provider to stop it and charges up to that stop when one was running, nothing when none was (M8).
-    const ran = await failSession(record, block.startedAt, options).catch(() => "unknown" as const)
+    const ran = await failSession(current, block.startedAt, options).catch(() => "unknown" as const)
     markStartFailure(error, ran === "ran" ? "ran" : "start")
     throw error
   }
   try {
-    await bootHostedComputer(account, { computer, session: id, runHost: started.runHost }, options)
+    await bootHostedComputer(account, { computer: record.computer, session: id, runHost: started.runHost }, options)
   } catch (error) {
     // The computer ran: it is stopped and its minutes are charged, as every minute a computer runs is (M8).
-    await endHostedSession(record, "failed", options).catch(() => undefined)
+    await endHostedSession(current, "failed", options).catch(() => undefined)
     markStartFailure(error, "ran")
     throw error
   }
-  record = await updateSessionRecord(
+  current = await updateSessionRecord(
     id,
-    (current) =>
-      current.state === "starting"
-        ? { ...current, state: "running", runningAt: clock(), viewerUrl: started.viewerUrl }
+    (value) =>
+      value.state === "starting"
+        ? { ...value, state: "running", runningAt: clock(), viewerUrl: started.viewerUrl }
         : undefined,
     { fetcher, clock },
   )
-  return sessionView(record)
+  return sessionView(current)
+}
+
+export type DownloadInput = { computer: number; source: Hosted.SessionSource }
+
+/**
+ * The body of a download-only start (H1a): `{mode: "download", computer}`, nothing else. The source is the caller's.
+ * What the start may do comes from the snapshot and the computer's kept disk, never from the body (S1).
+ */
+export function parseDownloadStart(input: unknown, source: Hosted.SessionSource): DownloadInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw request()
+  const body = input as Record<string, unknown>
+  if (body.mode !== "download" || Object.keys(body).some((key) => key !== "mode" && key !== "computer"))
+    throw request("A download names only the computer.")
+  const computer = body.computer
+  if (typeof computer !== "number" || !Number.isSafeInteger(computer) || computer < 1 || computer > MAX_COMPUTERS)
+    throw request("Choose one of your computers.")
+  return { computer, source }
+}
+
+/**
+ * A download-only start (H1a; §4.4: an ended plan's disks are kept 14 days for download, then deleted), in order: the
+ * hosted configuration and the media bucket, the account not being deleted, no hold on its cloud computer, the owner's
+ * switch and gate, the plan's answer for a download (`requireHostedDownload`: an ended plan whose final period was
+ * kept, or a live plan without a computer), the disk still inside its kept date with a block and an hour to spare, the
+ * computer one the account has, and its lease. The session then starts as any other (`launchSession`) with one block
+ * held from that period, no job, no browser and its files already asked for, so the computer's first answers ask it to
+ * pack and upload them. The image floor (H2a) does not apply: a kept disk's files stay downloadable whatever image it
+ * was made from.
+ */
+export async function startHostedDownload(
+  account: string,
+  input: DownloadInput,
+  options: SessionOptions = {},
+): Promise<Hosted.SessionView> {
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
+  if (hostedSessionProblems(options).length || !r2Configured("media")) throw unavailable()
+  await requireAccountOpen(account, fetcher)
+  const suspension = await readSuspension(account, fetcher)
+  if (suspension) throw suspendedError(suspension)
+  const service = await readSwitch("hosted", fetcher, { now: clock() })
+  if (service === "on" && !(await hostedOpen(account, fetcher)))
+    throw new ApiError(503, "HOSTED_UNAVAILABLE", "The cloud computer is not available on Vector yet.")
+  const plan = requireHostedDownload(await readEntitlement(account, fetcher, clock()), service)
+  const now = clock()
+  // The date first: once it passed, the nightly pass deletes the computers and forgets them.
+  const due = await readDiskDue(account, fetcher)
+  if (due === undefined || due <= now) throw diskGone()
+  // The block must end, and the person have time to fetch the files, before the disk and its packed copy are deleted.
+  if (due - now < DOWNLOAD_START_MARGIN_MS)
+    throw new ApiError(
+      409,
+      "HOSTED_DOWNLOAD_UNAVAILABLE",
+      "Too little time is left before this computer's disk is deleted.",
+    )
+  if (!(await knownComputers(account, fetcher)).includes(input.computer)) throw request("Choose one of your computers.")
+  const id = newSessionId()
+  const computer = await claimComputer(
+    account,
+    id,
+    input.computer,
+    now + HOLD_MINUTES * 60_000 + LEASE_SLACK_MS,
+    now,
+    fetcher,
+    input.computer,
+  )
+  if (computer === 0) throw new ApiError(429, "HOSTED_BUSY", "This computer is already getting its files ready.")
+  const days = Math.max(1, Math.min(90, Math.ceil((due - now) / DAY_MS)))
+  const record: SessionRecord = {
+    v: 1,
+    id,
+    account,
+    computer,
+    size: "standard",
+    source: input.source,
+    mode: "download",
+    state: "starting",
+    createdAt: now,
+    deadline: now + BLOCK_MINUTES * 60_000,
+    browser: false,
+    periodStart: plan.snapshot.periodStart,
+    block: 0,
+    blockStartedAt: now,
+    endsAt: now,
+    stopBy: now,
+    download: { requestedAt: now },
+    diskDays: days,
+  }
+  try {
+    await createRecord(record, fetcher, now)
+    await store(["ZADD", hostedSessionsKey(account), now, id], fetcher)
+    await store(["ZADD", hostedLiveKey(), now, id], fetcher)
+    await store(["ZADD", hostedRecentKey(), now, account], fetcher)
+    // The nightly deletion reads the live list before it deletes: a start that raced it sees the date gone here.
+    const still = await readDiskDue(account, fetcher)
+    if (still === undefined || still <= clock()) throw diskGone()
+  } catch (error) {
+    await abandonSession(record, fetcher, clock).catch(() => undefined)
+    throw error
+  }
+  return launchSession(record, { jobMinutes: BLOCK_MINUTES, diskDays: days, download: { ...plan, due } }, options)
+}
+
+/** When the account's computers' disks are to be deleted (§4.4), or undefined when no date is set. */
+async function readDiskDue(account: string, fetcher: typeof fetch) {
+  const raw = await store(["ZSCORE", hostedDiskDueKey(), account], fetcher)
+  const due = Number(raw)
+  return raw !== null && raw !== undefined && Number.isFinite(due) && due > 0 ? due : undefined
+}
+
+/** The computer numbers the account has had (`hosted:computers:<account>`), 1 to `MAX_COMPUTERS`, in order. */
+async function knownComputers(account: string, fetcher: typeof fetch) {
+  const known = await store(["SMEMBERS", hostedComputersKey(account)], fetcher)
+  const numbers = (Array.isArray(known) ? known : [])
+    .map(Number)
+    .filter((value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_COMPUTERS)
+  return [...new Set(numbers)].sort((a, b) => a - b)
+}
+
+function diskGone() {
+  return new ApiError(409, "HOSTED_DOWNLOAD_UNAVAILABLE", "This computer's disk is no longer kept.")
 }
 
 /** A start that failed before any block was held: the lease and the record go, nothing was charged. */
@@ -815,7 +1095,7 @@ export async function listHostedSessions(account: string, fetcher: typeof fetch 
     const record = await readSessionRecord(id, fetcher)
     if (!record || record.account !== account) continue
     const view = sessionView(record)
-    if (record.state === "running") {
+    if (record.state === "running" && record.mode !== "download") {
       const handoff = (await readBeat(record.id, fetcher).catch(() => undefined))?.handoff
       if (handoff && Hosted.HANDOFFS.includes(handoff.reason) && Number.isSafeInteger(handoff.since))
         view.handoff = { reason: handoff.reason, since: handoff.since }
@@ -851,6 +1131,7 @@ export async function takeOverHostedSession(account: string, id: unknown, option
   const next = await updateSessionRecord(
     record.id,
     (value) => {
+      if (value.mode === "download") throw downloadOnly()
       if (value.state === "takeover") return undefined
       if (value.state !== "running") throw notRunning(value)
       return {
@@ -887,6 +1168,7 @@ export async function issueViewer(account: string, id: unknown, mode: unknown, o
   const clock = options.clock ?? Date.now
   if (mode !== "view" && mode !== "control") throw request("Choose view or control.")
   const record = await requireOwnSession(account, id, fetcher)
+  if (record.mode === "download") throw downloadOnly()
   if (!["running", "takeover", "wrapping"].includes(record.state) || !record.viewerUrl) throw notRunning(record)
   if (mode === "control" && record.state !== "takeover")
     throw new ApiError(409, "HOSTED_TAKEOVER_REQUIRED", "Take over the computer before you control it.")
@@ -926,7 +1208,6 @@ export function archiveKey(account: string, id: string) {
  */
 export async function eraseSessionArchives(account: string, ids: readonly string[], options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
-  const clock = options.clock ?? Date.now
   const signed = await store(["SMEMBERS", hostedArchivesKey(account)], fetcher)
   const sessions = new Set((Array.isArray(signed) ? signed : []).map(String))
   for (const id of ids) {
@@ -934,8 +1215,15 @@ export async function eraseSessionArchives(account: string, ids: readonly string
     const record = await readSessionRecord(id, fetcher)
     if (record?.account === account && record.download) sessions.add(id)
   }
+  return deleteArchives(account, [...sessions], options)
+}
+
+/** Deletes exactly these sessions' packed files from the media bucket; 2xx or 404 each, or it throws. */
+async function deleteArchives(account: string, ids: readonly string[], options: SessionOptions) {
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
   let erased = 0
-  for (const id of sessions) {
+  for (const id of ids) {
     if (!Hosted.SESSION_ID.test(id)) continue
     // Files may be in the bucket: the deletion waits until it can reach it.
     if (!r2Configured("media")) throw unavailable()
@@ -945,6 +1233,28 @@ export async function eraseSessionArchives(account: string, ids: readonly string
     erased++
   }
   return erased
+}
+
+/**
+ * Marks each of `ids` whose files were packed (`download.erasedAt`) once its packed files went with the disk: from then
+ * on `requestDownload` gives no new link for it and `downloadRedirect` follows none, with or without a deletion date. A
+ * record that lapsed (its own TTL) in between has nothing left to mark and is skipped; any other failure throws.
+ */
+export async function markArchivesErased(ids: readonly string[], at: number, options: SessionOptions = {}) {
+  const fetcher = options.fetcher ?? fetch
+  for (const id of ids)
+    if ((await readSessionRecord(id, fetcher))?.download?.readyAt !== undefined)
+      await updateSessionRecord(
+        id,
+        (value) =>
+          value.download && value.download.erasedAt === undefined
+            ? { ...value, download: { ...value.download, erasedAt: at } }
+            : undefined,
+        options,
+      ).catch((error: unknown) => {
+        if (error instanceof ApiError && error.statusCode === 404) return undefined
+        throw error
+      })
 }
 
 function publicOrigin() {
@@ -958,23 +1268,36 @@ function publicOrigin() {
 /**
  * The person asks for a session's files. Once the computer has packed and uploaded them, the answer is a link valid
  * `Hosted.DOWNLOAD_LINK_MS` (`{ready: true, url, expiresAt}`); before that, a running session is asked to pack them
- * (`{ready: false}`) and the person asks again. An ended session whose files were never packed has none to give.
+ * (`{ready: false}`) and the person asks again. An ended session whose files were never packed has none to give. A
+ * download-only session (H1a) asked for its files when it started, so it answers `{ready: false}` from its start. While
+ * the account's disks have a deletion date (§4.4), no link outlives it, and none is given once it passed: the nightly
+ * pass deletes the packed files with the disks and marks each record whose files it deleted (`download.erasedAt`)
+ * before it forgets the date, so none is given after that either. Deleting a computer (`eraseHostedComputer`) deletes
+ * and marks its sessions' packed files the same way. No link is given, and none leads anywhere, while the plan's
+ * disks are kept with no download (`requireFilesAllowed`). A link also leads nowhere once the media bucket's own rule
+ * removed the packed files (owner-actions/hosted-computer.md); the person then asks a running session again. Files
+ * that are gone answer 410 `HOSTED_DOWNLOAD_UNAVAILABLE` here and on the link; a request that cannot be served, 409.
  */
 export async function requestDownload(account: string, id: unknown, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
   const clock = options.clock ?? Date.now
   if (!r2Configured("media")) throw unavailable()
   const record = await requireOwnSession(account, id, fetcher)
+  await requireFilesAllowed(account, fetcher)
   const now = clock()
   if (record.download?.readyAt !== undefined) {
-    const link = mintDownloadToken({ session: record.id, now })
+    const due = await readDiskDue(account, fetcher)
+    if (record.download.erasedAt !== undefined || (due !== undefined && due <= now))
+      throw new ApiError(410, "HOSTED_DOWNLOAD_UNAVAILABLE", "This session's files are no longer kept.")
+    const link = mintDownloadToken({ session: record.id, now, ...(due !== undefined ? { until: due } : {}) })
     return {
       ready: true as const,
       url: `${publicOrigin()}/api/hosted/sessions/${record.id}/download?t=${link.token}`,
       expiresAt: link.expiresAt,
     }
   }
-  if (!["running", "takeover", "wrapping"].includes(record.state))
+  const packing = record.mode === "download" ? ["starting", "running", "wrapping"] : ["running", "takeover", "wrapping"]
+  if (!packing.includes(record.state))
     throw new ApiError(409, "HOSTED_DOWNLOAD_UNAVAILABLE", "This session's files were not saved for download.")
   await updateSessionRecord(
     record.id,
@@ -990,6 +1313,9 @@ export async function downloadRedirect(id: string, options: SessionOptions = {})
   const clock = options.clock ?? Date.now
   const record = await readSessionRecord(id, fetcher)
   if (!record || record.download?.readyAt === undefined) throw notFound()
+  await requireFilesAllowed(record.account, fetcher)
+  if (record.download.erasedAt !== undefined)
+    throw new ApiError(410, "HOSTED_DOWNLOAD_UNAVAILABLE", "This session's files are no longer kept.")
   const key = archiveKey(record.account, id)
   const head = presignR2("media", { method: "HEAD", key, expiresIn: 60, now: clock() })
   const found = await fetcher(head.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(10_000) }).catch(
@@ -1007,6 +1333,26 @@ export async function downloadRedirect(id: string, options: SessionOptions = {})
       contentDisposition: `attachment; filename="vector-cloud-computer-${id}.tar.gz"`,
     },
   }).url
+}
+
+/**
+ * §4.4 keeps a frozen plan's disks, and a lost dispute's, with no download, and an account being deleted downloads
+ * nothing. A session's packed files are a copy of its disk, so they follow the same rule, whatever the session. The
+ * tombstone is read first: a deletion sets it before the stored snapshot says closing, and the link route has no
+ * caller check, so a link given before the deletion would otherwise still lead to the files in that window.
+ */
+async function requireFilesAllowed(account: string, fetcher: typeof fetch) {
+  await requireAccountOpen(account, fetcher)
+  const snapshot = await readSnapshot(account, fetcher)
+  const access = hostedDownloadAccess(snapshot)
+  if (access === "frozen") throw new ApiError(403, "HOSTED_FROZEN", "The cloud computer is on hold for this account.")
+  if (access === "closing") throw deletingRefusal()
+  if (snapshot?.state === "ended" && snapshot.reason === "disputed")
+    throw new ApiError(
+      409,
+      "HOSTED_DOWNLOAD_UNAVAILABLE",
+      "This computer's files cannot be downloaded for this account.",
+    )
 }
 
 // ── The computer's side (the run-API host) ─────────────────────────────────────────────────────────────────────────
@@ -1035,15 +1381,21 @@ export async function requireHostedRunRequest(
 
 /**
  * The gateway's `vht_` verifier (§4.8 `registerRunVerifier`): a valid token for a session of the same account that is
- * not stopping or ended. The gateway then refuses model requests while the session is not live
- * (`assertHostedSessionLive`).
+ * not stopping or ended, and not a download-only session (H1a: it runs no agent, so its token gets no chat or /models,
+ * S3). The gateway then refuses model requests while the session is not live (`assertHostedSessionLive`).
  */
 export async function verifyHostedRunToken(token: string, fetcher: typeof fetch = fetch, now = Date.now()) {
   const claims = readHostedRunToken(token, now)
   if (await runTokenRevoked(claims.account, claims.iat, fetcher))
     throw new ApiError(401, "MODEL_PLAN_RUN_EXPIRED", "This run is no longer authorized. Save your work and finish the run.")
   const record = await readSessionRecord(claims.session, fetcher)
-  if (!record || record.account !== claims.account || record.state === "ended" || record.state === "stopping")
+  if (
+    !record ||
+    record.account !== claims.account ||
+    record.state === "ended" ||
+    record.state === "stopping" ||
+    record.mode === "download"
+  )
     throw new ApiError(401, "MODEL_PLAN_RUN_EXPIRED", "This run is no longer authorized. Save your work and finish the run.")
   return {
     account: { id: claims.account },
@@ -1062,11 +1414,11 @@ export async function verifyHostedRunToken(token: string, fetcher: typeof fetch 
 /**
  * Whether a session's agent may make a model request now (§4.8 `assertHostedSessionLive`): the session is starting,
  * running or wrapping (not under the person's control, not stopping or ended), its current block still holds its time,
- * and its deadline has not passed by more than the provider's grace.
+ * and its deadline has not passed by more than the provider's grace. Never for a download-only session (H1a).
  */
 export async function assertHostedSessionLive(sessionId: string, fetcher: typeof fetch = fetch, now = Date.now()) {
   const record = await readSessionRecord(sessionId, fetcher)
-  if (!record) return false
+  if (!record || record.mode === "download") return false
   return (
     (record.state === "starting" || record.state === "running" || record.state === "wrapping") &&
     now < record.stopBy &&
@@ -1128,7 +1480,7 @@ export function parseHeartbeat(input: unknown): Hosted.Heartbeat {
   const pageLoads = count(body.pageLoads, 10_000_000)
   const egressBytes = count(body.egressBytes, Number.MAX_SAFE_INTEGER)
   const archiveBytes = count(body.archiveBytes, ARCHIVE_MAX_BYTES)
-  const generation = count(body.generation, 1_000_000)
+  const generation = count(body.generation, GENERATION_MAX)
   const handoff = Hosted.HANDOFFS.find((reason) => reason === body.handoff)
   return {
     ...(cpu !== undefined ? { cpu } : {}),
@@ -1212,7 +1564,11 @@ async function requireDaemonBeat(id: string, input: Record<string, unknown>, kee
  * The computer's daemon reports (`POST /api/hosted/sessions/<id>/heartbeat` on the run-API host, with the session's run
  * token): its CPU, its agent's last activity, page loads and egress (cumulative), whether it booted, finished or packed
  * the files the person asked for. The answer tells it the session's state, who has control, its deadline, whether the
- * browser may be used, the viewer tokens' key and, until it booted, its job.
+ * browser may be used, the viewer tokens' key and, until it booted, its job. A download-only session's answers (H1a)
+ * say `mode: "download"`, never carry a job, a browser or anything a heartbeat hook adds, and ask at once to pack and
+ * upload the disk; the bytes it uploads are noted so the nightly egress charge leaves them to Vector, at most one
+ * archive's worth per computer until its disk's deletion date. A beat's image generation is also kept for the
+ * computer (`hosted:generation:<account>`, H2a), so the image floor can read it after the session ends.
  */
 export async function recordHeartbeat(
   claims: HostedRunClaims,
@@ -1238,8 +1594,9 @@ export async function recordHeartbeat(
     control: record.state === "takeover" ? "person" : "agent",
     deadline: record.deadline,
     ...(record.state === "wrapping" && record.wrapBy !== undefined ? { wrapBy: record.wrapBy } : {}),
-    browser: record.browser,
+    browser: record.browser && record.mode !== "download",
     viewerKey: viewerPublicKey(),
+    ...(record.mode === "download" ? { mode: "download" as const } : {}),
   }
   if (record.state === "ended" || record.state === "stopping") return answer
   const previous = await readBeat(id, fetcher)
@@ -1279,11 +1636,26 @@ export async function recordHeartbeat(
       ? { handoff: { reason: beat.handoff, since: previous?.handoff?.reason === beat.handoff ? previous.handoff.since : now } }
       : {}),
   }
+  // The computer's own record of its image (H2a): only past requireDaemonBeat, so only hostd's signed reports count.
+  // Every such beat writes it again with when it lapses: the provider keeps the disk `diskDays` after the session
+  // stops, which is after this beat, so the record never outlives the disk (R12). A session record from before H2a
+  // counts one day, the shortest a disk is kept.
+  if (beat.generation !== undefined)
+    await store(
+      [
+        "HSET",
+        hostedGenerationKey(record.account),
+        record.computer,
+        `${beat.generation}:${now + (record.diskDays ?? 1) * DAY_MS}`,
+      ],
+      fetcher,
+    )
   await store(
     ["SET", hostedBeatKey(id), JSON.stringify(next), "PX", Math.max(60_000, record.deadline + TIMEOUT_GRACE_MS + DAY_MS - now)],
     fetcher,
   )
-  if (!next.booted) {
+  // A download-only session gets no job: nothing but the daemon's packing and upload runs on its computer.
+  if (record.mode !== "download" && !next.booted) {
     const job = await store(["GET", hostedJobKey(id)], fetcher)
     if (typeof job === "string") {
       try {
@@ -1292,7 +1664,7 @@ export async function recordHeartbeat(
           answer.job = { prompt: value.prompt, ...(typeof value.title === "string" ? { title: value.title } : {}) }
       } catch {}
     }
-  } else if (beat.booted) await store(["DEL", hostedJobKey(id)], fetcher)
+  } else if (record.mode !== "download" && beat.booted) await store(["DEL", hostedJobKey(id)], fetcher)
   const download = record.download
   if (download && download.readyAt === undefined && r2Configured("media")) {
     const key = archiveKey(record.account, id)
@@ -1301,8 +1673,8 @@ export async function recordHeartbeat(
       const found = await fetcher(head.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(10_000) }).catch(
         () => undefined,
       )
-      if (found?.ok && Number(found.headers.get("content-length")) === next.archiveBytes)
-        await updateSessionRecord(
+      if (found?.ok && Number(found.headers.get("content-length")) === next.archiveBytes) {
+        const saved = await updateSessionRecord(
           id,
           (value) =>
             value.download && value.download.readyAt === undefined
@@ -1310,6 +1682,25 @@ export async function recordHeartbeat(
               : undefined,
           { fetcher, clock },
         )
+        // H1a: Vector pays a download-only session's upload, at most one archive's worth per computer until its
+        // disk's deletion date; the nightly egress charge sets these bytes against the computer's reading.
+        if (
+          record.mode === "download" &&
+          saved.download?.readyAt === now &&
+          saved.download.bytes === next.archiveBytes
+        ) {
+          const uploaded = hostedDownloadUploadedKey(record.account, record.computer)
+          const total = Number(await store(["INCRBY", uploaded, next.archiveBytes], fetcher))
+          const due = (await readDiskDue(record.account, fetcher)) ?? now + Hosted.ENDED_DISK_DAYS * DAY_MS
+          await store(["PEXPIRE", uploaded, Math.max(DAY_MS, due - now)], fetcher)
+          const waived = Math.max(0, Math.min(next.archiveBytes, ARCHIVE_MAX_BYTES - (total - next.archiveBytes)))
+          if (waived > 0) {
+            const key = hostedDownloadEgressKey(record.account, record.computer)
+            await store(["INCRBY", key, waived], fetcher)
+            await store(["PEXPIRE", key, 7 * DAY_MS], fetcher)
+          }
+        }
+      }
     } else if (next.archiveBytes === undefined) {
       // The person asked for the files and the computer has not packed them yet (WP A54).
       answer.pack = true
@@ -1327,6 +1718,7 @@ export async function recordHeartbeat(
       answer.upload = { url: put.url, headers: put.headers, expiresAt: put.expiresAt }
     }
   }
+  if (record.mode === "download") return answer
   for (const hook of heartbeatHooks.values())
     await hook({ record, input, answer, now, fetcher, clock }).catch(() => undefined)
   return answer
@@ -1336,8 +1728,10 @@ export async function recordHeartbeat(
 
 /**
  * What the person's surfaces show about the cloud computer (`GET /api/hosted/status`): whether it can be used here, what
- * the plan's state lets it do now, the plan's public caps (with the trust ramp), the share of this month's hours used
- * and the live sessions. Shares, counts and times only (P1). Reads the snapshot (no Stripe call while it is fresh, M4).
+ * the plan's state lets it do now, the plan's public caps (with the trust ramp), the share of this month's hours used,
+ * the live sessions and, while the account's disks are kept for download after its plan ended or no longer includes a
+ * cloud computer, the kept disks (`kept`, H1c; `keptDisks`). Shares, counts and times only (P1). Reads the snapshot (no
+ * Stripe call while it is fresh, M4).
  */
 export async function hostedStatus(account: string, snapshot: EntitlementSnapshot | undefined, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -1351,8 +1745,13 @@ export async function hostedStatus(account: string, snapshot: EntitlementSnapsho
   const configured = hostedSessionsConfigured(options)
   const caps = snapshot ? hostedCaps(snapshot, now) : null
   const access = hostedAccess(snapshot, service === "off" ? "stop" : service, now)
-  const sessions = (await listHostedSessions(account, fetcher)).filter((session) => session.state !== "ended")
+  const all = await listHostedSessions(account, fetcher)
+  const sessions = all.filter((session) => session.state !== "ended")
   const hours = caps && snapshot ? await hoursUsedShare(snapshot, fetcher, now).catch(() => undefined) : undefined
+  // The start's own gates, in `startHostedDownload`'s order: configured, no hold, the switch on and the owner's gate.
+  const kept = configured
+    ? await keptDisks(account, snapshot, all, open && service === "on" && !suspension, fetcher, now)
+    : undefined
   return {
     available: configured && open && service === "on",
     access: suspension ? ("stop" as const) : access,
@@ -1372,22 +1771,76 @@ export async function hostedStatus(account: string, snapshot: EntitlementSnapsho
       : {}),
     ...(hours !== undefined ? { hours: { used: hours } } : {}),
     sessions,
+    ...(kept ? { kept } : {}),
   }
 }
 
-/** The account's computers: which are running a session, and when their disks are deleted if a deletion is set. */
+/**
+ * The account's kept disks for the status (H1c), or undefined when the screens have nothing to offer about them. They
+ * show while the disks have a deletion date still ahead (§4.4) and the media bucket is set, and only for a plan whose
+ * files may be downloaded (`requireFilesAllowed`: not frozen, not after a lost dispute, not while closing) that no
+ * longer includes a cloud computer. Then `open` when a download-only start could go ahead now as far as the status can
+ * tell (`startable`: the start's own gates, and the plan's `final` or `current` answer), `late` when it could but less
+ * than a block and an hour is left (`DOWNLOAD_START_MARGIN_MS`), and `closed` otherwise, sent only while some session
+ * has packed files to offer: `requestDownload` still gives their link. The money and the lease are the start's to
+ * decide (S1). Each computer comes with its preferred session (`Hosted.KeptDisks`); a job session's packed files count,
+ * since they are a copy of the same disk (H1a R11), until a later job session starts on that computer.
+ */
+async function keptDisks(
+  account: string,
+  snapshot: EntitlementSnapshot | undefined,
+  sessions: Hosted.SessionView[],
+  startable: boolean,
+  fetcher: typeof fetch,
+  now: number,
+): Promise<Hosted.KeptDisks | undefined> {
+  const access = hostedDownloadAccess(snapshot)
+  if (access === "live" || access === "frozen" || access === "closing") return undefined
+  if (snapshot?.state === "ended" && snapshot.reason === "disputed") return undefined
+  if (!r2Configured("media")) return undefined
+  const due = await readDiskDue(account, fetcher)
+  if (due === undefined || due <= now) return undefined
+  // `listHostedSessions` answers live sessions first, then the newest first.
+  const disks = (await knownComputers(account, fetcher)).map((computer) => {
+    const mine = sessions.filter((session) => session.computer === computer)
+    // Files packed before a later job session started on the computer may be older than its disk, so they are not
+    // offered; a download-only session leaves the disk as it was.
+    const changed = Math.max(0, ...mine.filter((item) => item.mode !== "download").map((item) => item.createdAt))
+    const current = mine.filter((item) => item.download?.readyAt === undefined || item.createdAt >= changed)
+    const session =
+      current.find((item) => item.mode === "download" && item.state !== "ended") ??
+      current.find((item) => item.download?.readyAt !== undefined) ??
+      current.find((item) => item.mode === "download")
+    return { computer, ...(session ? { session } : {}) }
+  })
+  const mayStart = startable && (access === "final" || access === "current")
+  const packed = disks.some((disk) => disk.session?.download?.readyAt !== undefined)
+  if (disks.length === 0 || (!mayStart && !packed)) return undefined
+  return { state: !mayStart ? "closed" : due - now < DOWNLOAD_START_MARGIN_MS ? "late" : "open", until: due, disks }
+}
+
+/**
+ * The account's computers: which are running a session, which must be rebuilt before a job starts on them (`rebuild`,
+ * H2a: while the image floor is set, on an included computer of a plan that has not ended, whose report is below it;
+ * never the generation itself), and when their disks are deleted if a deletion is set.
+ */
 export async function hostedComputers(account: string, snapshot: EntitlementSnapshot | undefined, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
   const clock = options.clock ?? Date.now
   const now = clock()
-  const known = await store(["SMEMBERS", hostedComputersKey(account)], fetcher)
-  const numbers = new Set(
-    (Array.isArray(known) ? known : []).map(Number).filter((value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_COMPUTERS),
-  )
+  const known = await knownComputers(account, fetcher)
+  const numbers = new Set(known)
   const caps = snapshot ? hostedCaps(snapshot, now) : null
   for (let n = 1; n <= (caps?.computers ?? 0); n++) numbers.add(n)
   const leases = await readLeases(account, fetcher, now)
   const deletion = Number(await store(["ZSCORE", hostedDiskDueKey(), account], fetcher))
+  const floor = hostedMinGeneration()
+  // `rebuild` only where a job start would check it: an included computer of a plan that has not ended (H2a). An ended
+  // plan's kept disk, or a computer the plan no longer includes, can only be downloaded, so nothing asks to erase it.
+  const below =
+    typeof floor === "number" && caps !== null && hostedAccess(snapshot, "on", now) !== "stop"
+      ? await computersBelow(account, known.filter((computer) => computer <= caps.computers), floor, now, fetcher)
+      : new Set<number>()
   return {
     computers: [...numbers]
       .sort((a, b) => a - b)
@@ -1396,6 +1849,7 @@ export async function hostedComputers(account: string, snapshot: EntitlementSnap
         running: leases.has(computer),
         ...(leases.has(computer) ? { session: leases.get(computer)! } : {}),
         included: caps !== null && computer <= caps.computers,
+        ...(below.has(computer) ? { rebuild: true as const } : {}),
       })),
     ...(Number.isSafeInteger(deletion) && deletion > 0 ? { disksDeletedAt: deletion } : {}),
   }
@@ -1404,7 +1858,13 @@ export async function hostedComputers(account: string, snapshot: EntitlementSnap
 /** Accounts whose computers' disks are to be deleted, scored by when (§4.4's ended and lost-dispute retention). */
 export const hostedDiskDueKey = () => codiumKey("hosted", "disk-due")
 
-/** The person deletes one of their computers and its saved disk. Refused while a session runs on it. */
+/**
+ * The person deletes one of their computers and its saved disk. Refused while a session runs on it. This is also the
+ * only rebuild of a computer below the image floor (H2a): its reported generation goes with it, and the next start
+ * makes it again from the base snapshot. Nothing deletes a disk for the floor on its own. The packed files of its
+ * sessions are copies of the disk, so they go with it as the nightly deletion's do (§4.4, `runHostedNightly`), before
+ * the computer leaves the account's list: a bucket that cannot be reached fails the deletion, which is asked again.
+ */
 export async function eraseHostedComputer(account: string, computer: unknown, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
   const clock = options.clock ?? Date.now
@@ -1414,9 +1874,26 @@ export async function eraseHostedComputer(account: string, computer: unknown, op
   if (leases.has(computer))
     throw new ApiError(409, "HOSTED_SESSION_RUNNING", "A session is running on this computer. Stop it first.")
   const result = await destroyHostedComputer(account, computer, options)
+  // A record that lapsed (its own TTL) can give no link, so its packed files are left to the bucket's own rule.
+  const listed = await store(["ZRANGE", hostedSessionsKey(account), 0, -1], fetcher)
+  const packed: string[] = []
+  for (const id of Array.isArray(listed) ? listed : []) {
+    const record = typeof id === "string" ? await readSessionRecord(id, fetcher) : undefined
+    if (record?.account === account && record.computer === computer && record.download) packed.push(record.id)
+  }
+  await deleteArchives(account, packed, { fetcher, clock })
+  await markArchivesErased(packed, clock(), { fetcher, clock })
   const name = computerName(account, computer)
+  await store(["HDEL", hostedGenerationKey(account), computer], fetcher)
+  // H1a's egress waiver and upload count are this disk's: a computer made again under the number starts with neither,
+  // and nothing named by the account outlives the computer (P5), its last provider reading included.
+  await store(
+    ["DEL", hostedDownloadEgressKey(account, computer), hostedDownloadUploadedKey(account, computer)],
+    fetcher,
+  )
   await store(["SREM", hostedComputersKey(account), computer], fetcher)
   await store(["HDEL", hostedNamesKey(), name], fetcher)
+  await store(["HDEL", hostedUsageKey(), name], fetcher)
   return { computer, deleted: result === "deleted" }
 }
 
@@ -1428,6 +1905,17 @@ function request(message = "This cloud computer request is not valid.") {
 
 function notFound() {
   return new ApiError(404, "HOSTED_SESSION_NOT_FOUND", "This cloud computer session was not found.")
+}
+
+/** Every computer the plan includes reported an image below the floor (H2a): the numbers only, never a generation. */
+function rebuildRequired(computers: number[]) {
+  return new ApiError(409, "HOSTED_REBUILD_REQUIRED", "This cloud computer needs to be rebuilt.", {
+    detail: { computers },
+  })
+}
+
+function downloadOnly() {
+  return request("This session only gets the computer's files ready to download.")
 }
 
 function notRunning(record: SessionRecord) {

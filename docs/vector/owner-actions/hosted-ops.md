@@ -43,7 +43,7 @@ Run these from `packages/ops-worker`, signed in with `wrangler login` to the Clo
    ```
 
 5. **Where it reports.** `API_ORIGIN` in `wrangler.jsonc` is `https://vectordev.ai`; the Worker sends its reports to `/api/ops/worker` there. Change it only for a staging copy.
-6. **Deploy** with the hosted deploy workflow, `.github/workflows/vector-hosted-deploy.yml` (WP A58): Actions → Vector hosted deploy → Run workflow on `main`, target `ops` (or `all` with the relay). As for the relay ([remote.md](remote.md), step 6), a preflight job with no secret requires `hosted-production` to have a required reviewer and to take protected branches only, `main` to be protected and the commit to be on `main`; the deploy job waits for your approval, reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `hosted-production`, checks step 2's namespace id, runs the dry run, checks with `wrangler secret list` (names only) that steps 3 and 4 are done, and deploys. It never sets or reads a secret's value. Pull requests that touch the ops Worker run its dry run and a smoke test of that bundle on Cloudflare's local runtime (`vector-hosted-ci.yml`), and so does every push to the Codium branches.
+6. **Deploy** with the hosted deploy workflow, `.github/workflows/vector-hosted-deploy.yml` (WP A58): Actions → Vector hosted deploy → Run workflow on `main`, target `ops` (or `all` with the relay). As for the relay ([remote.md](remote.md), step 6), a preflight job with no secret requires `hosted-production` to have a required reviewer and to take protected branches only, `main` to be protected and the commit to be on `main`; the deploy job waits for your approval, reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `hosted-production`, checks step 2's namespace id, runs the dry run, checks with `wrangler secret list` (names only) that steps 3 and 4 are done, and deploys. It never sets or reads a secret's value. Pull requests that touch the ops Worker run its dry run and a smoke test of that bundle on Cloudflare's local runtime (`vector-hosted-ci.yml`), and so does every push to the Codium branches. The Worker refuses a field it does not know in `plan`, `config` and `release`, and the API deploys on every merge to `main` while the Worker deploys only when you run this workflow, so a change that adds such a field goes in two merges: first the Worker change that accepts it, merged and deployed here; only then the API change that sends it. Merged together, the API's plan, config and release calls would be refused until the Worker was deployed (`state`, `erase`, `suspend` and `flags` are not affected).
 7. **Tell the API where it is:** set `VECTOR_OPS_WORKER_URL` in Vercel to the Worker's https origin (`https://vector-ops.<your-subdomain>.workers.dev`, or a custom domain), and `VECTOR_OPS_ENABLED=true`. Without both (and `VECTOR_OPS_SHARED_SECRET`), adding domains, monitors and repositories answers 503 and nothing is sent to the Worker.
 8. **Nobody else gets in yet.** This does not open the perks to subscribers: every new piece of work (a domain, a monitor, a repository, a release watch, a revert, a Ship Desk card or capture ticket, a fix run) also needs its perk in `CODIUM_LISTED_PERKS` (503 `OPS_UNAVAILABLE` otherwise). To try them before listing, set `VECTOR_OPS_ALLOW_ACCOUNTS` to your own account id (comma separated for more); those accounts still need a Max or Ultra plan. Remove it once the perks are listed.
 
@@ -52,6 +52,17 @@ Without its two secrets the Worker answers the API's calls with 503 and checks n
 ## Turning it off
 
 - **Normally:** the `ops` switch on `/owner/codium`. It stops new settings, release watches, reverts, cards and fix runs in the API (a regression the Worker still reports while its flag spreads is recorded, with Undo left to the person) and copies itself to the Worker's kill flag (`flags`). If the answer says `worker: "failed"`, apply the switch again or set the flag directly as below.
+- **A switch that answered `failed`.** The Worker applies the switch's calls in the order the API signed them, either way: a call that arrives after a newer one (the API gives up after 10 s and answers `failed`, but the call may still arrive later) is ignored. So a late "off" cannot turn the Worker off after a newer "on", and a late "on" cannot undo a newer "off". After any `failed`, apply the switch again (the new call is signed later, so it normally applies; if it answers `failed` again, set the key directly as below), or read the key to see where the flag stands:
+
+  ```sh
+  bunx wrangler kv key get --binding OPS_FLAGS --remote kill
+  ```
+
+  The order covers only calls made through the switch: a key set or deleted directly (below) is not part of it, and the next switch change applies normally. Three limits of that order, each covered by applying again or setting the key directly:
+  - A call that answers `failed` because the Worker could not write the key still counts as the newest: a call signed before it and delivered late is ignored, and its answer names the failed call's value, which the key may not hold (so a switch asking for that same value reports `updated`).
+  - Two calls whose writes overlap are not ordered at the key itself: the older call's write can land after the newer one's.
+  - The order is by the API's clock, to the second, and the Worker accepts up to 300 s of clock difference. A call from an API instance whose clock runs ahead can make a later call from a correct clock look older, so that call is ignored until real time passes the earlier stamp; the switch answers `failed` when it asked for the other value.
+
 - **Directly:**
 
   ```sh
@@ -63,6 +74,10 @@ Without its two secrets the Worker answers the API's calls with 503 and checks n
   ```sh
   bunx wrangler kv key delete --binding OPS_FLAGS --remote kill
   ```
+
+## Workers Logs and traces
+
+`packages/ops-worker/wrangler.jsonc` turns them off (`"observability": { "enabled": false }`). The Worker writes no log of its own, but the platform's logs and traces would record each request and possibly the URLs it checks. Turning them on is the owner's choice, and it is made by changing `wrangler.jsonc` (and deploying), not in the dashboard: each deploy applies the file, so a toggle changed in the dashboard does not survive the next deploy.
 
 ## The GitHub webhook and verified domains (A47)
 

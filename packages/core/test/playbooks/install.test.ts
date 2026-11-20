@@ -39,6 +39,22 @@ test("damaged, oversized and invalid workflow downloads leave no installed file"
   expect(await fs.readdir(root)).toEqual([])
 })
 
+test("a playbook naming a model other than a Codium role is never installed", async () => {
+  const root = await directory()
+  const pinned = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      title: "Check changes",
+      stages: [{ id: "check", prompt: "Run `bun test`.", model: "lmstudio/test-model" }],
+    }),
+  )
+  const pinnedLink = { ...link, sha256: createHash("sha256").update(pinned).digest("hex") }
+  await expect(
+    PlaybookInstall.install({ link: pinnedLink, directory: root, request: async () => new Response(pinned) }),
+  ).rejects.toThrow("Codium role")
+  expect(await fs.readdir(root)).toEqual([])
+})
+
 test("symlinks and project-shaped names cannot redirect a playbook write", async () => {
   const root = await directory()
   const outside = await directory()

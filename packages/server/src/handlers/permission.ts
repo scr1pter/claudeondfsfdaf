@@ -5,7 +5,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { PermissionNotFoundError, SessionNotFoundError } from "@vectordevai/protocol/errors"
-import { response } from "../location"
+import { pluginsLoaded, response } from "../location"
 
 function missingRequest(id: PermissionV2.ID) {
   return new PermissionNotFoundError({ requestID: id, message: `Permission request not found: ${id}` })
@@ -24,6 +24,9 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         "session.permission.create",
         Effect.fn(function* (ctx) {
           const permission = yield* PermissionV2.Service
+          // The request is judged by the session agent's rules, which the Location's plugins add as it starts; this
+          // can be the request that starts it, and judged before then it would be denied for want of an agent.
+          yield* pluginsLoaded
           return {
             data: yield* permission
               .ask({

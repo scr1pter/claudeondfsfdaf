@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { VaultCrypto } from "@vectordevai/core/vault/crypto"
+import { VaultError } from "@vectordevai/core/vault/error"
+import { VaultFormat } from "@vectordevai/core/vault/format"
 import { VaultStore } from "@vectordevai/core/vault/store"
 import { VaultBackup } from "@vectordevai/core/vault/vault"
+import { Vault } from "@vectordevai/schema/vault"
 import {
   createVaultBackup,
   due,
@@ -38,6 +42,7 @@ function harness(
   const { settings: initial, listed, ...overrides } = input
   let settings: Partial<VaultSettings> = { backend: "github", githubRepo: "octo/brain-vault", ...initial }
   let record: KeyRecord | undefined
+  let secure = true
   const calls: string[] = []
   const restored: MemoryFile[] = []
   const github = VaultStore.memory({ keep: 7, label: "your GitHub repository octo/brain-vault" })
@@ -47,7 +52,7 @@ function harness(
     cost: 2 ** 14,
     settings: { read: () => settings, write: (next) => void (settings = JSON.parse(JSON.stringify(next))) },
     keys: {
-      secure: () => true,
+      secure: () => secure,
       read: async () => record,
       write: async (next) => {
         calls.push("key written")
@@ -99,6 +104,7 @@ function harness(
     settings: () => settings,
     record: () => record,
     setRecord: (next: KeyRecord | undefined) => void (record = next),
+    setSecure: (next: boolean) => void (secure = next),
     advance: (ms: number) => void (time += ms),
     at: (next: number) => void (time = next),
   }
@@ -171,8 +177,9 @@ describe("backing up", () => {
     const run = harness({
       githubStore: () => ({
         ...store,
+        // What core's GitHub store throws when git fails (its failed()).
         commit: async () => {
-          throw new Error("git could not push to octo/brain-vault")
+          throw new VaultError("unavailable", "git could not push to octo/brain-vault")
         },
       }),
     })
@@ -242,6 +249,58 @@ describe("backing up", () => {
     expect(run.calls).not.toContain("github store")
   })
 
+  test("an unexpected failure shows plain copy, never its own text, and logs nothing more", async () => {
+    const logs: unknown[][] = []
+    const failing = VaultStore.memory({ keep: 7 })
+    const run = harness({
+      githubStore: () => ({
+        ...failing,
+        readKey: async () => {
+          throw Object.assign(
+            new Error(
+              "EACCES: permission denied, mkdir '/Users/someone/Library/Application Support/Vector/vault-cache'",
+            ),
+            { code: "EACCES" },
+          )
+        },
+      }),
+      log: (message, meta) => void logs.push([message, meta]),
+    })
+    const backedUp = await run.backup.backup()
+    expect(backedUp.ok).toBe(false)
+    expect(backedUp.message).toBe("Brain Vault could not finish the backup. Try again.")
+    expect(JSON.stringify(run.settings())).not.toContain("/Users/")
+    const listed = await run.backup.versions()
+    expect(listed.ok ? "" : listed.message).toBe("Brain Vault could not list the backups. Try again.")
+    expect((await run.backup.restore()).message).toBe("Brain Vault could not restore this backup. Try again.")
+    expect((await run.backup.forget("v1800000000000-0123abcd")).message).toBe(
+      "Brain Vault could not forget that version. Try again.",
+    )
+    expect((await run.backup.remove()).message).toBe("Brain Vault could not delete the vault. Try again.")
+    expect(logs).toEqual([["brain vault backup failed", { nightly: false }]])
+  })
+
+  test("learned sections keep their section and ask for reader two; they restore whole", async () => {
+    const skills = JSON.stringify({ format: "vector-memory", version: 1, scope: "repository", skills: [{ id: "s1" }] })
+    const files: MemoryFile[] = [
+      memoryFile(),
+      { path: "skills/repository-a.json", section: "skills", text: skills, repository: "prj_a", worktree: "/repo" },
+    ]
+    const run = harness({ memory: async () => files })
+    expect((await run.backup.backup()).ok).toBe(true)
+    const opened = { vault: run.record()!.vault, vaultKey: VaultCrypto.fromBase64Url(run.record()!.key) }
+    const read = await VaultBackup.read({ store: run.github, opened })
+    expect(read.manifest.minReader).toBe(Vault.LEARNED_READER)
+    expect(read.files.map((item) => item.file.section)).toEqual(["memory", "skills"])
+    expect((await run.backup.restore()).ok).toBe(true)
+    expect(run.restored.find((file) => file.section === "skills")).toEqual({ ...files[1]!, text: skills })
+
+    const plain = harness()
+    await plain.backup.backup()
+    const own = { vault: plain.record()!.vault, vaultKey: VaultCrypto.fromBase64Url(plain.record()!.key) }
+    expect((await VaultBackup.read({ store: plain.github, opened: own })).manifest.minReader).toBe(Vault.MIN_READER)
+  })
+
   test("one operation at a time", async () => {
     let release: () => void = () => undefined
     const gate = new Promise<void>((resolve) => (release = resolve))
@@ -273,6 +332,44 @@ describe("restoring, forgetting and deleting", () => {
     expect(run.restored[0]!.repository).toBe("")
   })
 
+  test("learned skills and workflow insights come back as proposals, counted apart from memory (B10)", async () => {
+    const learned = (section: "skills" | "insights", text: string): MemoryFile => ({
+      path: `${section}/repository-a.json`,
+      section,
+      text,
+      repository: "prj_a",
+      worktree: "/repo",
+    })
+    const answers: Record<Vault.Section, RestoreCounts> = {
+      memory: { restored: 3, active: 1, pinned: 1, waiting: 2, known: 0, refused: 0, documents: 0 },
+      // What the engine answers for a learned section: everything it brought back waits for review.
+      skills: { restored: 2, active: 0, pinned: 0, waiting: 2, known: 1, refused: 0, documents: 0 },
+      insights: { restored: 1, active: 0, pinned: 0, waiting: 1, known: 0, refused: 1, documents: 0 },
+    }
+    const run = harness({
+      memory: async () => [
+        memoryFile(),
+        learned("skills", JSON.stringify({ format: "vector-memory", version: 1, skills: [{ id: "s1" }] })),
+        learned("insights", JSON.stringify({ rows: [] })),
+      ],
+      restore: async (file) => answers[file.section ?? "memory"],
+    })
+    expect((await run.backup.backup()).ok).toBe(true)
+    const result = await run.backup.restore()
+    expect(result.ok).toBe(true)
+    expect(result.totals).toMatchObject({
+      restored: 6,
+      active: 1,
+      pinned: 1,
+      waiting: 2,
+      skills: 2,
+      insights: 1,
+      known: 1,
+      refused: 1,
+      unreadable: 0,
+    })
+  })
+
   test("another computer's vault needs its recovery code, and is kept here afterwards", async () => {
     const first = harness()
     const made = await first.backup.backup()
@@ -286,6 +383,88 @@ describe("restoring, forgetting and deleting", () => {
     expect(restored.ok).toBe(true)
     expect(other.record()?.vault).toBe(first.record()!.vault)
     expect(other.settings().vault).toBe(first.record()!.vault)
+  })
+
+  test("a version that needs a newer Vector is refused with Update Vector, and nothing is restored", async () => {
+    const run = harness()
+    await run.backup.backup()
+    const record = run.record()!
+    const at = T0 + HOUR
+    const version = VaultCrypto.versionId(at)
+    const sealed = VaultFormat.sealManifest(VaultCrypto.derive(VaultCrypto.fromBase64Url(record.key)), {
+      format: "vector-vault",
+      version: 1,
+      minReader: Vault.READER + 1,
+      vault: record.vault,
+      id: version,
+      createdAt: at,
+      files: [],
+      objects: [],
+    })
+    await run.github.prepare(version, [])
+    await run.github.commit(version, sealed, [])
+    const result = await run.backup.restore({ version })
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain("Update Vector")
+    expect(run.restored).toEqual([])
+  })
+
+  test("a key that no longer opens: a backup makes no second vault, the code restores it, and Delete clears this computer", async () => {
+    const run = harness()
+    const made = await run.backup.backup()
+    const wrapped = await run.github.readKey()
+    // What the runtime's key store reads for a record this launch cannot open.
+    run.setRecord(undefined)
+
+    const refused = await run.backup.backup()
+    expect(refused.ok).toBe(false)
+    expect(refused.message).toContain("already holds a vault")
+    expect(refused.code).toBeUndefined()
+    expect(await run.github.readKey()).toEqual(wrapped)
+    const listed = await run.backup.versions()
+    expect(listed.ok && listed.mine).toBe(false)
+
+    const restored = await run.backup.restore({ code: made.code! })
+    expect(restored.ok).toBe(true)
+    expect(run.record()?.vault).toBe(wrapped!.vault)
+
+    run.setRecord(undefined)
+    const removed = await run.backup.remove()
+    expect(removed.ok).toBe(true)
+    expect(run.calls).toContain("key cleared")
+    expect(run.settings().vault).toBeUndefined()
+    expect(run.settings().last).toBeUndefined()
+    expect(run.settings().enabled).toBe(false)
+    expect(run.backup.status().nextAt).toBeUndefined()
+    expect(await run.github.readKey()).toBeUndefined()
+  })
+
+  test("Delete while the credential store is locked keeps this computer's key; the settings forget only their own vault", async () => {
+    const other = harness()
+    await other.backup.backup()
+    const mine = other.record()!
+    // The place now holds another vault than the one this computer's key and settings name.
+    await other.github.destroy()
+    expect((await VaultBackup.create(other.github, { cost: 2 ** 14 })).vault).not.toBe(mine.vault)
+    // What the runtime's key store reads while the OS credential store is locked: no record, though it is kept.
+    other.setSecure(false)
+    other.setRecord(undefined)
+    const last = other.settings().last
+    expect((await other.backup.remove()).ok).toBe(true)
+    expect(await other.github.readKey()).toBeUndefined()
+    expect(other.calls).not.toContain("key cleared")
+    expect(other.settings().vault).toBe(mine.vault)
+    expect(other.settings().last).toEqual(last)
+
+    const own = harness()
+    await own.backup.backup()
+    own.setSecure(false)
+    own.setRecord(undefined)
+    expect((await own.backup.remove()).ok).toBe(true)
+    expect(own.calls).not.toContain("key cleared")
+    expect(own.settings().vault).toBeUndefined()
+    expect(own.settings().last).toBeUndefined()
+    expect(own.settings().enabled).toBe(false)
   })
 
   test("a restore file is sent without evidence or documents, in parts the engine takes", () => {
@@ -333,6 +512,31 @@ describe("restoring, forgetting and deleting", () => {
     expect(run.settings().vault).toBeUndefined()
     expect(run.settings().enabled).toBe(false)
     expect(await run.github.readKey()).toBeUndefined()
+  })
+
+  test("where backups go cannot change while a backup runs", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const run = harness({
+      memory: async () => {
+        await gate
+        return [memoryFile()]
+      },
+    })
+    const running = run.backup.backup()
+    const moved = run.backup.configure({ githubRepo: "octo/other-vault" })
+    expect(moved.ok).toBe(false)
+    expect(moved.message).toContain("busy")
+    expect(run.backup.configure({ backend: "vector" }).ok).toBe(false)
+    expect(run.backup.configure({ enabled: true }).ok).toBe(true)
+    release()
+    expect((await running).ok).toBe(true)
+    expect(run.settings().githubRepo).toBe("octo/brain-vault")
+    expect(run.settings().enabled).toBe(true)
+    expect(run.settings().last).toBeDefined()
+    expect(run.backup.configure({ githubRepo: "octo/other-vault" }).ok).toBe(true)
+    expect(run.settings().githubRepo).toBe("octo/other-vault")
+    expect(run.settings().last).toBeUndefined()
   })
 
   test("settings take only owner/repo, and moving the backups starts a new place", () => {

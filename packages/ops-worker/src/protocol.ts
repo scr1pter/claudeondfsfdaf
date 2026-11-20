@@ -3,7 +3,10 @@
 //
 // The API calls the Worker: POST https://<worker>/internal/v1/<action>, signed with WP A37's HMAC under the `ops`
 // service key (VECTOR_OPS_SHARED_SECRET on the API, INTERNAL_SECRET on the Worker). Each body is a JSON object; every
-// action but `flags` names the account.
+// action but `flags` names the account. Every field of the plan, config and release bodies below is required, and one
+// of those bodies with any other field, at any level, is refused (400 INTERNAL_BAD_REQUEST), so the Worker is deployed
+// with a new field before the API sends it. state, erase, suspend and flags ignore fields they do not know: refusing
+// would block the guard's hold (which reads state first), a deletion or the kill switch.
 //
 //   plan {account, plan}                     what the account's plan allows, from its entitlement snapshot (§4.4):
 //                                            onCall null stops checks, releaseGuard null stops new watches, and
@@ -11,13 +14,16 @@
 //                                            a plan older than the stored one (by version) is ignored
 //   config {account, domains, monitors}      the verified domains (in verification order) and the On Call URLs (in the
 //                                            order they were added), replacing what was there
-//   release {account, repositoryId, ...}     a production deployment reported success: watch it (Release Guard)
+//   release {account, repositoryId, ...}     a production deployment reported success: watch it (Release Guard);
+//                                            the environment is compared without case, as GitHub and the API compare it
 //   state {account}                          what the Worker knows: each monitor's state, recent changes, hourly totals,
 //                                            recent releases and running watches
 //   suspend {account, suspended, reason, at} the ops guard or the owner holds the account: nothing runs while held;
 //                                            ordered by `at`, so a late update never undoes a newer one
 //   erase {account}                          everything the account's object holds (P5, A57)
-//   flags {kill}                             the Worker's kill flag (the owner's `ops` switch)
+//   flags {kill}                             the Worker's kill flag (the owner's `ops` switch); ordered by when each
+//                                            call was signed: one signed before the newest applied is ignored and
+//                                            answers {kill: <the newest applied>, applied: false}
 //
 // The Worker reports to the API: POST <API_ORIGIN>/api/ops/worker with an OpsReport body, signed the same way (the API
 // checks it with requireInternalRequest("ops", …)). A 2xx answer means every event in it was taken; anything else and
@@ -56,7 +62,10 @@ export type ReleaseBody = {
   account: string
   repositoryId: number
   environment: string
-  /** The deployed commit, 40 hex digits. Releases are deduped by (repository, environment, sha). */
+  /**
+   * The deployed commit, 40 hex digits. Releases are deduped by (repository, environment without case, sha), and the
+   * Worker's reports and state name the environment in lower case.
+   */
   sha: string
   /** GitHub's deployment id, as text. */
   deployment: string

@@ -18,6 +18,14 @@ import type { Report } from "./run-api"
  * - `stopping` or `ended`, or a refusal that means the session is over: everything stops.
  * When the job ends, for whatever reason, the browser is stopped and its profile wiped, the recorder stopped, and `done`
  * reported. Nothing here holds a credential.
+ *
+ * A download-only session (H1b, for H1a's `mode: "download"`) only packs and uploads the computer's disk: once an
+ * answer says so before any job started, hostd starts no agent, browser or recorder and writes no viewer state (so the
+ * viewer proxy refuses every connection) for the rest of the session, whatever later answers carry. It packs and
+ * uploads when asked, drops its copy as soon as the upload went through, and keeps reporting `uploaded` with the size,
+ * so the server checks the upload on every beat until it confirms it and then ends the session as finished. An answer
+ * to such a beat that asks for the files again says the server did not take the upload: the disk is packed again and
+ * uploaded anew. It reports `done` only once the session is over (`stopping`, `ended` or a refusal that says so).
  */
 
 /** How long the end of a job waits for its last recording segments to upload before it reports `done`. */
@@ -87,6 +95,8 @@ const FINAL = new Set([401, 403, 404, 409])
 
 export class Daemon {
   private booted = false
+  /** A download-only session (H1b): set by an answer that says so before any job started, never unset. */
+  private downloadOnly = false
   private done = false
   private finishing: Promise<void> | undefined
   private control: "agent" | "person" = "agent"
@@ -237,8 +247,9 @@ export class Daemon {
       do {
         this.again = false
         try {
-          answer = await this.deps.api.heartbeat(await this.report())
-          await this.apply(answer)
+          const report = await this.report()
+          answer = await this.deps.api.heartbeat(report)
+          await this.apply(answer, report)
         } catch (error) {
           const status = (error as { status?: number }).status
           this.deps.log?.(`heartbeat failed${status ? ` (${status})` : ""}`)
@@ -253,9 +264,16 @@ export class Daemon {
     return this.ticking
   }
 
-  private async apply(answer: Hosted.HeartbeatAnswer) {
-    await this.deps.viewer({ session: this.deps.session, key: answer.viewerKey, control: answer.control }).catch(() => {})
+  private async apply(answer: Hosted.HeartbeatAnswer, report: Report) {
+    if (answer.mode === "download" && !this.booted) this.downloadOnly = true
+    // A download-only session writes no viewer state, so the viewer proxy boot.sh started refuses every connection.
+    if (!this.downloadOnly)
+      await this.deps
+        .viewer({ session: this.deps.session, key: answer.viewerKey, control: answer.control })
+        .catch(() => {})
     if (answer.state === "ended" || answer.state === "stopping") return this.finish("session over")
+    // Nothing a job runs is ever started: the disk is packed and uploaded, and the server ends the session.
+    if (this.downloadOnly) return this.download(answer, report)
     this.browserAllowed = answer.browser === true
     if (answer.recording && this.deps.recording) {
       const first = !this.recordingWanted
@@ -303,20 +321,7 @@ export class Daemon {
       this.wrapTimer = this.schedule(end, () => void this.finish("wrap-up time"))
     }
 
-    if (answer.pack && !this.archive && !this.packing) {
-      this.packing = true
-      void this.deps
-        .pack()
-        .then((archive) => {
-          this.archive = archive
-          this.uploaded = false
-          void this.tick()
-        })
-        .catch(() => this.deps.log?.("packing the files failed"))
-        .finally(() => {
-          this.packing = false
-        })
-    }
+    this.packWhenAsked(answer.pack)
     if (answer.upload && this.archive && !this.uploaded && !this.uploading) {
       this.uploading = true
       const archive = this.archive
@@ -337,6 +342,58 @@ export class Daemon {
       this.uploaded = false
       await this.deps.discard(file).catch(() => {})
     }
+  }
+
+  /** Packs the agent's work (WP A54) when asked and nothing is packed yet; the next report gives its size. */
+  private packWhenAsked(asked: boolean | undefined) {
+    if (!asked || this.archive || this.packing) return
+    this.packing = true
+    void this.deps
+      .pack()
+      .then((archive) => {
+        this.archive = archive
+        this.uploaded = false
+        void this.tick()
+      })
+      .catch(() => this.deps.log?.("packing the files failed"))
+      .finally(() => {
+        this.packing = false
+      })
+  }
+
+  /**
+   * A download-only session's files (H1b): packed when asked, then uploaded to the answer's link; the copy goes as soon
+   * as the upload went through. Its size (`archive` keeps the dropped copy's entry) and `uploaded` stay in every report
+   * after that: the server checks the upload on each beat until it confirms it (a check that failed is never taken for
+   * acceptance), then ends the session as finished. Today's server asks for nothing more while a beat says `uploaded`.
+   * A `pack` or `upload` answered to such a beat says it did not take the upload, so the disk is packed again (nothing
+   * changes it in this session) and the new size is uploaded to the next link; one answered to a beat from before the
+   * upload went through is stale and changes nothing.
+   */
+  private download(answer: Hosted.HeartbeatAnswer, report: Report) {
+    if (this.finishing) return
+    if (this.uploaded) {
+      if (!report.uploaded || (!answer.pack && !answer.upload)) return
+      this.archive = undefined
+      this.uploaded = false
+      return this.packWhenAsked(true)
+    }
+    this.packWhenAsked(answer.pack)
+    if (!answer.upload || !this.archive || this.uploading) return
+    this.uploading = true
+    const archive = this.archive
+    void this.deps
+      .upload(answer.upload, archive.file)
+      .then(async () => {
+        // Dropped before `uploaded` is reported, so a new pack never races the discard of the old copy.
+        await this.deps.discard(archive.file).catch(() => {})
+        this.uploaded = true
+        void this.tick()
+      })
+      .catch(() => this.deps.log?.("uploading the files failed"))
+      .finally(() => {
+        this.uploading = false
+      })
   }
 
   /**

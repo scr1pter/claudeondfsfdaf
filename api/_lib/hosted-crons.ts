@@ -6,7 +6,7 @@ import { notifyOwner } from "./codium-owner.js"
 import type { Transition } from "./codium-provision.js"
 import { readSnapshot } from "./codium-snapshot.js"
 import { readSwitch } from "./codium-switches.js"
-import { hostedAccess, readHostedMinutes } from "./hosted-entitlement.js"
+import { hostedAccess, hostedDownloadAccess, readHostedMinutes } from "./hosted-entitlement.js"
 import {
   chargeNightly,
   drainHostedSettles,
@@ -18,6 +18,8 @@ import {
 } from "./hosted-ledger.js"
 import {
   COMPUTER_PREFIX,
+  MAX_COMPUTERS,
+  accountComputerPrefix,
   computerName,
   eraseAccountComputers,
   hostedProvider,
@@ -44,7 +46,10 @@ import {
   hostedBeatKey,
   hostedComputersKey,
   hostedDiskDueKey,
+  hostedDownloadEgressKey,
+  hostedDownloadUploadedKey,
   hostedEgressKey,
+  hostedGenerationKey,
   hostedHandoffAlertKey,
   hostedHostdKey,
   hostedJobKey,
@@ -59,6 +64,8 @@ import {
   hostedSuspendKey,
   hostedSuspendedKey,
   hostedTrueUpKey,
+  hostedUsageKey,
+  markArchivesErased,
   readBeat,
   readLeases,
   readModelRequest,
@@ -251,6 +258,7 @@ export async function reapSession(id: string, options: CronOptions = {}): Promis
   ])
   const access = hostedAccess(snapshot, service === "off" ? "stop" : service, now)
   if (suspension) return end(suspension.reason === "abuse" ? "abuse" : "frozen")
+  if (record.mode === "download") return reapDownload(record, snapshot, service, now, end, fetcher)
   if (access === "stop") return end(stopReason(snapshot, service))
   if (record.state === "starting") return "kept"
 
@@ -335,6 +343,33 @@ export async function reapSession(id: string, options: CronOptions = {}): Promis
 }
 
 /**
+ * A download-only session's pass (H1a): it ends when the switch stops it, when the plan can no longer download (frozen,
+ * closing, paused or refused; an ended plan whose final period was kept, or a live plan, keeps it), once its files are
+ * uploaded or the daemon says it is done, at the end of its one block, or when its heartbeat is lost. No idle or
+ * fair-use check, wrap-up, renewal or token refresh applies: it runs no agent and its token outlives its block.
+ */
+async function reapDownload(
+  record: SessionRecord,
+  snapshot: EntitlementSnapshot | undefined,
+  service: string,
+  now: number,
+  end: (reason: Hosted.EndReason) => Promise<Outcome>,
+  fetcher: typeof fetch,
+): Promise<Outcome> {
+  if (service === "stop" || service === "off") return end("switch")
+  const access = hostedDownloadAccess(snapshot)
+  if (access === "frozen" || access === "closing") return end(access)
+  if (access === "paused" || access === "refused") return end("plan")
+  if (record.state === "starting") return "kept"
+  const beat = await readBeat(record.id, fetcher)
+  if (record.download?.readyAt !== undefined || beat?.done) return end("finished")
+  if (now >= record.endsAt) return end("deadline")
+  const lastBeat = beat?.at ?? (record.runningAt ?? record.createdAt) + Hosted.BOOT_GRACE_MS - Hosted.HEARTBEAT_LOST_MS
+  if (now - lastBeat >= Hosted.HEARTBEAT_LOST_MS) return end("heartbeat")
+  return "kept"
+}
+
+/**
  * §4.2's fair-use limits for one session, or undefined when none is passed: 600 page loads an hour (the account's),
  * egress outside the run-API host per day by plan (the account's), and 30 minutes above 80% CPU with no model request.
  */
@@ -372,8 +407,6 @@ async function fairUse(
 export const hostedRosterKey = () => codiumKey("hosted", "roster")
 /** The nightly job's cached figures per account (HASH account → JSON), read by the budget answer. */
 export const hostedBudgetKey = () => codiumKey("hosted", "budget")
-/** The nightly job's last provider readings per computer (HASH name → JSON). */
-export const hostedUsageKey = () => codiumKey("hosted", "usage")
 
 function liveHosted(snapshot: EntitlementSnapshot | undefined) {
   return Boolean(snapshot && snapshot.caps.hosted && LIVE_PLAN_STATES.has(snapshot.state))
@@ -387,9 +420,10 @@ function liveHosted(snapshot: EntitlementSnapshot | undefined) {
  * - renewing: running sessions continue (the reaper starts no new block past the grace);
  * - paused: running sessions wrap up, snapshot and stop within five minutes;
  * - frozen: every session stopped now; the disks are kept with no deletion date until the dispute closes;
- * - ended, or a plan without a cloud computer: every session stopped; the disks are kept 14 days for download, paid
- *   from the final period (shorter when it cannot cover them), then deleted; after a lost dispute they are kept 30
- *   days at Vector's cost.
+ * - ended, or a plan without a cloud computer: every session stopped; the disks are kept 14 days for download (H1a's
+ *   download-only start, whose first run on each computer charges that retention to the final period, shorter when it
+ *   cannot cover it), then deleted; after a lost dispute they are kept 30 days at Vector's cost, with no download.
+ * A download-only session is left running while the plan still lets it download, and ended otherwise.
  */
 export async function applyHostedTransition(t: Transition, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -412,10 +446,15 @@ export async function applyHostedTransition(t: Transition, options: SessionOptio
 
   const access = hostedAccess(to, "on", now)
   const live = await liveSessions(t.account, fetcher)
+  const download = hostedDownloadAccess(to)
   for (const record of live) {
     // Best effort: a stop the provider cannot make yet leaves the session stopping, and the reaper, which reads the
     // same snapshot every minute, finishes it. The disks below must not wait on it.
-    if (access === "stop")
+    if (record.mode === "download") {
+      // The sweep's catch-up and replays of the ended transition must not end the download they allow.
+      if (download !== "final" && download !== "current" && download !== "live")
+        await endHostedSession(record, download === "frozen" ? "frozen" : "plan", options).catch(() => undefined)
+    } else if (access === "stop")
       await endHostedSession(record, to.state === "frozen" ? "frozen" : "plan", options).catch(() => undefined)
     else if (access === "wrap")
       await wrapHostedSession(record, now + Hosted.WRAP_MS, "plan", options).catch(() => undefined)
@@ -424,9 +463,9 @@ export async function applyHostedTransition(t: Transition, options: SessionOptio
   if (to.state === "frozen" || liveHosted(to)) return
   if (from && !liveHosted(from) && from.state !== "frozen") return
   // The plan no longer keeps the disks: set when they are deleted, once (the first date stands). §4.4 keeps an ended
-  // plan's disks 14 days for download and WP A51 charges that to the final period (`chargeRetention`), but no route lets
-  // an ended plan download its disk yet (a download-only start is not built), so nothing is charged for it: the disks
-  // are kept the 14 days at Vector's cost, for a subscriber who comes back (P8 review; codium-deviations.md).
+  // plan's disks 14 days for download, then deletes them. Nothing is charged here: the first download-only start of
+  // each computer (H1a, hosted-sessions.ts) charges that retention to the final period, once (`chargeRetention`), and
+  // the disks nobody downloads are kept at Vector's cost, for a subscriber who comes back (codium-deviations.md).
   const computers = await accountComputers(t.account, fetcher)
   if (!computers.length) return
   const until =
@@ -444,6 +483,17 @@ async function liveSessions(account: string, fetcher: typeof fetch) {
     if (record && record.account === account && Hosted.LIVE_STATES.includes(record.state)) found.push(record)
   }
   return found
+}
+
+/**
+ * H1a's egress waiver and upload count of every computer number the account could have had, not only those still in
+ * `hosted:computers:<account>`: a number the set no longer holds may still have left both (P5).
+ */
+function downloadKeys(account: string) {
+  return Array.from({ length: MAX_COMPUTERS }, (_, index) => index + 1).flatMap((computer) => [
+    hostedDownloadEgressKey(account, computer),
+    hostedDownloadUploadedKey(account, computer),
+  ])
 }
 
 async function accountComputers(account: string, fetcher: typeof fetch) {
@@ -485,12 +535,14 @@ export async function eraseAccountHosted(account: string, options: SessionOption
     await store(["HDEL", hostedNamesKey(), computerName(account, computer)], fetcher)
     await store(["HDEL", hostedUsageKey(), computerName(account, computer)], fetcher)
   }
+  await store(["DEL", ...downloadKeys(account)], fetcher)
   await store(
     [
       "DEL",
       hostedSessionsKey(account),
       hostedLeaseKey(account),
       hostedComputersKey(account),
+      hostedGenerationKey(account),
       hostedSuspendKey(account),
       hostedTrueUpKey(account),
       hostedArchivesKey(account),
@@ -553,11 +605,22 @@ export async function runHostedNightly(options: CronOptions = {}): Promise<Night
         continue
       }
       await eraseAccountComputers(account, { ...(provider ? { provider } : {}), fetcher, clock })
+      // The packed files are a copy of the disks: they go with them (§4.4 "then deleted", H1a), so no download link
+      // answers after the date. Their session records stay until they lapse: a link given before answers 410.
+      const listed = await store(["ZRANGE", hostedSessionsKey(account), 0, -1], fetcher)
+      const ids = (Array.isArray(listed) ? listed : []).filter((id): id is string => typeof id === "string")
+      await eraseSessionArchives(account, ids, { fetcher, clock })
+      // Each record whose files were packed says they are gone, before the date is forgotten below: from then on
+      // `requestDownload` has no date to compare, and gives no new link to files that no longer exist. A record that
+      // lapsed (its own TTL) after the read has nothing left to mark: it is skipped, not the whole account failed.
+      await markArchivesErased(ids, started, { fetcher, clock })
       for (const computer of await accountComputers(account, fetcher)) {
         await store(["HDEL", hostedNamesKey(), computerName(account, computer)], fetcher)
         await store(["HDEL", hostedUsageKey(), computerName(account, computer)], fetcher)
       }
-      await store(["DEL", hostedComputersKey(account)], fetcher)
+      await store(["DEL", ...downloadKeys(account)], fetcher)
+      // The computers' reported image generations go with them (H2a).
+      await store(["DEL", hostedComputersKey(account), hostedGenerationKey(account)], fetcher)
       await store(["ZREM", hostedDiskDueKey(), account], fetcher)
       result.deleted++
     } catch {
@@ -655,7 +718,10 @@ function parseReading(raw: string | undefined): Reading | undefined {
 /**
  * One computer's nightly charge: a day of storage while the plan is live, and its egress since the last reading. A
  * listing with no egress figure (the provider's is optional) still charges the day's storage and keeps the last egress
- * reading, so the next figure charges everything since (P8 review).
+ * reading, so the next figure charges everything since (P8 review). The bytes download-only sessions uploaded from the
+ * computer (H1a, at most one archive's worth per computer until its disk's deletion date) are set against its egress
+ * and not charged: Vector pays them; what the reading has not caught up with yet waits for the next night. The waiver
+ * offsets whatever egress the computer measures while it lasts (7 days), a later job session's included.
  */
 async function chargeComputer(
   account: string,
@@ -668,7 +734,15 @@ async function chargeComputer(
   const before = reading?.egressBytes ?? 0
   if (reading?.egressDay === day) return { charged: false, reading }
   // A cumulative figure that went down means the computer was made again: everything it reports is new.
-  const egressBytes = egressNow === undefined ? 0 : egressNow >= before ? egressNow - before : egressNow
+  const measured = egressNow === undefined ? 0 : egressNow >= before ? egressNow - before : egressNow
+  // The waiver is filed under the computer's number (`computerName`); a name that is not the account's has none.
+  const prefix = accountComputerPrefix(account)
+  const number = computer.name.startsWith(prefix) ? Number(computer.name.slice(prefix.length)) : 0
+  const waivedKey = Number.isSafeInteger(number) && number >= 1 ? hostedDownloadEgressKey(account, number) : undefined
+  const waived = waivedKey
+    ? Math.min(measured, Math.max(0, Number(await store(["GET", waivedKey], options.fetcher)) || 0))
+    : 0
+  const egressBytes = measured - waived
   const snapshot = await readSnapshot(account, options.fetcher)
   const storageGbDays = liveHosted(snapshot) ? HOSTED_DISK_GB_MAX : 0
   if (storageGbDays > 0 || egressBytes > 0)
@@ -677,6 +751,7 @@ async function chargeComputer(
       { computer: computer.name, day, storageGbDays, egressGb: egressBytes / 1_000_000_000 },
       options,
     )
+  if (waivedKey && waived > 0) await store(["INCRBY", waivedKey, -waived], options.fetcher)
   return { charged: true, reading: { ...reading, egressBytes: egressNow ?? before, egressDay: day } }
 }
 

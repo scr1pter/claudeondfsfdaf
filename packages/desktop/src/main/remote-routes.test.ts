@@ -160,6 +160,25 @@ describe("route allowlist", () => {
     expect(engineCalls()).toEqual([])
   })
 
+  test("a paired phone never reaches the memory routes, Brain Vault's backup and restore among them", async () => {
+    expect(REMOTE_ROUTES.some((route) => route.path === "/memory" || route.path.startsWith("/memory/"))).toBe(false)
+    const { ask, engineCalls } = await setup()
+    const memory: [string, string][] = [
+      ["GET", "/memory/backup"],
+      ["POST", "/memory/restore"],
+      ["GET", "/memory"],
+      ["GET", "/memory/export"],
+      ["POST", "/memory/import"],
+      ["GET", "/memory/skills"],
+    ]
+    for (const [method, path] of memory) {
+      const answer = await ask({ method, path, directory: "/repo", body: { text: "{}", repository: "" } })
+      expect(answer.status).toBe(403)
+      expect(code(answer)).toBe("REMOTE_ROUTE_REFUSED")
+    }
+    expect(engineCalls()).toEqual([])
+  })
+
   test("needs a directory that is one of the engine's projects, never the global one", async () => {
     const { ask, engineCalls } = await setup()
     for (const directory of [undefined, "/", "/etc", "/repo/..", "/repo2", 7])

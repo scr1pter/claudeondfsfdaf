@@ -11,7 +11,10 @@ import { ApprovalError, type PasskeyApprovals } from "./remote-passkey"
 //   (remote-passkey.ts), or "reject". "always" is refused, so a phone never adds a rule.
 // - A turn the phone starts carries only text: no tools, agent, system prompt, permission rules or files. Its session
 //   is marked (`RemoteTurns`), and the app's auto-accept leaves that session's requests to a person until the session
-//   is idle again (packages/app/src/context/permission-auto-respond.ts).
+//   is idle again (packages/app/src/context/permission-auto-respond.ts). A helper session that turn starts or resumes
+//   while the mark stands is marked too, and stays with a person until it is idle or its helper record has ended, so
+//   a helper left running in the background keeps the hold after the phone's turn itself is over (Track B B09). A
+//   phone turn the engine refuses puts back the hold that stood before it, so it never releases an earlier one.
 // - Sessions the phone creates carry only a title; no permission ruleset.
 // - Every request names a directory, which must be one of the engine's projects (a worktree or a sandbox, never the
 //   global "/"), so a phone cannot start agents anywhere else on this computer.
@@ -129,21 +132,58 @@ export const REMOTE_ROUTES: readonly Route[] = [
 
 /** Sessions whose current turn a phone started. The app's auto-accept answers none of their requests. */
 export function createRemoteTurns() {
-  const marked = new Map<string, number>()
+  // Each held session's hold: when it began, and whether it came from the session above it (then the helper's own
+  // record ending releases it as well).
+  const marked = new Map<string, { at: number; inherited: boolean }>()
   return {
+    /**
+     * Holds a session for the phone's turn about to start. The returned function puts back the hold that stood before,
+     * for a turn the engine did not take: a helper an earlier phone turn started, or that turn's own mark, keeps its
+     * hold. It changes nothing once something else has replaced or released this hold.
+     */
     mark(sessionID: string, at = Date.now()) {
-      marked.set(sessionID, at)
-    },
-    clear(sessionID: string) {
-      marked.delete(sessionID)
+      const before = marked.get(sessionID)
+      const hold = { at, inherited: false }
+      marked.set(sessionID, hold)
+      return () => {
+        if (marked.get(sessionID) !== hold) return
+        if (before) marked.set(sessionID, before)
+        else marked.delete(sessionID)
+      }
     },
     /** Whether any of these sessions (a request's session and the sessions above it) runs a phone's turn. */
     has(sessionIDs: readonly string[]) {
       return sessionIDs.some((id) => marked.has(id))
     },
-    /** Follows the engine's events: a session that is idle again ran its phone turn to the end. */
+    /**
+     * Follows the engine's events: a session that is idle again ran its phone turn to the end; a helper session
+     * created, or resumed (its record running again since the mark), under a marked session is the phone's too, until
+     * it is idle or its record has ended. A deleted session holds nothing.
+     */
     observe(event: { type?: unknown; properties?: unknown }) {
       const properties = (event.properties ?? {}) as Record<string, unknown>
+      if (event.type === "session.deleted") {
+        const info = recordOf(properties.info)
+        if (typeof info?.id === "string") marked.delete(info.id)
+        return
+      }
+      if (event.type === "session.created" || event.type === "session.updated") {
+        const info = recordOf(properties.info)
+        if (typeof info?.id !== "string") return
+        const subagent = recordOf(recordOf(info.metadata)?.subagent)
+        // As the engine's SubagentLifecycle.open: a queued or running record is work in flight.
+        const open = subagent?.status === "queued" || subagent?.status === "running"
+        const parent = typeof info.parentID === "string" ? marked.get(info.parentID)?.at : undefined
+        const started =
+          event.type === "session.created" ||
+          (open && typeof subagent?.startedAt === "number" && parent !== undefined && subagent.startedAt >= parent)
+        if (parent !== undefined && started && !marked.has(info.id)) {
+          marked.set(info.id, { at: parent, inherited: true })
+          return
+        }
+        if (marked.get(info.id)?.inherited && typeof subagent?.status === "string" && !open) marked.delete(info.id)
+        return
+      }
       const sessionID = typeof properties.sessionID === "string" ? properties.sessionID : undefined
       if (!sessionID) return
       if (event.type === "session.idle") marked.delete(sessionID)
@@ -374,16 +414,17 @@ export function createRemoteRoutes(deps: RouteDependencies) {
         if (body === undefined)
           return refuse(400, "REMOTE_BODY_REFUSED", "Vector could not send that to this computer.")
       }
-      const turn = match.route.path === "/session/:sessionID/prompt_async" ? match.params.sessionID : undefined
       // Marked before the engine starts the turn, so no request it raises reaches the app's auto-accept first.
-      if (turn) deps.turns.mark(turn)
+      const restore =
+        match.route.path === "/session/:sessionID/prompt_async" ? deps.turns.mark(match.params.sessionID!) : undefined
       const answer = await send({
         method: match.route.method,
         path: match.path,
         query,
         ...(body !== undefined ? { body } : {}),
       })
-      if (turn && (answer.status < 200 || answer.status >= 300)) deps.turns.clear(turn)
+      // A turn the engine did not take leaves the session as it was, still held if an earlier turn holds it.
+      if (restore && (answer.status < 200 || answer.status >= 300)) restore()
       return answer
     },
   }
@@ -428,6 +469,10 @@ export function matchRoute(method: string, path: string) {
     if (matched) return { route, params, path: `/${segments.join("/")}` }
   }
   return undefined
+}
+
+function recordOf(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
 }
 
 function sessionBody(body: unknown) {

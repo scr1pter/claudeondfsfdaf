@@ -74,6 +74,8 @@ export const ERROR_CODES = {
   HOSTED_SESSION_ENDED: 409,
   HOSTED_TAKEOVER_REQUIRED: 409,
   HOSTED_RUN_REFUSED: 403,
+  // 409 for a start or a request that cannot be served; 410 once a session's packed files are gone (their disk's date
+  // passed, or they were deleted with the disk), both when the person asks for them and on the download link.
   HOSTED_DOWNLOAD_UNAVAILABLE: 409,
   // Done by Morning (WP A55).
   HOSTED_JOB_NOT_FOUND: 404,
@@ -81,6 +83,9 @@ export const ERROR_CODES = {
   HOSTED_JOB_STATE: 409,
   HOSTED_JOB_REFUSED: 403,
   HOSTED_JOB_JUDGE: 409,
+  // Codium finish H2a: every computer the plan includes reported an image older than VECTOR_HOSTED_MIN_GENERATION;
+  // deleting a computer's disk rebuilds it.
+  HOSTED_REBUILD_REQUIRED: 409,
 } as const
 export type ErrorCode = keyof typeof ERROR_CODES
 
@@ -188,6 +193,15 @@ export const DOWNLOAD_LINK_MS = 24 * 3_600_000
  */
 export const BOOT_COMMAND = "/opt/vector/boot.sh"
 
+/**
+ * What a session is for (H1a). `job` is the default and is absent on older records. A `download` session only packs
+ * and uploads the computer's saved disk, for an account whose plan has ended (or no longer includes a cloud computer)
+ * while that disk is kept for download (§4.4): it runs no agent, no browser and no live view, lasts at most one block,
+ * and its run token is refused at chat and /models (S3).
+ */
+export const SESSION_MODES = ["job", "download"] as const
+export type SessionMode = (typeof SESSION_MODES)[number]
+
 /** A session as its owner sees it: states, times and counts only, never an amount (P1). */
 export type SessionView = {
   id: string
@@ -204,11 +218,32 @@ export type SessionView = {
   wrapBy?: number
   takeover?: { since: number; until: number }
   download?: { requestedAt: number; readyAt?: number }
+  /** Sent only for a download-only session (H1a): its files are packed for download and nothing else runs. */
+  mode?: "download"
   /**
    * The computer is waiting for the person (WP A56): its credential guard met a password, one-time-code or card field,
    * or a CAPTCHA, and handed the computer over. Sent only while the agent has control; taking over answers it.
    */
   handoff?: { reason: Handoff; since: number }
+}
+
+/**
+ * The account's kept disks on `GET /api/hosted/status` (H1c): sent while the account's computers are kept for download
+ * after its plan ended or no longer includes a cloud computer (§4.4), and either a download-only start could go ahead
+ * short of the money and the lease, or a session has packed files the account may still download.
+ * - `state`: `open` while a download-only start may go ahead now; `late` when less than a block and an hour is left
+ *   before `until`; `closed` while no download-only start may go ahead for another reason (the owner's switch or gate,
+ *   a hold on the account, or the plan), so only packed files are offered.
+ * - `until`: when the disks and their packed files are deleted.
+ * - `disks`: each computer the account has, with its preferred session: the live download-only session, else the
+ *   newest session whose files are packed, else the newest download-only session. Files packed before a later job
+ *   session started on the computer are out of date and never count.
+ * Times, states and counts only (P1).
+ */
+export type KeptDisks = {
+  state: "open" | "late" | "closed"
+  until: number
+  disks: { computer: number; session?: SessionView }[]
 }
 
 /**
@@ -278,6 +313,11 @@ export type HeartbeatAnswer = {
   browser: boolean
   /** The Ed25519 public key viewer tokens are checked with, base64url (32 bytes). */
   viewerKey: string
+  /**
+   * Sent only for a download-only session (H1a): start no agent, browser or viewer; pack and upload the disk when
+   * asked (`pack`, then `upload`), and nothing else. Such a session never gets a job.
+   */
+  mode?: "download"
   /** The job, until the daemon says it booted. */
   job?: { prompt: string; title?: string }
   /** The person asked for the session's files: pack them and report their size as `archiveBytes` (WP A54). */

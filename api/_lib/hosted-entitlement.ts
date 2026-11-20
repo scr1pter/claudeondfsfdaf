@@ -5,8 +5,10 @@ import { Hosted } from "../../packages/schema/src/hosted.js"
 import { codiumKey } from "./codium-keys.js"
 import { renewalGraceMinutes } from "./codium-limits.js"
 import { listedPerks } from "./codium-perks.js"
+import { FINAL_PERIOD_REASONS } from "./codium-pool.js"
 import { effectiveCaps, METER_KEEP_MS, requireUsableSnapshot } from "./codium-snapshot.js"
-import { readSwitch } from "./codium-switches.js"
+import { readSwitch, type SwitchValue } from "./codium-switches.js"
+import { deletingRefusal } from "./codium-tombstone.js"
 import { ApiError } from "./http.js"
 import { readEntitlement } from "./model-plan-account.js"
 import { persistentStore } from "./persistent-store.js"
@@ -74,8 +76,9 @@ function planAccess(snapshot: EntitlementSnapshot | undefined, now: number): Hos
 /**
  * How long a computer's disk is kept when nothing runs on it (§4.4): the plan's `diskDays` while a plan is live (Vector
  * pays nothing extra for it beyond the nightly storage charge); `Hosted.ENDED_DISK_DAYS` for download after a plan
- * ends, paid from the final period (`chargeRetention` in hosted-ledger.ts, which shortens it when that period cannot
- * cover it); until the dispute closes while frozen; `Hosted.LOST_DISPUTE_DISK_DAYS` after a lost dispute, at Vector's
+ * ends, charged to the final period by the first download-only start of each computer (H1a, `chargeRetention` in
+ * hosted-ledger.ts, which shortens it when that period cannot cover it; a disk nobody downloads is kept at Vector's
+ * cost); until the dispute closes while frozen; `Hosted.LOST_DISPUTE_DISK_DAYS` after a lost dispute, at Vector's
  * cost, since that payment was reversed. `undefined` days means kept with no deletion date.
  */
 export function hostedDiskPolicy(snapshot: EntitlementSnapshot | undefined, now = Date.now()) {
@@ -87,6 +90,65 @@ export function hostedDiskPolicy(snapshot: EntitlementSnapshot | undefined, now 
     return { keep: "ended" as const, days: Hosted.ENDED_DISK_DAYS }
   }
   return { keep: "plan" as const, days: hostedCaps(snapshot, now)?.diskDays ?? 0 }
+}
+
+// ── Download-only starts (H1a) ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What the plan lets a download-only start do (§4.4: an ended plan's disks are "kept 14 days for download"):
+ * - `final`: the plan ended with its final period paid and kept (no reason, or one of `FINAL_PERIOD_REASONS`); the
+ *   block is held from that final period;
+ * - `current`: the plan is live but no longer includes a cloud computer (a move to a smaller plan); the block is held
+ *   from the current period;
+ * - `live`: the plan still includes the computer (a normal session asks for its files instead);
+ * - `paused` (a payment is owed), `frozen` (a dispute, a fraud warning or the owner holds it), `closing` (the account
+ *   is being deleted);
+ * - `refused`: no plan, or one that ended refunded, after a lost dispute, after a fraud warning or by Vector.
+ */
+export type HostedDownloadAccess = "final" | "current" | "live" | "paused" | "frozen" | "closing" | "refused"
+
+export function hostedDownloadAccess(snapshot: EntitlementSnapshot | undefined): HostedDownloadAccess {
+  if (!snapshot) return "refused"
+  switch (snapshot.state) {
+    case "ended":
+      if (snapshot.reason === "closing") return "closing"
+      if (snapshot.reason === undefined || (FINAL_PERIOD_REASONS as readonly string[]).includes(snapshot.reason))
+        return "final"
+      return "refused"
+    case "frozen":
+      return "frozen"
+    case "paused":
+      return "paused"
+    case "active":
+    case "renewing":
+      return snapshot.caps.hosted ? "live" : "current"
+    default:
+      return "refused"
+  }
+}
+
+/**
+ * The plan's answer to a download-only start, in the service's codes (no amount, no other service named): the owner's
+ * `hosted` switch must be on; then `final` and `current` go ahead (`final` says the block is held from the final
+ * period); `live` gets 409 HOSTED_DOWNLOAD_UNAVAILABLE (a session asks for its files instead), `paused` 402
+ * HOSTED_PAUSED, `frozen` 403 HOSTED_FROZEN, `closing` 409 MODEL_PLAN_ACCOUNT_CLOSING, `refused` 409
+ * HOSTED_DOWNLOAD_UNAVAILABLE.
+ */
+export function requireHostedDownload(snapshot: EntitlementSnapshot | undefined, service: SwitchValue) {
+  if (service !== "on") throw unavailable()
+  const access = hostedDownloadAccess(snapshot)
+  if (snapshot && (access === "final" || access === "current")) return { snapshot, final: access === "final" }
+  if (access === "live")
+    throw new ApiError(
+      409,
+      "HOSTED_DOWNLOAD_UNAVAILABLE",
+      "Your plan includes the cloud computer. Start a session and ask for its files.",
+    )
+  if (access === "paused")
+    throw new ApiError(402, "HOSTED_PAUSED", "The cloud computer is paused until your payment goes through.")
+  if (access === "frozen") throw new ApiError(403, "HOSTED_FROZEN", "The cloud computer is on hold for this account.")
+  if (access === "closing") throw deletingRefusal()
+  throw new ApiError(409, "HOSTED_DOWNLOAD_UNAVAILABLE", "This computer's files cannot be downloaded for this account.")
 }
 
 // ── The owner's gates ──────────────────────────────────────────────────────────────────────────────────────────────

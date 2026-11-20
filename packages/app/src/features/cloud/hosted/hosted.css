@@ -221,3 +221,10 @@
 .hosted-fail {
   color: #fda4af;
 }
+
+/* The kept disks' offer after a plan ends (H1c): nothing is running, so it has no purple edge. */
+.hosted-bar--quiet {
+  border: 1px solid color-mix(in srgb, #b9b3c9 35%, transparent);
+  background: color-mix(in srgb, #b9b3c9 6%, transparent);
+  box-shadow: none;
+}

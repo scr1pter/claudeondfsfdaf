@@ -97,6 +97,17 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
   GitHub's real API, Brain Vault on Vector against the deployed Vault API (A44's tests drive A43's client against the
   routes), safeStorage sealing in a packaged app, and the nightly timer in a running app.
 
+- **Status on 15 Nov 2026 (Codium finish B10).**
+  - Settings → Memory → Backup's restore lines get a browser run in CI through
+    `packages/app/e2e/regression/codium-vault-sections.spec.ts`. It renders the real page on a fixture with a stand-in
+    bridge (`e2e/fixtures/vault-sections.jsx`) whose answers are the native test's. CI ids follow in
+    `codium-track-b-checkpoint.md`.
+    15 Nov 2026 (Codium finish DZ): they do. The checkpoint's dated B10 bullet cites Vector Codium run 43715519898,
+    whose Codium browser specs job 132816094736 ran the spec's four cases ("9 passed").
+  - The native roundtrip (`vault-sections.test.ts`) ran locally only. It covers `startVault`, the sealed key and the
+    desktop's git against real engine processes and a local bare repository.
+  - Still not exercised: the running Electron app, real safeStorage, real GitHub, and GitHub's API.
+
 ## Left for others, and owner decisions
 
 - **Owner decision:** the Backup tab and its GitHub backend show on every plan now, as §1.1 lists "back up to my own
@@ -116,3 +127,37 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
 - A57: account deletion does not touch this computer's key (it is local); the vault on Vector is erased by A44's
   provisioner.
 - bun.lock was not touched. Nothing was pushed (the orchestrator pushes).
+- **Status on 15 Nov 2026 (Codium finish R45a).** The main process and the engine routes were reviewed (P7 addendum,
+  `codium-p7-repairs.md`, "A45 desktop vault: main process and engine routes"). Repaired: a key record this launch
+  cannot open now reads as no key, so the recovery code restores, and Delete clears this computer unless the
+  credential store is locked, when the key stays for a later launch (R45-1); only Brain Vault's own errors are shown
+  or kept, and anything else answers fixed copy (R45-2); where backups go cannot change while a backup runs (R45-3);
+  and git that cannot start answers fixed copy (R45-4(a)). For the lead: core's `failed()`
+  keeps git's first stderr line (R45-4(b)), an exported `VECTOR_VAULT_RECOVERY_CODE` reaches agents' shells (R45-18),
+  the shell sandbox neither hides the CLI's `vault/vault.json` (R45-19) nor protects the CLI's copy under `~/.cache`
+  (R45-20). Not confirmed: that B10's skills files fit the engine's 2 MB restore limit (R45-10). The A43 message item
+  above is settled: `eed4bc45` changed it to "Open Settings → Memory → Backup in Vector." The "For A60 and the legal
+  read" item is out of date: since B10 (`3b1ce6d5`) backups also carry `skills` and `insights` sections; that is
+  flagged for the owner's legal read, and no privacy text was changed. Part 2 (R45b, the renderer) remains. Local
+  receipts are in the P7 record; CI is pending.
+- **CI for R45a, 15 Nov 2026 (recorded by R45b).** `420e729f`: Vector Codium run 43700085301 passed every job that ran
+  except the HttpApi exerciser step of Codium tests job 132769096737, with exactly the four
+  `/experimental/review-memory` MISS lines and `fail=0` (the lane's baseline); typecheck.yml run 43700088239 passed;
+  vector-hosted-ci.yml run 43700704217 passed, its Hosted tests job 132770987031 ending "Hosted: 143/143 test files
+  passed". Details are in the P7 record.
+- **Status on 15 Nov 2026 (Codium finish R45b).** The renderer, the bridge and Vector Local's inventory were reviewed
+  (`codium-p7-repairs.md`, "A45 Settings → Memory → Backup"). Repaired: a call that throws shows fixed copy, never
+  Electron's text (R45-24); learned skills and workflow insights are counted apart and shown as proposals to review,
+  and "as before" covers memory only (R45-25); Vector Local's Brain Vault entry names learned skills and workflow
+  insights (R45-26); a page opened while Vector starts waits for Brain Vault instead of showing a stand-in status as
+  this computer's, and gets the real status when it starts (R45-27). Pinned: the preload's eight calls, the recovery
+  code kept out of storage, H1 and the busy guard. `src/browser-bundle.test.ts`, listed above as not run, now ran
+  locally: 4 pass. The "Backups hold memory only" sentence above is out of date, as R45a noted; the owner's A60 read
+  now also covers the allow dialog's new "Sends" text. Settings → Memory → Backup has still never run in a browser or
+  the running app (B10's package). Local receipts are in the P7 record; CI is pending.
+- **Status on 15 Nov 2026 (Codium finish DZ).** CI for R45b (`4bd146e7`: Vector Codium run 43705851187,
+  typecheck.yml run 43705853689, vector-hosted-ci.yml run 43706515849) and B10 (`8a43f2b2`: runs 43715519898,
+  43715522956 and 43715921854) is green under the lane rule. Settings → Memory → Backup has now run in a browser,
+  on a fixture with a stand-in bridge (`codium-vault-sections.spec.ts`, Codium browser specs jobs 132816094736 and
+  132886071679). It has still not run in the packaged app. See `codium-deviations.md` "Lane status (15 Nov 2026,
+  codium-finish)".

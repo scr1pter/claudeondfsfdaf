@@ -91,6 +91,8 @@ export type VaultStatus = {
   /** GitHub: the bytes the vault takes in the repository. */
   storedBytes?: number
   nextAt?: number
+  /** Brain Vault has not started yet (the engine is not up); nothing else here is this computer's. */
+  starting?: true
 }
 
 export type VaultResult = { ok: boolean; message: string; status: VaultStatus; code?: string }
@@ -116,6 +118,9 @@ export type VaultRestoreResult = VaultResult & {
     active: number
     pinned: number
     waiting: number
+    /** B10: learned skills and workflow insights brought back, each a proposal waiting for review. */
+    skills: number
+    insights: number
     known: number
     refused: number
     documents: number
@@ -169,10 +174,15 @@ export type HostedPlatform = {
     id: string
     mode: "view" | "control"
   }): Promise<{ ok: true } | { ok: false; status?: number; code?: string; message: string }>
-  /** Asks for the session's files and opens the download in the browser once they are packed. */
+  /**
+   * Asks for the session's files and opens the download in the browser once they are packed; `expiresAt` is when its
+   * link stops working.
+   */
   files(input: {
     id: string
-  }): Promise<{ ok: true; ready?: boolean } | { ok: false; status?: number; code?: string; message: string }>
+  }): Promise<
+    { ok: true; ready?: boolean; expiresAt?: number } | { ok: false; status?: number; code?: string; message: string }
+  >
   /** Opens a job's pull request or a recording link in the browser. */
   open(input: {
     kind: "pull-request" | "recording"

@@ -157,6 +157,64 @@ describe("probe", () => {
     expect(result.outcome).toBe("ok")
     expect(pulled).toBeLessThanOrEqual(1)
   })
+
+  // A stream with no buffer ahead (highWaterMark 0) is pulled once per read, so the counts below are the reads made.
+  function htmlStream(chunks: number, onStall?: (controller: ReadableStreamDefaultController<Uint8Array>) => void) {
+    const stream = { pulled: 0, cancelled: 0 }
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          stream.pulled++
+          if (stream.pulled > chunks) {
+            onStall?.(controller)
+            return new Promise<void>(() => {})
+          }
+          controller.enqueue(new TextEncoder().encode("x".repeat(1024)))
+        },
+        cancel() {
+          stream.cancelled++
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    return { stream, response: new Response(body, { status: 503, headers: { "content-type": "text/html" } }) }
+  }
+
+  test("a 5xx HTML page is read only to its first 8 KiB, and the rest is cancelled", async () => {
+    const page = htmlStream(Infinity)
+    const { result } = await run(page.response)
+    expect(result).toEqual({ outcome: "fail", reason: "status", status: 503, ms: 120 })
+    expect(page.stream).toEqual({ pulled: OPS_LIMITS.challengeSniffBytes / 1024, cancelled: 1 })
+  })
+
+  test("a 5xx HTML page of exactly 8 KiB that then stalls is judged at once", async () => {
+    const pages: ReturnType<typeof htmlStream>[] = []
+    const fetch = async (_url: string, init: RequestInit) => {
+      const page = htmlStream(OPS_LIMITS.challengeSniffBytes / 1024, (controller) =>
+        init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason)),
+      )
+      pages.push(page)
+      return page.response
+    }
+    const started = Date.now()
+    const result = await probe(URL_, { fetch, now: () => Date.now(), timeoutMs: 10_000 })
+    expect(result).toMatchObject({ outcome: "fail", reason: "status", status: 503 })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(pages[0]!.stream).toEqual({ pulled: 8, cancelled: 1 })
+  })
+
+  test("a 5xx HTML page whose body stalls past the timeout fails as a timeout", async () => {
+    const fetch = async (_url: string, init: RequestInit) => {
+      const page = htmlStream(2, (controller) =>
+        init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason)),
+      )
+      return page.response
+    }
+    const started = Date.now()
+    const result = await probe(URL_, { fetch, now: () => Date.now(), timeoutMs: 40 })
+    expect(result).toMatchObject({ outcome: "fail", reason: "timeout", status: 503 })
+    expect(Date.now() - started).toBeLessThan(2_000)
+  })
 })
 
 describe("helpers", () => {

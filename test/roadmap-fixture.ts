@@ -143,6 +143,8 @@ export class RoadmapStore {
       }
       case "HVALS":
         return [...this.hash(args[0]!).values()]
+      case "HGETALL":
+        return [...this.hash(args[0]!)].flat()
       case "HLEN":
         return this.hash(args[0]!).size
       case "HDEL": {

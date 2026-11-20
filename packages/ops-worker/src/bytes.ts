@@ -15,6 +15,39 @@ export function fromUtf8(bytes: Uint8Array): string | undefined {
   }
 }
 
+/**
+ * Reads a body as its bytes arrive until `limit` of them came or it ended, then cancels the rest, so at most `limit`
+ * bytes plus one chunk are ever held. `bytes` is at most the first `limit`; `complete` means the body ended before
+ * `limit` bytes came. Undefined when the read failed (an error, or the request's signal aborting it); no body reads as
+ * empty and complete.
+ */
+export async function readPrefix(body: ReadableStream<Uint8Array> | null, limit: number) {
+  if (!body) return { bytes: new Uint8Array(0), complete: true }
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  let complete = false
+  while (size < limit) {
+    const next = await reader.read().catch(() => undefined)
+    if (!next) return undefined
+    if (next.done) {
+      complete = true
+      break
+    }
+    chunks.push(next.value)
+    size += next.value.byteLength
+  }
+  if (!complete) await reader.cancel().catch(() => {})
+  const bytes = new Uint8Array(Math.min(size, limit))
+  let offset = 0
+  for (const chunk of chunks) {
+    const part = chunk.subarray(0, bytes.byteLength - offset)
+    bytes.set(part, offset)
+    offset += part.byteLength
+  }
+  return { bytes, complete }
+}
+
 export function base64url(bytes: Uint8Array): string {
   let binary = ""
   for (const byte of bytes) binary += String.fromCharCode(byte)

@@ -14,15 +14,14 @@ import {
   usageForecast,
   usageFreshness,
   usageHistoryStrip,
-  usageShare,
 } from "./settings-v2/codium-usage-model"
 import type { DisplayUsageSummary } from "@/utils/usage-summary"
 import { sendPhoneAlert } from "@/context/phone-alerts"
-
-// Reopening Settings does not repeat a notification for this account and billing period.
+import { sendUsageAlert } from "./codium-usage-alert"
 import "./settings-v2/settings-account.css"
 
-const alertedPeriods = new Set<string>()
+// Reopening Settings does not repeat a notification for this account and billing period (`sendUsageAlert`).
+const usageAlerts = { periods: new Set<string>(), phone: new Set<string>() }
 
 /**
  * Plan status is read by the desktop main process; account tokens never reach this component. `summary` is this
@@ -65,38 +64,16 @@ export function SettingsVectorCodium(props: { summary?: DisplayUsageSummary }) {
   const plan = () => state.status?.plan
   const notice = () => state.status && ModelPlanStatus.notice(state.status)
   createEffect(() => {
-    const status = state.status
-    const share = usageShare(status?.plan?.left)
-    const desktop = settings.codium.alert80()
-    // The paired phones' own switch (Settings → Notifications, WP A41), apart from this computer's.
-    const phone = settings.notifications.event("usage")
-    if (
-      (!desktop && !phone) ||
-      !state.identity ||
-      !status?.signedIn ||
-      status.error ||
-      !status.plan ||
-      !share ||
-      (status.plan.left ?? 1) > 0.2
-    )
-      return
-    const key = `${state.identity}:${status.plan.id}:${status.plan.renewsAt}`
-    if (alertedPeriods.has(key)) return
-    alertedPeriods.add(key)
-    if (phone)
-      void sendPhoneAlert(platform, settings.notifications, {
-        event: "usage",
-        title: "You've used 80% of this month's Codium usage",
-      })
-    if (!desktop) return
-    void platform
-      .notify(
-        "Vector Codium usage",
-        "You've used at least 80% of this month's Codium usage. Check your plan in Settings → Usage.",
-        undefined,
-        { force: true },
-      )
-      .catch(() => alertedPeriods.delete(key))
+    void sendUsageAlert({
+      status: state.status,
+      identity: state.identity,
+      desktop: settings.codium.alert80(),
+      // The paired phones' own switch (Settings → Notifications, WP A41), apart from this computer's.
+      phone: settings.notifications.event("usage"),
+      sent: usageAlerts,
+      platform,
+      sendPhone: (alert) => sendPhoneAlert(platform, settings.notifications, alert),
+    })
   })
   onMount(() => {
     const account = platform.vectorAccount

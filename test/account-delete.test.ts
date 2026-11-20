@@ -38,7 +38,10 @@ import {
   archiveKey,
   hostedArchivesKey,
   hostedComputersKey,
+  hostedDownloadEgressKey,
+  hostedDownloadUploadedKey,
   hostedEgressKey,
+  hostedGenerationKey,
   hostedPagesKey,
   hostedSessionKey,
   hostedSessionsKey,
@@ -427,6 +430,15 @@ async function seedEverything(w: World) {
   store.zset(hostedSessionsKey(ACCOUNT)).set(SESSION, now)
   store.set(hostedSessionKey(SESSION), JSON.stringify({ account: ACCOUNT, state: "ended" }))
   store.members(hostedComputersKey(ACCOUNT)).add("1")
+  // Codium finish H2a: the image generation computer 1's daemon last reported, and when that report lapses.
+  store.hash(hostedGenerationKey(ACCOUNT)).set("1", `2:${now + 7 * DAY}`)
+  // H1a's download waiver and upload count, for computer 1 and for computer 2, a number the account's set no longer
+  // holds (a computer the person erased): the cloud computer's part deletes both, not only the set's (phase review).
+  const downloads = [1, 2].flatMap((n) => [hostedDownloadEgressKey(ACCOUNT, n), hostedDownloadUploadedKey(ACCOUNT, n)])
+  for (const key of downloads) {
+    store.set(key, "4096")
+    store.expires.set(key, now + 7 * DAY)
+  }
   // A47-A50's settings, incident, card, domain health and the crons' roster.
   store.set(
     opsSettingsKey(ACCOUNT),

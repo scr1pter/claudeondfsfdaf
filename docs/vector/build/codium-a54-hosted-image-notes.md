@@ -120,3 +120,43 @@ resume after, also on failure).
 - No image was built, pushed or baked; no microVM was started.
 - The git-token route, the agent-side wiring and recording uploads (above).
 - bun.lock gains only the new workspace's entry. Nothing was pushed or deployed.
+
+**Status, 15 Nov 2026 (Codium finish, H1b).** `daemon.ts` gained the download-only session (H1a's `mode: "download"`):
+from an answer that says so before any job started, hostd starts no agent, browser, guard or recorder and writes no
+viewer state, so the viewer proxy refuses every connection. It packs `/data/work` and uploads it when asked, drops the
+copy after the PUT and keeps reporting `uploaded` with the size until the server confirms the upload and ends the
+session; a `pack` or `upload` answered to a beat that said `uploaded` makes it pack again and upload anew (today's
+server sends none). The job path's pack step is now `packWhenAsked`, shared by both paths and otherwise unchanged.
+`hostd.ts` changed only in its header. The image, `boot.sh`, `boot-lib.sh` and the firewall are unchanged, and no
+credential or host was added. A rebuilt image reaches a computer only when its disk is made again, so H1b reaches ended
+plans' kept disks only if they were made from an image built after it. The server-side image floor is still not built;
+when it is (H2a), it must exempt download-only starts. Tests here: `daemon.test.ts` 17 pass (8 new), `hostd.test.ts` 17
+pass (1 new), `recording`, `source` and `image` (`21 pass, 3 skip`) unchanged; typecheck, `bun run build` and
+`node --check` clean. The Docker job and the real-microVM check are CI and owner steps. `codium-deviations.md`
+"Codium finish: H1 computer (15 Nov 2026)".
+
+**Status, 15 Nov 2026 (Codium finish, H2a).** Closes "For later packages", "Server-side image floor", on the server side
+only; the image, `boot.sh` and hostd are unchanged. Each computer now keeps the generation its daemon last reported in a
+signed heartbeat (`hosted:generation:<account>` in `api/_lib/hosted-sessions.ts`, written in `recordHeartbeat` after
+`requireDaemonBeat`), until the plan's disk days after that beat, the earliest the provider may delete the disk. With
+`VECTOR_HOSTED_MIN_GENERATION` set, a job start passes over an included computer below it and is refused with 409
+`HOSTED_REBUILD_REQUIRED` ("This cloud computer needs to be rebuilt.") when every included computer is below it, before
+any lease, hold or provider call. A computer that never reported a generation, or whose report lapsed, passes.
+Download-only starts (H1a), running sessions and their renewals are not checked. Nothing rebuilds a computer on its own:
+deleting its disk (`eraseHostedComputer`) is the only rebuild. `GET /api/hosted/computers` marks such a computer
+`rebuild: true` when it is included in a plan that has not ended. `boot.sh`'s own `check_disk_generation` is unchanged,
+and per H1b's R4(d) it never acts on a resumed disk, so the server floor is the one that does. Tests:
+`test/hosted-sessions-api.test.ts` "the image generation floor (H2a)" (10 cases), two cases in
+`test/hosted-lifecycle.test.ts`, one in `test/hosted-jobs.test.ts` and the seeded hash in `test/account-delete.test.ts`,
+run locally; the Valkey cases, the Hosted tests job and the Docker job are CI. Setting the floor is an owner step after
+the image is rebuilt (`owner-actions/hosted-computer.md`, "The image floor"). `codium-deviations.md` "Codium finish: H2
+generation floor (15 Nov 2026)".
+
+**Status, 15 Nov 2026 (Codium finish, H2b).** The Dockerfile copies the CLI's three notice files from `notices/` in
+the build context into `/usr/share/vector/` with mode 0644, right after `bin/vector`. Its final RUN makes the folder
+root's with mode 0755. `.gitignore` adds `notices`. The image workflow fills `notices/` from the published release
+(WP A58's `hosted-image.ts cli --notices`), and the CI Docker job fills it with stand-ins. `test/docker/in-image.mjs`
+adds `/usr/share/vector` to the root-owned `find`, and checks the folder's mode, each file's owner and mode, and that
+the agent can read each file. `test/image.test.ts` has 1 new case (22 pass, 3 skip). `boot.sh`, its base archive,
+hostd and the firewall are unchanged. As with every image change, a computer gets the files only when its disk is made
+from a newer image. `codium-deviations.md` "Codium finish: H2 image notices (15 Nov 2026)".

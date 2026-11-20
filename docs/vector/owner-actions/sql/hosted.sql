@@ -8,7 +8,7 @@
 -- block's hold (overrun), a day of snapshot storage (GB-days) or egress (GB), or an ended plan's disk retention (days),
 -- with what it was charged, the provider's worst-case cost of the same units at the pinned rates, a true-up if one
 -- lowered it, the period it was charged to (null when no period could take it) and when the usage happened. Refs are
--- the server's own: hb-<session>-<block>[-over], hs-/he-<computer>-<day>, hr-<computer>-<subscription>-<start>.
+-- the server's own: hb-<session>-<block>[-over], hs-/he-<computer>-<day>, hr-<computer>-<disk deletion date, ms>.
 --
 -- Lines are financial records: they are never deleted, and account deletion (WP A57) does not touch them, because the
 -- account cannot be recovered from the HMAC once the account is gone (P5's exception for pseudonymous ledger lines).
