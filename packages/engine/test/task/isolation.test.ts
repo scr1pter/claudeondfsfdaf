@@ -30,7 +30,7 @@ import { Npm } from "@vectordevai/core/npm"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 // Bootstrap is independently covered by the real LSP/MCP/snapshot isolation files. These tests use real Git,
 // instances, sessions, agents and jobs, and never invoke a model or a package installation.
@@ -818,6 +818,58 @@ if (process.platform !== "win32")
       }),
     { git: true },
   )
+
+// Windows refuses to rename a save over a record another handle has open, and `find` reads without the per-task lock.
+// Engine (windows) job 136057825288 left a record short of "changed" when a save met the test's own `find` poll. Every
+// OS runs these: elsewhere the rename replaces the open file at once.
+it.instance(
+  "a save over a record another handle holds open waits for the handle and then replaces the record",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* f.start
+      const registry = path.dirname(f.recordPath)
+      const handle = yield* Effect.promise(() => fs.open(f.recordPath, "r"))
+      yield* Effect.addFinalizer(() => Effect.promise(() => handle.close().catch(() => undefined)))
+      const save = yield* f.isolation.markSettling(f.child.id, 1).pipe(Effect.forkScoped({ startImmediately: true }))
+      // The save has written its new file and reached the rename, or (where the rename does not wait) finished.
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          if ((yield* f.isolation.find(f.child.id))?.state === "settling") return true
+          const names = yield* Effect.promise(() => fs.readdir(registry))
+          return names.some((name) => name.endsWith(".tmp")) ? true : undefined
+        }),
+        "the save never reached its rename",
+      )
+      // While the handle is open Windows keeps the old record; nothing can have replaced it.
+      if (process.platform === "win32") expect((yield* f.isolation.find(f.child.id))?.state).toBe("running")
+      yield* Effect.promise(() => handle.close())
+      expect((yield* Fiber.join(save).pipe(Effect.timeout("5 seconds")))?.state).toBe("settling")
+      expect((yield* f.isolation.find(f.child.id))?.state).toBe("settling")
+      expect((yield* Effect.promise(() => fs.readdir(registry))).filter((name) => name.endsWith(".tmp"))).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "a save over a record held open past the retry window fails on Windows, keeping the old record and no temp file",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* f.start
+      const registry = path.dirname(f.recordPath)
+      const handle = yield* Effect.promise(() => fs.open(f.recordPath, "r"))
+      yield* Effect.addFinalizer(() => Effect.promise(() => handle.close().catch(() => undefined)))
+      // The retry window is 2 s; the deadline only bounds it.
+      const save = f.isolation.markSettling(f.child.id, 1).pipe(Effect.timeout("5 seconds"))
+      if (process.platform === "win32") yield* failure(save, "EPERM")
+      if (process.platform !== "win32") expect((yield* save)?.state).toBe("settling")
+      yield* Effect.promise(() => handle.close())
+      expect((yield* f.isolation.find(f.child.id))?.state).toBe(process.platform === "win32" ? "running" : "settling")
+      expect((yield* Effect.promise(() => fs.readdir(registry))).filter((name) => name.endsWith(".tmp"))).toEqual([])
+    }),
+  { git: true },
+)
 
 it.instance(
   "a merge through a symlinked target directory is refused",

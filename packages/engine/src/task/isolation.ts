@@ -21,10 +21,12 @@ import {
   writeFile,
 } from "node:fs/promises"
 import type { Stats } from "node:fs"
+import { setTimeout } from "node:timers/promises"
 import { Cause, Context, Effect, Layer, Option, RcMap, Schema, Scope, Stream } from "effect"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { KeyedMutex } from "@vectordevai/core/effect/keyed-mutex"
+import { LockFs } from "@vectordevai/core/util/lock-fs"
 import { Global } from "@vectordevai/core/global"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
@@ -321,8 +323,11 @@ export const linked = (info: Stats) => info.isSymbolicLink() || (info.isFile() &
  * rename cannot change. Elsewhere (Windows has no O_NOFOLLOW) the path's lstat stays the symbolic link check.
  */
 async function privateRead(file: string) {
-  await guarded(constants.O_NOFOLLOW === undefined ? file : path.dirname(file))
-  const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch((cause) => {
+  // The guard runs again before every retried open, so on Windows each open still follows a fresh lstat of the path.
+  const handle = await cleared(async () => {
+    await guarded(constants.O_NOFOLLOW === undefined ? file : path.dirname(file))
+    return open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+  }).catch((cause) => {
     const code = (cause as NodeJS.ErrnoException)?.code
     if (code === "ELOOP") throw err("registry", "Isolation data cannot be a symbolic or hard link.")
     // The guard checked the folder holding the file without requiring it to be one, and `missing` would read an
@@ -346,9 +351,29 @@ async function privateJSON(file: string, value: unknown) {
   await chmod(path.dirname(file), 0o700)
   const temp = `${file}.${randomUUID()}.tmp`
   await writeFile(temp, JSON.stringify(value), { flag: "wx", mode: 0o600 })
-  await rename(temp, file).catch(async (cause) => {
+  await cleared(() => rename(temp, file)).catch(async (cause) => {
     await rm(temp, { force: true })
     throw cause
+  })
+}
+
+/**
+ * Windows refuses to rename over a file another handle has open (a `find`, which reads without the per-task lock, or
+ * an antivirus scan of the new temp file), and to open one whose replacement is still pending, and the refusal clears
+ * once that handle closes. There an error LockFs counts as transient is retried for its short window before it is
+ * reported; elsewhere every error is reported at once. Engine (windows) job 136057825288 left a record short of
+ * "changed" when a save's rename met the test's own `find` poll.
+ */
+async function cleared<A>(run: () => Promise<A>, start = performance.now(), delay = LockFs.TRANSIENT_BASE_DELAY_MS) {
+  return run().catch(async (cause): Promise<A> => {
+    if (
+      process.platform !== "win32" ||
+      !LockFs.isTransient(cause) ||
+      performance.now() - start >= LockFs.TRANSIENT_WINDOW_MS
+    )
+      throw cause
+    await setTimeout(delay)
+    return cleared(run, start, LockFs.nextDelay(delay))
   })
 }
 
