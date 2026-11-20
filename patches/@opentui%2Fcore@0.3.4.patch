@@ -1,0 +1,35 @@
+diff --git a/index-54s7pk0d.js b/index-54s7pk0d.js
+index 4558c02f59c2d6772f3615bd63e0768bc3f8e3f7..51d2f9ac6104bdac23dc67ffc6850a10c68eaf8f 100644
+--- a/index-54s7pk0d.js
++++ b/index-54s7pk0d.js
+@@ -9071,6 +9071,16 @@ class TreeSitterClient extends EventEmitter2 {
+     }
+     const workerPath = this.resolveWorkerPath();
+     this.worker = new Worker(workerPath);
++    // Bun 1.3.14 frees a Worker's VM in terminate() without waiting for the entry module's transpile jobs on its
++    // thread pool, so terminating a worker that is still loading crashes the whole process. stopWorker() waits for
++    // this promise, which settles once the worker is online or has failed or exited. There is deliberately no
++    // timeout: terminating a worker that is still loading is exactly the crash this avoids.
++    const spawned = this.worker;
++    this.workerSettled = new Promise((settle) => {
++      spawned.addEventListener("open", () => settle(), { once: true });
++      spawned.addEventListener("error", () => settle(), { once: true });
++      spawned.addEventListener("close", () => settle(), { once: true });
++    });
+     this.worker.onmessage = this.handleWorkerMessage.bind(this);
+     this.worker.onerror = (error) => {
+       console.error("TreeSitter worker error:", error.message);
+@@ -9102,8 +9112,12 @@ class TreeSitterClient extends EventEmitter2 {
+     if (!this.worker) {
+       return;
+     }
+-    this.worker.terminate();
++    const worker = this.worker;
+     this.worker = undefined;
++    // Drop its handlers now so that, as before, a stopped worker's messages never reach this client.
++    worker.onmessage = null;
++    worker.onerror = null;
++    this.workerSettled.then(() => worker.terminate());
+   }
+   handleReset() {
+     this.buffers.clear();

@@ -17,6 +17,10 @@ type ClaimedCommit = {
 
 const decoder = new TextDecoder()
 const active: TestRenderer[] = []
+// MockTreeSitterClient extends the real client, so each instance starts a real tree-sitter Worker that is never
+// terminated. One shared mock keeps a single such worker per file instead of one per test.
+const treeSitterClient = new MockTreeSitterClient({ autoResolveTimeout: 0 })
+treeSitterClient.setMockResult({ highlights: [] })
 
 afterEach(() => {
   for (const renderer of active.splice(0)) {
@@ -75,9 +79,6 @@ async function setup(
     consoleMode: "disabled",
   })
   active.push(out.renderer)
-
-  const treeSitterClient = new MockTreeSitterClient({ autoResolveTimeout: 0 })
-  treeSitterClient.setMockResult({ highlights: [] })
 
   return {
     renderer: out.renderer,

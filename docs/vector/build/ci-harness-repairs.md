@@ -444,3 +444,105 @@ new isolation tests' results here when they finish, re-running the shards a few 
 Windows, look first at its one timing gap: once the poll sees the .tmp file, the save retries for at most 2 s while
 the test does one more `find` and closes the handle, and the test's own deadline does not cover that gap. Do not
 lengthen any deadline for it.
+
+## 2026-11-20: Bun 1.3.14 crash in scrollback.surface (Worker terminated while loading)
+
+Branch `scrollback-bun-crash` from `6a771354`. Changes: `patches/@opentui%2Fcore@0.3.4.patch` (registered in the root
+`package.json` `patchedDependencies` and `bun.lock`) and one shared mock in
+`packages/engine/test/cli/run/scrollback.surface.test.ts`. No assertion, test, timeout, shard layout or flag changes.
+
+Failures. Bun 1.3.14 panicked ("Segmentation fault at address 0xFFFFFFFFFFFFFFF8", "Bun has crashed", then exit 132
+or 139) inside `test/cli/run/scrollback.surface.test.ts` with no failing test: main `dabc4821` run 43974310423 shard
+5/6 job 133679953809 (after "renders structured write finals once as code blocks"), PR #44 run 43988960845 shard 5/6
+job 133728559216, PR #45 shard 5/6 job 133732849924, main `56b2862b` run 44676025086 shard 6/6 job 136088455729 (after
+"does not emit blank patch snapshots between edit and task"); about 5 of ~50 six-shard Linux engine jobs. RSS stayed
+below 1.1 GB. The earlier crash at the same address in multiagent-parity-deviations.md (shard 2/4 job 126909620047)
+was not diagnosed and may share this cause.
+
+Mechanism. Every test in the file creates and destroys an opentui test renderer. The writer's `<diff>` and `<code>`
+elements are built as `new CodeRenderable(ctx, { id })`, whose `options.treeSitterClient ?? getTreeSitterClient()`
+creates the process-global `TreeSitterClient`; its constructor starts a real `parser.worker.js` Worker. When afterEach
+destroys the last renderer, opentui's `finalizeDestroy` destroys that singleton, and `stopWorker()` called
+`worker.terminate()` 3-170 ms after spawn, while the worker's module graph (about 350 ms) was still loading. In the
+Bun 1.3.14 sources, `WebWorker.shutdown` (`src/jsc/web_worker.zig`) unpublishes the VM, tears down JSC and runs
+`vm.deinit()` without waiting for `RuntimeTranspilerStore.TranspilerJob`s on the shared WorkPool, which hold a raw
+`this.vm` and later write its source maps (`putMappings`, `sourceMapHandler`). Our bun.report trace decodes to frame
+offsets only (no symbols offline): its fault value is -8, the null-header `capacity` read of a freed HashMap, and its
+frames sit on a pool thread, not the JS thread. That the frames are `SavedSourceMap.putValue` through
+`runFromWorkerThread` is an inference from the source and the offsets, not a symbolized stack. The `bun:ffi` and
+`napi_module_register` entries in the Features line are incidental. `MockTreeSitterClient` extends the real client in
+0.3.4, so each test's mock also started a real worker (17 per file); those were never terminated, so they only widened
+the window.
+
+Evidence (local Linux, Bun 1.3.14, through the serial lock). A positive control that terminates each client's raw
+Worker 5-45 ms after spawn crashed 4 of 5 runs of the file with trace
+`C4j+hvE+ypR82oiwC4u41hDiytzhD2szqyD40w/uCm4lnB2svqCA2DR`: every frame equals CI's
+`D4j+hvE+ypR82oiwC4u41hDiytzhD2szqyD40w/uCm4lnB2svqCA2DR` except the leading byte, and the platform/feature prefix
+differs (`g/Bqkog` locally, `i/Hz6339/` in CI), so the strings are the same stack, not byte-identical reports. An
+earlier unamplified local crash (1 in 19 plain runs) has the same frames. A second local signature from the shard-6
+file sequence at main (fault 0x2B11, trace `Fz7339/D4j+hvE+ypRm4lnB2svqCA2AixV`, `workers_terminated(2)`) shares the
+two top frames and the two thread-start frames and lacks the five middle ones: consistent with the same freed VM read
+through reused rather than zeroed memory, with a shorter unwind, but not proven. Bun's non-TTY reporter prints no
+passing tests, so that log cannot place it before scrollback.surface; a worker-logging preload on the same sequence
+shows footer.view and the other earlier files spawn and terminate no worker, and scrollback.surface terminates exactly
+two (both singletons), so `workers_terminated(2)` places it inside scrollback.surface. The Features counts therefore
+do not attribute a spawn to footer.view; they depend on how many tests ran before the crash.
+
+Change. The patch makes `TreeSitterClient.startWorker()` record `workerSettled`, which resolves on the worker's first
+`open`, `error` or `close` event, and `stopWorker()` clear `this.worker`, detach its `onmessage`/`onerror` at once (so,
+as before, a stopped worker's messages never reach the client) and call `terminate()` only once `workerSettled`
+resolves. `open` fires only after `loadEntryPointForWebWorker` has resolved, so no entry-module transpile is in flight.
+There is no timer fallback on purpose: a timed terminate would recreate the crash for a worker still loading, and
+`parser.worker.js` has no top-level await, so a worker that neither opens nor fails is not expected. The cost of that
+choice: such a worker would be detached but never terminated and would keep the process alive, so it would show up as
+a hang at exit rather than a crash (before the patch it was terminated at once). A load failure emits `error`, so it
+does not take this path. When the worker is already online, `terminate()` now runs one microtask after `stopWorker()`
+returns instead of inside it; `handleReset()` reads the old `workerSettled` before `startWorker()` replaces it, so it
+still terminates the right worker, and no caller in engine, tui or cli needs `terminate()` finished on return. Only
+`index-54s7pk0d.js` calls `this.worker.terminate()`. The patch covers every opentui caller: this file,
+`runtime.test.ts:626` in shard 4, and a real `vector run` exit. The test now shares one module-level
+`MockTreeSitterClient({ autoResolveTimeout: 0 })`, so the file keeps one live mock worker instead of 17.
+
+Side effect checked. A client that posted INIT before its worker was online now lets that queued INIT start (mkdir of
+`<dataPath>/tree-sitter/{languages,queries}`, the `tree-sitter.wasm` dynamic import, `Parser.init`) before it is
+terminated; the old code terminated first. INIT runs only for a client that was asked to highlight, which in production
+already meant initializing; in this test file highlighting goes to the mock, so the singleton never receives INIT. A
+scratch stress script (5 runs x 40 rounds, each destroying a real client 0-40 ms after `initialize()` and another
+0-10 ms after `open` with INIT in flight, data path under a scratch folder) ended every run with exit 0, all 80
+initialize promises settled per run and the INIT directories created. That shows the wasm import's window did not race
+`terminate()` in 400 tries; it does not prove the import never uses a TranspilerJob. So a residual production risk
+remains: if that dynamic import does go through a RuntimeTranspilerStore job, `terminate()` during it (for example the
+TUI exiting while a client is still initializing) could hit the same Bun bug after `open`. This test file never sends
+INIT to the singleton, so the CI trigger is fixed either way.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock, from `packages/engine`):
+
+- Frozen reinstall with scripts disabled after deleting the installed `@opentui/core` applied the patch; `bun.lock`
+  changes only by the `patchedDependencies` entry.
+- The same 5-45 ms amplifier routed through the patched `stopWorker()`: 0 crashes in 20 runs, 17 pass each.
+- `bun test --timeout 30000 ./test/cli/run/scrollback.surface.test.ts`: 40 plain runs, 17 pass, 0 fail each.
+- Shard-6 sequence (github.sandbox through scrollback.surface) at this branch with a worker-logging preload: no
+  crash; 111 pass, 7 skip, 1 fail, the `run-process.test.ts` case below.
+- Every other `test/cli/run/*.test.ts` file once: 32 files pass with 0 fail (`runtime.test.ts` 9 pass; `footer.view`
+  22 pass, 5 skip). `run-process.test.ts` fails locally with or without the patch: 25 pass / 2 fail and 20 / 7 with
+  it, 18 / 9 with the unpatched chunk swapped back in, at load average about 14. Each failure is a `vector run`
+  subprocess reaching its 20 s or 30 s limit (for example "exits nonzero without reaching the process timeout when
+  the model is unknown", `timedOut` true); the earlier diagnosis saw the same case fail at unpatched main. Those
+  subprocess cases are local timing, not this change; CI is the check for them.
+- `packages/engine` `bun typecheck` exit 0; Prettier clean on the test file.
+
+Re-run class. Until CI on this branch's PR shows the six Linux engine shards green, a Bun "panic: Segmentation fault"
+on a Linux engine shard stays in the known-flake re-run class (d). After this lands, the same panic in
+scrollback.surface or `runtime.test.ts` means the patch missed a path and needs a root cause, not a re-run; record
+the job, its bun.report string and its Features counts here.
+
+Not changed, flagged for the lead. `packages/core/src/brain/worker/host.ts:280` terminates a Brain worker on its start
+timeout, possibly while it is still loading, and `packages/engine/src/cli/cmd/tui.ts:227` terminates the TUI worker
+after a shutdown RPC that can time out after 5 s (by then it is online). If the Bun bug is general, the first can hit
+it. Upstream: an oven-sh/bun report (`WebWorker.shutdown` runs `vm.deinit()` while RuntimeTranspilerStore jobs still
+hold that VM, with the trace and the amplified reproduction above) is not filed: filing is a public action left to the
+lead or owner. The report should also say that the same freed-VM read may apply to a dynamic import that is still
+transpiling when `terminate()` runs after `open`, since this patch only closes the entry-module window. No Bun 1.4.x
+fix is confirmed (its source fetches came back empty), and @opentui/core 0.9.x still starts the real worker eagerly, so
+there is no version to bump to. When a Bun release fixes it, bump setup-bun and the Bun
+pin, re-run the raw amplifier on unpatched opentui, and drop this patch.
