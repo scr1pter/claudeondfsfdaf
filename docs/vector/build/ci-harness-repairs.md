@@ -640,17 +640,19 @@ shard passed at `14cb9720`, and `14cb9720..8e34d05e` touches only `cli-process.t
 Cause. A test-isolation gap. This was the only test in the file that made the managed path itself (`mkdirSync(file)`)
 instead of calling `writeManaged()`, so it never installed `useManagedPolicyFixture`. On Windows `ConfigManaged.read()`
 then went `check()` -> `windowsCheck()` -> `cachedAcl()` -> the real `powershellAcl()`, a `spawnSync` of
-`powershell.exe` with a 20,000 ms timeout. The runner stalled briefly in that window, the cold PowerShell start
-(normally 2 to 3.5 s) ran past the timeout, a non-zero status gave `{ entries: {} }`, and `windowsCheck` reported the
-first missing entry, the folder. The product failed closed as designed.
+`powershell.exe` with a 20,000 ms timeout. Process starts on this runner were slow at the time, and the cold PowerShell
+start (normally 2 to 3.5 s) most likely ran past the timeout; a non-zero status gave `{ entries: {} }`, and
+`windowsCheck` reported the first missing entry, the folder. The product failed closed as designed. The slow start is
+inferred from the timing below, not observed directly: the log shows nothing from inside the 20 s window.
 
 Evidence.
 
 - 20831.45 ms is the 20,000 ms timeout plus about 0.8 s.
-- The same shard, minutes earlier, ran neighbours 3.5 to 6.7 times slower than a passing run (44736225208): "the policy
-  is resolved before the first catalog fetch" 25379.50 ms against 5222 ms, "the environment turned on ..." 11554.31 ms
-  against 1720 ms, "a nested vector keeps Local on ..." 12220.72 ms against 3498 ms. That is a runner stall, not a slow
-  PowerShell path.
+- The same shard, 20 to 47 s earlier, ran neighbours 3.5 to 6.7 times slower than a passing run (44736225208): "the
+  policy is resolved before the first catalog fetch" 25379.50 ms against 5222 ms (finished 14:03:40), "the environment
+  turned on ..." 11554.31 ms against 1720 ms (14:03:51), "a nested vector keeps Local on ..." 12220.72 ms against
+  3498 ms (14:04:07). All three spawn child Bun processes. The folder test started at about 14:04:27.3; the tests just
+  before it (14:04:24 to 14:04:27) and just after it (from 14:04:48.17) ran at their usual millisecond times. That points to slow process creation on this runner, not a slow PowerShell path in `managed.ts`.
 - In 14 sampled runs this test took 1819 to 5415 ms except the one failure. A product cause (a stdin wait, the minimal
   environment, the script blocking) would slow every call, not one in 14.
 - `test/fixture/managed-policy.ts` exists so policy-semantics tests skip Windows ACL discovery. Its reader answers SYSTEM
@@ -665,9 +667,11 @@ Change.
   exact assertions stay.
 - The fixture's reader is now the exported `managedPolicyAcl(directory)`; `useManagedPolicyFixture` installs it on
   Windows as before and is still a no-op elsewhere.
-- Pins that run on Linux too: the file's `afterEach` now fails a test that leaves anything in the managed folder
-  without the fixture installed, and a new test checks, with `platform: "win32"`, that the fixture's reader makes
-  `check()` trust a folder named `vector.json` and answers only for the managed folder and files that exist.
+- Pins that run on Linux too: the file's `afterEach` now fails a test that leaves a company policy file
+  (`vector.json` or `vector.jsonc`, a folder of that name included) in the managed folder without the fixture
+  installed, and a new test checks, with `platform: "win32"`, that the fixture's reader makes `check()` trust a folder
+  named `vector.json` and answers only for its own managed paths that exist (not an absent `vector.jsonc`, not
+  `other.json`).
 
 Validation (Linux, Bun 1.3.14, through the serial lock, from the package directories):
 
@@ -694,3 +698,22 @@ allow/deny integration. A runner stall of the same size could fail it the same w
 not a product bug: check the shard's neighbouring test times before suspecting `managed.ts`. Optional follow-ups, not
 part of this fix: `-InputFormat None` on the PowerShell call (tested only in `managed-trust`), and a review of the
 synchronous 20 s `spawnSync` blocking the desktop's 30-second policy refresh.
+
+Review follow-up.
+
+- The first `afterEach` guard failed any test that ran while the managed folder existed. An empty folder is harmless
+  (`ConfigManaged.read()` checks only the policy files that exist), but `test/cli/run-local.test.ts` left one behind:
+  its `afterEach` removed only `managed/vector.json`. `preload.ts` picks the managed folder once per process and a shard
+  runs its files in one process, so had the two files landed on the same shard, or run in one local `bun test`, the
+  first local-policy test (which uses no managed policy) would have failed the guard. The guard now looks only for
+  `vector.json` and `vector.jsonc`, and `run-local.test.ts` removes the whole managed folder after each test.
+- `managed-trust.test.ts` gains a Windows-only real PowerShell test that a folder named `vector.json` in the policy
+  file's place is read (trusted with `user: true`), the `[System.IO.Directory]::Exists` branch of `ACL_SCRIPT` that the
+  folder test in `local-policy.test.ts` used to cover through real PowerShell before it moved to the fixture. It runs
+  only on Windows CI (shard 12 at `8e34d05e`) and was not run locally.
+- Validation (Linux, through the serial lock): `local-policy.test.ts` 69 pass, 2 skip; `run-local.test.ts` 5 pass;
+  `managed-trust.test.ts` 25 pass, 4 skip, 1 fail (the same root-uid sandbox failure as above); `bun typecheck` exit 0
+  in `packages/core` and `packages/engine`. Mutations, each restored with matching sha256: an empty managed folder
+  made at load time stays green with the new guard and turns "the policy is resolved before the first catalog fetch"
+  red with the old one; dropping the fixture line from the folder test still fails the guard; dropping the fixture
+  reader's `existsSync` filter fails the renamed fixture test.
