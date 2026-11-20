@@ -268,3 +268,58 @@ Windows profile, local-data and temp redirection dropped, the early-timer allowa
 test/review/parse.test.ts` 63 pass, 0 fail; `packages/engine` `bun typecheck` exit 0. The harness test still costs
 about 5 s per shard that runs parse.test.ts; a 3 s bound would also sit above the slowest child start-up seen (1.6 s)
 if shard time becomes a problem.
+
+## 2026-11-20: Windows deferred removal without PowerShell command discovery
+
+Branch `ownership-windows` from `7c7508d2`. Product code: `packages/engine/src/installation/windows-remove.ts`, the
+two identity probes in `standalone.ts` and the same probe in `script/verify-windows-installer.ts`; diagnostics and a
+portable guard in `test/installation/ownership.test.ts`. No assertion, test timer (30 s kill, 40 s cleanup, 45 s
+test), 10 s acknowledgement, 15 min exit wait, 310 s `prepared()` deadline, shard layout or flag changes.
+
+Failure. Main push run 44009054115, job 133814545422 ("engine (windows, shard 6/12)", head `7c7508d2`):
+"Windows deferred standalone removal removes only owned files after its parent exits" failed at
+ownership.test.ts:221 after 34381.02 ms with `exitCode` 143, empty stderr, the status file still
+`{"state":"preparing"}` and the parent's last checkpoint `identity-command-finished` (code 0, 18-digit ticks). The
+replaced-executable case after it, in the same process, passed in 2661.58 ms; earlier runs of the failing case took
+1879-2393 ms. No file involved changed since `b57af809`, and no other Windows engine job on main or PRs #36, #43 and
+#44 failed this test.
+
+Mechanism. The parent was healthy: `launch()` had resolved and it was polling `prepared()`. Exit 143 is the test's own
+30 s `child.kill()`. The detached Windows PowerShell 5.1 worker started, created its status file and wrote
+`preparing`, then spent about 30 s before `prepared`. It was not stuck for good: the test's cleanup wait returned at
+34.38 s, before its 40 s deadline, which only the worker's own `finally` can cause. Between the two writes the worker
+ran `Get-Process`, a `StartTime` check, a `CreateNew`/`FileShare.None` lock open, `Get-FileHash` and `WriteAllText`.
+The .NET calls throw at once rather than wait, and any throw writes `failed`, which never appeared. That leaves
+PowerShell command discovery and module auto-load; `Get-Process` was the first use of
+Microsoft.PowerShell.Management in that process (`New-Object` before `preparing` had already loaded Utility, which
+also holds `Get-FileHash`). This is inferred from one sample: nothing timestamped the worker's steps. An equally
+consistent alternative is contention on the shared module analysis cache with the identity probe's `powershell.exe`,
+which had just run `Get-Process` and exited. Related evidence: release-approval.md:111-118 (discovery took
+15,674.88 ms without `PSModuleAnalysisCachePath`, 1,161.65 ms with it; that variable reached this shard),
+release-approval.md:467-477 (two deferred-uninstall cases stopped before scheduling earlier; the native-discovery
+environment fix from then is in place here, so this is a remaining intermittent stall, not a regression), and
+windows-holder.ts:157-160 (discovery "can otherwise wait indefinitely before Add-Type starts, even with -NoProfile",
+under a different environment with no PSModulePath at all).
+
+Change. The worker script and the identity probe now use operators and .NET only, so neither explanation applies:
+`[Diagnostics.Process]::GetProcessById` in a `parentTicks` function (`$null` once the process is gone, `''` while it
+is exiting or its start time cannot be read, keeping the old identity, acknowledgement and exit-wait semantics),
+`[IO.File]::OpenRead` plus `SHA256.ComputeHash` for the hash (same `FileShare.Read`), `[Threading.Thread]::Sleep`,
+`[IO.File]::Delete` and `[IO.Directory]::Delete` in `try` for cleanup, a regex `\uXXXX` escape for the failed-status
+JSON instead of `ConvertTo-Json`, and `[Console]::Error` instead of `Write-Error`/`Write-Warning`. The `preparing`
+status now names its step (`identity`, `lock`, `hash`); `prepared()` ignores the extra field. The test's checkpoints
+add `at` and `elapsedMs`, and its early-exit error lists every fixture entry, so a recurrence names the phase and the
+lock's presence separates the identity step from the hash step. A new portable test fails if the generated worker or
+probe contains a Verb-Noun cmdlet or a common alias at command position; it failed against the `7c7508d2` script.
+
+Not changed, flagged for the lead or owner: `packages/web/public/install.ps1` is a live-site asset whose deferred
+upgrade wait has the same exposure (`Get-FileHash` :105, :124, :148; `Get-Process` and `Start-Sleep` :151-167;
+`ConvertTo-Json` :46), so a real Windows `vector upgrade` can still stall in discovery up to the 310 s deadline. Core's
+`windows-powershell.ts` environment boundary and its native-discovery regression test stay as they are: the installer
+needs cmdlets such as `Expand-Archive`.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock): `packages/engine`
+`bun test --timeout 30000 test/installation/ownership.test.ts` 6 pass, 2 skip (the Windows cases), 0 fail;
+`packages/engine` `bun typecheck` exit 0; `bun turbo typecheck --concurrency=2` 27 of 27 tasks successful. No PowerShell
+ran locally. CI must show every Windows engine shard green and
+ownership's two deferred cases back near 2 s.

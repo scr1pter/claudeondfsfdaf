@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { InstallationOwnership } from "../../src/installation/ownership"
 import { Standalone } from "../../src/installation/standalone"
+import { WindowsRemoval } from "../../src/installation/windows-remove"
 
 async function directory(prefix = "vector-ownership-") {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)))
@@ -156,6 +157,37 @@ test("Homebrew and Scoop use recorded manager identities rather than invented re
   ).toEqual({ method: "scoop", package: "fixture-bucket/vector", latest: "1.2.4" })
 })
 
+test("Windows deferred-operation PowerShell runs no cmdlet that needs command discovery", () => {
+  // Windows PowerShell 5.1 resolves a cmdlet or alias through command discovery and module auto-load, which stalled a
+  // deferred-removal worker for 30 s on CI. The worker and identity probe must stay operators and .NET only.
+  const generated = [
+    WindowsRemoval.script({
+      pid: 4242,
+      startTicks: "639304879276547567",
+      executable: "C:\\Vector\\vector.exe",
+      metadata: "C:\\Vector\\.vector-vector.exe",
+      lock: "C:\\Vector\\.vector-vector.exe.lock",
+      statusFile: "C:\\Vector\\.vector-update-0.json",
+      temporaryDirectory: "C:\\Vector\\.vector-uninstall-0",
+      binarySha256: "a".repeat(64),
+      files: ["C:\\Vector\\vector.exe", "C:\\Vector\\.vector-vector.exe\\receipt.tsv"],
+    }),
+    WindowsRemoval.identity(4242),
+  ]
+    .join("\n")
+    .replace(/FromBase64String\('[A-Za-z0-9+/=]*'\)/g, "FromBase64String('')")
+  expect(generated.match(/\b[A-Z][a-z]+-[A-Z]\w*/g) ?? []).toEqual([])
+  expect(
+    generated.match(
+      /\b(get|set|new|remove|start|stop|write|out|convertto|convertfrom|test|import|add|select|where|foreach|invoke|join|split)-\w+/gi,
+    ) ?? [],
+  ).toEqual([])
+  expect(generated.match(/(^|[;{(|]\s*)(sleep|gps|ps|rm|ri|rd|del|echo|cat|ls|dir|iex|start|kill)\b/gim) ?? []).toEqual(
+    [],
+  )
+  expect(generated).toContain("GetProcessById(4242)")
+})
+
 for (const replacement of [false, true]) {
   test.skipIf(process.platform !== "win32")(
     `Windows deferred standalone removal ${replacement ? "preserves a replaced executable" : "removes only owned files after its parent exits"}`,
@@ -176,7 +208,8 @@ for (const replacement of [false, true]) {
       // that exact process to exit; using the test runner's PID would leave it waiting for the suite.
       const diagnostic = path.join(fixture.root, "uninstall-diagnostic.json")
       const script = `
-        const checkpoint = (phase, details = {}) => Bun.write(${JSON.stringify(diagnostic)}, JSON.stringify({ phase, ...details }));
+        const started = Date.now();
+        const checkpoint = (phase, details = {}) => Bun.write(${JSON.stringify(diagnostic)}, JSON.stringify({ phase, at: new Date().toISOString(), elapsedMs: Date.now() - started, ...details }));
         await checkpoint("bun-started");
         const { Standalone } = await import( ${JSON.stringify(new URL("../../src/installation/standalone.ts", import.meta.url).href)});
         await checkpoint("standalone-imported");
@@ -223,6 +256,8 @@ for (const replacement of [false, true]) {
                 exitCode: await child.exited,
                 stderr: await stderr,
                 statuses,
+                // A lock entry tells a stall in the worker's hash step apart from one in its identity step.
+                entries: await readdir(fixture.root),
                 diagnostic: await Bun.file(diagnostic)
                   .text()
                   .catch(() => "not written"),
