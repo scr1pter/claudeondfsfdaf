@@ -198,11 +198,37 @@ uint32_t InputGuardianReleaser::drain(uint32_t milliseconds,bool retired_only) {
   } while (GetTickCount64()<deadline);
   const auto after=ledger_.released_count(); return static_cast<uint32_t>(std::min<uint64_t>(after-before,136));
 }
-void InputGuardianReleaser::notify() noexcept { generation_.fetch_add(1); changed_.notify_all(); }
+void InputGuardianReleaser::notify() noexcept {
+  // Taking the wake lock between the increment and the notify means a waiter is either before its
+  // predicate check (and sees the new generation) or already blocked (and is woken). No thread holds
+  // this lock across SendInput, so the hook callback waits at most for another thread's predicate check.
+  // If the lock ever failed, the wake would still arrive at the waiter's timeout.
+  generation_.fetch_add(1);
+  try { std::lock_guard lock(changed_mutex_); } catch (...) {}
+  changed_.notify_all();
+}
 uint64_t InputGuardianReleaser::generation() const noexcept { return generation_.load(); }
 void InputGuardianReleaser::wait(uint64_t seen,uint32_t milliseconds) {
   std::unique_lock lock(changed_mutex_); changed_.wait_for(lock,std::chrono::milliseconds(milliseconds),[&] { return generation_.load()!=seen; });
 }
+void InputGuardianReleaser::start(const std::atomic<bool>& stopping,Spawn spawn) {
+  if (started_.load()) throw std::logic_error("Guardian release thread already started.");
+  if (!spawn) throw std::invalid_argument("Guardian release thread needs a spawn that owns its lifetime.");
+  std::function<void()> body=[this,&stopping] {
+    while (!halted_.load()) {
+      const auto seen=generation();
+      // A failed allocation must not end the only release path. The wait stays outside the drain's
+      // try, so a drain that throws every time still pauses about 2 ms per loop instead of spinning
+      // against the hook thread. Before Stop nothing else bounds such a loop; the fuse arms only on stop.
+      try { (void)(stopping.load() ? drain(5) : drain(1,true)); } catch (...) {}
+      try { wait(seen,2); } catch (...) { Sleep(2); }
+    }
+  };
+  spawn(std::move(body));
+  started_.store(true);
+}
+bool InputGuardianReleaser::started() const noexcept { return started_.load(); }
+void InputGuardianReleaser::stop() noexcept { halted_.store(true); notify(); }
 
 namespace {
 bool hex(std::wstring_view text, size_t count) {
@@ -423,9 +449,12 @@ struct ChildState final : std::enable_shared_from_this<ChildState> {
           reply.diagnostic=ledger.release_diagnostic(ticket,(ticket.release.kind==InputReleaseKind::mouse_button ? mouse_callbacks : keyboard_callbacks).load(std::memory_order_relaxed),pump_stale);
       } else if (request->op==Op::retire) {
         if (request->ticket==0 || request->budget!=0 || !valid_input_release(request->release)) { stop(); return; }
-        ledger.retire(ticket,request->down); reply.ok=true;
+        // Wake the release thread so a retired DOWN is released at once rather than at its next poll.
+        ledger.retire(ticket,request->down); releaser.notify(); reply.ok=true;
       } else {
         if (request->ticket!=0 || request->release!=InputRelease{} || request->down || request->budget==0 || request->budget>300) { stop(); return; }
+        // As before the release thread, this returns 0 at once while another drain holds the release
+        // lock. The real release bound is the parent's 300 ms close lock and one-second child wait.
         reply.count=releaser.drain(request->budget); reply.ok=!ledger.pending();
         if (request->op==Op::close) { stop(); }
       }
@@ -877,6 +906,9 @@ int run_input_guardian(const InputGuardianCommand& command,HANDLE input,HANDLE o
     keyboard=SetWindowsHookExW(WH_KEYBOARD_LL,keyboard_hook,GetModuleHandleW(nullptr),0);
     mouse=SetWindowsHookExW(WH_MOUSE_LL,mouse_hook,GetModuleHandleW(nullptr),0);
     if (!keyboard || !mouse) throw std::runtime_error("Guardian hooks unavailable.");
+    // The hookless release thread exists before readiness, so the parent can never post a DOWN that
+    // has no release path. If it cannot start, the catch below fails closed before ready is written.
+    state->releaser.start(state->stopping,[state](std::function<void()> body) { std::thread([state,run=std::move(body)] { run(); }).detach(); });
     Packet ready; ready.response=true; ready.ok=true; ready.tag=command.tag; ready.nonce=nonce_bytes(command.nonce);
     auto bytes=encode(ready); { IoWatch io; if (!io.transfer(output,bytes,true,GetTickCount64()+50)) throw std::runtime_error("Guardian readiness unavailable."); }
     SetEvent(state->armed_event.get());
@@ -887,11 +919,12 @@ int run_input_guardian(const InputGuardianCommand& command,HANDLE input,HANDLE o
       // The callback only loads metadata; no clock, process, pipe or discovery API runs inside it.
       state->pumped();
       while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) { if (message.message==WM_QUIT) state->stop(); else { TranslateMessage(&message); DispatchMessageW(&message); } }
+      // This thread owns the hooks and only pumps. SendInput runs on the release thread, so the hook
+      // callback for the guardian's own UP never waits behind SendInput or the release lock here.
       if (state->stopping.load()) {
-        (void)state->releaser.drain(5);
         if (state->ledger.pending()) quiet=0; else if (!quiet) quiet=GetTickCount64();
         if (quiet && GetTickCount64()-quiet>=100) break;
-      } else (void)state->releaser.drain(1,true);
+      }
       (void)MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT);
     }
     UnhookWindowsHookEx(keyboard); keyboard=nullptr; UnhookWindowsHookEx(mouse); mouse=nullptr; hook_state=nullptr;
@@ -900,11 +933,13 @@ int run_input_guardian(const InputGuardianCommand& command,HANDLE input,HANDLE o
   } catch (...) {
     if (state) state->stop();
     if (state && keyboard && mouse) {
+      // Release inline only if the release thread never started; otherwise it keeps releasing.
+      const bool inline_release=!state->releaser.started();
       const auto deadline=GetTickCount64()+300; MSG message{};
       do {
         state->pumped();
         while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
-        try { (void)state->releaser.drain(2); } catch (...) {}
+        if (inline_release) try { (void)state->releaser.drain(2); } catch (...) {}
         (void)MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT);
       } while (GetTickCount64()<deadline);
     }
