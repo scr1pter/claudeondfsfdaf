@@ -194,11 +194,22 @@ export const ResearchReadTool = Tool.define<
             params.mode !== "fetch" && (!fetched || (fetched.status === "needs-render" && !fetched.private))
               ? yield* ResearchBrowser.render({ research, ctx, found, url: checked.url, chunkTokens })
               : undefined
-          const page = rendered && !("error" in rendered) ? rendered : fetched
+          const failed = rendered && "error" in rendered ? rendered.error : undefined
+          // A failed render keeps the fetched page as skipped but says why the desktop browser did not read it, so a
+          // broken bridge call never reads as "no desktop browser".
+          const page =
+            failed && fetched
+              ? {
+                  ...fetched,
+                  reason: `${(fetched.reason ?? ResearchReader.NEEDS_RENDER).replace(/\.+$/, "")}. The desktop browser could not render it: ${failed}`,
+                }
+              : rendered && !("error" in rendered)
+                ? rendered
+                : fetched
           if (!page)
             return {
               title: "Not read",
-              output: `${checked.url} could not be rendered: ${rendered && "error" in rendered ? rendered.error : RENDER}`,
+              output: `${checked.url} could not be rendered: ${failed ?? RENDER}`,
               metadata: { runID, url: checked.url },
             }
           return yield* ResearchSource.keep({ research, store, found, page, view: params, lead })

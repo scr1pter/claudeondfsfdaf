@@ -413,26 +413,56 @@ export function withCliFixture<A, E>(
     const pipe = Effect.fn("vector.pipe")(function* (args: string[], reader: string[], opts?: SpawnOpts) {
       const start = Date.now()
       const timeoutMs = opts?.timeoutMs ?? 30_000
-      // Bun's shell joins the two with an OS pipe on every platform. A Bun.spawn pipe cannot stand in
-      // for the reader: Bun drains it into this process from the moment the child starts.
+      // Bun's shell joins the two stages itself (an AF_UNIX socketpair on Linux, about 208 KB of buffer).
+      // A Bun.spawn pipe cannot stand in for the reader: Bun drains it into this process from the moment
+      // the child starts. Output goes to files, not the shell's capture: Bun 1.3.14 drops the end of a
+      // captured stream when more than 128 KiB arrives together with its hangup, so the shell promise
+      // never settles after both processes have exited. The files also show how far each side got. The
+      // shell takes one redirect per command, so the reader's own stderr stays captured: a reader passed
+      // here must keep its stderr well under 128 KiB or it can hang the same way.
       // A shell pipeline cannot be killed, so a timeout leaves the CLI to its own exit.
+      const id = `pipe-${Date.now()}`
+      const out = path.join(home, `${id}.out`)
+      const cliErr = path.join(home, `${id}.cli.err`)
       return yield* Effect.promise(() =>
-        $`bun run --conditions=browser ${cliEntry} ${args} | ${reader}`
+        $`bun run --conditions=browser ${cliEntry} ${args} 2> ${cliErr} | ${reader} > ${out}`
           .cwd(home)
           .env({ ...process.env, ...env, ...opts?.env })
           .nothrow()
           .quiet(),
       ).pipe(
-        Effect.map((result) => ({
-          exitCode: result.exitCode,
-          stdout: normalizeLines(result.stdout.toString()),
-          stderr: normalizeLines(result.stderr.toString()),
-          durationMs: Date.now() - start,
-        })),
+        Effect.flatMap((result) =>
+          Effect.promise(async () => {
+            const readerErr = result.stderr.toString()
+            return {
+              exitCode: result.exitCode,
+              stdout: normalizeLines(await readText(out)),
+              stderr: normalizeLines(
+                (await readText(cliErr)) + (readerErr ? `\n--- reader stderr ---\n${readerErr}` : ""),
+              ),
+              durationMs: Date.now() - start,
+            }
+          }),
+        ),
         Effect.timeoutOrElse({
           duration: Duration.millis(timeoutMs),
           orElse: () =>
-            Effect.succeed({ exitCode: -1, stdout: "", stderr: "", durationMs: Date.now() - start, timedOut: true }),
+            Effect.promise(async () => {
+              const stdout = await readText(out)
+              return {
+                exitCode: -1,
+                stdout: normalizeLines(stdout),
+                stderr: normalizeLines(
+                  [
+                    `vector.pipe timed out after ${timeoutMs} ms; the reader had written ${stdout.length} characters`,
+                    `--- CLI stderr ---`,
+                    await readText(cliErr),
+                  ].join("\n"),
+                ),
+                durationMs: Date.now() - start,
+                timedOut: true,
+              }
+            }),
         }),
       )
     })
@@ -617,6 +647,13 @@ function parseJsonEvents(stdout: string): Array<Record<string, unknown>> {
 
 function normalizeLines(value: string) {
   return value.replaceAll("\r\n", "\n")
+}
+
+// A pipeline that timed out may not have opened every redirect yet.
+async function readText(file: string) {
+  const handle = Bun.file(file)
+  if (!(await handle.exists())) return ""
+  return handle.text()
 }
 
 // Convenience for the common assertion pattern. Dumps stderr/stdout when

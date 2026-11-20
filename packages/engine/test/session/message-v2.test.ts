@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { BrainSchema } from "@vectordevai/core/brain/schema"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { APICallError } from "ai"
 import { Effect, Layer } from "effect"
@@ -757,6 +758,47 @@ describe("session.message-v2.toModelMessage", () => {
             toolName: "bash",
             output: { type: "text", value: "ok" },
           },
+        ],
+      },
+    ])
+  })
+
+  test("replays only the provider namespaces of a text part's metadata, never Vector's own marks", async () => {
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+    // An imported session's text carries BrainSchema.OUTSIDE (SessionArchive.import); the AI SDK refuses a prompt whose
+    // provider options hold anything but provider namespaces of JSON objects (BT06).
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [{ ...basePart(userID, "u1"), type: "text", text: "continue" }] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "text",
+            text: "done",
+            metadata: { [BrainSchema.OUTSIDE]: "import", openai: { assistant: "meta" } },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "text",
+            text: "imported",
+            metadata: { [BrainSchema.OUTSIDE]: "import", list: [1], none: null },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "done", providerOptions: { openai: { assistant: "meta" } } },
+          { type: "text", text: "imported" },
         ],
       },
     ])

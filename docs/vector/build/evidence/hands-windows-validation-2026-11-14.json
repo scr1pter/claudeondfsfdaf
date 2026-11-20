@@ -1,0 +1,1440 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-windows-continuation",
+  "datePacific": "2026-11-15",
+  "branch": "hands-finish",
+  "parentRevision": "289af6bb288e22c9243cbf939e22b59eecbc4534",
+  "startRevision": "bca1585493e6b7bc3eace4de92df77a0b5420dd5",
+  "testedRevision": "289af6bb288e22c9243cbf939e22b59eecbc4534",
+  "helperVersion": "1.0.15",
+  "windowsSourceDigest": "not observed: the digest is only a step output of 'Expose the verified source digest' (windows-build step 21), and the manifests are inside artifacts that were not downloaded",
+  "countOrder": "passed / failed / skipped",
+  "stageSource": "Stages and nativeCodes of failed rows are read from the x64 and ARM64 summary lines that 289af6bb added ([stage=..., nativeCode=...], printed only when the check, reason, stage and code are all in the closed Windows native vocabulary). In every HF-4 run the vocabulary loaded; no 'Stage diagnostics unavailable' line was printed.",
+  "archiveAccess": "No report archive was downloaded. The HF-4 blocked-mode pass's credential-free reachability check of the artifact blob host was refused by this session's permission policy, so this pass requested no signed artifact URL rather than retry a refused action; the stages are printed in the logs instead. Archive bytes and SHA-256 read 'not downloaded'. No API digest or size_in_bytes, and no uploader-logged size or 'SHA256 digest of uploaded artifact zip', is copied as an archive hash.",
+  "continueOnError": "computer-helper.yml:718 (x64 'Run explicitly isolated Windows scenarios') and :956 (ARM64 'Run explicitly isolated ARM64 scenarios') at 289af6bb continue on error while privileged-required is false; every failed row below is a failure even where its step, job or run concluded success.",
+  "hf4Status": "Three windows-target test.yml dispatches ran at 289af6bb, one after another: 43809140577 (success), 43813017303 (failure) and 43816713717 (failure). Each failure is recorded as a failure, including those in continue-on-error steps. x64 apps-running-target failed in runs 1 and 3 at apps-list-reply / paused and passed in run 2. The staged Stop passed in runs 1 and 3 and failed in run 2 at cleanup_failed / observe-up / driver_failure. ARM64 isolated rows exist only for run 1 (33/5/10); run 2 skipped ARM64 and run 3's required ARM64 core step failed on the unit row. No cause is established.",
+  "seriesStop": "All three permitted dispatches were used. After run 1 the staged Stop had passed, so not every decision row had reproduced; after run 2 the rows disagreed with run 1 (the Stop failed and apps-running-target passed), so run 3 ran. No rerun_workflow_run was used. A first dispatch call for run 3 returned a connection error and created no run.",
+  "prerequisite": {
+    "status": "committed and pushed as its own commit before the dispatches (lead ruling of 16 November 2026)",
+    "commit": "289af6bb288e22c9243cbf939e22b59eecbc4534",
+    "title": "fix(hands): compile the folded Windows self-test and print failed-row stages",
+    "push": "fast-forward bca15854..289af6bb on origin/hands-finish, before run 1 was dispatched at 2026-11-16T05:16:19Z",
+    "compileFix": {
+      "file": "packages/desktop/native/computer-helper/windows/tests/privileged_self_test_tests.cpp",
+      "line": 153,
+      "before": "const auto reply = response_failure(42, {code, L\"PRIVATE native explanation\"});",
+      "after": "const auto reply = response_failure(42, code, L\"PRIVATE native explanation\");",
+      "declaration": "windows/src/protocol.h:54 declares response_failure(uint64_t id, std::wstring_view code, std::wstring_view message); the definition is protocol.cpp:309",
+      "ciResult": "windows-build step 9 'Build both channel helper architectures' and step 10 'Run Windows unit and fresh version/probe checks' succeeded in every HF-4 run; ARM64 step 8 'Run ARM64 unit and fresh version/probe checks' succeeded in every HF-4 run that reached it"
+    },
+    "summaryChange": {
+      "file": ".github/workflows/computer-helper.yml",
+      "steps": "'Summarize Windows protocol readiness' (:726, stage text :762) and 'Summarize ARM64 protocol readiness' (:964, stage text :1000)",
+      "behaviour": "Failed rows of computer-win32-privileged.json (x64) and computer-win32-arm64-privileged.json (ARM64) print ' [stage=..., nativeCode=...]' only when the check, reason, stage and code are all in WINDOWS_NATIVE_CHECKS.privileged, WINDOWS_NATIVE_REASONS, WINDOWS_NATIVE_STAGES and WINDOWS_NATIVE_CODES, as test.yml:315 does. If the vocabulary cannot load, the rows and counts still print without stages and the step does not fail, because it gates the staged Stop and the ARM64 job.",
+      "test": "packages/desktop/scripts/computer-workflow.test.ts: 'Windows x64 and ARM64 helper summaries log closed failed stages and codes without native payloads', plus the source regex and environment of the existing summary test"
+    },
+    "digestEffect": "Windows source digest only: sourceDigestFor (build-computer-helper.ts:1180) hashes every file under windows/, including tests/. computer-helper.yml and computer-workflow.test.ts are not among the nine COMPUTER_HELPER_BUILD_INPUTS. No macOS input changes; invariant 2 is empty and helperVersion stays 1.0.15.",
+    "localChecks": "desktop computer-workflow.test.ts 35 passed / 0 failed (3,996 assertions), computer-overlay-workflow.test.ts 6/0, computer-release-workflow.test.ts 9/0; a mutation pointing the ARM64 summary at the x64 report name failed the new test; desktop bun typecheck passed; full turbo typecheck 27/27 tasks passed. The C++ change was compiled only in CI."
+  },
+  "nativeStopFixA0fBuild": {
+    "run": 43638862293,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "headBranch": "native-stop-fix",
+    "headRevision": "a0fbfa3b16b65c0def4459d83892ee1f09c71daa",
+    "inputs": "computer_helper: true, computer_helper_target: windows; the called workflow logged windows-only: true, isolated-desktop: true, privileged-required: false",
+    "createdAtUtc": "2026-11-14T20:41:54Z",
+    "updatedAtUtc": "2026-11-14T20:50:14Z",
+    "conclusion": "failure",
+    "windowsBuildJob": 132581736096,
+    "windowsBuildConclusion": "failure",
+    "failedStep": {
+      "step": 9,
+      "name": "Build both channel helper architectures",
+      "startedAtUtc": "2026-11-14T20:45:57Z",
+      "completedAtUtc": "2026-11-14T20:50:09Z"
+    },
+    "compileError": "2026-11-14T20:50:09.0636694Z D:\\a\\claudeondfsfdaf\\claudeondfsfdaf\\packages\\desktop\\native\\computer-helper\\windows\\tests\\privileged_self_test_tests.cpp(153,26): error C2660: 'vector::computer::response_failure': function does not take 2 arguments",
+    "compileErrorDetail": "while trying to match the argument list '(int, initializer list)'; see declaration at protocol.h(54,12)",
+    "builtBeforeError": "computer-core.lib, VectorComputerCaller.exe, computer-test-target.exe, overlay-driver-support.lib and vector-computer.exe (win32-x64) linked; vector-computer-tests did not, and the ARM64 build was not reached",
+    "onlyErrorLine": "the 685-line log has one compiler error line and then 'The native helper command failed: cmake (exit-1).' at 2026-11-14T20:50:09.0645889Z",
+    "skippedSteps": "10-12 and 14-24 skipped; step 25 'Preserve check reports' logged 'No files were found with the provided path: D:\\a\\_temp/computer-win32-*.json. No artifacts will be uploaded.'",
+    "artifacts": 0,
+    "windowsArm64TestJob": 132583927674,
+    "windowsArm64TestConclusion": "skipped",
+    "rows": "none",
+    "sourceRelation": "git diff --stat a0fbfa3b bca15854 over packages/desktop/native, packages/desktop/scripts, computer-helper.yml and test.yml lists only identity.json (1.0.17 to 1.0.15), so a windows-target dispatch at bca15854 compiles the same failing test",
+    "logs": [
+      {
+        "job": 132581736096,
+        "tailLines": 700,
+        "linesReturned": 685
+      }
+    ]
+  },
+  "pr33F830": {
+    "run": 43631024090,
+    "attempt": 1,
+    "event": "pull_request",
+    "headRevision": "f830e3fdf707b722aa190206994337cecec0f01d",
+    "testedMergeRevision": "303eecb8f0015f92f32a652ffe10214fca5840cb",
+    "windowsBuildJob": 132558654772,
+    "windowsBuildConclusion": "failure",
+    "windowsArm64TestJob": 132563098712,
+    "windowsArm64TestConclusion": "skipped",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "coreSkippedRows": [
+      {
+        "name": "privileged",
+        "status": "skipped",
+        "reason": "disabled"
+      }
+    ],
+    "isolated": {
+      "passed": 36,
+      "failed": 2,
+      "skipped": 10
+    },
+    "failedRows": [
+      {
+        "name": "privileged",
+        "status": "failed",
+        "reason": "native-check-failed"
+      },
+      {
+        "name": "privileged.apps-running-target",
+        "status": "failed",
+        "reason": "native_operation_failed"
+      }
+    ],
+    "skippedRows": [
+      {
+        "name": "privileged.apps-installed-target",
+        "status": "skipped",
+        "reason": "target_not_installed"
+      },
+      {
+        "name": "privileged.uia-counter-increment",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.uia-value-set-and-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.secure-field-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.tagged-click-increments",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.unicode-type-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.stale-capture-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.owned-input-release",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.input-detection-probe",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.hardware-user-input-pauses",
+        "status": "skipped",
+        "reason": "hardware_input_required"
+      }
+    ],
+    "countLines": {
+      "core": "2026-11-14T19:31:34.4503853Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+      "isolated": "2026-11-14T19:31:52.6785002Z Computer helper checks: 36 passed, 10 skipped, 2 failed."
+    },
+    "substages": "not read: report archive not downloaded; the source predates a0fbfa3b, so the 20 closed substages did not exist",
+    "isolatedStep": {
+      "step": 12,
+      "name": "Run explicitly isolated Windows scenarios",
+      "threw": true,
+      "conclusion": "success",
+      "recordedAs": "failure",
+      "privilegedRequired": false
+    },
+    "stagedStop": {
+      "step": 18,
+      "stepConclusion": "failure",
+      "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":false,\"reason\":\"native_failure\",\"stage\":\"stop-root-retired\",\"cause\":\"core_failure:no_ui_tree\"},\"exitCode\":1}",
+      "timestampUtc": "2026-11-14T19:34:47.3208342Z",
+      "ok": false,
+      "reason": "native_failure",
+      "stage": "stop-root-retired",
+      "cause": "core_failure:no_ui_tree",
+      "exitCode": 1,
+      "phaseSample": "no phase sample: diagnostic not in source (f830e3fd does not contain 8e792a72)",
+      "ordinaryOverlay": "native-os-stop skipped: native_harness_unavailable (2026-11-14T19:32:09.0828328Z)",
+      "overlayAfterStop": "native-os-stop failed: native_proof_invalid (2026-11-14T19:34:47.6165544Z)"
+    },
+    "reportArtifacts": [
+      {
+        "id": 14128583221,
+        "name": "computer-helper-win32-reports-pr-303eecb8f0015f92f32a652ffe10214fca5840cb",
+        "archiveBytes": "not downloaded",
+        "archiveSha256": "not downloaded"
+      }
+    ],
+    "logs": [
+      {
+        "job": 132558654772,
+        "tailLines": 1400,
+        "linesReturned": 1139
+      }
+    ],
+    "qualification": "The job failed at the staged Stop; the isolated step's two failed rows are failures although the step concluded success."
+  },
+  "pr33Ee48": {
+    "run": 43636452606,
+    "attempt": 1,
+    "event": "pull_request",
+    "headRevision": "0ee486e3412c29512022d369325a3747b567d090",
+    "testedMergeRevision": "0975ed15d6ce4da4672c95f0a1ad7f70e648e235",
+    "windowsBuildJob": 132574657019,
+    "windowsBuildConclusion": "success",
+    "windowsArm64TestJob": 132579526582,
+    "windowsArm64TestConclusion": "skipped",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "coreSkippedRows": [
+      {
+        "name": "privileged",
+        "status": "skipped",
+        "reason": "disabled"
+      }
+    ],
+    "isolated": {
+      "passed": 36,
+      "failed": 2,
+      "skipped": 10
+    },
+    "failedRows": [
+      {
+        "name": "privileged",
+        "status": "failed",
+        "reason": "native-check-failed"
+      },
+      {
+        "name": "privileged.apps-running-target",
+        "status": "failed",
+        "reason": "native_operation_failed"
+      }
+    ],
+    "skippedRows": [
+      {
+        "name": "privileged.apps-installed-target",
+        "status": "skipped",
+        "reason": "target_not_installed"
+      },
+      {
+        "name": "privileged.uia-counter-increment",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.uia-value-set-and-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.secure-field-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.tagged-click-increments",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.unicode-type-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.stale-capture-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.owned-input-release",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.input-detection-probe",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.hardware-user-input-pauses",
+        "status": "skipped",
+        "reason": "hardware_input_required"
+      }
+    ],
+    "countLines": {
+      "core": "2026-11-14T20:30:16.7928971Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+      "isolated": "2026-11-14T20:30:34.9683438Z Computer helper checks: 36 passed, 10 skipped, 2 failed."
+    },
+    "substages": "not read: report archive not downloaded; the source predates a0fbfa3b, so the 20 closed substages did not exist",
+    "isolatedStep": {
+      "step": 12,
+      "name": "Run explicitly isolated Windows scenarios",
+      "threw": true,
+      "conclusion": "success",
+      "recordedAs": "failure",
+      "privilegedRequired": false
+    },
+    "stagedStop": {
+      "step": 18,
+      "stepConclusion": "success",
+      "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":true},\"exitCode\":0}",
+      "timestampUtc": "2026-11-14T20:33:35.8424872Z",
+      "ok": true,
+      "exitCode": 0,
+      "phaseSample": "no timeout",
+      "ordinaryOverlay": "native-os-stop skipped: native_harness_unavailable (2026-11-14T20:30:54.6111333Z)",
+      "overlayAfterStop": "native-os-stop passed (2026-11-14T20:33:36.2886038Z)"
+    },
+    "reportArtifacts": [
+      {
+        "id": 14130766366,
+        "name": "computer-helper-win32-reports-pr-0975ed15d6ce4da4672c95f0a1ad7f70e648e235",
+        "archiveBytes": "not downloaded",
+        "archiveSha256": "not downloaded"
+      }
+    ],
+    "logs": [
+      {
+        "job": 132574657019,
+        "tailLines": 1400,
+        "linesReturned": 1400
+      }
+    ],
+    "qualification": "The job concluded success only because the isolated step continues on error; its two failed rows are failures."
+  },
+  "pr33Cf23": {
+    "run": 43656696007,
+    "attempt": 1,
+    "event": "pull_request",
+    "headRevision": "cf2373c46dd90211c44e34165ad8d23a841d922b",
+    "testedMergeRevision": "3293a952c19e4f46bcf4d990bcd7d66d9a4b850b",
+    "windowsBuildJob": 132636926176,
+    "windowsBuildConclusion": "success",
+    "windowsArm64TestJob": 132640157890,
+    "windowsArm64TestConclusion": "skipped",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "coreSkippedRows": [
+      {
+        "name": "privileged",
+        "status": "skipped",
+        "reason": "disabled"
+      }
+    ],
+    "isolated": {
+      "passed": 35,
+      "failed": 3,
+      "skipped": 10
+    },
+    "failedRows": [
+      {
+        "name": "privileged",
+        "status": "failed",
+        "reason": "native-check-failed"
+      },
+      {
+        "name": "privileged.capture-color-patch",
+        "status": "failed",
+        "reason": "native_operation_failed"
+      },
+      {
+        "name": "privileged.capture-affinity-exclusion",
+        "status": "failed",
+        "reason": "native_operation_failed"
+      }
+    ],
+    "skippedRows": [
+      {
+        "name": "privileged.apps-installed-target",
+        "status": "skipped",
+        "reason": "target_not_installed"
+      },
+      {
+        "name": "privileged.uia-counter-increment",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.uia-value-set-and-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.secure-field-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.tagged-click-increments",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.unicode-type-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.stale-capture-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.owned-input-release",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.input-detection-probe",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.hardware-user-input-pauses",
+        "status": "skipped",
+        "reason": "hardware_input_required"
+      }
+    ],
+    "appsRunningTarget": "passed (not among failed or skipped rows)",
+    "countLines": {
+      "core": "2026-11-15T00:19:07.0569828Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+      "isolated": "2026-11-15T00:19:35.0232270Z Computer helper checks: 35 passed, 10 skipped, 3 failed."
+    },
+    "substages": "not read: report archive not downloaded; the source predates a0fbfa3b, so the 20 closed substages did not exist",
+    "isolatedStep": {
+      "step": 12,
+      "name": "Run explicitly isolated Windows scenarios",
+      "threw": true,
+      "conclusion": "success",
+      "recordedAs": "failure",
+      "privilegedRequired": false
+    },
+    "stagedStop": {
+      "step": 18,
+      "stepConclusion": "success",
+      "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":true},\"exitCode\":0}",
+      "timestampUtc": "2026-11-15T00:21:37.1023946Z",
+      "ok": true,
+      "exitCode": 0,
+      "phaseSample": "no timeout",
+      "ordinaryOverlay": "native-os-stop skipped: native_harness_unavailable (2026-11-15T00:19:51.0473715Z)",
+      "overlayAfterStop": "native-os-stop passed (2026-11-15T00:21:37.4485933Z)"
+    },
+    "reportArtifacts": [
+      {
+        "id": 14138423673,
+        "name": "computer-helper-win32-reports-pr-3293a952c19e4f46bcf4d990bcd7d66d9a4b850b",
+        "archiveBytes": "not downloaded",
+        "archiveSha256": "not downloaded"
+      }
+    ],
+    "logs": [
+      {
+        "job": 132636926176,
+        "tailLines": 1400,
+        "linesReturned": 1400
+      }
+    ],
+    "qualification": "The job concluded success only because the isolated step continues on error; its three failed rows are failures. This run postdates the lane brief and is included as HF-3 included it."
+  },
+  "nativeStopFix503Arm64": {
+    "run": 43635651691,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "headBranch": "native-stop-fix",
+    "headRevision": "503418a11c9f3f0b251943faa34f9c2f51827d09",
+    "windowsBuildJob": 132571855706,
+    "windowsBuildConclusion": "success",
+    "windowsArm64TestJob": 132576158733,
+    "windowsArm64TestConclusion": "success",
+    "arm64Core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "arm64Privileged": {
+      "passed": 34,
+      "failed": 4,
+      "skipped": 10
+    },
+    "countLines": {
+      "core": "2026-11-14T20:29:22.5287571Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+      "privileged": "2026-11-14T20:29:42.4097072Z Computer helper checks: 34 passed, 10 skipped, 4 failed."
+    },
+    "failedRows": [
+      {
+        "name": "privileged",
+        "status": "failed",
+        "reason": "native-check-failed"
+      },
+      {
+        "name": "privileged.apps-running-target",
+        "status": "failed",
+        "reason": "native_operation_failed"
+      },
+      {
+        "name": "privileged.capture-affinity-exclusion",
+        "status": "failed",
+        "reason": "assertion_failed"
+      },
+      {
+        "name": "privileged.input-listener-health",
+        "status": "failed",
+        "reason": "assertion_failed"
+      }
+    ],
+    "skippedRows": [
+      {
+        "name": "privileged.apps-installed-target",
+        "status": "skipped",
+        "reason": "target_not_installed"
+      },
+      {
+        "name": "privileged.uia-counter-increment",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.uia-value-set-and-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.secure-field-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.tagged-click-increments",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.unicode-type-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.stale-capture-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.owned-input-release",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.input-detection-probe",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.hardware-user-input-pauses",
+        "status": "skipped",
+        "reason": "hardware_input_required"
+      }
+    ],
+    "isolatedStep": {
+      "step": 10,
+      "name": "Run explicitly isolated ARM64 scenarios",
+      "threw": true,
+      "conclusion": "success",
+      "recordedAs": "failure",
+      "privilegedRequired": false
+    },
+    "recordedStages": [
+      {
+        "name": "privileged.capture-affinity-exclusion",
+        "stage": "affinity-sample-plan"
+      },
+      {
+        "name": "privileged.input-listener-health",
+        "stage": "input-listener-health"
+      }
+    ],
+    "appsRunningTargetStage": "not recorded in hands-uia-timeout-diagnostic.md",
+    "stagesSource": "hands-uia-timeout-diagnostic.md, section 'Actual ARM64 failures and diagnostic scope', from report artifact 14131485147 that the native-stop-fix lane downloaded; HF-4 did not re-read the archive. 503418a1 predates the a0fbfa3b substages, so these are the coarse stages.",
+    "reportArtifact": {
+      "id": 14131485147,
+      "name": "computer-helper-win32-arm64-report-pr-503418a11c9f3f0b251943faa34f9c2f51827d09",
+      "archiveBytes": "not downloaded by HF-4",
+      "archiveSha256": "not downloaded by HF-4"
+    },
+    "x64AtSameSource": "Per hands-uia-timeout-diagnostic.md: staged Stop stop.ok=true, exit 0 at 20:21:15 UTC (no timeout); isolated 37/0/11 with apps-running-target and input-listener-health explicitly passed.",
+    "logs": [
+      {
+        "job": 132576158733,
+        "tailLines": 600,
+        "linesReturned": 482
+      }
+    ],
+    "qualification": "The ARM64 job concluded success only because its isolated step continues on error; its four failed rows are failures."
+  },
+  "hf4Runs": [
+    {
+      "ordinal": 1,
+      "run": 43809140577,
+      "attempt": 1,
+      "event": "workflow_dispatch",
+      "headRevision": "289af6bb288e22c9243cbf939e22b59eecbc4534",
+      "dispatchedAtUtc": "2026-11-16T05:16:19Z",
+      "createdAtUtc": "2026-11-16T05:16:22Z",
+      "completedAtUtc": "2026-11-16T05:51:16Z",
+      "conclusion": "success",
+      "windowsBuildJob": 133107110425,
+      "windowsBuildConclusion": "success",
+      "windowsArm64TestJob": 133112685091,
+      "windowsArm64TestConclusion": "success",
+      "windowsBuildSteps": {
+        "build": {
+          "step": 9,
+          "conclusion": "success"
+        },
+        "units": {
+          "step": 10,
+          "conclusion": "success"
+        },
+        "core": {
+          "step": 11,
+          "conclusion": "success"
+        },
+        "isolated": {
+          "step": 12,
+          "conclusion": "success"
+        },
+        "summary": {
+          "step": 13,
+          "conclusion": "success"
+        },
+        "stop": {
+          "step": 18,
+          "conclusion": "success"
+        }
+      },
+      "windowsArm64TestSteps": {
+        "units": {
+          "step": 8,
+          "conclusion": "success"
+        },
+        "core": {
+          "step": 9,
+          "conclusion": "success"
+        },
+        "isolated": {
+          "step": 10,
+          "conclusion": "success"
+        },
+        "summary": {
+          "step": 11,
+          "conclusion": "success"
+        }
+      },
+      "x64": {
+        "core": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "isolated": {
+          "passed": 36,
+          "failed": 2,
+          "skipped": 10
+        },
+        "failedRows": [
+          {
+            "name": "privileged",
+            "status": "failed",
+            "reason": "native-check-failed",
+            "stage": "not applicable: aggregate row",
+            "nativeCode": "not applicable: aggregate row",
+            "recordedAs": "failure"
+          },
+          {
+            "name": "privileged.apps-running-target",
+            "status": "failed",
+            "reason": "native_operation_failed",
+            "stage": "apps-list-reply",
+            "nativeCode": "paused",
+            "recordedAs": "failure"
+          }
+        ],
+        "skippedRows": [
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "skipped",
+            "reason": "target_not_installed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          }
+        ],
+        "countLines": {
+          "core": "2026-11-16T05:31:04.3618272Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+          "isolated": "2026-11-16T05:31:21.5187561Z Computer helper checks: 36 passed, 10 skipped, 2 failed."
+        },
+        "isolatedStep": {
+          "step": 12,
+          "name": "Run explicitly isolated Windows scenarios",
+          "threw": true,
+          "conclusion": "success",
+          "recordedAs": "failure",
+          "privilegedRequired": false
+        },
+        "stageVocabulary": "loaded"
+      },
+      "stagedStop": {
+        "step": 18,
+        "stepConclusion": "success",
+        "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":true},\"exitCode\":0}",
+        "timestampUtc": "2026-11-16T05:33:41.1929374Z",
+        "ok": true,
+        "exitCode": 0,
+        "phaseSample": "no timeout",
+        "ordinaryOverlay": "native-os-stop skipped: native_harness_unavailable (2026-11-16T05:31:38.9265817Z)",
+        "overlayAfterStop": "native-os-stop passed (2026-11-16T05:33:41.5239969Z)"
+      },
+      "arm64": {
+        "core": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "isolated": {
+          "passed": 33,
+          "failed": 5,
+          "skipped": 10
+        },
+        "failedRows": [
+          {
+            "name": "privileged",
+            "status": "failed",
+            "reason": "native-check-failed",
+            "stage": "not applicable: aggregate row",
+            "nativeCode": "not applicable: aggregate row",
+            "recordedAs": "failure"
+          },
+          {
+            "name": "privileged.apps-running-target",
+            "status": "failed",
+            "reason": "native_operation_failed",
+            "stage": "apps-list-reply",
+            "nativeCode": "paused",
+            "recordedAs": "failure"
+          },
+          {
+            "name": "privileged.capture-color-patch",
+            "status": "failed",
+            "reason": "native_operation_failed",
+            "stage": "capture-window-worker-read",
+            "nativeCode": "capture_unavailable",
+            "recordedAs": "failure"
+          },
+          {
+            "name": "privileged.capture-affinity-exclusion",
+            "status": "failed",
+            "reason": "native_operation_failed",
+            "stage": "capture-service",
+            "nativeCode": "stale_frame",
+            "recordedAs": "failure"
+          },
+          {
+            "name": "privileged.input-listener-health",
+            "status": "failed",
+            "reason": "assertion_failed",
+            "stage": "input-health-ready",
+            "nativeCode": "unknown",
+            "recordedAs": "failure"
+          }
+        ],
+        "skippedRows": [
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "skipped",
+            "reason": "target_not_installed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          }
+        ],
+        "countLines": {
+          "core": "2026-11-16T05:50:43.2548938Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+          "isolated": "2026-11-16T05:51:04.5333300Z Computer helper checks: 33 passed, 10 skipped, 5 failed."
+        },
+        "isolatedStep": {
+          "step": 10,
+          "name": "Run explicitly isolated ARM64 scenarios",
+          "threw": true,
+          "conclusion": "success",
+          "recordedAs": "failure",
+          "privilegedRequired": false
+        },
+        "stageVocabulary": "loaded"
+      },
+      "reportArtifacts": [
+        {
+          "id": 14200890399,
+          "name": "computer-helper-win32-reports-pr-289af6bb288e22c9243cbf939e22b59eecbc4534",
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        },
+        {
+          "id": 14201580149,
+          "name": "computer-helper-win32-arm64-report-pr-289af6bb288e22c9243cbf939e22b59eecbc4534",
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        }
+      ],
+      "logs": [
+        {
+          "job": 133107110425,
+          "tailLines": 1400,
+          "linesReturned": 1400
+        },
+        {
+          "job": 133112685091,
+          "tailLines": 600,
+          "linesReturned": 510,
+          "saved": "verbatim extract of the evidence lines"
+        }
+      ]
+    },
+    {
+      "ordinal": 2,
+      "run": 43813017303,
+      "attempt": 1,
+      "event": "workflow_dispatch",
+      "headRevision": "289af6bb288e22c9243cbf939e22b59eecbc4534",
+      "dispatchedAtUtc": "2026-11-16T05:52:12Z",
+      "createdAtUtc": "2026-11-16T05:52:14Z",
+      "completedAtUtc": "2026-11-16T06:24:33Z",
+      "conclusion": "failure",
+      "windowsBuildJob": 133123907277,
+      "windowsBuildConclusion": "failure",
+      "windowsArm64TestJob": 133129770867,
+      "windowsArm64TestConclusion": "skipped",
+      "windowsBuildSteps": {
+        "build": {
+          "step": 9,
+          "conclusion": "success"
+        },
+        "units": {
+          "step": 10,
+          "conclusion": "success"
+        },
+        "core": {
+          "step": 11,
+          "conclusion": "success"
+        },
+        "isolated": {
+          "step": 12,
+          "conclusion": "success"
+        },
+        "summary": {
+          "step": 13,
+          "conclusion": "success"
+        },
+        "stop": {
+          "step": 18,
+          "conclusion": "failure"
+        }
+      },
+      "x64": {
+        "core": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "isolated": {
+          "passed": 37,
+          "failed": 0,
+          "skipped": 11
+        },
+        "failedRows": [],
+        "skippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "native-skip"
+          },
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "skipped",
+            "reason": "target_not_installed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          }
+        ],
+        "countLines": {
+          "core": "2026-11-16T06:21:03.2899701Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+          "isolated": "2026-11-16T06:21:21.7388595Z Computer helper checks: 37 passed, 11 skipped, 0 failed."
+        },
+        "isolatedStep": {
+          "step": 12,
+          "name": "Run explicitly isolated Windows scenarios",
+          "threw": false,
+          "conclusion": "success",
+          "recordedAs": "passed",
+          "privilegedRequired": false
+        },
+        "stageVocabulary": "loaded"
+      },
+      "stagedStop": {
+        "step": 18,
+        "stepConclusion": "failure",
+        "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":false,\"reason\":\"cleanup_failed\",\"stage\":\"observe-up\",\"cause\":\"driver_failure\"},\"exitCode\":1}",
+        "timestampUtc": "2026-11-16T06:24:25.3656124Z",
+        "ok": false,
+        "reason": "cleanup_failed",
+        "stage": "observe-up",
+        "cause": "driver_failure",
+        "exitCode": 1,
+        "phaseSample": "failed at the closed stage observe-up, which is not a uia-* phase; the result line carries no UIA timeout sample",
+        "ordinaryOverlay": "native-os-stop skipped: native_harness_unavailable (2026-11-16T06:21:45.2946864Z)",
+        "overlayAfterStop": "native-os-stop failed: native_proof_invalid (2026-11-16T06:24:25.5628708Z)"
+      },
+      "arm64": "not run (windows-build concluded failure at step 18, 'Run actual isolated medium-token Windows overlay Stop'; windows-arm64-test needs windows-build success, computer-helper.yml:874-875)",
+      "reportArtifacts": [
+        {
+          "id": 14202074982,
+          "name": "computer-helper-win32-reports-pr-289af6bb288e22c9243cbf939e22b59eecbc4534",
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        }
+      ],
+      "logs": [
+        {
+          "job": 133123907277,
+          "tailLines": 1400,
+          "linesReturned": 1144
+        }
+      ]
+    },
+    {
+      "ordinal": 3,
+      "run": 43816713717,
+      "attempt": 1,
+      "event": "workflow_dispatch",
+      "headRevision": "289af6bb288e22c9243cbf939e22b59eecbc4534",
+      "dispatchedAtUtc": "2026-11-16T06:26:06Z",
+      "createdAtUtc": "2026-11-16T06:26:06Z",
+      "completedAtUtc": "2026-11-16T06:43:34Z",
+      "conclusion": "failure",
+      "windowsBuildJob": 133130439687,
+      "windowsBuildConclusion": "success",
+      "windowsArm64TestJob": 133134684497,
+      "windowsArm64TestConclusion": "failure",
+      "dispatchNote": "a first dispatch call at 06:25:55Z returned a connection error and created no run (list_workflow_runs showed none); the retry at 06:26:06Z created this run",
+      "windowsBuildSteps": {
+        "build": {
+          "step": 9,
+          "conclusion": "success"
+        },
+        "units": {
+          "step": 10,
+          "conclusion": "success"
+        },
+        "core": {
+          "step": 11,
+          "conclusion": "success"
+        },
+        "isolated": {
+          "step": 12,
+          "conclusion": "success"
+        },
+        "summary": {
+          "step": 13,
+          "conclusion": "success"
+        },
+        "stop": {
+          "step": 18,
+          "conclusion": "success"
+        }
+      },
+      "windowsArm64TestSteps": {
+        "units": {
+          "step": 8,
+          "conclusion": "success"
+        },
+        "core": {
+          "step": 9,
+          "conclusion": "failure"
+        },
+        "isolated": {
+          "step": 10,
+          "conclusion": "skipped"
+        },
+        "summary": {
+          "step": 11,
+          "conclusion": "success"
+        }
+      },
+      "x64": {
+        "core": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "isolated": {
+          "passed": 36,
+          "failed": 2,
+          "skipped": 10
+        },
+        "failedRows": [
+          {
+            "name": "privileged",
+            "status": "failed",
+            "reason": "native-check-failed",
+            "stage": "not applicable: aggregate row",
+            "nativeCode": "not applicable: aggregate row",
+            "recordedAs": "failure"
+          },
+          {
+            "name": "privileged.apps-running-target",
+            "status": "failed",
+            "reason": "native_operation_failed",
+            "stage": "apps-list-reply",
+            "nativeCode": "paused",
+            "recordedAs": "failure"
+          }
+        ],
+        "skippedRows": [
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "skipped",
+            "reason": "target_not_installed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          }
+        ],
+        "countLines": {
+          "core": "2026-11-16T06:35:32.7630524Z Computer helper checks: 30 passed, 1 skipped, 0 failed.",
+          "isolated": "2026-11-16T06:35:54.6412047Z Computer helper checks: 36 passed, 10 skipped, 2 failed."
+        },
+        "isolatedStep": {
+          "step": 12,
+          "name": "Run explicitly isolated Windows scenarios",
+          "threw": true,
+          "conclusion": "success",
+          "recordedAs": "failure",
+          "privilegedRequired": false
+        },
+        "stageVocabulary": "loaded"
+      },
+      "stagedStop": {
+        "step": 18,
+        "stepConclusion": "success",
+        "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":true},\"exitCode\":0}",
+        "timestampUtc": "2026-11-16T06:37:47.1877118Z",
+        "ok": true,
+        "exitCode": 0,
+        "phaseSample": "no timeout",
+        "ordinaryOverlay": "native-os-stop skipped: native_harness_unavailable (2026-11-16T06:36:09.5091725Z)",
+        "overlayAfterStop": "native-os-stop passed (2026-11-16T06:37:47.5502498Z)"
+      },
+      "arm64": {
+        "core": {
+          "passed": 29,
+          "failed": 1,
+          "skipped": 1
+        },
+        "coreFailedRows": [
+          {
+            "name": "unit",
+            "status": "failed",
+            "reason": "windows-unit-failure-integration.failed-transport-nonzero-code",
+            "stage": "not applicable: core report (stages print only for the isolated report)",
+            "recordedAs": "failure"
+          }
+        ],
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "coreStep": {
+          "step": 9,
+          "conclusion": "failure",
+          "recordedAs": "failure"
+        },
+        "countLines": {
+          "core": "2026-11-16T06:43:24.7664457Z Computer helper checks: 29 passed, 1 skipped, 1 failed."
+        },
+        "isolated": "not run: step 10 was skipped because the required step 9 'Run required ARM64 protocol and lifecycle checks' failed",
+        "isolatedStep": {
+          "step": 10,
+          "name": "Run explicitly isolated ARM64 scenarios",
+          "conclusion": "skipped"
+        }
+      },
+      "reportArtifacts": [
+        {
+          "id": 14202938405,
+          "name": "computer-helper-win32-reports-pr-289af6bb288e22c9243cbf939e22b59eecbc4534",
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        },
+        {
+          "id": 14202759668,
+          "name": "computer-helper-win32-arm64-report-pr-289af6bb288e22c9243cbf939e22b59eecbc4534",
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        }
+      ],
+      "logs": [
+        {
+          "job": 133130439687,
+          "tailLines": 1400,
+          "linesReturned": 1400
+        },
+        {
+          "job": 133134684497,
+          "tailLines": 190,
+          "linesReturned": 481,
+          "saved": "verbatim extract of the evidence lines"
+        }
+      ]
+    }
+  ],
+  "decisionGates": {
+    "source": "Conditions stated in the lead's HF-4 plan for HF-5, HF-6 and HF-7. The HF-5 to HF-7 briefs are not among the lane documents, so the lead confirms them.",
+    "hf5": "Proceeds only if a run at the folded source fails apps-running-target (x64 or ARM64) with stage apps-list-request, apps-list-reply, apps-list-decode or apps-list-target and a nativeCode. Any other closed stage is recorded word for word and does not meet the condition; the lead decides.",
+    "hf6Affinity": "Proceeds only with one of the 13 affinity-plan-* stages. The coarse affinity-sample-plan (computer-helper-selftest-windows.ts:244) does not qualify.",
+    "hf6Listener": "Proceeds only with input-health-context, input-health-target or input-health-ready.",
+    "hf7": "Proceeds only if a run at the folded source shows a staged Stop failure with a uia-* stage. Plain stop-root-retired is 'failed without phase sample', recorded for HF-8. A uia-* stage is the immutable timeout sample when the actor was retired and the live phase when it was healthy; the result line does not say which.",
+    "access": "'Not identified for lack of access' (stage not printed and archive not downloaded) is kept separate from 'identified but does not qualify'."
+  },
+  "decisions": [
+    {
+      "row": "privileged.apps-running-target",
+      "platform": "x64",
+      "inBrief": true,
+      "priorObservations": "Failed native_operation_failed at f830e3fd (run 43631024090, job 132558654772) and 0ee486e3 (run 43636452606, job 132574657019), stage not printed. Passed at a0e5ce8e (run 43560683817), 503418a1 (job 132571855706) and cf2373c4 (job 132636926176).",
+      "priorSummary": "failed at `f830e3fd` and `0ee486e3`, stage not printed; passed at `a0e5ce8e`, `503418a1` and `cf2373c4`",
+      "reproduced": "failed 2/3 (runs 1 and 3); passed in run 2",
+      "stageIdentified": "`apps-list-reply` / `paused` in both failures",
+      "next": "HF-5 proceeds: a run at `289af6bb` failed with an `apps-list-*` stage and a nativeCode"
+    },
+    {
+      "row": "privileged.apps-running-target",
+      "platform": "ARM64",
+      "inBrief": true,
+      "priorObservations": "Failed native_operation_failed at 503418a1 (job 132576158733); no stage recorded.",
+      "priorSummary": "failed at `503418a1`, no stage recorded",
+      "reproduced": "failed 1/1 (run 1); not run in run 2 (windows-build failed at step 18, the staged Stop) or run 3 (the required ARM64 core step 9 failed, so isolated step 10 was skipped)",
+      "stageIdentified": "`apps-list-reply` / `paused`",
+      "next": "HF-5 proceeds, with the x64 row"
+    },
+    {
+      "row": "privileged.capture-affinity-exclusion",
+      "platform": "ARM64",
+      "inBrief": true,
+      "priorObservations": "Failed assertion_failed at the coarse affinity-sample-plan stage at 503418a1 (job 132576158733).",
+      "priorSummary": "failed `assertion_failed` at coarse `affinity-sample-plan` at `503418a1`",
+      "reproduced": "failed 1/1 (run 1), now `native_operation_failed`; not run in run 2 (windows-build failed at step 18, the staged Stop) or run 3 (the required ARM64 core step 9 failed, so isolated step 10 was skipped)",
+      "stageIdentified": "identified: `capture-service` / `stale_frame`, which is not one of the 13 `affinity-plan-*` stages",
+      "next": "HF-6 (affinity) does not meet its condition; the lead decides"
+    },
+    {
+      "row": "privileged.input-listener-health",
+      "platform": "ARM64",
+      "inBrief": true,
+      "priorObservations": "Failed assertion_failed at the coarse input-listener-health stage at 503418a1 (job 132576158733).",
+      "priorSummary": "failed `assertion_failed` at coarse `input-listener-health` at `503418a1`",
+      "reproduced": "failed 1/1 (run 1), `assertion_failed`; not run in run 2 (windows-build failed at step 18, the staged Stop) or run 3 (the required ARM64 core step 9 failed, so isolated step 10 was skipped)",
+      "stageIdentified": "`input-health-ready` / `unknown`",
+      "next": "HF-6 (listener) proceeds: `input-health-ready` is one of its three stages"
+    },
+    {
+      "row": "staged Stop",
+      "platform": "x64",
+      "inBrief": true,
+      "priorObservations": "Failed native_failure / stop-root-retired / core_failure:no_ui_tree at f830e3fd (job 132558654772), no phase sample in source. Passed with no timeout at 503418a1 (job 132571855706), 0ee486e3 (job 132574657019) and cf2373c4 (job 132636926176).",
+      "priorSummary": "failed at `f830e3fd` (`stop-root-retired` / `core_failure:no_ui_tree`, no sample in source); passed at `503418a1`, `0ee486e3` and `cf2373c4`",
+      "reproduced": "failed 1/3 (run 2, exit 1); passed with no timeout in runs 1 and 3",
+      "stageIdentified": "`cleanup_failed` / `observe-up` / `driver_failure`: a closed driver stage, not a `uia-*` phase, so the line carries no timeout sample",
+      "next": "HF-7 does not proceed (no `uia-*` stage); the `observe-up` and `f830e3fd` failures are recorded for HF-8 and the lead"
+    },
+    {
+      "row": "privileged.capture-affinity-exclusion",
+      "platform": "x64",
+      "inBrief": false,
+      "priorObservations": "Failed native_operation_failed at cf2373c4 (job 132636926176), stage not printed. Passed at f830e3fd, 0ee486e3 and 503418a1.",
+      "priorSummary": "failed at `cf2373c4`, stage not printed; passed at `f830e3fd`, `0ee486e3` and `503418a1`",
+      "reproduced": "passed 3/3 (not among the failed or skipped rows)",
+      "stageIdentified": "not applicable: no failure",
+      "next": "nothing to decide at `289af6bb`; the `cf2373c4` failure stays on record"
+    },
+    {
+      "row": "privileged.capture-color-patch",
+      "platform": "x64",
+      "inBrief": false,
+      "priorObservations": "Failed native_operation_failed at cf2373c4 (job 132636926176), stage not printed. Passed at f830e3fd, 0ee486e3 and 503418a1.",
+      "priorSummary": "failed at `cf2373c4`, stage not printed; passed at `f830e3fd`, `0ee486e3` and `503418a1`",
+      "reproduced": "passed 3/3 (not among the failed or skipped rows)",
+      "stageIdentified": "not applicable: no failure",
+      "next": "nothing to decide at `289af6bb`; the `cf2373c4` failure stays on record"
+    },
+    {
+      "row": "privileged.capture-color-patch",
+      "platform": "ARM64",
+      "inBrief": false,
+      "priorObservations": "Passed at 503418a1 (job 132576158733; not among its failed or skipped rows).",
+      "priorSummary": "passed at `503418a1`",
+      "reproduced": "failed 1/1 (run 1), `native_operation_failed`; not run in run 2 (windows-build failed at step 18, the staged Stop) or run 3 (the required ARM64 core step 9 failed, so isolated step 10 was skipped)",
+      "stageIdentified": "`capture-window-worker-read` / `capture_unavailable`",
+      "next": "the lead decides"
+    },
+    {
+      "row": "ARM64 required core `unit`",
+      "platform": "ARM64",
+      "inBrief": false,
+      "priorObservations": "ARM64 core 30/0/1 at 503418a1 (job 132576158733) and in run 1 here (job 133112685091).",
+      "priorSummary": "core 30/0/1 at `503418a1` and in run 1",
+      "reproduced": "failed 1/2 (run 3, core 29/1/1, step 9 failure); passed in run 1; not run in run 2",
+      "stageIdentified": "not applicable (core report); the reason names the closed native integration check `integration.failed-transport-nonzero-code` (`windows/tests/integration_tests.cpp:652`)",
+      "next": "the lead decides; it is not a listed known flake, and the step before it (step 8, the ARM64 unit executable) passed"
+    }
+  ],
+  "pending": "HF-5 (apps-running-target, x64 and ARM64) and HF-6 listener health meet their conditions; HF-6 affinity and HF-7 do not, and the lead decides them, along with the supplementary ARM64 capture-color-patch row, the run 2 Stop failure at observe-up and the run 3 ARM64 core unit failure. HF-2's Windows engine-shard MCP_REQUIRED_ISOLATION_LAUNCH=refused line, from a default-input dispatch or the lane PR run. Mac lock confirmation at the merged source, in the lane's final full test.yml. Packaging at the merged source, which depends on the owner's preview-ref decision (vector-desktop-release.yml:74). Owner gates unchanged: production signing, Clean Mac and Windows 11 device checklists, Reset, legal, naming, release choices."
+}

@@ -91,6 +91,7 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
         run: undefined,
         permission: undefined,
         error: "",
+        admissionAnswer: undefined,
         epoch: identity.epoch,
       })
       return
@@ -101,7 +102,14 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
       target,
       enabled: true,
       current,
-      changed: (value) => setState({ ...value, run: value.run, permission: value.permission, epoch: identity.epoch }),
+      changed: (value) =>
+        setState({
+          ...value,
+          run: value.run,
+          permission: value.permission,
+          admissionAnswer: value.admissionAnswer,
+          epoch: identity.epoch,
+        }),
       admission: saved,
       transport: {
         runs: (signal) => client.runs(undefined, signal),
@@ -216,18 +224,27 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
         <Show when={state.error}>
           <p role="alert">{state.error}</p>
         </Show>
+        <Show when={state.admissionAnswer?.code === "consumed" && (!state.run || state.run.status === "done")}>
+          <p role="status">{state.admissionAnswer?.message}</p>
+        </Show>
         <Show when={state.admissionUncertain}>
           <p role="status">
-            The review start is unconfirmed. Refresh to inspect existing reviews, or retry the same saved request.
-            Starting a different review remains blocked.
+            {state.admissionAnswer?.code === "pending"
+              ? state.admissionAnswer.message
+              : state.admissionAnswer?.code === "consumed"
+                ? "This view can no longer track its saved review request. Reopen the workspace to continue."
+                : "The review start is unconfirmed. Refresh to inspect existing reviews, or retry the same saved request. Starting a different review remains blocked."}
           </p>
-          <button
-            type="button"
-            disabled={state.busy || state.phase !== "ready"}
-            onClick={() => void controller?.start(true)}
-          >
-            Retry review start
-          </button>
+          {/* A consumed key whose marker another view replaced can only fail a retry here. */}
+          <Show when={state.admissionAnswer?.code !== "consumed"}>
+            <button
+              type="button"
+              disabled={state.busy || state.phase !== "ready"}
+              onClick={() => void controller?.start(true)}
+            >
+              Retry review start
+            </button>
+          </Show>
         </Show>
         <div class="mt-2 flex gap-3">
           <Show
@@ -247,7 +264,11 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
               disabled={state.busy || state.phase !== "ready" || state.admissionUncertain}
               onClick={() => void controller?.start()}
             >
-              {state.busy ? "Starting review…" : "Review with VectorScope"}
+              {state.busy
+                ? "Starting review…"
+                : state.admissionAnswer?.code === "consumed"
+                  ? "Start a new review"
+                  : "Review with VectorScope"}
             </button>
           </Show>
           <button type="button" disabled={state.busy} onClick={() => void controller?.refresh()}>

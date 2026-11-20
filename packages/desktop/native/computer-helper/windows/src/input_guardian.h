@@ -2,6 +2,8 @@
 #include "input_events.h"
 #include <array>
 #include <atomic>
+#include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -13,7 +15,10 @@ namespace vector::computer {
 inline constexpr uint64_t input_guardian_held_limit_ms=10'000;
 // Smoke-only observation of existing receipt refusal paths. No ticket, event, tag or native value.
 enum class InputGuardianPhase : uint8_t { none, request_invalid, lock_expired, budget_expired, inactive, write_refused, read_refused, reply_invalid, setup_failed, reply_negative, confirmed, reply_negative_zero_budget, reply_negative_short_budget, reply_negative_full_budget,
-  reply_negative_no_callback_pump_stalled, reply_negative_no_callback_pump_progressed, reply_negative_own_move_only, reply_negative_own_down_refused, reply_negative_own_up_only, reply_negative_own_tag_unflagged, reply_negative_low32_tag_candidate };
+  reply_negative_no_callback_pump_stalled, reply_negative_no_callback_pump_progressed, reply_negative_own_move_only, reply_negative_own_down_refused, reply_negative_own_up_only, reply_negative_own_tag_unflagged, reply_negative_low32_tag_candidate,
+  reply_negative_up_not_released, reply_negative_up_release_blocked, reply_negative_up_release_blocked_callbacks, reply_negative_up_release_refused,
+  reply_negative_up_release_slow, reply_negative_up_release_slow_callbacks, reply_negative_up_pump_stalled, reply_negative_up_callbacks_without_up,
+  reply_negative_up_no_callback };
 struct InputGuardianDiagnostic { std::atomic<InputGuardianPhase> phase{InputGuardianPhase::none}; };
 static_assert(std::atomic<InputGuardianPhase>::is_always_lock_free);
 struct InputGuardianTicket {
@@ -31,13 +36,28 @@ struct InputGuardianEvent {
 // Private smoke metadata only. "No callback" means no matching own-tag injected callback
 // (or own mouse MOVE) recorded for this reservation, never absence of global/hardware input.
 // A low32 candidate is weak correlation only; it never identifies an owned event or creates a receipt.
+// Codes 2-8 answer only a negative DOWN query and codes 9-17 only a negative UP query.
 enum class InputGuardianReceiptDiagnostic : uint8_t {
   none, opt_in, no_callback_pump_stalled, no_callback_pump_progressed, own_move_only, own_down_refused, own_up_only, own_tag_unflagged, low32_tag_candidate,
+  up_not_released, up_release_blocked, up_release_blocked_callbacks, up_release_refused, up_release_slow, up_release_slow_callbacks,
+  up_pump_stalled, up_callbacks_without_up, up_no_callback,
 };
 struct InputGuardianReceiptEvidence {
   bool enabled = false, own_move = false, own_down_refused = false, own_up = false, own_tag_unflagged = false, low32_tag_candidate = false;
 };
 InputGuardianReceiptDiagnostic input_guardian_receipt_diagnostic(const InputGuardianReceiptEvidence&, uint64_t pump_before, uint64_t pump_after) noexcept;
+// UP-only smoke metadata for an opted-in reservation, recorded from the latest release attempt on.
+// DOWN-era callback flags never enter it. Times are monotonic milliseconds; callbacks count every
+// low-level hook call of the release's kind (mouse or keyboard), whatever its message or tag.
+struct InputGuardianReleaseEvidence {
+  bool started = false, returned = false, accepted = false;
+  uint64_t started_ms = 0, returned_ms = 0, callbacks_at_start = 0, callbacks_at_return = 0;
+};
+// A SendInput that outlasts one default 15.6 ms scheduler tick is slow. A hook thread that has not
+// finished a pump iteration for the whole 40 ms observe budget has stalled; its normal gap is at most
+// about two ticks, one in the release wait and one in its message wait.
+inline constexpr uint64_t input_guardian_release_slow_ms = 16, input_guardian_pump_stall_ms = 40;
+InputGuardianReceiptDiagnostic input_guardian_release_diagnostic(const InputGuardianReleaseEvidence&, uint64_t callbacks, uint64_t pump_stale_ms) noexcept;
 
 struct InputIoDeadlineSnapshot {
   uint64_t generation = 0, deadline = 0;
@@ -72,6 +92,11 @@ class InputGuardianLedger final {
   bool observed(const InputGuardianTicket&, bool down, InputGuardianReceiptDiagnostic* diagnostic = nullptr, uint64_t pump_before = 0, uint64_t pump_after = 0) const noexcept;
   bool diagnostics_enabled() const noexcept;
   void observe_move(uint64_t tag, bool injected) noexcept;
+  // Opted-in, pending entries only. Neither call changes a receipt, an order or a release obligation.
+  void release_started(const InputGuardianTicket&, uint64_t now_ms, uint64_t callbacks) noexcept;
+  void release_returned(const InputGuardianTicket&, bool accepted, uint64_t now_ms, uint64_t callbacks) noexcept;
+  // none unless the exact opted-in ticket is still waiting for its UP.
+  InputGuardianReceiptDiagnostic release_diagnostic(const InputGuardianTicket&, uint64_t callbacks, uint64_t pump_stale_ms) const noexcept;
   // Unobserved/held retirement quarantines that descriptor; it cannot be reused by a successor.
   // A late matching own down remains release-only. An observed own up frees a retired slot.
   // Trusted no-call/one-event SendInput0 proof may free only an unobserved reservation, never emit an up.
@@ -87,6 +112,7 @@ class InputGuardianLedger final {
     uint64_t down_at_ms = 0;
     bool down = false, up = false, retired = false;
     InputGuardianReceiptEvidence diagnostic;
+    InputGuardianReleaseEvidence release;
   };
   mutable std::mutex mutex_;
   uint64_t tag_ = 0, sequence_ = 0, order_ = 0, released_ = 0;
@@ -97,6 +123,41 @@ class InputGuardianLedger final {
   std::atomic<uint32_t> diagnostic_entries_{0};
   void erase(Entry&) noexcept;
   bool is_low32_tag_candidate(uint64_t observed_tag, bool injected) const noexcept;
+};
+
+// Serializes the guardian child's UP releases. Invariant: no thread holds the ledger lock or the wake
+// lock while calling the release function (SendInput), so the hook thread can always record the UP.
+class InputGuardianReleaser final {
+ public:
+  using Release = std::function<bool(const InputRelease&)>;
+  using Callbacks = std::function<uint64_t(InputReleaseKind)>;
+  using Spawn = std::function<void(std::function<void()>)>;
+  InputGuardianReleaser(InputGuardianLedger&, Release, Callbacks = {});
+  // Bounded to 300 ms. Returns 0 at once while another drain holds the release lock. At most one
+  // accepted UP per ticket is in flight, and only an observed DOWN is ever released.
+  uint32_t drain(uint32_t milliseconds, bool retired_only = false);
+  // Safe for hook callbacks: it takes the wake lock only for an instant, never across SendInput.
+  // A wake before or during a wait is not lost.
+  void notify() noexcept;
+  uint64_t generation() const noexcept;
+  void wait(uint64_t seen, uint32_t milliseconds);
+  // Starts the one release thread, which owns no hooks: retired or held-limit DOWNs until stopping,
+  // then every observed DOWN. If spawning throws, started() stays false and nothing was released.
+  // The spawn function must keep this releaser and the stopping flag alive while the thread runs;
+  // an empty one is refused.
+  void start(const std::atomic<bool>& stopping, Spawn spawn);
+  bool started() const noexcept;
+  // Tests only. The guardian child keeps its release thread until the process ends.
+  void stop() noexcept;
+ private:
+  InputGuardianLedger& ledger_;
+  Release release_;
+  Callbacks callbacks_;
+  std::mutex drain_mutex_, changed_mutex_;
+  std::condition_variable changed_;
+  std::atomic<uint64_t> generation_{0};
+  std::atomic<bool> started_{false}, halted_{false};
+  std::array<uint64_t, 136> in_flight_{};
 };
 
 class InputGuardian {

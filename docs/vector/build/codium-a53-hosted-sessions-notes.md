@@ -131,6 +131,18 @@ process to rule out an import-cycle failure (`codium-provisioners.ts` now import
 - `computer` stays unlisted: listing waits on Vercel's written OK, the computer-use build, the brand name and the
   security review (contract §1.2).
 - bun.lock was not touched. Nothing was pushed or deployed.
+- 15 Nov 2026 (Codium finish, H1b review), a defect for a later server package: a download-only start on a disk made
+  before signed heartbeats is charged its block and the 14-day retention, then every beat is refused
+  (`requireDaemonBeat`) and the person gets no files. Until a per-computer generation record exists, the start should
+  keep its hold and charge only the minutes that ran (M8), and charge the retention only after the first accepted
+  heartbeat. A second one: while a beat says `uploaded` the server only HEADs the object, so a HEAD that never confirms
+  strands the session for its block; a definitive rejection (404, or a size other than `archiveBytes`) should answer
+  `pack` or `upload`, which H1b's hostd already acts on. `codium-deviations.md` "Codium finish: H1 computer
+  (15 Nov 2026)", O4 and O6, and the 15 Nov H1b row in "Lane status (8 Nov 2026)".
+- 15 Nov 2026 (Codium finish, H2a): the per-computer generation record now exists (`hosted:generation:<account>`,
+  from signed beats only), and the image floor (`VECTOR_HOSTED_MIN_GENERATION`) refuses job starts, never download-only
+  starts. The download-charging defect above is unchanged: nothing reads the record for a download start yet.
+  `codium-deviations.md` "Codium finish: H2 generation floor (15 Nov 2026)".
 
 **Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. P8's review (`codium-p8-repairs.md`)
 changed A53 in seven places: the nightly job stores the egress reading as soon as it charged (no double charge after a
@@ -139,3 +151,43 @@ caps and the disks kept for ended plans, and steps periods by 28 days; an ended 
 longer charged while no download-only start exists; a store fault after the first block charges nothing; a start whose
 outcome the provider could not tell is charged up to the computer's stop; every heartbeat must be signed by hostd's own
 key (`hosted:hostd:<sid>`); account deletion deletes the sessions' packed files (`hosted:archives:<account>`).
+
+**Status, 15 Nov 2026 (Codium finish, H1a).** The download-only start is built on the server:
+`POST /api/hosted/sessions {mode: "download", computer}` (`startHostedDownload`) lets an account whose plan ended (or
+no longer includes a cloud computer) run download-only sessions, one block each and one at a time per computer, on a
+computer whose disk is still inside its `hosted:disk-due` date, held from the final period; the computer is asked only
+to pack and upload, and the existing download link then works while the media bucket keeps the packed files, never
+past the date and never while frozen, after a lost dispute or while closing. Vector pays the uploads' egress up to one
+archive's worth per computer and window. Its first start for a computer charges `chargeRetention` (once per computer and period); the ended transition
+charges nothing. The reaper ends it after its one block or the upload, the provisioner leaves it running while the
+plan still allows it, and the nightly deletion now erases the packed files with the disks. Readings and owner questions:
+`codium-deviations.md` "Codium finish: H1 download-only start (15 Nov 2026)". Not built: the computer side (H1b), the
+image rebuild (owner) and any client surface.
+
+16 Nov 2026 (Codium finish, phase review round three). The H1a status above changed in two places. The retention is
+charged once per computer and kept window (`hr-<computer>-<due>`), not once per computer and period (PR18).
+`eraseHostedComputer` now deletes the packed files of the computer's sessions and marks their records
+(`download.erasedAt`), as the nightly deletion does, and deletes its `hosted:usage` reading (PR16). See
+`codium-deviations.md` "Codium finish: phase review fixes, round three, codium-finish lane (16 Nov 2026)".
+
+**Status, 15 Nov 2026 (Codium finish, H1b).** The computer side of the download-only start is built
+(`packages/hosted-computer/src/daemon.ts`). Once an answer says `mode: "download"` before any job started, hostd starts
+no agent, browser or recorder and writes no viewer state. It packs and uploads the disk when asked, drops its copy after
+the PUT, and keeps reporting `uploaded` with the size, so the heartbeat's HEAD check (A53's files flow) is retried until
+it confirms and the reaper then ends the session as finished. A `pack` or `upload` answered to a beat that said
+`uploaded` (today's server sends none) makes it pack the disk again and upload anew. It reports `done` only when the
+session is over. No
+server change: H1a already sends a download session no job, so no hostd starts the agent for one. H1b reaches only
+computers whose disk is made from an image built after it. A disk made before signed heartbeats cannot complete a
+download (every beat is refused) and is still charged the block and the retention; that is open for the owner and a
+later server package ("Not done" above). Real computers are unverified until the image is rebuilt and a disk is made
+from it.
+`codium-deviations.md` "Codium finish: H1 computer (15 Nov 2026)".
+
+**Status, 15 Nov 2026 (Codium finish, H1c).** The client surfaces are built: `hostedStatus` now carries `kept` (the
+kept disks' date, each computer's preferred session, never one whose files were packed before a later job session on
+that computer, and whether a download-only start is `open`, `late` or `closed`; `keptDisks` in `hosted-sessions.ts`),
+and the desktop's bar and the phone's Cloud computer page offer the files from it. `startHostedDownload` and
+`hostedComputers` now share `knownComputers` and the margin constant; their behaviour is unchanged. `kept` is a hosted
+API field added by H1c rather than H1a (D2, for the lead). `codium-deviations.md` "Codium finish: H1 clients (15 Nov
+2026)".

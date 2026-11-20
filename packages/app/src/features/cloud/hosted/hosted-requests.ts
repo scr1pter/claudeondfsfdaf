@@ -19,6 +19,7 @@ export type HostedRequest =
   | { kind: "release"; id: string }
   | { kind: "viewer"; id: string; mode: "view" | "control" }
   | { kind: "download"; id: string }
+  | { kind: "download-start"; computer: number }
   | { kind: "estimate"; size: HostedSize; minutes: number }
   | { kind: "jobs" }
   | { kind: "job"; id: string }
@@ -46,6 +47,8 @@ export const LIMITS = {
   minutesMin: 15,
   // The longest job any plan has (Ultra's 12 hours); the plan's own cap comes from the status.
   minutesMax: 720,
+  // The most computers any plan has (Ultra's 3), the server's MAX_COMPUTERS.
+  computers: 3,
 } as const
 
 const SESSION = /^hs_[a-z2-7]{26}$/
@@ -114,6 +117,13 @@ export function hostedRoute(input: unknown): HostedRoute | undefined {
     case "release":
     case "download":
       return SESSION.test(id) ? { path: `/api/hosted/sessions/${id}/${value.kind}`, method: "POST", body: {} } : undefined
+    case "download-start": {
+      // A download-only start (H1c): one computer's kept disk is packed for download; nothing else is sent.
+      const computer = whole(value.computer, 1, LIMITS.computers)
+      return computer === undefined
+        ? undefined
+        : { path: "/api/hosted/sessions", method: "POST", body: { mode: "download", computer } }
+    }
     case "viewer":
       return SESSION.test(id) && (value.mode === "view" || value.mode === "control")
         ? { path: `/api/hosted/sessions/${id}/viewer`, method: "POST", body: { mode: value.mode } }
@@ -177,7 +187,8 @@ export function viewerOrigin(url: string) {
 
 /**
  * Whether a session's files link may be opened: vectordev.ai's own download route for that session with its link
- * token (`/api/hosted/sessions/<id>/download?t=…`), which redirects to the files for 24 hours.
+ * token (`/api/hosted/sessions/<id>/download?t=…`), which redirects to the files for 24 hours at most: never past the
+ * disks' deletion date while one is set (H1a), so the screens show the link's own `expiresAt`.
  */
 export function downloadLinkAllowed(url: unknown, site = "https://vectordev.ai") {
   if (typeof url !== "string" || url.length > 4_096) return false

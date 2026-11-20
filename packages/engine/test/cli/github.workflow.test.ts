@@ -2,6 +2,8 @@ import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import release from "../../../desktop/package.json"
 import { githubShareConsent, prepareGithubEnvironment } from "../../src/cli/cmd/github.environment"
+import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
+import { runTokenFile } from "../../src/cli/cmd/ship"
 import { describe, expect, test } from "bun:test"
 import {
   buildAgentsWorkflow,
@@ -480,7 +482,11 @@ describe("GitHub workflow compatibility", () => {
     expect(JSON.parse(env.VECTOR_CONFIG_CONTENT!)).toEqual({ lsp: false, formatter: false, snapshot: false })
   })
   test("current workflow preserves explicit config and task mode", () => {
-    const env = { GITHUB_ACTIONS: "true", VECTOR_WORKFLOW_VERSION: "2", VECTOR_CONFIG_CONTENT: '{"snapshot":true}' }
+    const env = {
+      GITHUB_ACTIONS: "true",
+      VECTOR_WORKFLOW_VERSION: GithubAgents.WORKFLOW_VERSION,
+      VECTOR_CONFIG_CONTENT: '{"snapshot":true}',
+    }
     expect(prepareGithubEnvironment(env, true)).toBeUndefined()
     expect(env.VECTOR_CONFIG_CONTENT).toBe('{"snapshot":true}')
     const task: Record<string, string | undefined> = { GITHUB_ACTIONS: "true" }
@@ -488,6 +494,32 @@ describe("GitHub workflow compatibility", () => {
     expect(task.VECTOR_PURE).toBeUndefined()
     expect(task.VECTOR_CONFIG_CONTENT).toBeUndefined()
     expect(prepareGithubEnvironment({}, true)).toBeUndefined()
+  })
+  // Both installers write v3 (V24). Each env passes its own configuration, so only the "2" can make it stale.
+  for (const [name, review, extra, pure] of [
+    ["review", true, {}, "1"],
+    ["task", false, {}, undefined],
+    ["App task", false, { VECTOR_GITHUB_AUTH: "auto" }, "1"],
+  ] as const)
+    test(`a v2 ${name} job is stale on its version alone now that both installers write v3`, () => {
+      const env: Record<string, string | undefined> = {
+        GITHUB_ACTIONS: "true",
+        VECTOR_WORKFLOW_VERSION: "2",
+        VECTOR_CONFIG_CONTENT: '{"snapshot":true}',
+        ...extra,
+      }
+      expect(prepareGithubEnvironment(env, review)).toContain("vector github install")
+      expect(env.VECTOR_CONFIG_CONTENT).toBe('{"snapshot":true}')
+      expect(env.VECTOR_PURE).toBe(pure)
+      expect(env.VECTOR_DISABLE_PROJECT_CONFIG).toBe(pure)
+      expect(prepareGithubEnvironment({ ...env, GITHUB_ACTIONS: undefined }, review)).toBeUndefined()
+    })
+  test("a v2 review without its configuration still gets the safe defaults", () => {
+    const env: Record<string, string | undefined> = { GITHUB_ACTIONS: "true", VECTOR_WORKFLOW_VERSION: "2" }
+    expect(prepareGithubEnvironment(env, true)).toContain("vector github install")
+    expect(env.VECTOR_PURE).toBe("1")
+    expect(env.VECTOR_DISABLE_PROJECT_CONFIG).toBe("1")
+    expect(JSON.parse(env.VECTOR_CONFIG_CONTENT!)).toEqual({ lsp: false, formatter: false, snapshot: false })
   })
 })
 
@@ -609,9 +641,11 @@ type AgentsStep = Step & {
   shell?: string
   "working-directory"?: string
   "continue-on-error"?: boolean
+  "timeout-minutes"?: number
 }
 type AgentsJob = Omit<Job, "steps"> & {
   name?: string
+  needs?: string | string[]
   "runs-on": string
   "timeout-minutes": number
   env: Record<string, string>
@@ -639,7 +673,11 @@ describe("workflow v3", () => {
         ...options,
         publishAuth: options.publishAuth ?? "github",
       })
-      expect(Object.keys(workflow.jobs)).toEqual(["route", "agent", "publish", "bind", "review"])
+      expect(Object.keys(workflow.jobs)).toEqual(
+        options.mode === "codium"
+          ? ["route", "agent", "publish", "capture", "bind", "review"]
+          : ["route", "agent", "publish", "bind", "review"],
+      )
       for (const job of Object.values(workflow.jobs)) {
         expect(job.env.VECTOR_WORKFLOW_VERSION).toBe("3")
         expect(job["runs-on"]).toBe("ubuntu-latest")
@@ -658,7 +696,7 @@ describe("workflow v3", () => {
     })
   }
 
-  test("agent credentials, sandbox, cache, and upload order are fixed", () => {
+  test("agent credentials, sandbox, and upload order are fixed, and Codium's jobs restore no npm cache", () => {
     for (const options of [CODIUM, OWN_KEY]) {
       const job = agents(options).jobs.agent
       const steps = job.steps
@@ -671,17 +709,26 @@ describe("workflow v3", () => {
         ...(codium ? { "id-token": "write" } : {}),
       })
       expect(job["timeout-minutes"]).toBe(codium ? 135 : 60)
-      expect(steps.slice(0, 3).map((step) => step.uses ?? step.name)).toEqual([
+      // Own key keeps its restore-only cache (its review job saves the key). No Codium job saves one, so a Codium restore
+      // could only hit an entry planted in the run's cache scope, which Ship Desk's capture job can write (BT12 item 5).
+      expect(steps.slice(0, codium ? 2 : 3).map((step) => step.uses ?? step.name)).toEqual([
         "actions/setup-node@v4",
-        "actions/cache/restore@v4",
+        ...(codium ? [] : ["actions/cache/restore@v4"]),
         "Install Vector",
       ])
       expect(steps.some((step) => step.uses === "actions/cache@v4" || step.uses === "actions/cache/save@v4")).toBe(
         false,
       )
+      if (codium)
+        for (const [name, other] of Object.entries(agents(options).jobs))
+          expect([name, other.steps.filter((step) => step.uses?.startsWith("actions/cache")).length]).toEqual([name, 0])
       const checkout = steps.findIndex((step) => step.uses === "actions/checkout@v4")
-      if (codium) expect(steps.findIndex((step) => step.id === "mint")).toBeLessThan(checkout)
+      const mint = steps.findIndex((step) => step.id === "mint")
+      if (codium) expect(mint).toBeLessThan(checkout)
       else expect(steps.find((step) => step.id === "mint")).toBeUndefined()
+      // Ship Desk's ticket: right after the mint, before any repository file is on disk (V31).
+      if (codium) expect([steps.findIndex((step) => step.id === "capture"), checkout]).toEqual([mint + 1, mint + 2])
+      else expect(steps.find((step) => step.id === "capture")).toBeUndefined()
       const sandbox = steps.findIndex((step) => step.id === "sandbox")
       const isolation = steps.findIndex((step) => step.name === "Install tool process isolation")
       const agent = steps.findIndex((step) => step.id === "agent")
@@ -749,7 +796,6 @@ describe("workflow v3", () => {
     })
     expect(job.steps.map((step) => step.uses ?? step.run)).toEqual([
       "actions/setup-node@v4",
-      "actions/cache/restore@v4",
       `npm install -g @vectordevai/cli@${GithubAgents.MIN_AGENTS_CLI} --prefer-offline --no-audit --no-fund`,
       "vector github mint --purpose review",
       "actions/checkout@v4",
@@ -780,6 +826,8 @@ describe("workflow v3", () => {
       for (const name of ["KIND", "PR", "REF"])
         expect(publish.env![`VECTOR_ROUTE_${name}`]).toBe(`\${{ needs.route.outputs.${name.toLowerCase()} }}`)
       expect(publish.env!.VECTOR_GITHUB_AUTH).toBe(options.publishAuth ?? "github")
+      // The publisher re-derives a dispatch's route, which needs its prompt (deviations BT08b item 1).
+      expect(publish.env!.VECTOR_PROMPT).toBe("${{ inputs.prompt }}")
       expect(publish.env!.VECTOR_AGENT_STATUS).toBe(
         options.mode === "codium" ? "${{ needs.agent.outputs.status }}" : "ok",
       )
@@ -805,6 +853,143 @@ describe("workflow v3", () => {
     expect(buildAgentsWorkflow(SCHEDULED).split("\n")[0]).not.toContain("${{")
   })
 
+  // The App's owner-started desktop dispatch sends brain_upload; GitHub refuses an undeclared input with 422.
+  test("only the Codium agent step receives the desktop Brain upload input", () => {
+    const occurrences = (text: string, name: string) => text.split(name).length - 1
+    for (const options of [CODIUM, { ...CODIUM, handle: "vector-dev", schedules: SCHEDULED.schedules }]) {
+      const workflow = agents(options)
+      const inputs = (workflow.on.workflow_dispatch as { inputs: Record<string, unknown> }).inputs
+      expect(Object.keys(inputs)).toEqual(["mode", "prompt", "pr", "code", "ticket", "brain_upload"])
+      expect(inputs.brain_upload).toEqual({ type: "string", required: false })
+      // The input key and the agent step's one expression: never the header, the route script or a run line. The split
+      // count is case-sensitive, so lowercase brain_upload never matches inside VECTOR_BRAIN_UPLOAD; the carriers check
+      // below is the structural guarantee.
+      const yaml = buildAgentsWorkflow(options)
+      expect(occurrences(yaml, "brain_upload")).toBe(2)
+      expect(occurrences(yaml, "VECTOR_BRAIN_UPLOAD")).toBe(1)
+      const carriers = Object.entries(workflow.jobs).flatMap(([job, value]) => [
+        ...Object.entries(value.env).flatMap(([name, text]) =>
+          text.includes("brain_upload") ? [`${job}:${name}`] : [],
+        ),
+        ...value.steps.flatMap((step) => [
+          ...Object.entries(step.env ?? {}).flatMap(([name, text]) =>
+            text.includes("inputs.brain_upload") ? [`${job}/${step.id ?? step.uses ?? step.run}:${name}`] : [],
+          ),
+          ...(step.run?.includes("brain_upload") ? [`${job}/${step.run}:run`] : []),
+          ...(JSON.stringify(step.with ?? {}).includes("brain_upload") ? [`${job}/${step.uses}:with`] : []),
+        ]),
+      ])
+      expect(carriers).toEqual(["agent/agent:VECTOR_BRAIN_UPLOAD"])
+      expect(workflow.jobs.agent.steps.find((step) => step.id === "agent")!.env!.VECTOR_BRAIN_UPLOAD).toBe(
+        "${{ inputs.brain_upload }}",
+      )
+    }
+    for (const options of [OWN_KEY, SCHEDULED]) {
+      const inputs = (agents(options).on.workflow_dispatch as { inputs: Record<string, unknown> }).inputs
+      expect(Object.keys(inputs)).toEqual(["mode", "prompt", "pr", "code", "ticket"])
+      const yaml = buildAgentsWorkflow(options)
+      expect(yaml).not.toContain("brain_upload")
+      expect(yaml).not.toContain("VECTOR_BRAIN_UPLOAD")
+    }
+    // The sandbox launcher keeps it; the run token that gives it meaning stays in the secret channel.
+    expect(GithubAgents.SANDBOX_ENV_ALLOW).toContain("VECTOR_BRAIN_UPLOAD")
+  })
+
+  // Ship Desk (A49, V31): the ticket is asked for with the run token before checkout, and the job that runs the pull
+  // request's own code holds that ticket and nothing else (deviations 2026-11-16 BT12).
+  test("Ship Desk's ticket step and capture job are Codium-only, hold only the ticket and follow publish's pull request", () => {
+    const occurrences = (text: string, name: string) => text.split(name).length - 1
+    for (const options of [CODIUM, { ...CODIUM, handle: "vector-dev", schedules: SCHEDULED.schedules }]) {
+      const workflow = agents(options)
+      const agent = workflow.jobs.agent!
+      // No env: the runner gives RUNNER_TEMP and GITHUB_OUTPUT, and the ticket comes from vectordev.ai. The agent step's
+      // shell keeps the OIDC request pair out of it; its lines are discarded (INV-P1) and any failure never stops the run.
+      expect(agent.steps.find((step) => step.id === "capture")).toEqual({
+        id: "capture",
+        if: "steps.mint.outputs.status == 'ok' && vars.VECTOR_SHIP_DESK == '1'",
+        run: "vector ship ticket >/dev/null 2>&1",
+        shell: agent.steps.find((step) => step.id === "agent")!.shell!,
+        "continue-on-error": true,
+        "timeout-minutes": 2,
+      })
+      // It reads the file the mint step writes the run token to.
+      expect(runTokenFile({ RUNNER_TEMP: "/runner/temp" })).toBe(
+        GithubSecrets.runTokenPath({ RUNNER_TEMP: "/runner/temp" }),
+      )
+      expect(agent.outputs).toEqual({
+        status: "${{ steps.mint.outputs.status }}",
+        rid: "${{ steps.mint.outputs.rid }}",
+        capture: "${{ steps.capture.outputs.capture }}",
+      })
+      const publish = workflow.jobs.publish!
+      expect(publish.outputs).toEqual({ pr: "${{ steps.publish.outputs.pr }}" })
+      expect(publish.steps.filter((step) => step.id === "publish").map((step) => step.run)).toEqual([
+        "vector github publish",
+      ])
+      const capture = workflow.jobs.capture!
+      expect(capture).toEqual({
+        name: GithubAgents.JOB.capture,
+        needs: ["route", "agent", "publish"],
+        if: "!cancelled() && vars.VECTOR_SHIP_DESK == '1' && needs.agent.outputs.capture != '' && needs.publish.outputs.pr != ''",
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": GithubAgents.TIMEOUT_MIN.capture,
+        env: { VECTOR_WORKFLOW_VERSION: GithubAgents.WORKFLOW_VERSION },
+        permissions: { contents: "read" },
+        steps: [
+          { uses: "actions/setup-node@v4", with: { "node-version": 20 } },
+          {
+            name: "Install Vector",
+            run: `npm install -g @vectordevai/cli@${GithubAgents.MIN_AGENTS_CLI} --prefer-offline --no-audit --no-fund`,
+          },
+          {
+            uses: "actions/checkout@v4",
+            with: {
+              ref: "refs/pull/${{ needs.publish.outputs.pr }}/head",
+              "fetch-depth": 0,
+              "persist-credentials": false,
+            },
+          },
+          {
+            run: 'vector ship capture --pr "$VECTOR_CAPTURE_PR"',
+            env: {
+              VECTOR_WORKFLOW_VERSION: GithubAgents.WORKFLOW_VERSION,
+              VECTOR_CAPTURE_PR: "${{ needs.publish.outputs.pr }}",
+              VECTOR_CAPTURE_TICKET: "${{ needs.agent.outputs.capture }}",
+            },
+          },
+        ],
+      })
+      const text = JSON.stringify(capture)
+      for (const absent of [
+        "secrets.",
+        "id-token",
+        "VECTOR_CLI_TOKEN",
+        "GITHUB_TOKEN",
+        "vector-secrets",
+        "github mint",
+        "actions/cache",
+      ])
+        expect([absent, text.includes(absent)]).toEqual([absent, false])
+      // The pull request's number reaches the run line through env only (INV-S15).
+      expect(capture.steps.flatMap((step) => step.run ?? []).filter((run) => run.includes("${{"))).toEqual([])
+      // The ticket step's condition and the capture job's, nowhere else.
+      expect(occurrences(buildAgentsWorkflow(options), "VECTOR_SHIP_DESK")).toBe(2)
+    }
+    for (const options of [OWN_KEY, SCHEDULED]) {
+      const workflow = agents(options)
+      expect(workflow.jobs.capture).toBeUndefined()
+      expect(workflow.jobs.publish!.outputs).toBeUndefined()
+      expect(
+        Object.values(workflow.jobs).flatMap((job) =>
+          job.steps.filter((step) => step.id === "capture" || step.id === "publish"),
+        ),
+      ).toEqual([])
+      const yaml = buildAgentsWorkflow(options)
+      for (const absent of ["vector ship", "VECTOR_SHIP_DESK", "VECTOR_CAPTURE", "steps.publish", "steps.capture"])
+        expect([absent, yaml.includes(absent)]).toEqual([absent, false])
+    }
+  })
+
   test("every emitted Actions expression is explicitly allowlisted", () => {
     const allowed = new Set([
       "runner.os",
@@ -816,6 +1001,7 @@ describe("workflow v3", () => {
       "inputs.ticket",
       "inputs.prompt",
       "inputs.code",
+      "inputs.brain_upload",
       "github.event.comment.id",
       "secrets.GITHUB_TOKEN",
       "secrets.VECTOR_CLI_TOKEN",
@@ -835,6 +1021,11 @@ describe("workflow v3", () => {
       "steps.mint.outputs.rid",
       "needs.agent.outputs.status",
       "needs.agent.outputs.rid",
+      // Ship Desk (V31): the ticket step's output and the pull request publish names.
+      "steps.capture.outputs.capture",
+      "needs.agent.outputs.capture",
+      "steps.publish.outputs.pr",
+      "needs.publish.outputs.pr",
       "github.event.pull_request.number || needs.route.outputs.pr",
       "needs.route.outputs.ref || github.event.pull_request.head.sha",
       `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.issue.author_association) && github.run_id || (github.event.comment.user.id || github.event.issue.user.id || github.run_id)`,
@@ -921,5 +1112,40 @@ describe("workflow v3", () => {
           true,
         ),
       ).toContain("vector github install")
+  })
+
+  test("what the v3 builder writes is current for the CLI, and the legacy builder's stamp is stale", () => {
+    for (const options of [CODIUM, OWN_KEY, SCHEDULED]) {
+      const jobs = Object.values(agents(options).jobs)
+      const versions = jobs.flatMap((job) => [
+        job.env.VECTOR_WORKFLOW_VERSION,
+        ...job.steps.flatMap((step) => step.env?.VECTOR_WORKFLOW_VERSION ?? []),
+      ])
+      expect(new Set(versions)).toEqual(new Set([GithubAgents.WORKFLOW_VERSION]))
+      // The agent phase returns before prepareGithubEnvironment, so the review step is the only v3 step that reaches it.
+      for (const step of jobs.flatMap((job) => job.steps))
+        if (step.run?.includes("vector github run")) expect(step.run).toContain("--phase agent")
+      const reviews = jobs.flatMap((job) =>
+        job.steps
+          .filter((step) => step.run === "vector github review")
+          .map((step) => ({ ...job.env, ...step.env, GITHUB_ACTIONS: "true" })),
+      )
+      expect(reviews).toHaveLength(1)
+      for (const env of reviews) expect(prepareGithubEnvironment(env, true)).toBeUndefined()
+    }
+    // With App mode the legacy file adds a second review job and a second task job.
+    for (const [legacy, jobs] of [
+      [OPENAI, 2],
+      [{ ...OPENAI, auth: "auto" }, 4],
+    ] as const) {
+      const steps = Object.values(parse(buildWorkflowYaml(legacy)).jobs).flatMap((job) => job.steps)
+      expect(new Set(steps.flatMap((step) => step.env?.VECTOR_WORKFLOW_VERSION ?? []))).toEqual(new Set(["2"]))
+      const runs = steps.filter((step) => step.run === "vector github review" || step.run === "vector github run")
+      expect(runs).toHaveLength(jobs)
+      for (const step of runs)
+        expect(
+          prepareGithubEnvironment({ ...step.env, GITHUB_ACTIONS: "true" }, step.run === "vector github review"),
+        ).toContain("vector github install")
+    }
   })
 })

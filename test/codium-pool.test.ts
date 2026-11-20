@@ -1320,6 +1320,75 @@ describe("A17: the common hold's fence", () => {
   })
 })
 
+describe("H1a: the final fence", () => {
+  const accountKey = `vector:codium:test:account:${user.id}`
+  const snapshotKey = `vector:codium:test:ent:${user.id}`
+
+  // Reconcile leaves an ended plan's key revoked and its snapshot ended on the same subscription (and the key switched
+  // off at the provider, which a final hold never asks about). Run in memory and, in CI, on Valkey: the Lua's parity.
+  async function endPlan(reason?: string) {
+    const record = JSON.parse(String(await redis(["GET", accountKey])))
+    await redis([
+      "SET",
+      accountKey,
+      JSON.stringify({ ...record, key: { ...record.key, revoked: reason ?? "canceled" } }),
+    ])
+    const snapshot = JSON.parse(String(await redis(["GET", snapshotKey])))
+    const ended = { ...snapshot, state: "ended", ...(reason ? { reason } : {}), version: snapshot.version + 1 }
+    await redis(["SET", snapshotKey, JSON.stringify(ended)])
+    world.keys.get(HASH)!.disabled = true
+    return ended
+  }
+
+  test("holds an ended plan's final period, the same floor as any hold, with its revoked key", async () => {
+    await seed({ price: 100, limit: 48, usage: 40 })
+    const ended = await endPlan("canceled")
+    const hold = await holdPool(user.id, 1, HOUR, "hosted", { fetcher, final: true, snapshot: ended })
+    expect(hold).toMatchObject({ pool: HASH, micro: 1_000_000 })
+    expect(await heldMembers()).toHaveLength(1)
+    // The floor counts that hold: what is left of the final period cannot cover more than it has.
+    await expect(holdPool(user.id, 7.5, HOUR, "hosted", { fetcher, final: true })).rejects.toMatchObject({
+      statusCode: 402,
+      code: "MODEL_PLAN_EXHAUSTED",
+    })
+    await hold.release()
+    expect(await heldMembers()).toEqual([])
+    // The usual hold is still refused for an ended plan.
+    await expect(holdPool(user.id, 1, HOUR, "hosted", { fetcher })).rejects.toMatchObject({ statusCode: 402 })
+  })
+
+  test("is stale for a live plan, another subscription, another version, or an end whose period was not kept", async () => {
+    await seed({ price: 100, limit: 48 })
+    const live = JSON.parse(String(await redis(["GET", snapshotKey])))
+    await expect(holdPool(user.id, 1, HOUR, "hosted", { fetcher, final: true })).rejects.toMatchObject({
+      code: "MODEL_PLAN_RENEWING",
+    })
+    const ended = await endPlan()
+    expect((await holdPool(user.id, 1, HOUR, "hosted", { fetcher, final: true })).micro).toBe(1_000_000)
+    for (const change of [
+      { reason: "refunded" },
+      { reason: "disputed" },
+      { reason: "owner" },
+      { subscription: "sub_next" },
+    ]) {
+      await redis(["SET", snapshotKey, JSON.stringify({ ...ended, ...change })])
+      await expect(holdPool(user.id, 1, HOUR, "hosted", { fetcher, final: true })).rejects.toMatchObject({
+        code: "MODEL_PLAN_RENEWING",
+      })
+    }
+    await redis(["SET", snapshotKey, JSON.stringify(ended)])
+    await expect(
+      holdPool(user.id, 1, HOUR, "hosted", {
+        fetcher,
+        final: true,
+        snapshot: { ...ended, version: ended.version + 5 },
+      }),
+    ).rejects.toMatchObject({ code: "MODEL_PLAN_RENEWING" })
+    expect(live.state).toBe("active")
+    expect(await heldMembers()).toHaveLength(1)
+  })
+})
+
 describe("A51 obligation: nonmodel producers", () => {
   // The common HOLD enforces the month and the run's pool binding only. Any producer that starts calling holdPool
   // (hosted blocks, WP A51 and later) must first enforce the shared day, Brain and run caps atomically, keep its run
@@ -1328,10 +1397,17 @@ describe("A51 obligation: nonmodel producers", () => {
   // window. This tripwire fails when a production module calls holdPool, or reaches the same HOLD through placeHold
   // or the script itself, so that obligation is reviewed, not lost.
   test("no production module places a pool hold until its producer is reviewed against the shared caps", async () => {
-    // The reviewed calls are holdPool's own HOLD and the cloud computer's blocks (WP A51, reviewed against the shared
+    // The reviewed calls are holdPool's own HOLD, the cloud computer's blocks (WP A51, reviewed against the shared
     // caps in hosted-ledger.ts's header: worst-case holds of 20 minutes that lapse after 30, nothing settled above a
-    // hold on it, no run binding, the daily share checked before each hold). Adding a producer here is its review.
-    const reviewed = ["_lib/hosted-ledger.ts: holdPool(", "_lib/model-plan-account.ts: placeHold("]
+    // hold on it, no run binding, the daily share checked before each hold) and a kept disk's retention (Codium
+    // finish, the phase review's M2 fix: exactly its charge, held for 5 minutes and settled at once at that amount, no
+    // run binding, the daily share checked before the hold against its start's snapshot, a stale or monthly refusal
+    // sized again once). Adding a producer here is its review.
+    const reviewed = [
+      "_lib/hosted-ledger.ts: holdPool(",
+      "_lib/hosted-ledger.ts: holdPool(",
+      "_lib/model-plan-account.ts: placeHold(",
+    ]
     const root = new URL("../api/", import.meta.url).pathname
     const calls: string[] = []
     for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: root }))

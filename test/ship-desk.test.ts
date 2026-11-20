@@ -1,7 +1,11 @@
 import { RedisClient } from "bun"
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test"
-import { createHash } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { ops as opsProvisioner } from "../api/_lib/codium-provisioners"
+import { createBindCode, redeemAndBind } from "../api/_lib/cloud-agents-binding"
+import type { CloudAgentAllowance } from "../api/_lib/cloud-agents-entitlement"
+import { reserveRun, settleRun } from "../api/_lib/cloud-agents-ledger"
+import { recordRunEnd, recordRunStart, type RunStart } from "../api/_lib/cloud-agents-runs"
 import { meterKey } from "../api/_lib/codium-snapshot"
 import { readGithubAudit } from "../api/_lib/github-app-server"
 import { createGithubWebhookRoute, githubSignature, type GithubWebhookEvent } from "../api/_lib/github-webhook"
@@ -20,6 +24,7 @@ import {
   cardId,
   cardIndexKey,
   cardKey,
+  cardRefreshKey,
   cardRunKey,
   cardsUsed,
   cardView,
@@ -30,20 +35,24 @@ import {
   readyTitle,
   runFacts,
   SHIP_DESK_CARD_METER,
+  SHIP_DESK_LIMITS,
   SHIP_DESK_SCRIPTS,
   shipDeskIntake,
   ticketHash,
   ticketIndexKey,
   ticketKey,
+  type Card,
   type ShipDeskAlert,
   type ShipDeskContext,
 } from "../api/_lib/ship-desk"
 import { handleOpsCards } from "../api/ops/cards"
 import { handleOpsImage, imageTarget } from "../api/ops/image"
 import { handleOpsUploads } from "../api/ops/uploads"
-import type { CloudRunReader } from "../api/_lib/cloud-run-reader"
+import { cloudRunReader, type CloudRunReader } from "../api/_lib/cloud-run-reader"
+import { GithubAgents } from "../packages/core/src/github-agents"
 import type { PlanId } from "../packages/schema/src/codium-plan"
 import { ShipDesk } from "../packages/schema/src/ship-desk"
+import { FAKE_KV_URL } from "../packages/web/test/fixture/codium-fakes"
 import { APP_SLUG, DAY, invoke, MAX, NOW, OpsWorld, OTHER, PRO, ULTRA, WEBHOOK_SECRET } from "./ops-fixture"
 
 // WP A49: Ship Desk. Pull requests from Codium runs of Vector's GitHub agent become private cards: the App's bot, or
@@ -671,7 +680,7 @@ describe("cards", () => {
 
     const intake = (extra: ShipDeskContext = {}) =>
       shipDeskIntake(pull(settings, { author: "actions" }), context(extra))
-    // No reader yet (before A59): it cannot be checked, so no card.
+    // No reader (`reader: null`): it cannot be checked, so no card.
     expect(await intake()).toEqual({ kind: "ignored", reason: "run-unverified" })
     expect(await intake({ reader: async () => Promise.reject(new Error("down")) })).toEqual({
       kind: "ignored",
@@ -739,6 +748,55 @@ describe("cards", () => {
     expect(world.github.minted.length).toBe(mints + 1)
     expect(runFacts({ rid: RID, repositoryId: "042" })).toBeUndefined()
     expect(await lookupRun(MAX, RID, REPO, undefined)).toEqual({ available: false })
+  })
+
+  // WP A59 (BT11): api/ops/cards.ts and the webhook's ops handler import the registration of Codex's run records, so
+  // the registered reader is what an intake or a card reads by default. While the GitHub agent service is off it lists
+  // nothing without reading the store (deviations "2026-11-16 BT11" item 2).
+  test("A59: the registered run reader is the default; while the GitHub agent service is off it finds no run", async () => {
+    world.close()
+    world = new OpsWorld({ ...MEDIA, VECTOR_GITHUB_BRAIN_ENABLED: undefined })
+    registerShipDeskScripts(world)
+    expect(cloudRunReader()).toBeFunction()
+    const settings = await ready()
+    // github-actions[bot] needs the run's own record: the registered reader answers and has none, where no reader at
+    // all leaves the run unverified. Neither makes a card.
+    expect(await shipDeskIntake(pull(settings, { author: "actions" }), context({ reader: undefined }))).toEqual({
+      kind: "ignored",
+      reason: "no-run",
+    })
+    expect(await shipDeskIntake(pull(settings, { author: "actions" }), context())).toEqual({
+      kind: "ignored",
+      reason: "run-unverified",
+    })
+    expect(await readCard(MAX, cardId(REPO, 12), fetcher())).toBeUndefined()
+    // An App-bot card with the run marker and finished checks of its head. Opened with no reader, it reads nothing
+    // more; opened through the route's default reader, it takes its refresh lock to read the run, which only a reader
+    // does, and finds none: no verdict or run link. That this reader reads no store while the service is off is the
+    // Valkey case's (its bridge sees no command) and the Node probe's: it uses the default store and global fetch, so
+    // a run-record read would never reach this fake.
+    world.github.checkRuns.set(`${REPO}:${HEAD}`, [{ name: "test", status: "completed", conclusion: "success" }])
+    expect(await shipDeskIntake(pull(settings), context())).toMatchObject({ kind: "created" })
+    const mints = world.github.minted.length
+    const lock = cardRefreshKey(MAX, cardId(REPO, 12))
+    const open = async (extra?: ShipDeskContext) => {
+      const before = world.fakes.store.commands.length
+      const answer = await invoke(
+        (request, response) => handleOpsCards(request, response, fetcher(), () => world.now, extra),
+        { method: "GET", authorization: world.token(MAX), url: `/api/ops/cards?id=${cardId(REPO, 12)}` },
+      )
+      expect(answer.status).toBe(200)
+      expect(answer.body.card).not.toHaveProperty("verdict")
+      expect(answer.body.card).not.toHaveProperty("run")
+      return world.fakes.store.commands.slice(before).filter((command) => command[1] === lock)
+    }
+    expect(await open({ reader: null })).toEqual([])
+    expect(world.fakes.store.keys()).not.toContain(lock)
+    expect((await open()).map((command) => command[0])).toEqual(["SET"])
+    expect(world.fakes.store.keys()).toContain(lock)
+    expect(await readCard(MAX, cardId(REPO, 12), fetcher())).toMatchObject({ rid: RID })
+    expect(await readCard(MAX, cardId(REPO, 12), fetcher())).not.toHaveProperty("verdict")
+    expect(world.github.minted.length).toBe(mints)
   })
 
   test("a later run on the same pull request moves the card to that run once it is checked", async () => {
@@ -1239,5 +1297,300 @@ describe.skipIf(!valkeyURL)("Ship Desk's CARD script on Valkey", () => {
     expect(Number(await client!.send("PTTL", ["meter"]))).toBeGreaterThan(0)
     expect(await run("c4", "r4", 5, NOW + 20_000)).toBe(1)
     expect(await client!.send("ZRANGE", ["index", "0", "-1"])).toEqual(["c4"])
+  })
+})
+
+// WP A59 (BT11): the cards route's default reader is the registered one, so the verdict a card shows is the one the
+// server derived when Codex's run record ended (spec 2.16: changes is pass, draft and failed are fail, anything else
+// none), whatever the pull request says. Ship Desk's own state stays on the Codium fake, reached through the route's
+// fetcher; the registered reader and Codex's own writers use the default store and global fetch, which this case points
+// at a loopback bridge to Valkey. Every key the bridge sees, and every run-record key of this case's random account or
+// repository, is deleted afterwards.
+describe.skipIf(!valkeyURL)("A59: a card's verdict from the registered reader's run record on Valkey", () => {
+  test("a card's verdict, made by the webhook's intake or read when it opens, is the run record's as the server derived it, never the pull request's", async () => {
+    const target = new URL(valkeyURL!)
+    if (!["127.0.0.1", "localhost"].includes(target.hostname)) throw new Error("Run records require loopback Valkey")
+    const redis = new RedisClient(target.href, { connectionTimeout: 1000, enableOfflineQueue: false })
+    await redis.connect()
+    const account = randomUUID()
+    const repositoryId = 100_000_000 + crypto.getRandomValues(new Uint32Array(1))[0]!
+    const keys = new Set<string>()
+    const commands: string[] = []
+    const refused: (string | null)[] = []
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request): Promise<Response> {
+        const authorization = request.headers.get("authorization")
+        if (authorization !== "Bearer ship-desk-run-records") {
+          refused.push(authorization)
+          return new Response("unauthorized", { status: 401 })
+        }
+        const command = (await request.json()) as (string | number)[]
+        commands.push(String(command[0]))
+        if (command[0] === "EVAL") command.slice(3, 3 + Number(command[2])).forEach((key) => keys.add(String(key)))
+        else keys.add(String(command[1]))
+        return Response.json({ result: await redis.send(String(command[0]), command.slice(1).map(String)) })
+      },
+    })
+    try {
+      world.close()
+      world = new OpsWorld({
+        ...MEDIA,
+        KV_REST_API_URL: upstream.url.origin,
+        KV_REST_API_TOKEN: "ship-desk-run-records",
+        VECTOR_GITHUB_BRAIN_ENABLED: "true",
+        VECTOR_OPS_ALLOW_ACCOUNTS: account,
+      })
+      registerShipDeskScripts(world)
+      // The route's own store calls go to the Codium fake; nothing else leaves the fakes.
+      const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input))
+        return fetcher()(url.origin === upstream.url.origin ? FAKE_KV_URL : input, init)
+      }) as typeof fetch
+
+      world.seed(account, "vector-100")
+      const repository = `octo-fixture/repo-${repositoryId}`
+      const now = Date.now()
+      const identity = {
+        repository,
+        repositoryId: String(repositoryId),
+        ownerId: "456",
+        actor: "fixture-person",
+        actorId: "789",
+        ref: "refs/heads/main",
+        repositoryVisibility: "private" as const,
+      }
+      const code = await createBindCode({ account, repository, now })
+      const binding = await redeemAndBind({
+        code: code.code,
+        account,
+        identity,
+        workflowVersion: "3",
+        takeover: { adminVerified: false, allowanceInactive: false },
+        now,
+      })
+      const allowance: Extract<CloudAgentAllowance, { active: true }> = {
+        active: true,
+        plan: "vector-100",
+        limits: { atOnce: 4, hours: 40, longestRunMin: 45, scheduledPerDay: 5, runCeilingShare: 0.1 },
+        allowanceSeconds: 144_000,
+        meterEpoch: `p${now}`,
+        periodEnd: now + 30 * DAY,
+        premiumModels: true,
+      }
+      // Codex's own writers: reserve, start, then settle and end with an outcome, from which the server derives the
+      // record's verdict.
+      const run = async (runId: string, outcome?: GithubAgents.Outcome) => {
+        const record: RunStart = {
+          account,
+          generation: binding.generation,
+          jti: randomBytes(16).toString("base64url"),
+          rid: GithubAgents.runId(repositoryId, runId, 1, runId),
+          runId,
+          repository,
+          repositoryId: String(repositoryId),
+          event: "issue_comment",
+          source: "github-comment",
+          purpose: "task",
+          startedAt: now,
+          actor: { login: identity.actor, id: identity.actorId },
+        }
+        const answer = await reserveRun({
+          account,
+          rid: record.rid,
+          repositoryId: record.repositoryId,
+          thread: "17",
+          generation: record.generation,
+          jti: record.jti,
+          source: record.source,
+          purpose: record.purpose,
+          allowance,
+          now,
+        })
+        if (!answer.ok) throw new Error(`Fixture reserve refused: ${JSON.stringify(answer)}`)
+        record.startedAt = answer.startedAt
+        await recordRunStart(record)
+        if (!outcome) return record
+        expect((await settleRun(account, record.rid, { jti: record.jti, epoch: allowance.meterEpoch })).settled).toBe(
+          true,
+        )
+        expect(await recordRunEnd(record.rid, outcome, record.startedAt + 1000, record)).toBe(true)
+        return record
+      }
+      const passed = await run("7101", "changes")
+      const drafted = await run("7102", "draft")
+      const running = await run("7103")
+      const ended = await run("7104", "changes")
+
+      // One stored card per run (each open takes that card's refresh lock), with finished checks of its head, so
+      // opening one reads only the run's record. Each title says the opposite of the record.
+      const card = (number: number, rid: string, title: string) => {
+        const value: Card = {
+          v: 1,
+          id: cardId(repositoryId, number),
+          repositoryId,
+          repository,
+          number,
+          url: `https://github.com/${repository}/pull/${number}`,
+          title,
+          author: "app",
+          state: "open",
+          draft: false,
+          baseRef: "main",
+          headSha: HEAD,
+          createdAt: world.now,
+          updatedAt: world.now,
+          expiresAt: world.now + 30 * DAY,
+          keepDays: 30,
+          rid,
+          checks: {
+            at: world.now,
+            sha: HEAD,
+            total: 1,
+            items: [{ name: "test", status: "completed", conclusion: "success" }],
+          },
+          images: [],
+        }
+        expect(decodeCard(value)).toEqual(value)
+        world.fakes.store.set(cardKey(account, value.id), JSON.stringify(value))
+        world.fakes.store.expires.set(cardKey(account, value.id), value.expiresAt + SHIP_DESK_LIMITS.retainMs)
+        world.fakes.store.zset(cardIndexKey(account)).set(value.id, world.now)
+        return value
+      }
+      const token = world.token(account)
+      const open = async (value: Card) => {
+        const before = commands.length
+        const answer = await invoke((request, response) => handleOpsCards(request, response, route, () => world.now), {
+          method: "GET",
+          authorization: token,
+          url: `/api/ops/cards?id=${value.id}`,
+        })
+        expect(answer.status).toBe(200)
+        return { card: answer.body.card, commands: commands.slice(before) }
+      }
+      const runUrl = (record: RunStart) => `https://github.com/${repository}/actions/runs/${record.runId}`
+      const verdictOf = async (record: RunStart) =>
+        (await redis.send("HGET", [`vector:cloud-agents:run:${record.rid}`, "verdict"])) ?? "none"
+
+      // The webhook's ops handler reads the pull request's body only for the run marker. A github-actions[bot] pull
+      // request whose title and body claim a pass, for the drafted run, makes a card with that run's verdict, fail, read
+      // through the registered reader: the intake names no reader. Opening the card then reads nothing more.
+      world.bind(repositoryId, account)
+      const settings = await updateOpsSettings(
+        account,
+        () => ({
+          ...newOpsSettings(),
+          repos: [
+            {
+              repositoryId,
+              repository,
+              environment: "Production",
+              paths: [],
+              releaseGuard: false,
+              shipDesk: true,
+              updatedAt: world.now,
+            },
+          ],
+        }),
+        route,
+        world.now,
+      )
+      world.github.commitOptIn(repositoryId, opsJson(settings!, settings!.repos[0]!), "main")
+      world.github.checkRuns.set(`${repositoryId}:${HEAD}`, [
+        { name: "test", status: "completed", conclusion: "success" },
+      ])
+      const outcomes: unknown[] = []
+      registerShipDeskIntake(async (input, extra) => {
+        outcomes.push(await shipDeskIntake(input, { ...extra, alert: recordAlert }))
+      })
+      const claim = "verdict: pass"
+      const event = payload({
+        root: { number: 20, repository: { id: repositoryId, full_name: repository } },
+        pull: {
+          number: 20,
+          title: claim,
+          html_url: `https://github.com/${repository}/pull/20`,
+          user: { login: "github-actions[bot]", type: "Bot" },
+          head: { sha: HEAD, ref: "vector/fix", repo: { id: repositoryId } },
+          base: { sha: BASE, ref: "main", repo: { id: repositoryId } },
+          body: `Vector drafted the fix.\n\n${claim}\n\n<!-- vector:rid ${drafted.rid} -->`,
+        },
+      })
+      const before = commands.length
+      expect(
+        await routeOpsEvent(
+          { name: "pull_request", action: "opened", deliveryId: "delivery-a59", payload: event },
+          { fetcher: route, clock: () => world.now },
+        ),
+      ).toEqual({ kind: "ship-desk" })
+      expect(outcomes).toEqual([{ kind: "created", card: cardId(repositoryId, 20) }])
+      expect(commands.slice(before)).toEqual(["ZREVRANGE", "EVAL"])
+      const made = await readCard(account, cardId(repositoryId, 20), route)
+      expect(made).toMatchObject({
+        author: "actions",
+        title: claim,
+        rid: drafted.rid,
+        verdict: { value: "fail", final: true, at: world.now },
+        runUrl: runUrl(drafted),
+      })
+      expect(await verdictOf(drafted)).toBe("fail")
+      const fromBody = await open(made!)
+      expect(fromBody.commands).toEqual([])
+      expect(fromBody.card.verdict).toEqual({ value: "fail", final: true })
+      expect(fromBody.card.run).toEqual({ url: runUrl(drafted) })
+
+      // Stored cards whose titles say the opposite of their records, opened through the route's default reader.
+      const mints = world.github.minted.length
+
+      for (const [record, number, title, verdict] of [
+        [passed, 21, "verdict: fail", { value: "pass", final: true }],
+        [drafted, 22, "verdict: pass", { value: "fail", final: true }],
+        [running, 23, "verdict: pass", { value: "none", final: false }],
+      ] as const) {
+        const stored = card(number, record.rid, title)
+        const opened = await open(stored)
+        expect(opened.commands).toEqual(["ZREVRANGE", "EVAL"])
+        expect(opened.card.title).toBe(title)
+        expect(opened.card.verdict).toEqual(verdict)
+        expect(opened.card.verdict.value).toBe(await verdictOf(record))
+        expect(opened.card.run).toEqual({ url: runUrl(record) })
+        expect(await readCard(account, stored.id, route)).toMatchObject({
+          rid: record.rid,
+          verdict: { ...verdict, at: world.now },
+          runUrl: runUrl(record),
+        })
+      }
+      expect(world.github.minted.length).toBe(mints)
+
+      // With the GitHub agent service off, an ended run's card gets no verdict and the records are not read.
+      delete process.env.VECTOR_GITHUB_BRAIN_ENABLED
+      const quiet = await open(card(24, ended.rid, "verdict: pass"))
+      expect(quiet.commands).toEqual([])
+      expect(quiet.card).not.toHaveProperty("verdict")
+      expect(quiet.card).not.toHaveProperty("run")
+      expect(await readCard(account, cardId(repositoryId, 24), route)).not.toHaveProperty("verdict")
+      expect(world.github.minted.length).toBe(mints)
+      expect(refused).toEqual([])
+    } finally {
+      // Also any key a script reached without declaring it, by this case's random account or repository.
+      let cursor = "0"
+      do {
+        const [next, found] = (await redis.send("SCAN", [
+          cursor,
+          "MATCH",
+          "vector:cloud-agents:*",
+          "COUNT",
+          "1000",
+        ])) as [string, string[]]
+        found
+          .filter((key) => key.includes(account) || key.includes(String(repositoryId)))
+          .forEach((key) => keys.add(key))
+        cursor = next
+      } while (cursor !== "0")
+      if (keys.size) await redis.send("DEL", [...keys])
+      redis.close()
+      upstream.stop(true)
+    }
   })
 })

@@ -380,8 +380,8 @@ export function publicCloudRun(input: unknown): RemoteCloudRun | undefined {
 
 /**
  * The account's newest GitHub runs for the phone, on every paid plan that includes Remote (all of them): Remote on,
- * the plan allowing it (§4.4), then the reader's records, newest first. `available: false` while no reader is
- * registered (before A59).
+ * the plan allowing it (§4.4), then the reader's records, newest first. `available: false` where no reader is
+ * registered (A59 registers it for the cloud-runs route; it lists nothing while the GitHub agent service is off).
  */
 export async function remoteCloudRuns(
   account: string,

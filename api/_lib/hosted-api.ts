@@ -17,8 +17,10 @@ import {
   recordHeartbeat,
   releaseHostedSession,
   releaseHostedSuspension,
+  parseDownloadStart,
   requestDownload,
   requireHostedRunRequest,
+  startHostedDownload,
   startHostedSession,
   stopHostedSession,
   suspendHostedAccount,
@@ -84,14 +86,17 @@ export async function requireHostedCaller(
   return { account: user.id, via: "session", marked: true, source: phone && header(request, "origin") === phone ? "phone" : "desktop" }
 }
 
-/** A change's JSON body, from the site, the phone app or the desktop app (no origin), at most `bytes`. */
-async function readBody(request: ApiRequest, bytes: number, fields: readonly string[]) {
+/**
+ * A change's JSON body, from the site, the phone app or the desktop app (no origin), at most `bytes`, with only
+ * `fields` (undefined: the caller checks them).
+ */
+async function readBody(request: ApiRequest, bytes: number, fields: readonly string[] | undefined) {
   const phone = phoneAppOrigin()
   requireTrustedJsonRequest(request, bytes, phone ? [phone] : [])
   const body = await readJson<unknown>(request, bytes)
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw new ApiError(400, "HOSTED_REQUEST", "Send the request as a JSON object.")
-  if (Object.keys(body).some((key) => !fields.includes(key)))
+  if (fields && Object.keys(body).some((key) => !fields.includes(key)))
     throw new ApiError(400, "HOSTED_REQUEST", `Send only ${fields.join(", ")}.`)
   return body as Record<string, unknown>
 }
@@ -120,9 +125,11 @@ function clockOf(options: HostedRouteOptions) {
 
 /**
  * `/api/hosted/sessions`. `GET`: the account's sessions, newest first, live ones first (600 an hour). `POST {size,
- * jobMinutes, prompt, title?}`: starts a session (30 an hour), answering it. Starting spends Codium, so it takes a
- * website session or a marked token (the desktop's own sign-in, `vector login`); a token copied from
- * vectordev.ai/auth/cli gets 401 CODIUM_SIGN_IN_REQUIRED (S2), unless the owner set MODEL_PLAN_REQUIRE_MARKED_TOKENS=false.
+ * jobMinutes, prompt, title?}`: starts a session (30 an hour), answering it. `POST {mode: "download", computer}` (H1a)
+ * starts a download-only session on that computer instead, for an ended plan whose disk is still kept: it packs and
+ * uploads the disk, and its files are then asked for as any session's. Starting spends Codium, so it takes a website
+ * session or a marked token (the desktop's own sign-in, `vector login`); a token copied from vectordev.ai/auth/cli gets
+ * 401 CODIUM_SIGN_IN_REQUIRED (S2), unless the owner set MODEL_PLAN_REQUIRE_MARKED_TOKENS=false.
  */
 export async function handleHostedSessions(
   request: ApiRequest,
@@ -138,16 +145,33 @@ export async function handleHostedSessions(
       return json(response, 200, { sessions: await listHostedSessions(caller.account, fetcher) })
     }
     requireMethod(request, "POST")
-    const body = await readBody(request, 40_000, ["size", "jobMinutes", "prompt", "title"])
+    const body = await readStartBody(request)
     const caller = await requireHostedCaller(request, fetcher, clock())
     if (!caller.marked && modelPlanRequireMarkedTokens())
       throw new ApiError(401, "CODIUM_SIGN_IN_REQUIRED", "Sign in to Vector again or run vector login to use Vector Codium.")
     await limit(request, response, "hosted-start", caller.account, 30, fetcher)
-    const session = await startHostedSession(caller.account, parseStart(body, caller.source), options)
+    const session =
+      body.mode === "download"
+        ? await startHostedDownload(caller.account, parseDownloadStart(body, caller.source), options)
+        : await startHostedSession(caller.account, parseStart(body, caller.source), options)
     json(response, 201, { session })
   } catch (error) {
     handleApiError(response, error)
   }
+}
+
+/**
+ * A start's body: a session's `{size, jobMinutes, prompt, title?}`, or a download-only start's `{mode: "download",
+ * computer}` (H1a), whose own fields are checked by `parseDownloadStart`. A session's body keeps its own field list
+ * and its copy.
+ */
+async function readStartBody(request: ApiRequest) {
+  const body = await readBody(request, 40_000, undefined)
+  if (body.mode === "download") return body
+  const fields = ["size", "jobMinutes", "prompt", "title"]
+  if (Object.keys(body).some((key) => !fields.includes(key)))
+    throw new ApiError(400, "HOSTED_REQUEST", `Send only ${fields.join(", ")}.`)
+  return body
 }
 
 export type SessionAction = "stop" | "takeover" | "release" | "viewer" | "download"

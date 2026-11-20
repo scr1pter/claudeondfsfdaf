@@ -304,6 +304,13 @@ const Artifact = z.object({
   name: z.string().max(256),
   expired: z.boolean(),
   created_at: z.string().datetime({ offset: true }),
+  workflow_run: z
+    .object({
+      repository_id: z.number().int().positive().safe(),
+      head_repository_id: z.number().int().positive().safe(),
+    })
+    .nullable()
+    .optional(),
 })
 type ArtifactTransport = {
   repository: string
@@ -356,7 +363,11 @@ async function responseBytes(response: Response, maximum: number) {
   }
 }
 
-/** Reconstruct the API URL from the verified repo and id. Never follow an artifact's arbitrary URL with a token. */
+/**
+ * Reconstruct the API URL from the verified repo and id. Never follow an artifact's arbitrary URL with a token. Only an
+ * artifact a run of this repository's own head uploaded counts: a fork's `pull_request` run can upload one of any name,
+ * and a newer one that does not open would otherwise hide the thread's own (BT06).
+ */
 export async function latestConversation(input: ArtifactTransport & { thread: string }) {
   const name = `vector-session-${input.thread}`
   const artifacts: z.infer<typeof Artifact>[] = []
@@ -375,9 +386,19 @@ export async function latestConversation(input: ArtifactTransport & { thread: st
         return undefined
       }
       const list = z
-        .object({ artifacts: z.array(Artifact).max(100) })
+        .object({ artifacts: z.array(z.unknown()).max(100) })
         .parse(JSON.parse((await responseBytes(response, 1_000_000)).toString("utf8")))
-      artifacts.push(...list.artifacts.filter((entry) => !entry.expired && entry.name === name))
+      // Each entry is read alone: one of any name in an unexpected shape (a deleted fork's run names no head
+      // repository) is skipped, and never hides the thread's own artifacts by failing the page.
+      artifacts.push(
+        ...list.artifacts.flatMap((value) => {
+          const entry = Artifact.safeParse(value)
+          if (!entry.success || entry.data.expired || entry.data.name !== name || !entry.data.workflow_run) return []
+          return entry.data.workflow_run.head_repository_id === entry.data.workflow_run.repository_id
+            ? [entry.data]
+            : []
+        }),
+      )
       if (list.artifacts.length < 100) break
     }
     const latest = artifacts.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0]

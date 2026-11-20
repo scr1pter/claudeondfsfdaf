@@ -149,7 +149,7 @@ export async function accountHandle(accountKey: string | undefined, account: str
 
 /**
  * The API's origin from API_ORIGIN: https with no credentials, path, query or fragment. Plain http only to this machine
- * (the CI smoke test's stand-in API); a Worker on Cloudflare cannot reach that anyway.
+ * (a local stand-in API); a Worker on Cloudflare cannot reach that anyway.
  */
 export function callbackOrigin(setting: string | undefined): string | undefined {
   const value = setting?.trim()

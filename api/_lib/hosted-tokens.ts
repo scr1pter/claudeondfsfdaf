@@ -225,10 +225,14 @@ export function checkViewerToken(
 export type DownloadClaims = { s: string; exp: number }
 
 /** A 24-hour download token for one session's packed files. */
-export function mintDownloadToken(input: { session: string; now: number }) {
+export function mintDownloadToken(input: { session: string; now: number; until?: number }) {
   const secret = runSecret()
   if (!secret) throw unavailable()
-  const claims: DownloadClaims = { s: input.session, exp: input.now + Hosted.DOWNLOAD_LINK_MS }
+  // `until`: the files' own deletion date (§4.4, H1a), which no link outlives.
+  const claims: DownloadClaims = {
+    s: input.session,
+    exp: Math.min(input.now + Hosted.DOWNLOAD_LINK_MS, input.until ?? Infinity),
+  }
   const payload = Buffer.from(JSON.stringify(claims)).toString("base64url")
   return { token: `vhd1.${payload}.${mac(secret, DOWNLOAD_DOMAIN, payload)}`, expiresAt: claims.exp }
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { runInNewContext } from "node:vm"
@@ -123,6 +123,7 @@ const targets = [
   "linux",
   "windows",
   "windows-units",
+  "macos-measure",
   "macos-signing",
   "macos-overlay",
   "windows-overlay",
@@ -142,6 +143,7 @@ const targetJobs = {
   linux: "computer-helper",
   windows: "computer-helper",
   "windows-units": "computer-helper-windows-units",
+  "macos-measure": "computer-helper-macos-measure",
   "macos-signing": "computer-helper-macos-signing",
   "macos-overlay": "computer-helper-macos-overlay",
   "windows-overlay": "computer-helper-windows-overlay",
@@ -283,6 +285,46 @@ test("the normal test workflow supplies only the native lane's read permissions"
   expect(main.source).not.toContain("pull_request_target:")
 })
 
+test("Mac measurement is a separate grant-free manual caller with no secret or normal-CI authority", () => {
+  const current = record(record(main.document.jobs)["computer-helper-macos-measure"])
+  expect(Object.keys(current).toSorted()).toEqual(["if", "needs", "permissions", "uses", "with"])
+  expect(current.needs).toBe("validate-dispatch")
+  expect(current.uses).toBe("./.github/workflows/computer-helper.yml")
+  expect(current.permissions).toEqual({ contents: "read", actions: "read" })
+  expect(current.secrets).toBeUndefined()
+  expect(current["continue-on-error"]).toBeUndefined()
+  const inputs = record(current.with)
+  expect(inputs).toEqual({
+    "helper-channel": "prod",
+    "artifact-suffix": "mac-measure-${{ github.sha }}",
+    "reuse-artifacts": false,
+    "full-desktop-e2e": false,
+    "isolated-desktop": false,
+    "privileged-required": false,
+    "windows-only": false,
+    "linux-only": false,
+  })
+  const mode = { computer_helper: true, computer_helper_target: "macos-measure" }
+  expect(mainExpression(String(current.if), mode)).toBe(true)
+  for (const event of ["pull_request", "push"]) expect(mainExpression(String(current.if), mode, event)).toBe(false)
+  for (const flag of booleanSelectors.filter((flag) => flag !== "computer_helper"))
+    expect(mainExpression(String(current.if), { ...mode, [flag]: true }), flag).toBe(false)
+  for (const incomplete of [{}, { computer_helper_target: "macos-measure" }, { ...mode, computer_helper: false }])
+    expect(mainExpression(String(current.if), incomplete)).toBe(false)
+  const normal = record(record(main.document.jobs)["computer-helper"])
+  expect(mainExpression(String(normal.if), mode)).toBe(false)
+  expect(record(normal.with)["isolated-desktop"]).toBe(true)
+  const concurrency = record(main.document.concurrency)
+  for (const target of ["all", "windows", "windows-units"])
+    expect(group(concurrency.group, mode)).not.toBe(
+      group(concurrency.group, { computer_helper: true, computer_helper_target: target }),
+    )
+  const child = record(helper.document.concurrency)
+  expect(helperGroup(child.group, inputs)).not.toBe(
+    helperGroup(child.group, { ...record(normal.with), "artifact-suffix": "pr-fixture-sha" }),
+  )
+})
+
 test("dispatch selectors stay within GitHub's input limit and every expensive job waits for validation", () => {
   const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
   expect(Object.keys(inputs).toSorted()).toEqual(
@@ -313,7 +355,11 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
   expect(current[0]!.uses).toBeUndefined()
   expect(current[0]!["continue-on-error"]).toBeUndefined()
   expect(Object.keys(record(current[0]!.env)).toSorted()).toEqual(
-    [...booleanSelectors.map((name) => name.toUpperCase()), "COMPUTER_HELPER_TARGET", "PRODUCTION_SOURCE_SHA"].toSorted(),
+    [
+      ...booleanSelectors.map((name) => name.toUpperCase()),
+      "COMPUTER_HELPER_TARGET",
+      "PRODUCTION_SOURCE_SHA",
+    ].toSorted(),
   )
   for (const [name, value] of Object.entries(all)) {
     if (name === "validate-dispatch") continue
@@ -511,7 +557,9 @@ test("the native lane covers supported runners and only expands PR matrices for 
   for (const name of ["mac-test", "windows-arm64-test"]) expect(job(name).if).toContain("needs.plan.outputs.extended")
   const plan = commands(job("plan"))
   expect(plan).toMatch(/extended=true[\s\S]*pull_request[\s\S]*extended=false/)
-  const filter = plan.match(/rg\s+-q\s+'([^']+)'/)?.[1]
+  // ubuntu-24.04 has no ripgrep, so the filter runs through the image's grep.
+  expect(plan).not.toMatch(/(^|[\s;(])rg\s/m)
+  const filter = plan.match(/grep\s+-qE\s+'([^']+)'/)?.[1]
   expect(filter, "PR coverage needs an actual changed-path filter").toBeDefined()
   const matches = new RegExp(filter!)
   for (const file of [
@@ -534,6 +582,104 @@ test("the native lane covers supported runners and only expands PR matrices for 
       (step) => typeof step.run === "string" && /--privileged(?:\s+|=)off/.test(step.run),
     )
     expect(core?.if).toContain("windows-protocol")
+  }
+})
+
+// Run the plan step's real script against a local repository. On main it used `if rg -q`: ubuntu-24.04 has no rg and
+// errexit ignores an `if` condition, so "command not found" read as "no match" and every PR skipped the extended jobs.
+test("the plan's changed-path check needs no ripgrep and fails closed when the filter cannot run", () => {
+  const plan = steps(job("plan")).find((step) => step.id === "plan")!
+  const script = String(plan.run)
+  expect(record(helper.document.env).VECTOR_CHANNEL).toBeDefined()
+  // Forward slashes, so Git Bash on Windows reads the same paths.
+  const temp = mkdtempSync(path.join(tmpdir(), "computer-plan-")).replaceAll("\\", "/")
+  const repo = `${temp}/repo`
+  const git = (...args: string[]) => {
+    const result = spawnSync(
+      "git",
+      ["-c", "user.name=Vector", "-c", "user.email=bot@vectordev.ai", "-c", "commit.gpgsign=false", ...args],
+      { cwd: repo, encoding: "utf8", timeout: 10000 },
+    )
+    expect(result.status, result.stderr).toBe(0)
+    return result.stdout.trim()
+  }
+  const change = (base: string, file: string) => {
+    git("checkout", "-q", "--detach", base)
+    mkdirSync(path.dirname(`${repo}/${file}`), { recursive: true })
+    writeFileSync(`${repo}/${file}`, "change\n")
+    git("add", file)
+    git("commit", "-q", "-m", file)
+    return git("rev-parse", "HEAD")
+  }
+  const run = (base: string, head: string, prefix = "") => {
+    writeFileSync(`${temp}/output`, "")
+    writeFileSync(`${temp}/summary`, "")
+    const env = {
+      VECTOR_CHANNEL: "prod",
+      ARTIFACT_SUFFIX: "plan-test",
+      PRIVILEGED_REQUIRED: "false",
+      ISOLATED_DESKTOP: "false",
+      EVENT_NAME: "pull_request",
+      FULL_DESKTOP_E2E: "true",
+      LINUX_ONLY: "false",
+      WINDOWS_ONLY: "false",
+      BASE_SHA: base,
+      HEAD_SHA: head,
+    }
+    // The script runs under `set -u`: give it every variable the step and the workflow define.
+    for (const name of Object.keys(record(plan.env))) expect(env).toHaveProperty(name)
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-c", `${prefix}\n${script}`], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        ...env,
+        RUNNER_TEMP: temp,
+        GITHUB_OUTPUT: `${temp}/output`,
+        GITHUB_STEP_SUMMARY: `${temp}/summary`,
+      },
+      encoding: "utf8",
+      timeout: 10000,
+    })
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      extended: readFileSync(`${temp}/output`, "utf8").match(/^extended=(\w+)$/m)?.[1],
+    }
+  }
+  try {
+    mkdirSync(repo)
+    git("init", "-q")
+    writeFileSync(`${repo}/README.md`, "base\n")
+    git("add", "README.md")
+    git("commit", "-q", "-m", "base")
+    const base = git("rev-parse", "HEAD")
+    const native = change(base, "packages/desktop/native/x.cpp")
+    const docs = change(base, "docs/note.md")
+
+    expect(run(base, native)).toMatchObject({ status: 0, extended: "true" })
+    expect(readFileSync(`${temp}/summary`, "utf8")).toContain("Native PR coverage: extended=true")
+    expect(run(base, docs)).toMatchObject({ status: 0, extended: "false" })
+
+    // A ripgrep on PATH must not be what decides coverage.
+    expect(run(base, native, `rg() { echo used > "$RUNNER_TEMP/rg-used"; return 1; }`)).toMatchObject({
+      status: 0,
+      extended: "true",
+    })
+    expect(existsSync(`${temp}/rg-used`)).toBe(false)
+
+    // A filter that cannot run (a missing tool, a read error) fails the plan instead of choosing narrow coverage.
+    const broken = run(base, native, 'grep() { if [[ "$1" == -qE ]]; then return 2; fi; command grep "$@"; }')
+    expect(broken.status).not.toBe(0)
+    expect(broken.stdout).toContain("::error::The native changed-path filter failed (grep exit 2)")
+    expect(broken.extended).toBeUndefined()
+
+    // A well-formed base that the repository does not have fails, as does a missing one.
+    expect(run("f".repeat(40), native).status).not.toBe(0)
+    const missing = run("", native)
+    expect(missing.status).not.toBe(0)
+    expect(missing.stdout).toContain("::error::The pull request base SHA is missing or malformed.")
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
   }
 })
 
@@ -641,6 +787,13 @@ test("shipping and test archives preserve executable modes while failure diagnos
   }
 })
 
+const windowsNativeDiagnostics = JSON.stringify({
+  checks: WINDOWS_NATIVE_CHECKS.privileged,
+  reasons: WINDOWS_NATIVE_REASONS,
+  stages: WINDOWS_NATIVE_STAGES,
+  codes: WINDOWS_NATIVE_CODES,
+})
+
 test("native summaries expose failed and skipped closed rows in job logs without native payloads", () => {
   const reports = {
     "mac-build": ["computer-darwin-core.json", "computer-darwin-privileged.json"],
@@ -654,7 +807,7 @@ test("native summaries expose failed and skipped closed rows in job logs without
     )!
     expect(summary.if).toBe("${{ always() }}")
     expect(summary["timeout-minutes"]).toBe(2)
-    const source = /^node --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+    const source = /(?:^|\n)node --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
     expect(source).toBeString()
     const temporary = mkdtempSync(path.join(tmpdir(), "vector-native-summary-"))
     const output = path.join(temporary, "summary.md")
@@ -672,7 +825,13 @@ test("native summaries expose failed and skipped closed rows in job logs without
       const result = spawnSync("node", ["--input-type=module", "-e", source!], {
         encoding: "utf8",
         timeout: 10_000,
-        env: { ...process.env, RUNNER_TEMP: temporary, GITHUB_STEP_SUMMARY: output, WINDOWS_PROTOCOL: "true" },
+        env: {
+          ...process.env,
+          RUNNER_TEMP: temporary,
+          GITHUB_STEP_SUMMARY: output,
+          WINDOWS_PROTOCOL: "true",
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS: windowsNativeDiagnostics,
+        },
       })
       expect(result.error).toBeUndefined()
       expect(result.status, result.stderr).toBe(0)
@@ -683,6 +842,153 @@ test("native summaries expose failed and skipped closed rows in job logs without
           `\n${file}: passed=1, failed=1, skipped=1\n- FAILED privileged.capture-color-patch: native_operation_failed\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`,
         )
       expect(result.stdout).not.toMatch(/PRIVATE|image|stderr|unit:|\"checks\"/)
+    } finally {
+      rmSync(temporary, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows x64 and ARM64 helper summaries log closed failed stages and codes without native payloads", () => {
+  const loader = String(
+    steps(record(record(main.document.jobs)["computer-helper-windows-units"])).find(
+      (step) => step.name === "Summarize x64 native diagnostic rows",
+    )!.run,
+  ).split("\n")[0]!
+  const code = /--eval '([^']+)'/.exec(loader)?.[1]
+  expect(code).toBeString()
+  const loaded = spawnSync(process.execPath, ["--no-env-file", "--eval", code!], {
+    cwd: path.resolve(import.meta.dir, ".."),
+    encoding: "utf8",
+    timeout: 30_000,
+  })
+  expect(loaded.status, loaded.stderr).toBe(0)
+  expect(JSON.parse(loaded.stdout)).toEqual(JSON.parse(windowsNativeDiagnostics))
+  const reports = {
+    "windows-build": {
+      isolated: "Run explicitly isolated Windows scenarios",
+      summary: "Summarize Windows protocol readiness",
+      files: ["computer-win32-core.json", "computer-win32-privileged.json"],
+    },
+    "windows-arm64-test": {
+      isolated: "Run explicitly isolated ARM64 scenarios",
+      summary: "Summarize ARM64 protocol readiness",
+      files: ["computer-win32-arm64.json", "computer-win32-arm64-privileged.json"],
+    },
+  }
+  for (const [name, report] of Object.entries(reports)) {
+    const current = steps(job(name))
+    const summary = current.find((step) => step.name === report.summary)!
+    expect(current.indexOf(summary)).toBeGreaterThan(current.findIndex((step) => step.name === report.isolated))
+    expect(summary.if).toBe("${{ always() }}")
+    expect(summary["timeout-minutes"]).toBe(2)
+    expect(summary["continue-on-error"]).toBeUndefined()
+    expect(summary.shell).toBe("bash")
+    // The same closed vocabulary as the x64 diagnostic job; a failed load must not fail this gating step.
+    expect(String(summary.run).split("\n").slice(0, 2)).toEqual([
+      `${loader} || VECTOR_WINDOWS_NATIVE_DIAGNOSTICS=""`,
+      "export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS",
+    ])
+    const source = /\nnode --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+    expect(source).toBeString()
+    const temporary = mkdtempSync(path.join(tmpdir(), "vector-helper-diagnostic-summary-"))
+    const output = path.join(temporary, "summary.md")
+    const run = (diagnostics: string) => {
+      rmSync(output, { force: true })
+      const result = spawnSync("node", ["--input-type=module", "-e", source!], {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          RUNNER_TEMP: temporary,
+          GITHUB_STEP_SUMMARY: output,
+          WINDOWS_PROTOCOL: "true",
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS: diagnostics,
+        },
+      })
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toBe("")
+      expect(result.stdout).toBe(readFileSync(output, "utf8"))
+      return result.stdout
+    }
+    const privileged = report.files[1]!
+    const rows = (stage: string) =>
+      `: passed=1, failed=1, skipped=1\n- FAILED privileged.apps-running-target: native_operation_failed${stage}\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`
+    try {
+      const diagnostic = { stage: "apps-list-reply", nativeCode: "no_ui_tree" }
+      for (const file of report.files)
+        writeFileSync(
+          path.join(temporary, file),
+          JSON.stringify({
+            checks: [
+              { name: "unit", status: "passed", stdout: "PRIVATE UNIT OUTPUT", ...diagnostic },
+              {
+                name: "privileged.apps-running-target",
+                status: "failed",
+                reason: "native_operation_failed",
+                ...diagnostic,
+              },
+              {
+                name: "privileged.secure-field-refusal",
+                status: "skipped",
+                reason: "noninteractive_desktop",
+                ...diagnostic,
+              },
+            ],
+            image: "PRIVATE SCREENSHOT",
+            stderr: "PRIVATE NATIVE ERROR",
+          }),
+        )
+      writeFileSync(path.join(temporary, "unrelated.json"), JSON.stringify({ text: "PRIVATE UNRELATED FILE" }))
+      const printed = run(windowsNativeDiagnostics)
+      for (const file of report.files)
+        expect(printed).toContain(
+          `\n${file}${rows(file === privileged ? " [stage=apps-list-reply, nativeCode=no_ui_tree]" : "")}`,
+        )
+      expect(printed.match(/\[stage=/g)).toHaveLength(1)
+      expect(printed).not.toMatch(/PRIVATE|image|stderr|unit:|unavailable|\"checks\"/)
+
+      for (const diagnostics of ["", "{}", "PRIVATE NOT JSON"]) {
+        const fallback = run(diagnostics)
+        expect(fallback).toStartWith(
+          "\nStage diagnostics unavailable: the closed Windows native vocabulary did not load.\n",
+        )
+        for (const file of report.files) expect(fallback).toContain(`\n${file}${rows("")}`)
+        expect(fallback).not.toMatch(/PRIVATE|stage=|nativeCode=/)
+      }
+
+      const invalid = [
+        { stage: "PRIVATE WINDOW TITLE", nativeCode: "no_ui_tree" },
+        { stage: diagnostic.stage, nativeCode: "PRIVATE NATIVE ERROR" },
+        { stage: diagnostic.stage },
+        { nativeCode: "no_ui_tree" },
+        { stage: null, nativeCode: "no_ui_tree" },
+        { stage: diagnostic.stage, nativeCode: ["no_ui_tree"] },
+      ]
+      writeFileSync(
+        path.join(temporary, privileged),
+        JSON.stringify({
+          checks: [
+            ...invalid.map((value) => ({
+              name: "privileged.apps-running-target",
+              status: "failed",
+              reason: "native_operation_failed",
+              ...value,
+            })),
+            {
+              name: "privileged.apps-running-target",
+              status: "passed",
+              reason: "native_operation_failed",
+              ...diagnostic,
+            },
+            { name: "privileged", status: "failed", reason: "native_operation_failed", ...diagnostic },
+            { name: "unit", status: "failed", reason: "native_operation_failed", ...diagnostic },
+            { name: "privileged.unknown-check", status: "failed", reason: "native_operation_failed", ...diagnostic },
+            { name: "privileged.apps-running-target", status: "failed", reason: "native_failure", ...diagnostic },
+          ],
+        }),
+      )
+      expect(run(windowsNativeDiagnostics)).not.toMatch(/PRIVATE|stage=|nativeCode=/)
     } finally {
       rmSync(temporary, { recursive: true, force: true })
     }

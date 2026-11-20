@@ -110,3 +110,41 @@ These are in `owner-actions/hosted-ops.md`:
   - **Domain health.** Certificate expiry, domain expiry and DNS drift run in the daily `/api/ops/domains` job (A50, `api/_lib/ops-health.ts`; the route and its cron are A47's).
   - **Readiness.** `perkServices` in `api/_lib/codium-perks.ts` has readiness checks for `on-call`, `release-guard` and `ship-desk` (A50, not A47 or A48 as the bullet expected). Since P7, new ops work also needs its perk listed on the server (`api/_lib/ops-listing.ts`).
   - No build item from this list stays open; deployment, the owner steps above and listing the ops perks remain.
+- **Status on 15 Nov 2026 (Codium finish R46a).** The P7 review addendum's part 1 (outbound checks and the protocol;
+  `codium-p7-repairs.md`, "A46 ops Worker: outbound checks") repaired four findings. R46-1: a DNS-over-HTTPS answer is
+  read as it arrives, at most 64 KiB counted in bytes, and must be UTF-8 (`readPrefix` in `src/bytes.ts`, which the 5xx
+  sniff in `src/check.ts` now uses too, with unchanged verdicts). R46-2 and R46-3: the S8 row above now also leaves a
+  host unknown (inconclusive, never probed) when either kind's lookup fails or an answer is cut short (`TC`); this
+  reverses the 4 Nov reading that one kind's public addresses were enough. R46-4: the plan, config and release bodies,
+  and the nested plan, `onCall`, `releaseGuard` and monitor objects, refuse fields they do not list (400
+  `INTERNAL_BAD_REQUEST`); state, erase, suspend and flags still ignore them (the guard reads state before a hold). The Interface row above holds: its fields are
+  exactly the lists, checked against `src/protocol.ts`'s types. New tests: `test/bytes.test.ts` and
+  `test/protocol.test.ts`; `ssrf.test.ts` and `check.test.ts` gained cases. The deploy order for a new field (the Worker
+  first, in its own merge) is in `owner-actions/hosted-ops.md` step 6. `ssrf.ts`'s header no longer states that
+  Cloudflare's production fetch refuses private addresses: unverified, left to the outside security review. R46b
+  (part 2: `index.ts`, `internal.ts`, `limits.ts`, `runtime.ts` and the rest of `ops-account.ts`) follows. CI: pending.
+- **Status on 15 Nov 2026 (Codium finish R46b).** The P7 review addendum's part 2 (accounts, schedules and the
+  internal API; `codium-p7-repairs.md`, "A46 ops Worker: accounts, schedules and internal API") repaired five findings
+  and tightened two tests. R46-16: an inbound body with no length is read only to 32 KiB and one byte, then cancelled,
+  before the signature check (`src/index.ts`, R46a's `readPrefix`). R46-20: an erasure that comes while a wake waits on
+  the kill flag or its probes, or while a release reads the flag, now leaves the object holding only `erased_at` (an
+  in-memory erasure counter in `src/ops-account.ts`; the release answers 409 `OPS_ERASED`). R46-21: reports older than
+  a day are dropped while the kill flag is set too, so such an account stops waking. R46-22: `flags` calls apply in the
+  order the API signed them, both ways; a delayed one answers `{kill, applied: false}` (a KV write that fails leaves
+  the order claimed, and overlapping writes are not ordered at KV; `owner-actions/hosted-ops.md` covers both).
+  R46-23: release environments are compared without case, as GitHub and the API compare them, with the length checked
+  on the name as sent, and the Worker names them in lower case. R46-19:
+  `wrangler.jsonc` turns Workers Logs and traces off (`"observability": { "enabled": false }`), an owner choice made in
+  that file (`owner-actions/hosted-ops.md`). R46-18 and R46-32: `test/source.test.ts` now requires every outbound
+  `fetch(` call to pass an options argument with `redirect: "manual"` (each call read to its own closing parenthesis)
+  and pins the entry module's exports to `default`, `OpsAccount` and `handleRequest`. A lane follow-up for the lead:
+  the API takes a report that was in flight during an erasure without checking the tombstone
+  (`api/_lib/ops-incidents.ts:328-357`).
+  R46a's CI receipts: Vector Codium run 43720600992 (Codium tests job 132831553538 green but for the four baseline
+  `/experimental/review-memory` MISS lines; Ops Worker job 132831553772), typecheck.yml run 43720604063 and
+  vector-hosted-ci.yml run 43721009223 (Hosted tests job 132832781366), all at `d866364f`. R46b's own CI is pending
+  until its commit is pushed. P7 now covers A44–A50.
+  15 Nov 2026 (Codium finish DZ): R46b's CI receipts. Vector Codium run 43726343168 is green under the lane rule
+  (Codium tests job 132848987130 failed only at the exerciser, with the four baseline MISS lines and `fail=0`).
+  typecheck.yml run 43726319195 and vector-hosted-ci.yml run 43726762155 concluded success, all at `dfef44e3`. See
+  `codium-deviations.md` "Lane status (15 Nov 2026, codium-finish)".

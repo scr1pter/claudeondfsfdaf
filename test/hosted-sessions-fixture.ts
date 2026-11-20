@@ -6,6 +6,8 @@ import { mintCliToken } from "../api/_lib/cli-token"
 import { codiumKey } from "../api/_lib/codium-keys"
 import { effectiveCaps } from "../api/_lib/codium-snapshot"
 import type { ComputerInfo, ComputerStatus, HostedProvider, StopResult } from "../api/_lib/hosted-provider"
+import { handleHostedSessionAction, handleHostedSessions } from "../api/_lib/hosted-api"
+import { applyHostedTransition } from "../api/_lib/hosted-crons"
 import { HOSTED_SESSION_SCRIPTS } from "../api/_lib/hosted-sessions"
 import type { ApiRequest, ApiResponse } from "../api/_lib/http"
 import { keyExpiresAt, protectModelPlanKey, reconcileModelPlanAccount } from "../api/_lib/model-plan-account"
@@ -64,6 +66,8 @@ export function hostedSessionEnvironment(overrides: Record<string, string | unde
     VECTOR_HOSTED_ACCOUNT_SALT: HOSTED_SALT,
     VECTOR_HOSTED_ALLOW_ACCOUNTS: ACCOUNT_ID,
     VECTOR_HOSTED_EGRESS_MICRO_USD_PER_GB: undefined,
+    // No image floor unless a test sets one (H2a); listed so `restore()` puts back what a test set mid-test.
+    VECTOR_HOSTED_MIN_GENERATION: undefined,
     VECTOR_HOSTED_PROVIDER: undefined,
     VECTOR_HOSTED_RUN_HOST: undefined,
     VECTOR_HOSTED_RUN_SIGNING_KEY: "fixture-hosted-run-signing-key-".padEnd(48, "r"),
@@ -101,10 +105,10 @@ export function registerSessionScripts(fakes: Pick<CodiumFakes, "store" | "clock
     store.expires.set(key!, clock.now + Number(px))
     return 1
   })
-  store.scripts.set(HOSTED_SESSION_SCRIPTS.CLAIM, ([lease], [session, cap, until, now, ms]) => {
+  store.scripts.set(HOSTED_SESSION_SCRIPTS.CLAIM, ([lease], [session, cap, until, now, ms, first]) => {
     const fields = store.hash(lease!)
     let free: number | undefined
-    for (let n = 1; n <= Number(cap); n++) {
+    for (let n = Number(first ?? "1"); n <= Number(cap); n++) {
       const value = fields.get(String(n))
       if (value !== undefined) {
         const match = /^([^:]+):(\d+)$/.exec(value)
@@ -450,4 +454,50 @@ export function daemonBeat(session: string, body: Record<string, unknown>, key =
   const signed = { ...body, hostdKey: key }
   const mac = createHmac("sha256", Buffer.from(key, "base64url")).update(Hosted.hostdMacInput(session, signed)).digest("base64url")
   return { ...signed, mac }
+}
+
+// ── Download-only starts (H1a) ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Computer 1 ran a session and stopped, then the plan ended (`patch`; canceled by default) once its period was over, as
+ * reconcile leaves an ended plan: the key marked revoked and switched off at the provider. The `hosted` provisioner's
+ * work then ran, so the disk has its deletion date. Answers when the disk is to be deleted.
+ */
+export async function endedWithDisk(
+  w: HostedWorld,
+  patch: Partial<EntitlementSnapshot> = { state: "ended", reason: "canceled" },
+) {
+  const started = await invoke((request, response) => handleHostedSessions(request, response, w.options), {
+    method: "POST",
+    authorization: w.desktopToken(),
+    body: { size: "standard", jobMinutes: 60, prompt: "Keep working." },
+  })
+  if (started.status !== 201) throw new Error(`The session did not start: ${JSON.stringify(started.body)}`)
+  await invoke((request, response) => handleHostedSessionAction(request, response, "stop", w.options), {
+    method: "POST",
+    authorization: w.desktopToken(),
+    body: {},
+    query: { id: started.body.session.id },
+  })
+  w.advance(Math.max(0, P1.end * 1000 + HOUR - w.fakes.clock.now))
+  const accountKey = codiumKey("account", ACCOUNT_ID)
+  const record = JSON.parse(w.fakes.store.get(accountKey)!)
+  if (patch.state === "ended") {
+    record.key.revoked = patch.reason ?? "canceled"
+    w.fakes.store.set(accountKey, JSON.stringify(record))
+    w.fakes.openRouter.keys.get(SEEDED)!.disabled = true
+  }
+  const from = w.snapshot()
+  const to = w.setSnapshot(patch)
+  await applyHostedTransition({ account: ACCOUNT_ID, from, to, cause: "ended" }, w.options)
+  return w.fakes.store.zset(codiumKey("hosted", "disk-due")).get(ACCOUNT_ID)
+}
+
+/** A download-only start for `computer` (H1a), as the desktop app sends it. */
+export function startDownload(w: HostedWorld, computer: unknown = 1, authorization = w.desktopToken()) {
+  return invoke((request, response) => handleHostedSessions(request, response, w.options), {
+    method: "POST",
+    authorization,
+    body: { mode: "download", computer },
+  })
 }

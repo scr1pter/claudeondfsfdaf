@@ -7,6 +7,11 @@ export type CloudWorkspace = {
   createdAt: number
   updatedAt: number
   revision: number
+  /**
+   * Whole percentages (0-100, rounded down) of the lifetime model-request allowance and of the current Start's running
+   * time. A host from before this field omits it.
+   */
+  usage?: { model: number; time: number }
 }
 
 export type EngineCommand = {
@@ -49,7 +54,7 @@ export const record = (value: unknown): value is Record<string, unknown> =>
 
 export function parsePublicWorkspace(value: unknown): CloudWorkspace {
   if (!record(value)) return invalid()
-  fields(value, ["id", "repository", "branch", "title", "state", "createdAt", "updatedAt", "revision"])
+  fields(value, ["id", "repository", "branch", "title", "state", "createdAt", "updatedAt", "revision", "usage"])
   if (
     !workspaceId(value.id) ||
     typeof value.repository !== "string" ||
@@ -68,6 +73,19 @@ export function parsePublicWorkspace(value: unknown): CloudWorkspace {
     value.revision < 1
   )
     return invalid()
+  // The browser repeats this `usage` rule in readCloudWorkspace (packages/web/src/lib/cloud-workspaces-client.ts),
+  // which cannot import this package; change both together, or the console hides every workspace.
+  const usage = value.usage
+  if (usage !== undefined) {
+    if (!record(usage)) return invalid()
+    fields(usage, ["model", "time"])
+    if (
+      ![usage.model, usage.time].every(
+        (part) => typeof part === "number" && Number.isSafeInteger(part) && part >= 0 && part <= 100,
+      )
+    )
+      return invalid()
+  }
   // Reuse the input boundary without allowing any private record fields through.
   parseCommand({
     action: "create",
@@ -85,6 +103,7 @@ export function parsePublicWorkspace(value: unknown): CloudWorkspace {
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     revision: value.revision,
+    ...(record(usage) ? { usage: { model: usage.model as number, time: usage.time as number } } : {}),
   }
 }
 
@@ -189,6 +208,60 @@ export function validateEngineCommand(command: EngineCommand) {
   const path = url.pathname
   const session = "ses_[A-Za-z0-9]{1,80}"
   const request = "(?:per|req|que)_[A-Za-z0-9]{1,80}"
+  // A Connect.RunID (schema connect.ts), narrower than the desktop's Remote rule (`cr_[A-Za-z0-9_-]{1,61}`):
+  // RunID.create() appends ascending()'s letters and digits only (schema identifier.ts), and protocol.test.ts pins
+  // that its ids pass.
+  const run = "cr_[A-Za-z0-9]{1,61}"
+  // Connected tools (CW-24b): a conversation's members and runs, one run, its cancel, and one VectorScope review of
+  // uncommitted, staged or branch changes, always in the background. service.ts forwards the body as sent, so it is
+  // exactly the engine's review input (schema Connect.ReviewInput, which has no `action`). Fixes, findings, dismissals,
+  // the sessionless folder review and every other /experimental route stay refused, and so does a path that reaches
+  // one of these routes only through dot segments.
+  if (path.startsWith("/experimental/")) {
+    if (command.path.split("?")[0] !== path) return invalid()
+    if (command.method === "GET" && (path === "/experimental/connect" || path === "/experimental/connect/runs")) {
+      const keys = [...url.searchParams.keys()]
+      if (
+        command.body !== undefined ||
+        keys.length !== 1 ||
+        keys[0] !== "sessionID" ||
+        !new RegExp(`^${session}$`).test(url.searchParams.get("sessionID") ?? "")
+      )
+        return invalid()
+      return
+    }
+    if (url.search) return invalid()
+    if (command.method === "GET" && new RegExp(`^/experimental/connect/runs/${run}$`).test(path)) {
+      if (command.body !== undefined) return invalid()
+      return
+    }
+    if (command.method === "POST" && new RegExp(`^/experimental/connect/runs/${run}/cancel$`).test(path)) {
+      if (command.body !== undefined && (!record(command.body) || Object.keys(command.body).length)) return invalid()
+      return
+    }
+    if (command.method !== "POST" || !new RegExp(`^/experimental/session/${session}/connect$`).test(path))
+      return invalid()
+    const body = command.body
+    if (!record(body)) return invalid()
+    fields(body, ["to", "target", "background"])
+    const target = body.target
+    if (
+      body.to !== "vectorscope" ||
+      body.background !== true ||
+      !record(target) ||
+      (target.kind !== "uncommitted" && target.kind !== "staged" && target.kind !== "branch")
+    )
+      return invalid()
+    fields(target, target.kind === "branch" ? ["kind", "base"] : ["kind"])
+    // A branch review's base, as Connect.Ref (schema connect.ts), which the desktop's and the phone's Remote copies
+    // also mirror: never an option, no space or control character. protocol.test.ts checks it against Connect.Ref.
+    if (
+      target.base !== undefined &&
+      (typeof target.base !== "string" || !/^(?!-)[^\s\u0000-\u001f\u007f]{1,256}$/.test(target.base))
+    )
+      return invalid()
+    return
+  }
   if ([...url.searchParams.keys()].some((key) => !["limit", "roots"].includes(key))) return invalid()
   if (url.search && path !== "/session" && !new RegExp(`^/session/${session}/message$`).test(path)) return invalid()
   if ([...url.searchParams.keys()].some((key) => url.searchParams.getAll(key).length !== 1)) return invalid()

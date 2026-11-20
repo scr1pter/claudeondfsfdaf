@@ -2466,6 +2466,12 @@ export async function holdPool(
     fetcher?: typeof fetch
     clock?: () => number
     snapshot?: EntitlementSnapshot
+    /**
+     * H1a: hold from an ended plan's final period (a download-only start's one block), purpose hosted and no run only.
+     * The snapshot is not required to be usable; HOLD's final fence checks it is that plan, ended for a reason whose
+     * final period was kept (`FINAL_PERIOD_REASONS`), and the same floor applies.
+     */
+    final?: true
   } = {},
 ): Promise<PoolHold> {
   if (
@@ -2475,24 +2481,16 @@ export async function holdPool(
     ttlMs < 1_000 ||
     ttlMs > MAX_POOL_HOLD_MS ||
     !isPoolPurpose(purpose) ||
-    !validRunId(options.runId)
+    !validRunId(options.runId) ||
+    (options.final && (purpose !== "hosted" || options.runId !== undefined))
   )
     throw new ApiError(500, "MODEL_PLAN_POOL_INVALID", "This Codium charge could not be held.")
   const fetcher = options.fetcher ?? fetch
   const clock = options.clock ?? Date.now
   const required = usdToMicroCeil(usd)
-  const snapshot = requireUsableSnapshot(
-    options.snapshot ?? (await readEntitlement(account, fetcher, clock())),
-    clock(),
-  )
-  const funding =
-    (await snapshotPoolCredential(account, snapshot, fetcher, clock())) ??
-    (await reconcileOnDemand(account, fetcher, clock()).then((fresh) =>
-      fresh && requireUsableSnapshot(fresh, clock()).version === snapshot.version
-        ? snapshotPoolCredential(account, fresh, fetcher, clock())
-        : undefined,
-    ))
-  if (!funding) throw modelSpendStale()
+  const funding = options.final
+    ? await finalPoolCredential(account, fetcher)
+    : await currentPoolCredential(account, options.snapshot, fetcher, clock)
   const now = clock()
   const ticket = await placeHold(
     {
@@ -2504,6 +2502,7 @@ export async function holdPool(
       ttlMs,
       now,
       ...(options.snapshot ? { version: options.snapshot.version } : {}),
+      ...(options.final ? { final: true } : {}),
     },
     fetcher,
   )
@@ -2515,6 +2514,65 @@ export async function holdPool(
     expiresAt: now + ttlMs,
     release: () => releaseHold(ticket, fetcher),
     settle: (chargedUsd, ref) => settlePoolCharge(ticket, funding.end, chargedUsd, ref, fetcher),
+  }
+}
+
+/** The paid period's pool, from a usable snapshot (reconciling on demand once when its key moved on). */
+async function currentPoolCredential(
+  account: string,
+  given: EntitlementSnapshot | undefined,
+  fetcher: typeof fetch,
+  clock: () => number,
+) {
+  const snapshot = requireUsableSnapshot(given ?? (await readEntitlement(account, fetcher, clock())), clock())
+  const funding =
+    (await snapshotPoolCredential(account, snapshot, fetcher, clock())) ??
+    (await reconcileOnDemand(account, fetcher, clock()).then((fresh) =>
+      fresh && requireUsableSnapshot(fresh, clock()).version === snapshot.version
+        ? snapshotPoolCredential(account, fresh, fetcher, clock())
+        : undefined,
+    ))
+  if (!funding) throw modelSpendStale()
+  return funding
+}
+
+/**
+ * The account's last key and what its pool holds, for a hold from an ended plan's final period (H1a). The key is
+ * switched off and past its period once the plan ended, so neither is asked of it here; the usage is read from the
+ * provider as for any pool (a provider that no longer answers for the key, or answers no usage, refuses: 503). The
+ * private record is read first and is what HOLD's final fence compares.
+ */
+async function finalPoolCredential(id: string, fetcher: typeof fetch): Promise<PoolFunding> {
+  const raw = await persistentStore(["GET", accountKey(id)], fetcher)
+  if (raw === null) throw modelSpendStale()
+  const account = decodeModelPlanAccount(raw)
+  if (account.closing)
+    throw new ApiError(409, "MODEL_PLAN_ACCOUNT_CLOSING", "This account is being deleted. Model access is closed.")
+  const held = riskState(account)
+  if (held) throw riskRefusal(held)
+  const key = account.key
+  if (
+    !key ||
+    key.provisioning ||
+    account.transition !== undefined ||
+    account.upgrade !== undefined ||
+    account.keyCreation !== undefined ||
+    (account.ownerEnd !== undefined && !account.ownerEnd.done)
+  )
+    throw modelSpendStale()
+  if (key.spendGenesis?.state !== "ready" || key.creditsMicro === undefined) throw modelSpendUnavailable()
+  const data = (await openRouterManagement(`/${encodeURIComponent(key.hash)}`, undefined, fetcher)).data
+  if (!stripeRecord(data) || typeof data.usage !== "number" || !Number.isFinite(data.usage) || data.usage < 0)
+    throw modelSpendUnavailable()
+  const pool = keyPool(key)
+  return {
+    pool: key.hash,
+    baseMicro: pool.creditsMicro + pool.carryMicro - usdToMicro(data.usage),
+    totalMicro: pool.creditsMicro + pool.carryMicro,
+    subscription: key.subscription,
+    start: key.start,
+    end: key.end,
+    accountRecord: String(raw),
   }
 }
 

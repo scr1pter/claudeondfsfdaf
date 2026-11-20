@@ -12,6 +12,8 @@ import { onCodiumChange } from "@/vector-account"
 import {
   GITHUB_COPY,
   RECOVERY_COPY,
+  RESTORE_COPY,
+  STARTING_COPY,
   bytes,
   lastLine,
   nextLine,
@@ -58,15 +60,22 @@ function Backup(props: { vault: VaultPlatform }) {
   )
   const offer = () => vectorOffer(plan())
 
+  // The page's own read and Brain Vault's broadcasts. Until Brain Vault starts, the desktop answers a stand-in marked
+  // `starting`; its broadcast at start can arrive before that answer, which then must not replace it (R45-27). The
+  // repository field takes the first real status's repository.
+  const accept = (next: VaultStatus) => {
+    const held = status()
+    if (next.starting && held && !held.starting) return
+    if (!held || held.starting) setRepo(next.githubRepo ?? "")
+    setStatus(next)
+  }
+
   onMount(() => {
     void props.vault
       .status()
-      .then((next) => {
-        setStatus(next)
-        setRepo(next.githubRepo ?? "")
-      })
+      .then(accept)
       .catch(() => undefined)
-    onCleanup(props.vault.onChange(setStatus))
+    onCleanup(props.vault.onChange(accept))
     const clock = setInterval(() => setNow(Date.now()), 30_000)
     onCleanup(() => clearInterval(clock))
   })
@@ -86,8 +95,10 @@ function Backup(props: { vault: VaultPlatform }) {
       if (result.ok) setNotice(result.message)
       else setProblem(result.message)
       after?.(result)
-    } catch (cause) {
-      setProblem(cause instanceof Error && cause.message ? cause.message : "Vector could not do that. Try again.")
+    } catch {
+      // Brain Vault's own refusals arrive as results. A call that throws carries Electron's "Error invoking remote
+      // method …" around a main-process error that was never written for the person, so only fixed copy shows (R45-24).
+      setProblem("Vector could not do that. Try again.")
     } finally {
       setBusy(false)
     }
@@ -178,7 +189,10 @@ function Backup(props: { vault: VaultPlatform }) {
   }
 
   return (
-    <Show when={status()} fallback={<p class="settings-memory-empty">Reading Brain Vault…</p>}>
+    <Show
+      when={status()?.starting ? undefined : status()}
+      fallback={<p class="settings-memory-empty">{status()?.starting ? STARTING_COPY : "Reading Brain Vault…"}</p>}
+    >
       {(current) => (
         <>
           <div class="settings-v2-card settings-v2-card--wide" data-component="settings-memory-backup">
@@ -186,8 +200,9 @@ function Backup(props: { vault: VaultPlatform }) {
               <div class="settings-v2-card-copy">
                 <h3 class="settings-v2-card-title">Back up your memory</h3>
                 <p class="settings-v2-card-description">
-                  Brain Vault backs up the memory of Vector on this computer, encrypted here before it leaves. A new
-                  computer restores it with your recovery code. Nobody else can read it, Vector included.
+                  Brain Vault backs up the memory of Vector on this computer, with its learned skills and workflow
+                  insights, encrypted here before it leaves. A new computer restores it with your recovery code. Nobody
+                  else can read it, Vector included.
                 </p>
               </div>
             </div>
@@ -323,10 +338,7 @@ function Backup(props: { vault: VaultPlatform }) {
             <div class="settings-v2-card-head">
               <div class="settings-v2-card-copy">
                 <h3 class="settings-v2-card-title">Versions and restore</h3>
-                <p class="settings-v2-card-description">
-                  A restore brings back what was in use and pinned, in use and pinned; what waited for your review waits
-                  again. It never replaces what is in memory now.
-                </p>
+                <p class="settings-v2-card-description">{RESTORE_COPY}</p>
               </div>
             </div>
             <div class="settings-v2-card-body">

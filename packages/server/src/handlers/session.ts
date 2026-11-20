@@ -9,13 +9,13 @@ import { FreeModels } from "@vectordevai/core/free-models"
 import { Location } from "@vectordevai/core/location"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { SessionRunnerModel } from "@vectordevai/core/session/runner/model"
-import { PluginInternal } from "@vectordevai/core/plugin/internal"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { RequestOwner } from "../request-owner"
 import { SessionAudienceHttp } from "../session-audience"
 import { DateTime, Effect, Option, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
+import { pluginsLoaded } from "../location"
 import { SessionsCursor } from "@vectordevai/protocol/groups/session"
 import {
   ConflictError,
@@ -632,13 +632,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
   }),
-)
-
-// A location's plugins fill its catalog in the background as it starts, and a guest's first request can be what starts
-// it, so a guest's check waits for them rather than judging an empty catalog. Read optionally, like the services below:
-// embedded callers provide no location plugins, so there is nothing to wait for.
-const pluginsLoaded = Effect.serviceOption(PluginInternal.Service).pipe(
-  Effect.flatMap((plugins) => (Option.isSome(plugins) ? plugins.value.ready : Effect.void)),
 )
 
 /**

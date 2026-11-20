@@ -172,6 +172,38 @@ describe("intake", () => {
     expect(state.watches).toEqual([expect.objectContaining({ sha: SHA("2") })])
   })
 
+  test("environments are compared without case, as GitHub and the API compare them", async () => {
+    const harness = await maxPlan()
+    expect((await harness.release({ sha: SHA("1"), environment: "Production", urls: [A] })).body).toMatchObject({
+      accepted: true,
+    })
+    expect((await harness.release({ sha: SHA("1"), environment: "production", urls: [A] })).body).toEqual({
+      accepted: false,
+      reason: "duplicate",
+    })
+    harness.advance(1_000)
+    expect((await harness.release({ sha: SHA("2"), environment: "PRODUCTION", urls: [A] })).body).toMatchObject({
+      accepted: true,
+    })
+    expect(harness.rows("SELECT environment, sha, state FROM releases ORDER BY at, sha")).toEqual([
+      { environment: "production", sha: SHA("1"), state: "superseded" },
+      { environment: "production", sha: SHA("2"), state: "watching" },
+    ])
+    expect((await harness.state_()).body.watches).toEqual([
+      expect.objectContaining({ environment: "production", sha: SHA("2") }),
+    ])
+  })
+
+  test("the length is checked on the name as sent: a 255-unit name with İ, longer once folded, is watched", async () => {
+    // The API accepts 255 UTF-16 units on the raw name (ops-settings.ts environmentName); folding turns İ into two.
+    const harness = await maxPlan()
+    const environment = `İ${"a".repeat(254)}`
+    expect([environment.length, environment.toLowerCase().length]).toEqual([255, 256])
+    expect((await harness.release({ sha: SHA("1"), environment, urls: [A] })).body).toMatchObject({ accepted: true })
+    expect(harness.rows("SELECT environment FROM releases")).toEqual([{ environment: environment.toLowerCase() }])
+    expect((await harness.release({ sha: SHA("2"), environment: `${environment}a`, urls: [A] })).status).toBe(400)
+  })
+
   test("an older deployment reported late is not watched, and a report older than a day is stale", async () => {
     const harness = await maxPlan()
     await harness.release({ sha: SHA("2"), urls: [A] })

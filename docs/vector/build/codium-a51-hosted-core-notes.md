@@ -48,6 +48,21 @@ all are fakes in the tests. Nothing was applied, deployed or pushed.
 - **Nightly and retention.** `chargeNightly(account, {computer, day, storageGbDays, egressGb})` charges a computer's
   day once per ref (`hs-`/`he-<computer>-<day>`); an ended plan's storage is not charged there. `chargeRetention`
   charges an ended plan's disk days to the final key, as many as it can still cover, once per computer and period.
+  16 Nov 2026 (Codium finish, phase review PR9 and its second round): `chargeRetention` is no longer an unheld debit
+  through `chargeOnce`. Its input is now `{computer, gb, days, final, snapshot}`: `final` says the block was held from
+  an ended plan's final period, and `snapshot` is the one the download-only start decided with. It sizes the days from
+  the period's available figure and checks the daily share against that snapshot (`requireDailyRoom`, 429
+  `MODEL_PLAN_DAILY_LIMIT` with nothing charged). It then holds exactly the charge with
+  `holdPool(…, RETENTION_HOLD_MS, "hosted", {final})` and settles it at once at that amount. A `monthly` or `stale`
+  refusal of that hold sizes the days once more. The line carries the held key's period. The `codium-pool.test.ts`
+  tripwire lists it as a second reviewed `holdPool` producer. See `codium-deviations.md` "Codium finish: phase review
+  fixes, codium-finish lane (16 Nov 2026)" (PR9, R14) and "Codium finish: phase review fixes, round two, codium-finish
+  lane (16 Nov 2026)".
+  16 Nov 2026 (Codium finish, phase review round three, PR18 and PR19): the input also carries `due`, the account's
+  disk deletion date (`hosted:disk-due`), and the line's ref is `hr-<computer>-<due>`: once per computer and kept
+  window, not per period, so a later start in that window held from another period answers the first grant. It
+  answers `{days}` only; the `until` it computed was not the disk's date and no caller read it. See
+  `codium-deviations.md` "Codium finish: phase review fixes, round three, codium-finish lane (16 Nov 2026)" (R18).
 - **True-up.** `trueUpCharge(account, {ref, actualCostMicro})` lowers one line's debit to min(current, cost + 10%),
   on the current period's key only, and records it on the line.
 - **Lines** are written by `vector_hosted` (`record` once per ref, `get`, `trued`, `period` totals for A53's drift
@@ -109,6 +124,9 @@ scratch config (Bun and node types) and are clean.
   `trueUpCharge` per line once it has the provider's usage (`computeCostMicro`); the drift check reads `periodCharges`.
   The hosted provisioner calls `chargeRetention` when a plan ends (days from `hostedDiskPolicy`) and deletes the disk
   at its `until`. Add `computer`'s readiness check in `perkServices` (provider, snapshot and `hostedLedgerConfigured()`).
+  15 Nov 2026 (Codium finish, H1a): the provisioner no longer calls it (P8 review); the first download-only start of
+  each computer does (`launchSession` in `hosted-sessions.ts`), and that start's block is held through `holdPool`'s
+  final path from the ended plan's final period (`codium-deviations.md` "Codium finish: H1 download-only start").
 - **A56:** the pre-start ceiling is the estimate's hosted form.
 - **A57:** call `eraseAccountHostedLedger(account)` after the hosted provisioner stopped the computers. Lines stay.
 - **A60 / legal read:** the privacy page's `#hosted-computer` should say the ledger keeps, per charge, the units, what

@@ -7,6 +7,7 @@ import path from "node:path"
 import { PassThrough } from "node:stream"
 import { agentCommand, agentEnv, browserCommand, cpuReader, createAgentApi, parseArgs, parseEgressCounter, tiePipe, type ApiDeps } from "../src/hostd"
 import { CdpPipe } from "../src/guard"
+import { Daemon } from "../src/daemon"
 import { GitError } from "../src/git"
 import { HeartbeatError, RunApi, type Transport } from "../src/run-api"
 import { Hosted } from "@vectordevai/schema/hosted"
@@ -270,6 +271,55 @@ describe("the agent's socket", () => {
     })
     const paused = await serve({ daemon: { acting: () => false, status: () => ({ booted: true, done: false, control: "person", wrapping: false, browser: true }), touch: () => {} } })
     expect((await paused.call("POST", "/v1/git", { op: "fetch", repository: { owner: "o", name: "app" }, directory: "app" })).status).toBe(409)
+  })
+
+  test("a download-only session starts nothing for the agent, and its socket refuses git (H1b)", async () => {
+    const started: string[] = []
+    const note = (what: string) => async () => void started.push(what)
+    const daemon = new Daemon({
+      session: SESSION,
+      generation: 1,
+      api: {
+        heartbeat: async () => ({
+          state: "running",
+          control: "agent",
+          deadline: 1,
+          browser: true,
+          viewerKey: "k".repeat(43),
+          mode: "download",
+          job: { prompt: "p" },
+        }),
+      },
+      upload: async () => {},
+      agent: {
+        start: note("agent"),
+        running: () => false,
+        pause: async () => {},
+        resume: async () => {},
+        ask: () => {},
+        kill: async () => {},
+        onExit: () => {},
+      },
+      browser: { start: note("browser"), stop: async () => {}, running: () => false, pageLoads: () => 0 },
+      recorder: { start: note("recorder"), stop: () => {}, running: () => false },
+      wipe: async () => {},
+      viewer: note("viewer"),
+      pack: async () => ({ file: "/var/lib/vector/pack/files.tar.gz", bytes: 1 }),
+      discard: async () => {},
+      metrics: { cpu: () => undefined, egressBytes: async () => undefined },
+    })
+    await daemon.tick()
+    expect(started).toEqual([])
+    const s = await serve({ daemon })
+    const clone = { op: "clone", repository: { owner: "o", name: "app" }, directory: "app" }
+    expect((await s.call("POST", "/v1/git", clone)).status).toBe(409)
+    expect((await s.call("GET", "/v1/status")).body).toEqual({
+      booted: false,
+      done: false,
+      control: "agent",
+      wrapping: false,
+      browser: false,
+    })
   })
 
   test("status, and nothing else", async () => {

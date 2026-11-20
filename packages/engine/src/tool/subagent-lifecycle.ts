@@ -297,7 +297,6 @@ export function read(info: Pick<Session.Info, "metadata">): SubagentRecord | und
     Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : undefined
   const optionalString = (input: unknown) => (typeof input === "string" ? input : undefined)
   const budget = Schema.decodeUnknownOption(RunBudget.Info)(value.budget)
-  const scopes = Schema.decodeUnknownOption(Schema.Array(Task.BudgetScope))(value.budgetScopes)
   return {
     ...value,
     ownedPaths: strings(value.ownedPaths),
@@ -315,7 +314,19 @@ export function read(info: Pick<Session.Info, "metadata">): SubagentRecord | und
         ? value.attempt
         : undefined,
     budget: budget._tag === "Some" ? budget.value : undefined,
-    budgetScopes: scopes._tag === "Some" ? scopes.value : undefined,
+    // Each scope is checked alone (P4 F6): a cost kind a newer version added reads as unknown, as an interruption
+    // cause does; an unknown stop reason still drops its scope, since StopReason has no unknown value.
+    budgetScopes: Array.isArray(value.budgetScopes)
+      ? value.budgetScopes.flatMap((scope: unknown) => {
+          const checked = decoded(
+            Task.BudgetScope,
+            isRecord(scope) && typeof scope.costKind === "string" && !Schema.is(RunBudget.CostKind)(scope.costKind)
+              ? { ...scope, costKind: "unknown" }
+              : scope,
+          )
+          return checked ? [checked] : []
+        })
+      : undefined,
     notification:
       isRecord(value.notification) &&
       typeof value.notification.text === "string" &&

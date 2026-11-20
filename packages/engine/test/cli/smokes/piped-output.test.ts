@@ -5,9 +5,10 @@ import path from "node:path"
 import { Effect } from "effect"
 import { cliIt } from "../../lib/cli-process"
 
-// Far more than a pipe holds (64 KB at most), so most of the output is still queued in the CLI when
-// the command finishes and the CLI reaches its exit.
-const prompt = "x".repeat(160_000)
+// Far more than the link between the two stages holds (on Linux Bun's shell uses an AF_UNIX
+// socketpair with about 208 KB of buffer; a pipe holds 64 KB), so most of the output is still queued
+// in the CLI when the command finishes and the CLI reaches its exit.
+const prompt = "x".repeat(512_000)
 
 // The config travels in a file: Linux refuses to start a process whose environment holds a single
 // variable over 128 KB. The file sits outside the project the CLI runs in, so it counts as the user's own.

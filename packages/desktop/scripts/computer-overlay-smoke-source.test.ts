@@ -126,7 +126,7 @@ describe("independent overlay source admission", () => {
       "app.setAccessibilitySupportEnabled(true)",
     )
   })
-  test("the optional UIA observer owns only a shared atomic phase across late native work", async () => {
+  test("the optional UIA observer keeps an immutable first-timeout phase across late native work", async () => {
     const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
     const header = await readFile(path.join(native, "uia_native.h"), "utf8")
     const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
@@ -143,13 +143,82 @@ describe("independent overlay source admission", () => {
     expect(implementation).not.toMatch(/WindowsUiaDiagnostic\s*[*&]/)
     expect(driver).toContain("std::make_shared<WindowsUiaDiagnostic>()")
     expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic)")
-    expect(driver).toContain("diagnostic->phase.load(std::memory_order_relaxed)")
+    expect(header).toContain("std::atomic<uint64_t> timeout_observation{0}")
+    expect(header).toContain("std::atomic<uint64_t>::is_always_lock_free")
+    expect(header).toContain("uint64_t{1} + static_cast<uint64_t>(phase.load(std::memory_order_relaxed))")
+    expect(header).toContain("timeout_observation.compare_exchange_strong(empty, observed, std::memory_order_relaxed)")
+    expect(header).toContain("if (available) return phase.load(std::memory_order_relaxed)")
+    expect(header).toContain("if (!observed || observed > windows_uia_phases.size()) return WindowsUiaPhase::none")
+    expect(header).toContain("return static_cast<WindowsUiaPhase>(observed - 1)")
+    expect(driver).toContain("diagnostic->failure_phase(available)")
+    // HF-7 (1): the side and the root status sampled before retirement ride in that same single snapshot.
+    const snapshot = header.slice(
+      header.indexOf("void note_timeout(WindowsUiaExpiry expiry) noexcept"),
+      header.indexOf("void note_root_element_status("),
+    )
+    expect(snapshot).toContain("root_element_status.load(std::memory_order_relaxed)")
+    expect(snapshot).toContain("uint64_t{static_cast<uint8_t>(expiry)} << 16")
+    expect(snapshot.match(/compare_exchange_strong/g)).toHaveLength(1)
+    expect(header).toContain(
+      "if (status) root_element_status.compare_exchange_strong(empty, status, std::memory_order_relaxed)",
+    )
+    expect(header).toContain("if (available) return WindowsUiaExpiry::none;")
+    expect(header).toContain("const auto status = available ? root_element_status.load(std::memory_order_relaxed)")
+    const root = implementation.slice(
+      implementation.indexOf("note(WindowsUiaPhase::root_element); current_call();"),
+      implementation.indexOf("note(WindowsUiaPhase::root_handle);"),
+    )
+    expect(root).toContain(
+      "FAILED(status)) {\n      if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));\n      unavailable();",
+    )
+    expect(root.match(/ElementFromHandleBuildCache\(/g)).toHaveLength(1)
+    expect(root.match(/current_call\(\)/g)).toHaveLength(1)
+    expect(implementation.match(/note_root_element_status\(/g)).toHaveLength(1)
+    expect(implementation).toContain(
+      "note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_expired, WindowsUiaExpiry::worker_current)",
+    )
+    expect(implementation).toContain(
+      "WindowsComObservation::expired: note(WindowsUiaPhase::actor_com_expired, WindowsUiaExpiry::worker_budget)",
+    )
+    const timeout = implementation.slice(
+      implementation.indexOf("if (result.wait_until(deadline)"),
+      implementation.indexOf("return result.get();"),
+    )
+    expect(
+      timeout.indexOf("note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait)"),
+    ).toBeGreaterThanOrEqual(0)
+    expect(timeout.indexOf("note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait)")).toBeLessThan(
+      timeout.indexOf("ticket->cancelled.store(true)"),
+    )
+    const note = implementation.slice(
+      implementation.indexOf("void note_uia("),
+      implementation.indexOf("struct UiaActor"),
+    )
+    expect(note).toContain("phase == WindowsUiaPhase::actor_expired || phase == WindowsUiaPhase::actor_com_expired")
+    expect(note.match(/note_timeout\(/g)).toHaveLength(1)
+    expect(note.indexOf("state->note_timeout(expiry)")).toBeGreaterThanOrEqual(0)
+    expect(note.indexOf("state->note_timeout(expiry)")).toBeLessThan(note.indexOf("state->phase.store(phase,"))
+    expect(timeout).toContain("ticket->cancelled.store(true); actor_->revoked.store(true)")
+    expect(timeout).toContain("actor_->quarantined = true")
+    expect(timeout).toContain("(void)CoCancelCall(thread, 0); unavailable();")
+    expect(implementation).toContain("ticket->deadline = now_ms() + 50")
     const rootFailure = driver.slice(
       driver.indexOf("try { root = uia.root(window); }"),
       driver.indexOf("stage = OverlayDriverStage::stop_hit;"),
     )
     expect(rootFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
-    expect(rootFailure).toContain("if (available && diagnostic)")
+    expect(rootFailure).toContain("diagnostic->failure_phase(available)")
+    expect(rootFailure).not.toContain("diagnostic->phase.load")
+    expect(rootFailure).toContain(
+      "failure = OverlayDriverUiaFailure{lookup, OverlayDriverUiaCall::root, available, diagnostic->failure_expiry(available), diagnostic->failure_status(available)};",
+    )
+    expect(driver).toContain(
+      "observe_stop(uia, window, *request, stage, uia_diagnostic, OverlayDriverLookup::first, uia_failure)",
+    )
+    expect(driver).toContain(
+      "observe_stop(uia, window, request, stage, diagnostic, OverlayDriverLookup::refresh, failure)",
+    )
+    expect(driver).toContain("overlay_driver_caught(options.mode, stage, std::current_exception(), uia_failure)")
     const hitFailure = driver.slice(
       driver.indexOf(
         'try { require(static_cast<bool>(uia.overlay_hit), L"stop_target_invalid"); element = uia.overlay_hit(root, point(request)); }',
@@ -160,9 +229,14 @@ describe("independent overlay source admission", () => {
     expect(hitFailure).toContain(
       "available ? OverlayDriverStage::stop_hit_refused : OverlayDriverStage::stop_hit_retired",
     )
-    expect(hitFailure).toContain("if (available && diagnostic)")
+    expect(hitFailure).toContain("diagnostic->failure_phase(available)")
+    expect(hitFailure).not.toContain("diagnostic->phase.load")
+    expect(hitFailure).toContain(
+      "failure = OverlayDriverUiaFailure{lookup, OverlayDriverUiaCall::hit, available, diagnostic->failure_expiry(available), diagnostic->failure_status(available)};",
+    )
     expect(hitFailure).toContain("throw;")
-    for (const phase of ["uninitialized", "cancellation_unavailable", "timer_unavailable", "expired"])
+    // expired is pinned above with its worker_budget side.
+    for (const phase of ["uninitialized", "cancellation_unavailable", "timer_unavailable"])
       expect(implementation).toContain(`WindowsComObservation::${phase}: note(WindowsUiaPhase::actor_com_${phase})`)
     expect(implementation).toContain("if (!actor_->diagnostic) return;")
     expect(

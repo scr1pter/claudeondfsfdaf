@@ -20,5 +20,9 @@
   // namespace, so a deploy that still carries it fails instead of writing anywhere.
   "kv_namespaces": [{ "binding": "OPS_FLAGS", "id": "00000000000000000000000000000000" }],
   // Where the Worker reports what it found (POST <API_ORIGIN>/api/ops/worker, signed). Not a secret.
-  "vars": { "API_ORIGIN": "https://vectordev.ai" }
+  "vars": { "API_ORIGIN": "https://vectordev.ai" },
+  // Workers Logs and traces stay off. The Worker writes no log of its own, but the platform's logs and traces would
+  // record each request and possibly the URLs it checks. Turning them on is the owner's choice, made here: each deploy
+  // applies this file, so a toggle changed in the dashboard does not survive the next deploy.
+  "observability": { "enabled": false }
 }

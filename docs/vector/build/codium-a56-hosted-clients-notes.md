@@ -126,3 +126,20 @@ changed A56: hand-over alerts go out at most once per session in 10 minutes (`HA
 says "Vector reports N of M criteria met" and the composer no longer says a model from another lab checks each criterion;
 and `vercelCli` no longer uses `npx`: it installs the pinned CLI with npm, install scripts off and no secret in npm's
 environment, and runs it with the token alone.
+
+**Status, 15 Nov 2026 (Codium finish, H1a).** The server now has the download-only start for an ended plan's disk
+(`POST /api/hosted/sessions {mode: "download", computer}`; `codium-deviations.md` "Codium finish: H1 download-only start
+(15 Nov 2026)"). No client offers it yet: `decodeSession` in `packages/app/src/features/cloud/hosted/hosted-model.ts`
+ignores the session's new `mode` field, so a download session would show Watch and Take over, which the server refuses
+for it; §4.4's notice of the 14 days is not built either.
+
+**Status, 15 Nov 2026 (Codium finish, H1c).** The clients now offer an ended plan's kept files. While
+`GET /api/hosted/status` carries `kept` (H1c's addition; sent only while a download-only start could go ahead or a
+session has packed files), the desktop's bar shows a quiet block ("Your cloud computer's files", the days left as a
+count, "Download your files" behind a confirmation, "Open the download" once packed, "Not now") and the phone's Cloud
+computer page shows the same card; a kept-only phone page shows no plan lines. The download-only session shows as a
+live session with its own lines and only Stop and Files. The clients ask only for a customer with `computer` listed
+and not in the plan (`keptCandidate`), so allowlisted accounts see nothing before listing (D1). The files notice now
+gives the link's own end, for job sessions too. The phone now starts download-only sessions (no ceiling: no job runs);
+"The phone does not start or queue jobs" above still holds for jobs. `codium-deviations.md` "Codium finish: H1 clients
+(15 Nov 2026)".

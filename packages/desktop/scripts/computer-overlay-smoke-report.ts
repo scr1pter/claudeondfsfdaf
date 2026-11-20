@@ -576,6 +576,15 @@ export const COMPUTER_SMOKE_DRIVER_STAGES = [
   "probe-mode",
   "probe-move",
   "guardian-observe-reply-negative-low32-tag-candidate",
+  "guardian-observe-reply-negative-up-not-released",
+  "guardian-observe-reply-negative-up-release-blocked",
+  "guardian-observe-reply-negative-up-release-blocked-callbacks",
+  "guardian-observe-reply-negative-up-release-refused",
+  "guardian-observe-reply-negative-up-release-slow",
+  "guardian-observe-reply-negative-up-release-slow-callbacks",
+  "guardian-observe-reply-negative-up-pump-stalled",
+  "guardian-observe-reply-negative-up-callbacks-without-up",
+  "guardian-observe-reply-negative-up-no-callback",
 ] as const
 export const COMPUTER_SMOKE_DRIVER_NATIVE_CODES = [
   "unavailable",
@@ -619,17 +628,35 @@ export const COMPUTER_SMOKE_DRIVER_CAUSES = [
   "std_exception",
   "unknown",
 ] as const
+// Closed facts of a failed Stop UIA lookup (overlay_driver.h, uia_native.h). They only locate the failure.
+export const COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS = ["first", "refresh"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_CALLS = ["root", "hit"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_ACTORS = ["healthy", "retired"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES = ["none", "worker-current", "worker-budget", "caller-wait"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_HRESULTS = ["unobserved", ...COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES] as const
 export type ComputerSmokeDriverStage = (typeof COMPUTER_SMOKE_DRIVER_STAGES)[number]
 export type ComputerSmokeDriverCause = (typeof COMPUTER_SMOKE_DRIVER_CAUSES)[number]
-export type ComputerSmokeDriverFailure = { stage: ComputerSmokeDriverStage; cause: ComputerSmokeDriverCause }
+export type ComputerSmokeDriverUiaFailure = {
+  lookup: (typeof COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS)[number]
+  call: (typeof COMPUTER_SMOKE_DRIVER_UIA_CALLS)[number]
+  actor: (typeof COMPUTER_SMOKE_DRIVER_UIA_ACTORS)[number]
+  expiry: (typeof COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES)[number]
+  hresult: (typeof COMPUTER_SMOKE_DRIVER_UIA_HRESULTS)[number]
+}
+export type ComputerSmokeDriverFailure = {
+  stage: ComputerSmokeDriverStage
+  cause: ComputerSmokeDriverCause
+  uia?: ComputerSmokeDriverUiaFailure
+}
 
 /**
  * Reads the optional closed location of a coherent, unskipped Windows Stop driver failure. It is a
  * location only: it grants no pass, skip, retry or authority and never changes a reason or an exit.
- * Both keys or neither; anything else throws, which the caller treats as invalid native evidence.
+ * stage and cause together or neither, and uia only beside them; anything else throws, which the caller treats as
+ * invalid native evidence.
  */
 export function computerSmokeDriverFailure(value: Record<string, unknown>): ComputerSmokeDriverFailure | undefined {
-  if (value.stage === undefined && value.cause === undefined) return undefined
+  if (value.stage === undefined && value.cause === undefined && value.uia === undefined) return undefined
   if (
     value.ok !== false ||
     value.skipped !== undefined ||
@@ -643,7 +670,33 @@ export function computerSmokeDriverFailure(value: Record<string, unknown>): Comp
     (value.cause !== "driver_failure" && value.reason !== "native_failure")
   )
     throw new Error("The native driver failure location is invalid.")
-  return { stage: value.stage as ComputerSmokeDriverStage, cause: value.cause as ComputerSmokeDriverCause }
+  return {
+    stage: value.stage as ComputerSmokeDriverStage,
+    cause: value.cause as ComputerSmokeDriverCause,
+    ...(value.uia === undefined ? {} : { uia: computerSmokeDriverUiaFailure(value.uia) }),
+  }
+}
+
+// All five closed facts or none. A healthy actor never expired a ticket, so it cannot name an expiry side.
+function computerSmokeDriverUiaFailure(value: unknown): ComputerSmokeDriverUiaFailure {
+  if (
+    !record(value) ||
+    !exact(value, ["lookup", "call", "actor", "expiry", "hresult"]) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS as readonly unknown[]).includes(value.lookup) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_CALLS as readonly unknown[]).includes(value.call) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_ACTORS as readonly unknown[]).includes(value.actor) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES as readonly unknown[]).includes(value.expiry) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_HRESULTS as readonly unknown[]).includes(value.hresult) ||
+    (value.actor === "healthy" && value.expiry !== "none")
+  )
+    throw new Error("The native driver UIA failure facts are invalid.")
+  return {
+    lookup: value.lookup as ComputerSmokeDriverUiaFailure["lookup"],
+    call: value.call as ComputerSmokeDriverUiaFailure["call"],
+    actor: value.actor as ComputerSmokeDriverUiaFailure["actor"],
+    expiry: value.expiry as ComputerSmokeDriverUiaFailure["expiry"],
+    hresult: value.hresult as ComputerSmokeDriverUiaFailure["hresult"],
+  }
 }
 
 /**
@@ -658,7 +711,7 @@ export function parseComputerSmokeDriverResultFrame(value: Record<string, unknow
     !exact(
       value,
       platform === "win32"
-        ? ["id", "ok", "protocol", "check", "skipped", "reason", "capture", "stage", "cause"]
+        ? ["id", "ok", "protocol", "check", "skipped", "reason", "capture", "stage", "cause", "uia"]
         : ["id", "ok", "protocol", "check", "skipped", "reason", "capture"],
     )
   )
@@ -772,7 +825,9 @@ export function parseComputerSmokeNativeDiagnostic(line: string, platform?: stri
       !record(value) ||
       !exact(
         value,
-        stop && platform === "win32" ? ["ok", "skipped", "reason", "stage", "cause"] : ["ok", "skipped", "reason"],
+        stop && platform === "win32"
+          ? ["ok", "skipped", "reason", "stage", "cause", "uia"]
+          : ["ok", "skipped", "reason"],
       ) ||
       typeof value.ok !== "boolean" ||
       (value.skipped !== undefined && value.skipped !== true) ||
@@ -809,6 +864,68 @@ export function parseComputerSmokeNativeDiagnostic(line: string, platform?: stri
     stop: outcome(value.stop, true),
     ...(value.capture === undefined ? {} : { capture: outcome(value.capture, false) }),
     exitCode: value.exitCode,
+  }
+}
+
+export const COMPUTER_SMOKE_STOP_EFFECT_MARK = "computer-smoke-stop-effect "
+/**
+ * Observation only, installed beside the unchanged trusted-click listener before a Windows native Stop.
+ * It records which trusted left-button half of a Stop click reached the banner page. It never answers
+ * the click, gates the proof or changes a check.
+ */
+export const COMPUTER_SMOKE_STOP_EFFECT_LISTENER =
+  "(() => { const effect = { down: false, up: false }; const stop = (event) => event.isTrusted === true && event.button === 0 && Boolean(event.target?.closest?.('button[data-action=stop]')); document.addEventListener('mousedown', (event) => { if (stop(event)) effect.down = true }, { capture: true }); document.addEventListener('mouseup', (event) => { if (stop(event)) effect.up = true }, { capture: true }); window.__computerSmokeStopEffect = effect })()"
+/** Reads the press, release and existing trusted-click flags, or null when the listener never installed. */
+export const COMPUTER_SMOKE_STOP_EFFECT_PROBE =
+  "(() => { const effect = window.__computerSmokeStopEffect; return effect ? [effect.down === true, effect.up === true, window.__computerSmokeTrustedStop === true] : null })()"
+/**
+ * After a failed Windows native Stop: whether the controller saw its cancel, and whether the page saw the
+ * trusted Stop press, release and click. `page` is false when the flags could not be read, and then the
+ * three page flags are false. It is a location for the next investigation, never a pass, skip or retry.
+ */
+export type ComputerSmokeStopEffect = {
+  protocol: 1
+  cancel: boolean
+  page: boolean
+  down: boolean
+  up: boolean
+  click: boolean
+}
+export function computerSmokeStopEffect(cancel: boolean, page: unknown): ComputerSmokeStopEffect {
+  const flags =
+    Array.isArray(page) && page.length === 3 && page.every((value) => typeof value === "boolean") ? page : undefined
+  return {
+    protocol: 1,
+    cancel,
+    page: flags !== undefined,
+    down: flags?.[0] ?? false,
+    up: flags?.[1] ?? false,
+    click: flags?.[2] ?? false,
+  }
+}
+export function parseComputerSmokeStopEffect(line: string): ComputerSmokeStopEffect {
+  if (!line.startsWith(COMPUTER_SMOKE_STOP_EFFECT_MARK) || line.length > 256)
+    throw new Error("The Stop effect receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_STOP_EFFECT_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "cancel", "page", "down", "up", "click"]) ||
+    value.protocol !== 1 ||
+    typeof value.cancel !== "boolean" ||
+    typeof value.page !== "boolean" ||
+    typeof value.down !== "boolean" ||
+    typeof value.up !== "boolean" ||
+    typeof value.click !== "boolean" ||
+    (!value.page && (value.down || value.up || value.click))
+  )
+    throw new Error("The Stop effect receipt is invalid.")
+  return {
+    protocol: 1,
+    cancel: value.cancel,
+    page: value.page,
+    down: value.down,
+    up: value.up,
+    click: value.click,
   }
 }
 

@@ -608,6 +608,13 @@ export function CloudWorkspaces() {
               <span>{notice}</span>
             </div>
           )}
+          {!createOpen && workspace?.usage?.model === 100 && (
+            <div className="cw-alert cw-notice" role="status">
+              <span>
+                This workspace has used 100% of its pilot model allowance, so it can’t start new model replies.
+              </span>
+            </div>
+          )}
           {enabled === false ? (
             <section className="cw-door cw-disabled">
               <Cloud size={28} />
@@ -799,6 +806,11 @@ export function CloudWorkspaces() {
                           <GitBranch size={13} />
                           <span>{workspace.branch}</span>
                         </p>
+                        {workspace.usage && (
+                          <p className="cw-usage">
+                            {`Pilot allowance used: ${workspace.usage.model}% of model requests${workspace.state === "running" ? ` · ${workspace.usage.time}% of this run’s time` : ""}`}
+                          </p>
+                        )}
                       </div>
                       <div className="cw-toolbar">
                         <span className={`cw-status cw-status-${workspace.state}`}>

@@ -67,7 +67,44 @@ function worker(options: { env?: Partial<Env> } = {}) {
     )
     return { status: response.status, body: (await response.json()) as Record<string, any>, headers }
   }
-  return { clock, net, kv, env, namespace, send }
+  return { clock, net, kv, env, namespace, runtime, send }
+}
+
+/** A body that arrives in 1 KiB chunks only as it is read (nothing is queued ahead), counting the reads and cancels. */
+function trickle(bytes: Uint8Array) {
+  const counts = { pulled: 0, cancelled: 0 }
+  let offset = 0
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        counts.pulled++
+        if (offset >= bytes.byteLength) return controller.close()
+        controller.enqueue(bytes.slice(offset, offset + 1024))
+        offset += 1024
+      },
+      cancel() {
+        counts.cancelled++
+      },
+    },
+    { highWaterMark: 0 },
+  )
+  return { body, counts }
+}
+
+/** Waits (a few ms at a time) until `ready` holds: a wake or a call is now waiting where the test holds it. */
+async function until(ready: () => boolean) {
+  while (!ready()) await Bun.sleep(1)
+}
+
+/** What an erased object may hold: the erasure time and nothing else. */
+function expectErased(harness: Harness) {
+  expect(harness.rows<{ k: string }>("SELECT k FROM meta").map((row) => row.k)).toEqual(["erased_at"])
+  const stored = JSON.stringify(harness.rows("SELECT * FROM meta"))
+  expect(stored).not.toContain(HOST)
+  expect(stored).not.toContain(ACCOUNT)
+  for (const table of ["monitors", "changes", "hourly", "releases", "baselines", "outbox"])
+    expect({ table, rows: harness.rows(`SELECT * FROM ${table}`) }).toEqual({ table, rows: [] })
+  expect(harness.state.alarm).toBeNull()
 }
 
 describe("internal signature", () => {
@@ -178,6 +215,64 @@ describe("routes", () => {
     expect((await worker({ env: { ACCOUNT_KEY: undefined } }).send("state", { account: ACCOUNT })).status).toBe(503)
   })
 
+  test("a body sent with no length is read only to 32 KiB and one more byte, and the rest is cancelled", async () => {
+    const { env, runtime, clock } = worker()
+    const large = trickle(new Uint8Array(1024 * 1024).fill(0x20))
+    const request = new Request("https://vector-ops.workers.dev/internal/v1/state", {
+      method: "POST",
+      body: large.body,
+    })
+    expect(request.headers.get("content-length")).toBeNull()
+    const refused = await handleRequest(request, env, runtime)
+    expect({ status: refused.status, ...large.counts }).toEqual({ status: 413, pulled: 33, cancelled: 1 })
+    // A signed body of exactly 32 KiB, sent the same way, is still taken.
+    const prefix = JSON.stringify({ account: ACCOUNT, pad: "" })
+    const text = JSON.stringify({ account: ACCOUNT, pad: "x".repeat(OPS_LIMITS.internalBodyBytes - prefix.length) })
+    expect(utf8(text).byteLength).toBe(OPS_LIMITS.internalBodyBytes)
+    const path = "/internal/v1/state"
+    const headers = await signInternal(INTERNAL_SECRET, { method: "POST", path, body: text, now: clock.now })
+    const exact = trickle(utf8(text))
+    const taken = await handleRequest(
+      new Request(`https://vector-ops.workers.dev${path}`, { method: "POST", headers, body: exact.body }),
+      env,
+      runtime,
+    )
+    expect(taken.status).toBe(200)
+    expect(exact.counts.cancelled).toBe(0)
+  })
+
+  test("a delayed call to the kill flag cannot undo a newer one, either way", async () => {
+    const { send, kv, clock } = worker()
+    expect((await send("flags", { kill: true })).body).toEqual({ kill: true })
+    // The clear the API gave up on, signed a minute before the raise, arrives after it.
+    expect((await send("flags", { kill: false }, { now: clock.now - 60_000 })).body).toEqual({
+      kill: true,
+      applied: false,
+    })
+    expect(kv.values.get("kill")).toBe("1")
+    expect((await send("flags", { kill: true }, { now: clock.now - 120_000 })).body).toEqual({
+      kill: true,
+      applied: false,
+    })
+    expect((await send("flags", { kill: false }, { now: clock.now - 30_000 })).body).toEqual({
+      kill: true,
+      applied: false,
+    })
+    expect(kv.values.get("kill")).toBe("1")
+    clock.now += 1_000
+    expect((await send("flags", { kill: false })).body).toEqual({ kill: false })
+    expect(kv.values.has("kill")).toBe(false)
+    // A raise signed before that newer clear is refused the same way.
+    expect((await send("flags", { kill: true }, { now: clock.now - 30_000 })).body).toEqual({
+      kill: false,
+      applied: false,
+    })
+    expect(kv.values.has("kill")).toBe(false)
+    clock.now += 1_000
+    expect((await send("flags", { kill: true })).body).toEqual({ kill: true })
+    expect(kv.values.get("kill")).toBe("1")
+  })
+
   test("the kill flag is set and cleared through the control object, and read on every wake", async () => {
     const { send, kv, namespace } = worker()
     expect((await send("flags", { kill: true })).body).toEqual({ kill: true })
@@ -264,6 +359,96 @@ describe("erase (delete)", () => {
     // A later account with the same id (a re-subscription) starts clean.
     harness.advance(1_000)
     expect((await harness.plan(planFor("vector-200", { validUntil: harness.clock.now + 86_400_000 }))).status).toBe(200)
+  })
+
+  test("an erasure while a wake waits on its probes leaves nothing of that wake", async () => {
+    const harness = new Harness()
+    await harness.plan(planFor("vector-200"))
+    await harness.config([HOST], [{ id: "home", url: HOME }])
+    const gate = Promise.withResolvers<Response>()
+    harness.net.sites.set(HOME, () => gate.promise)
+    const wake = harness.fire()
+    await until(() => harness.net.probes(HOME) === 1)
+    expect((await harness.call("erase", { account: ACCOUNT })).body).toEqual({ erased: true })
+    gate.resolve(new Response("x", { status: 500 }))
+    await wake
+    expectErased(harness)
+  })
+
+  test("an erasure while a wake waits on the kill flag leaves nothing of that wake, with the flag set or not", async () => {
+    for (const flag of ["1", null]) {
+      const harness = new Harness()
+      await harness.plan(planFor("vector-200"))
+      await harness.config([HOST], [{ id: "home", url: HOME }])
+      await harness.fire()
+      const gate = Promise.withResolvers<void>()
+      let waiting = false
+      harness.kv.get = async () => {
+        waiting = true
+        await gate.promise
+        return flag
+      }
+      const wake = harness.fire()
+      await until(() => waiting)
+      expect((await harness.call("erase", { account: ACCOUNT })).body).toEqual({ erased: true })
+      gate.resolve()
+      await wake
+      expectErased(harness)
+    }
+  })
+
+  test("an erasure while a release waits on the kill flag stores neither the release nor the account", async () => {
+    const harness = new Harness()
+    const gate = Promise.withResolvers<void>()
+    let waiting = false
+    harness.kv.get = async () => {
+      waiting = true
+      await gate.promise
+      return null
+    }
+    // A fresh object: the first release would have stored the account id with its answer.
+    const fresh = harness.release({ sha: SHA("1"), urls: [HOME] })
+    await until(() => waiting)
+    expect((await harness.call("erase", { account: ACCOUNT })).body).toEqual({ erased: true })
+    gate.resolve()
+    expect(await fresh).toEqual({ status: 409, body: { error: { code: "OPS_ERASED" } } })
+    expectErased(harness)
+    // A re-subscription while a release signed before the erasure waits: the release is still refused.
+    const later = new Harness()
+    await later.plan(planFor("vector-200"))
+    await later.config([HOST], [])
+    const held = Promise.withResolvers<void>()
+    waiting = false
+    later.kv.get = async () => {
+      waiting = true
+      await held.promise
+      return null
+    }
+    const delayed = later.release({ sha: SHA("2"), urls: [HOME] })
+    await until(() => waiting)
+    expect((await later.call("erase", { account: ACCOUNT })).body).toEqual({ erased: true })
+    later.advance(1_000)
+    expect((await later.plan(planFor("vector-200", { validUntil: later.clock.now + 86_400_000 }))).status).toBe(200)
+    held.resolve()
+    expect(await delayed).toEqual({ status: 409, body: { error: { code: "OPS_ERASED" } } })
+    expect(later.rows("SELECT * FROM releases")).toEqual([])
+  })
+
+  test("a repeated erase answers the same and keeps only the erasure time", async () => {
+    const { send, namespace, clock } = worker()
+    await send("plan", { account: ACCOUNT, plan: planFor("vector-200") })
+    const entry = async () => namespace.objects.get((await accountHandle(ACCOUNT_KEY, ACCOUNT))!)!
+    const erasedAt = async () =>
+      JSON.parse((await entry()).state.sql.rows<{ v: string }>("SELECT v FROM meta WHERE k = 'erased_at'")[0]!.v)
+    expect((await send("erase", { account: ACCOUNT })).body).toEqual({ erased: true })
+    const first = await erasedAt()
+    clock.now += 1_000
+    expect((await send("erase", { account: ACCOUNT })).body).toEqual({ erased: true })
+    expect((await entry()).state.sql.rows<{ k: string }>("SELECT k FROM meta").map((row) => row.k)).toEqual([
+      "erased_at",
+    ])
+    expect(await erasedAt()).toBe(first + 1_000)
+    expect((await entry()).state.alarm).toBeNull()
   })
 
   test("erase through the Worker reaches the account's object", async () => {

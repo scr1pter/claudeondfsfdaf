@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import {
   chmod,
   appendFile,
+  constants,
   open,
   copyFile,
   lstat,
@@ -19,10 +20,13 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises"
+import type { Stats } from "node:fs"
+import { setTimeout } from "node:timers/promises"
 import { Cause, Context, Effect, Layer, Option, RcMap, Schema, Scope, Stream } from "effect"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { KeyedMutex } from "@vectordevai/core/effect/keyed-mutex"
+import { LockFs } from "@vectordevai/core/util/lock-fs"
 import { Global } from "@vectordevai/core/global"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
@@ -299,11 +303,46 @@ async function guarded(file: string, root = Global.Path.data) {
       if (missing(cause)) return undefined
       throw cause
     })
-    if (info?.isSymbolicLink() || (info?.isFile() && info.nlink !== 1))
-      throw err("registry", "Isolation data cannot be a symbolic or hard link.")
+    if (info && linked(info)) throw err("registry", "Isolation data cannot be a symbolic or hard link.")
     if (name !== file && info && !info.isDirectory())
       throw err("registry", "Isolation registry ancestor is not a directory.")
   }
+}
+
+/**
+ * A second name is nlink 2 or more. Every save renames a fresh file over the record, and a file looked at just before
+ * that rename (an lstat that resolved the old name, or a file already open) reports no names left (nlink 0): that is
+ * a replaced file, not a link.
+ */
+export const linked = (info: Stats) => info.isSymbolicLink() || (info.isFile() && info.nlink > 1)
+
+/**
+ * Reads isolation data, checking the file that is read rather than the path. Every save renames a fresh file over
+ * the old one, so a check of the path and a later read by path can see two different files. Where open can refuse a
+ * final symbolic link, the path guard covers only the folders and the checks are made on the open file, which a later
+ * rename cannot change. Elsewhere (Windows has no O_NOFOLLOW) the path's lstat stays the symbolic link check.
+ */
+async function privateRead(file: string) {
+  // The guard runs again before every retried open, so on Windows each open still follows a fresh lstat of the path.
+  const handle = await cleared(async () => {
+    await guarded(constants.O_NOFOLLOW === undefined ? file : path.dirname(file))
+    return open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+  }).catch((cause) => {
+    const code = (cause as NodeJS.ErrnoException)?.code
+    if (code === "ELOOP") throw err("registry", "Isolation data cannot be a symbolic or hard link.")
+    // The guard checked the folder holding the file without requiring it to be one, and `missing` would read an
+    // ordinary file there as absent, so that stays the error the guard gives an ancestor that is not a directory.
+    if (code === "ENOTDIR") throw err("registry", "Isolation registry ancestor is not a directory.")
+    throw cause
+  })
+  return handle
+    .stat()
+    .then((info) => {
+      if (linked(info)) throw err("registry", "Isolation data cannot be a symbolic or hard link.")
+      if (!info.isFile()) throw err("registry", "Isolation data is not an ordinary file.")
+      return handle.readFile("utf8")
+    })
+    .finally(() => handle.close())
 }
 
 async function privateJSON(file: string, value: unknown) {
@@ -312,9 +351,29 @@ async function privateJSON(file: string, value: unknown) {
   await chmod(path.dirname(file), 0o700)
   const temp = `${file}.${randomUUID()}.tmp`
   await writeFile(temp, JSON.stringify(value), { flag: "wx", mode: 0o600 })
-  await rename(temp, file).catch(async (cause) => {
+  await cleared(() => rename(temp, file)).catch(async (cause) => {
     await rm(temp, { force: true })
     throw cause
+  })
+}
+
+/**
+ * Windows refuses to rename over a file another handle has open (a `find`, which reads without the per-task lock, or
+ * an antivirus scan of the new temp file), and to open one whose replacement is still pending, and the refusal clears
+ * once that handle closes. There an error LockFs counts as transient is retried for its short window before it is
+ * reported; elsewhere every error is reported at once. Engine (windows) job 136057825288 left a record short of
+ * "changed" when a save's rename met the test's own `find` poll.
+ */
+async function cleared<A>(run: () => Promise<A>, start = performance.now(), delay = LockFs.TRANSIENT_BASE_DELAY_MS) {
+  return run().catch(async (cause): Promise<A> => {
+    if (
+      process.platform !== "win32" ||
+      !LockFs.isTransient(cause) ||
+      performance.now() - start >= LockFs.TRANSIENT_WINDOW_MS
+    )
+      throw cause
+    await setTimeout(delay)
+    return cleared(run, start, LockFs.nextDelay(delay))
   })
 }
 
@@ -357,8 +416,7 @@ export async function place(target: string, entry: { symlink: string } | { bytes
 
 async function readRecord(ctx: InstanceContext, taskID: string): Promise<Record> {
   const expected = paths(ctx.project.id, taskID)
-  await guarded(expected.file)
-  const record = decode(JSON.parse(await readFile(expected.file, "utf8")))
+  const record = decode(JSON.parse(await privateRead(expected.file)))
   if (
     record.taskID !== taskID ||
     record.projectID !== ctx.project.id ||
@@ -385,8 +443,7 @@ async function readRecord(ctx: InstanceContext, taskID: string): Promise<Record>
   )
     throw err("registry", "Isolation registry does not match the launching project.")
   const tombstone = path.join(expected.registry, "deleted.json")
-  await guarded(tombstone)
-  const deleted = await readFile(tombstone, "utf8")
+  const deleted = await privateRead(tombstone)
     .then((value) => JSON.parse(value) as { sessionID: string; projectID: string })
     .catch((cause) => {
       if (missing(cause)) return undefined
@@ -402,8 +459,7 @@ export const enqueueDeleted = Effect.fn("TaskIsolation.enqueueDeleted")(function
   if (!safeID(session.id) || !safeID(session.projectID)) return
   const location = paths(session.projectID, session.id)
   yield* io(async () => {
-    await guarded(location.file)
-    const record = await readFile(location.file, "utf8")
+    const record = await privateRead(location.file)
       .then((value) => decode(JSON.parse(value)))
       .catch((cause) => {
         if (missing(cause)) return undefined
@@ -452,9 +508,7 @@ async function dropBaselines(record: Record) {
 }
 const baselineHashes = (record: Record) =>
   io(async () => {
-    const file = baselinePaths(record).hashes
-    await guarded(file)
-    const value = JSON.parse(await readFile(file, "utf8")) as { [key: string]: string }
+    const value = JSON.parse(await privateRead(baselinePaths(record).hashes)) as { [key: string]: string }
     if (
       !value ||
       typeof value !== "object" ||

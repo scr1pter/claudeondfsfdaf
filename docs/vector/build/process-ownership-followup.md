@@ -138,3 +138,69 @@ This document does not close PR #23.
 CI here ran only on Linux and Windows runners. No macOS run, artifact ZIP
 verification, release review or other platform acceptance is claimed. No merge
 or release is claimed.
+
+## Hosted sandbox cleanup (C9), 15 November 2026
+
+The process-spawn review's C9 worried that the POSIX owned-group cleanup could not
+confirm a stop inside the hosted engine sandbox, because the sandbox `/proc` might be
+empty. At the `native-qualify` head that case cannot occur in any shipped or CI build:
+
+- A legacy hosted `@vector` engine runs with the host `/proc`. The bubblewrap floor is off,
+  and so is the native build. So the `kill(-pgid, 0)` check and the `/bin/ps` zombie check
+  in `OwnedProcess` work there.
+- A native CI build has an empty `/proc`, but it refuses owned commands before launch.
+
+The new Linux test `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts`
+covers this path. Under required isolation it stops an owned background group that
+ignores SIGTERM, and it shows:
+
+- cleanup `"confirmed"`;
+- both group members gone (on a GitHub-hosted runner strictly `ESRCH`; elsewhere a
+  reparented zombie that PID 1 has not reaped yet is also accepted);
+- the slot released;
+- the stop inside the default bounds (3 s grace, then 3 s kill).
+
+No process-ownership guarantee or deadline changed: grace, kill and drain stay at 3 s
+each, and ShellJobs sets none. A `setsid` grandchild still leaves the group and is not
+contained; that limit is unchanged. Hosted CI evidence comes from the Linux engine shard of
+`test.yml` at the end of the lane. The details are in the
+[spawn-review addendum](v2-spawn-review.md#addendum-15-november-2026-c9-spawn-1-and-spawn-2-at-the-native-qualify-head-nq-2)
+and the [lane notes](native-qualify-notes.md#nq-2-15-november-2026).
+
+## Native qualification lane end, 15 November 2026
+
+No process-ownership guarantee or deadline changed in the `native-qualify` lane. At its
+head `ce5e5605`:
+
+- POSIX grace, kill and drain stay at 3 s each
+  (`packages/core/src/owned-process.ts:131`, `:134`, `:136`).
+- The Windows holder's startup, persistence, stop and close stay at 15, 10, 2 and 3 s
+  (`packages/engine/src/tool/shell/windows-process.ts:28-31`).
+
+The status of the rest:
+
+- The NQ-2 Linux test `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts`
+  has no hosted run yet. `test.yml` has not run on `native-qualify`, so the Linux engine
+  shard of the branch's PR is its first hosted run.
+- Two more POSIX tests for the same contract are on `origin/review-fixes` (`fa5a5639`, not
+  merged here). One of them is
+  `packages/engine/test/task/shell-required-isolation-posix.test.ts`, the path the NQ-2
+  test had until review round two renamed it (lane notes, D106). The two files no longer
+  collide, so both tests' scenarios survive the merge without a hand resolution.
+- Native commands registered with `OwnedProcess` stay refused before launch
+  (`packages/core/src/cross-spawn-spawner.ts:405-411`). The spawn review's §6 Q2,
+  delegate versus refuse, stays open.
+- The holder's own required-isolation guard (SPAWN-3) is only on `origin/review-fixes`
+  (`8562dd7a`).
+- The engine sandbox's `/proc` treatment is still undecided. Run 43697711119 shows that
+  Bun `-e 0` aborts under the empty `/proc` on the hosted image.
+  - If the decision gives the engine its own PID namespace procfs, the `/bin/ps` check in
+    `groupEmpty` would see only that namespace.
+  - Whoever decides must then check C9 again.
+
+The details are in the
+[spawn-review addendum](v2-spawn-review.md#addendum-15-november-2026-lane-end-status-at-the-native-qualify-head-nq-8)
+and the [lane notes](native-qualify-notes.md#nq-8-15-november-2026).
+
+Both native build switches and FLOOR stay false; no production activation is authorized
+by this section.

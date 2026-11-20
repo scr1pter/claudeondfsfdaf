@@ -1091,6 +1091,41 @@ describe("paired phones", () => {
     env.link.stop()
   })
 
+  test("a helper the phone's turn starts keeps the hold and the event stream open after the session is idle", async () => {
+    const { env, send, read } = await paired()
+    await send({
+      t: "req",
+      id: 10,
+      method: "POST",
+      path: "/session/ses_1/prompt_async",
+      directory: "/repo",
+      body: { parts: [{ type: "text", text: "Clean the build in the background" }] },
+    })
+    await until(async () => (await read()).some((item) => (item as { id?: number }).id === 10))
+    await until(() => env.fake.open() === 1)
+    env.fake.push({
+      directory: "/repo",
+      payload: {
+        type: "session.created",
+        properties: {
+          sessionID: "ses_helper",
+          info: { id: "ses_helper", parentID: "ses_1", metadata: { subagent: { status: "running" } } },
+        },
+      },
+    })
+    env.fake.push({
+      directory: "/repo",
+      payload: { type: "session.status", properties: { sessionID: "ses_1", status: { type: "idle" } } },
+    })
+    await until(() => !env.link.isPhoneTurn(["ses_1"]))
+    expect(env.link.isPhoneTurn(["ses_helper", "ses_1"])).toBe(true)
+    expect(env.fake.open()).toBe(1)
+    env.fake.push({ directory: "/repo", payload: { type: "session.idle", properties: { sessionID: "ses_helper" } } })
+    await until(() => !env.link.isPhoneTurn(["ses_helper", "ses_1"]))
+    await until(() => env.fake.open() === 0)
+    env.link.stop()
+  })
+
   test("sends no data frame while no phone is attached", async () => {
     const { env, send } = await paired()
     env.socket().server({ t: "peers", peers: [], viewers: 0 })

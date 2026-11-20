@@ -128,3 +128,498 @@ The first fixture repair run identified one further test-harness mismatch: Redis
 For the workspace retry case, an initial attempt to use `revokeAccountTokens` directly correctly stopped at `revoke`: this billing fixture deliberately lacks Upstash's path-style REST endpoint. Reusing its existing durable-marker helper instead made the complete account-deletion file pass; the separate real revocation tests remain intact.
 
 Exact-source hosted checks remain required after integration; queued, skipped and superseded checks are not passes. The earlier scope UI/Vite configuration failure was superseded by a successful `57f6bf0c1` UI run. Its Vercel commit status also became successful at 18:05:26 UTC; that receipt does not qualify later source revisions.
+
+## 2026-11-16: Windows ripgrep install and native PR coverage plan
+
+Branch `ci-install-retry` from `3ab7858e`. Both problems are in the CI harness; no product code, test assertion
+threshold, timeout budget or feature flag changes.
+
+### Chocolatey ripgrep install
+
+Mechanism. The three Windows x64 steps that installed ripgrep (test.yml `unit` "Install ripgrep (Windows)",
+`engine-windows` "Install ripgrep" in all 12 shards, windows-containment.yml `native` "Install native ripgrep") ran an
+unpinned `choco install ripgrep`. Chocolatey makes one request to its community V2 feed and does not retry. In job
+133556510297 (PR #40, run 43940493286) the feed answered 504 at 20:03:24; choco printed "Unable to find package
+'ripgrep'" and "Chocolatey installed 0/0 packages." and exited 0, so the step's own `$LASTEXITCODE` check did not fire
+and the step died later on "Cannot find path ...\lib\ripgrep\tools". Job 133557296076 (PR #38) shows the same sequence
+with a 503. The step never continued without rg, but it named the wrong cause and one feed blip cost a full re-run.
+
+Change. New composite action `.github/actions/install-ripgrep-windows` downloads the official ripgrep 15.2.0 release
+zip from github.com (which every job already needs for checkout) with
+`curl.exe --fail --retry 6 --retry-all-errors --max-time 60 --retry-max-time 180` and no `--retry-delay`, so the
+exponential backoff stays. `--retry-all-errors` also retries a permanent 404 until the budget ends; the final error
+names the URL. The worst case is under about 4.5 minutes, about 272 s: curl checks the 180 s budget only before its
+backoff sleep, so an attempt that fails just before 180 s can be followed by one last backoff of up to 32 s (the sixth
+retry) and one more full 60 s attempt. That stays inside the engine shards' 5-minute step limit with about 30 s left for
+pwsh startup, hashing, `Expand-Archive` and `rg --version`; an overrun still fails the step loudly. The step timeouts
+are unchanged. The zip's SHA-256 is compared with the release's published value
+(x64 `71b2fef8…aafc5`, ARM64 `e4abca10…5360f`; no job uses ARM64 yet, so that branch has not run in CI), the archive is
+expanded under `RUNNER_TEMP`, `rg --version` must report `ripgrep 15.2.0`, and only then is the native folder appended
+to `GITHUB_PATH`. Every failure throws; there is no Chocolatey fallback. The three steps keep their names, their
+conditions and their timeouts (10, 5, 10 minutes). windows-containment.yml now also runs when the action changes.
+`packages/cloud/src/workflow-compliance.test.ts` pins this from the local files only: no workflow runs
+`choco install ripgrep`, each of the three steps uses the action, and the action keeps its pinned version and hashes,
+the curl exit check right after the download, the hash comparison and the version check before the one `GITHUB_PATH`
+write.
+
+Not changed: the `unit` (windows) job's "Run desktop computer-use tests" step still runs after a failed install
+because of its own condition; the job still goes red. A release download that fails after all retries is a new failure
+signature and should be triaged, not re-run blindly. Whether to drop "Chocolatey or ripgrep 504" from the known-flake
+list is the lead's decision.
+
+### computer-helper plan changed-path filter
+
+Mechanism. The plan job (computer-helper.yml) runs on ubuntu-24.04, which has no ripgrep, and its pull_request branch
+ran `if rg -q '<filter>' changed-paths; then extended=true; fi` under `set -euo pipefail`. Bash does not apply errexit
+to an `if` condition, so exit 127 read as "no match": job 133587777165 (run 43940493286 attempt 2) logged
+"line 24: rg: command not found", set extended=false and succeeded. mac-test and windows-arm64-test, gated on
+`extended == 'true'`, were therefore skipped on every PR since 5a52aa04 added the check (for example
+windows-arm64-test 133587780175 on PR #40; also PR runs 43829091585, 43871132549, 43940516400 and 43869650678). They ran
+only after a merge to main, where extended=true is set without the filter (main push run 43930210165 passed them).
+
+Change. The plan now requires a 40-hex base SHA, runs the identical POSIX ERE filter through `grep -qE` (which ships
+with the image), treats exit 0 as extended, 1 as narrow and anything else as an `::error::` that fails the plan, and
+writes the decision and changed-path count to the step summary. `packages/desktop/scripts/computer-workflow.test.ts`
+now extracts the filter from the grep call, refuses any `rg` command in the plan, and runs the plan step's real script
+in Bash against a temporary local Git repository: a native change gives extended=true, a docs change false, a shadowing
+`rg` function is never called, a grep that exits 2 fails the plan with `::error::`, and a missing or unknown base SHA
+fails. Against main's `if rg -q` text the new cases fail (checked locally by reverting just that block).
+
+Expected cost: PRs touching native, computer or Hands paths, test.yml, computer-helper.yml, bun.lock or package.json
+now run the two macOS mac-test jobs and windows-arm64-test again, as designed. Failures there are real until shown
+otherwise, not flakes.
+
+### Validation
+
+Linux, Bun 1.3.14, frozen install with scripts disabled. One file at a time through the serial lock:
+
+- `packages/desktop`: `scripts/computer-workflow.test.ts` 34 pass, 0 fail; `scripts/computer-overlay-workflow.test.ts`
+  6 pass; `scripts/computer-release-workflow.test.ts` 9 pass; `bun typecheck` exit 0.
+- `packages/cloud`: `src/workflow-compliance.test.ts` 54 pass, 0 fail; `bun typecheck` exit 0. Removing the curl exit
+  check from the action makes the new guard fail.
+
+The PowerShell action, the GitHub release download and the Windows and macOS jobs cannot run here. CI must show, on the
+fix revision: the three Windows install steps print `ripgrep 15.2.0` and the following steps find `rg`; the plan job
+on a PR that touches test.yml reports extended=true in its summary; and mac-test (macos-15-intel, macos-26) and
+windows-arm64-test run and pass on that PR.
+
+## 2026-11-17: Windows review parse child bound and phase marks
+
+Branch `parse-test-windows` from `dabc4821`. Test harness only: `packages/engine/test/review/parse.test.ts`'s
+`child()` helper and one new test for it. No product code, assertion, test deadline, shard layout or flag changes.
+
+Failure. Main push run 43974310423, job 133679953818 ("engine (windows, shard 12/12)"): "parseMs times the parse
+alone, not the first file's grammar load" timed out at 30001.27 ms, the log printed "killed 1 dangling process", and
+then "# Unhandled error between tests: error: child exited 143: " (empty stderr) from parse.test.ts:1138 via :981. The
+one fail and the one error are the same event.
+
+Mechanism. `child()` spawned its own Bun process (env PATH, HOME=scratch, NODE_PATH only) and awaited stdout, stderr
+and `exited` with no bound of its own. On the runner that child was still running at the 30 s test deadline; Bun
+1.3.14 failed the test, SIGTERMed the leftover child as a dangling process (the same chain recorded for
+task-manage.test.ts in multiagent-parity-deviations.md), the child's `exited` resolved to 143, and the still-running
+body then threw after the test was already failed. Not the cause: the preceding wasm-trap test (its own child, exit 0,
+329 ms); the shard list (identical 55 files at 7e440a27, where parseMs passed in 263 ms); code changes (parse.ts,
+tree-sitter.ts, parse.test.ts, fixture.ts and preload.ts last changed Nov 6-12); a slow runner ("twenty large trees"
+took 23.0 s, inside its 20.8-29.5 s range). Why the child stalled is not in the log: the old helper dropped stdout and
+had no phase marks, so a stall in start-up, transpile, the wasm compile or process exit all looked the same.
+
+Change.
+
+- `child()` now bounds its own process: `Bun.spawn` `timeout` (default 20 s, far above the slowest Windows child seen,
+  1.6 s, and under the 30 s deadline) with `killSignal: "SIGKILL"`. Any non-zero exit or signal throws inside the
+  test with exitCode, signalCode, elapsed ms, "killed at its N ms bound" when the bound fired, and both streams.
+  The bound is told by the parent's clock (at or past the limit, or within 50 ms of it with no exit code, for a timer
+  that fires early), since Bun's `killed` reads true after any exit and a Windows kill may report no signal code.
+- The generated child writes synchronous `fs.writeSync(2, ...)` phase marks with its own clock: `started` (from
+  `mark.ts`, passed with `--preload`, so it runs before Bun resolves, transpiles or evaluates the script's static
+  imports), `imported`, `ran` (after the body) and `exiting`. A first static import would not do: ESM loads the whole
+  graph before any module body runs, so its mark would follow the engine modules' resolve and transpile (checked on
+  Bun 1.3.14: with `--preload` the mark prints at about 13 ms, before a missing-module error). No
+  grammar-ready mark: loading the grammar before the timed part would take it out of `wall`, which the parseMs
+  assertion relies on.
+- The child also gets SystemRoot and windir from the parent when they are set (on Windows), which Windows processes
+  expect. Nothing else in its env changes: the job argues against env as the cause (the I-8 child ran right after the
+  stall with the same minimal env in 325 ms, and more than 15 Windows child runs passed with it), so the profile,
+  local-data and temp folders are not redirected until the marks point at start-up. A green shard 12 after this change
+  does not tell the SystemRoot and windir pass-through apart from chance; only the marks of a repeat can.
+- New test "the child() harness > a child that never finishes is killed at its own bound, and the error names the
+  phases it reached" runs a never-ending child with a 5 s bound.
+
+This is diagnostic work: if the stall returns, Windows shard 12 still goes red, but the failure is owned by the test
+and names the phase. Next steps by phase: no marks at all is Bun start-up, before the preload runs (compare the
+child's PATH with a passing run first, since #41 added the pinned-ripgrep PATH entry, then consider the Windows
+profile and temp env); `started` without `imported` is resolve, transpile or top-level evaluation of the engine
+modules (consider a per-child BUN_RUNTIME_TRANSPILER_CACHE_PATH inside its scratch directory); a stall between
+`imported` and `ran` is the body,
+in practice the grammar's wasm read or compile; one between `ran` and `exiting` is a handle keeping the event loop
+alive; one after `exiting` is process exit. The last three go to Bun upstream with the marks, not to a workaround in
+parse.ts, which sets no timers, workers or handles.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock). With the new test and the old helper,
+the run reproduced the CI shape exactly: "killed 1 dangling process", a 30000 ms timeout, then "# Unhandled error
+between tests" with "child exited 143: ". With the change: `test/review/parse.test.ts` 60 pass, 0 fail; the shard-12
+ordered pair `test/review/dismissals.test.ts test/review/parse.test.ts` 63 pass, 0 fail; `packages/engine`
+`bun typecheck` exit 0. CI must show, on the next Windows shard-12 run, the trap, parseMs and I-8 children back in the
+263-401 ms range and the new harness test passing.
+
+Review revision (same branch, Linux, Bun 1.3.14, through the serial lock): `started` moved to a `--preload`, the
+Windows profile, local-data and temp redirection dropped, the early-timer allowance added to the bound check.
+`test/review/parse.test.ts` 60 pass, 0 fail; the ordered pair `test/review/dismissals.test.ts
+test/review/parse.test.ts` 63 pass, 0 fail; `packages/engine` `bun typecheck` exit 0. The harness test still costs
+about 5 s per shard that runs parse.test.ts; a 3 s bound would also sit above the slowest child start-up seen (1.6 s)
+if shard time becomes a problem.
+
+## 2026-11-20: Windows deferred removal without PowerShell command discovery
+
+Branch `ownership-windows` from `7c7508d2`. Product code: `packages/engine/src/installation/windows-remove.ts`, the
+two identity probes in `standalone.ts` and the same probe in `script/verify-windows-installer.ts`; diagnostics and a
+portable guard in `test/installation/ownership.test.ts`. No assertion, test timer (30 s kill, 40 s cleanup, 45 s
+test), 10 s acknowledgement, 15 min exit wait, 310 s `prepared()` deadline, shard layout or flag changes.
+
+Failure. Main push run 44009054115, job 133814545422 ("engine (windows, shard 6/12)", head `7c7508d2`):
+"Windows deferred standalone removal removes only owned files after its parent exits" failed at
+ownership.test.ts:221 after 34381.02 ms with `exitCode` 143, empty stderr, the status file still
+`{"state":"preparing"}` and the parent's last checkpoint `identity-command-finished` (code 0, 18-digit ticks). The
+replaced-executable case after it, in the same process, passed in 2661.58 ms; earlier runs of the failing case took
+1879-2393 ms. No file involved changed since `b57af809`, and no other Windows engine job on main or PRs #36, #43 and
+#44 failed this test.
+
+Mechanism. The parent was healthy: `launch()` had resolved and it was polling `prepared()`. Exit 143 is the test's own
+30 s `child.kill()`. The detached Windows PowerShell 5.1 worker started, created its status file and wrote
+`preparing`, then spent about 30 s before `prepared`. It was not stuck for good: the test's cleanup wait returned at
+34.38 s, before its 40 s deadline, which only the worker's own `finally` can cause. Between the two writes the worker
+ran `Get-Process`, a `StartTime` check, a `CreateNew`/`FileShare.None` lock open, `Get-FileHash` and `WriteAllText`.
+The .NET calls throw at once rather than wait, and any throw writes `failed`, which never appeared. That leaves
+PowerShell command discovery and module auto-load; `Get-Process` was the first use of
+Microsoft.PowerShell.Management in that process (`New-Object` before `preparing` had already loaded Utility, which
+also holds `Get-FileHash`). This is inferred from one sample: nothing timestamped the worker's steps. An equally
+consistent alternative is contention on the shared module analysis cache with the identity probe's `powershell.exe`,
+which had just run `Get-Process` and exited. Related evidence: release-approval.md:111-118 (discovery took
+15,674.88 ms without `PSModuleAnalysisCachePath`, 1,161.65 ms with it; that variable reached this shard),
+release-approval.md:467-477 (two deferred-uninstall cases stopped before scheduling earlier; the native-discovery
+environment fix from then is in place here, so this is a remaining intermittent stall, not a regression), and
+windows-holder.ts:157-160 (discovery "can otherwise wait indefinitely before Add-Type starts, even with -NoProfile",
+under a different environment with no PSModulePath at all).
+
+Change. The worker script and the identity probe now use operators and .NET only, so neither explanation applies:
+`[Diagnostics.Process]::GetProcessById` in a `parentTicks` function (`$null` once the process is gone, `''` while it
+is exiting or its start time cannot be read, keeping the old identity, acknowledgement and exit-wait semantics),
+`[IO.File]::OpenRead` plus `SHA256.ComputeHash` for the hash (same `FileShare.Read`), `[Threading.Thread]::Sleep`,
+`[IO.File]::Delete` and `[IO.Directory]::Delete` in `try` for cleanup, a regex `\uXXXX` escape for the failed-status
+JSON instead of `ConvertTo-Json`, and `[Console]::Error` instead of `Write-Error`/`Write-Warning`. The `preparing`
+status now names its step (`identity`, `lock`, `hash`); `prepared()` ignores the extra field. The test's checkpoints
+add `at` and `elapsedMs`, and its early-exit error lists every fixture entry, so a recurrence names the phase and the
+lock's presence separates the identity step from the hash step. A new portable test strips string literals and
+comments from the generated worker and probe, then fails on any Verb-Noun word in any case, and on any bare word at
+command position (line start, after `;`, `{`, `}`, `(`, `|`, `=`, `&`, `return` or `throw`) that is not a language
+keyword or one of the script's own three functions. It reports every cmdlet in the `7c7508d2` script, and a scratch
+check showed it also catches lowercase `get-process`, `measure-object` inside a block and the aliases `gps`, `sleep`,
+`dir`, `gci` and `gc` after `=`, `&`, `(` and `return`.
+
+Not changed, flagged for the lead or owner: `packages/web/public/install.ps1` is a live-site asset whose deferred
+upgrade wait has the same exposure (`Get-FileHash` :105, :124, :148; `Get-Process` and `Start-Sleep` :151-167;
+`ConvertTo-Json` :46), so a real Windows `vector upgrade` can still stall in discovery up to the 310 s deadline. Core's
+`windows-powershell.ts` environment boundary and its native-discovery regression test stay as they are: the installer
+needs cmdlets such as `Expand-Archive`.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock): `packages/engine`
+`bun test --timeout 30000 test/installation/ownership.test.ts` 6 pass, 2 skip (the Windows cases), 0 fail;
+`packages/engine` `bun typecheck` exit 0; `bun turbo typecheck --concurrency=2` 27 of 27 tasks successful. No PowerShell
+ran locally.
+
+Open check: the root cause counts as confirmed only once Windows CI on this branch's PR shows every Windows engine
+shard green and ownership's two deferred cases back near 2 s. That PR does not exist yet (the branch is not pushed);
+record its run ID, the shard jobs' IDs and both cases' durations here when they finish.
+
+## 2026-11-20: Windows patch-limit listing row and its after-test rejection
+
+Branch `windows-engine-timeouts` from `56b2862b`. Test-only change in `packages/engine/test/cli/github.bundle.test.ts`.
+No product code, assertion, 2,001-path count, 30 s test deadline, retry, skip or shard layout changes.
+
+Failure. `writeBundle > patch-limit refusal: files, counted in the listing` timed out at its 30 s deadline twice on
+Windows: main `dc89e4ec` run 44006980544, job 133785925116 ("engine (windows, shard 12/12)"), and PR #46 run
+44666752560, job 136057825295 ("engine (windows, shard 1/12)"). In PR #46 Bun printed `killed 1 dangling process`,
+then `(fail) ... counted in the listing [30011.98ms]`, then `Unhandled error between tests` with "Vector could not
+record the run's changes." at `src/cli/cmd/github.bundle.ts:776:41` <- `#maybeClose` <- `#handleOnExit`. In `dc89e4ec`
+no git child was running at the deadline; the dropped row body kept running alongside the next row instead, and
+"files, deletions counted" took 27,765 ms against about 9.5 s normally. Linux and most Windows runs pass.
+
+What the row does. `repository()` wrote README.md plus 1,001 distinct `tracked/<i>.txt` files, then ran `git add -A`
+(about 1,002 loose objects) and `git commit` through Bun `$`. `make()` rewrote the 1,001 tracked files and wrote 1,000
+new ones. `writeBundle` (no `timeoutMs`, so its own `GIT_TIMEOUT_MS` = 120 s) runs one git child per step:
+`rev-parse`, `read-tree` into a private index, `ls-files --others` (1,000 paths), `update-index -q --refresh` and
+`ls-files --modified` (1,001 paths); 2,001 is over `PATCH_LIMITS.files`, so it refuses before the add. The read-tree
+index has no stat data, so the refresh and the listing each hash the 1,001 changed files. No other child process.
+
+Timing (passing Windows runs, from the two investigations' job logs, e.g. main `4bb9bcb2` run 44007029816 job
+133786559895 and codium-finish run 44009826105 attempt 2 job 136042932366): "files" (README plus 2,001 new files)
+1.3-1.8 s, "deletions counted" (same 1,002-file base, little for writeBundle to read) 7.9-9.5 s, the listing row
+8.4-13.2 s. So the base build (1,002 writes, `add -A`, commit) is about 6-7 s of the row and the product's hashing about
+0-2 s: only 2.3x-3.5x headroom. In both failing jobs the first writeBundle rows ran 1.7x-10x slower for a short
+stretch (in PR #46 "files" took 3,291 ms against 1,340 ms, and the next row ran a normal 9,211 ms). The logs do not
+show what slowed the runner. On Linux the listing row takes about 144 ms, about 80% of it fixture.
+
+Why the error lands after the test. When Bun times a test out it drops the test body's promise but lets its async work
+run on, and kills the processes it still holds. Bun killed the git child `writeBundle` was waiting on; its `close` event
+had a non-zero code, so `github.bundle.ts:776` rejected FAILED. That rejection travels `git()` -> `stage()` ->
+`writeBundle` -> the row's `await bundle(...)`, whose promise Bun had already dropped, so it surfaces as an unhandled
+error between tests. Reproduced locally with a scratch Bun test that mirrors `git()` (a `git hash-object --stdin`
+child that never gets EOF, 1 s test timeout): with a 120 s signal Bun printed `killed 1 dangling process`, the test
+failed at 1,001 ms and `Unhandled error between tests` followed with the close-handler FAILED via `#maybeClose`; with a
+300 ms signal the same test failed inside itself with the abort FAILED and nothing landed between tests. The product
+behaves as designed: a killed git is a failure, and `writeBundle` deliberately takes no signal.
+
+Change. (1) A new `trackedRepository(count)` builds the two heavy rows' base cheaply: `git init`, README.md written
+and added normally, one `hash-object -w --stdin` blob ("base\n"), all `tracked/<i>.txt` entries in a single
+`update-index --index-info` call on stdin (1,001 `--cacheinfo` arguments would pass the Windows command-line limit),
+then `commit`. 5 objects instead of about 1,005, and the tracked files are never written to disk; README.md stays on
+disk, or `ls-files --modified` would count it and give 2,002. "deletions counted" no longer runs `fs.rm` of the
+never-written `tracked/`. `sh()` gained an optional stdin `input`. The product path is unchanged: same 1,001-path base
+tree, same read-tree, and the same refresh and listing hashing of 1,001 changed or deleted paths. Locally the base
+build fell from 770-1,084 ms to 23-29 ms (5 runs each); on Windows the row should fall from 8.4-13.2 s to about 3-4 s.
+(2) Every patch-limit row passes `writeBundle` its own `timeoutMs`, the 25 s left of a budget taken at the row's start
+(at least 1 ms), so on a slow runner the product's git is stopped inside the row and the row fails with its own
+error instead of a git child outliving it. This only tightens a bound and applies to these five rows only, not the
+shared `bundle()` helper. It does not cover setup git run through Bun `$` that is still running at the deadline; step
+(1)'s headroom is what prevents the flake. Not changed: `countChanges` hashes changed files twice on a fresh read-tree
+index; the later add relies on the refresh's stat data, so leave it unless measured.
+
+Validation (Linux, Bun 1.3.14, through the serial lock): `packages/engine`
+`bun test --timeout 30000 test/cli/github.bundle.test.ts` 24 pass, 2 skip (the existing platform-selected cases), 0
+fail; `packages/engine` `bun typecheck` exit 0.
+
+Open check: confirmed only once Windows CI on this branch's PR shows every Windows engine shard green and the listing
+and "deletions counted" rows near 3-4 s. The branch is not pushed yet; record the run ID, shard job IDs and both rows'
+durations here when they finish.
+
+## 2026-11-20: Windows isolated save renamed over an open record
+
+Failure. PR #46 run 44666752560, engine (windows) shard 4/12, job
+[136057825288](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44666752560/job/136057825288):
+`packages/engine/test/tool/task.test.ts` "task isolation saves > stopping the parent while a foreground isolated
+child's normal save runs does not wait on Git" failed after 26,327 ms with "the save never finished after the Stop".
+That is about 6.3 s of setup plus the whole 20 s `ISOLATED` wait; neighbouring isolated-save tests in the same job took
+6.3-7.7 s, and the same test passed in 10.2 s on a slower runner (job 133427562994), so the deadline is not short: the
+record never reached "changed". The rerun at the same SHA passed. Searches of engine (windows) jobs since `2034e1da`
+found no other failure of this test.
+
+Cause (the most likely one, not reproduced: Linux renames over an open file). The writer side of the race that
+`20efba16` and `4435beab` fixed on the reader side. `TaskIsolation.find` reads record.json without the per-task lock
+(the test polls it every 20 ms), and `privateRead` keeps the file open through stat, read and close. Every save goes
+through `privateJSON`, which writes a temp file and renames it over the record with no retry, and Windows refuses a
+rename over a file another handle has open with EPERM. Whichever save lost (markSettling's, settle's settling save or
+`save(final)`) made settle's catch write `failed`, through the same rename; if that collided too, the error only
+reached `BackgroundJob.finished`'s warning. The log shows no EPERM because settle stores the error in the record. Job
+[133427562994](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43900984996/job/133427562994) (codium-finish
+`0b9f8337`) showed the mechanism: its stress test's own `record.json.0.tmp` rename over a record held open by `find`
+loops failed with EPERM, and `4435beab` removed that stress test and keeps the replace-under-open-handle case off
+Windows, which hid the writer side. The parent's Stop is not involved: the job had ended, so `cancel` only joins it, and
+the save runs in the uninterruptible `onExit`. A residual alternative leaves the same signature: `retire(final)`
+failing after "changed" was written, which settle also turns into `failed`.
+
+Change. `packages/engine/src/task/isolation.ts`: a new `cleared()` retries, on win32 only, an error
+`LockFs.isTransient` accepts (EBUSY, EPERM, ENOTEMPTY, EMFILE, ENFILE) with LockFs's schedule (10 ms doubling to
+250 ms, 2 s window), then reports it. `privateJSON`'s rename uses it (still removing the temp file on a final failure),
+and so does `privateRead`'s open, which can meet a delete-pending record. Each retried open first re-runs the path
+guard: Windows has no O_NOFOLLOW, so the path's lstat is the only symbolic link check there, and a retry would
+otherwise stretch the gap between that check and the open from microseconds to up to 2 s. Readers still take no lock: Stop and the
+Changes view must never wait behind a save that holds the task lock across Git. Other platforms are unchanged. `place()`
+renames (merge and rollback) are not changed here. Tests: `packages/engine/test/task/isolation.test.ts` gains "a save
+over a record another handle holds open waits for the handle and then replaces the record" (on Windows it is expected
+to fail with EPERM without the fix; that rests on job 133427562994's EPERM and has not been run) and "a save over a record held open past the retry window fails on Windows, keeping the old
+record and no temp file" (on other platforms the save replaces the record). In `task.test.ts` every "changed" wait in
+"task isolation saves" now goes through `reached()`, `saveStarted`'s diagnostic generalised, so a timeout reports the
+record's state, attempt, settled attempt and saved error, and names a failed save (EPERM rename) or a retire failure.
+No deadline changed.
+
+Validation (Linux, Bun 1.3.14, through the serial lock): `packages/engine` `bun test --timeout 30000
+test/task/isolation.test.ts` 94 pass, 0 fail; `bun test --timeout 30000 test/tool/task.test.ts` 161 pass, 0 fail;
+`bun typecheck` exit 0. After the per-retry path guard, the same three runs again: 94 pass, 161 pass, exit 0.
+
+Open check: the Windows half of both new tests runs only on Windows CI, and neither Windows-only branch has run yet:
+the old record staying "running" while the handle is open, and the EPERM failure after the retry window. Linux renames
+over an open file at once, so local passes do not exercise them, and this branch has not yet shown the named cause (a
+rename blocked by `find`). The branch is not pushed yet; record the run ID, the Windows engine shard job IDs and both
+new isolation tests' results here when they finish, re-running the shards a few times. If the first test ever flakes on
+Windows, look first at its one timing gap: once the poll sees the .tmp file, the save retries for at most 2 s while
+the test does one more `find` and closes the handle, and the test's own deadline does not cover that gap. Do not
+lengthen any deadline for it.
+
+## 2026-11-20: Bun 1.3.14 crash in scrollback.surface (Worker terminated while loading)
+
+Branch `scrollback-bun-crash` from `6a771354`. Changes: `patches/@opentui%2Fcore@0.3.4.patch` (registered in the root
+`package.json` `patchedDependencies` and `bun.lock`) and one shared mock in
+`packages/engine/test/cli/run/scrollback.surface.test.ts`. No assertion, test, timeout, shard layout or flag changes.
+
+Failures. Bun 1.3.14 panicked ("Segmentation fault at address 0xFFFFFFFFFFFFFFF8", "Bun has crashed", then exit 132
+or 139) inside `test/cli/run/scrollback.surface.test.ts` with no failing test: main `dabc4821` run 43974310423 shard
+5/6 job 133679953809 (after "renders structured write finals once as code blocks"), PR #44 run 43988960845 shard 5/6
+job 133728559216, PR #45 shard 5/6 job 133732849924, main `56b2862b` run 44676025086 shard 6/6 job 136088455729 (after
+"does not emit blank patch snapshots between edit and task"); about 5 of ~50 six-shard Linux engine jobs. RSS stayed
+below 1.1 GB. The earlier crash at the same address in multiagent-parity-deviations.md (shard 2/4 job 126909620047)
+was not diagnosed and may share this cause.
+
+Mechanism. Every test in the file creates and destroys an opentui test renderer. The writer's `<diff>` and `<code>`
+elements are built as `new CodeRenderable(ctx, { id })`, whose `options.treeSitterClient ?? getTreeSitterClient()`
+creates the process-global `TreeSitterClient`; its constructor starts a real `parser.worker.js` Worker. When afterEach
+destroys the last renderer, opentui's `finalizeDestroy` destroys that singleton, and `stopWorker()` called
+`worker.terminate()` 3-170 ms after spawn, while the worker's module graph (about 350 ms) was still loading. In the
+Bun 1.3.14 sources, `WebWorker.shutdown` (`src/jsc/web_worker.zig`) unpublishes the VM, tears down JSC and runs
+`vm.deinit()` without waiting for `RuntimeTranspilerStore.TranspilerJob`s on the shared WorkPool, which hold a raw
+`this.vm` and later write its source maps (`putMappings`, `sourceMapHandler`). Our bun.report trace decodes to frame
+offsets only (no symbols offline): its fault value is -8, the null-header `capacity` read of a freed HashMap, and its
+frames sit on a pool thread, not the JS thread. That the frames are `SavedSourceMap.putValue` through
+`runFromWorkerThread` is an inference from the source and the offsets, not a symbolized stack. The `bun:ffi` and
+`napi_module_register` entries in the Features line are incidental. `MockTreeSitterClient` extends the real client in
+0.3.4, so each test's mock also started a real worker (17 per file); those were never terminated, so they only widened
+the window.
+
+Evidence (local Linux, Bun 1.3.14, through the serial lock). A positive control that terminates each client's raw
+Worker 5-45 ms after spawn crashed 4 of 5 runs of the file with trace
+`C4j+hvE+ypR82oiwC4u41hDiytzhD2szqyD40w/uCm4lnB2svqCA2DR`: every frame equals CI's
+`D4j+hvE+ypR82oiwC4u41hDiytzhD2szqyD40w/uCm4lnB2svqCA2DR` except the leading byte, and the platform/feature prefix
+differs (`g/Bqkog` locally, `i/Hz6339/` in CI), so the strings are the same stack, not byte-identical reports. An
+earlier unamplified local crash (1 in 19 plain runs) has the same frames. A second local signature from the shard-6
+file sequence at main (fault 0x2B11, trace `Fz7339/D4j+hvE+ypRm4lnB2svqCA2AixV`, `workers_terminated(2)`) shares the
+two top frames and the two thread-start frames and lacks the five middle ones: consistent with the same freed VM read
+through reused rather than zeroed memory, with a shorter unwind, but not proven. Bun's non-TTY reporter prints no
+passing tests, so that log cannot place it before scrollback.surface; a worker-logging preload on the same sequence
+shows footer.view and the other earlier files spawn and terminate no worker, and scrollback.surface terminates exactly
+two (both singletons), so `workers_terminated(2)` places it inside scrollback.surface. The Features counts therefore
+do not attribute a spawn to footer.view; they depend on how many tests ran before the crash.
+
+Change. The patch makes `TreeSitterClient.startWorker()` record `workerSettled`, which resolves on the worker's first
+`open`, `error` or `close` event, and `stopWorker()` clear `this.worker`, detach its `onmessage`/`onerror` at once (so,
+as before, a stopped worker's messages never reach the client) and call `terminate()` only once `workerSettled`
+resolves. `open` fires only after `loadEntryPointForWebWorker` has resolved, so no entry-module transpile is in flight.
+There is no timer fallback on purpose: a timed terminate would recreate the crash for a worker still loading, and
+`parser.worker.js` has no top-level await, so a worker that neither opens nor fails is not expected. The cost of that
+choice: such a worker would be detached but never terminated and would keep the process alive, so it would show up as
+a hang at exit rather than a crash (before the patch it was terminated at once). A load failure emits `error`, so it
+does not take this path. When the worker is already online, `terminate()` now runs one microtask after `stopWorker()`
+returns instead of inside it; `handleReset()` reads the old `workerSettled` before `startWorker()` replaces it, so it
+still terminates the right worker, and no caller in engine, tui or cli needs `terminate()` finished on return. Only
+`index-54s7pk0d.js` calls `this.worker.terminate()`. The patch covers every opentui caller: this file,
+`runtime.test.ts:626` in shard 4, and a real `vector run` exit. The test now shares one module-level
+`MockTreeSitterClient({ autoResolveTimeout: 0 })`, so the file keeps one live mock worker instead of 17.
+
+Side effect checked. A client that posted INIT before its worker was online now lets that queued INIT start (mkdir of
+`<dataPath>/tree-sitter/{languages,queries}`, the `tree-sitter.wasm` dynamic import, `Parser.init`) before it is
+terminated; the old code terminated first. INIT runs only for a client that was asked to highlight, which in production
+already meant initializing; in this test file highlighting goes to the mock, so the singleton never receives INIT. A
+scratch stress script (5 runs x 40 rounds, each destroying a real client 0-40 ms after `initialize()` and another
+0-10 ms after `open` with INIT in flight, data path under a scratch folder) ended every run with exit 0, all 80
+initialize promises settled per run and the INIT directories created. That shows the wasm import's window did not race
+`terminate()` in 400 tries; it does not prove the import never uses a TranspilerJob. So a residual production risk
+remains: if that dynamic import does go through a RuntimeTranspilerStore job, `terminate()` during it (for example the
+TUI exiting while a client is still initializing) could hit the same Bun bug after `open`. This test file never sends
+INIT to the singleton, so the CI trigger is fixed either way.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock, from `packages/engine`):
+
+- Frozen reinstall with scripts disabled after deleting the installed `@opentui/core` applied the patch; `bun.lock`
+  changes only by the `patchedDependencies` entry.
+- The same 5-45 ms amplifier routed through the patched `stopWorker()`: 0 crashes in 20 runs, 17 pass each.
+- `bun test --timeout 30000 ./test/cli/run/scrollback.surface.test.ts`: 40 plain runs, 17 pass, 0 fail each.
+- Shard-6 sequence (github.sandbox through scrollback.surface) at this branch with a worker-logging preload: no
+  crash; 111 pass, 7 skip, 1 fail, the `run-process.test.ts` case below.
+- Every other `test/cli/run/*.test.ts` file once: 32 files pass with 0 fail (`runtime.test.ts` 9 pass; `footer.view`
+  22 pass, 5 skip). `run-process.test.ts` fails locally with or without the patch: 25 pass / 2 fail and 20 / 7 with
+  it, 18 / 9 with the unpatched chunk swapped back in, at load average about 14. Each failure is a `vector run`
+  subprocess reaching its 20 s or 30 s limit (for example "exits nonzero without reaching the process timeout when
+  the model is unknown", `timedOut` true); the earlier diagnosis saw the same case fail at unpatched main. Those
+  subprocess cases are local timing, not this change; CI is the check for them.
+- `packages/engine` `bun typecheck` exit 0; Prettier clean on the test file.
+
+Re-run class. Until CI on this branch's PR shows the six Linux engine shards green, a Bun "panic: Segmentation fault"
+on a Linux engine shard stays in the known-flake re-run class (d). After this lands, the same panic in
+scrollback.surface or `runtime.test.ts` means the patch missed a path and needs a root cause, not a re-run; record
+the job, its bun.report string and its Features counts here.
+
+Not changed, flagged for the lead. `packages/core/src/brain/worker/host.ts:280` terminates a Brain worker on its start
+timeout, possibly while it is still loading, and `packages/engine/src/cli/cmd/tui.ts:227` terminates the TUI worker
+after a shutdown RPC that can time out after 5 s (by then it is online). If the Bun bug is general, the first can hit
+it. Upstream: an oven-sh/bun report (`WebWorker.shutdown` runs `vm.deinit()` while RuntimeTranspilerStore jobs still
+hold that VM, with the trace and the amplified reproduction above) is not filed: filing is a public action left to the
+lead or owner. The report should also say that the same freed-VM read may apply to a dynamic import that is still
+transpiling when `terminate()` runs after `open`, since this patch only closes the entry-module window. No Bun 1.4.x
+fix is confirmed (its source fetches came back empty), and @opentui/core 0.9.x still starts the real worker eagerly, so
+there is no version to bump to. When a Bun release fixes it, bump setup-bun and the Bun
+pin, re-run the raw amplifier on unpatched opentui, and drop this patch.
+
+## 2026-11-20: piped-output smoke hung in Bun's shell output capture
+
+Branch `piped-output-drain` from `14cb9720`. Changes: `vector.pipe` in `packages/engine/test/lib/cli-process.ts` and
+the size and comment in `packages/engine/test/cli/smokes/piped-output.test.ts`. `packages/engine/src/index.ts` and
+every assertion, deadline and flag are unchanged.
+
+Failure. PR #49 run 44705365424, engine (linux, shard 1/6), job 136185709075: "piped output larger than the pipe
+buffer all reaches a reader that starts late" timed out at 30003 ms. The helper's timeout fallback reported exit -1
+with empty stdout and stderr, so the log could not show which side hung. The next test in the file passed.
+
+Cause. The hang is in the test process, in Bun 1.3.14's shell output capture. The CLI's exit path is not involved.
+`vector.pipe` ran ``$`bun run ... debug config | <reader>`.quiet()``, so the test process captured the reader's
+stdout through an AF_UNIX socketpair that it polls with EPOLLIN|EPOLLHUP|EPOLLONESHOT. The reader echoes the CLI's
+161,040-byte JSON in one write and exits about 1 ms later. When the test process's event loop reaches that socket only
+after the reader has exited, the data and the hangup arrive as one event. `PosixBufferedReader.readWithFn` reads all
+161,040 bytes with one recvfrom. More than 128 KiB (`stack_buffer_cutoff`) is now buffered and the hangup has been
+seen, so it calls `onReadChunk(chunk, .eof)`. The shell's `PipeReader.onReadChunk` returns false and does not re-arm
+the poll, and `readWithFn` returns without reading the real EOF and without calling `done()`. The capture never closes
+and the ShellPromise never settles, although both processes have been reaped with exit 0. strace of a failing run
+shows the 161,040-byte recvfrom after the reader's `exit_group(0)` and no EPOLL_CTL_MOD or recvfrom on that socket
+afterwards; a healthy run reads before the reader exits, re-arms, reads 0 and closes. A loaded or starved event loop
+(CI shard runners) is what makes the late read likely.
+
+The window is a captured burst between 128 KiB and the socket buffer (212,992 bytes, `net.core.wmem_default` and
+`rmem_default`). A standalone repro (``$`bun -e 'process.stdout.write("x".repeat(N))'`.quiet()`` with the parent
+busy for 1.5 s) returned at N = 100,000, 125,000 and 300,000 and hung at 135,000, 160,000 and 200,000. Capturing
+stderr hangs the same way, and redirecting the child's stdout to a file does not. Instrumented failures showed the CLI
+writing all 161,040 bytes, `end()` calling back within about 1 ms, `process.exit(0)`, and the reader receiving
+everything. Contrary to the test's comments, Bun's shell joins the stages with a socketpair on Linux, not a 64 KB pipe,
+so 160 KB fitted in the link and the CLI's five-second flush at exit was never reached.
+
+Change.
+
+- `vector.pipe` sends the reader stage's stdout to a file in the fixture home (`| <reader> > <out>`) and the CLI
+  stage's stderr to another (`2> <cli.err>`), and reads them once the shell settles. The real link between the CLI and
+  the late reader, which the test exists to check, is unchanged. Bun's shell takes one redirect per command, so the
+  reader's own stderr stays captured; the readers passed here write nothing there.
+- On a timeout the result now carries the reader's output so far and a stderr that names the deadline, how many
+  characters the reader had written, and the CLI's stderr, so a repeat shows which side stopped. The deadline stays
+  30 s.
+- The test's prompt grows from 160,000 to 512,000 characters (it travels through the `VECTOR_AGENT_CONFIG` file), well
+  above the socketpair's capacity, so the CLI really is left with queued output and reaches its bounded flush when the
+  reader starts late. The comments now describe the socketpair and the capture bug. The larger size alone would also
+  have stepped outside the bug's window; it is not the fix.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock, from `packages/engine`; "loaded" means
+six busy-loop shells alongside the test, as in the diagnosis):
+
+- Before, at `14cb9720`: 2 of 4 loaded runs hung at about 30.2 s (stopped after the second hang); the diagnosis saw
+  1 of 5 plain runs hang and 2 of 7 loaded.
+- After: 25 of 25 loaded runs pass, 15 of 15 plain runs pass. With the helper change and the size set back to 160,000,
+  10 of 10 loaded runs pass, so the helper change fixes it on its own.
+- A scratch call with a 2.5 s deadline and a reader that writes "early" then sleeps returned `timedOut`, stdout
+  "early" and the new timeout report. That scratch file was deleted.
+- `piped-output.test.ts` is the only `vector.pipe` caller. `packages/engine` `bun typecheck` exit 0; Prettier clean on
+  both files.
+
+Upstream. A Bun report with the standalone repro above (the fault is in `readWithFn`'s `stack_buffer_cutoff` branch in
+`src/io/PipeReader.zig`, which returns without `done()` when `onReadChunk(.eof)` returns false) is not filed: filing is
+a public action left to the lead or owner. Any other test that captures a 128 KiB to 208 KB burst through Bun's shell
+`.quiet()` or `.text()` can hang the same way.
+
+Review follow-up.
+
+- Margin. At 512,000 characters the Linux run now depends on the CLI's five-second flush at exit, which 160,000 never
+  reached. The reader starts reading about 3 s after the pipeline starts and the window opens when the CLI finishes, so
+  the margin is about 2 s. If a starved runner wakes the reader after the window, the CLI exits with output still
+  queued and the test fails fast with truncated JSON, not a timeout. That is the case the test exists to check (Windows
+  already runs it). If it ever flakes as truncated stdout, look at the 3 s reader sleep against the 5 s flush bound
+  before suspecting the helper; the timeout report tells the two cases apart.
+- Reader stderr. It is still captured by the shell, so a reader passed to `vector.pipe` must keep its stderr well under
+  128 KiB; the helper's comment says so. If Bun's shell ever allows two redirects per command, send it to a file too.
+- On success the CLI's stderr and the reader's captured stderr are now separated by a `--- reader stderr ---` line
+  (only when the reader wrote any), as the timeout report already separates its parts.
+- Windows. Only Linux was validated locally. Check the Windows engine shard that runs `piped-output.test.ts` on the
+  PR's CI (the `2>` and `>` redirects and the 512 KB size) before merging.

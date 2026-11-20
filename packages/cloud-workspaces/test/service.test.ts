@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { createWorkspaceService, type WorkspaceRuntime } from "../src/service"
 import { snapshotDigest } from "../src/docker"
 import { WorkspacePublishError, type publishWorkspaceChanges } from "../src/github"
+import { parsePublicWorkspace, type CloudWorkspace } from "../src/protocol"
 import { signWorkspaceRequest } from "../src/signing"
 import { WorkspaceStore } from "../src/store"
 
@@ -28,13 +29,14 @@ function fixture(input: { modelLimit?: number; maxActive?: number; publish?: typ
     calls: 0,
     starts: 0,
     stops: 0,
-    requests: [] as { path: string; init: RequestInit }[],
+    requests: [] as { id: string; password: string; path: string; init: RequestInit }[],
     creation: undefined as unknown,
     saved: [] as unknown[],
     containers: new Map<string, "running" | "stopped">(),
     modelHeaders: "",
     snapshotText: "new content",
     publications: [] as unknown[],
+    connectOff: false,
   }
   const failedStops = new Set<string>()
   const runtime: WorkspaceRuntime = {
@@ -74,8 +76,10 @@ function fixture(input: { modelLimit?: number; maxActive?: number; publish?: typ
       }
       return { ...snapshot, digest: snapshotDigest(snapshot) }
     },
-    async request(_id, _password, path, init = {}) {
-      state.requests.push({ path, init })
+    async request(id, password, path, init = {}) {
+      state.requests.push({ id, password, path, init })
+      if (state.connectOff && path.startsWith("/experimental/"))
+        return Response.json({ code: "disabled", message: "ENGINE-CONNECT-DETAIL" }, { status: 400 })
       if (path.includes("prompt_async")) {
         state.saved.push(JSON.parse(String(init.body)))
         return new Response(null, { status: 204 })
@@ -238,6 +242,95 @@ test("account ownership, replay rejection and fixed engine routing hold across t
     model: { maxOutputTokens: 4096 },
   })
   expect(JSON.stringify(value.state.creation)).not.toContain("PRIVATE-UPSTREAM-KEY")
+})
+
+test("connected tools reach only the caller's own workspace engine, with its credential and fixed folder (CW-24b)", async () => {
+  const value = fixture()
+  const id = await value.create()
+  const engine = (command: unknown, accountId = owner) => value.call(`/workspaces/${id}/engine`, command, accountId)
+  const run = "cr_0123456789abABCDEFGHIJKLMN"
+  const start = "/experimental/session/ses_saved/connect"
+  const review = { to: "vectorscope", target: { kind: "branch", base: "main" }, background: true }
+  for (const item of [
+    {
+      command: { path: "/experimental/connect?sessionID=ses_saved", method: "GET" },
+      forwarded: "/experimental/connect?sessionID=ses_saved&directory=%2Fdata%2Frepository",
+    },
+    {
+      command: { path: "/experimental/connect/runs?sessionID=ses_saved", method: "GET" },
+      forwarded: "/experimental/connect/runs?sessionID=ses_saved&directory=%2Fdata%2Frepository",
+    },
+    {
+      command: { path: `/experimental/connect/runs/${run}`, method: "GET" },
+      forwarded: `/experimental/connect/runs/${run}?directory=%2Fdata%2Frepository`,
+    },
+    {
+      command: { path: `/experimental/connect/runs/${run}/cancel`, method: "POST", body: {} },
+      forwarded: `/experimental/connect/runs/${run}/cancel?directory=%2Fdata%2Frepository`,
+    },
+    {
+      command: { path: start, method: "POST", body: review },
+      forwarded: `${start}?directory=%2Fdata%2Frepository`,
+    },
+  ]) {
+    expect((await engine(item.command)).status).toBe(200)
+    const sent = value.state.requests.at(-1)!
+    expect(sent.id).toBe(id)
+    expect(sent.password).toBe(value.store.get(owner, id)!.enginePassword)
+    expect(sent.path).toBe(item.forwarded)
+    expect(sent.init.method).toBe(item.command.method)
+    // No forwarding or guest header goes to the engine, so its owner-only connect rules see the workspace's owner.
+    expect([...new Headers(sent.init.headers).keys()]).toEqual(["content-type", "x-vector-directory"])
+    expect(sent.init.body).toBe("body" in item.command ? JSON.stringify(item.command.body) : undefined)
+  }
+  const count = value.state.requests.length
+  for (const command of [
+    { path: "/experimental/connect?sessionID=ses_saved", method: "GET" },
+    { path: "/experimental/connect/runs?sessionID=ses_saved", method: "GET" },
+    { path: `/experimental/connect/runs/${run}`, method: "GET" },
+    { path: `/experimental/connect/runs/${run}/cancel`, method: "POST" },
+    { path: start, method: "POST", body: review },
+  ])
+    expect((await engine(command, other)).status).toBe(404)
+  for (const command of [
+    { path: "/experimental/connect/review", method: "POST", body: { ...review, requestKey: randomUUID() } },
+    { path: "/experimental/connect/findings", method: "POST", body: {} },
+    { path: `/experimental/connect/runs/${run}/dismiss`, method: "POST", body: {} },
+    { path: start, method: "POST", body: { ...review, action: "fix" } },
+    { path: start, method: "POST", body: { ...review, background: false } },
+    { path: "/experimental/connect/runs", method: "GET" },
+    { path: "/experimental/connect?sessionID=ses_saved&directory=/other", method: "GET" },
+  ])
+    expect((await engine(command)).status).toBe(400)
+  expect(value.state.requests).toHaveLength(count)
+})
+
+test("the engine's connect refusal stays generic, and a retiring engine starts no connect review (CW-24b)", async () => {
+  const value = fixture()
+  const id = await value.create()
+  value.state.connectOff = true
+  const refused = await value.call(`/workspaces/${id}/engine`, {
+    path: "/experimental/connect/runs?sessionID=ses_saved",
+    method: "GET",
+  })
+  expect(refused.status).toBe(409)
+  const text = await refused.text()
+  expect(JSON.parse(text)).toMatchObject({ error: { code: "ENGINE_REQUEST_FAILED" } })
+  expect(text).not.toContain("ENGINE-CONNECT-DETAIL")
+  expect(value.state.requests).toHaveLength(1)
+  value.state.stopFailure = true
+  expect((await value.call(`/workspaces/${id}/stop`, {})).status).toBe(503)
+  const retiring = await value.call(`/workspaces/${id}/engine`, {
+    path: "/experimental/session/ses_saved/connect",
+    method: "POST",
+    body: { to: "vectorscope", target: { kind: "uncommitted" }, background: true },
+  })
+  expect(retiring.status).toBe(409)
+  expect(await retiring.json()).toMatchObject({ error: { code: "WORKSPACE_RETIRING" } })
+  expect(value.state.requests).toHaveLength(1)
+  value.state.stopFailure = false
+  await value.service.reap()
+  expect(value.store.get(owner, id)!.state).toBe("stopped")
 })
 
 test("saved chats survive pause, service restart and explicit resume without replaying a turn", async () => {
@@ -573,4 +666,84 @@ test("allocated turns are durably confirmed and an explicit retry cannot dispatc
   expect(value.state.requests.filter((request) => request.path.includes("prompt_async"))).toHaveLength(1)
   expect((await send({ ...turn, parts: [{ type: "text", text: "Changed intent" }] })).status).toBe(409)
   expect((await send({ ...turn, messageID: "msg_0123456789abABCDEFGHIJKLMN" })).status).toBe(400)
+})
+
+test("workspace answers carry the model allowance and the running lifetime only as whole percentages, rounded down", async () => {
+  const value = fixture({ modelLimit: 4 })
+  const id = await value.create()
+  const usage = async () =>
+    ((await (await value.call("/workspaces")).json()) as { workspaces: { usage: unknown }[] }).workspaces[0]!.usage
+  const admit = async () => {
+    const result = await value.model(id)
+    expect(result.status).toBe(200)
+    await result.text()
+  }
+  expect(await usage()).toEqual({ model: 0, time: 0 })
+  // A clock behind the stored running start reads 0, never a negative share that the gateway's parser would refuse.
+  value.advance(-1000)
+  const behind = (await (await value.call("/workspaces")).json()) as { workspaces: unknown[] }
+  expect(parsePublicWorkspace(behind.workspaces[0]).usage).toEqual({ model: 0, time: 0 })
+  value.advance(1000)
+  await admit()
+  expect(await usage()).toEqual({ model: 25, time: 0 })
+  value.advance(30_000)
+  expect(await usage()).toEqual({ model: 25, time: 50 })
+  value.advance(29_700)
+  await admit()
+  await admit()
+  await admit()
+  expect((await value.model(id)).status).toBe(422)
+  expect(value.state.calls).toBe(4)
+  // 99.5% of the running lifetime still reads 99, so 100 appears only once a limit is reached.
+  expect(await usage()).toEqual({ model: 100, time: 99 })
+  value.advance(1000)
+  expect(await usage()).toEqual({ model: 100, time: 100 })
+  const stopped = await (await value.call(`/workspaces/${id}/stop`, {})).text()
+  expect(JSON.parse(stopped).workspace.usage).toEqual({ model: 100, time: 0 })
+  const list = await (await value.call("/workspaces")).text()
+  expect(JSON.parse(list).workspaces[0].usage).toEqual({ model: 100, time: 0 })
+  for (const text of [stopped, list])
+    for (const key of ["modelCalls", "runningSince", "maxModelCalls", "maxCalls", "maxRunMs"])
+      expect(text).not.toContain(key)
+  await value.restart()
+  expect(await usage()).toEqual({ model: 100, time: 0 })
+})
+
+test("every workspace answer carries usage in the form the gateway's shared parser accepts", async () => {
+  const value = fixture()
+  const check = async (response: Response, usage: { model: number; time: number }) => {
+    const body = (await response.json()) as { workspace: CloudWorkspace; changes?: { digest: string } }
+    expect(body.workspace.usage).toEqual(usage)
+    expect(parsePublicWorkspace(body.workspace)).toEqual(body.workspace)
+    return body
+  }
+  const created = await value.call("/workspaces", { repository: "fixture/repository", idempotencyKey: randomUUID() })
+  expect(created.status).toBe(202)
+  const id = (await check(created, { model: 0, time: 0 })).workspace.id
+  await value.service.settle()
+  const admitted = await value.model(id)
+  expect(admitted.status).toBe(200)
+  await admitted.text()
+  value.advance(6000)
+  const running = await value.call(`/workspaces/${id}/start`, {})
+  expect(running.status).toBe(200)
+  await check(running, { model: 20, time: 10 })
+  const listed = (await (await value.call("/workspaces")).json()) as { workspaces: CloudWorkspace[] }
+  expect(listed.workspaces[0]!.usage).toEqual({ model: 20, time: 10 })
+  expect(parsePublicWorkspace(listed.workspaces[0])).toEqual(listed.workspaces[0]!)
+  await check(await value.call(`/workspaces/${id}/stop`, {}), { model: 20, time: 0 })
+  const started = await value.call(`/workspaces/${id}/start`, {})
+  expect(started.status).toBe(202)
+  await check(started, { model: 20, time: 0 })
+  await value.service.settle()
+  const review = await check(await value.call(`/workspaces/${id}/changes`, {}), { model: 20, time: 0 })
+  const publish = () =>
+    value.call(`/workspaces/${id}/publish`, {
+      digest: review.changes!.digest,
+      githubToken: "github_fixture_credential_only_publish",
+      title: "Update the README",
+    })
+  await check(await publish(), { model: 20, time: 0 })
+  await check(await publish(), { model: 20, time: 0 })
+  expect(value.state.publications).toHaveLength(1)
 })

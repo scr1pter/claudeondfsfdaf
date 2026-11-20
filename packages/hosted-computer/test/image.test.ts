@@ -75,6 +75,31 @@ describe("the Dockerfile", () => {
   test("every program hostd runs is checked to be where hostd looks for it", () => {
     for (const binary of Object.values(BINARIES)) expect(dockerfile).toContain(binary)
   })
+
+  test("the CLI's notices go into /usr/share/vector, where the Vector CLI container keeps them, readable by every user", () => {
+    const sources = /^COPY --chmod=644 (.+) \/usr\/share\/vector\/$/m.exec(dockerfile)?.[1]?.split(" ") ?? []
+    const container =
+      /^COPY (.+) \/usr\/share\/vector\/$/m.exec(read("../cloud/container/Dockerfile"))?.[1]?.split(" ") ?? []
+    // The container adds its own CONTAINER-INFO.json; the rest are the CLI release's notices, the same three here.
+    expect(sources.map((source) => path.dirname(source))).toEqual(["notices", "notices", "notices"])
+    expect(sources.map((source) => path.basename(source))).toEqual(
+      container.filter((name) => name !== "CONTAINER-INFO.json"),
+    )
+    expect(dockerfile).toContain("chown -R 0:0 /opt/vector /usr/lib/vector /usr/share/vector;")
+    expect(dockerfile).toContain("chmod 0755 /opt/vector/boot.sh /usr/share/vector;")
+    // The Docker job's checks look for the same files.
+    const checks = read("test/docker/in-image.mjs")
+    for (const source of sources) expect(checks).toContain(`"${path.basename(source)}"`)
+    // notices/ stays in the build context: no .dockerignore pattern drops the folder or a file in it (Bun's `*`, like
+    // Docker's, stops at a slash).
+    const patterns = read(".dockerignore")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
+    for (const pattern of patterns)
+      for (const file of ["notices", ...sources])
+        expect({ pattern, file, ignored: new Bun.Glob(pattern).match(file) }).toEqual({ pattern, file, ignored: false })
+  })
 })
 
 describe("boot.sh", () => {

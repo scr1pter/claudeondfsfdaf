@@ -163,6 +163,7 @@ body {
 }
 
 .phone-form input,
+.phone-form select,
 .phone-form textarea {
   min-height: 44px;
   padding: 10px 12px;

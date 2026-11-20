@@ -17,6 +17,9 @@ import {
 import { opsPerkOpen } from "../ops-listing.js"
 import { opsConfigured, requireOpsService } from "../ops-worker.js"
 import { hostPage, releaseIntake } from "../release-guard.js"
+// A59: the webhook function bundles this handler, so Ship Desk's intake (registered by api/github/webhook.ts) reads
+// the registered @vector run records there.
+import "../cloud-agents-run-registration.js"
 
 /*
  * Codium's ops handler on the shared GitHub webhook router (WP A47). It takes:

@@ -115,12 +115,13 @@ export async function upgrade(value: Receipt, version: string, run: Run): Promis
   }
   await writeFile(script, await bounded(response, 128_000), { mode: 0o600, flag: "wx" })
   if (windows) {
+    const { WindowsRemoval } = await import("./windows-remove")
     const identity = await run([
       "powershell.exe",
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      `(Get-Process -Id ${process.pid}).StartTime.ToUniversalTime().Ticks.ToString()`,
+      WindowsRemoval.identity(process.pid),
     ])
     if (identity.code !== 0 || !/^\d{18}$/.test(identity.stdout.trim()))
       throw new Error("Could not identify the running Vector process for safe replacement.")
@@ -176,17 +177,17 @@ export async function uninstall(value: Receipt, run: Run): Promise<Result> {
   const directory = path.join(value.directory, `.vector-uninstall-${operation}`)
   await mkdir(directory, { mode: 0o700 })
   const statusFile = path.join(value.directory, `.vector-update-${operation}.json`)
+  const { WindowsRemoval } = await import("./windows-remove")
   const identity = await run([
     "powershell.exe",
     "-NoProfile",
     "-NonInteractive",
     "-Command",
-    `(Get-Process -Id ${process.pid}).StartTime.ToUniversalTime().Ticks.ToString()`,
+    WindowsRemoval.identity(process.pid),
   ])
   if (identity.code !== 0 || !/^\d{18}$/.test(identity.stdout.trim()))
     throw new Error("Could not identify Vector for deferred removal.")
   const script = path.join(directory, "remove.ps1")
-  const { WindowsRemoval } = await import("./windows-remove")
   await writeFile(
     script,
     WindowsRemoval.script({

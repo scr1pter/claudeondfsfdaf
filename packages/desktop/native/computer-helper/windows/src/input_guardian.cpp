@@ -35,6 +35,15 @@ InputGuardianReceiptDiagnostic input_guardian_receipt_diagnostic(const InputGuar
   if (evidence.low32_tag_candidate) return InputGuardianReceiptDiagnostic::low32_tag_candidate;
   return pump_after > pump_before ? InputGuardianReceiptDiagnostic::no_callback_pump_progressed : InputGuardianReceiptDiagnostic::no_callback_pump_stalled;
 }
+InputGuardianReceiptDiagnostic input_guardian_release_diagnostic(const InputGuardianReleaseEvidence& evidence, uint64_t callbacks, uint64_t pump_stale_ms) noexcept {
+  if (!evidence.started) return InputGuardianReceiptDiagnostic::up_not_released;
+  if (!evidence.returned) return callbacks > evidence.callbacks_at_start ? InputGuardianReceiptDiagnostic::up_release_blocked_callbacks : InputGuardianReceiptDiagnostic::up_release_blocked;
+  if (!evidence.accepted) return InputGuardianReceiptDiagnostic::up_release_refused;
+  if (evidence.returned_ms >= evidence.started_ms && evidence.returned_ms - evidence.started_ms >= input_guardian_release_slow_ms)
+    return evidence.callbacks_at_return > evidence.callbacks_at_start ? InputGuardianReceiptDiagnostic::up_release_slow_callbacks : InputGuardianReceiptDiagnostic::up_release_slow;
+  if (pump_stale_ms >= input_guardian_pump_stall_ms) return InputGuardianReceiptDiagnostic::up_pump_stalled;
+  return callbacks > evidence.callbacks_at_start ? InputGuardianReceiptDiagnostic::up_callbacks_without_up : InputGuardianReceiptDiagnostic::up_no_callback;
+}
 InputGuardianLedger::InputGuardianLedger(uint64_t tag) : tag_(tag) {}
 std::optional<InputGuardianTicket> InputGuardianLedger::reserve(const InputRelease& release, bool diagnostic) {
   if (!valid_input_release(release)) return {};
@@ -110,6 +119,25 @@ void InputGuardianLedger::observe_move(uint64_t tag, bool injected) noexcept {
     else entry.diagnostic.own_tag_unflagged = true;
   }
 }
+void InputGuardianLedger::release_started(const InputGuardianTicket& ticket, uint64_t now_ms, uint64_t callbacks) noexcept {
+  if (!diagnostics_enabled()) return;
+  std::lock_guard lock(mutex_);
+  for (auto& entry : entries_) if (entry.ticket == ticket && ticket.id != 0 && entry.diagnostic.enabled && entry.down && !entry.up)
+    entry.release = {true, false, false, now_ms, 0, callbacks, 0};
+}
+void InputGuardianLedger::release_returned(const InputGuardianTicket& ticket, bool accepted, uint64_t now_ms, uint64_t callbacks) noexcept {
+  if (!diagnostics_enabled()) return;
+  std::lock_guard lock(mutex_);
+  for (auto& entry : entries_) if (entry.ticket == ticket && ticket.id != 0 && entry.diagnostic.enabled && entry.release.started) {
+    entry.release.returned = true; entry.release.accepted = accepted; entry.release.returned_ms = now_ms; entry.release.callbacks_at_return = callbacks;
+  }
+}
+InputGuardianReceiptDiagnostic InputGuardianLedger::release_diagnostic(const InputGuardianTicket& ticket, uint64_t callbacks, uint64_t pump_stale_ms) const noexcept {
+  std::lock_guard lock(mutex_);
+  for (const auto& entry : entries_) if (entry.ticket == ticket && ticket.id != 0 && entry.diagnostic.enabled && entry.down && !entry.up)
+    return input_guardian_release_diagnostic(entry.release, callbacks, pump_stale_ms);
+  return InputGuardianReceiptDiagnostic::none;
+}
 void InputGuardianLedger::erase(Entry& entry) noexcept {
   if (entry.diagnostic.enabled) diagnostic_entries_.fetch_sub(1);
   entry = {};
@@ -138,6 +166,71 @@ bool InputGuardianLedger::pending() const noexcept {
 void InputGuardianLedger::close() noexcept { std::lock_guard lock(mutex_); closed_ = true; }
 
 namespace {
+uint64_t monotonic_ms() noexcept {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+}
+InputGuardianReleaser::InputGuardianReleaser(InputGuardianLedger& ledger, Release release, Callbacks callbacks)
+  : ledger_(ledger), release_(std::move(release)), callbacks_(std::move(callbacks)) {}
+uint32_t InputGuardianReleaser::drain(uint32_t milliseconds,bool retired_only) {
+  const auto deadline=GetTickCount64()+std::clamp<uint32_t>(milliseconds,1,300);
+  std::unique_lock lock(drain_mutex_,std::try_to_lock); if (!lock.owns_lock()) return 0;
+  const auto before=ledger_.released_count();
+  do {
+    const auto seen=generation();
+    const auto candidates=ledger_.releases(retired_only,GetTickCount64());
+    const auto all=ledger_.releases();
+    for (auto& id:in_flight_) if (id && std::none_of(all.begin(),all.end(),[&](const auto& ticket) { return ticket.id==id; })) id=0;
+    if (candidates.empty()) break;
+    for (const auto& ticket:candidates) {
+      if (GetTickCount64()>=deadline) break;
+      if (ledger_.observed(ticket,false)) continue;
+      if (std::find(in_flight_.begin(),in_flight_.end(),ticket.id)!=in_flight_.end()) continue;
+      const auto slot=std::find(in_flight_.begin(),in_flight_.end(),0ULL);
+      if (slot==in_flight_.end()) continue;
+      // Only drain_mutex_ is held here: the ledger and wake locks are taken and dropped inside each call.
+      ledger_.release_started(ticket,monotonic_ms(),callbacks_ ? callbacks_(ticket.release.kind) : 0);
+      const auto accepted=release_(ticket.release);
+      ledger_.release_returned(ticket,accepted,monotonic_ms(),callbacks_ ? callbacks_(ticket.release.kind) : 0);
+      if (accepted) *slot=ticket.id;
+    }
+    wait(seen,2);
+  } while (GetTickCount64()<deadline);
+  const auto after=ledger_.released_count(); return static_cast<uint32_t>(std::min<uint64_t>(after-before,136));
+}
+void InputGuardianReleaser::notify() noexcept {
+  // Taking the wake lock between the increment and the notify means a waiter is either before its
+  // predicate check (and sees the new generation) or already blocked (and is woken). No thread holds
+  // this lock across SendInput, so the hook callback waits at most for another thread's predicate check.
+  // If the lock ever failed, the wake would still arrive at the waiter's timeout.
+  generation_.fetch_add(1);
+  try { std::lock_guard lock(changed_mutex_); } catch (...) {}
+  changed_.notify_all();
+}
+uint64_t InputGuardianReleaser::generation() const noexcept { return generation_.load(); }
+void InputGuardianReleaser::wait(uint64_t seen,uint32_t milliseconds) {
+  std::unique_lock lock(changed_mutex_); changed_.wait_for(lock,std::chrono::milliseconds(milliseconds),[&] { return generation_.load()!=seen; });
+}
+void InputGuardianReleaser::start(const std::atomic<bool>& stopping,Spawn spawn) {
+  if (started_.load()) throw std::logic_error("Guardian release thread already started.");
+  if (!spawn) throw std::invalid_argument("Guardian release thread needs a spawn that owns its lifetime.");
+  std::function<void()> body=[this,&stopping] {
+    while (!halted_.load()) {
+      const auto seen=generation();
+      // A failed allocation must not end the only release path. The wait stays outside the drain's
+      // try, so a drain that throws every time still pauses about 2 ms per loop instead of spinning
+      // against the hook thread. Before Stop nothing else bounds such a loop; the fuse arms only on stop.
+      try { (void)(stopping.load() ? drain(5) : drain(1,true)); } catch (...) {}
+      try { wait(seen,2); } catch (...) { Sleep(2); }
+    }
+  };
+  spawn(std::move(body));
+  started_.store(true);
+}
+bool InputGuardianReleaser::started() const noexcept { return started_.load(); }
+void InputGuardianReleaser::stop() noexcept { halted_.store(true); notify(); }
+
+namespace {
 bool hex(std::wstring_view text, size_t count) {
   return text.size() == count && std::all_of(text.begin(),text.end(),[](wchar_t c) { return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'); });
 }
@@ -158,11 +251,15 @@ struct Packet {
   InputGuardianReceiptDiagnostic diagnostic = InputGuardianReceiptDiagnostic::none;
   std::array<uint8_t,32> nonce{};
 };
+// A negative DOWN reply carries only a DOWN code and a negative UP reply only an UP code.
+bool answers(InputGuardianReceiptDiagnostic diagnostic,bool down) noexcept {
+  return down ? diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && diagnostic<=InputGuardianReceiptDiagnostic::low32_tag_candidate :
+    diagnostic>=InputGuardianReceiptDiagnostic::up_not_released && diagnostic<=InputGuardianReceiptDiagnostic::up_no_callback;
+}
 bool valid_diagnostic_shape(const Packet& packet) noexcept {
   if (packet.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
   if (!packet.response) return packet.op==Op::reserve && !packet.ok && !packet.down && packet.diagnostic==InputGuardianReceiptDiagnostic::opt_in;
-  return packet.op==Op::observed && !packet.ok && packet.down &&
-    packet.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && packet.diagnostic<=InputGuardianReceiptDiagnostic::low32_tag_candidate;
+  return packet.op==Op::observed && !packet.ok && answers(packet.diagnostic,packet.down);
 }
 constexpr size_t packet_size = 80;
 using Bytes = std::array<uint8_t,packet_size>;
@@ -179,7 +276,7 @@ Bytes encode(const Packet& packet) {
   std::copy(packet.nonce.begin(),packet.nonce.end(),bytes.begin()+48); return bytes;
 }
 std::optional<Packet> decode(const Bytes& bytes) {
-  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='2' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]>static_cast<uint8_t>(InputGuardianReceiptDiagnostic::low32_tag_candidate)) return {};
+  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='2' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]>static_cast<uint8_t>(InputGuardianReceiptDiagnostic::up_no_callback)) return {};
   Packet packet; packet.op=static_cast<Op>(bytes[4]); packet.response=bytes[5]!=0; packet.ok=bytes[6]!=0; packet.down=bytes[7]!=0;
   packet.sequence=get(bytes,8,8); packet.ticket=get(bytes,16,8); packet.tag=get(bytes,24,8);
   packet.budget=static_cast<uint32_t>(get(bytes,32,4)); packet.count=static_cast<uint32_t>(get(bytes,36,4));
@@ -209,8 +306,7 @@ bool valid_reply(const Packet& reply, const Packet& request, bool diagnostic) {
       reply.release!=request.release || (request.op!=Op::reserve && reply.ticket!=request.ticket) || reply.down!=request.down || reply.budget!=request.budget || reply.count>136 ||
       ((request.op!=Op::drain && request.op!=Op::close) && reply.count!=0)) return false;
   if (reply.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
-  return diagnostic && request.op==Op::observed && request.down && !reply.ok &&
-    reply.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && reply.diagnostic<=InputGuardianReceiptDiagnostic::low32_tag_candidate;
+  return diagnostic && request.op==Op::observed && !reply.ok && answers(reply.diagnostic,request.down);
 }
 // Anonymous pipes are synchronous. The independent watcher repeats cancellation after the absolute
 // deadline, covering cancellation-before-ReadFile races without holding an authority/journal lock.
@@ -294,45 +390,29 @@ bool release_input(const InputRelease& release,uint64_t tag) {
   return SendInput(1,&event,sizeof(event))==1;
 }
 struct ChildState final : std::enable_shared_from_this<ChildState> {
-  explicit ChildState(InputGuardianCommand value) : command(std::move(value)),ledger(command.tag) {}
+  explicit ChildState(InputGuardianCommand value) : command(std::move(value)),ledger(command.tag),
+    releaser(ledger,[tag=command.tag](const InputRelease& release) { return release_input(release,tag); },
+      [this](InputReleaseKind kind) { return (kind==InputReleaseKind::mouse_button ? mouse_callbacks : keyboard_callbacks).load(std::memory_order_relaxed); }) {}
   InputGuardianCommand command;
   InputGuardianLedger ledger;
+  // Every hook call, whatever its message or tag, for the opted-in UP release diagnostic only.
+  std::atomic<uint64_t> mouse_callbacks{0},keyboard_callbacks{0};
+  InputGuardianReleaser releaser;
   winrt::handle parent,stop_event,armed_event,shutdown_event,reader_thread,peeker_thread;
   HANDLE input=nullptr,output=nullptr;
   std::atomic<bool> stopping{false};
   std::atomic<uint64_t> now_ms{0};
-  std::mutex drain_mutex;
+  // Monotonic start of the hook thread's latest pump iteration, for the UP release diagnostic only.
+  std::atomic<uint64_t> pump_ms{0};
   std::mutex reader_mutex;
-  std::condition_variable changed;
-  std::mutex changed_mutex;
   std::optional<WindowsOwner> parent_identity,self_identity;
   uint64_t last_sequence=0;
-  std::array<uint64_t,136> release_in_flight{};
   void stop() noexcept {
     if (stopping.exchange(true)) return; ledger.close(); SetEvent(stop_event.get());
     { std::lock_guard lock(reader_mutex); if (reader_thread) (void)CancelSynchronousIo(reader_thread.get()); if (peeker_thread) (void)CancelSynchronousIo(peeker_thread.get()); }
-    changed.notify_all();
+    releaser.notify();
   }
-  uint32_t drain(uint32_t milliseconds,bool retired_only=false) {
-    const auto deadline=GetTickCount64()+std::clamp<uint32_t>(milliseconds,1,300);
-    std::unique_lock lock(drain_mutex,std::try_to_lock); if (!lock.owns_lock()) return 0;
-    const auto before=ledger.released_count();
-    do {
-      const auto candidates=ledger.releases(retired_only,GetTickCount64());
-      const auto all=ledger.releases();
-      for (auto& id:release_in_flight) if (id && std::none_of(all.begin(),all.end(),[&](const auto& ticket) { return ticket.id==id; })) id=0;
-      if (candidates.empty()) break;
-      for (const auto& ticket:candidates) {
-        if (GetTickCount64()>=deadline) break;
-        if (ledger.observed(ticket,false)) continue;
-        if (std::find(release_in_flight.begin(),release_in_flight.end(),ticket.id)!=release_in_flight.end()) continue;
-        const auto slot=std::find(release_in_flight.begin(),release_in_flight.end(),0ULL);
-        if (slot!=release_in_flight.end() && release_input(ticket.release,command.tag)) *slot=ticket.id;
-      }
-      std::unique_lock wait(changed_mutex); changed.wait_for(wait,std::chrono::milliseconds(2));
-    } while (GetTickCount64()<deadline);
-    const auto after=ledger.released_count(); return static_cast<uint32_t>(std::min<uint64_t>(after-before,136));
-  }
+  void pumped() noexcept { now_ms.store(GetTickCount64()); pump_ms.store(monotonic_ms()); }
   void control() {
     HANDLE raw=nullptr; if (!DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&raw,THREAD_TERMINATE,FALSE,0)) { stop(); return; }
     {
@@ -351,20 +431,31 @@ struct ChildState final : std::enable_shared_from_this<ChildState> {
         if (const auto reserved=ledger.reserve(request->release,request->diagnostic==InputGuardianReceiptDiagnostic::opt_in)) { reply.ticket=reserved->id; reply.ok=true; }
       } else if (request->op==Op::observed) {
         if (request->ticket==0 || request->budget>50 || !valid_input_release(request->release)) { stop(); return; }
-        const bool diagnose=request->down && ledger.diagnostics_enabled();
+        const bool enabled=ledger.diagnostics_enabled();
+        const bool diagnose=request->down && enabled, diagnose_release=!request->down && enabled;
         const auto pump_before=diagnose ? now_ms.load() : 0;
         const auto deadline=GetTickCount64()+request->budget;
+        // The UP diagnostic samples how long the hook thread has gone without a pump iteration at each
+        // poll, so a thread that stamped its iteration and then stalled still reads as stalled.
+        uint64_t pump_stale=0;
         do {
+          const auto seen=releaser.generation();
           if (ledger.observed(ticket,request->down,diagnose ? &reply.diagnostic : nullptr,pump_before,diagnose ? now_ms.load() : 0)) { reply.ok=true; break; }
+          if (diagnose_release) { const auto now=monotonic_ms(),pump=pump_ms.load(); pump_stale=std::max(pump_stale,now>pump ? now-pump : 0); }
           if (stopping.load() || GetTickCount64()>=deadline) break;
-          std::unique_lock wait(changed_mutex); changed.wait_for(wait,std::chrono::milliseconds(1));
+          releaser.wait(seen,1);
         } while (true);
+        if (!reply.ok && diagnose_release)
+          reply.diagnostic=ledger.release_diagnostic(ticket,(ticket.release.kind==InputReleaseKind::mouse_button ? mouse_callbacks : keyboard_callbacks).load(std::memory_order_relaxed),pump_stale);
       } else if (request->op==Op::retire) {
         if (request->ticket==0 || request->budget!=0 || !valid_input_release(request->release)) { stop(); return; }
-        ledger.retire(ticket,request->down); reply.ok=true;
+        // Wake the release thread so a retired DOWN is released at once rather than at its next poll.
+        ledger.retire(ticket,request->down); releaser.notify(); reply.ok=true;
       } else {
         if (request->ticket!=0 || request->release!=InputRelease{} || request->down || request->budget==0 || request->budget>300) { stop(); return; }
-        reply.count=drain(request->budget); reply.ok=!ledger.pending();
+        // As before the release thread, this returns 0 at once while another drain holds the release
+        // lock. The real release bound is the parent's 300 ms close lock and one-second child wait.
+        reply.count=releaser.drain(request->budget); reply.ok=!ledger.pending();
         if (request->op==Op::close) { stop(); }
       }
       auto answer=encode(reply); if (!io.transfer(output,answer,true,GetTickCount64()+50)) { stop(); return; }
@@ -384,6 +475,7 @@ struct ChildState final : std::enable_shared_from_this<ChildState> {
 thread_local ChildState* hook_state=nullptr;
 LRESULT CALLBACK keyboard_hook(int code,WPARAM message,LPARAM data) {
   if (code==HC_ACTION && hook_state) {
+    hook_state->keyboard_callbacks.fetch_add(1,std::memory_order_relaxed);
     const auto& actual=*reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
     if (message==WM_KEYDOWN || message==WM_SYSKEYDOWN || message==WM_KEYUP || message==WM_SYSKEYUP) {
       // Wine's Windows conformance oracle pins VK_PACKET plus the exact UTF-16 scan value for
@@ -391,13 +483,14 @@ LRESULT CALLBACK keyboard_hook(int code,WPARAM message,LPARAM data) {
       // https://github.com/wine-mirror/wine/blob/c28e3a549fc76b9c3c2f92058db98a1c78a9325d/dlls/user32/tests/input.c#L1205-L1213
       InputRelease release; release.kind=actual.vkCode==VK_PACKET ? InputReleaseKind::unicode_key : InputReleaseKind::scan_key;
       release.virtual_key=static_cast<WORD>(actual.vkCode); release.scan=static_cast<WORD>(actual.scanCode); release.extended=(actual.flags&LLKHF_EXTENDED)!=0;
-      if (actual.vkCode<=0xffff && actual.scanCode<=0xffff && hook_state->ledger.observe({release,static_cast<uint64_t>(actual.dwExtraInfo),(actual.flags&LLKHF_INJECTED)!=0,(actual.flags&LLKHF_UP)==0,hook_state->now_ms.load()})) hook_state->changed.notify_all();
+      if (actual.vkCode<=0xffff && actual.scanCode<=0xffff && hook_state->ledger.observe({release,static_cast<uint64_t>(actual.dwExtraInfo),(actual.flags&LLKHF_INJECTED)!=0,(actual.flags&LLKHF_UP)==0,hook_state->now_ms.load()})) hook_state->releaser.notify();
     }
   }
   return CallNextHookEx(nullptr,code,message,data);
 }
 LRESULT CALLBACK mouse_hook(int code,WPARAM message,LPARAM data) {
   if (code==HC_ACTION && hook_state) {
+    hook_state->mouse_callbacks.fetch_add(1,std::memory_order_relaxed);
     std::optional<uint8_t> button; bool down=false;
     switch (message) {
       case WM_LBUTTONDOWN:button=uint8_t{0};down=true;break; case WM_LBUTTONUP:button=uint8_t{0};break;
@@ -411,7 +504,7 @@ LRESULT CALLBACK mouse_hook(int code,WPARAM message,LPARAM data) {
     }
     if (button) {
       const auto& actual=*reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
-      if (hook_state->ledger.observe({InputRelease{InputReleaseKind::mouse_button,0,0,false,*button},static_cast<uint64_t>(actual.dwExtraInfo),(actual.flags&LLMHF_INJECTED)!=0,down,hook_state->now_ms.load()})) hook_state->changed.notify_all();
+      if (hook_state->ledger.observe({InputRelease{InputReleaseKind::mouse_button,0,0,false,*button},static_cast<uint64_t>(actual.dwExtraInfo),(actual.flags&LLMHF_INJECTED)!=0,down,hook_state->now_ms.load()})) hook_state->releaser.notify();
     }
   }
   return CallNextHookEx(nullptr,code,message,data);
@@ -485,6 +578,15 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
         case InputGuardianReceiptDiagnostic::own_up_only: phase=InputGuardianPhase::reply_negative_own_up_only; break;
         case InputGuardianReceiptDiagnostic::own_tag_unflagged: phase=InputGuardianPhase::reply_negative_own_tag_unflagged; break;
         case InputGuardianReceiptDiagnostic::low32_tag_candidate: phase=InputGuardianPhase::reply_negative_low32_tag_candidate; break;
+        case InputGuardianReceiptDiagnostic::up_not_released: phase=InputGuardianPhase::reply_negative_up_not_released; break;
+        case InputGuardianReceiptDiagnostic::up_release_blocked: phase=InputGuardianPhase::reply_negative_up_release_blocked; break;
+        case InputGuardianReceiptDiagnostic::up_release_blocked_callbacks: phase=InputGuardianPhase::reply_negative_up_release_blocked_callbacks; break;
+        case InputGuardianReceiptDiagnostic::up_release_refused: phase=InputGuardianPhase::reply_negative_up_release_refused; break;
+        case InputGuardianReceiptDiagnostic::up_release_slow: phase=InputGuardianPhase::reply_negative_up_release_slow; break;
+        case InputGuardianReceiptDiagnostic::up_release_slow_callbacks: phase=InputGuardianPhase::reply_negative_up_release_slow_callbacks; break;
+        case InputGuardianReceiptDiagnostic::up_pump_stalled: phase=InputGuardianPhase::reply_negative_up_pump_stalled; break;
+        case InputGuardianReceiptDiagnostic::up_callbacks_without_up: phase=InputGuardianPhase::reply_negative_up_callbacks_without_up; break;
+        case InputGuardianReceiptDiagnostic::up_no_callback: phase=InputGuardianPhase::reply_negative_up_no_callback; break;
         default: break;
       }
     }
@@ -729,9 +831,41 @@ bool input_guardian_protocol_self_test() {
       if (valid_reply(malformed,packet,true)) return false;
     }
   }
-  for (const auto code : {uint8_t{9},uint8_t{255}}) {
+  for (const auto code : {uint8_t{9},uint8_t{17},uint8_t{18},uint8_t{255}}) {
     auto invalid=packet; invalid.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
     if (valid_request(invalid,command,0) || decode(encode(invalid))) return false;
+  }
+  // An UP code answers only a negative UP query; a DOWN code never answers one.
+  auto up=packet; up.down=false;
+  Packet up_reply=up; up_reply.response=true;
+  if (!valid_request(up,command,0) || !valid_reply(up_reply,up,false)) return false;
+  for (uint8_t code=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::up_not_released);
+       code<=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::up_no_callback); ++code) {
+    up_reply.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
+    const auto received=decode(encode(up_reply));
+    if (!received || !valid_reply(*received,up,true) || valid_reply(*received,up,false)) return false;
+    // The decodable UP reply still fails against the DOWN query: reply.down must equal request.down.
+    if (valid_reply(*received,packet,true)) return false;
+    auto request=up; request.diagnostic=up_reply.diagnostic;
+    if (valid_request(request,command,0) || decode(encode(request))) return false;
+    for (int field=0; field<5; ++field) {
+      auto malformed=up_reply;
+      if (field==0) malformed.response=false;
+      if (field==1) malformed.ok=true;
+      if (field==2) malformed.down=true;
+      if (field==3) malformed.op=Op::reserve;
+      if (field==4) malformed.op=Op::drain;
+      if (decode(encode(malformed)) || valid_reply(malformed,up,true) || valid_reply(malformed,packet,true)) return false;
+    }
+  }
+  for (uint8_t code=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::no_callback_pump_stalled);
+       code<=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::low32_tag_candidate); ++code) {
+    auto crossed=up_reply; crossed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
+    if (decode(encode(crossed)) || valid_reply(crossed,up,true)) return false;
+  }
+  for (const auto code : {uint8_t{18},uint8_t{255}}) {
+    auto invalid=up_reply; invalid.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
+    if (decode(encode(invalid)) || valid_reply(invalid,up,true)) return false;
   }
   reply.diagnostic=InputGuardianReceiptDiagnostic::none; reply.ok=true;
   if (!valid_reply(reply,packet,false)) return false;
@@ -767,11 +901,14 @@ int run_input_guardian(const InputGuardianCommand& command,HANDLE input,HANDLE o
     // Startup also has an independent finite bound before any hook can observe or release an event.
     std::thread([state] { const HANDLE handles[]={state->stop_event.get(),state->armed_event.get()}; if (WaitForMultipleObjects(2,handles,FALSE,10'000)==WAIT_TIMEOUT) state->stop(); }).detach();
     authenticate(state);
-    state->now_ms.store(GetTickCount64());
+    state->pumped();
     MSG message{}; (void)PeekMessageW(&message,nullptr,0,0,PM_NOREMOVE); hook_state=state.get();
     keyboard=SetWindowsHookExW(WH_KEYBOARD_LL,keyboard_hook,GetModuleHandleW(nullptr),0);
     mouse=SetWindowsHookExW(WH_MOUSE_LL,mouse_hook,GetModuleHandleW(nullptr),0);
     if (!keyboard || !mouse) throw std::runtime_error("Guardian hooks unavailable.");
+    // The hookless release thread exists before readiness, so the parent can never post a DOWN that
+    // has no release path. If it cannot start, the catch below fails closed before ready is written.
+    state->releaser.start(state->stopping,[state](std::function<void()> body) { std::thread([state,run=std::move(body)] { run(); }).detach(); });
     Packet ready; ready.response=true; ready.ok=true; ready.tag=command.tag; ready.nonce=nonce_bytes(command.nonce);
     auto bytes=encode(ready); { IoWatch io; if (!io.transfer(output,bytes,true,GetTickCount64()+50)) throw std::runtime_error("Guardian readiness unavailable."); }
     SetEvent(state->armed_event.get());
@@ -780,13 +917,14 @@ int run_input_guardian(const InputGuardianCommand& command,HANDLE input,HANDLE o
     for (;;) {
       // Conservative monotonic observation time is refreshed before dispatching hook messages.
       // The callback only loads metadata; no clock, process, pipe or discovery API runs inside it.
-      state->now_ms.store(GetTickCount64());
+      state->pumped();
       while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) { if (message.message==WM_QUIT) state->stop(); else { TranslateMessage(&message); DispatchMessageW(&message); } }
+      // This thread owns the hooks and only pumps. SendInput runs on the release thread, so the hook
+      // callback for the guardian's own UP never waits behind SendInput or the release lock here.
       if (state->stopping.load()) {
-        (void)state->drain(5);
         if (state->ledger.pending()) quiet=0; else if (!quiet) quiet=GetTickCount64();
         if (quiet && GetTickCount64()-quiet>=100) break;
-      } else (void)state->drain(1,true);
+      }
       (void)MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT);
     }
     UnhookWindowsHookEx(keyboard); keyboard=nullptr; UnhookWindowsHookEx(mouse); mouse=nullptr; hook_state=nullptr;
@@ -795,11 +933,13 @@ int run_input_guardian(const InputGuardianCommand& command,HANDLE input,HANDLE o
   } catch (...) {
     if (state) state->stop();
     if (state && keyboard && mouse) {
+      // Release inline only if the release thread never started; otherwise it keeps releasing.
+      const bool inline_release=!state->releaser.started();
       const auto deadline=GetTickCount64()+300; MSG message{};
       do {
-        state->now_ms.store(GetTickCount64());
+        state->pumped();
         while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
-        try { (void)state->drain(2); } catch (...) {}
+        if (inline_release) try { (void)state->releaser.drain(2); } catch (...) {}
         (void)MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT);
       } while (GetTickCount64()<deadline);
     }

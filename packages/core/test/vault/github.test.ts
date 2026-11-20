@@ -208,4 +208,36 @@ describe("VaultGitHub.store", () => {
     await VaultBackup.backup({ store: fresh, opened: next, files: [file("new vault")] })
     expect((await VaultBackup.read({ store: env.make("cache-check"), opened: next })).files[0]!.bytes.toString("utf8")).toBe("new vault")
   })
+
+  test("reads that overlap on a new computer's copy share one, so listing the versions and reading the key at once both answer (B10)", async () => {
+    const env = await setup()
+    await using _ = env.tmp
+    const store = env.make("cache-a")
+    const created = await VaultBackup.create(store, { cost: COST })
+    const done = await VaultBackup.backup({ store, opened: created, files: [file("I prefer tables for comparisons")] })
+    // git as the desktop and the CLI run it, without blocking: each command lets the other read go on meanwhile.
+    const ran: string[] = []
+    const overlapping: VaultGitHub.Git = async (args, options) => {
+      ran.push(args.find((word) => !word.startsWith("-")) ?? "")
+      await Bun.sleep(20)
+      return git(args, options)
+    }
+    const fresh = VaultGitHub.store({
+      repo: "octo/brain-vault",
+      remote: env.remote,
+      api: "https://api.github.test",
+      dir: path.join(env.tmp.path, "cache-new"),
+      git: overlapping,
+      send: async () => new Response(null, { status: 404 }),
+    })
+    const [listing, key] = await Promise.all([fresh.list(), fresh.readKey()])
+    expect(listing.snapshots.map((snapshot) => snapshot.id)).toEqual([done.snapshot.id])
+    expect(key?.vault).toBe(created.vault)
+    // One copy set up and one fetch: two would race in the same directory (the desktop saw git's "cannot copy").
+    expect(ran.filter((command) => command === "init" || command === "ls-remote" || command === "fetch")).toEqual([
+      "init",
+      "ls-remote",
+      "fetch",
+    ])
+  })
 })

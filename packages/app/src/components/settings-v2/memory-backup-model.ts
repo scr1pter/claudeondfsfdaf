@@ -80,13 +80,20 @@ export function nextLine(status: VaultStatus, now: number) {
     : `Next backup ${when(status.nextAt, now)}, if Vector is open.`
 }
 
-/** What a restore did, as one line. */
+/**
+ * What a restore did, as one line. "As before" is memory's: learned skills and workflow insights always come back as
+ * proposals for review (B10), whatever they were when the backup was made.
+ */
 export function restoreLine(result: VaultRestoreResult) {
   const totals = result.totals
   if (!result.ok || !totals) return result.message
+  // A restore of learned content only names no memory, so "0 in use, 0 waiting … as before" would say nothing.
+  const memory = totals.active || totals.pinned || totals.waiting || !(totals.skills || totals.insights)
   const parts = [
-    `${totals.active} in use${totals.pinned ? ` (${totals.pinned} pinned)` : ""}`,
-    `${totals.waiting} waiting for your review as before`,
+    memory ? `${totals.active} in use${totals.pinned ? ` (${totals.pinned} pinned)` : ""}` : undefined,
+    memory ? `${totals.waiting} waiting for your review as before` : undefined,
+    totals.skills ? `${totals.skills} learned skill${totals.skills === 1 ? "" : "s"} to review` : undefined,
+    totals.insights ? `${totals.insights} workflow insight${totals.insights === 1 ? "" : "s"} to review` : undefined,
     totals.known ? `${totals.known} already in memory` : undefined,
     totals.refused ? `${totals.refused} refused (forgotten here, or past what may wait for review)` : undefined,
   ].filter((part): part is string => part !== undefined)
@@ -120,6 +127,12 @@ export function repoValid(input: string) {
   const match = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100})$/.exec(input.trim())
   return Boolean(match && match[2] !== "." && match[2] !== ".." && !match[2]!.endsWith(".git"))
 }
+
+export const RESTORE_COPY =
+  "A restore brings your memory back as it was: what was in use and pinned comes back in use and pinned, and what waited for your review waits again. Learned skills and workflow insights come back as proposals for you to review. A restore never replaces what is in memory now."
+
+/** Shown while the desktop answers its startup stand-in, before Brain Vault has started (R45-27). */
+export const STARTING_COPY = "Vector is still starting. Brain Vault shows here once it has started."
 
 export const RECOVERY_COPY =
   "Write it down and keep it somewhere safe. It is the only way to restore these backups on another computer: Vector never sees it and cannot recover it."

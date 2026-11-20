@@ -31,8 +31,11 @@ SELF = ROOT + "/entry.py"
 SPEC = ROOT + "/run.json"
 PRIVATE = ROOT + "/private/state.json"
 CONTAINERS = ("/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox")
-HOST_TEMP = "/home/runner/work/_temp"
-MASKS = ("/home/vector-agent", "/tmp", "/var/tmp", "/run", HOST_TEMP)
+# The runner account's home. Its mask also hides the fixed hosted temporary root /home/runner/work/_temp, at least
+# one of whose runner-owned ancestors the keeper could not search (run 43675930370,
+# prepare-mask-host-temp-keeper-search), so bwrap could not build a mask on that leaf itself.
+RUNNER_HOME = "/home/runner"
+MASKS = ("/home/vector-agent", "/tmp", "/var/tmp", "/run", RUNNER_HOME)
 KINDS = {"user": 0x10000000, "mnt": 0x00020000, "pid": 0x20000000}
 KEYS = {"v", "container", "uid", "gid", "stage", "scratch", "directory", "socket", "nonce", "namespaces",
         "devices", "keeper", "broker", "socketIdentity"}
@@ -115,6 +118,8 @@ def validate_spec(value, partial=False):
             value["scratch"] == value["container"] + "/tool-scratch" and
             value["directory"] == value["container"] + "/tool-namespaces" and
             value["socket"] == value["directory"] + "/broker.sock")
+    # No mask may cover the published container, its binds or the broker socket.
+    require(not any(hidden(value[key]) for key in ("container", "stage", "scratch", "directory", "socket")))
     require(type(value["nonce"]) is str and len(value["nonce"]) == 32 and
             all(char in "0123456789abcdef" for char in value["nonce"]))
     for key in ("namespaces", "devices"):
@@ -914,21 +919,32 @@ def keeper_log_stage(data):
 
 
 def keeper_destination_stage(data):
-    # Only fixed ABI destinations are named. No caller path or error prose leaves the private log.
+    # Only fixed ABI destinations are named. After an exact target, only the complete C-locale strerror text
+    # of six fixed errnos maps to a closed cause suffix: bwrap v0.9.0 never calls setlocale and the keeper
+    # starts it under env -i. Any other remainder keeps the unsuffixed target label. No caller path, errno
+    # text or error prose leaves the private log.
     if type(data) is not bytes or len(data) > 65536:
         return "bwrap-destination"
     prefixes = (b"bwrap: Can't mkdir ", b"bwrap: Can't mkdir parents for ")
     targets = (
         ("root", b"/"), ("home", b"/home/vector-agent"), ("tmp", b"/tmp"), ("var-tmp", b"/var/tmp"),
-        ("run", b"/run"), ("host-temp", b"/home/runner/work/_temp"), ("dev", b"/dev"), ("proc", b"/proc"),
+        ("run", b"/run"), ("runner-home", b"/home/runner"), ("dev", b"/dev"), ("proc", b"/proc"),
+        ("checkout", b"/mnt/vector-agent-sandbox/checkout"), ("scratch", b"/mnt/vector-agent-sandbox/tool-scratch"),
+        ("checkout", b"/var/lib/vector-agent-sandbox/checkout"),
+        ("scratch", b"/var/lib/vector-agent-sandbox/tool-scratch"),
+        ("checkout", b"/home/vector-agent-sandbox/checkout"), ("scratch", b"/home/vector-agent-sandbox/tool-scratch"),
     )
+    causes = {
+        b"Permission denied": "eacces", b"Read-only file system": "erofs", b"No such file or directory": "enoent",
+        b"Not a directory": "enotdir", b"Too many levels of symbolic links": "eloop",
+        b"Operation not permitted": "eperm",
+    }
     for kind, target in targets:
-        if any(data.startswith(prefix + target + b": ") for prefix in prefixes):
-            return "bwrap-destination-" + kind
-    for container in (b"/mnt/vector-agent-sandbox", b"/var/lib/vector-agent-sandbox", b"/home/vector-agent-sandbox"):
-        for kind, suffix in (("checkout", b"/checkout"), ("scratch", b"/tool-scratch")):
-            if any(data.startswith(prefix + container + suffix + b": ") for prefix in prefixes):
-                return "bwrap-destination-" + kind
+        for prefix in prefixes:
+            head = prefix + target + b": "
+            if data.startswith(head):
+                cause = causes.get(data[len(head):])
+                return "bwrap-destination-" + kind + ("" if cause is None else "-" + cause)
     return "bwrap-destination"
 
 
@@ -942,7 +958,8 @@ def keeper_log_classification(data):
         return "invalid"
     # Exact fatal labels and formatting from bubblewrap v0.9.0, commit
     # 8e51677abd7e3338e4952370bf7d902e37d8cbb6 (bubblewrap.c and utils.c:warnv).
-    # Only the closed category leaves this parser. Error prose, paths and errno text remain private.
+    # Only the closed category leaves this parser. Error prose, paths and unknown errno text remain private;
+    # keeper_destination_stage maps only six exact errno texts after a fixed target to a closed suffix.
     labels = (
         ("bwrap-initial-caps", b"bwrap: Unexpected capabilities but not setuid, old file caps config?", True),
         ("bwrap-capset", b"bwrap: capset failed: ", False),
@@ -1035,10 +1052,31 @@ def keeper_failure_stage(outcome, log, info):
                     "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
                     "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
                     "bwrap-destination-root", "bwrap-destination-home", "bwrap-destination-tmp",
-                    "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-host-temp",
+                    "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-runner-home",
                     "bwrap-destination-dev", "bwrap-destination-proc", "bwrap-destination-checkout",
-                    "bwrap-destination-scratch", "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot",
-                    "bwrap-exec") and
+                    "bwrap-destination-scratch",
+                    "bwrap-destination-root-eacces", "bwrap-destination-root-erofs", "bwrap-destination-root-enoent",
+                    "bwrap-destination-root-enotdir", "bwrap-destination-root-eloop", "bwrap-destination-root-eperm",
+                    "bwrap-destination-home-eacces", "bwrap-destination-home-erofs", "bwrap-destination-home-enoent",
+                    "bwrap-destination-home-enotdir", "bwrap-destination-home-eloop", "bwrap-destination-home-eperm",
+                    "bwrap-destination-tmp-eacces", "bwrap-destination-tmp-erofs", "bwrap-destination-tmp-enoent",
+                    "bwrap-destination-tmp-enotdir", "bwrap-destination-tmp-eloop", "bwrap-destination-tmp-eperm",
+                    "bwrap-destination-var-tmp-eacces", "bwrap-destination-var-tmp-erofs", "bwrap-destination-var-tmp-enoent",
+                    "bwrap-destination-var-tmp-enotdir", "bwrap-destination-var-tmp-eloop", "bwrap-destination-var-tmp-eperm",
+                    "bwrap-destination-run-eacces", "bwrap-destination-run-erofs", "bwrap-destination-run-enoent",
+                    "bwrap-destination-run-enotdir", "bwrap-destination-run-eloop", "bwrap-destination-run-eperm",
+                    "bwrap-destination-runner-home-eacces", "bwrap-destination-runner-home-erofs",
+                    "bwrap-destination-runner-home-enoent", "bwrap-destination-runner-home-enotdir",
+                    "bwrap-destination-runner-home-eloop", "bwrap-destination-runner-home-eperm",
+                    "bwrap-destination-dev-eacces", "bwrap-destination-dev-erofs", "bwrap-destination-dev-enoent",
+                    "bwrap-destination-dev-enotdir", "bwrap-destination-dev-eloop", "bwrap-destination-dev-eperm",
+                    "bwrap-destination-proc-eacces", "bwrap-destination-proc-erofs", "bwrap-destination-proc-enoent",
+                    "bwrap-destination-proc-enotdir", "bwrap-destination-proc-eloop", "bwrap-destination-proc-eperm",
+                    "bwrap-destination-checkout-eacces", "bwrap-destination-checkout-erofs", "bwrap-destination-checkout-enoent",
+                    "bwrap-destination-checkout-enotdir", "bwrap-destination-checkout-eloop", "bwrap-destination-checkout-eperm",
+                    "bwrap-destination-scratch-eacces", "bwrap-destination-scratch-erofs", "bwrap-destination-scratch-enoent",
+                    "bwrap-destination-scratch-enotdir", "bwrap-destination-scratch-eloop", "bwrap-destination-scratch-eperm",
+                    "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec") and
             info in ("empty", "child-created", "invalid"))
     return "prepare-keeper-" + outcome + "-log-" + log + "-info-" + info
 
@@ -1361,7 +1399,7 @@ def capture_mount_namespace():
 
 
 def supported_mask_sources(uid, gid, namespace, pins):
-    # OS/layout metadata only. Neither a runner UID nor Root ownership is guessed for the hosted temporary root.
+    # OS/layout metadata only. Neither a runner UID nor Root ownership is guessed for the runner home.
     global _DIAGNOSTIC_STAGE
     _DIAGNOSTIC_STAGE = "prepare-mask-os-chain"
     release = secure_chain("/etc/os-release")
@@ -1386,13 +1424,14 @@ def supported_mask_sources(uid, gid, namespace, pins):
     _DIAGNOSTIC_STAGE = "prepare-mask-runner-lookup"
     runner = pwd.getpwnam("runner")
     _DIAGNOSTIC_STAGE = "prepare-mask-runner-identity"
-    require(integer(runner.pw_uid) and runner.pw_uid != uid)
+    require(integer(runner.pw_uid) and runner.pw_uid != uid and runner.pw_dir == RUNNER_HOME)
     _DIAGNOSTIC_STAGE = "prepare-mask-mount-table"
     mounts = mount_table()
     require_private_mounts(mounts)
     # These labels are fixed metadata categories, never path strings supplied by a caller.
-    labels = {"/home/vector-agent":"home", "/tmp":"tmp", "/var/tmp":"var-tmp", "/run":"run", HOST_TEMP:"host-temp"}
+    labels = {"/home/vector-agent":"home", "/tmp":"tmp", "/var/tmp":"var-tmp", "/run":"run", RUNNER_HOME:"runner-home"}
     records = []
+    searches = []
     for target in MASKS:
         label = labels[target]
         _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-stat"
@@ -1406,7 +1445,7 @@ def supported_mask_sources(uid, gid, namespace, pins):
             require(info.st_uid == uid and info.st_gid == gid)
             _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-mode"
             require(not info.st_mode & 0o022)
-        elif target == HOST_TEMP:
+        elif target == RUNNER_HOME:
             require(info.st_uid == runner.pw_uid)
             _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-mode"
             require(not info.st_mode & 0o022)
@@ -1418,11 +1457,13 @@ def supported_mask_sources(uid, gid, namespace, pins):
             _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-type"
             require(stat.S_ISDIR(item.st_mode))
             _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-owner"
-            require(item.st_uid in (0, runner.pw_uid))
+            # Every supported mask parent is a Root-owned system directory; the runner owns only its own home.
+            require(item.st_uid == 0)
             _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-mode"
             require(not item.st_mode & 0o022)
             _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-canonical"
             require(os.path.realpath(parent) == str(parent))
+            searches.append((label, item))
         _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-mount-present"
         containing = [row for row in mounts if beneath(target, row["target"])]
         require(containing)
@@ -1456,7 +1497,25 @@ def supported_mask_sources(uid, gid, namespace, pins):
     require_capture_closure(result, mounts)
     refuse_mask_aliases(result, mounts)
     validate_source_view(os.getpid(), identity(os.getpid(), 0)["start"], result, pins["sources"])
+    # bwrap makes every mask's parents as the keeper (mkdir_with_parents) before it mounts the mask, so a parent the
+    # keeper cannot search fails construction as bwrap-destination-<label>-eacces. Refuse it here, after every other
+    # mask predicate, from the parent metadata those predicates already admitted.
+    for label, item in searches:
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-keeper-search"
+        require(keeper_searchable(item.st_mode, item.st_uid, item.st_gid, uid, gid))
     return result
+
+
+def keeper_searchable(mode, owner, group, uid, gid):
+    # The keeper runs as uid:gid with no supplementary groups (setpriv --clear-groups) in a user namespace that maps
+    # only uid and gid. Its namespace capabilities override DAC only on an inode whose owner and group are both mapped
+    # (the keeper's own); any other inode, Root's and the runner's included, is searchable only through the one class
+    # the kernel selects: owner, else group, else other. ACLs are not read; the keeper's construction stays the authority.
+    require(integer(uid) and integer(gid) and type(mode) is int and 0 <= mode <= 0o177777 and
+            all(type(value) is int and 0 <= value <= 9007199254740991 for value in (owner, group)))
+    if owner == uid and group == gid:
+        return True
+    return (mode & (0o100 if owner == uid else 0o010 if group == gid else 0o001)) != 0
 
 
 def validate_source_view(pid, start, records, original_pins=None):
@@ -1664,6 +1723,11 @@ def prepare_in_capture(uid, gid, container, namespace, pins):
     _DIAGNOSTIC_STAGE = "prepare-images"
     state = {"v": 1, "public": value, "phase": "recorded", "brokerPending": False, "runtimeImages": runtime_images(),
              "maskSources": masks}
+    # bwrap resolves the checkout and scratch binds and the --chdir as the keeper too. validate_spec pins both directly
+    # under the container, so they share one strict ancestry; check it after every existing pre-construction predicate.
+    _DIAGNOSTIC_STAGE = "prepare-keeper-search-checkout"
+    require(all(keeper_searchable(item.st_mode, item.st_uid, item.st_gid, uid, gid)
+                for item in (os.lstat(parent) for parent in pathlib.Path(stage).parents)))
     # The durable process-crash record precedes directory/child ownership. No power-loss claim is made.
     _DIAGNOSTIC_STAGE = "prepare-record"
     write_json(PRIVATE, state, 0o600)

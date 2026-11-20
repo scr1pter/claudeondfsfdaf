@@ -165,3 +165,15 @@ own Bun process. No generator input changed.
   a lockfile needs network access to update bun.lock.
 - A download-only start for an ended plan's disk is still not built. When it is, the provisioner should charge
   `chargeRetention` again.
+  - 15 Nov 2026 (Codium finish, H1a): built on the server. `chargeRetention` is charged by the first download-only start
+    of each computer, not by the provisioner (charging at the end would charge subscribers who never download);
+    `codium-deviations.md` "Codium finish: H1 download-only start (15 Nov 2026)", R3. The computer side is H1b.
+  - 15 Nov 2026 (Codium finish, H1b): the computer side is built. hostd starts nothing of a job in a download-only
+    session and only packs and uploads. It reaches only disks made from an image built after it; disks from before
+    signed heartbeats cannot complete a download and are still charged (an open server defect, O6). A HEAD that never
+    confirms strands a download session for its block (O4). `codium-deviations.md` "Codium finish: H1 computer
+    (15 Nov 2026)".
+  - 15 Nov 2026 (Codium finish, H1c): the client surfaces are built. The desktop's bar and the phone's Cloud computer
+    page offer "Download your files" with the days left, behind a confirmation, show the session's progress and hand
+    over the link. They show only once `computer` is listed. `codium-deviations.md` "Codium finish: H1 clients
+    (15 Nov 2026)".

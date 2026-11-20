@@ -123,6 +123,71 @@ computer's daemon then reports every 30 seconds through the run-API host, and it
   the worst-case disk size, 16 GB, while the plan is live) and its egress, lowers the block charges of ended sessions
   towards the provider's actual cost plus 10% (never below it), and caches the figures the budget answer reads.
 
+**Download-only starts (H1a).** After a plan ends (or moves to a plan without a cloud computer), the account can start
+download-only sessions on a computer whose disk is still inside its deletion date
+(`POST /api/hosted/sessions {mode: "download", computer}`): one at a time on each computer, none once less than a block
+and an hour is left before that date, each one block with no agent, browser or live view. The computer packs and
+uploads its disk, and the session's download link then works while the media bucket keeps the packed files (step 4's
+rule removes them; the person then starts another download-only session), never past the deletion date, and never
+while the plan is frozen, after a lost dispute or while the account is being deleted. Each block is held from the
+plan's final period (after a move to a plan without a cloud computer, from the current one), and the first start on
+each computer charges that disk's retention to the same period, once. Vector pays the uploads' egress up to one
+archive's worth per computer until the deletion date; further uploads are charged as ordinary egress. At the deletion
+date the nightly job deletes the disks and their packed files. It is reachable only when `VECTOR_HOSTED_PROVIDER` is
+set, the `hosted` switch is on, and either `computer` is listed or the account is on `VECTOR_HOSTED_ALLOW_ACCOUNTS`.
+
+Decisions that are yours (the build takes a reading for each; `codium-deviations.md` "Codium finish: H1 download-only
+start", R2-R4):
+- who pays a download-only block (today: the final period, or the current one after a move to a plan without a cloud
+  computer) and its upload's egress (today: Vector, up to one archive's worth per computer until the deletion date;
+  the rest as ordinary egress);
+- the retention: charged at the first download start, after the block's hold, so a tight final period grants fewer
+  paid days while the disk stays kept the whole window (the first deletion date stands); a start that fails after the
+  hold keeps its retention charge; after a move to a plan without a cloud computer it is charged to the current plan's
+  period. 16 Nov 2026 (codium-finish lane, phase review round three): it is charged once per computer and kept window,
+  named by the disk's deletion date, so a later start in the same window held from another period (after a renewal,
+  or after an ended plan came back on a plan without a cloud computer) charges nothing more for it;
+- which ended plans may download: today canceled and uncollected renewals (`payment_failed`, `action_required`,
+  `payment_pending`) may; refunded, lost-dispute, fraud-warning and Vector-ended plans may not;
+- before listing, confirm with OpenRouter that a key that expired and was switched off can still be read (its usage)
+  and have its limit changed: every download start depends on it, and answers "temporarily unavailable" otherwise;
+- rebuild the image (A58's image workflow) so a computer's hostd signs its heartbeats; until then today's images are
+  refused, and H1b's reading of `mode` needs the same rebuild;
+- H1b (`codium-deviations.md` "Codium finish: H1 computer", R4): a rebuilt image reaches a computer only when its disk
+  is made again, because a resumed computer keeps its whole saved disk. A download-only session on an ended plan's kept
+  disk therefore runs the hostd that disk was made with. A disk made before signed heartbeats cannot complete a
+  download: every beat is refused, and the session ends with no files after its block and the retention were charged.
+  Yours to decide: whether a download start should be refused, or not charged, when the computer's last reported image
+  generation is unknown or below the signed-beat floor. No per-computer generation record exists yet, and the
+  server-side image floor (H2a) is not built; when it is, it must not block download-only starts. The lane also tracks
+  this as a defect for a later server package (`codium-a53-hosted-sessions-notes.md`, "Not done").
+  15 Nov 2026 (Codium finish H2a): the per-computer record now exists (`hosted:generation:<account>`, the generation
+  each computer's hostd last reported in a signed heartbeat), and the image floor below does not apply to download-only
+  starts. Whether a download start should be refused or not charged below the signed-beat floor is still yours; H2a
+  does neither.
+  16 Nov 2026 (codium-finish lane, phase review PR3): this is a listing gate for `computer`. A download-only start
+  can still be charged its block and the retention and leave no files. That happens with a disk made before signed
+  heartbeats (above), and with an upload whose size check never matches, which the server never asks for again
+  (`codium-deviations.md` "Codium finish: H1 computer", O4 and O6). Before `computer` is listed, a server package
+  should charge the retention only once the first upload is confirmed, or give it back when no signed beat arrives
+  during the block. It should also answer a definite mismatch with a new pack or upload. The retention is now held
+  and settled from the same pool as the block (M2), and that does not change this gate;
+- computers above a live plan's cap (16 Nov 2026, codium-finish lane, phase review PR1; `codium-deviations.md` R13):
+  after a move to a plan with fewer computers, the computers above the new plan's count keep their disks only as long
+  as the provider keeps them, which is the disk days of the plan that last ran them. Nothing offers their files: a
+  download-only start is refused while the plan includes a cloud computer, no kept offer shows, and the server sets no
+  deletion date for them. Yours to decide: whether those files should be downloadable, with what deletion date, and
+  who pays the block and the retention.
+
+**The screens (H1c).** Once `computer` is listed, a customer whose plan ended (or no longer includes a cloud computer)
+and whose disks are still kept sees, on the desktop's bar and the phone's Cloud computer page, "Your cloud
+computer's files" with the days left (a count, never an amount), "Download your files" (it asks first: "Vector starts
+the computer once to pack its files for download.") and, once packed, "Open the download". Packed files stay offered
+while new starts are closed (the switch at `no-new`, a hold, a refunded plan); a frozen plan, a lost dispute and an
+account being deleted see nothing. Before listing, an account on `VECTOR_HOSTED_ALLOW_ACCOUNTS` sees none of it in
+the apps (`codium-deviations.md` "Codium finish: H1 clients", D1); the route works for it. The email notice of the 14
+days is not built. Yours: the confirmation's wording names no payer, so it fits either answer to who pays the block.
+
 **Fair use.** A session that passes 600 page loads an hour, 5 GB (Max) or 15 GB (Ultra) of egress a day, or 30 minutes
 above 80% of the processor with no model request is stopped, the account's cloud computer is put on hold and you get an
 email. Release it from the owner's hosted flags once you have looked.
@@ -144,6 +209,9 @@ Preview environment that tests in Stripe test mode):
 4. **Files for download.** Session downloads use the `vector-media` bucket (`VECTOR_R2_MEDIA_*`). Add a lifecycle rule
    that deletes objects under `hosted/` after 2 days (the links last 24 hours), and keep it away from `playbooks/`.
    Account deletion also deletes an account's packed files itself, so a missing rule never keeps them (P8 review).
+   A session's download link leads to its files only while the bucket keeps them: once this rule removed them, the
+   link answers that they are no longer kept, even while an ended plan's disk is still inside its deletion date (H1a),
+   and the person asks for them again (a running session, or a new download-only start).
 5. **Listing.** `computer` is ready to list once the provider, the ledger and both keys are set. List it only after the
    computer-use build, the brand name and the outside security review of isolation and the viewer (contract §1.2),
    starting with `VECTOR_HOSTED_ALLOW_ACCOUNTS` set to your own account.
@@ -188,7 +256,10 @@ What it does: a preflight job with no secret checks the environment's reviewer a
 that the commit is on `main`, and the inputs. The image job waits for your approval, then:
 
 1. `bun run build` in `packages/hosted-computer` (hostd and the viewer proxy, for Node), and the CLI at
-   `packages/hosted-computer/bin/vector`.
+   `packages/hosted-computer/bin/vector`, with its three notice files (`LICENSE`, `THIRD_PARTY_NOTICES.md`,
+   `DEPENDENCY_NOTICES.md`) in `packages/hosted-computer/notices/` from the same release archive. The image keeps them
+   in `/usr/share/vector/`, as the Vector CLI container does. The legal read of these files as shipped in the image is
+   yours (owner step 15, "hosted computer"); nothing here edits their text.
 2. `docker build --platform linux/amd64 --file image/Dockerfile` with both generations, then boots the image in Docker
    and runs `test/image.test.ts` inside it, the same checks CI runs. Nothing is pushed if one fails.
 3. Signs Docker in to the registry with the Vercel CLI (`vercel vcr login docker`, the version the budget workflow
@@ -200,6 +271,48 @@ that the commit is on `main`, and the inputs. The image job waits for your appro
 
 Then set `VECTOR_HOSTED_BASE_SNAPSHOT` in Vercel. New computers start from it. Computers that already have a disk keep
 their own programs until their disk is made again (after its retention lapses, or when you delete it).
+
+**The image floor (Codium finish H2a, optional).** `VECTOR_HOSTED_MIN_GENERATION` makes the server refuse job starts
+on computers whose disk was made from an older image, before anything is leased, held or started. Unset, blank or 0 is
+no floor, and nothing changes.
+
+- What it compares: the generation each computer's hostd reports in its signed heartbeat, which is the image's
+  `/usr/lib/vector/GENERATION` (the image workflow's `generation` input). A resumed computer keeps its whole disk, so
+  this is the generation its disk was made from.
+- When to set it: only after a rebuilt image is baked and `VECTOR_HOSTED_BASE_SNAPSHOT` points at it. Never set it
+  above the generation that snapshot was baked with: new computers report that generation, so a higher floor refuses
+  them from their second job on, and deleting one makes it again from the same snapshot.
+- What it does: a job start passes over an included computer below the floor and runs on another free one, without the
+  passed-over computer's files. When every included computer is below it, the start is refused with "This cloud
+  computer needs to be rebuilt." When the only free ones are below it and the rest are running, the start answers busy
+  ("Every cloud computer your plan includes is running or needs to be rebuilt."), so a queued Done by Morning job waits;
+  a refused one is missed.
+- Not checked: a computer that never reported a generation (it never booted, its image predates signed heartbeats, or
+  its hostd could not read the file and sent 0). Each computer is checked only after its first signed report from this
+  server version on, so its first start after you set the floor is not checked.
+- Not checked either: a computer whose report lapsed. A report lasts the plan's disk days from the computer's last
+  signed heartbeat, the earliest the provider may delete that disk, after which the next start may make the computer
+  afresh from the current snapshot. An idle subscriber whose disk lapsed is therefore not refused. The other side of
+  the same choice: the provider counts from when the computer stopped, normally within a minute of its last heartbeat
+  and at most the job's length later (a daemon that stopped reporting), so a start in that window resumes the old disk
+  unchecked, as `boot.sh` would also let it.
+- Not affected: download-only starts (an ended plan's files stay downloadable), running sessions and their renewals. To
+  stop running sessions, use the `hosted` switch.
+- A value that is not a whole number up to 1000000 stops every job start with "temporarily unavailable", and no other
+  screen says why. If starts stop after you set it, check the value first.
+- Nothing rebuilds a computer on its own. The person rebuilds one by deleting its disk (`POST /api/hosted/computers
+  {computer, action: "erase"}`); no screen offers that yet, and the API's erase has no confirmation step of its own, so
+  the confirmation belongs to that future screen. Since 16 Nov 2026 that deletion also deletes the packed files of the
+  computer's sessions, so no download link leads to them afterwards; the confirmation should say so. On a live plan a below-floor computer's files are kept only by not
+  deleting it: a live plan that includes a computer cannot start a download-only session. `GET /api/hosted/computers`
+  marks `rebuild: true` only on an included computer of a plan that has not ended, where a job start checks it; an
+  ended plan's kept disks and computers the plan no longer includes are never marked, because their files can only be
+  downloaded.
+- Yours to decide: an automatic rebuild (today the floor only refuses); passing over a below-floor computer versus
+  refusing any job start while one exists; what happens to a live plan's files on a below-floor computer; a queued job
+  that is missed when refused versus one that waits; and a report that lapses at the disk's earliest deletion (no
+  false refusal for a lapsed disk, a short unchecked window when the disk outlives it) versus one kept until its latest
+  (no unchecked window, a false refusal of up to the job's length).
 
 Not yet tried anywhere: the Vercel CLI's `vcr login docker` at that version and the registry's answers. If the sign-in
 step fails, the pinned version may predate the command: raise `VERCEL_CLI_VERSION` in
@@ -257,6 +370,10 @@ loads nothing but the computer's own viewer page. The phone's Cloud computer pag
 Morning's jobs and reports. When the computer's credential guard hands the computer to the subscriber, the session list
 says so and their phone gets one title-only alert ("Vector needs you on its cloud computer", tag `computer`). None of
 this shows until `computer` is listed (or for `VECTOR_HOSTED_ALLOW_ACCOUNTS`), and Vector Local blocks it.
+
+Correction, 15 Nov 2026 (Codium finish, H1c): "(or for `VECTOR_HOSTED_ALLOW_ACCOUNTS`)" above is wrong for the
+screens. Every one of them, the download-only offer included, shows only once `computer` is listed; an account on
+`VECTOR_HOSTED_ALLOW_ACCOUNTS` can use the routes before listing (step 4) but sees nothing in the desktop or phone app.
 
 ### The budget workflow
 

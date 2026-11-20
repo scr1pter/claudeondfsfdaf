@@ -49,6 +49,7 @@ const binding = {
 }
 const state = {
   enabled: true,
+  plans: true,
   revoked: false,
   foreign: false,
   source: "desktop",
@@ -57,23 +58,34 @@ const state = {
   rebind: false,
   brain: false,
   reads: 0,
+  stores: 0,
+  fetches: 0,
+  limits: 0,
 }
 const env = {
   VECTOR_RUN_ARTIFACT_SECRET: "owner-artifact-fixture-at-least-32-characters",
   get VECTOR_GITHUB_BRAIN_ENABLED() {
     return state.enabled ? "true" : "false"
   },
+  get MODEL_PLANS_ENABLED() {
+    return state.plans ? "true" : "false"
+  },
 }
 const api = createOwnerArtifactReadApi({
   env,
   now: () => at,
   fetcher: (async (_url, init) => {
+    state.fetches++
     expect(JSON.parse(String(init?.body))).toEqual(["GET", `vector:cli-revoked:${account}`])
     return Response.json({ result: state.revoked ? "1" : null })
   }) as typeof fetch,
   store: async (command) => {
-    if (command[0] === "HGETALL") {
-      expect(command[1]).toBe(`vector:cloud-agents:run:${rid}`)
+    state.stores++
+    expect(command[0]).toBe("EVAL")
+    expect(command[2]).toBe("1")
+    // The run record is read with HGETALL inside a script, which answers a flat array on every protocol (BT09).
+    if (command[3] === `vector:cloud-agents:run:${rid}`) {
+      expect(command[1]).toBe("return redis.call('HGETALL', KEYS[1])")
       return Object.entries({
         ...record,
         account: state.foreign ? "22222222-2222-4222-8222-222222222222" : account,
@@ -84,8 +96,6 @@ const api = createOwnerArtifactReadApi({
         .filter(([key]) => state.thread !== undefined || key !== "thread")
         .flat()
     }
-    expect(command[0]).toBe("EVAL")
-    expect(command[2]).toBe("1")
     expect(command[3]).toBe("vector:cloud-agents:binding:123")
     return [Object.entries({ ...binding, generation: state.generation }).flat()]
   },
@@ -100,7 +110,9 @@ const api = createOwnerArtifactReadApi({
       return { repositoryId: "123", generation: 1, publicRepository: true }
     },
   },
-  limit: async () => {},
+  limit: async () => {
+    state.limits++
+  },
 })
 const server = createServer((request, response) => void api(request, response))
 let origin = ""
@@ -214,5 +226,39 @@ test("a rebind during slow metadata verification and the closed activation switc
     expect(state.reads).toBe(0)
   } finally {
     state.enabled = true
+  }
+})
+
+test("with either switch off the owner read answers 503 before any store, fetch or limit", async () => {
+  Object.assign(state, { stores: 0, fetches: 0, reads: 0, limits: 0 })
+  const token = mintCliToken({ id: account, email: "fixture@example.test" }, at, "desktop").token
+  // Brain off with model plans on, then Brain on with model plans off; the read needs no active model allowance.
+  const switches = [
+    { enabled: false, plans: true },
+    { enabled: true, plans: false },
+  ]
+  try {
+    for (const off of switches)
+      for (const method of ["POST", "GET", "PUT"]) {
+        Object.assign(state, off)
+        const response = await fetch(origin, {
+          method,
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+        })
+        expect({ method, status: response.status, body: await response.json() }).toEqual({
+          method,
+          status: 503,
+          body: { error: { code: "ARTIFACT_READ_UNAVAILABLE", message: expect.any(String) } },
+        })
+      }
+    expect({ stores: state.stores, fetches: state.fetches, reads: state.reads, limits: state.limits }).toEqual({
+      stores: 0,
+      fetches: 0,
+      reads: 0,
+      limits: 0,
+    })
+  } finally {
+    Object.assign(state, { enabled: true, plans: true })
   }
 })

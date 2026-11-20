@@ -39,9 +39,10 @@ function refuse(code: Connect.RefusalCode, message: string): { ok: false; refusa
 // ---------------------------------------------------------------------------------------------------------------
 // Effects and the narrowing check
 
-// `read` maps to the requester's `read` rules and `write` to its `edit` rules (edit, write and apply_patch). Any other
-// effect is unknown, and the hub refuses it.
-const BASE_PERMISSION: Record<Connect.Effect, string> = { read: "read", write: "edit" }
+// `read` maps to the requester's `read` rules and `write` to its `edit` rules (edit, write and apply_patch). `cloud`
+// maps to `connect_cloud`, which is in `requiresApproval`: a deny rule refuses it here, but no allow rule, saved approval
+// or auto-accept answers it. Any other effect is unknown, and the hub refuses it.
+const BASE_PERMISSION: Record<Connect.Effect, string> = { read: "read", write: "edit", cloud: "connect_cloud" }
 const BASE = new Map<string, string>(Object.entries(BASE_PERMISSION))
 
 /** The requester permission an effect maps to, or undefined for an effect connect does not accept. */
@@ -69,11 +70,17 @@ export function evaluate(permission: string, pattern: string, ruleset: Ruleset):
  * Whether a hand-off may start at all, before anything is asked. Each effect must be one connect accepts, and the
  * requester's own rules must not deny the permission it maps to. `patterns` are what the effect touches (a fix's owned
  * paths); without them the blanket `*` is checked. An ask in those rules does not refuse: the consent asks.
+ *
+ * The `cloud` effect is accepted only with `input.cloud`, which the hub passes only for an action whose adapter declared
+ * it when the hub was built, and a declared action must list `cloud` among its effects, so neither the declaration nor
+ * the description alone decides. `connect_cloud` is checked against the declaration's own pattern (`<member>.<action>`),
+ * the one it is asked with.
  */
 export function narrowing(input: {
   readonly effects: readonly string[]
   readonly ruleset: Ruleset
   readonly patterns?: readonly string[]
+  readonly cloud?: { readonly pattern: string }
 }): Decision<readonly string[]> {
   if (input.effects.length === 0)
     return refuse("effect", "This action declares no effect, so connect did not start it.")
@@ -81,11 +88,22 @@ export function narrowing(input: {
   for (const effect of input.effects) {
     const base = basePermission(effect)
     if (!base) return refuse("effect", `Connect does not accept the "${clip(effect, 60)}" effect.`)
+    if (effect === "cloud" && !input.cloud)
+      return refuse(
+        "effect",
+        "Connect accepts the cloud effect only from an action its member declared when connect started, so it did not start this hand-off.",
+      )
     bases.push(base)
   }
+  // A declared cloud action that describes itself without `cloud` would otherwise start on read or write alone.
+  if (input.cloud && !input.effects.includes("cloud"))
+    return refuse(
+      "effect",
+      "This action was declared as sending your code to a Vector cloud service but no longer says so, so connect did not start it.",
+    )
   const patterns = input.patterns && input.patterns.length > 0 ? input.patterns : ["*"]
   for (const base of bases)
-    for (const pattern of patterns)
+    for (const pattern of base === "connect_cloud" && input.cloud ? [input.cloud.pattern] : patterns)
       if (evaluate(base, pattern, input.ruleset).action === "deny")
         return refuse(
           "permission",
@@ -104,6 +122,7 @@ export function admit(input: {
   readonly effects: readonly string[]
   readonly ruleset: Ruleset
   readonly patterns?: readonly string[]
+  readonly cloud?: { readonly pattern: string }
   readonly consents: () => readonly Connect.Consent[]
 }): Decision<readonly Connect.Consent[]> {
   const narrowed = narrowing(input)
@@ -117,7 +136,8 @@ export function admit(input: {
 /**
  * What each consent asks and who may answer it. `connect` is allowed by the build agent's `*` default, so only a
  * user's rule makes it ask or deny. `connect_model` asks once per request and may be saved per model. `connect_write`
- * asks every time: it joins `requiresApproval`, so no rule, saved approval or auto-accept answers it.
+ * asks every time: it joins `requiresApproval`, so no rule, saved approval or auto-accept answers it. `connect_cloud`
+ * is asked the same way on every hand-off of a `cloud` action, and names the Vector cloud service the code goes to.
  */
 export const CONSENTS = {
   connect: {
@@ -137,6 +157,13 @@ export const CONSENTS = {
   connect_write: {
     permission: "connect_write",
     when: "Each fix batch, and each merge of a fix worktree into your checkout.",
+    default: "ask",
+    asked: "every-time",
+    saveable: false,
+  },
+  connect_cloud: {
+    permission: "connect_cloud",
+    when: "Each hand-off whose action sends your code or screen to a Vector cloud service, naming it.",
     default: "ask",
     asked: "every-time",
     saveable: false,
@@ -260,6 +287,29 @@ export function writeConsent(input: {
   }
 }
 
+/**
+ * The `connect_cloud` consent for one hand-off of a `cloud` action. It names the destination in the words the adapter
+ * declared when the hub was built, never a model's, and never offers "Always allow": `connect_cloud` is in
+ * `requiresApproval`, so no rule, saved approval or auto-accept answers it.
+ */
+export function cloudConsent(input: {
+  readonly member: string
+  readonly pattern: string
+  readonly destination: Connect.CloudDestination
+}): Connect.Consent {
+  const destination = clip(input.destination, 200)
+  return {
+    permission: "connect_cloud",
+    patterns: [clip(input.pattern, 500)],
+    always: [],
+    message: clip(
+      `${clip(input.member, 120)} sends your code or screen to ${destination}. It leaves this computer, so connect asks every time.`,
+      Connect.MAX_SUMMARY,
+    ),
+    destination,
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Place and where code goes, against Vector Local
 
@@ -304,18 +354,22 @@ export function mayCallLocal(sendsTo: Connect.SendsTo | undefined): boolean {
 
 /**
  * Whether a member may work while Vector Local is on. With it off, every place is allowed. With it on, the member's
- * code must run on this machine and send code nowhere but this computer or a listed model server.
+ * code must run on this machine and send code nowhere but this computer or a listed model server, and none of its
+ * actions may have the `cloud` effect, whatever Vector Local's web setting.
  */
 export function localGate(input: {
   readonly local: boolean
   readonly place: Connect.Place
   readonly sendsTo?: Connect.SendsTo
+  readonly effects?: readonly string[]
 }): { readonly state: "ready" } | { readonly state: "off"; readonly reason: string } {
   if (!input.local) return { state: "ready" }
   if (input.place === "vector-cloud")
     return { state: "off", reason: "Off in Vector Local: it runs on Vector's servers." }
   if (input.place === "your-cloud")
     return { state: "off", reason: "Off in Vector Local: it runs in your own cloud accounts, not on this computer." }
+  if (input.effects?.includes("cloud"))
+    return { state: "off", reason: "Off in Vector Local: it sends your code or screen to a Vector cloud service." }
   if (input.sendsTo !== undefined && !Connect.isLocal(input.sendsTo))
     return {
       state: "off",
@@ -930,7 +984,10 @@ function token(value: string): string {
 }
 
 function clip(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max - 1) + "…"
+  if (value.length <= max) return value
+  // Cut in UTF-16 units, as the schemas' limits count, but never inside a surrogate pair, which would leave a lone half.
+  const cut = value.slice(0, max - 1)
+  return (/[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut) + "…"
 }
 
 function plural(count: number, noun: string): string {

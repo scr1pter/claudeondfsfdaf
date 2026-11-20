@@ -18,8 +18,12 @@ const state = {
   wrongAccount: false,
   bindFails: false,
   enabled: true,
+  plans: true,
   eligible: true,
   calls: [] as string[],
+  stores: 0,
+  fetches: 0,
+  limits: 0,
 }
 const binding = {
   repositoryId: "123",
@@ -40,13 +44,18 @@ const api = createDesktopCloudAgentApi({
     get VECTOR_GITHUB_BRAIN_ENABLED() {
       return state.enabled ? "true" : "false"
     },
+    get MODEL_PLANS_ENABLED() {
+      return state.plans ? "true" : "false"
+    },
   },
   fetcher: (async (_url, init) => {
+    state.fetches++
     const command = JSON.parse(String(init?.body))
     expect(command).toEqual(["GET", `vector:cli-revoked:${account}`])
     return Response.json({ result: state.revoked ? "1" : null })
   }) as typeof fetch,
   store: async (command) => {
+    state.stores++
     expect(command[0]).toBe("EVAL")
     expect(command[2]).toBe("1")
     expect(command[3]).toBe("vector:cloud-agents:binding:123")
@@ -101,10 +110,15 @@ const api = createDesktopCloudAgentApi({
     if (state.bindFails) throw new Error("fixture consent changed")
     return { uploadId, sha256, bytes: 40, approvedAt: 1_800_000_000_000 }
   },
-  limit: async () => {},
+  limit: async () => {
+    state.limits++
+  },
   eligible: async () => state.eligible,
 })
-const server = createServer((request, response) => void api.start(request, response))
+const server = createServer((request, response) => {
+  const route = new URL(request.url ?? "/", "http://fixture").pathname.slice(1)
+  void (route === "prepare" || route === "commit" || route === "download" ? api[route] : api.start)(request, response)
+})
 let origin = ""
 beforeAll(async () => {
   process.env.VECTOR_CLI_TOKEN_SECRET = "desktop-brain-fixture-secret-at-least-32-characters"
@@ -201,5 +215,75 @@ test("the new attachment route remains off by default and never starts a no-atta
     expect(state.calls).toEqual([])
   } finally {
     state.enabled = true
+  }
+})
+
+test("with either switch off every Brain route answers 503 before any method, body, credential, limit or store work", async () => {
+  const token = mintCliToken({ id: account, email: "fixture@example.test" }, Date.now(), "desktop").token
+  const routes = {
+    prepare: { repositoryId: "123", sha256, bytes: 40, includeBrain: true },
+    commit: { uploadId, nonce: "A".repeat(16), ciphertext: "A".repeat(76) },
+    download: { uploadId },
+    "": body,
+  }
+  const variants: Array<{ method: string; body?: unknown; query?: string; headers?: Record<string, string> }> = [
+    { method: "POST" },
+    { method: "POST", body: { forged: "field" } },
+    { method: "POST", query: "?ticket=secret" },
+    { method: "GET" },
+    { method: "POST", headers: { origin: "https://attacker.invalid" } },
+    { method: "POST", headers: { "content-type": "text/plain" } },
+  ]
+  // Brain off with model plans on, then Brain on with model plans off.
+  const switches = [
+    { enabled: false, plans: true },
+    { enabled: true, plans: false },
+  ]
+  Object.assign(state, { stores: 0, fetches: 0, limits: 0, calls: [] })
+  try {
+    for (const off of switches)
+      for (const [route, value] of Object.entries(routes))
+        for (const variant of variants) {
+          Object.assign(state, off)
+          const response = await fetch(`${origin}/${route}${variant.query ?? ""}`, {
+            method: variant.method,
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...variant.headers },
+            ...(variant.method === "GET" ? {} : { body: JSON.stringify({ ...value, ...(variant.body ?? {}) }) }),
+          })
+          expect({ route, variant, status: response.status, body: await response.json() }).toEqual({
+            route,
+            variant,
+            status: 503,
+            body: { error: { code: "BRAIN_UPLOAD_UNAVAILABLE", message: expect.any(String) } },
+          })
+          expect(response.headers.get("cache-control")).toBe("no-store")
+          expect(response.headers.get("x-content-type-options")).toBe("nosniff")
+          expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+        }
+    expect({ stores: state.stores, fetches: state.fetches, limits: state.limits, calls: state.calls }).toEqual({
+      stores: 0,
+      fetches: 0,
+      limits: 0,
+      calls: [],
+    })
+  } finally {
+    Object.assign(state, { enabled: true, plans: true })
+  }
+  // Positive control: switched on, the same request reaches the desktop revocation read, then stops at eligibility.
+  state.eligible = false
+  try {
+    const response = await fetch(`${origin}/prepare`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(routes.prepare),
+    })
+    expect(response.status).toBe(503)
+    expect({ stores: state.stores, fetches: state.fetches, limits: state.limits }).toEqual({
+      stores: 0,
+      fetches: 1,
+      limits: 0,
+    })
+  } finally {
+    state.eligible = true
   }
 })

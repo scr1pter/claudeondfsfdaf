@@ -10,6 +10,7 @@ import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
 import { SessionArchive } from "@vectordevai/core/share/archive"
 import { Hands } from "@vectordevai/schema/hands"
+import { isRecord } from "@/util/record"
 import { taskMetadata } from "./run/usage-output"
 
 function redact(kind: string, id: string, value: string) {
@@ -188,10 +189,20 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
     ...archive,
     info: {
       ...info,
-      // A child's lifecycle record copies its session totals and proof; editable metadata never certifies them.
-      ...(data.info.metadata?.subagent === undefined
+      // A child's lifecycle record copies its session totals and proof; editable metadata never certifies them (F43).
+      // The record's text, and every string beside it, is redacted too (F44).
+      ...(data.info.metadata === undefined
         ? {}
-        : { metadata: { ...data.info.metadata, subagent: taskMetadata(data.info.metadata.subagent) } }),
+        : {
+            metadata: Object.fromEntries(
+              Object.entries(data.info.metadata).map(([key, value]) => [
+                key,
+                key === "subagent"
+                  ? redactLifecycle(LIFECYCLE, data.info.id, taskMetadata(value))
+                  : redactStrings("session-metadata", data.info.id, value),
+              ]),
+            ),
+          }),
       title: redact("session-title", data.info.id, data.info.title),
       directory: redact("session-directory", data.info.id, data.info.directory),
       summary: !data.info.summary
@@ -264,6 +275,141 @@ function withoutTokens<T extends object>(value: T, codium: boolean, own = false)
   }
   delete result.tokens
   return result
+}
+
+// What a sanitized export keeps of a child's lifecycle record (SubagentRecord, agent/subagent-kind.ts) once taskMetadata
+// has dropped its aggregate tokens. `true` keeps a scalar field that holds no user, model or client text: an enum, id,
+// count, timestamp or budget, or the engine's slot wording. An object or list under it, which only a crafted archive
+// holds, takes the "subagent-field" label. A label redacts a field: a string with redact(), an object with data(), each
+// array element alike. A nested rule applies field by field, to an object or to each object of an array. A key it does
+// not name, from another version or a crafted archive, takes the "subagent-field" label too, so its string or object is
+// redacted while a number, boolean or null stays: taskMetadata, not this rule, keeps token figures out.
+type Rule = true | string | { readonly [key: string]: Rule }
+const BUDGET: Rule = { usd: true, steps: true, warnAt: true, unpricedSteps: true }
+const SCOPE: Rule = {
+  kind: true,
+  id: true,
+  budget: BUDGET,
+  spentUsd: true,
+  steps: true,
+  unpricedSteps: true,
+  codiumSteps: true,
+  costKind: true,
+  // The stop message can name a tool; the reason keeps what stopped it.
+  stopped: { reason: true, message: "subagent-stop-message" },
+}
+const LIFECYCLE: Rule = {
+  kind: true,
+  agent: true,
+  custom: true,
+  title: "subagent-title",
+  parentSessionID: true,
+  parentMessageID: true,
+  callID: true,
+  batchIndex: true,
+  batchID: "subagent-batch",
+  attempt: true,
+  runtimeID: true,
+  ownedPaths: "subagent-owned-path",
+  dependsOn: "subagent-depends-on",
+  successCriteria: "subagent-success-criterion",
+  resultRef: "subagent-result-ref",
+  resultSummary: "subagent-result-summary",
+  reason: "subagent-reason",
+  notification: { text: "subagent-notification", state: true, launchID: true, messageID: true, claimedAt: true },
+  budgetScopes: SCOPE,
+  budget: BUDGET,
+  mailbox: {
+    id: true,
+    sender: "subagent-mailbox-sender",
+    text: "subagent-mailbox-text",
+    delivery: true,
+    createdAt: true,
+    deliveredAt: true,
+    from: true,
+  },
+  model: { providerID: true, modelID: true, variant: true },
+  background: true,
+  status: true,
+  startedAt: true,
+  completedAt: true,
+  usage: { cost: true, toolUses: true, steps: true, unpricedSteps: true, codiumSteps: true },
+  error: "subagent-error",
+  conversationID: true,
+  rootSessionID: true,
+  requestID: true,
+  effort: true,
+  modelSource: true,
+  fork: { point: "subagent-fork-point", callID: true, from: "subagent-fork-from", warm: true },
+  structured: { schema: "subagent-structured-schema", schemaHash: true, attempts: true, valid: true },
+  delegatedScope: SCOPE,
+  owner: { pid: true, boot: true },
+  interruption: { at: true, cause: true, reportedAt: true, resumedAt: true, dismissedAt: true },
+  waiting: {
+    kind: true,
+    requestID: true,
+    since: true,
+    expiresAt: true,
+    notedAt: true,
+    summary: "subagent-waiting-summary",
+  },
+  stop: { by: true, at: true },
+  reports: { at: true, wakes: true },
+  slotReason: true,
+  isolation: {
+    mode: true,
+    state: true,
+    branch: "subagent-isolation-branch",
+    files: true,
+    additions: true,
+    deletions: true,
+    merged: "subagent-isolation-merged",
+    skipped: "subagent-isolation-skipped",
+    conflicts: "subagent-isolation-conflict",
+    error: "subagent-isolation-error",
+  },
+  // Both workflow shapes: a run, and one agent of a run.
+  workflow: {
+    role: true,
+    title: "subagent-workflow-title",
+    revision: true,
+    quiet: true,
+    progress: "subagent-workflow-progress",
+    runID: true,
+    stage: "subagent-workflow-stage",
+    phase: "subagent-workflow-phase",
+    item: "subagent-workflow-item",
+    key: "subagent-workflow-key",
+    node: "subagent-workflow-node",
+    round: true,
+    verifier: true,
+    final: true,
+    verified: true,
+    output: true,
+  },
+}
+
+function redactLifecycle(rule: Rule, id: string, value: unknown): unknown {
+  if (rule === true)
+    return isRecord(value) || Array.isArray(value) ? redactLifecycle("subagent-field", id, value) : value
+  if (Array.isArray(value)) return value.map((item, i) => redactLifecycle(rule, `${id}-${i}`, item))
+  if (typeof rule === "string")
+    return typeof value === "string" ? redact(rule, id, value) : isRecord(value) ? data(rule, id, value) : value
+  if (!isRecord(value)) return redactLifecycle("subagent-field", id, value)
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      redactLifecycle(Object.hasOwn(rule, key) ? rule[key] : "subagent-field", id, item),
+    ]),
+  )
+}
+
+// A session's other metadata keeps its keys, numbers, booleans and nulls; each string in it is redacted.
+function redactStrings(kind: string, id: string, value: unknown): unknown {
+  if (typeof value === "string") return redact(kind, id, value)
+  if (Array.isArray(value)) return value.map((item, i) => redactStrings(kind, `${id}-${i}`, item))
+  if (!isRecord(value)) return value
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactStrings(kind, id, item)]))
 }
 
 export const ExportCommand = effectCmd({
@@ -356,15 +502,18 @@ const run = Effect.fn("Cli.export.body")(function* (args: {
       ? yield* shares
           .preview(selection)
           .pipe(Effect.map((archive) => (args.sanitize ? sanitizePublic(archive) : archive)))
-      : "engine" in local
-        ? Schema.encodeSync(SessionArchive.Native)(local)
-        : args.sanitize
-          ? sanitizeLegacy(local)
-          : local
+      : localArchive(local, args.sanitize)
     process.stdout.write(JSON.stringify(output, null, 2))
     process.stdout.write(EOL)
   }).pipe(Effect.catchTag("PublicSessionError", (error) => fail(error.message)))
 })
+
+// What an export in the local format prints. A native archive is encoded as stored: --sanitize never reaches it here,
+// since it sends a native archive to the portable format. A legacy archive is printed as exported, or sanitized.
+export function localArchive(local: SessionArchive.Local, sanitize?: boolean) {
+  if ("engine" in local) return Schema.encodeSync(SessionArchive.Native)(local)
+  return sanitize ? sanitizeLegacy(local) : local
+}
 
 function sanitizePublic(archive: PublicSession.Archive): PublicSession.Archive {
   return {
