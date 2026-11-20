@@ -420,11 +420,13 @@ failing after "changed" was written, which settle also turns into `failed`.
 Change. `packages/engine/src/task/isolation.ts`: a new `cleared()` retries, on win32 only, an error
 `LockFs.isTransient` accepts (EBUSY, EPERM, ENOTEMPTY, EMFILE, ENFILE) with LockFs's schedule (10 ms doubling to
 250 ms, 2 s window), then reports it. `privateJSON`'s rename uses it (still removing the temp file on a final failure),
-and so does `privateRead`'s open, which can meet a delete-pending record. Readers still take no lock: Stop and the
+and so does `privateRead`'s open, which can meet a delete-pending record. Each retried open first re-runs the path
+guard: Windows has no O_NOFOLLOW, so the path's lstat is the only symbolic link check there, and a retry would
+otherwise stretch the gap between that check and the open from microseconds to up to 2 s. Readers still take no lock: Stop and the
 Changes view must never wait behind a save that holds the task lock across Git. Other platforms are unchanged. `place()`
 renames (merge and rollback) are not changed here. Tests: `packages/engine/test/task/isolation.test.ts` gains "a save
-over a record another handle holds open waits for the handle and then replaces the record" (on Windows it fails with
-EPERM without the fix) and "a save over a record held open past the retry window fails on Windows, keeping the old
+over a record another handle holds open waits for the handle and then replaces the record" (on Windows it is expected
+to fail with EPERM without the fix; that rests on job 133427562994's EPERM and has not been run) and "a save over a record held open past the retry window fails on Windows, keeping the old
 record and no temp file" (on other platforms the save replaces the record). In `task.test.ts` every "changed" wait in
 "task isolation saves" now goes through `reached()`, `saveStarted`'s diagnostic generalised, so a timeout reports the
 record's state, attempt, settled attempt and saved error, and names a failed save (EPERM rename) or a retire failure.
@@ -432,7 +434,13 @@ No deadline changed.
 
 Validation (Linux, Bun 1.3.14, through the serial lock): `packages/engine` `bun test --timeout 30000
 test/task/isolation.test.ts` 94 pass, 0 fail; `bun test --timeout 30000 test/tool/task.test.ts` 161 pass, 0 fail;
-`bun typecheck` exit 0.
+`bun typecheck` exit 0. After the per-retry path guard, the same three runs again: 94 pass, 161 pass, exit 0.
 
-Open check: the Windows half of both new tests runs only on Windows CI. The branch is not pushed yet; record the run ID
-and the Windows engine shard jobs here when they finish, re-running the shards a few times.
+Open check: the Windows half of both new tests runs only on Windows CI, and neither Windows-only branch has run yet:
+the old record staying "running" while the handle is open, and the EPERM failure after the retry window. Linux renames
+over an open file at once, so local passes do not exercise them, and this branch has not yet shown the named cause (a
+rename blocked by `find`). The branch is not pushed yet; record the run ID, the Windows engine shard job IDs and both
+new isolation tests' results here when they finish, re-running the shards a few times. If the first test ever flakes on
+Windows, look first at its one timing gap: once the poll sees the .tmp file, the save retries for at most 2 s while
+the test does one more `find` and closes the handle, and the test's own deadline does not cover that gap. Do not
+lengthen any deadline for it.

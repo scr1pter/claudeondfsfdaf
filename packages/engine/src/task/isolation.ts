@@ -322,8 +322,11 @@ export const linked = (info: Stats) => info.isSymbolicLink() || (info.isFile() &
  * rename cannot change. Elsewhere (Windows has no O_NOFOLLOW) the path's lstat stays the symbolic link check.
  */
 async function privateRead(file: string) {
-  await guarded(constants.O_NOFOLLOW === undefined ? file : path.dirname(file))
-  const handle = await cleared(() => open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))).catch((cause) => {
+  // The guard runs again before every retried open, so on Windows each open still follows a fresh lstat of the path.
+  const handle = await cleared(async () => {
+    await guarded(constants.O_NOFOLLOW === undefined ? file : path.dirname(file))
+    return open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+  }).catch((cause) => {
     const code = (cause as NodeJS.ErrnoException)?.code
     if (code === "ELOOP") throw err("registry", "Isolation data cannot be a symbolic or hard link.")
     // The guard checked the folder holding the file without requiring it to be one, and `missing` would read an
