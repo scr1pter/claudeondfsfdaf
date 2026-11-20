@@ -391,3 +391,48 @@ fail; `packages/engine` `bun typecheck` exit 0.
 Open check: confirmed only once Windows CI on this branch's PR shows every Windows engine shard green and the listing
 and "deletions counted" rows near 3-4 s. The branch is not pushed yet; record the run ID, shard job IDs and both rows'
 durations here when they finish.
+
+## 2026-11-20: Windows isolated save renamed over an open record
+
+Failure. PR #46 run 44666752560, engine (windows) shard 4/12, job
+[136057825288](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44666752560/job/136057825288):
+`packages/engine/test/tool/task.test.ts` "task isolation saves > stopping the parent while a foreground isolated
+child's normal save runs does not wait on Git" failed after 26,327 ms with "the save never finished after the Stop".
+That is about 6.3 s of setup plus the whole 20 s `ISOLATED` wait; neighbouring isolated-save tests in the same job took
+6.3-7.7 s, and the same test passed in 10.2 s on a slower runner (job 133427562994), so the deadline is not short: the
+record never reached "changed". The rerun at the same SHA passed. Searches of engine (windows) jobs since `2034e1da`
+found no other failure of this test.
+
+Cause (the most likely one, not reproduced: Linux renames over an open file). The writer side of the race that
+`20efba16` and `4435beab` fixed on the reader side. `TaskIsolation.find` reads record.json without the per-task lock
+(the test polls it every 20 ms), and `privateRead` keeps the file open through stat, read and close. Every save goes
+through `privateJSON`, which writes a temp file and renames it over the record with no retry, and Windows refuses a
+rename over a file another handle has open with EPERM. Whichever save lost (markSettling's, settle's settling save or
+`save(final)`) made settle's catch write `failed`, through the same rename; if that collided too, the error only
+reached `BackgroundJob.finished`'s warning. The log shows no EPERM because settle stores the error in the record. Job
+[133427562994](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43900984996/job/133427562994) (codium-finish
+`0b9f8337`) showed the mechanism: its stress test's own `record.json.0.tmp` rename over a record held open by `find`
+loops failed with EPERM, and `4435beab` removed that stress test and keeps the replace-under-open-handle case off
+Windows, which hid the writer side. The parent's Stop is not involved: the job had ended, so `cancel` only joins it, and
+the save runs in the uninterruptible `onExit`. A residual alternative leaves the same signature: `retire(final)`
+failing after "changed" was written, which settle also turns into `failed`.
+
+Change. `packages/engine/src/task/isolation.ts`: a new `cleared()` retries, on win32 only, an error
+`LockFs.isTransient` accepts (EBUSY, EPERM, ENOTEMPTY, EMFILE, ENFILE) with LockFs's schedule (10 ms doubling to
+250 ms, 2 s window), then reports it. `privateJSON`'s rename uses it (still removing the temp file on a final failure),
+and so does `privateRead`'s open, which can meet a delete-pending record. Readers still take no lock: Stop and the
+Changes view must never wait behind a save that holds the task lock across Git. Other platforms are unchanged. `place()`
+renames (merge and rollback) are not changed here. Tests: `packages/engine/test/task/isolation.test.ts` gains "a save
+over a record another handle holds open waits for the handle and then replaces the record" (on Windows it fails with
+EPERM without the fix) and "a save over a record held open past the retry window fails on Windows, keeping the old
+record and no temp file" (on other platforms the save replaces the record). In `task.test.ts` every "changed" wait in
+"task isolation saves" now goes through `reached()`, `saveStarted`'s diagnostic generalised, so a timeout reports the
+record's state, attempt, settled attempt and saved error, and names a failed save (EPERM rename) or a retire failure.
+No deadline changed.
+
+Validation (Linux, Bun 1.3.14, through the serial lock): `packages/engine` `bun test --timeout 30000
+test/task/isolation.test.ts` 94 pass, 0 fail; `bun test --timeout 30000 test/tool/task.test.ts` 161 pass, 0 fail;
+`bun typecheck` exit 0.
+
+Open check: the Windows half of both new tests runs only on Windows CI. The branch is not pushed yet; record the run ID
+and the Windows engine shard jobs here when they finish, re-running the shards a few times.
