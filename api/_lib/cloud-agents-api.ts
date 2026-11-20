@@ -163,6 +163,15 @@ export function createCloudAgentsApi(
         identity,
         workflowVersion: body.workflowVersion,
         ...(checked.installed ? { installationId: checked.installationId } : {}),
+        // R-A9: only the App's read of the workflow at the bind token's verified SHA names the mode, and the key check
+        // above refuses a body that names one. The body's workflowVersion comes from the request, so its gate can only
+        // withhold a mode, never grant one. The gate covers own-key too, though the constant names Codium: only the v3
+        // generator writes the header and route lines a mode is read from.
+        ...(checked.installed &&
+        checked.workflowMode &&
+        Number(body.workflowVersion) >= GithubAgents.MIN_CODIUM_WORKFLOW_VERSION
+          ? { workflowMode: checked.workflowMode }
+          : {}),
         takeover,
         now: now(),
       },

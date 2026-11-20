@@ -4033,3 +4033,135 @@ Seven findings, none blocking; all taken (deviations log, "2026-11-20, EV-25", "
 | mutations Ma, Mb, Mc (runs) and Md2, Me (start) | all red on their named cases; every restore matched by sha256 (results.json, results2.json) |
 
 The engine was not changed in this round, so its typecheck and github.cloud.test.ts were not re-run.
+
+## EV-26: @vector bindings record the workflow mode (R-A9) (2026-11-20)
+
+Spec §11 R-A9; §3.6 "Mode is @vector's record". Deviations log: "2026-11-20, EV-26".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `7a806f91` (EV-25) equals origin/everywhere-finish; origin/main `8e34d05e` and origin/release-finish `67ec3a60` are ancestors, so nothing was merged. Preconditions: review-fixes `e417c44d`, origin/review-fixes `1433d105` and origin/brain-transport `0d18f750` are ancestors. Built uncommitted. **The lead approved the api/_lib/github-app.ts hunk on 2026-11-20**, in its best-effort form, with the fixture and test edits beside it and the bind route's spread; the hunk is outside the brief's file list (deviations log, EV-26, "Commit precondition" and (b); the ruling is quoted under "EV-26 lead ruling and verification" below).
+
+**Files** (line numbers in the deviations entry, "What changed"):
+
+- api/_lib/cloud-agents-binding.ts, api/_lib/cloud-agents-api.ts, api/_lib/github-app.ts;
+- packages/web/test/github-app-fixture.ts (additive state and contents route);
+- packages/web/test/cloud-agents-binding.test.ts (4 new cases, 3 new rows in one case, the shape test), packages/web/test/cloud-agents-bind-api.test.ts (3 new cases), packages/web/test/github-app.test.ts (2 new cases);
+- the lane documents: the deviations entry (and a dated annotation on EV-25's Left open), this receipt, spec notes (§3.4 step 6, §3.6, §6.1 `binding`, §6.4, §8 VE-30, §11 header and R-A9) and the handoff's status bullet and EV-26 loose ends block.
+
+No generated file, flag, env var, switch, workflow, dependency or lockfile changes. The everywhere side is unchanged.
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named, against a disposable loopback Redis 7.0.15 on port 6396 (free: `ss` is not installed here, so the plan's `ss -ltn` check printed nothing; redis-server bound the port, which it refuses when the port is taken, and it was shut down with `redis-cli -p 6396 shutdown nosave` afterwards and its folder removed), `--save '' --appendonly no`, under /tmp/vector-v2/everywhere/ev26/redis; logs in /tmp/vector-v2/everywhere/ev26/checks/):
+
+| Check | Result |
+| --- | --- |
+| baselines at HEAD, before any edit: cloud-agents-binding, -bind-api, github-app | 42/0, 16/0, 73/0 (EV-25's figures) |
+| web cloud-agents-binding.test.ts | 46 pass, 0 fail, 683 expects (42 existing cases, one with three new rows, and 4 new) |
+| web cloud-agents-bind-api.test.ts | 19 pass, 0 fail, 5,683 expects; without VECTOR_TEST_REDIS_URL: 0 pass, 1 skip, 0 fail |
+| web github-app.test.ts | 75 pass, 0 fail, 6,347 expects |
+| every other file vector-at-mention.yml's api step names, each alone | github-oidc 41/0, github-app-api 12/0, account-github-agents 8/0, cloud-agents-artifact-key 3/0, -brain-api 3/0, -brain 11/0, -desktop 6/0, -entitlement-contract 6/0, -journey 4/0, -ledger 38/0, -mint-api 21/0, -owner-artifact 6/0, -readiness 8/0, -run-token 22/0, -runs 25/0, -service-off 4/0, -start 38/0, -status 1/0, -unbind 3/0, -webhook 4/0 |
+| root test/api-module-loading.test.ts, cli-token.test.ts, no-personal-paths.test.ts, no-project-wording.test.ts (from test/) | 3/0, 9/0, 1/0, 2/0 |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 304 files, 0 errors, 0 warnings, 452 hints (449 before; the three new ones are the `await expect(...).rejects` pattern the file already uses, in B4 and G1). The first runs had four type errors in the new tests (a `mode` typed `string`, and an optional binding put in an array), fixed before the runs above |
+| prettier `--check` (through vector-serial) on the three api sources and the four test files | clean |
+| after the lane document edits: web test/everywhere-lane.test.ts; root no-personal-paths and no-project-wording (from test/); `git diff --check` | 13 pass, 0 fail, 158 expects; 1/0; 2/0; clean |
+| `git diff HEAD...origin/<lane>` over the seven touched source and test files, for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify, process-finish and brain-transport | empty for every lane |
+
+**Mutations** (/tmp/vector-v2/everywhere/ev26/mut/: run.py, log.txt, log-m18b.txt): 19 mutations of the three api sources, one at a time, each with its named test files run alone. All 19 turned their named cases red (M18 after the non-base64 case was strengthened; it first survived), and every file was restored from its saved bytes and matched its sha256. The table is in the deviations entry.
+
+**Not run here:** the commit, the push gate's full turbo typecheck and the CI dispatches, which belong to the commit gate.
+
+**For the commit gate:**
+- The lead's approval of the github-app.ts hunk (and the fixture and test edits beside it): given on 2026-11-20 (below).
+- One package commit, staging explicit paths: `feat(cloud-agents): record the workflow mode on repository bindings`. The body names the files, the App's best-effort contents read at the bind token's verified SHA (a failed read records no mode and never fails the bind), that a client's mode is "refused (400)" and never exposed (it says "refused (400)", never "ignored", so reviewers check it against deviation (d)), that no generated file, flag, env, workflow or dependency changed, and the deferrals (the live mode read in EV-30, the port mapping and its tests in EV-29/EV-31).
+- Then `git fetch origin everywhere-finish`, the full turbo typecheck, and `git push origin HEAD:everywhere-finish`.
+- Dispatch on everywhere-finish: vector-at-mention.yml (Done-when: green) and typecheck.yml. Record the run ids here and in the handoff.
+
+### EV-26 review round one (2026-11-20)
+
+Nine findings, none blocking (deviations log, "2026-11-20, EV-26", "Review round one"). Code: the bind's contents read in api/_lib/github-app.ts is best effort (a failed, missing or over-cap read records no mode and the bind goes ahead); comments in github-app.ts (why the App does not call `readWorkflowOptions`) and cloud-agents-api.ts (the version gate covers own-key too); github-app.test.ts G1 pins the App's reader to core's `readWorkflowOptions` wherever the App names a mode and pins the best-effort read (404, 403, 503, over cap), and G2 is renamed; cloud-agents-bind-api.test.ts A3 is rewritten for the best-effort read; one comment rewrapped in cloud-agents-binding.test.ts. Still uncommitted; the commit precondition is unchanged.
+
+Checks (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named, against a fresh disposable loopback Redis 7.0.15 on port 6396 under /tmp/vector-v2/everywhere/ev26/redis2, shut down and removed afterwards; logs in /tmp/vector-v2/everywhere/ev26/review1/):
+
+| Check | Result |
+| --- | --- |
+| web github-app.test.ts | 75 pass, 0 fail, 6,416 expects |
+| web cloud-agents-bind-api.test.ts | 19 pass, 0 fail, 5,793 expects |
+| web cloud-agents-binding.test.ts | 46 pass, 0 fail, 683 expects |
+| the other files that drive a bind, each alone: account-github-agents, cloud-agents-desktop, -journey, -runs, -service-off, github-oidc, github-app-api | 8/0, 6/0, 4/0, 25/0, 4/0, 41/0, 12/0 |
+| mutations R1 (catch removed), R2 (read at the default branch), R3 (catch answers `{ type: "file" }`) | R1 red on G1 and A3; R2 red on G1 and A1; R3 survives, equivalent (the reader names no mode for a body without base64 content); every restore matched by sha256 (review1/mut/log.txt) |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 304 files, 0 errors, 0 warnings, 450 hints (452 in the first round; G1 no longer uses the `rejects` pattern) |
+| prettier `--check` on the three api sources and the four test files | clean |
+| after the lane document edits: web test/everywhere-lane.test.ts; root no-personal-paths and no-project-wording (from test/); `git diff --check` | 13 pass, 0 fail, 158 expects; 1/0; 2/0; clean |
+
+### EV-26 commit gate (2026-11-20): held, not committed
+
+The commit gate ran and stopped before staging anything. The package's commit precondition (the lead's explicit approval of the api/_lib/github-app.ts hunk and the fixture and test edits beside it; deviations log, EV-26, "Commit precondition") has no recorded ruling: no lead ruling or resume note for EV-26 exists, and the commit gate's brief does not name github-app.ts. So nothing was committed, pushed or dispatched. HEAD is still `7a806f91`, equal to origin/everywhere-finish; origin/main `8e34d05e` is an ancestor. `git status` shows only this package's eleven files (three api sources, four web test files, four lane documents), nothing unrelated.
+
+Check at the gate (github-app.ts was last edited after review round one's run of its test): web github-app.test.ts, alone through vector-serial with `--timeout 30000`, 75 pass, 0 fail, 6,416 expects (/tmp/vector-v2/everywhere/ev26/commit-gate/github-app.log); `git diff --check` clean. Once the lead approves, the commit gate re-runs from step 2 as written; if the lead refuses, the github-app.ts hunk, its fixture and test edits and the bind route's spread are dropped together and the package waits.
+
+*Annotation (2026-11-20):* the lead has since approved (next section), so this hold is lifted.
+
+### EV-26 lead ruling and verification (2026-11-20)
+
+The lead's ruling, recorded verbatim in the deviations log (EV-26, "Commit precondition"):
+
+> LEAD RULING 2026-11-20: APPROVED: the out-of-brief edit to api/_lib/github-app.ts (the bind branch's BEST-EFFORT contents read of GithubAgents.WORKFLOW_FILE at identity.workflowSha with the validation token inside the existing try/finally, verifyBind's optional workflowMode return, and the workflowModeOf reader), plus the edits beside it in packages/web/test/github-app-fixture.ts and packages/web/test/github-app.test.ts, and the bind route's spread in api/_lib/cloud-agents-api.ts. The best-effort form chosen in review round one is the approved form: any failed or over-cap read records no mode and the @vector bind still succeeds; the strict 503 form is NOT wanted. A client-supplied mode stays refused with 400, and the commit body must say 'refused (400)', never 'ignored'.
+
+The ruling asked for a verification pass, not a rebuild. Base: `git fetch origin release-finish main everywhere-finish` moved nothing; HEAD `7a806f91` equals origin/everywhere-finish, and origin/main `8e34d05e`, origin/release-finish `67ec3a60` and `e417c44d` are ancestors. `git status` shows only this package's eleven files.
+
+What was verified, by reading the diff:
+- **The tree matches the ruling.** The bind branch reads `${root}/contents/${GithubAgents.WORKFLOW_FILE}?ref=<identity.workflowSha>` with `validation.token`, best effort (`.catch(() => undefined)`, no `missing` option); `verifyBind` adds `workflowMode` only when there is one; `workflowModeOf` is the one reader; the bind route passes the mode only when the App verified the bind, read one, and the body's workflowVersion is at least 3; the body key check still refuses `workflowMode` with 400.
+- **The validation token is revoked on every path.** The read is inside the existing `try`, whose `finally` runs `revoke(validation.token)`. The read cannot throw past it, because the catch turns every failure into no mode, and every earlier throw in the `try` still reaches the `finally`. G1 checks `tokens.size === 0` after every case, and that every minted token has a `revoke:` event.
+- **Nothing of the file is logged or stored beyond the mode literal.** `workflowModeOf` returns only `"codium"`, `"own-key"` or undefined. Neither it nor `api()`, `githubResponseBytes` or `githubUnavailable` (github-http.ts) logs. The decoded text and the header are locals. REDEEM stores only ARGV[16], which `recordRepoBinding` has checked against the two literals. The bind response and the listing do not carry the field (A1).
+
+Checks (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named, against a fresh disposable loopback Redis 7.0.15 on port 6396, free before start: a `/dev/tcp` probe was refused. It ran with `--save '' --appendonly no` under /tmp/vector-v2/everywhere/ev26/verify/redis, and was shut down with `redis-cli -p 6396 shutdown nosave` and its folder removed afterwards. Logs are in /tmp/vector-v2/everywhere/ev26/verify/logs/):
+
+| Check | Result |
+| --- | --- |
+| web github-app.test.ts | 75 pass, 0 fail, 6,416 expects |
+| web cloud-agents-binding.test.ts | 46 pass, 0 fail, 683 expects |
+| web cloud-agents-bind-api.test.ts | 19 pass, 0 fail, 5,793 expects |
+| the other files that drive a bind or mint, each alone: account-github-agents, cloud-agents-desktop, -journey, -runs, -service-off, -start, -mint-api, github-oidc, github-app-api | 8/0, 6/0, 4/0, 25/0, 4/0, 38/0, 21/0, 41/0, 12/0 |
+| root test/api-module-loading.test.ts and cli-token.test.ts (from test/; github-app.ts now imports effect at run time) | 3/0, 9/0 |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 304 files, 0 errors, 0 warnings, 450 hints (as in review round one) |
+| prettier `--check` (through vector-serial) on the three api sources and the four test files; `git diff --check` | clean; clean |
+| `git diff HEAD...origin/<lane>` over the seven touched source and test files, after fetching review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14` and brain-transport `0d18f750` | empty for every lane |
+| after these lane document edits: web test/everywhere-lane.test.ts; root no-personal-paths and no-project-wording (from test/) | 13 pass, 0 fail, 158 expects; 1/0; 2/0 |
+
+Nothing was broken, so no source or test changed in this pass; only the four lane documents record the ruling. Still uncommitted: the commit (`feat(cloud-agents): record the workflow mode on repository bindings`, whose body says a client's mode is "refused (400)", never "ignored"), the push gate's full turbo typecheck, the push and the vector-at-mention.yml and typecheck.yml dispatches belong to the commit gate. VECTOR_EVERYWHERE_ENABLED stays off.
+
+### EV-26 review round two (2026-11-20)
+
+Four findings, none blocking (deviations log, "2026-11-20, EV-26", "Review round two"). Code: api/_lib/github-app.ts's mode literal is `["codium", "own-key"] as const satisfies readonly WorkflowMode[]` (:816), with one comment line naming the binding's `Mode` as the source of truth (the reader is now :806-834). Documents: deviation (b) and the items for the lead to forward to @vector say the bind's read can add up to 10 s when GitHub stalls (`api()`'s shared timeout; a shorter per-call timeout is not built, since it needs the lead's approval in @vector's file); the spec's §3.4 step 6 note lists the missing, unreadable, over-cap and disagreeing cases; EV-30's tests and VE-50's GitHub acceptance check that a known codium binding has `workflowMode: "codium"` stored (spec §8 VE-30 note, deviations Left open, handoff), in place of a failure counter, since api/_lib has no metrics facility. Still uncommitted; the commit gate is unchanged.
+
+Checks (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named, against a fresh disposable loopback Redis 7.0.15 on port 6396, free before start (a `/dev/tcp` probe was refused), with `--save '' --appendonly no` under /tmp/vector-v2/everywhere/ev26/review2/redis, shut down with `redis-cli -p 6396 shutdown nosave` and its folder removed afterwards; logs in /tmp/vector-v2/everywhere/ev26/review2/):
+
+| Check | Result |
+| --- | --- |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| compile-time mutation: `"byok"` added to the literal | the same typecheck exit 2, errors at github-app.ts:816 (the `satisfies`) and :415 (the `verified` assignment); restored from its saved copy, sha256 matched |
+| web github-app.test.ts | 75 pass, 0 fail, 6,416 expects |
+| web cloud-agents-bind-api.test.ts | 19 pass, 0 fail, 5,793 expects |
+| web cloud-agents-binding.test.ts | 46 pass, 0 fail, 683 expects |
+| `bun typecheck` in packages/web (astro check) | exit 0: 304 files, 0 errors, 0 warnings, 450 hints (as before) |
+| prettier `--check` (through vector-serial) on the three api sources and the four test files; `git diff --check` | clean; clean |
+| after the lane document edits: web test/everywhere-lane.test.ts; root no-personal-paths and no-project-wording (from test/) | 13 pass, 0 fail, 158 expects; 1/0; 2/0 |
+
+### EV-26 commit gate (2026-11-20, second run): committed
+
+The lead's ruling lifted the hold above. `git fetch origin release-finish main everywhere-finish` moved nothing: HEAD `7a806f91` equals origin/everywhere-finish, and origin/main `8e34d05e` and origin/release-finish `67ec3a60` are ancestors. `git status` showed only this package's eleven files, all staged by explicit path.
+
+Checks (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named, against a fresh disposable loopback Redis 7.0.15 on port 6396, free before start (a `/dev/tcp` probe was refused), with `--save '' --appendonly no` under /tmp/vector-v2/everywhere/ev26/gate/redis, shut down with `redis-cli -p 6396 shutdown nosave` and its folder removed afterwards; logs in /tmp/vector-v2/everywhere/ev26/gate/logs/):
+
+| Check | Result |
+| --- | --- |
+| web cloud-agents-binding.test.ts | 46 pass, 0 fail, 683 expects |
+| web cloud-agents-bind-api.test.ts | 19 pass, 0 fail, 5,793 expects |
+| web github-app.test.ts | 75 pass, 0 fail, 6,416 expects |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 304 files, 0 errors, 0 warnings, 450 hints |
+| push gate: `bun turbo typecheck --concurrency=2` with TURBO_CACHE_DIR in the worktree | exit 0, 27 of 27 tasks |
+| `git diff --check` | clean |
+
+The commit is `feat(cloud-agents): record the workflow mode on repository bindings`; its body says a client's mode is "refused (400)", never "ignored". The gate then pushes it to everywhere-finish and dispatches vector-at-mention.yml, typecheck.yml, vector-everywhere.yml, vector-hosted-ci.yml and vector-codium.yml on that ref; their run ids and results go in the next receipt.

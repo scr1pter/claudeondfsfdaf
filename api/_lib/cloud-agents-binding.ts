@@ -15,7 +15,9 @@ import { persistentStore } from "./persistent-store.js"
  * PERSISTENT_STORE_UNAVAILABLE and grants nothing. Inputs pass the same rules the reader applies before any store
  * command, so nothing is written that a later read would refuse. Redis keeps whatever a script wrote before it failed,
  * so each script checks everything before its first write, and every key a script touches arrives in KEYS. Ids stay
- * decimal strings, in Lua too: GitHub ids reach 2^53, past what Lua numbers and cjson print exactly.
+ * decimal strings, in Lua too: GitHub ids reach 2^53, past what Lua numbers and cjson print exactly. REDEEM also
+ * records the workflow mode the App read at the bind's verified SHA (R-A9), with that bind's workflowVersion and never
+ * from a request body.
  */
 
 const PREFIX = "vector:cloud-agents:"
@@ -32,6 +34,7 @@ const Login = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9-]{0,3
 const Ref = Schema.String.check(Schema.isPattern(/^refs\/heads\/[^\s:~^?*\[\\]{1,240}$/))
 const WorkflowVersion = Schema.String.check(Schema.isPattern(/^[1-9]\d{0,3}$/))
 const Visibility = Schema.Literals(["public", "private", "internal"])
+const Mode = Schema.Literals(["codium", "own-key"])
 const Reason = Schema.Literals(["transferred", "deleted", "binder-left"])
 const CODE = /^vbc_[A-Za-z0-9_-]{43}$/
 
@@ -59,11 +62,13 @@ const StoredBinding = Schema.Struct({
   lastUsedAt: Schema.optionalKey(Decimal),
   suspended: Schema.optionalKey(Reason),
   installationId: Schema.optionalKey(Decimal),
+  workflowMode: Schema.optionalKey(Mode),
 })
 const decodeCode = Schema.decodeUnknownOption(Schema.fromJsonString(StoredCode), { onExcessProperty: "error" })
 const decodeBinding = Schema.decodeUnknownOption(StoredBinding, { onExcessProperty: "error" })
 
 export type SuspendReason = typeof Reason.Type
+export type WorkflowMode = typeof Mode.Type
 export type RepoBinding = {
   repositoryId: string
   ownerId: string
@@ -82,6 +87,11 @@ export type RepoBinding = {
   suspended?: SuspendReason
   /** Verified by the App during bind, never supplied by a client. Absent on legacy or no-App bindings. */
   installationId?: string
+  /**
+   * R-A9 (EV-26): the workflow's mode as the App read it at this bind (verifyBind), recorded with this bind's
+   * workflowVersion. Absent on legacy, no-App and unreadable binds; the everywhere router reads that as no Actions route.
+   */
+  workflowMode?: WorkflowMode
 }
 /** The verified bind-token fields a binding is made from. V08 adds repositoryVisibility to GithubIdentity. */
 export type BindIdentity = Pick<
@@ -99,6 +109,8 @@ export type RedeemInput = {
   identity: BindIdentity
   workflowVersion: string
   installationId?: string
+  /** Only verifyBind's read of the workflow file at the bind token's SHA, never a request body. */
+  workflowMode?: WorkflowMode
   takeover: { adminVerified: boolean; allowanceInactive: boolean }
   now: number
 }
@@ -218,6 +230,7 @@ export async function recordRepoBinding(input: RedeemInput, store = persistentSt
     !Schema.is(Visibility)(visibility) ||
     !Schema.is(WorkflowVersion)(input.workflowVersion) ||
     (input.installationId !== undefined && !Schema.is(Decimal)(input.installationId)) ||
+    (input.workflowMode !== undefined && !Schema.is(Mode)(input.workflowMode)) ||
     typeof input.takeover.adminVerified !== "boolean" ||
     typeof input.takeover.allowanceInactive !== "boolean" ||
     !time(input.now)
@@ -250,6 +263,7 @@ export async function recordRepoBinding(input: RedeemInput, store = persistentSt
     input.takeover.allowanceInactive ? "1" : "0",
     String(TAKEOVER_AFTER_MS),
     input.installationId ?? "",
+    input.workflowMode ?? "",
   ])
   if (reply === "code" || reply === "elsewhere" || reply === "changed") return { ok: false as const, refusal: reply }
   if (!Array.isArray(reply) || reply.length !== 2 || reply[0] !== "ok" || !Schema.is(Decimal)(reply[1]))
@@ -266,6 +280,7 @@ export async function recordRepoBinding(input: RedeemInput, store = persistentSt
     workflowVersion: input.workflowVersion,
     boundAt: input.now,
     ...(input.installationId === undefined ? {} : { installationId: input.installationId }),
+    ...(input.workflowMode === undefined ? {} : { workflowMode: input.workflowMode }),
   }
   return { ok: true as const, binding }
 }
@@ -405,7 +420,7 @@ local reasons = { transferred = true, deleted = true, ['binder-left'] = true }
 // KEYS: the code, the binding, the generation, the code account's set, the set of the account the caller judged
 // (the code account's own set when there was none), the code account's binder-left set, its revocation key. ARGV: now, account, judged
 // account or "", repository, repository id, owner id, actor, actor id, ref, visibility, workflow version, admin
-// verified, allowance inactive, O6 window.
+// verified, allowance inactive, O6 window, installation id or "", workflow mode or "".
 const REDEEM = `${STORED_RULES}
 if redis.call('GET', KEYS[7]) then return 'code' end
 local raw = redis.call('GET', KEYS[1])
@@ -443,6 +458,8 @@ redis.call('HSET', KEYS[2], 'repositoryId', ARGV[5], 'ownerId', ARGV[6], 'reposi
   'visibility', ARGV[10], 'defaultRef', ARGV[9], 'generation', tostring(generation), 'binderGithubId', ARGV[8],
   'binderLogin', ARGV[7], 'workflowVersion', ARGV[11], 'boundAt', ARGV[1])
 if ARGV[15] ~= '' then redis.call('HSET', KEYS[2], 'installationId', ARGV[15]) end
+-- R-A9: the DEL above dropped an earlier bind's mode, so a bind whose App read named none leaves none.
+if ARGV[16] ~= '' then redis.call('HSET', KEYS[2], 'workflowMode', ARGV[16]) end
 redis.call('SADD', KEYS[4], ARGV[5])
 -- The account's own new binding has a binder with write access again.
 redis.call('SREM', KEYS[6], ARGV[5])
@@ -558,6 +575,7 @@ function storedBinding(reply: unknown, repositoryId: string): RepoBinding | unde
     workflowVersion: stored.workflowVersion,
     boundAt: Number(stored.boundAt),
     ...(stored.installationId === undefined ? {} : { installationId: stored.installationId }),
+    ...(stored.workflowMode === undefined ? {} : { workflowMode: stored.workflowMode }),
     ...(stored.lastUsedAt === undefined ? {} : { lastUsedAt: Number(stored.lastUsedAt) }),
     ...(stored.suspended === undefined ? {} : { suspended: stored.suspended }),
   }

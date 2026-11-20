@@ -1,4 +1,5 @@
 import { createPrivateKey } from "node:crypto"
+import { Option, Schema } from "effect"
 import { importPKCS8, SignJWT } from "jose"
 import { ApiError } from "./http.js"
 import {
@@ -13,7 +14,7 @@ import { githubOidcAudiences, type GithubIdentity } from "./github-oidc.js"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { parseReviewCommand } from "../../packages/core/src/review/command.js"
 import { persistentStore } from "./persistent-store.js"
-import type { RepoBinding } from "./cloud-agents-binding.js"
+import type { RepoBinding, WorkflowMode } from "./cloud-agents-binding.js"
 
 export const githubTokenPermissions = {
   task: {
@@ -233,7 +234,9 @@ export function createGithubApp(
       throw denied("REPOSITORY_MISMATCH", "This repository's App installation is unavailable.")
     const installationId = githubId(installation.id)
     const validation = await mint(jwt, installationId, identity, validationPermissions)
-    let verified: { defaultRef: string; adminVerified: boolean; binder: "ok" | "binder-left" } | undefined
+    let verified:
+      | { defaultRef: string; adminVerified: boolean; binder: "ok" | "binder-left"; workflowMode?: WorkflowMode }
+      | undefined
     try {
       const repository = await api(root, validation.token)
       if (
@@ -398,7 +401,19 @@ export function createGithubApp(
           binder: await verifyBinder(identity, verification, root, validation.token),
         }
       }
-      if (verification?.job === "bind") verified = { defaultRef, adminVerified, binder: "ok" }
+      if (verification?.job === "bind") {
+        // R-A9: the mode of the file this bind job ran from (the run's path and head SHA are checked above). Best
+        // effort, so everywhere never fails an @vector bind: a missing file or any failed read (an answer over the
+        // shared response cap included) names no mode, which everywhere reads as no Actions route until a rebind.
+        const workflowMode = workflowModeOf(
+          await api(
+            `${root}/contents/${GithubAgents.WORKFLOW_FILE}?ref=${encodeURIComponent(identity.workflowSha)}`,
+            validation.token,
+          ).catch(() => undefined),
+          config.slug,
+        )
+        verified = { defaultRef, adminVerified, binder: "ok", ...(workflowMode ? { workflowMode } : {}) }
+      }
     } finally {
       // Never retain the private-repository validation credential in the server.
       // Failure to revoke stops issuance of the final write credential.
@@ -754,6 +769,7 @@ export function createGithubApp(
         defaultRef: authorized.verified!.defaultRef,
         adminVerified: authorized.verified!.adminVerified,
         installationId: authorized.installationId,
+        ...(authorized.verified!.workflowMode ? { workflowMode: authorized.verified!.workflowMode } : {}),
       }
     },
     async installation(identity: GithubIdentity) {
@@ -785,6 +801,36 @@ export function createGithubApp(
       }
     },
   }
+}
+
+// R-A9: the v3 generator writes the mode twice, in the `# vector-workflow:` header (core readWorkflowOptions) and in
+// the route script's `const mode` line, which decides whether the route job accepts the App bot's dispatch. Codium
+// counts only when the header's handle and the route's one `const handle` line both name this App, because the route
+// refuses the bot otherwise. A file whose lines disagree, a v2 or hand-written file, or a body that is not base64 names
+// none. Only the literal leaves this function; nothing of the file is logged or stored. The literals are spelled here,
+// not imported from cloud-agents-binding.ts, so App code gains no runtime import of the binding store; `satisfies`
+// ties them at compile time to the binding's WorkflowMode, which is the source of truth. The header is read here, not
+// with readWorkflowOptions, which would bring yaml and semver into the API bundle; github-app.test.ts pins both
+// readers to the same mode on the generator's output.
+const WorkflowHeader = Schema.Struct({
+  mode: Schema.Literals(["codium", "own-key"] as const satisfies readonly WorkflowMode[]),
+  handle: Schema.optionalKey(Schema.String),
+})
+const decodeWorkflowHeader = Schema.decodeUnknownOption(Schema.fromJsonString(WorkflowHeader))
+
+function workflowModeOf(file: Record<string, unknown> | undefined, slug: string) {
+  if (file?.type !== "file" || file.encoding !== "base64" || typeof file.content !== "string") return undefined
+  const encoded = file.content.replace(/\s/g, "")
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return undefined
+  const text = Buffer.from(encoded, "base64").toString("utf8")
+  const first = text.split(/\r?\n/, 1)[0] ?? ""
+  if (!first.startsWith("# vector-workflow: ")) return undefined
+  const header = Option.getOrUndefined(decodeWorkflowHeader(first.slice("# vector-workflow: ".length)))
+  const modes = [...text.matchAll(/^[ \t]*const mode = (.*)$/gm)].map((match) => match[1])
+  if (!header || modes.length !== 1 || modes[0] !== JSON.stringify(header.mode)) return undefined
+  if (header.mode === "own-key") return header.mode
+  const handles = [...text.matchAll(/^[ \t]*const handle = (.*)$/gm)].map((match) => match[1])
+  return header.handle === slug && handles.length === 1 && handles[0] === JSON.stringify(slug) ? header.mode : undefined
 }
 
 function storeUnavailable() {
