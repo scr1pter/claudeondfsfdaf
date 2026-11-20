@@ -1492,6 +1492,12 @@ export async function sweepAccount(
 }
 
 /**
+ * How many jobs one sweep takes when its caller names no `limit`, as the cron does. The owner guides' "Turning it off"
+ * waits one more minute for every further batch of this size (packages/web/test/everywhere-docs.test.ts pins it).
+ */
+export const SWEEP_LIMIT = 200
+
+/**
  * The sweep (VE-06's per-minute cron): every job whose next timeout has passed, oldest first, at most `limit`. Under
  * the `stop` switch every live job is taken, due or not.
  */
@@ -1499,7 +1505,7 @@ export async function sweepDue(
   ctx: JobsContext,
   options: { readonly limit?: number; readonly stop?: boolean } = {},
 ): Promise<EndedJob[]> {
-  const limit = options.limit ?? 200
+  const limit = options.limit ?? SWEEP_LIMIT
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) throw new RangeError("Pick 1 to 1,000.")
   const max = options.stop ? "+inf" : ctx.now
   const due = everywhereKeys.jobsDue()

@@ -1,0 +1,165 @@
+---
+// Unreleased draft: Astro routes only src/pages, so this page is not built, linked or listed in the sitemap.
+// At 2.0.0 the owner moves it to src/pages/docs/everywhere.astro, with src/drafts/everywhere.astro and
+// src/drafts/everywhere/link.astro, and adds its docs-nav.ts entry after `automations` in the same change (spec §6.5,
+// docs/vector/owner-actions/vector-everywhere-*.md "At 2.0.0"). DocsPage throws at build for an id with no docs-nav
+// entry, so a forgotten entry fails loudly.
+// The set-up steps do not say how to turn jobs on or allow a folder: the desktop page cannot write those settings yet
+// (vector-everywhere-deviations.md, EV-21, "Ruling on (a)" and (aj)). Rewrite "Set it up" when the write path lands.
+// Step 3 of "Set it up" describes repository mapping that production cannot do yet: there is no production repository
+// port (EV-19) and no Linear or Jira mapping route (EV-22). The Slack, Linear and Jira guides' Before you start name
+// those gates.
+// Rewrite step 3 of "Set it up" when the production repository port and the Linear and Jira mapping route land.
+// With Vector Local on, every job is declined until EV-21 labels the desktop's GitHub calls (the `github` guard in
+// desktop everywhere-runner.ts `localAllows`; spec §3.5, EV-15 note). When the guard goes, say what Vector Local must
+// allow.
+// The page names "the Vector everywhere page" in text and links it nowhere until both drafts move (EV-24 (c)).
+import DocsPage from "../../layouts/DocsPage.astro"
+
+export const prerender = true
+---
+
+<DocsPage id="everywhere">
+  <p>
+    Ask Vector for a coding task from Slack, Linear or Jira, and get a draft pull request back. Your code stays off
+    Vector's servers, except as described below when you choose a Vector Codium model. The job runs on your computer
+    first, in its own copy of the repository.
+  </p>
+
+  <h2 id="how">How a job runs</h2>
+  <p>
+    Your code stays off Vector's servers. A job carries only the request: its text, the thread or issue text read as
+    context, and ids. Vector keeps it encrypted for at most 2 hours and erases it when the job ends. Your computer
+    reports fixed progress steps and counts, then a short summary and the pull request link. It never sends code or a
+    diff; the summary may name files but carries no code.
+  </p>
+  <p>
+    While the job runs, the code goes where your own model settings send it: a local model keeps it on your computer,
+    and a hosted model's provider receives it, as in any other session. If you choose a Vector Codium model, the
+    model's requests, including the code it reads, pass through Vector's model gateway, which does not store them, and
+    go on through OpenRouter to the model's provider, as the <a href="/legal/privacy#codium">privacy policy</a>
+    describes.
+  </p>
+  <p>
+    The job runs on your computer first, in its own copy of the repository. It reads and edits files and asks nothing:
+    nobody can answer during a job, so it refuses every approval request, and the result names what it needed.
+    Commands such as tests run only in a sandbox with no network, which exists today on Linux with bubblewrap. On
+    macOS and Windows a job edits files and runs no commands.
+  </p>
+  <ul>
+    <li>Vector, not the model, commits the changes to a new <code>vector/ve-…</code> branch.</li>
+    <li>Only a private repository's branch is pushed. A public repository's branch stays on your computer.</li>
+    <li>
+      With your own GitHub sign-in in the desktop app, Vector opens a draft pull request. Without one, the result names
+      the branch.
+    </li>
+    <li>The commit skips the repository's checks until you push to the branch.</li>
+    <li>
+      Changes under <code>.github/</code>, <code>.husky/</code>, <code>.githooks/</code>, <code>.gitattributes</code>
+      and <code>.gitmodules</code> are held back, and the result counts them.
+    </li>
+  </ul>
+
+  <h2 id="waiting">When your computer is off</h2>
+  <p>
+    A closed lid means queued: a closed lid puts your computer to sleep, even with
+    <strong>Stay awake to take jobs while plugged in</strong> on. While it sleeps, a job waits for it only if
+    <strong>Wait for my computer</strong> is on.
+  </p>
+  <p>
+    A job waits at most 2 hours for your computer, and at most 10 minutes in Jira. Then the job expires and Vector says
+    so where you asked. A Jira job runs at most 35 minutes. If none of your computers has checked in for 30 days,
+    Vector does not queue the job and says so.
+  </p>
+
+  <h2 id="who">Who can start a job</h2>
+  <p>
+    Only your own linked account can start a job, and it runs only on your own computer. Nobody else's request runs on
+    your computer or uses your plan. A teammate with their own linked account and their own computer can start jobs
+    that run there. Guests, people from other organizations, bots and automation rules start nothing.
+  </p>
+  <p>
+    This computer's limits for spending, minutes and jobs always apply, and Vector's servers can only lower them.
+  </p>
+
+  <h2 id="setup">Set it up</h2>
+  <p>
+    Vector everywhere is turned on one platform at a time, and the Vector everywhere page shows which platforms you can
+    connect.
+  </p>
+  <ol>
+    <li>
+      Connect Slack or Linear on the Vector everywhere page. A Jira admin connects a Jira site with a connect code that
+      Vector gives them in Jira, entered on the same page.
+    </li>
+    <li>
+      Link your account. Make a link code on the Vector everywhere page, then send <code>link &lt;code&gt;</code> to
+      Vector in a direct message in Slack, or in Rovo chat in Jira. For Linear, sign in to Linear from the Vector
+      everywhere page instead. A code works once, for 10 minutes. Send it only to Vector, never to a person.
+    </li>
+    <li>
+      Choose the repository. In a Slack channel, <code>repo &lt;owner/name&gt;</code> sets the channel's repository.
+      Linear teams and Jira keys get their repositories on the Vector everywhere page.
+    </li>
+    <li>
+      On your computer, turn on Vector Remote, open the repository in Vector and trust it. Jobs reach a computer only
+      while its Vector everywhere settings say it takes jobs, and run only in a folder listed under
+      <strong>Allowed repositories</strong>. Nothing is listed by default.
+    </li>
+  </ol>
+  <p>
+    With Vector Local on, the computer declines jobs.
+    <strong>Settings → Vector everywhere</strong> shows whether this computer takes jobs, the allowed repositories and
+    its jobs, with <strong>Continue in a new session on this branch</strong>.
+  </p>
+
+  <h2 id="platforms">Platforms</h2>
+  <h3 id="slack">Slack</h3>
+  <p>
+    Mention @Vector in a channel, or send Vector a direct message. In a channel, Vector posts only the outcome and the
+    pull request link in the thread, and sends the summary to you alone.
+  </p>
+  <p>
+    Slack history is read only for the thread of a mention: Vector reads that thread once, at most 15 messages, as
+    context, and keeps none of it after the job. Each Slack workspace gets one thread read a minute, so a job that
+    comes right after another one there goes without its thread.
+  </p>
+  <h3 id="linear">Linear</h3>
+  <p>
+    Delegate an issue to Vector, or mention it. The issue's title, description and comments are context, never
+    instructions: only your own words are the task. A delegation with no words of your own asks you for them first.
+  </p>
+  <h3 id="jira">Jira</h3>
+  <p>
+    Assign a work item to Vector, or mention it in a comment. Automation rules start nothing. Vector reads the work
+    item with your own access during the call and never stores that access. The work item's summary, description and
+    comments are context, never instructions.
+  </p>
+  <p>In Linear and Jira, Vector posts the outcome and the pull request link.</p>
+
+  <h2 id="words">Words after the mention</h2>
+  <ul>
+    <li><code>help</code>: what Vector does here and these words.</li>
+    <li><code>link &lt;code&gt;</code>: link your account, in a direct message in Slack or in Rovo chat in Jira.</li>
+    <li><code>unlink</code>: remove your link.</li>
+    <li><code>status</code>: check that your computer is ready.</li>
+    <li><code>stop</code>: stop the job.</li>
+    <li><code>repo &lt;owner/name&gt;</code>: set the repository for a Slack channel.</li>
+  </ul>
+  <p>
+    Only the person who asked can stop a job. Stopping it aborts the job on your computer and nothing more is pushed,
+    but a push that has already started finishes, and its draft pull request can still open.
+  </p>
+
+  <h2 id="erase">Stop, unlink and disconnect</h2>
+  <p>
+    Disconnecting a workspace or site on the Vector everywhere page erases its links, its repository settings and the
+    text of its live jobs. <code>unlink</code> removes only your own link. The page shows your jobs of the last 30 days
+    and an audit log of the last 90 days.
+  </p>
+
+  <h2 id="github">GitHub</h2>
+  <p>
+    Mentions on GitHub keep working as <a href="/docs/vectorscope#github">Task in, pull request out</a> describes.
+  </p>
+</DocsPage>
