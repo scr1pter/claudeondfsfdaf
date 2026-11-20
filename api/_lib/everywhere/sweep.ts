@@ -1,7 +1,8 @@
 import { ApiError, json, requireMethod, type ApiRequest, type ApiResponse } from "../http.js"
+import { createActionsRunEnd } from "./adapters/cloud-agents.js"
 import { readConfig, type EverywhereConfig } from "./config.js"
 import { postPending } from "./events.js"
-import { sweepDue, type JobsContext } from "./jobs.js"
+import { sweepDue, type ActionsRunEnd, type JobsContext } from "./jobs.js"
 import type { Platforms } from "./platform.js"
 import { productionContext, productionPlatforms } from "./runtime.js"
 import { bearerMatches } from "./signature.js"
@@ -9,13 +10,15 @@ import { readEverywhereSwitch } from "./switch.js"
 
 /**
  * The per-minute sweep cron (vercel.json, R-C11). Order: the method, then the exact CRON_SECRET bearer, then the off
- * answer, then the `everywhere` switch, the due jobs and the reply outbox.
+ * answer, then the `everywhere` switch, the due jobs and the reply outbox. An overdue Actions run is settled from
+ * @vector's run record when it ended (`runEnd`, default createActionsRunEnd, EV-30), and otherwise fails.
  */
 export function createSweep(deps: {
   readonly config?: () => EverywhereConfig
   readonly context?: () => JobsContext
   readonly platforms?: () => Platforms
   readonly stopped?: () => Promise<boolean>
+  readonly runEnd?: ActionsRunEnd
 } = {}) {
   return async (request: ApiRequest, response: ApiResponse) => {
     try {
@@ -29,7 +32,7 @@ export function createSweep(deps: {
       if (!config.enabled) return json(response, 200, { enabled: false })
       const context = deps.context ?? productionContext
       const stop = deps.stopped ? await deps.stopped() : await readEverywhereSwitch(config) === "stop"
-      const ended = await sweepDue(context(), { stop })
+      const ended = await sweepDue(context(), { stop, runEnd: deps.runEnd ?? createActionsRunEnd() })
       const posted = await postPending(context, deps.platforms ?? productionPlatforms)
       return json(response, 200, { ended: ended.length, posted })
     } catch (error) {

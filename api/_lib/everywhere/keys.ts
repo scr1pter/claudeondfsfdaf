@@ -46,6 +46,12 @@ export const KEEP_MS = {
   ticket: TIMING.bodyTtlMs,
   run: TIMING.bodyTtlMs,
   bodyRead: TIMING.bodyTtlMs,
+  /**
+   * EV-30: a run's settle index. It holds only a jid, never platform text (E4), so it is not capped at the body's end:
+   * a run that starts late in its body's life still settles after it. It outlives ACTIONS_OVERDUE_MS (135 minutes)
+   * plus the cron's grace (10 minutes), and it is deleted with the job's other links when the job ends.
+   */
+  runSettle: 3 * HOUR,
   jiraTask: 2 * DAY,
   audit: 90 * DAY,
 } as const
@@ -210,6 +216,11 @@ export const everywhereKeys = {
   run: (rid: string) => key("run", matching(rid, RUN_ID)),
   /** EV-27: present once that run has read its job's body, which it may do once. */
   runBodyRead: (rid: string) => key("run", matching(rid, RUN_ID), "body-read"),
+  /**
+   * EV-30: the job a run's settle finds, written with `run:<rid>` when that run starts. It holds only the jid and
+   * outlives the body (KEEP_MS.runSettle), so `run:<rid>` stays the body route's own key.
+   */
+  runSettle: (rid: string) => key("run", matching(rid, RUN_ID), "settle"),
   jiraTask: (taskId: string) => key("jira", "task", freePart(taskId)),
   jiraTaskDraft: (taskId: string) => key("jira", "draft", matching(taskId, UUID)),
   jiraTasks: (installationKey: string) => key("jira", "tasks", installation(installationKey)),

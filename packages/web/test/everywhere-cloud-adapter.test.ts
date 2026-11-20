@@ -1,25 +1,49 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { randomBytes, randomUUID } from "node:crypto"
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
+import { randomBytes, randomInt, randomUUID } from "node:crypto"
+import { GithubAgents } from "../../core/src/github-agents"
 import type { RepoBinding } from "../../../api/_lib/cloud-agents-binding"
+import { notifyRunSettle, notifyRunStart } from "../../../api/_lib/cloud-agents-runs"
 import type { CloudRunTrigger, prepareCloudRun, StartCloudRunResult } from "../../../api/_lib/cloud-agents-start"
+import { cloudAgentsEnabled } from "../../../api/_lib/model-plan-config"
 import {
+  ACTIONS_OUTCOME,
+  createActionsRunEnd,
   createCloudPorts,
+  createRunHooks,
   createHandoffBinding,
   type CloudPortsDeps,
+  type RunJobDeps,
 } from "../../../api/_lib/everywhere/adapters/cloud-agents"
 import { readConfig } from "../../../api/_lib/everywhere/config"
-import { claimJob, offerJob, readJob, recordSeen, startDispatched } from "../../../api/_lib/everywhere/jobs"
+import { createJobEvents, postPending } from "../../../api/_lib/everywhere/events"
+import {
+  ACTIONS_CRON_GRACE_MS,
+  ACTIONS_OUTCOMES,
+  ACTIONS_OVERDUE_MS,
+  claimJob,
+  dispatchJob,
+  offerJob,
+  readJob,
+  recordSeen,
+  startDispatched,
+  sweepDue,
+} from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { routeJob } from "../../../api/_lib/everywhere/router"
+import { registerEverywhereRunHooks } from "../../../api/_lib/everywhere/run-hooks"
+// The registration module the two @vector routes import: in this process the flag is off, so it registers nothing.
+import "../../../api/_lib/everywhere/run-hooks-registration"
 import { productionPorts } from "../../../api/_lib/everywhere/runtime"
-import { getValue } from "../../../api/_lib/everywhere/store"
+import { getValue, type Store } from "../../../api/_lib/everywhere/store"
+import { createSweep } from "../../../api/_lib/everywhere/sweep"
 import { ENABLED_SOURCES, type RunSource } from "../../../packages/schema/src/codium-run-trigger"
-import { ACTIONS_JOB_PROMPT, createJobId, jobOfActionsPrompt } from "../../../packages/schema/src/everywhere"
+import { ACTIONS_JOB_PROMPT, TIMING, createJobId, jobOfActionsPrompt } from "../../../packages/schema/src/everywhere"
+import type { SwitchState } from "../../../packages/schema/src/everywhere-policy"
 import { githubAppFixture } from "./github-app-fixture"
-import { everywhereEnv } from "./lib/everywhere-account"
+import { everywhereEnv, RouteHarness, secret } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { routerFixture } from "./lib/everywhere-router"
-import { realRedis, testEverywhereStore, useKv, type RealRedis } from "./lib/everywhere-store"
+import { realRedis, testEverywhereStore, useKv, withTestAccountAuthority, type RealRedis } from "./lib/everywhere-store"
 
 /*
  * VE-30a (EV-29): the Actions route's ports over @vector, with @vector's real binding decoder behind a stub store, the
@@ -78,7 +102,7 @@ function bindingStore(answer: () => Record<string, string> | undefined | "down")
   return { store, commands }
 }
 
-/** A stand-in for attachmentRepository; `visibility` is the field EV-30 asks github-app.ts to add. */
+/** A stand-in for attachmentRepository; `visibility` is the field EV-29 asks github-app.ts to add (no package yet). */
 function stubApp(answer: () => Promise<{ publicRepository: boolean; visibility?: string }>) {
   const calls: RepoBinding[] = []
   return {
@@ -183,7 +207,20 @@ describe("prepareCloud", () => {
     ])
   })
 
-  test("P2: without EV-30's live mode read there is no prepareCloud", () => {
+  test("P13 (EV-30): Jira has no Actions route even as an enabled source, until a run limit ends it before 50 minutes", async () => {
+    const w = world({ sources: sources("jira") })
+    expect(w.ports.prepareCloud).toBeUndefined()
+    expect(w.ports.cloudSource!("jira")).toBe(false)
+    const both = world({ sources: sources("slack", "jira") })
+    expect(await both.ports.prepareCloud!({ ...both.input, source: "jira" })).toBeUndefined()
+    expect({ store: both.store.commands.length, prepare: both.prep.state.triggers.length }).toEqual({
+      store: 0,
+      prepare: 0,
+    })
+    expect(both.ports.cloudSource!("slack")).toBe(true)
+  })
+
+  test("P2: without the live mode read there is no prepareCloud", () => {
     const w = world({ liveMode: undefined })
     expect(w.ports.prepareCloud).toBeUndefined()
     expect(createCloudPorts({ sources: sources("slack", "linear", "jira") }).prepareCloud).toBeUndefined()
@@ -473,7 +510,7 @@ describe("the binding and visibility ports", () => {
         app: fixture.app,
         fields: () => bindingFields({ repositoryId: fixture.repositoryId, account }),
       })
-      // attachmentRepository answers only `publicRepository` today, so private and internal look the same (EV-30).
+      // attachmentRepository answers only `publicRepository` today, so private and internal look the same (EV-29 (c)).
       expect(await w.ports.visibility!(Number(fixture.repositoryId))).toBe("internal")
       expect(
         await w.ports.prepareCloud!({ ...w.input, sponsor: account, repositoryId: Number(fixture.repositoryId) }),
@@ -846,4 +883,490 @@ describe("productionPorts", () => {
       ])
       expect(guard.violations).toEqual([])
     }))
+})
+
+/*
+ * VE-30b (EV-30): the listeners on @vector's run hooks, registered through the real registry (cloud-agents-runs.ts
+ * notifyRunStart and notifyRunSettle, with their 5 s budget) over the router fixture's store, and the cron's run read
+ * through @vector's real listCloudRuns over a stub of @vector's store.
+ */
+
+const VECTOR_RUN_KEY = "vector:cloud-agents:run:"
+
+/** A @vector run record as recordRunStart and the settle write it, which listCloudRuns' and runPages' decoders accept. */
+function vectorRun(input: {
+  readonly account: string
+  readonly rid: string
+  readonly outcome?: GithubAgents.Outcome
+  readonly with?: Record<string, string>
+}) {
+  const parts = /^gh-(\d+)-(\d+)-(\d+)-(\d+)$/.exec(input.rid)!
+  const verdict =
+    input.outcome === "changes" ? "pass" : input.outcome === "draft" || input.outcome === "failed" ? "fail" : "none"
+  return {
+    rid: input.rid,
+    account: input.account,
+    repository: "acme/app",
+    repositoryId: parts[1]!,
+    runUrl: `https://github.com/acme/app/actions/runs/${parts[2]}`,
+    event: "workflow_dispatch",
+    source: "github-dispatch",
+    purpose: "task",
+    startedAt: "1700000000000",
+    generation: "1",
+    jti: "A".repeat(22),
+    ...(input.outcome ? { endedAt: "1700000600000", outcome: input.outcome, verdict } : {}),
+    ...input.with,
+  }
+}
+
+/**
+ * @vector's store as listCloudRuns (ZREVRANGE, then the READ script) and runPages (the RECORD script) read it. It
+ * records every command, and refuses any other: nothing here may write a run record.
+ */
+function vectorStore(runs: () => readonly Record<string, string>[] | "down") {
+  const commands: Command[] = []
+  const store = async (command: Command) => {
+    commands.push(command)
+    const list = runs()
+    if (list === "down") throw new Error("store down")
+    if (command[0] === "ZREVRANGE") return list.map((run) => run.rid)
+    if (command[0] === "EVAL" && command[2] === "1") {
+      const run = list.find((entry) => `${VECTOR_RUN_KEY}${entry.rid}` === command[3])
+      return run ? Object.entries(run).flat() : []
+    }
+    if (command[0] === "EVAL") return [[], ...list.map((run) => [Object.entries(run).flat(), []])]
+    throw new Error(`@vector's store got ${String(command[0])}`)
+  }
+  return { store, commands }
+}
+
+const runId = () => `gh-101-${randomInt(1, 2 ** 40)}-1-${randomInt(1, 2 ** 40)}`
+
+/** The router fixture's Slack job, dispatched with its own ticket, and EV-30's listeners registered over its store. */
+async function hooked(options: { readonly store?: (store: Store) => Store } = {}) {
+  const f = routerFixture()
+  const job = await f.create()
+  const ticket = randomBytes(32).toString("hex")
+  expect((await dispatchJob(f.context(), job.jid, { ticketHash: ticket })).ok).toBe(true)
+  const events = createJobEvents(f.context, { slack: f.adapter })
+  const state = { loads: 0, posts: 0, switch: "on" as SwitchState }
+  const store = options.store ? options.store(f.store) : f.store
+  const remove = registerEverywhereRunHooks({
+    config: f.config,
+    hooks: {
+      store,
+      load: async (): Promise<RunJobDeps> => {
+        state.loads++
+        return {
+          context: () => ({ ...f.context(), store }),
+          settled: async (settled) => {
+            state.posts++
+            await events.settled!(settled)
+          },
+          switch: async () => state.switch,
+        }
+      },
+    },
+  })
+  if (!remove) throw new Error("the listeners were not registered")
+  const rid = runId()
+  const vector = vectorStore(() => [vectorRun({ account: f.account, rid })])
+  const finishes = () => f.calls.filter((call) => call.kind === "finish")
+  return { f, job, ticket, rid, state, remove, vector, finishes }
+}
+
+/** Runs `check` with the hooks of `hooked()`, and always removes them. */
+async function withHooks(
+  check: (h: Awaited<ReturnType<typeof hooked>>) => Promise<void>,
+  options: Parameters<typeof hooked>[0] = {},
+) {
+  const h = await hooked(options)
+  try {
+    await check(h)
+  } finally {
+    h.remove()
+  }
+}
+
+describe("the run hooks (VE-30b)", () => {
+  test("L1: a start with the ticket's job id moves the dispatched job to running and links the run; a repeat moves nothing", () =>
+    withHooks(async (h) => {
+      await notifyRunStart(h.ticket, h.rid, h.job.jid)
+      const running = await readJob(h.f.store, h.job.jid)
+      expect(running).toMatchObject({ state: "running", route: "actions", rid: h.rid })
+      expect(await getValue(h.f.store, everywhereKeys.run(h.rid))).toBe(h.job.jid)
+      expect(await getValue(h.f.store, everywhereKeys.runSettle(h.rid))).toBe(h.job.jid)
+      await notifyRunStart(h.ticket, h.rid, h.job.jid)
+      expect((await readJob(h.f.store, h.job.jid))?.version).toBe(running?.version)
+      expect(h.state.loads).toBe(2)
+    }))
+
+  test("L2: a start without a job id, or with a malformed one, reads nothing; one naming another job only reads the ticket", () =>
+    withHooks(async (h) => {
+      const mark = h.f.fake.commands.length
+      await notifyRunStart(h.ticket, h.rid)
+      await notifyRunStart(h.ticket, h.rid, "vej_short")
+      expect(h.f.fake.commands.length).toBe(mark)
+      expect(h.state.loads).toBe(0)
+      await notifyRunStart(h.ticket, h.rid, createJobId(Date.now()))
+      expect(h.f.fake.commands.slice(mark).map((command) => command[0])).toEqual(["GET"])
+      expect((await readJob(h.f.store, h.job.jid))?.state).toBe("dispatched")
+    }))
+
+  test("L3: the settle posts the Actions result once, without the reported pull request; a repeat posts nothing", () =>
+    withHooks(async (h) => {
+      await notifyRunStart(h.ticket, h.rid, h.job.jid)
+      // A pull request of the run's own repository passes @vector's check and still is not posted (EV-30 (f)).
+      await notifyRunSettle(h.rid, { outcome: "changes", prUrl: "https://github.com/acme/app/pull/7" }, h.vector.store)
+      const settled = await readJob(h.f.store, h.job.jid)
+      expect(settled).toMatchObject({ state: "settled", route: "actions", outcome: "changes" })
+      expect(settled?.result).toBeUndefined()
+      expect(h.finishes()).toEqual([{ kind: "finish", value: { text: "Done in GitHub Actions." } }])
+      expect(h.f.fake.sorted(everywhereKeys.jobsPosts())).toEqual([])
+      await notifyRunSettle(h.rid, { outcome: "changes" }, h.vector.store)
+      expect(await postPending(h.f.context, { slack: h.f.adapter })).toBe(0)
+      expect(h.finishes()).toHaveLength(1)
+      expect(h.state.posts).toBe(1)
+      expect((await readJob(h.f.store, h.job.jid))?.version).toBe(settled?.version)
+    }))
+
+  test("L10: a repeated settle whose index outlived the job's end (a failed unlink) is fenced and posts nothing", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      await withHooks(
+        async (h) => {
+          await notifyRunStart(h.ticket, h.rid, h.job.jid)
+          await notifyRunSettle(h.rid, { outcome: "changes" }, h.vector.store)
+          expect(await getValue(h.f.store, everywhereKeys.runSettle(h.rid))).toBe(h.job.jid)
+          const settled = await readJob(h.f.store, h.job.jid)
+          await notifyRunSettle(h.rid, { outcome: "failed" }, h.vector.store)
+          expect(await readJob(h.f.store, h.job.jid)).toMatchObject({ version: settled?.version, outcome: "changes" })
+          expect({ posts: h.state.posts, finishes: h.finishes().length }).toEqual({ posts: 1, finishes: 1 })
+        },
+        {
+          store: (store) =>
+            withTestAccountAuthority(async (command) => {
+              if (command[0] === "DEL" && command.some((part) => String(part).endsWith(":settle")))
+                throw new Error("unlink lost")
+              return store(command)
+            }),
+        },
+      )
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  test("L4: a draft run reads failed, and @vector's outcomes all map into the everywhere outcomes", () =>
+    withHooks(async (h) => {
+      expect(Object.keys(ACTIONS_OUTCOME).sort()).toEqual([...GithubAgents.OUTCOME].sort())
+      expect(Object.values(ACTIONS_OUTCOME).every((outcome) => ACTIONS_OUTCOMES.includes(outcome))).toBe(true)
+      expect(ACTIONS_OUTCOME).toEqual({
+        changes: "changes",
+        "no-changes": "no-changes",
+        draft: "failed",
+        failed: "failed",
+        refused: "refused",
+        cancelled: "cancelled",
+      })
+      await notifyRunStart(h.ticket, h.rid, h.job.jid)
+      await notifyRunSettle(h.rid, { outcome: "draft" }, h.vector.store)
+      expect(await readJob(h.f.store, h.job.jid)).toMatchObject({ state: "settled", outcome: "failed" })
+      expect(h.finishes()).toEqual([{ kind: "finish", value: { text: "The run in GitHub Actions failed." } }])
+    }))
+
+  test("L5: a settle whose budget ends after the transition is not posted by the hook; the outbox posts it once", async () => {
+    const f = routerFixture()
+    const job = await f.create()
+    const ticket = randomBytes(32).toString("hex")
+    const rid = runId()
+    expect((await dispatchJob(f.context(), job.jid, { ticketHash: ticket })).ok).toBe(true)
+    expect((await startDispatched(f.context(), ticket, rid, job.jid)).ok).toBe(true)
+    const budget = new AbortController()
+    // The budget ends right after the fenced transition, as when a settle's 5 s run out part-way.
+    const store = withTestAccountAuthority(async (command) => {
+      const answer = await f.store(command)
+      if (command[0] === "EVAL" && command.includes(everywhereKeys.jobsPosts())) budget.abort()
+      return answer
+    })
+    let posts = 0
+    const hooks = createRunHooks({
+      store: f.store,
+      load: async () => ({
+        context: () => ({ ...f.context(), store }),
+        settled: async () => {
+          posts++
+        },
+        switch: async () => "on",
+      }),
+    })
+    await hooks.settle(rid, { outcome: "no-changes" }, budget.signal)
+    expect(budget.signal.aborted).toBe(true)
+    expect(await readJob(f.store, job.jid)).toMatchObject({ state: "settled", outcome: "no-changes" })
+    expect(posts).toBe(0)
+    expect(f.fake.sorted(everywhereKeys.jobsPosts())).toEqual([job.jid])
+    expect(await postPending(f.context, { slack: f.adapter })).toBe(1)
+    expect(await postPending(f.context, { slack: f.adapter })).toBe(0)
+    expect(f.calls.filter((call) => call.kind === "finish")).toEqual([
+      { kind: "finish", value: { text: "Finished in GitHub Actions with no changes." } },
+    ])
+    // A budget already spent stops the hooks before any read.
+    const mark = f.fake.commands.length
+    await hooks.settle(rid, { outcome: "changes" }, budget.signal)
+    await hooks.start(ticket, rid, job.jid, budget.signal)
+    expect(f.fake.commands.length).toBe(mark)
+  })
+
+  test("L6: under stop neither hook moves a job; no-new lets both through", () =>
+    withHooks(async (h) => {
+      h.state.switch = "stop"
+      await notifyRunStart(h.ticket, h.rid, h.job.jid)
+      expect((await readJob(h.f.store, h.job.jid))?.state).toBe("dispatched")
+      h.state.switch = "no-new"
+      await notifyRunStart(h.ticket, h.rid, h.job.jid)
+      expect((await readJob(h.f.store, h.job.jid))?.state).toBe("running")
+      h.state.switch = "stop"
+      await notifyRunSettle(h.rid, { outcome: "changes" }, h.vector.store)
+      expect((await readJob(h.f.store, h.job.jid))?.state).toBe("running")
+      h.state.switch = "no-new"
+      await notifyRunSettle(h.rid, { outcome: "changes" }, h.vector.store)
+      expect((await readJob(h.f.store, h.job.jid))?.state).toBe("settled")
+      expect(h.finishes()).toHaveLength(1)
+    }))
+
+  test("L7: a settle with no settle index (its start was lost) reads one key and moves nothing; 900 s later the job ends not-started", () =>
+    withHooks(async (h) => {
+      const mark = h.f.fake.commands.length
+      await notifyRunSettle(h.rid, { outcome: "changes" }, h.vector.store)
+      expect(h.f.fake.commands.slice(mark)).toEqual([["GET", everywhereKeys.runSettle(h.rid)]])
+      expect(h.state.loads).toBe(0)
+      expect((await readJob(h.f.store, h.job.jid))?.state).toBe("dispatched")
+      // Recorded in EV-30 (k): the run did start, but the post says it did not; EV-27's body-route fallback is the fix.
+      h.f.fake.clock.advance(TIMING.dispatchStartMs)
+      expect((await sweepDue(h.f.context())).map((entry) => [entry.job.state, entry.ending])).toEqual([
+        ["failed", "not-started"],
+      ])
+      expect(await postPending(h.f.context, { slack: h.f.adapter })).toBe(1)
+      expect(h.finishes()).toEqual([
+        { kind: "finish", value: { text: "GitHub Actions did not start; check the workflow uses Codium." } },
+      ])
+    }))
+
+  test("L8: listener failures are logged with the hooks' fixed line and never touch @vector's run record", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await withHooks(
+        async (h) => {
+          await notifyRunStart(h.ticket, h.rid, h.job.jid)
+          await notifyRunSettle(h.rid, { outcome: "changes" }, h.vector.store)
+          expect(warn.mock.calls.map((call) => call[0])).toEqual([
+            "Vector cloud-agents start listener failed",
+            "Vector cloud-agents settle listener failed",
+          ])
+          // @vector's store saw only the settle's one record read, and no listener got it.
+          expect(h.vector.commands).toEqual([["EVAL", expect.any(String), "1", `${VECTOR_RUN_KEY}${h.rid}`]])
+          expect((await readJob(h.f.store, h.job.jid))?.state).toBe("dispatched")
+        },
+        {
+          store: () => async () => {
+            throw new Error("everywhere store down")
+          },
+        },
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  test("L9: with the flag off nothing registers, the registration module included; with it on, one remover removes both", async () => {
+    const vector = vectorStore(() => [])
+    expect(readConfig().enabled).toBe(false)
+    expect(registerEverywhereRunHooks({ config: readConfig({}) })).toBeUndefined()
+    // With no settle listener registered, @vector's notify does not even read the run record (EV-25).
+    await notifyRunSettle(runId(), { outcome: "changes" }, vector.store)
+    await notifyRunStart("a".repeat(64), runId(), createJobId(Date.now()))
+    expect(vector.commands).toEqual([])
+    const loads: string[] = []
+    const remove = registerEverywhereRunHooks({
+      config: readConfig(everywhereEnv()),
+      hooks: {
+        store: async () => {
+          loads.push("store")
+          return null
+        },
+        load: async () => {
+          loads.push("load")
+          throw new Error("not reached")
+        },
+      },
+    })
+    expect(remove).toBeDefined()
+    await notifyRunSettle(runId(), { outcome: "changes" }, vector.store)
+    expect(loads).toEqual(["store"])
+    remove!()
+    await notifyRunSettle(runId(), { outcome: "changes" }, vector.store)
+    await notifyRunStart("a".repeat(64), runId(), createJobId(Date.now()))
+    expect(loads).toEqual(["store"])
+    expect(vector.commands).toHaveLength(1)
+    // Vercel bundles each function's own graph: @vector's two routes that tell listeners load the registration.
+    for (const route of ["mint", "settle"])
+      expect(await Bun.file(new URL(`../../../api/cloud-agents/${route}.ts`, import.meta.url)).text()).toContain(
+        'import "../_lib/everywhere/run-hooks-registration.js"',
+      )
+  })
+})
+
+describe("the cron's run read (VE-30b)", () => {
+  const harness = new RouteHarness()
+  beforeAll(() => harness.start())
+  afterAll(() => harness.stop())
+
+  test("C1: an ended run answers its outcome; an open, unknown or other account's run none; a failed or damaged read rejects", async () => {
+    const account = randomUUID()
+    const [ended, open, draft, other] = [runId(), runId(), runId(), runId()]
+    const runs = [
+      vectorRun({ account, rid: ended, outcome: "no-changes" }),
+      vectorRun({ account, rid: open }),
+      vectorRun({ account, rid: draft, outcome: "draft" }),
+      vectorRun({ account: randomUUID(), rid: other, outcome: "changes" }),
+    ]
+    const vector = vectorStore(() => runs)
+    const read = createActionsRunEnd({ store: vector.store, enabled: () => true })
+    expect(await Promise.all([ended, open, draft, other, runId()].map((rid) => read(account, rid)))).toEqual([
+      "no-changes",
+      undefined,
+      "failed",
+      undefined,
+      undefined,
+    ])
+    // Each read is the newest 200 of the sponsor's runs, read only.
+    expect(vector.commands.filter((command) => command[0] === "ZREVRANGE")).toEqual(
+      Array.from({ length: 5 }, () => ["ZREVRANGE", `vector:cloud-agents:runs:${account}`, 0, 199]),
+    )
+    expect(vector.commands.every((command) => command[0] === "ZREVRANGE" || command[0] === "EVAL")).toBe(true)
+    await expect(
+      createActionsRunEnd({ store: vectorStore(() => "down").store, enabled: () => true })(account, ended),
+    ).rejects.toMatchObject({
+      code: "PERSISTENT_STORE_UNAVAILABLE",
+    })
+    // One damaged neighbour among the 200 makes the whole read fail (EV-30, Left open).
+    const damaged = vectorStore(() => [...runs, vectorRun({ account, rid: runId(), with: { event: "push" } })])
+    await expect(
+      createActionsRunEnd({ store: damaged.store, enabled: () => true })(account, ended),
+    ).rejects.toMatchObject({
+      code: "PERSISTENT_STORE_UNAVAILABLE",
+    })
+  })
+
+  test("C2: while the cloud-agents service is off nothing is read, by the default gate too", async () => {
+    const account = randomUUID()
+    const rid = runId()
+    const vector = vectorStore(() => [vectorRun({ account, rid, outcome: "changes" })])
+    expect(await createActionsRunEnd({ store: vector.store, enabled: () => false })(account, rid)).toBeUndefined()
+    const names = ["MODEL_PLANS_ENABLED", "VECTOR_GITHUB_BRAIN_ENABLED"]
+    const saved = Object.entries(process.env).filter((entry) => names.includes(entry[0]))
+    try {
+      for (const name of names) delete process.env[name]
+      expect(cloudAgentsEnabled()).toBe(false)
+      expect(await createActionsRunEnd({ store: vector.store })(account, rid)).toBeUndefined()
+      expect(vector.commands).toEqual([])
+      for (const name of names) process.env[name] = "true"
+      expect(cloudAgentsEnabled()).toBe(true)
+      expect(await createActionsRunEnd({ store: vector.store })(account, rid)).toBe("changes")
+      expect(vector.commands.map((command) => command[0])).toEqual(["ZREVRANGE", "EVAL"])
+    } finally {
+      // C5 relies on this restore: it asserts that the service is off in this process.
+      for (const name of names) delete process.env[name]
+      Object.assign(process.env, Object.fromEntries(saved))
+    }
+  })
+
+  /** A started Actions job of the router fixture, its run in @vector's stub store, and the cron over both. */
+  async function overdue(outcome: GithubAgents.Outcome | undefined, runEnd?: "default") {
+    const f = routerFixture()
+    const job = await f.create()
+    const ticket = randomBytes(32).toString("hex")
+    const rid = runId()
+    expect((await dispatchJob(f.context(), job.jid, { ticketHash: ticket })).ok).toBe(true)
+    expect((await startDispatched(f.context(), ticket, rid, job.jid)).ok).toBe(true)
+    const vector = vectorStore(() => [vectorRun({ account: f.account, rid, ...(outcome ? { outcome } : {}) })])
+    const cronSecret = secret()
+    harness.mount({
+      "/sweep": createSweep({
+        config: () => ({ ...f.config, cronSecret }),
+        context: f.context,
+        platforms: () => ({ slack: f.adapter }),
+        stopped: async () => false,
+        ...(runEnd === "default" ? {} : { runEnd: createActionsRunEnd({ store: vector.store, enabled: () => true }) }),
+      }),
+    })
+    const sweep = async () => (await harness.call("GET", "/sweep", { token: cronSecret })).body
+    const finishes = () => f.calls.filter((call) => call.kind === "finish")
+    return { f, job, rid, vector, sweep, finishes }
+  }
+
+  test("C3: past its longest run the cron settles a run @vector recorded as ended, and posts it once", async () => {
+    const o = await overdue("changes")
+    o.f.fake.clock.advance(ACTIONS_OVERDUE_MS - 1)
+    expect(await o.sweep()).toEqual({ ended: 0, posted: 0 })
+    expect(o.vector.commands).toEqual([])
+    o.f.fake.clock.advance(1)
+    expect(await o.sweep()).toEqual({ ended: 1, posted: 1 })
+    expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "settled", outcome: "changes" })
+    expect(o.finishes()).toEqual([{ kind: "finish", value: { text: "Done in GitHub Actions." } }])
+    expect(await o.sweep()).toEqual({ ended: 0, posted: 0 })
+    expect(o.vector.commands.map((command) => command[0])).toEqual(["ZREVRANGE", "EVAL"])
+  })
+
+  test("C4: an open run is failed, and its post says it failed, not that it was cancelled", async () => {
+    const o = await overdue(undefined)
+    o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
+    expect(await o.sweep()).toEqual({ ended: 1, posted: 1 })
+    expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "failed", outcome: "failed" })
+    expect(o.finishes()).toEqual([{ kind: "finish", value: { text: "The run in GitHub Actions failed." } }])
+  })
+
+  test("C5: the production cron's default reader reads nothing while the service is off, and fails the run at its due time", async () => {
+    expect(cloudAgentsEnabled()).toBe(false)
+    const o = await overdue("changes", "default")
+    o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
+    expect(await o.sweep()).toEqual({ ended: 1, posted: 1 })
+    expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "failed", outcome: "failed" })
+    expect(guard.violations).toEqual([])
+  })
+
+  test("C6: a damaged neighbouring record makes the cron wait, then fail the run at its due time plus the grace", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const o = await overdue("changes")
+      const damaged = vectorStore(() => [
+        vectorRun({ account: o.f.account, rid: o.rid, outcome: "changes" }),
+        vectorRun({ account: o.f.account, rid: runId(), with: { event: "push" } }),
+      ])
+      o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
+      const cronSecret = secret()
+      harness.mount({
+        "/sweep": createSweep({
+          config: () => ({ ...o.f.config, cronSecret }),
+          context: o.f.context,
+          platforms: () => ({ slack: o.f.adapter }),
+          stopped: async () => false,
+          runEnd: createActionsRunEnd({ store: damaged.store, enabled: () => true }),
+        }),
+      })
+      const sweep = async () => (await harness.call("GET", "/sweep", { token: cronSecret })).body
+      expect(await sweep()).toEqual({ ended: 0, posted: 0 })
+      o.f.fake.clock.advance(ACTIONS_CRON_GRACE_MS - 1)
+      expect(await sweep()).toEqual({ ended: 0, posted: 0 })
+      o.f.fake.clock.advance(1)
+      expect(await sweep()).toEqual({ ended: 1, posted: 1 })
+      expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "failed", outcome: "failed" })
+      expect(
+        errors.mock.calls.filter((call) => (call[1] as { step?: string } | undefined)?.step === "run-end"),
+      ).toHaveLength(3)
+    } finally {
+      errors.mockRestore()
+    }
+  })
 })

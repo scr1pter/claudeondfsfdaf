@@ -74,7 +74,7 @@ import {
  *   offered  ─► claimed | dispatched | waiting | refused | expired
  *   claimed  ─► running | lost | refused (a decline under the lease, whatever its reason)
  *   running  ─► settled | lost (laptop only) | refused (a decline under the lease) | failed (Actions only)
- *   dispatched ─► running | failed (no start hook in 900 s)
+ *   dispatched ─► running (the start hook) | failed (no start hook in 900 s)
  *   waiting  ─► offered | claimed | expired
  *   any live state ─► cancelled
  *
@@ -93,6 +93,12 @@ import {
  * links (`ticket:<hash>`, `run:<rid>` and that run's body-read marker) end with its body and are deleted, best effort,
  * when it ends (EV-27).
  *
+ * An Actions job moves `running` → `settled` from @vector's settle hook (`settleDispatched`), fenced like a laptop
+ * settle, through the run's settle index `run:<rid>:settle`: written with `run:<rid>` at the start, it holds only the
+ * jid and lasts 3 hours, past the body, so a run that starts late can still settle (EV-30). A run past its longest run
+ * with no settle is settled from @vector's run record by the cron, or fails; an account's own sweep leaves it to the
+ * cron for ACTIONS_CRON_GRACE_MS first.
+ *
  * The body (task and context) is sealed under the data key and lives at most 2 hours; no job waits longer than its
  * body lives, and a claim that finds the body gone ends the job `expired`. Nothing here stores code, diffs, file names
  * or pull request text: reports are milestone ids and counts, and a settle carries a short summary (sealed) and links.
@@ -110,9 +116,28 @@ export type JobRoute = "laptop" | "actions" | "queue"
 export const RECEIVED_STALE_MS = 2 * 60_000
 /**
  * An Actions run still `running` this long after it started has passed @vector's longest run (120 minutes on the
- * largest plan) and its publish step; it ends `failed` unless VE-30's settle hook or `listCloudRuns` settled it.
+ * largest plan) and its publish step; it ends `failed` unless the settle hook or @vector's run record settled it.
  */
 export const ACTIONS_OVERDUE_MS = 135 * 60_000
+/**
+ * EV-30: how long an account's own sweep leaves an overdue Actions run to the cron, which reads @vector's run record,
+ * and how long the cron waits while that record cannot be read. Past it, the run ends `failed` unread.
+ */
+export const ACTIONS_CRON_GRACE_MS = 10 * 60_000
+/** EV-30: the outcomes an Actions run can end its job with (@vector's, mapped by adapters/cloud-agents.ts). */
+export const ACTIONS_OUTCOMES = [
+  "changes",
+  "no-changes",
+  "failed",
+  "refused",
+  "cancelled",
+] as const satisfies readonly Outcome[]
+export type ActionsOutcome = (typeof ACTIONS_OUTCOMES)[number]
+/**
+ * EV-30: how @vector's run `rid` of `account` ended: its outcome once it ended, undefined while it is open or unknown,
+ * and a rejection when the records cannot be read.
+ */
+export type ActionsRunEnd = (account: string, rid: string) => Promise<ActionsOutcome | undefined>
 /** How many times a change is tried again after another change won the race. */
 const ATTEMPTS = 8
 
@@ -615,11 +640,16 @@ function untilBodyEnds(job: Pick<JobRecord, "bodyExpiresAt">, now: number, keep:
   return Math.max(1, Math.min(keep, job.bodyExpiresAt - now))
 }
 
-/** EV-27: an Actions job's links, which end with it: its ticket, its run's link and that run's body-read marker. */
+/**
+ * EV-27: an Actions job's links, which end with it: its ticket, its run's link and that run's body-read marker, and
+ * (EV-30) that run's settle index.
+ */
 function runLinks(job: Pick<JobRecord, "ticketHash" | "rid">): string[] {
   return [
     ...(job.ticketHash ? [everywhereKeys.ticket(job.ticketHash)] : []),
-    ...(job.rid ? [everywhereKeys.run(job.rid), everywhereKeys.runBodyRead(job.rid)] : []),
+    ...(job.rid
+      ? [everywhereKeys.run(job.rid), everywhereKeys.runBodyRead(job.rid), everywhereKeys.runSettle(job.rid)]
+      : []),
   ]
 }
 
@@ -1056,14 +1086,21 @@ export async function dispatchJob(
 
 /**
  * @vector's start hook (R-A2): the run for this ticket started, so `dispatched` becomes `running` with its run id.
- * The step first links the run to the job (`run:<rid>`, until the body ends, EV-27) under the guards `change()` has
- * just read, then moves the job, as the dispatch writes its ticket before moving the job. A link left by a change that
- * then lost is harmless: the body route re-checks the record's rid. The link adds one EVAL to a start, nothing else.
+ * The step first links the run to the job under the guards `change()` has just read, then moves the job, as the
+ * dispatch writes its ticket before moving the job: `run:<rid>` until the body ends (EV-27), and the settle index
+ * `run:<rid>:settle` for KEEP_MS.runSettle (EV-30), both in one EVAL. A link left by a change that then lost is
+ * harmless: the body route and the settle re-check the record's rid. `ticket:<hash>` decides the job; the ticket's job
+ * id (`jobId`, R-A1) only cross-checks it, and a ticket that names another job moves nothing.
  */
-export async function startDispatched(ctx: JobsContext, ticketHash: string, rid: string): Promise<Moved> {
+export async function startDispatched(
+  ctx: JobsContext,
+  ticketHash: string,
+  rid: string,
+  jobId?: string,
+): Promise<Moved> {
   if (!TICKET_HASH_PATTERN.test(ticketHash) || !RID_PATTERN.test(rid)) return notFound()
   const jid = await getValue(ctx.store, everywhereKeys.ticket(ticketHash))
-  if (jid === undefined || !JOB_ID_PATTERN.test(jid)) return notFound()
+  if (jid === undefined || !JOB_ID_PATTERN.test(jid) || (jobId !== undefined && jobId !== jid)) return notFound()
   return change<Moved>(
     ctx,
     jid,
@@ -1071,12 +1108,51 @@ export async function startDispatched(ctx: JobsContext, ticketHash: string, rid:
       if (job.state !== "dispatched" || job.ticketHash !== ticketHash) return { answer: wrongState(job) }
       return {
         next: next(job, { state: "running", startedAt: ctx.now, rid }),
-        before: [["SET", everywhereKeys.run(rid), jid, "PX", untilBodyEnds(job, ctx.now, KEEP_MS.run)]],
+        before: [
+          ["SET", everywhereKeys.run(rid), jid, "PX", untilBodyEnds(job, ctx.now, KEEP_MS.run)],
+          ["SET", everywhereKeys.runSettle(rid), jid, "PX", KEEP_MS.runSettle],
+        ],
         done: (written) => ({ ok: true, job: written }),
       }
     },
     notFound,
   )
+}
+
+/** What @vector's settle hook says about a run (EV-30): its id and its outcome, mapped to this module's words. */
+export type RunSettle = { readonly rid: string; readonly outcome: ActionsOutcome }
+export type RunSettled =
+  | { readonly ok: true; readonly job: JobRecord; readonly fresh: boolean }
+  | (Moved & { readonly ok: false })
+
+/**
+ * @vector's settle hook (R-A3, EV-30): run `rid` ended, so its job goes `running` → `settled` with the run's outcome.
+ * Fenced like a laptop settle: only that run's own running Actions job moves (a laptop job, another run's job or a job
+ * that has not started answers wrong-state), and a job this already settled answers `fresh: false`, so a repeated
+ * settle never posts twice. The result holds no pull request link (EV-30 (f)). Ending the job queues it on the reply
+ * outbox in the same script, as every end does, and erases its body and links.
+ */
+export async function settleDispatched(ctx: JobsContext, jid: string, input: RunSettle): Promise<RunSettled> {
+  const missing = { ok: false, code: "not-found" } as const
+  if (!JOB_ID_PATTERN.test(jid) || !RID_PATTERN.test(input.rid)) return missing
+  if (!(ACTIONS_OUTCOMES as readonly string[]).includes(input.outcome)) return { ok: false, code: "wrong-state" }
+  const settled = await change<RunSettled>(
+    ctx,
+    jid,
+    (job) => {
+      // Only an Actions start sets a rid, so this also refuses every laptop job.
+      if (job.rid !== input.rid || (job.state !== "running" && job.state !== "settled"))
+        return { answer: { ok: false, state: job.state, code: "wrong-state" } }
+      if (job.state === "settled") return { answer: { ok: true, job, fresh: false } }
+      return {
+        next: ended(job, "settled", ctx.now, { outcome: input.outcome }),
+        done: (written) => ({ ok: true, job: written, fresh: true }),
+      }
+    },
+    () => missing,
+  )
+  if (settled.ok && settled.fresh) await audit(ctx, settled.job, { event: "settle", code: input.outcome })
+  return settled
 }
 
 /** Refuses a job that was received, offered or claimed (lasting declines, a refusal found after intake). */
@@ -1508,12 +1584,25 @@ export type EndedJob = { readonly job: JobRecord; readonly ending?: Ending }
 type Swept = { readonly job: JobRecord; readonly ended: boolean; readonly ending?: Ending }
 
 /**
- * What a due job becomes (3.4): an unrouted job and a waiting one expire; an offer nobody claimed goes back to the
- * queue when it has one, else expires; a laptop job with no report for a lease length is `lost`; an Actions run past
- * its longest run fails; a dispatch with no start hook in 900 s fails (`not-started`). Under the `stop` switch every
- * live job ends at once: waiting ones expire and the rest are cancelled.
+ * EV-30: `lazy` is an account's own sweep, which leaves an overdue Actions run to the cron for ACTIONS_CRON_GRACE_MS;
+ * never for a job whose authority ended, since no sweep reads its record and it is retired at its due time (A9).
+ * `read` is how the job's run ended, as the cron read it before the change: its outcome, or "unread" when the read
+ * failed. A running job's rid never changes, so the read is always this job's run.
  */
-function timeout(job: JobRecord, now: number, stop: boolean): Decision<Swept> | undefined {
+type Overdue = { readonly lazy: boolean; readonly read?: ActionsOutcome | "unread" }
+
+/** How a sweep treats an overdue Actions run (EV-30): `lazy` for an account's own sweep; the cron's reader. */
+type Sweep = { readonly lazy: boolean; readonly runEnd?: ActionsRunEnd }
+
+/**
+ * What a due job becomes (3.4): an unrouted job and a waiting one expire; an offer nobody claimed goes back to the
+ * queue when it has one, else expires; a laptop job with no report for a lease length is `lost`; a dispatch with no
+ * start hook in 900 s fails (`not-started`). An Actions run past its longest run is settled with the outcome @vector
+ * recorded once it ended, and otherwise fails (outcome `failed`); an account's own sweep, and the cron while the record
+ * cannot be read, leave it for ACTIONS_CRON_GRACE_MS first (EV-30). Under the `stop` switch every live job ends at
+ * once: waiting ones expire and the rest are cancelled.
+ */
+function timeout(job: JobRecord, now: number, stop: boolean, overdue: Overdue): Decision<Swept> | undefined {
   const expire = (ending: Ending = job.platform === "jira" ? "jira-waiting" : "expired"): Decision<Swept> => ({
     next: ended(job, "expired", now, { outcome: "expired", ending }),
     done: (written) => ({ job: written, ended: true, ending }),
@@ -1543,13 +1632,19 @@ function timeout(job: JobRecord, now: number, stop: boolean): Decision<Swept> | 
         next: ended(job, "lost", now, { ending: "lost" }),
         done: (written) => ({ job: written, ended: true, ending: "lost" as const }),
       }
-    case "running":
-      if (job.route === "actions")
-        return { next: ended(job, "failed", now), done: (written) => ({ job: written, ended: true }) }
+    case "running": {
+      if (job.route !== "actions")
+        return {
+          next: ended(job, "lost", now, { ending: "lost" }),
+          done: (written) => ({ job: written, ended: true, ending: "lost" as const }),
+        }
+      if ((overdue.lazy || overdue.read === "unread") && now < due + ACTIONS_CRON_GRACE_MS) return undefined
+      const read = overdue.read === "unread" ? undefined : overdue.read
       return {
-        next: ended(job, "lost", now, { ending: "lost" }),
-        done: (written) => ({ job: written, ended: true, ending: "lost" as const }),
+        next: ended(job, read ? "settled" : "failed", now, { outcome: read ?? "failed" }),
+        done: (written) => ({ job: written, ended: true }),
       }
+    }
     case "dispatched":
       return {
         next: ended(job, "failed", now, { ending: "not-started" }),
@@ -1569,6 +1664,7 @@ async function sweepOne(
   jid: string,
   stop: boolean,
   indexes: readonly string[],
+  sweep: Sweep,
 ): Promise<EndedJob | undefined> {
   let authorityEnded = false
   const observed = await readJob(ctx.store, jid)
@@ -1578,15 +1674,26 @@ async function sweepOne(
       authorityEnded = true
     }
   }
+  // EV-30: the cron reads how an overdue Actions run ended before the change, once; a failed read waits (`timeout`).
+  // Only the cron has a reader, and it takes only due jobs (under `stop`, which reads nothing, it takes every job).
+  const rid = observed?.state === "running" && observed.route === "actions" ? observed.rid : undefined
+  const read =
+    observed && rid && sweep.runEnd && !stop && !authorityEnded
+      ? await sweep.runEnd(observed.sponsor, rid).catch((error) => {
+          report("run-end", error, jid)
+          return "unread" as const
+        })
+      : undefined
+  const overdue: Overdue = { lazy: sweep.lazy && !authorityEnded, read }
   let gone = false
   const swept = await change<Swept | undefined>(
     authorityEnded ? { ...ctx, erasing: true } : ctx,
     jid,
     (job) => {
-      const decision = timeout(job, ctx.now, stop)
+      const decision = timeout(job, ctx.now, stop, overdue)
       // A lost authorization may retire an already due job, never restart/requeue it or alter a live body's lifetime.
       if (authorityEnded && decision && "next" in decision && !TERMINAL_STATES.has(decision.next.state))
-        return timeout(job, ctx.now, true) ?? { answer: undefined }
+        return timeout(job, ctx.now, true, overdue) ?? { answer: undefined }
       return decision ?? { answer: undefined }
     },
     () => {
@@ -1601,7 +1708,8 @@ async function sweepOne(
     return undefined
   }
   if (!swept?.ended) return undefined
-  await audit(ctx, swept.job, { event: "settle", code: swept.job.state })
+  // An Actions run the cron settled from @vector's record is audited with its outcome, as the settle hook audits it.
+  await audit(ctx, swept.job, { event: "settle", code: swept.job.outcome ?? swept.job.state })
   return swept.ending ? { job: swept.job, ending: swept.ending } : { job: swept.job }
 }
 
@@ -1615,11 +1723,12 @@ async function sweepEach(
   jids: readonly string[],
   stop: boolean,
   indexes: readonly string[],
+  sweep: Sweep,
 ): Promise<EndedJob[]> {
   const done: EndedJob[] = []
   for (const jid of jids) {
     try {
-      const result = await sweepOne(ctx, jid, stop, indexes)
+      const result = await sweepOne(ctx, jid, stop, indexes, sweep)
       if (result) done.push(result)
     } catch (error) {
       report("sweep", error, jid)
@@ -1637,6 +1746,8 @@ function members(value: unknown): string[] {
 /**
  * Ends or moves an account's due jobs: what every `pending`, `claim`, `decline`, `report` and `settle` call does
  * first, as the safety net beside the sweep cron (3.4). Answers the jobs that ended, for the adapters' fixed replies.
+ * It reads no @vector record: an overdue Actions run is left to the cron for ACTIONS_CRON_GRACE_MS, then fails (EV-30);
+ * one whose authority ended fails at its due time, as the cron fails it.
  */
 export async function sweepAccount(
   ctx: JobsContext,
@@ -1645,7 +1756,7 @@ export async function sweepAccount(
 ): Promise<EndedJob[]> {
   const live = everywhereKeys.jobs(account)
   const jids = members(await ctx.store(["ZRANGE", live, 0, -1]))
-  return sweepEach(ctx, jids, options.stop === true, [live, everywhereKeys.jobsDue()])
+  return sweepEach(ctx, jids, options.stop === true, [live, everywhereKeys.jobsDue()], { lazy: true })
 }
 
 /**
@@ -1656,18 +1767,19 @@ export const SWEEP_LIMIT = 200
 
 /**
  * The sweep (VE-06's per-minute cron): every job whose next timeout has passed, oldest first, at most `limit`. Under
- * the `stop` switch every live job is taken, due or not.
+ * the `stop` switch every live job is taken, due or not. `runEnd` reads how an overdue Actions run ended (EV-30);
+ * without it such a run fails at its due time.
  */
 export async function sweepDue(
   ctx: JobsContext,
-  options: { readonly limit?: number; readonly stop?: boolean } = {},
+  options: { readonly limit?: number; readonly stop?: boolean; readonly runEnd?: ActionsRunEnd } = {},
 ): Promise<EndedJob[]> {
   const limit = options.limit ?? SWEEP_LIMIT
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) throw new RangeError("Pick 1 to 1,000.")
   const max = options.stop ? "+inf" : ctx.now
   const due = everywhereKeys.jobsDue()
   const jids = members(await ctx.store(["ZRANGEBYSCORE", due, "-inf", max, "LIMIT", 0, limit]))
-  return sweepEach(ctx, jids, options.stop === true, [due])
+  return sweepEach(ctx, jids, options.stop === true, [due], { lazy: false, runEnd: options.runEnd })
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

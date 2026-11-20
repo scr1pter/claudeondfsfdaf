@@ -4420,3 +4420,86 @@ Ten findings, none blocking; the dispositions are in the deviations entry, "2026
 | prettier `--check` | the two new files and runtime.ts clean; ports.ts, router.ts and everywhere-router.test.ts were not prettier-clean at HEAD either (checked from `git show HEAD:<file>`), and the edits keep their style |
 
 **Commit.** One package commit, `feat(everywhere): add the dormant GitHub Actions fallback adapter` (the gate brief's title, in place of the planned `feat(everywhere): add the Actions fallback adapter's route gating and dispatch`), Vector identity and the trailers. Then the push to everywhere-finish and the dispatches of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on that ref (the gate's brief names all five; vector-codium.yml is allowed because PR #33 is on main and merged into this branch). Their run ids and results go in the next receipt.
+
+### EV-29 CI (recorded by EV-30, 2026-11-20)
+
+Dispatched by EV-29's commit gate on everywhere-finish at `3200acc2`: vector-everywhere 44814830700 success; vector-at-mention 44814838340 success; vector-codium 44814843100 success; typecheck 44814850547 success; vector-hosted-ci 44814834365 cancelled after 15 s (20:49:38 to 20:49:53), beside the vector-codium run that calls the same reusable workflow. The vector-everywhere, vector-at-mention and vector-hosted-ci runs were read back here with the GitHub tools (head `3200acc2`, workflow_dispatch); the vector-codium and typecheck conclusions are as EV-30's brief reports them. The hosted-ci cancellation's cause is inferred (a shared concurrency group), not confirmed from its log.
+
+## EV-30: the Actions listeners and the Actions settle transition (VE-30b) (2026-11-20)
+
+Spec §8 VE-30; §3.4; §3.6 "Correlation"; §3.13; §5 E8; §6.1; §6.4. Deviations log: "2026-11-20, EV-30".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `3200acc2` (EV-29) equals origin/everywhere-finish; origin/release-finish `67ec3a60` is an ancestor; EV-25 to EV-29 are ancestors. origin/main (`15f3ba77` at the start, `3670461a` at the end, #53) is not an ancestor and is the lead's to merge (the EV-14 precedent); `git merge-tree --write-tree HEAD origin/main` is clean and none of main's changed files is touched. Built uncommitted.
+
+**Files** (line numbers in the deviations entry, "What changed"):
+
+- api/_lib/everywhere/jobs.ts (`ACTIONS_CRON_GRACE_MS`, `ACTIONS_OUTCOMES`, `ActionsRunEnd`, `startDispatched`'s `jobId` and settle index, `settleDispatched`, `runLinks`, the overdue rule in `timeout`, the cron's read in `sweepOne`, lazy account sweeps);
+- api/_lib/everywhere/adapters/cloud-agents.ts (`ACTIONS_OUTCOME`, `createRunHooks`, `createActionsRunEnd`, Jira refused by `cloudSource`);
+- new api/_lib/everywhere/run-hooks.ts and run-hooks-registration.ts;
+- api/_lib/everywhere/sweep.ts (the cron's reader);
+- outside the brief's list: api/_lib/everywhere/keys.ts (`KEEP_MS.runSettle`, `everywhereKeys.runSettle`); @vector's api/cloud-agents/mint.ts and settle.ts (one import line each); .github/workflows/vector-everywhere.yml (four paths); packages/web/test/everywhere-lane.test.ts (three `helpers` entries); docs/vector/owner-actions/vector-everywhere-{github,slack,linear,jira}.md (one line each, byte-identical);
+- tests: packages/web/test/everywhere-jobs.test.ts (A1 to A9, one Redis case, the overdue case tightened) and packages/web/test/everywhere-cloud-adapter.test.ts (P13, L1 to L10, C1 to C6);
+- the lane documents: the deviations entry and dated annotations on VE-05 "Edges" and on EV-25's, EV-27's and EV-29's Left open items; this receipt (with EV-29's CI above); spec notes (§3.4, §3.6, §3.13, §5 E8, §6.1, §6.4, §8 VE-30); the handoff's status bullet, annotations on EV-25's, EV-27's and EV-29's loose ends, and an EV-30 loose-ends block.
+
+No generated file, flag, env var, switch, dependency or lockfile changes; nothing is regenerated.
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named; logs in /tmp/vector-v2/everywhere/ev30/{base,base-redis,after,after-redis,probe,mut}/; the Redis runs used a disposable loopback redis-server on port 6398 with `--save '' --appendonly no`, shut down after). "pass/fail (expects)":
+
+| Check | Result |
+| --- | --- |
+| baselines at HEAD, before any edit: everywhere-jobs, -cloud-adapter, -body-api, -sweep, -router, -jobs-api, -erase, -keys, -authority, -intake, -jira-a2a, -journey-laptop, -journey-laptop-tracker, -lane, -docs, cloud-agents-runs, cloud-agents-service-off, cloud-agents-start | 43/0, 9 skip (329); 67/0, 3 skip (1,040); 24/0, 5 skip (329); 11/0 (99); 9/0 (37); 22/0 (226); 11/0 (152); 15/0 (126); 20/0, 7 skip (225); 8/0 (68); 20/0, 3 skip (251); 5/0, 2 skip (211); 5/0, 4 skip (345); 13/0 (161); 17/0 (215); 2/0, 1 skip (22); 4/0 (104); 0/0, 1 skip |
+| baselines at HEAD with Redis: everywhere-jobs, -cloud-adapter, -body-api, -authority, -jira-a2a, -journey-laptop, -journey-laptop-tracker, cloud-agents-runs, cloud-agents-start | 50/0 (393); 68/0 (1,062); 27/0 (355); 25/0 (331); 21/0 (310); 7/0 (329); 9/0 (666); 25/0 (2,444); 38/0 (12,988) |
+| everywhere-jobs.test.ts after (the final tree), without and with Redis | 52/0, 10 skip (439); 60/0 (515): +9 cases, +1 Redis case |
+| everywhere-cloud-adapter.test.ts after (the final tree), without and with Redis | 84/0, 3 skip (1,167); 85/0 (1,189): +17 cases |
+| the 16 other neighbours after, without Redis (run twice: after the first build and on the final tree) | every pass, fail, skip and expect count equals its baseline both times (everywhere-lane 13/0 (161) after its `helpers` edit; everywhere-docs 17/0 (215) after the guides' line) |
+| the 7 other Redis neighbours after (both times) | every count equals its baseline, except cloud-agents-runs' expect count, which varies on its own: 25/0 with 2,445 expects on the final tree, then 2,444 and 2,443 in two more runs on a flushed Redis; that file and cloud-agents-runs.ts are untouched |
+| root test/api-module-loading.test.ts, no-personal-paths.test.ts, no-project-wording.test.ts (from test/) | 3/0 (22); 1/0 (2); 2/0 (16), as at HEAD |
+| packages/cloud src/workflow-compliance.test.ts | 58/0 (1,104), as at HEAD |
+| Node ESM probe (/tmp/vector-v2/everywhere/ev30/probe/build.ts, probe.log): mint.ts's and settle.ts's import trees compiled module by module, run under Node 22.23 in two fresh processes with a loopback KV inside the process and a fetch guard refusing every host but 127.0.0.1 | exit 0 both. **Flag off:** both routes load (391 ms) and their default handlers are functions; a start notify with a job id and two settle notifies, one with a settle index in the KV, make no KV request and no @vector record read (no listener is registered). **Flag on:** a start notify with a job id imports runtime.js lazily and reads the Codium switch and the ticket (76 ms, cold); a settle notify with no index reads @vector's record once and the index once (6 ms); with an index, the index and the job record (7 ms; the record is absent, so nothing moves) |
+| the functions' bundle (the probe's graph count) | mint.ts and settle.ts: static graph 101 → 110 files (1,763,362 → 1,809,613 bytes of source); with lazy imports 101 → 155 files (2,277,266 bytes); 54 files and 513,906 bytes added, almost all runtime.js's graph |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`), on the final tree | exit 0 |
+| `bun typecheck` in packages/web (astro check), on the final tree | exit 0: 306 files, 0 errors, 0 warnings, 454 hints (452 at EV-29's gate; the two new ones are C1's `await expect(...).rejects`, the existing pattern) |
+| prettier `--check` | clean for the two new files, cloud-agents.ts, the two route files, everywhere-cloud-adapter.test.ts, the lane test and the workflow. jobs.ts, keys.ts, sweep.ts and everywhere-jobs.test.ts were not prettier-clean at HEAD; prettier's difference count is unchanged for jobs.ts (475), keys.ts (27) and everywhere-jobs.test.ts (130), and sweep.ts's grows by two lines only inside `createSweep`'s signature, whose HEAD style the new dep line keeps |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over every touched file for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify, process-finish, brain-transport and main `3670461a` | empty for every lane |
+| after every lane document edit: web everywhere-lane.test.ts, everywhere-docs.test.ts; root test/no-personal-paths.test.ts and no-project-wording.test.ts (from test/) | 13/0 (161); 17/0 (215); 1/0 (2); 2/0 (16) |
+
+**Mutations** (/tmp/vector-v2/everywhere/ev30/mut/: mutate.py, run-m1-m5.log, stdout-m6-m30.txt, stdout-rerun.txt, table.md, before.sha256, one log per mutation and file; M31 and M32 from review round one below): 30 mutations, one at a time, the named test files alone without Redis. The first run left two survivors (M14, the cron's due check, which was equivalent and was removed; M20, a repeated settle posting, which needed a case where the settle index outlives the job's end); A9 and L10 were added and M13, M14 (retargeted at the authority gate) and M20 run again on the final tree. All 30 end red; `sha256sum -c` matched jobs.ts, cloud-agents.ts, run-hooks.ts and sweep.ts after every run. The table is in the deviations entry.
+
+**Review round one (2026-11-20; deviations entry, "Review round one").** Eight findings, none blocking. Code: jobs.ts moves `type Sweep` beside `type Overdue` (:1595), makes a job whose authority ended never lazy (:1687), and audits a sweep's end as `outcome ?? state` (:1712); cloud-agents.ts's `createRunHooks` uses `satisfies` (:208) instead of a return annotation; everywhere-jobs.test.ts adds A3's audit assertion and A9's account sweep; everywhere-cloud-adapter.test.ts adds a comment to C2's `finally`. Recorded with no code change: the waiting runs at the head of `jobs:due` (Left open). Checks (logs in /tmp/vector-v2/everywhere/ev30/fix/), each through vector-serial, one file at a time with `--timeout 30000`, from packages/web:
+
+| Check | Result |
+| --- | --- |
+| everywhere-jobs.test.ts, without and with Redis (disposable loopback redis-server on port 6398, `--save '' --appendonly no`, flushed before each file, shut down after) | 52/0, 10 skip (444); 60/0 (520): +5 expects, no new case |
+| everywhere-cloud-adapter.test.ts, without and with Redis | 84/0, 3 skip (1,167); 85/0 (1,189), unchanged |
+| everywhere-sweep, -body-api, -authority, -jobs-api, -erase, -journey-laptop, -journey-laptop-tracker, -intake, -jira-a2a, -router, -lane, without Redis | 11/0 (99); 24/0, 5 skip (329); 20/0, 7 skip (225); 22/0 (226); 11/0 (152); 5/0, 2 skip (211); 5/0, 4 skip (345); 8/0 (68); 20/0, 3 skip (251); 9/0 (37); 13/0 (161): each equals its baseline |
+| M31 (an account sweep stays lazy for an ended authority), M32 (the cron's settle audited with the state) | each red in exactly its case: jobs 51/1, A9; jobs 51/1, A3; `sha256sum -c` matched jobs.ts after each |
+| hosted API typecheck; `bun typecheck` in packages/web | exit 0; exit 0, 306 files, 0 errors, 0 warnings, 454 hints |
+| prettier | cloud-agents.ts and everywhere-cloud-adapter.test.ts `--check` clean; the difference count is unchanged for jobs.ts (475) and everywhere-jobs.test.ts (130) |
+| after the lane document edits: web everywhere-lane.test.ts, everywhere-docs.test.ts; root test/no-personal-paths.test.ts and no-project-wording.test.ts (from test/); `git diff --check` | 13/0 (161); 17/0 (215); 1/0 (2); 2/0 (16); clean |
+
+**Not run here:** the commit, the push gate's full turbo typecheck, and the dispatches, which belong to the commit step.
+
+**For the commit step:**
+- No main merge (deviations entry, "origin/main"); the lead owns it.
+- One package commit, staging explicit paths: `feat(everywhere): settle Actions jobs from run start and settle hooks`. The body names what is outside the brief: the files (keys.ts, the two new modules, @vector's mint.ts and settle.ts, the workflow paths, the lane test, the four guides) and the behaviour change to EV-29's adapter (`cloudSource` refuses Jira, deviation (j), with the four guides' line that says so); it says nothing was regenerated and no flag, env, switch, dependency or lockfile changed, and says production still has no Actions route. Vector identity and the trailers.
+- Then `git fetch origin everywhere-finish`, the full `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2`, and `git push origin HEAD:everywhere-finish`.
+- Dispatch vector-everywhere.yml (the Redis cases in its Valkey job), vector-at-mention.yml (cloud-agents-start, -runs and -service-off import the route files) and typecheck.yml on everywhere-finish. Record the run ids in the next receipt and on the handoff.
+
+### EV-30 commit gate (2026-11-20)
+
+`git fetch origin everywhere-finish release-finish main`: origin/everywhere-finish is `3200acc2`, HEAD's parent, so nothing was merged; origin/main `3670461a` is left for the lead (the deviations entry, "origin/main"). `git status` held only this package's files. Checks on the final tree, each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named; the Redis runs used a disposable loopback redis-server on port 46391 with `--save '' --appendonly no`, shut down after. "pass/fail (expects)":
+
+| Check | Result |
+| --- | --- |
+| everywhere-jobs.test.ts, without and with Redis | 52/0, 10 skip (444); 60/0 (520) |
+| everywhere-cloud-adapter.test.ts, without and with Redis | 84/0, 3 skip (1,167); 85/0 (1,189) |
+| everywhere-body-api.test.ts, without and with Redis | 24/0, 5 skip (329); 27/0 (355) |
+| everywhere-lane.test.ts; everywhere-sweep.test.ts | 13/0 (161); 11/0 (99) |
+| cloud-agents-runs.test.ts and cloud-agents-mint-api.test.ts (the mint route's import), with Redis | 25/0 (2,444); 21/0 (6,398) |
+| root test/api-module-loading.test.ts (from test/) | 3/0 (22) |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| full `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2` | exit 0, 27/27 tasks; packages/web 306 files, 0 errors, 0 warnings, 454 hints |
+| prettier | as in the receipt above: the difference count is unchanged for jobs.ts (475), keys.ts (27) and everywhere-jobs.test.ts (130); sweep.ts's 16 → 18 only inside `createSweep`'s signature |
+
+**Commit.** One package commit, `feat(everywhere): settle Actions jobs from run start and settle hooks`, Vector identity and the trailers; then the push to everywhere-finish and the dispatches of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on that ref (the gate's brief names all five). Their run ids and results go in the next receipt.

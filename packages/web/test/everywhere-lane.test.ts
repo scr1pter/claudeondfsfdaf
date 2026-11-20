@@ -315,6 +315,11 @@ describe("the lane's shape", () => {
       "api/_lib/github-app.ts",
       // @vector's App fixture, which everywhere-cloud-adapter.test.ts imports; serverImports scans only server code.
       "packages/web/test/github-app-fixture.ts",
+      // The cron's run read checks the cloud-agents service gate by a lazy import, which serverImports does not see.
+      "api/_lib/model-plan-config.ts",
+      // @vector's routes that import the run hooks' registration (VE-30b); serverImports scans only everywhere code.
+      "api/cloud-agents/mint.ts",
+      "api/cloud-agents/settle.ts",
     ]
     expect(helpers.filter((file) => !matches(file))).toEqual([])
     // A helper that moves on main would silently stop starting the lane.

@@ -6,6 +6,7 @@ import type { DataKey } from "../../../api/_lib/everywhere/crypto"
 import { claimDelivery, finishDelivery } from "../../../api/_lib/everywhere/dedupe"
 import { eraseEverywhereAccount } from "../../../api/_lib/everywhere/erase"
 import {
+  ACTIONS_CRON_GRACE_MS,
   ACTIONS_OVERDUE_MS,
   CREATE_JOB_SCRIPT,
   RECEIVED_STALE_MS,
@@ -32,10 +33,13 @@ import {
   recordSeen,
   refuseJob,
   reportJob,
+  settleDispatched,
   settleJob,
   startDispatched,
   sweepAccount,
   sweepDue,
+  type ActionsOutcome,
+  type ActionsRunEnd,
   type JobRecord,
   type JobsContext,
   type NewJob,
@@ -744,7 +748,8 @@ describe("timeouts", () => {
       expect(await state(job.jid)).toBe("running")
     }
     fake.clock.now = job.receivedAt + 60_000 + ACTIONS_OVERDUE_MS
-    expect((await sweepDue(ctx())).map((entry) => entry.job.state)).toEqual(["failed"])
+    // EV-30: with no reader the cron fails it at its due time, with outcome `failed`, so its post says it failed.
+    expect((await sweepDue(ctx())).map((entry) => [entry.job.state, entry.job.outcome])).toEqual([["failed", "failed"]])
   })
 
   test("a dispatch with no start hook in 900 s fails as not started", async () => {
@@ -829,6 +834,281 @@ describe("timeouts", () => {
     expect(await cancelJob(ctx(), job.jid)).toMatchObject({ ok: false, state: "refused" })
     expect(await offerJob(ctx(), job.jid)).toMatchObject({ ok: false, state: "refused" })
     expect(await readJob(store, job.jid)).toMatchObject({ state: "refused", code: "no-place" })
+  })
+})
+
+describe("the Actions settle (EV-30)", () => {
+  /** A Slack job dispatched with its own ticket and, unless `start` is false, started as run `rid`. */
+  async function actionsJob(rid: string, start = true) {
+    const job = await created()
+    const ticket = `ticket-hash-${randomBytes(8).toString("hex")}`
+    expect((await dispatchJob(ctx(), job.jid, { ticketHash: ticket })).ok).toBe(true)
+    if (start) expect((await startDispatched(ctx(), ticket, rid, job.jid)).ok).toBe(true)
+    return { jid: job.jid, ticket, rid, job }
+  }
+
+  test("A1: the start links the run and its settle index, which outlives the body; a ticket naming another job moves nothing", async () => {
+    const run = await actionsJob("run-a1", false)
+    const mark = fake.commands.length
+    expect(await startDispatched(ctx(), run.ticket, "run-a1", createJobId(fake.clock.now))).toEqual({
+      ok: false,
+      code: "not-found",
+    })
+    // Only the ticket is read: no record, no authority, no write.
+    expect(fake.commands.slice(mark).map((command) => command[0])).toEqual(["GET"])
+    expect(await state(run.jid)).toBe("dispatched")
+    fake.clock.advance(90 * 60_000)
+    expect(await startDispatched(ctx(), run.ticket, "run-a1", run.jid)).toMatchObject({
+      ok: true,
+      job: { state: "running", route: "actions", rid: "run-a1", startedAt: fake.clock.now },
+    })
+    expect(fake.read(everywhereKeys.runSettle("run-a1"))?.value).toBe(run.jid)
+    expect(fake.pttl(everywhereKeys.runSettle("run-a1"))).toBe(KEEP_MS.runSettle)
+    // The body route's link still ends with the body; the settle index outlives the run's longest life.
+    expect(fake.pttl(everywhereKeys.run("run-a1"))).toBe(run.job.bodyExpiresAt - fake.clock.now)
+    expect(KEEP_MS.runSettle).toBeGreaterThan(ACTIONS_OVERDUE_MS + ACTIONS_CRON_GRACE_MS)
+    // A second start of the same ticket is not a second link: the job is running.
+    expect(await startDispatched(ctx(), run.ticket, "run-a1b", run.jid)).toMatchObject({
+      ok: false,
+      code: "wrong-state",
+    })
+    expect(fake.read(everywhereKeys.runSettle("run-a1b"))).toBeUndefined()
+  })
+
+  test("A2: a settle ends only that run's running Actions job, once, with no link, and queues one reply", async () => {
+    const run = await actionsJob("run-a2")
+    const mark = fake.commands.length
+    expect(await settleDispatched(ctx(), "vej_bad", { rid: "run-a2", outcome: "changes" })).toEqual({
+      ok: false,
+      code: "not-found",
+    })
+    expect(await settleDispatched(ctx(), run.jid, { rid: "run a2", outcome: "changes" })).toEqual({
+      ok: false,
+      code: "not-found",
+    })
+    expect(await settleDispatched(ctx(), run.jid, { rid: "run-a2", outcome: "held" as ActionsOutcome })).toEqual({
+      ok: false,
+      code: "wrong-state",
+    })
+    expect(fake.commands.length).toBe(mark)
+    expect(await settleDispatched(ctx(), run.jid, { rid: "run-other", outcome: "changes" })).toMatchObject({
+      ok: false,
+      code: "wrong-state",
+      state: "running",
+    })
+    const laptop = await claimed()
+    expect(await settleDispatched(ctx(), laptop.jid, { rid: "run-a2", outcome: "changes" })).toMatchObject({
+      ok: false,
+      code: "wrong-state",
+      state: "claimed",
+    })
+    const waiting = await actionsJob("run-a2b", false)
+    expect(await settleDispatched(ctx(), waiting.jid, { rid: "run-a2b", outcome: "changes" })).toMatchObject({
+      ok: false,
+      code: "wrong-state",
+      state: "dispatched",
+    })
+    expect(members(everywhereKeys.jobsPosts())).toEqual([])
+
+    fake.clock.advance(30 * 60_000)
+    const first = await settleDispatched(ctx(), run.jid, { rid: "run-a2", outcome: "changes" })
+    expect(first).toMatchObject({
+      ok: true,
+      fresh: true,
+      job: { state: "settled", route: "actions", outcome: "changes", endedAt: fake.clock.now },
+    })
+    expect(first.ok && first.job.result).toBeUndefined()
+    expect(members(everywhereKeys.jobsPosts())).toEqual([run.jid])
+    expect(fake.read(everywhereKeys.jobBody(run.jid))).toBeUndefined()
+    expect(members(everywhereKeys.jobs(ALICE))).not.toContain(run.jid)
+    expect(members(everywhereKeys.jobsDue())).not.toContain(run.jid)
+    for (const key of [
+      everywhereKeys.ticket(run.ticket),
+      everywhereKeys.run("run-a2"),
+      everywhereKeys.runBodyRead("run-a2"),
+      everywhereKeys.runSettle("run-a2"),
+    ])
+      expect(fake.read(key)).toBeUndefined()
+
+    // A repeated settle answers as the first did, with the first outcome, writes nothing and queues no second reply.
+    const writes = fake.commands.length
+    expect(await settleDispatched(ctx(), run.jid, { rid: "run-a2", outcome: "failed" })).toMatchObject({
+      ok: true,
+      fresh: false,
+      job: { outcome: "changes", version: first.ok ? first.job.version : 0 },
+    })
+    expect(fake.commands.slice(writes).filter((command) => command[0] === "EVAL" || command[0] === "DEL")).toEqual([])
+    const events = (await readAudit(store, ALICE)).map((entry) => `${entry.event} ${entry.code ?? ""}`.trim())
+    expect(events.filter((event) => event === "settle changes")).toHaveLength(1)
+  })
+
+  test("A3: past its longest run the cron settles an ended run from @vector's record and fails an open one", async () => {
+    const ended = await actionsJob("run-a3-ended")
+    const open = await actionsJob("run-a3-open")
+    const asked: string[][] = []
+    const runEnd: ActionsRunEnd = async (account, rid) => {
+      asked.push([account, rid])
+      return rid === "run-a3-ended" ? "no-changes" : undefined
+    }
+    fake.clock.advance(ACTIONS_OVERDUE_MS - 1)
+    expect(await sweepDue(ctx(), { runEnd })).toEqual([])
+    // Nothing is read before a run is due.
+    expect(asked).toEqual([])
+    fake.clock.advance(1)
+    const swept = await sweepDue(ctx(), { runEnd })
+    expect(
+      Object.fromEntries(swept.map((entry) => [entry.job.jid, [entry.job.state, entry.job.outcome, entry.ending]])),
+    ).toEqual({
+      [ended.jid]: ["settled", "no-changes", undefined],
+      [open.jid]: ["failed", "failed", undefined],
+    })
+    expect(asked.sort()).toEqual([
+      [ALICE, "run-a3-ended"],
+      [ALICE, "run-a3-open"],
+    ])
+    for (const rid of ["run-a3-ended", "run-a3-open"]) expect(fake.read(everywhereKeys.runSettle(rid))).toBeUndefined()
+    expect(members(everywhereKeys.jobsPosts()).sort()).toEqual([ended.jid, open.jid].sort())
+    // The cron's settle is audited with the run's outcome, as the settle hook's is (A2), not as `settle settled`.
+    const events = (await readAudit(store, ALICE)).map((entry) => `${entry.event} ${entry.code ?? ""}`.trim())
+    expect(events.filter((event) => event.startsWith("settle")).sort()).toEqual(["settle failed", "settle no-changes"])
+    // A late settle hook finds the job ended and posts nothing more.
+    expect(await settleDispatched(ctx(), ended.jid, { rid: "run-a3-ended", outcome: "changes" })).toMatchObject({
+      ok: true,
+      fresh: false,
+      job: { outcome: "no-changes" },
+    })
+    expect(await settleDispatched(ctx(), open.jid, { rid: "run-a3-open", outcome: "changes" })).toMatchObject({
+      ok: false,
+      state: "failed",
+    })
+  })
+
+  test("A4: a record the cron cannot read waits: read again each minute, then failed unread at due plus the grace", async () => {
+    const run = await actionsJob("run-a4")
+    const errors = spyOn(console, "error").mockImplementation(() => {})
+    let reads = 0
+    const runEnd: ActionsRunEnd = async () => {
+      reads++
+      throw storeUnavailable()
+    }
+    try {
+      fake.clock.advance(ACTIONS_OVERDUE_MS)
+      for (let minute = 0; minute < ACTIONS_CRON_GRACE_MS / 60_000; minute++) {
+        expect(await sweepDue(ctx(), { runEnd })).toEqual([])
+        fake.clock.advance(60_000)
+      }
+      expect(await state(run.jid)).toBe("running")
+      const swept = await sweepDue(ctx(), { runEnd })
+      expect(swept.map((entry) => [entry.job.state, entry.job.outcome])).toEqual([["failed", "failed"]])
+      expect(reads).toBe(11)
+      const lines = errors.mock.calls.filter((call) => (call[1] as { step?: string } | undefined)?.step === "run-end")
+      expect(lines).toHaveLength(11)
+      expect(lines[0]).toEqual([
+        "Vector everywhere: a jobs step failed",
+        { step: "run-end", jid: run.jid, code: "PERSISTENT_STORE_UNAVAILABLE" },
+      ])
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  test("A5: an account's own sweep reads nothing and leaves an overdue run to the cron for the grace, then fails it", async () => {
+    const run = await actionsJob("run-a5")
+    const settledInGrace = await actionsJob("run-a5-hook")
+    fake.clock.advance(ACTIONS_OVERDUE_MS)
+    expect(await sweepAccount(ctx(), ALICE)).toEqual([])
+    // The settle hook still lands inside the grace.
+    expect(await settleDispatched(ctx(), settledInGrace.jid, { rid: "run-a5-hook", outcome: "changes" })).toMatchObject(
+      {
+        ok: true,
+        fresh: true,
+      },
+    )
+    fake.clock.advance(ACTIONS_CRON_GRACE_MS - 1)
+    expect(await sweepAccount(ctx(), ALICE)).toEqual([])
+    expect(await state(run.jid)).toBe("running")
+    fake.clock.advance(1)
+    // Recorded trade-off (EV-30 (i)): with the cron down this long, the run is failed without reading its record.
+    expect(
+      (await sweepAccount(ctx(), ALICE)).map((entry) => [entry.job.jid, entry.job.state, entry.job.outcome]),
+    ).toEqual([[run.jid, "failed", "failed"]])
+    expect(await readJob(store, settledInGrace.jid)).toMatchObject({ state: "settled", outcome: "changes" })
+  })
+
+  test("A6: under the stop switch the cron cancels an overdue run and reads no record", async () => {
+    const run = await actionsJob("run-a6")
+    fake.clock.advance(ACTIONS_OVERDUE_MS)
+    let reads = 0
+    const swept = await sweepDue(ctx(), {
+      stop: true,
+      runEnd: async () => {
+        reads++
+        return "changes"
+      },
+    })
+    expect(swept.map((entry) => [entry.job.jid, entry.job.state])).toEqual([[run.jid, "cancelled"]])
+    expect(reads).toBe(0)
+  })
+
+  test("A9: a run whose job lost its authority (the link is gone) is failed at its due time without reading @vector's record", async () => {
+    const run = await actionsJob("run-a9")
+    fake.clock.advance(60_000)
+    const later = await actionsJob("run-a9-account")
+    fake.data.delete(everywhereKeys.link(SLACK, "U0ALICE01"))
+    fake.clock.advance(ACTIONS_OVERDUE_MS - 60_000)
+    let reads = 0
+    const swept = await sweepDue(ctx(), {
+      runEnd: async () => {
+        reads++
+        return "changes"
+      },
+    })
+    expect(swept.map((entry) => [entry.job.jid, entry.job.state, entry.job.outcome])).toEqual([
+      [run.jid, "failed", "failed"],
+    ])
+    expect(reads).toBe(0)
+    // An account's own sweep does not wait the grace for such a run either: nothing would read its record.
+    expect(await state(later.jid)).toBe("running")
+    fake.clock.advance(60_000)
+    expect(
+      (await sweepAccount(ctx(), ALICE)).map((entry) => [entry.job.jid, entry.job.state, entry.job.outcome]),
+    ).toEqual([[later.jid, "failed", "failed"]])
+  })
+
+  test("A7 (E8): a late laptop claim gets 409 after the dispatch, after the start and after the settle", async () => {
+    const run = await actionsJob("run-a7", false)
+    const claim = () => claimJob(ctx(), { account: ALICE, jid: run.jid, device: device() })
+    expect(await claim()).toMatchObject({ ok: false, status: 409, code: "JOB_TAKEN" })
+    expect((await startDispatched(ctx(), run.ticket, "run-a7", run.jid)).ok).toBe(true)
+    expect(await claim()).toMatchObject({ ok: false, status: 409, code: "JOB_TAKEN" })
+    expect((await settleDispatched(ctx(), run.jid, { rid: "run-a7", outcome: "changes" })).ok).toBe(true)
+    expect(await claim()).toMatchObject({ ok: false, status: 409, code: "JOB_TAKEN" })
+    const job = await readJob(store, run.jid)
+    expect(job).toMatchObject({ state: "settled", route: "actions" })
+    expect({ device: job?.device, lease: job?.lease, claimedAt: job?.claimedAt }).toEqual({
+      device: undefined,
+      lease: undefined,
+      claimedAt: undefined,
+    })
+  })
+
+  test("A8 (E13): erasing the installation or the account removes the settle index, even one a failed delete left", async () => {
+    const run = await actionsJob("run-a8")
+    await eraseInstallationJobs(ctx(), SLACK)
+    expect(fake.read(everywhereKeys.runSettle("run-a8"))).toBeUndefined()
+    expect(await state(run.jid)).toBe("cancelled")
+    const errors = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const left = await actionsJob("run-a8b")
+      const unlink = (command: StoreCommand) =>
+        command[0] === "DEL" && command.includes(everywhereKeys.runSettle("run-a8b"))
+      expect((await cancelJob(ctx({ store: failing(store, unlink) }), left.jid)).ok).toBe(true)
+      expect(fake.read(everywhereKeys.runSettle("run-a8b"))?.value).toBe(left.jid)
+      await eraseAccountJobs(ctx(), ALICE)
+      expect(fake.read(everywhereKeys.runSettle("run-a8b"))).toBeUndefined()
+    } finally {
+      errors.mockRestore()
+    }
   })
 })
 
@@ -1279,6 +1559,40 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
     )
     expect(results.filter((result) => result.ok)).toHaveLength(3)
     expect(results.filter((result) => !result.ok && result.code === "over-limit")).toHaveLength(3)
+  })
+
+  test("an Actions start writes both links with their lifetimes, and its settle is fenced and queued once on Redis", async () => {
+    const sponsor = randomUUID()
+    const context = realCtx()
+    const input = isolatedSlackJob(sponsor)
+    await seedJobAuthority(context, input)
+    const verdict = await createJob(context, input)
+    if (!verdict.ok) throw new Error("not created")
+    const jid = verdict.job.jid
+    const ticket = `ticket-hash-real-${randomUUID()}`
+    const rid = `run-real-${randomBytes(6).toString("hex")}`
+    const real = testEverywhereStore(redis.fetch)
+    expect((await dispatchJob(realCtx(), jid, { ticketHash: ticket })).ok).toBe(true)
+    expect(await startDispatched(realCtx(), ticket, rid, createJobId(Date.now()))).toEqual({
+      ok: false,
+      code: "not-found",
+    })
+    expect((await startDispatched(realCtx(), ticket, rid, jid)).ok).toBe(true)
+    const settleTtl = Number(await real(["PTTL", everywhereKeys.runSettle(rid)]))
+    const runTtl = Number(await real(["PTTL", everywhereKeys.run(rid)]))
+    const bodyTtl = Number(await real(["PTTL", everywhereKeys.jobBody(jid)]))
+    expect(settleTtl).toBeGreaterThan(KEEP_MS.runSettle - 60_000)
+    expect(settleTtl).toBeLessThanOrEqual(KEEP_MS.runSettle)
+    expect(runTtl).toBeLessThanOrEqual(bodyTtl + 1_000)
+    const settles = await Promise.all(
+      Array.from({ length: 6 }, () => settleDispatched(realCtx(), jid, { rid, outcome: "changes" })),
+    )
+    expect(settles.filter((settled) => settled.ok && settled.fresh)).toHaveLength(1)
+    expect(settles.every((settled) => settled.ok)).toBe(true)
+    expect((await readJob(real, jid))?.state).toBe("settled")
+    expect(await real(["ZSCORE", everywhereKeys.jobsPosts(), jid])).not.toBeNull()
+    expect(Number(await real(["EXISTS", everywhereKeys.runSettle(rid)]))).toBe(0)
+    await real(["ZREM", everywhereKeys.jobsPosts(), jid])
   })
 
   test("the lease timeout and the body erase hold on Redis", async () => {

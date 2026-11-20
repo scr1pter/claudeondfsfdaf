@@ -12,7 +12,7 @@ These gates are in the code or with the lead, not yours. Check that each one is 
 
 - `LAPTOP_ROUTE_WIRED` is `false` (`api/_lib/everywhere/config.ts`): no paying customer's job runs until a reviewed package sets it.
 - `OFFER_KEYS` is empty (`packages/desktop/src/main/everywhere-offer.ts`): every computer refuses every offer until your public key is pinned and a desktop release ships it (Keys, step 2).
-- The Actions fallback is off: its adapter is built (EV-29), but it has no route until the live workflow read (EV-30) is built and R-C8 is answered, and `RESERVED` in `packages/schema/src/codium-run-trigger.ts` keeps Slack, Linear and Jira out of Actions until you say yes. A job whose computer is away waits or expires.
+- The Actions fallback is off: its adapter and its run hooks are built (EV-29, EV-30), but it has no route until the live workflow read is built (no work package yet) and R-C8 is answered, and `RESERVED` in `packages/schema/src/codium-run-trigger.ts` keeps Slack, Linear and Jira out of Actions until you say yes. Jira stays out of Actions even then, until a run limit ends a Jira job before 50 minutes. A job whose computer is away waits or expires.
 - macOS and Windows have no shell for jobs: jobs there edit files and run no commands (spec §7, Stage B note of 2026-11-16).
 - The desktop page cannot turn jobs on or allow a folder yet: Settings → Vector everywhere is read-only until the write path is built (vector-everywhere-deviations.md, "2026-11-20, EV-21", "Ruling on (a)").
 - The decisions are the ones you confirmed on 2026-11-11 (spec §10): Q5 (Slack reads a mention's thread once), Q13 (GitHub laptop-first only if @vector agrees) and Q14 (a platform goes live when its own steps are met).

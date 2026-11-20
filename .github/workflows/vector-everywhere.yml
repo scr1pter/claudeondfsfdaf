@@ -72,6 +72,12 @@ on:
       - api/_lib/github-app.ts
       - packages/schema/src/codium-run-trigger.ts
       - packages/web/test/github-app-fixture.ts
+      # The @vector run hooks the Actions listeners register on (VE-30b), the service gate the cron's run read checks
+      # (a lazy import), and the two routes that import the registration, which a scan of everywhere code cannot see.
+      - api/_lib/cloud-agents-runs.ts
+      - api/_lib/model-plan-config.ts
+      - api/cloud-agents/mint.ts
+      - api/cloud-agents/settle.ts
   workflow_dispatch:
 
 concurrency:
