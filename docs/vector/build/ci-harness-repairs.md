@@ -330,3 +330,64 @@ ran locally.
 Open check: the root cause counts as confirmed only once Windows CI on this branch's PR shows every Windows engine
 shard green and ownership's two deferred cases back near 2 s. That PR does not exist yet (the branch is not pushed);
 record its run ID, the shard jobs' IDs and both cases' durations here when they finish.
+
+## 2026-11-20: Windows patch-limit listing row and its after-test rejection
+
+Branch `windows-engine-timeouts` from `56b2862b`. Test-only change in `packages/engine/test/cli/github.bundle.test.ts`.
+No product code, assertion, 2,001-path count, 30 s test deadline, retry, skip or shard layout changes.
+
+Failure. `writeBundle > patch-limit refusal: files, counted in the listing` timed out at its 30 s deadline twice on
+Windows: main `dc89e4ec` run 44006980544, job 133785925116 ("engine (windows, shard 12/12)"), and PR #46 run
+44666752560, job 136057825295 ("engine (windows, shard 1/12)"). In PR #46 Bun printed `killed 1 dangling process`,
+then `(fail) ... counted in the listing [30011.98ms]`, then `Unhandled error between tests` with "Vector could not
+record the run's changes." at `src/cli/cmd/github.bundle.ts:776:41` <- `#maybeClose` <- `#handleOnExit`. In `dc89e4ec`
+no git child was running at the deadline; the dropped row body kept running alongside the next row instead, and
+"files, deletions counted" took 27,765 ms against about 9.5 s normally. Linux and most Windows runs pass.
+
+What the row does. `repository()` wrote README.md plus 1,001 distinct `tracked/<i>.txt` files, then ran `git add -A`
+(about 1,002 loose objects) and `git commit` through Bun `$`. `make()` rewrote the 1,001 tracked files and wrote 1,000
+new ones. `writeBundle` (no `timeoutMs`, so its own `GIT_TIMEOUT_MS` = 120 s) runs one git child per step:
+`rev-parse`, `read-tree` into a private index, `ls-files --others` (1,000 paths), `update-index -q --refresh` and
+`ls-files --modified` (1,001 paths); 2,001 is over `PATCH_LIMITS.files`, so it refuses before the add. The read-tree
+index has no stat data, so the refresh and the listing each hash the 1,001 changed files. No other child process.
+
+Timing (passing Windows runs, from the two investigations' job logs, e.g. main `4bb9bcb2` run 44007029816 job
+133786559895 and codium-finish run 44009826105 attempt 2 job 136042932366): "files" (README plus 2,001 new files)
+1.3-1.8 s, "deletions counted" (same 1,002-file base, little for writeBundle to read) 7.9-9.5 s, the listing row
+8.4-13.2 s. So the base build (1,002 writes, `add -A`, commit) is about 6-7 s of the row and the product's hashing about
+0-2 s: only 2.3x-3.5x headroom. In both failing jobs the first writeBundle rows ran 1.7x-10x slower for a short
+stretch (in PR #46 "files" took 3,291 ms against 1,340 ms, and the next row ran a normal 9,211 ms). The logs do not
+show what slowed the runner. On Linux the listing row takes about 144 ms, about 80% of it fixture.
+
+Why the error lands after the test. When Bun times a test out it drops the test body's promise but lets its async work
+run on, and kills the processes it still holds. Bun killed the git child `writeBundle` was waiting on; its `close` event
+had a non-zero code, so `github.bundle.ts:776` rejected FAILED. That rejection travels `git()` -> `stage()` ->
+`writeBundle` -> the row's `await bundle(...)`, whose promise Bun had already dropped, so it surfaces as an unhandled
+error between tests. Reproduced locally with a scratch Bun test that mirrors `git()` (a `git hash-object --stdin`
+child that never gets EOF, 1 s test timeout): with a 120 s signal Bun printed `killed 1 dangling process`, the test
+failed at 1,001 ms and `Unhandled error between tests` followed with the close-handler FAILED via `#maybeClose`; with a
+300 ms signal the same test failed inside itself with the abort FAILED and nothing landed between tests. The product
+behaves as designed: a killed git is a failure, and `writeBundle` deliberately takes no signal.
+
+Change. (1) A new `trackedRepository(count)` builds the two heavy rows' base cheaply: `git init`, README.md written
+and added normally, one `hash-object -w --stdin` blob ("base\n"), all `tracked/<i>.txt` entries in a single
+`update-index --index-info` call on stdin (1,001 `--cacheinfo` arguments would pass the Windows command-line limit),
+then `commit`. 5 objects instead of about 1,005, and the tracked files are never written to disk; README.md stays on
+disk, or `ls-files --modified` would count it and give 2,002. "deletions counted" no longer runs `fs.rm` of the
+never-written `tracked/`. `sh()` gained an optional stdin `input`. The product path is unchanged: same 1,001-path base
+tree, same read-tree, and the same refresh and listing hashing of 1,001 changed or deleted paths. Locally the base
+build fell from 770-1,084 ms to 23-29 ms (5 runs each); on Windows the row should fall from 8.4-13.2 s to about 3-4 s.
+(2) Every patch-limit row passes `writeBundle` its own `timeoutMs`, the 25 s left of a budget taken at the row's start
+(at least 1 ms), so on a slow runner the product's git is stopped inside the row and the row fails with its own
+error instead of a git child outliving it. This only tightens a bound and applies to these five rows only, not the
+shared `bundle()` helper. It does not cover setup git run through Bun `$` that is still running at the deadline; step
+(1)'s headroom is what prevents the flake. Not changed: `countChanges` hashes changed files twice on a fresh read-tree
+index; the later add relies on the refresh's stat data, so leave it unless measured.
+
+Validation (Linux, Bun 1.3.14, through the serial lock): `packages/engine`
+`bun test --timeout 30000 test/cli/github.bundle.test.ts` 24 pass, 2 skip (the existing platform-selected cases), 0
+fail; `packages/engine` `bun typecheck` exit 0.
+
+Open check: confirmed only once Windows CI on this branch's PR shows every Windows engine shard green and the listing
+and "deletions counted" rows near 3-4 s. The branch is not pushed yet; record the run ID, shard job IDs and both rows'
+durations here when they finish.
