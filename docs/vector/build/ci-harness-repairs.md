@@ -379,7 +379,12 @@ Change. The patch makes `TreeSitterClient.startWorker()` record `workerSettled`,
 as before, a stopped worker's messages never reach the client) and call `terminate()` only once `workerSettled`
 resolves. `open` fires only after `loadEntryPointForWebWorker` has resolved, so no entry-module transpile is in flight.
 There is no timer fallback on purpose: a timed terminate would recreate the crash for a worker still loading, and
-`parser.worker.js` has no top-level await, so a worker that neither opens nor fails is not expected. Only
+`parser.worker.js` has no top-level await, so a worker that neither opens nor fails is not expected. The cost of that
+choice: such a worker would be detached but never terminated and would keep the process alive, so it would show up as
+a hang at exit rather than a crash (before the patch it was terminated at once). A load failure emits `error`, so it
+does not take this path. When the worker is already online, `terminate()` now runs one microtask after `stopWorker()`
+returns instead of inside it; `handleReset()` reads the old `workerSettled` before `startWorker()` replaces it, so it
+still terminates the right worker, and no caller in engine, tui or cli needs `terminate()` finished on return. Only
 `index-54s7pk0d.js` calls `this.worker.terminate()`. The patch covers every opentui caller: this file,
 `runtime.test.ts:626` in shard 4, and a real `vector run` exit. The test now shares one module-level
 `MockTreeSitterClient({ autoResolveTimeout: 0 })`, so the file keeps one live mock worker instead of 17.
@@ -391,7 +396,10 @@ already meant initializing; in this test file highlighting goes to the mock, so 
 scratch stress script (5 runs x 40 rounds, each destroying a real client 0-40 ms after `initialize()` and another
 0-10 ms after `open` with INIT in flight, data path under a scratch folder) ended every run with exit 0, all 80
 initialize promises settled per run and the INIT directories created. That shows the wasm import's window did not race
-`terminate()` in 400 tries; it does not prove the import never uses a TranspilerJob.
+`terminate()` in 400 tries; it does not prove the import never uses a TranspilerJob. So a residual production risk
+remains: if that dynamic import does go through a RuntimeTranspilerStore job, `terminate()` during it (for example the
+TUI exiting while a client is still initializing) could hit the same Bun bug after `open`. This test file never sends
+INIT to the singleton, so the CI trigger is fixed either way.
 
 Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock, from `packages/engine`):
 
@@ -419,6 +427,8 @@ timeout, possibly while it is still loading, and `packages/engine/src/cli/cmd/tu
 after a shutdown RPC that can time out after 5 s (by then it is online). If the Bun bug is general, the first can hit
 it. Upstream: an oven-sh/bun report (`WebWorker.shutdown` runs `vm.deinit()` while RuntimeTranspilerStore jobs still
 hold that VM, with the trace and the amplified reproduction above) is not filed: filing is a public action left to the
-lead or owner. No Bun 1.4.x fix is confirmed (its source fetches came back empty), and @opentui/core 0.9.x still starts
-the real worker eagerly, so there is no version to bump to. When a Bun release fixes it, bump setup-bun and the Bun
+lead or owner. The report should also say that the same freed-VM read may apply to a dynamic import that is still
+transpiling when `terminate()` runs after `open`, since this patch only closes the entry-module window. No Bun 1.4.x
+fix is confirmed (its source fetches came back empty), and @opentui/core 0.9.x still starts the real worker eagerly, so
+there is no version to bump to. When a Bun release fixes it, bump setup-bun and the Bun
 pin, re-run the raw amplifier on unpatched opentui, and drop this patch.
