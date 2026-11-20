@@ -648,14 +648,20 @@ projects. Source growth since Nov 14 (+3.1% lines) and possibly image 20261116.3
 Precedent: run 42031291175 hit the same deadline and `/MP2` fixed it (`hands-progress.md`, "Windows native compile
 budget evidence").
 
-Evidence (step 9, both architectures including configure):
+Evidence (step 9, both architectures including configure; the groups do not overlap):
 
-| Group               | Step 9 (s)                                     | Per-architecture build (s) | Note                              |
-| ------------------- | ---------------------------------------------- | -------------------------- | --------------------------------- |
-| Fast runners        | 314-342                                        | about 155-170              | well under the cap                |
-| Recent passing jobs | 400, 410, 470, 555, 555, 558, 562              | up to about 281            | 85-95% of the cap on slow runners |
-| Slow runners        | 514-620                                        | about 255-345              |                                   |
-| Timeouts            | 616 (job 136403306943), 620 (job 136058227563) | over 300                   | both slow-group, new image        |
+| Group          | Step 9 (s)                                     | Per-architecture build (s, inferred: half of step 9; not measured) | Note                       |
+| -------------- | ---------------------------------------------- | ------------------------------------------------------------------ | -------------------------- |
+| Fast passing   | 314-342                                        | about 155-170                                                      | well under the cap         |
+| Middle passing | 400, 410, 470                                  | about 200-235                                                      | 67-78% of the cap          |
+| Slow passing   | 514-562 (recent: 555, 555, 558, 562)           | about 255-281                                                      | 85-94% of the cap          |
+| Timed out      | 616 (job 136403306943), 620 (job 136058227563) | ARM64 `--build` killed at 300 (the cap); x64 under 300 (it passed) | both slow-group, new image |
+
+In the two timed-out jobs, x64 configure and build, the ARM64 configure and the script's toolchain probes took about
+316 s and 320 s (step 9 minus the 300 s kill), so the x64 `cmake --build` was itself close to the cap. Both observed
+kills were in the ARM64 `cmake --build` (136403306943 on `accessibility_tests.cpp`, 24 of 29 unit files; 136058227563
+after printing all 29 unit sources). That build is also the second build command in step 9, so these two jobs cannot
+tell whether ARM64 compiles slower or the kill simply lands on whichever build runs second.
 
 The overlay-stage build (37 files, same CMakeLists) took 83-150 s and tracks step 9 (r = 0.84). Passing jobs print no
 per-command times, so per-command figures are inferred from step durations and the two kill points. The 4-vCPU count
@@ -672,9 +678,12 @@ already passes `process.env` to cmake, so `CMAKE_BUILD_PARALLEL_LEVEL` reaches M
 Change.
 
 - `/MP4` in place of `/MP2`; every other compile and link flag is unchanged. The count stays explicit so the worker
-  count and memory never follow a larger host. `/MPn` changes only how many cl processes run; each translation unit
-  still compiles the same way under `/Brepro`, and link order comes from the vcxproj source order. Because the vCPUs
-  may be SMT siblings, expect the compile phases to speed up about 1.4-1.9x, not 2x.
+  count and memory never follow a larger host. `/MP4` is per project: with the workflow's `/m:2`, at most eight cl
+  workers run while two multi-file projects overlap. The dependency chain (computer-core, then vector-computer-tests)
+  keeps that to the short window when the one-file projects build alongside one of them. `/MPn` changes only how many cl
+  processes run; each translation unit still compiles the same way under `/Brepro`, and link order comes from the
+  vcxproj source order. Because the vCPUs may be SMT siblings, expect the compile phases to speed up about 1.4-1.9x, not
+  2x.
 - `CMAKE_BUILD_PARALLEL_LEVEL: "2"` on both build steps (expected saving about 15-30 s) and
   `Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"` before the bun call.
 - The 300000 ms cap, `timeout-minutes: 20` and `timeout-minutes: 15` are unchanged. Nothing retries, skips or lengthens
@@ -694,13 +703,20 @@ Validation (Linux; no native tool runs here):
   300_000 to 600_000; the computer-helper.yml level "2" to "4"; test.yml's 15 to 20 minutes.
 - `packages/desktop` `bun typecheck` and the full turbo typecheck pass.
 
-What Windows CI must show. At least 3 windows-build jobs, including at least one slow-group job (overlay-stage proxy
-at least 135 s before, or clearly above the fast group after). The logged processor count must be 4. Step 9 at or
-below about 420 s in every job, and the fast group at or below about 260 s, which is about 190 s or less per
-`cmake --build` (at least 35% headroom) and about 25 s or less per configure. windows-arm64-test, the native units,
-the fresh version/probe checks and the overlay-stage build must also pass. If a slow-group step 9 exceeds about 470 s,
-this is not enough: the next lever (a measured per-phase `--build` budget or precompiled headers, which need a
-helperVersion bump and a re-measured macOS lock) goes to the lead as its own package, and the cap is not changed
-silently. Only the Windows source digest changes; since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows
-exe hash changes for that reason alone. PR #51 needs no code change: once this merges, merge main into
-`policy-acl-timeout` to re-run it.
+What Windows CI must show. At least 3 windows-build jobs, including at least one slow-group job (overlay-stage proxy at
+least 135 s before, or clearly above the fast group after). The logged processor count must be 4. Step 9 at or below
+about 420 s in every job, and the fast group at or below about 260 s, which is about 190 s or less per `cmake --build`
+(at least 35% headroom) and about 25 s or less per configure. windows-arm64-test, the native units, the fresh
+version/probe checks and the overlay-stage build must also pass. Before judging headroom, compare the x64 and ARM64
+build times rather than halving step 9. Passing step logs do not show them: `build-computer-helper.ts` captures cmake
+output and prints it only on a failure, so no timestamped `vector-computer-tests.vcxproj ->` lines appear, and adding
+per-command timing there would move the darwin source digest. Use what the logs do give: any killed command's captured
+output names its architecture, and the x64-only "Build only the x64 native diagnostic artifacts" step in test.yml's
+computer-helper-windows-units job times x64 alone (on a different runner, so only as a rough share). Until the split is
+known, treat the ARM64 build as the binding one. The overlay-stage build (`diagnose-build-computer-overlay-smoke.ts`)
+uses the same CMakeLists but its steps do not set `CMAKE_BUILD_PARALLEL_LEVEL`, so its timings reflect `/MP4` alone and
+understate any `/m:2` saving in step 9. If a slow-group step 9 exceeds about 470 s, this is not enough: the next lever
+(a measured per-phase `--build` budget or precompiled headers, which need a helperVersion bump and a re-measured macOS
+lock) goes to the lead as its own package, and the cap is not changed silently. Only the Windows source digest changes;
+since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows exe hash changes for that reason alone. PR #51
+needs no code change: once this merges, merge main into `policy-acl-timeout` to re-run it.

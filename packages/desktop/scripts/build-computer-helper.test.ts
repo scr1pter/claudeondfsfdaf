@@ -460,7 +460,8 @@ describe("native build boundaries", () => {
   }
 
   test("Windows CMake compiles every helper target with four bounded workers and unchanged hardening flags", async () => {
-    // Four is the hosted Windows runner's vCPU count; run 44759083191 hit the 300 s cmake deadline at /MP2.
+    // Four is the hosted Windows runner's expected vCPU count (inferred; the workflow step logs NUMBER_OF_PROCESSORS);
+    // run 44759083191 hit the 300 s cmake deadline at /MP2.
     const cmake = await readFile(path.join(directory, "native/computer-helper/windows/CMakeLists.txt"), "utf8")
     const shared = [...cmake.matchAll(/"\$<\$<COMPILE_LANGUAGE:CXX>:([^>]*)>"/g)].map((match) => match[1]!.split(";"))
     expect(shared).toHaveLength(1)

@@ -129,8 +129,11 @@ if(VECTOR_COMPUTER_OVERLAY_DRIVER)
   list(APPEND VECTOR_COMPUTER_TARGETS computer-overlay-driver)
 endif()
 foreach(TARGET IN LISTS VECTOR_COMPUTER_TARGETS)
-  # Compile independent translation units with four workers, the hosted Windows runner's vCPU count, while bounding
-  # memory use. Keep an explicit count so the worker count, and memory, never follow a larger host's processor count.
+  # Compile independent translation units with four workers per project, the hosted Windows runner's expected vCPU
+  # count (inferred; see the 2026-11-20 entry in docs/vector/build/ci-harness-repairs.md). Keep an explicit count so
+  # the worker count, and memory, never follow a larger host's processor count. The helper build steps also set
+  # CMAKE_BUILD_PARALLEL_LEVEL=2 (MSBuild /m:2), so the bound is four workers per project times two projects: at most
+  # eight cl workers while two multi-file projects overlap.
   target_compile_options(${TARGET} PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/EHsc;/utf-8;/guard:cf;/sdl;/Brepro;/Zc:__cplusplus;/MP4>")
   if(NOT "${TARGET}" STREQUAL "computer-core" AND NOT "${TARGET}" STREQUAL "overlay-driver-support")
