@@ -142,6 +142,13 @@ carries the shell mark, and `bash` is allowed only on the probe's exact
 `offline-v1` with no company lock on a key that can carry permission rules
 (`permission`, `tools`, `agent`, `mode`, `default_agent`). The runner itself
 was wired by EV-17 and EV-18; what EV-21 still owes is the settings page.
+*Annotation 2026-11-20 (EV-21):* the settings page is built (Settings →
+Vector everywhere, packages/app/src/components/settings-v2/everywhere.tsx;
+CI pending). It is read-only: the lead refused the desktop config-skew
+exception for the `everywhere` key, so the page writes nothing until the
+setting has skew-safe storage outside user/global config (deviations log,
+"2026-11-20, EV-21", "Ruling on (a)"). That storage is a package for the
+lead to brief, not a request to main. The page needs nothing more from main.
 
 - **macOS: not built.** Seatbelt's offline profile lets this computer's
   servers and every Unix socket through, so it does not qualify. It needs a

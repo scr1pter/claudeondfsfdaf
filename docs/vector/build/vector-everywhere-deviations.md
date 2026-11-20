@@ -2298,3 +2298,337 @@ Eight findings, none blocking. Seven are taken; the eighth (Linear's `ackMs` aga
 They were applied by /tmp/vector-v2/everywhere/ev20-fix/mutate.py, with the file run alone and each source restored by sha256 (logs in ev20-fix/mut/). `BEFORE=1` swaps the pre-round copy of the tracker file in for the run and restores it by sha256. T3 to T20 were re-run on the edited file (ev20-fix/tmutate.py, logs in ev20-fix/tmut/; T16 against the loopback redis-server). Each is red in the same cases and at the same assertions as before, and the mutation table above gives their new lines. T1 and T2 were not re-run: they fail by the case timeout and have no line to move, and nothing on their path changed (the routes' `sleep`, the poll).
 
 Receipts: vector-everywhere-progress.md, "EV-20 review round one".
+
+## 2026-11-20, EV-21: the desktop settings page (VE-41)
+
+Spec §8 VE-41; §3.12 "Desktop Settings → Vector everywhere"; §6.5 rows 3-5 (re-found by their text). Depends on EV-08 (`3443cfa3`), EV-10 (`7146a98f`), EV-17 (`c9275df0`) and EV-18 (`cf9195d0`), each an ancestor of HEAD. Built at HEAD `6a74ac3b`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged; origin/main `6a771354` (PR #33) is the lead's to merge. Line numbers are after this package.
+
+**Precondition still open: the lead's ruling on (a).** The page's one write is of a key newer than the desktop config-skew baseline, and that test is owned by test.yml. The critique asked for the ruling before any code; no lead or other session was reachable from the build (ListAgents listed none), and the build step does not commit, so the exception is built in its strictest form and the commit waits for the ruling. If the lead refuses it: revert the config-skew.test.ts hunk and the page's `save`; the model file, its tests, the registry entry and the dialog gate stand alone (the tab stays hidden anyway), and the write becomes an owner decision. *Settled 2026-11-20: the lead ruled No ("Ruling on (a)", below).*
+
+**Commit hold (2026-11-20, review round one; both reviewers, blocking).** The config-skew.test.ts hunk accepts a top-level key newer than the 1.99.99 baseline, which reads as loosening an existing test (RULES-v2), and the file is outside EV-21's brief. So nothing of this package is committed until the lead's ruling on (a) is recorded here, under "Ruling on (a)", with its date and decision. The rest cannot go in without the hunk: the page's `save` writes `everywhere`, which the unchanged test refuses. A commit gate that finds no ruling stops and reports this hold as its blocker. The page never calls `client.global.config.update` directly to get around the test. The fix round could not reach the lead either (ListAgents listed only the main session and this agent, and the step forbids committing), so it made the code ready for either answer and changed nothing about the hold:
+- *Yes:* commit everything as it stands. The guard case is stricter now (`||` operands, F12 and F12b below).
+- *No:* revert config-skew.test.ts to HEAD, and remove the page's `save` with every control that calls it. That is the "This computer takes jobs" switch with its consent step, Add, Remove, the four limits, the model select and the three switches in "How jobs run". `writeRefusal`, `turnOn`, `turnOff`, `capChange`, `addProject`, `removeProject`, `modelChange` and their cases stay as tested helpers for the owner's later write path. What remains is a read-only page: the jobs line, the folder list with trust, the job list, Open and Continue. Record the refusal here, and add the write to the owner actions.
+
+**Commit hold, review round two (2026-11-20; both reviewers, blocking, one finding given twice).** The hold stands, unchanged in substance: nothing of EV-21 is committed until the line below holds the lead's dated decision. This round could not reach the lead either (ListAgents: "No reachable agents"), and the step forbids committing. Whatever the answer, the commit body names packages/desktop/src/main/config-skew.test.ts and quotes the ruling with its date.
+- *Yes:* commit everything as it stands.
+- *No:* revert config-skew.test.ts to HEAD. In everywhere.tsx remove `save` (:203-225) and every control that calls it: `apply` (:227), `acceptConsent` (:236) and the consent block, the "This computer takes jobs" switch, Add, Remove, the four limits, the model select and the three switches in "How jobs run". Keep the model's write helpers and their cases. What remains is read-only: the jobs line, the checks line, the folder list with its trust and "Trust this repository" (the trust API, not a config write), and the job list with Open and Continue. Record the refusal here, and add the write to the owner actions (spec §10).
+- What the lead weighs, as both reviewers put it: a 1.99.112-or-earlier CLI or desktop that shares the config folder cannot read the settings file once the page has written `everywhere`, even with jobs off. That happens with a user-set XDG_CONFIG_HOME, which sidecar.ts :104 keeps, or by going back to an older desktop app on the same user data. Turning jobs off does not remove the block, because the update deep-merges. The three added assertions are stricter, but they do not undo the widening.
+
+**Commit hold, review round three (2026-11-20; both reviewers, blocking, one finding given twice).** The hold stands. "Ruling on (a)" below still reads "none yet", ListAgents again answered "No reachable agents", and the step forbids committing. config-skew.test.ts and `save` are unchanged this round. The reviewers' hazard is not disputed. Two things are new:
+- *The No answer is ready to apply.* /tmp/vector-v2/everywhere/ev21-fix3/read-only.patch (sha256 `085f8942…`; made by make-readonly.py beside it from this round's everywhere.tsx) turns the page read-only and puts config-skew.test.ts back to HEAD. On this round's tree, `git apply --check` passes. With the patch applied, the app typecheck exits 0, the unchanged config-skew.test.ts passes (2 pass, 38 expects) and prettier is clean. Both files were then restored and matched their hashes (yes.sha256 there). The patch removes `save`, `apply`, `acceptConsent`, the consent block, `BLOCKED`, `busy`, the "This computer takes jobs" switch, Add with the folder pick and the repository field, Remove, the Limits card, the "How jobs run" card, `Toggle` and `capValue`. It also removes the NOT_OFFERED note, because its "You can still turn it off" would be false on a page that writes nothing. What stays: the jobs line, the checks line, the version note, the folder list with trust and "Trust this repository", and the job list with Open and Continue. The model and its 47 cases do not change. Scratch files can be cleared; if the patch is gone, round two's list above is the recipe. On a No, the commit gate applies the patch, re-runs the model, registry and config-skew tests and the app typecheck, records the refusal here, and adds the write to the owner actions (spec §10).
+- *What No costs today:* nothing anyone sees. The tab is shown only to an account the plan offers it to (none while CODIUM_LISTED_PERKS is unset) or to a computer whose own block already says on (only a hand edit can do that). Under No, such a computer turns jobs off by editing its settings file, the same way they were turned on. The brief's "so it can always be turned off" then holds only through the settings file, not through the page.
+
+New line numbers for the Yes answer (round three's trust memo, (ag), moved them by four): `save` :207-229 (guard :210, `writeRefusal` :214, `updateConfig` :222), `apply` :231, `acceptConsent` :240.
+
+**Commit gate (2026-11-20).** It found no ruling, so it stopped before staging anything and reported this hold as its blocker: nothing committed, pushed or dispatched. ListAgents again answered "No reachable agents". The tree still matches round three's yes.sha256, and read-only.patch (`085f8942…`) still passes `git apply --check` on it. Its re-run checks are in the progress receipt, "EV-21 commit gate".
+
+**Ruling on (a)** (2026-11-20, the lead): **No.** The config-skew test stays exactly as at HEAD. Engines before this release reject unknown top-level keys (hands-build-spec.md, the "Config skew" row; hands-deviations.md item 5). The built-in engine still writes the shared user/global config file that an older Vector on the same computer reads, so the built-in-engine guard does not make the write safe.
+
+What was applied. The tree held the Yes build and review rounds one to three, and it still matched round three's yes.sha256:
+- /tmp/vector-v2/everywhere/ev21-fix3/read-only.patch (sha256 `085f89421c95…`) applied cleanly with `git apply`. packages/desktop/src/main/config-skew.test.ts is byte-identical to HEAD again (sha256 `c1ac9af0…`, the same as `git show HEAD:` gives). everywhere.tsx matched the patch's prepared copy (`623a49af…`) before the comment edits below. The Yes copies of both files are kept at /tmp/vector-v2/everywhere/ev21-no/.
+- The patch removes the page's `save` and every control that called it:
+  - `apply`, `acceptConsent` and the consent block;
+  - `BLOCKED` and `busy`;
+  - the "This computer takes jobs" switch;
+  - Add, with the folder pick and the repository field, and Remove;
+  - the four limits and the model select;
+  - the three switches in "How jobs run";
+  - `Toggle` and `capValue`;
+  - the NOT_OFFERED note, whose "You can still turn it off" would be false on a page that writes nothing.
+- What stays on the page:
+  - the jobs line, the checks line and the version note;
+  - the folder list, with each folder's trust and "Trust this repository" (the existing trust approval, not a config write);
+  - the job list, with Refresh, Open and "Continue in a new session on this branch";
+  - the registry entry and the dialog gate.
+- What stays in the model, unchanged, with its cases, as tested helpers for a later write path:
+  - `writeBlock`, `editable`, `writeRefusal`, `turnOn`, `turnOff`, `capChange`, `addProject`, `removeProject`, `modelChoices` and `modelChange`;
+  - their copy: `CAPS`, `CLOSED_LID`, `PUSH_RULE`, `CONSENT`, `NOT_OFFERED` and `REMOTE_STAYED_ON`.
+  The page calls none of them. *Review round four:* all of these are removed except `CLOSED_LID` and `PUSH_RULE`, which the page now renders ((ai), (aj)).
+- Copy that pointed at the removed controls was fixed after the patch, under the brief's plain-fact rule:
+  - `PAGE_DESCRIPTION` said "Jobs are off until you turn them on." It now says "Jobs are off unless this computer's settings file turns them on. This page shows those settings and changes none of them."
+  - `REPOSITORY_RULE` said "Nothing is listed until you add it." It now says "Nothing is listed by default."
+  The plain-copy case pins both (mutations N1 and N2 below).
+- Some comments said the page writes, or that the tab shows "so it can always be turned off": the model's header, `everywhereTab` and its `server` field, `useEverywhereTab`, the page's header, dialog-settings-v2.tsx :74-75 and settings-registry.ts :174-175. They now say the page reads, and that a computer that takes jobs always shows the tab. Two case titles follow.
+- Four search keywords for controls the page no longer has are gone from the registry entry: "wait for my computer", "stay awake", "plugged in" and "draft pull request". No test pinned them. "this computer takes jobs" stays, because the jobs line answers it.
+
+**Deferred: the write path.** The page needs skew-safe storage outside user/global config before it can write: the desktop store, the way Hands keeps its per-user state. Everywhere stays off by default meanwhile.
+- Until then, a computer whose own block says on is turned off by editing its settings file, the same way it was turned on. The tab still shows on such a computer, so a computer that takes jobs always shows the page. But the brief's "so it can always be turned off" holds only through the settings file.
+- The runner (desktop everywhere-settings.ts) and the engine's EV-10 block still use user/global config. So moving the setting changes the runner, the engine and this page together. That is a package of its own, for the lead to brief.
+
+**Superseded by the ruling:**
+- In (a): the exception and its guard case.
+- The "Commit hold" paragraphs above.
+- The config-skew mutations: M12, M12b, M13, M15, F12 and F12b.
+
+**Now about the model's kept helpers, not the page** (the page has none of these controls). *Review round four:* the helpers are removed ((aj)), so these items now record only the reasoning a later write path can reuse:
+- the write-path items (b), (b3), (e), (f), (j), (n), (s), (t), (z) as far as it concerns `turnOn`, (aa) and (ac);
+- (m)'s "nothing is written until the config has loaded";
+- (r), the stay-awake text.
+
+(ab) is replaced by the description above.
+
+**Review round four (2026-11-20, after the ruling).** Eleven findings from two reviewers. One is blocking, and two other reviewer findings repeat it; three more were given twice. Nothing is committed: the step forbids it.
+- *Blocking, taken: the page said it shows the settings, and showed only two of them.* After the ruling's patch the page showed the jobs line and the folder list. `everywhereView` still decoded the four limits, the model, `wait_for_computer`, `push` and `stay_awake`, and the page rendered none of them, nor `CLOSED_LID` or `PUSH_RULE`, while `PAGE_DESCRIPTION` said "This page shows those settings and changes none of them". The ruling forbids writes only, and the brief lists all of these. So the page gains a read-only "How jobs run" card (the reviewers' first option, (ai)), and `PAGE_DESCRIPTION` stays as it was, now true. The plain-copy case pins it whole, with the card's description and every row's label, value and note.
+- *Non-blocking (given twice), taken in its preferred form: the write helpers are removed* ((aj)).
+- *Non-blocking, taken: an older Remote status no longer overwrites a newer change event* ((ak)).
+- *Non-blocking (given twice), taken: the misplaced doc comment.* The block that traces each own-session limit to the engine sat above `PAGE_DESCRIPTION`. It now sits directly above `OWN_SESSION_LIMITS` (everywhere-model.ts :92-98).
+- *Non-blocking (given twice), kept as built: the three shared context files* ((l2)). The commit body and the PR description name packages/ui/src/context/helper.tsx, packages/app/src/context/server-sdk.tsx and server-sync.tsx as shared-surface changes for the lead to see. This round fetched every lane again and re-ran `git diff HEAD...origin/<lane>` over them (Coordination); the push gate runs it once more.
+- *Non-blocking, recorded, not built: Continue and job-written instruction files (E1)* ((o)). This stays an owner or lead gate before `CODIUM_LISTED_PERKS` lists `everywhere`. The reviewer's preferred fix is an engine-side hold, and that is engine work outside this package's files.
+- *Non-blocking, the hard precondition kept, the optional constant not taken: the vectordev.ai jobs link* ((h)).
+
+### What changed
+
+Line numbers are after review round four (the read-only page with its "How jobs run" card).
+
+- **New packages/app/src/components/settings-v2/everywhere-model.ts** (318 lines, pure, no Solid). Its header says the page writes nothing and why, and that nothing in it writes or prepares a write.
+  - `EverywhereView` (:24), with:
+    - `state` (`loading | failed | ready`), `written`, `locked`, `invalid`, `enabled` and `rulesLocked`;
+    - the four caps, `model`, `waitForComputer`, `push`, `stayAwake` and `projects`.
+  - `everywhereView(config, failed)` (:160) decodes only the `everywhere` block of GET /global/config, with `ConfigEverywhereV1.Info` over `Defaults`.
+  - Types `RemoteState` (:67, `loading` until the desktop answers) and `FolderTrust` (:74).
+  - The gate: `everywhereOffered` (:133) and `everywhereTab` (:141, which also takes `server`).
+  - What the page says:
+    - `howJobsRun` (:195, (ai)), `jobsLine` (:211), `folderTrustLine` (:238), `checksLine` (:264, with the engine probe's answer, (q)) and `openWorktree` (:284, (y));
+    - `RULE_KEYS` (:84, exported for the tie test, (ae));
+    - `CLOSED_LID`, `PAGE_DESCRIPTION`, `OWN_SESSION_LIMITS`, `CONTINUE_NOTE`, `JOB_RUNNING`, `VERSION_NOTE`, `REPOSITORY_RULE`, `PUSH_RULE` and `HOW_JOBS_RUN` (:86-126).
+  - Jobs: `everywhereJobs` (:290) and `jobsPage` (:316).
+  - *Review round four:* the write helpers and their copy are gone ((aj)).
+- **New packages/app/src/components/settings-v2/everywhere.tsx** (374 lines, read-only). It has `useEverywhereTab(offered)` (:60) and `SettingsEverywhereV2` (:74), with four cards:
+  - On this computer: the jobs line, the checks line and the version note.
+  - How jobs run (:241-260, review round four, (ai)): the four limits, the model, Wait for my computer, push with `PUSH_RULE` and stay awake with `CLOSED_LID`, as plain text, with no control. It shows only while `howJobsRun` answers.
+  - Allowed repositories: the listed folders, each with its trust and "Trust this repository" where it applies (y).
+  - Jobs on this computer: Refresh, "Your jobs on vectordev.ai" (only while offered), the own-session limits, the folder note, and each job with Open and "Continue in a new session on this branch". Continue is disabled with `JOB_RUNNING` while the job's session is working (ad).
+
+  The page reads only the built-in engine (`ours`, :85). It reads Remote's status (:92-101, (ak)), Vector Local's state (:103), the job list (:120), the engine's shell probe (:131, (q)), the folder memo (:144, (ag)) and each open folder's trust (:147). Its only actions are the trust approval (`approve`, :178) and `continueJob` (:203). It makes no `updateConfig` call and no PATCH. No IPC, preload or platform change, and parts/page.tsx is not edited.
+- **packages/ui/src/context/helper.tsx** (+4): `createSimpleContext` also returns `useOptional()` (:38), which is `useContext` without the throw.
+- **packages/app/src/context/server-sdk.tsx** (:297-301) and **server-sync.tsx** (:617-621) export it as `useOptionalServerSDK` and `useOptionalServerSync` (review round one, see (v)).
+- **settings-registry.ts**: `| "everywhere"` after `| "local"` (:22), and the entry after the `local` entry (:174-190), icon `branch`, with a VE-41 comment.
+- **settings-registry.test.ts**: `toBe(21)` (:7) and `"everywhere",` after `"local",` (:16).
+- **dialog-settings-v2.tsx** (+10):
+  - the two imports after `./local` (:30-31);
+  - the `offersEverywhere` signal after `producing` (:74-76);
+  - `setOffersEverywhere(false)` in readVoting's signed-out branch (:85), and `Boolean(platform.remote) && everywhereOffered(status)` after the status read (:93);
+  - `const everywhere = useEverywhereTab(offersEverywhere)` (:95);
+  - the gate right after `const available = (item: SettingsTab) => {` (:99);
+  - the mount after the servers mount (:167).
+- **packages/desktop/src/main/config-skew.test.ts**: unchanged (Ruling on (a)).
+- **New packages/app/src/components/settings-v2/everywhere-model.test.ts** (519 lines, 32 cases after review round four; vector-everywhere.yml picks it up by name).
+
+### Deviations
+
+- **(a) The config-skew exception** (critique, blocker). *Ruled No on 2026-11-20 ("Ruling on (a)", above): not built, and config-skew.test.ts is at HEAD. The rest of this item is the case as it was put to the lead.* `everywhere` is newer than the 1.99.99 key baseline. The page writes it only to the desktop's built-in engine, the same build as the app: `save` returns first unless `platform.platform === "desktop"` and `ServerConnection.builtin` holds for the connection ServerSync writes to (b2). That engine's global folder is the desktop's own (`<userData>/xdg-config/vector`, sidecar.ts `prepareSidecarEnv` :89 and :104) unless the app was started with XDG_CONFIG_HOME set, so a WSL, SSH, remote or older engine is never written to. *Review round one:* the guard case no longer matches text; an operand of the `||` chain must be exactly the negated built-in check, so `busy() && !ServerConnection.builtin(…)` or `&&` in place of `||` fails it (F12; F12b shows the round-one case let that through). Two cases remain, both named on the page by `VERSION_NOTE` ("Vector 1.99.112 and earlier cannot read a settings file that holds these settings, even with jobs off"): a 1.99.112-or-earlier CLI sharing the folder through XDG_CONFIG_HOME, and going back to an older desktop app on the same user data. Turning jobs off cannot remove the block (the update deep-merges), so going back needs the block removed by hand. The test gains one named exception and three stricter assertions (the only writer, only that key, the guard before it); every other write is still held to the baseline, and the walker and the forwarding set are unchanged. Precedent cuts the other way (Hands never writes `computer` through updateConfig, and the test pins that), which is why this needs the lead.
+- **(b) No `refresh()` call.** The renderer cannot reach the wiring without IPC, and does not need to: the runner re-reads GET /global/config on every check, so `enabled: false` aborts a running job (wiring test :679); turning Remote on opens the event stream, whose `server.connected` starts a read (:879); while the stream is open a PATCH emits `global.disposed`. So the consent order is Remote first, then the write (everywhere.tsx `acceptConsent`). The wiring's `refresh()` keeps a doc comment naming the settings page as its caller; it now has none (Left open; desktop source untouched).
+  - **(b3) Remote stays on when the write after the consent does not happen** (review round one, non-blocking, taken: the "say so" option). `acceptConsent` turns Remote on first. If the write then fails, or is refused because the settings became locked, invalid or not offered, the page says why and adds `REMOTE_STAYED_ON` ("Vector Remote stayed on. You can turn it off in Settings → Remote."). Remote is not turned off automatically: the consent text says taking jobs turns Remote on, so the person agreed to Remote as part of it.
+  - **(b2) The server is ServerSync's, not `useServer().current`** (critique, major, taken). A draft's or a session's Settings mounts under `ServerSDKProvider`/`ServerSyncProvider server={conn}` (app.tsx:128-129, :183-184), so the page and `useEverywhereTab` take the connection from `useServerSDK()().server`, the one `global.ensureServerCtx(conn)` gives ServerSync too, for the built-in check, for `sessionHref`'s key and inside `save`. The page checks desktop and built-in again itself (`ours`), since a hidden tab can still be mounted through `section`. Vector Local's status is read from that client too (`client.local.get`, refreshed on `local.updated`), not with `useLocalStatus`, which reads `useServer().current`.
+- **(c) The gate reads the built-in engine's own block.** `everywhereTab`: desktop only; shown when offered (on another server the page asks for this computer's own engine and writes nothing); unlisted, shown only while ServerSync's server is built in and its block says `enabled: true` (`written`, lock and decoding aside), so a company lock still shows the tab with its note. Another server's block never counts. While CODIUM_LISTED_PERKS is unset and `LAPTOP_ROUTE_WIRED` is false nobody is offered it.
+- **(d) Offered means `listed` includes `everywhere` and `remoteOffered`.** The perk has no entitlement field (EV-08), and an account with no plan still sees it listed, so Remote's entitlement is the plan check.
+- **(e) The model cannot go back to "Your default model" once one is saved.** PATCH /global/config deep-merges and JSON cannot carry `undefined` (engine config.ts `updateGlobal` :2747); subagent-limits.ts has the same limit. "Your default model" is offered only while none is saved.
+- **(f) The person types the repository.** No route reads a folder's remote without IPC, and the runner's mapping check refuses a mismatch (EV-17 (h)). The directory is kept as the picker spells it (EV-10 (d)); `addProject` checks the whole next list with `ConfigEverywhereV1.Info`.
+- **(g) The job list is one page of the 200 newest root sessions** (`experimental.session.list({roots: true, limit: 200})`, owner-wide), filtered on the client to `vector.unattended` marks with `by: "everywhere"`, a `vej_` id and a known platform, newest first, at most 20. The branch name is not shown.
+- **(h) The vectordev.ai jobs link shows only while the perk is offered** (website rule). It also needs /everywhere to leave packages/web/src/drafts/ (VE-42, owner at 2.0.0); listing before that would link a missing page (Left open). *Review round four (non-blocking):* the hard precondition stays in the spec's §10 "Codium listing" note, named there as one of the four things that must hold before listing. The optional second gate was not taken. That gate is a constant that the 2.0.0 move flips. It would guard only one of several references to the same page: the platform replies (everywhere-policy.ts `EVERYWHERE_PAGE`, in "not-linked", "not-connected" and `renderHelp`) send people there too. It would also add one more step to the owner's 2.0.0 list, and a missed flip would hide the link with no test noticing. The listing precondition covers every reference at once.
+- **(i) A job-only link that reads `online` is explained on this page only** ("Connected for jobs. No phone is paired, and none is needed for jobs."). The Remote page is Codium's (§6.4).
+- **(j) Saves do not ask first while work runs, and none is dropped** (critique, minor, taken: the disable option). Every control is disabled while a save or the Remote consent runs, and `save` refuses a second call meanwhile, so a quick second change cannot be lost. Saves happen only on explicit actions. *Review round one:* `save` also checks the page's own rules itself (`writeRefusal`, see (n)), so the disabled state is not the only guard.
+- **(k) No background-mode residency offer** (R-M4).
+- **(l) The dialog hunk is 10 lines, not 3**: following the remote gating needs the signal and the two readVoting lines. config-skew.test.ts is a shared file outside §6.5 (a). *Ruling on (a):* config-skew.test.ts is not changed.
+- **(m) Loading, failed and locked are three states** (critique, major, taken). `undefined` is `loading`, `globalConfigFailed()` is `failed`, and only a loaded answer is read for locks (no `locked` list, or one with `everywhere`, is locked, as everywhere-settings.ts `unlocked` reads it). Nothing is written until the config has loaded, because updateConfig's onSuccess keeps `locked: previous?.locked ?? []` (server-sync.tsx:503-505) and a save before the first load would cache the block as unlocked.
+- **(n) An unlisted computer can only wind down** (critique, major, taken). `turnOn` takes `offered` and answers `not-offered` with no consent and no write; `editable` is false while not offered, so caps, model, toggles and adding folders are disabled; turning off and Remove stay (`writeBlock` only). Turning Remote back on is therefore never offered to an account whose plan no longer lists the perk. *Review round one (non-blocking, taken):* `save` enforces this and (m) itself through `writeRefusal(view, offered, change)`. It refuses every write while `writeBlock` answers. While not offered it accepts only `{enabled: false}`, or a `projects` list made only of listed folders, each once and with its listed repository (`windsDown`). Anything else gets `not-offered` and the page shows NOT_OFFERED.
+- **(o) Continue in a new session on this branch is kept** (critique, major: its second option). It creates an ordinary owner session in the job's checkout (`<data>/everywhere-worktree/<project id>/<jid>`), on the job's branch. The page says the folder holds files and settings files the job wrote and that Vector keeps it untrusted, so its settings, formatters and language servers stay off unless the person trusts it (`CONTINUE_NOTE`; EV-18 (e)). *Review round one (non-blocking, taken):* trust does not cover instruction files. Instruction.systemPaths (engine session/instruction.ts :277-297) adds the workspace's AGENTS.md or CLAUDE.md whether or not the folder is trusted; PromptTrust holds only files outside the workspace. So `CONTINUE_NOTE` now says the new session "still reads its AGENTS.md and other instruction files from its first message", and asks the person to read what changed before they continue. The hardening of `Worktree.remove` and `Worktree.reset` for that folder (EV-12 Left open, EV-18 Left open) is now a precondition for listing the perk, not for this page; until then the tab is hidden for everyone. The unbuilt 7-day sweep must not delete a checkout that has a session other than the job's own, or one updated in the last seven days, or it would remove a folder from under a continued session (Left open). *Corrected in review round one:* the build said "Continue adds no new kind of load". That is wrong. Opening the job's own session loads the folder's instance, but that session keeps the job's limits. The continued session is the first owner-privileged load of instruction files a job wrote from platform text, with network and the owner's permissions, on its first prompt. That is the E1 line. The page says it; holding in-workspace instruction files for a session continued from a `vector.unattended` folder until the folder is trusted is not built (Left open). Continuing a job that is still running is (ad). *Review round four (non-blocking, recorded, not built):* nothing in code enforces the listing precondition. The tab is hidden for everyone, so this is not reachable today. The reviewer's preferred fix is an engine-side hold: a session created in a folder whose root session carries `vector.unattended` gets no in-workspace instruction files (engine session/instruction.ts `systemPaths`) until the folder is trusted. Its test is an engine case showing that a continued session's system prompt leaves out a job-written AGENTS.md. The alternative is a session metadata mark that the page passes and the engine honours, with the same test. Both are engine changes outside this package's files, so both are a package for the lead to brief. The spec's §10 note now names the hold as the recommended answer to that precondition.
+- **(p) The own-session limits are the engine's, each traced** (critique, major, taken). `OWN_SESSION_LIMITS` names only:
+  - commands run only offline and inside the job's folder: engine session/unattended-shell.ts :12-27 (the marks are fixed at creation, `FIXED`);
+  - the job's permission rules stay: the session's `permission` is set at creation (desktop everywhere-engine.ts :164);
+  - it hears how you work but nothing personal: engine session/prompt.ts `audienceOf` :163-177 (`outward` for any `vector.unattended`);
+  - free models that may train stay refused: the job's prompt is sent as a guest (everywhere-engine.ts :172), which marks the whole tree (engine middleware/workspace-routing.ts :537-548, core free-model-guests.ts :13-19);
+  - subagents cannot run in task isolation: engine task/isolation.ts :1018-1019 ("Isolation requires an owner conversation without guest input."), through the same guest mark. Kept: the critique asked to drop it unless code enforces it, and this does.
+- **(q) The jobs line does not claim to be the runner's reading** (critique, minor, taken: the reword option). *Review round two (non-blocking, taken; the text below is superseded where it differs):* on Linux without a bubblewrap that starts, the engine's probe does not answer `offline-v1`, so jobs edit but run no commands, and the page said nothing. The page now reads that probe itself: `client.shell.unattended.policy()`, GET /experimental/shell/unattended, an owner-only route with no instance routing, so it loads no folder. It is the answer the wiring reads; the engine runs bubblewrap's self-test at most once per process and binary. `checksLine` takes the answer: a company lock on a rule key, then macOS or Windows, then nothing for `offline-v1`, a line naming bubblewrap for `none`, and, while the answer is missing or unreadable, "Jobs here run commands only in their offline sandbox, which needs bubblewrap (the bwrap command). Where it does not start, they edit files but run no commands." No IPC was needed. The view's `enabled` says "on as far as this block decides", and the runner also needs the user's permission blocks to decode (everywhere-settings.ts :56); mirroring that decode would copy `userRules`. `checksLine` says jobs edit files but run no commands under a company lock on any of `permission`, `tools`, `agent`, `mode`, `default_agent` (a copy of wiring `RULE_KEYS`, EV-18 (i)) and on macOS and Windows (no offline sandbox there, EV-16).
+- **(r) The closed-lid text states the real wait** (critique, minor, taken): a closed lid sleeps the computer even with stay-awake on; a job waits only with Wait for my computer on, for at most about two hours (ten minutes for Jira; spec §3.4 row 7, E4). *Review round four:* it is rendered again, as the note beside the stay-awake row under How jobs run (ai).
+- **(s) The push toggle says what it allows** (critique, minor, taken): "Allow pushing the branch and opening a draft pull request", for a private repository only. The push path is still the EV-17 (m) stand-ins (`privateRepository` false, `openPr` nothing), so today every branch stays on the computer whatever the toggle says; it takes effect when the push path is built (EV-17 Left open). *Review round four:* the setting is shown read-only under How jobs run as "Push the branch and open a draft pull request", On or Off, with `PUSH_RULE` beside it. The row shows the setting as saved, not what a job does today: the push path is still everywhere-wiring.ts's stand-ins (`privateRepository: async () => false`, `openPr` returns nothing, :331-332), so every branch still stays on the computer. The page does not add a line for that. It would be copy about an unbuilt path, and the tab is hidden until the perk is listed.
+- **(t) The model list leaves out free models that may train or that Vector has not reviewed** (critique, minor, taken: filter). `freeModelMayTrain` from core free-model-choice; the engine refuses them for a job's guest-marked tree. Providers go through `providerUsable`. A saved model is always kept.
+- **(u) `turnOff` reports `invalid`** rather than merging `enabled: false` into a block the engine cannot load (critique, minor, taken); the runner already reads an invalid block as off. Both places say the same.
+- **(v) `useEverywhereTab` runs at the top of SettingsWorkspace** (critique, minor: checked; *corrected in review round one*, blocking). Every DialogSettings mount runs under ServerSync: budget-stop.tsx (session timeline), status-pill.tsx (prompt-input.tsx and layout-new.tsx), workflow-chip.tsx (session-side-panel.tsx), home.tsx (NewHome under NewAppLayout's SelectedServerProviders), layout-new.tsx (the same), layout.tsx (LegacyServerLayout) and settings-general.tsx (inside the legacy dialog that layout.tsx opens); drafts and target sessions have their own providers (app.tsx). The build said SettingsWorkspace is mounted nowhere else. That was wrong: packages/app/e2e/fixtures/account-settings.jsx (:336) mounts `<SettingsWorkspace section="account" />` under only PlatformProvider and DialogProvider, for e2e/regression/account-settings.spec.ts, which test.yml runs (`bun --cwd packages/app test:e2e`). `useServerSDK()` and `useServerSync()` throw outside a provider, so the hook broke every case there. The hook now reads both through `useOptionalServerSDK()` and `useOptionalServerSync()` (above), and `everywhereTab` takes `server`, false when either is missing, so the tab stays hidden there and the page, which still needs both, is never mounted. The account panel and SettingsWorkspace read no other server context.
+- **(w) Smaller points** (critique, taken): the test copies remote-model.test.ts's fixture shapes instead of importing that file; Open and Continue close the dialog with `if (dialog.active) dialog.close()` (memory.tsx pattern); the repository copy says a job runs only while the folder is open in Vector and trusted (EV-18 (l)); `pickedFolder` and `continueTitle` are not separate helpers (the folder pick is inlined, the title is a field of `EverywhereJob`); `jobsPage` stays as a tested helper for the website rule.
+- **(y) Each listed folder's trust is shown, and trust is offered, without loading anything** (review round one, blocking, taken). EV-13 (c) says this page must show trust for a listed folder and offer the existing approval: the create route requires `trusted === true`, and ProjectTrustPrompt never asks about a folder without settings of its own. Reading trust (`config.trust.get` with the folder as directory) goes through InstanceContextMiddleware, which loads the instance. So the page reads it only for a folder that is open in Vector on this server (`useServer().projects.forServer(key).list()`, compared by exact `worktree`); the app already keeps those loaded. A folder that is not open is never read, and the page says "Not open in Vector. Its jobs wait until you open it and trust it." (the runner holds such a job anyway, EV-18 (l)). For an open folder the page says "Trusted.", "Checking whether you trust it…", that it could not be read, or "Not trusted, so its jobs wait until you trust it.". Where Settings → Repository trust would offer the approval (`projectTrustSummary(...).canTrust`), including a folder without settings, the page shows that page's description and a "Trust this repository" button. The button calls `useProjectTrust().approve(client, scope)`, the same action. `folderTrustLine` (model) decides the text; the resource re-reads on `trust.version()`, the listed folders and the open list (round three: the folders, not the whole config, (ag)). A folder spelled differently from its open `worktree` (case, a trailing separator) reads as not open: no read, no load. That fails closed, and Settings → Repository trust still shows it once the folder is open. *Review round two (non-blocking, taken):* on Windows the picker's spelling (`C:\work\repo`) and the engine's `worktree` (often `C:/work/repo`) differ in separators, so the exact compare made "Not open in Vector" the usual case there. `openWorktree` (model) now compares with the app's own project-path key (`pathKey`, utils/path-key.ts, which layout and server.tsx use for project paths: Windows separators as `/`, no trailing separator), and the trust read uses the open project's own spelling, so it reaches the instance that is already loaded. Case is still kept: `pathKey` does not fold it, so `C:\Work` against `c:\work`, a drive letter included, still reads as not open (fails closed; Left open). The runner resolves canonical paths and is not affected.
+- **(z) Remote's state is `loading` until the desktop answers** (review round one, non-blocking, taken; see (ak) for the order of answers). `remote.status()` answers after mount. Until it does, `turnOn` decided `consent` for a computer whose Remote was on, and the jobs line said Remote was off. `RemoteState` adds `loading`: `turnOn` answers `not-loaded` (no consent) and `jobsLine` says "Reading Vector Remote on this computer…". The switch stays disabled for turning on until the state is read; turning off never waits for it. A failed status read leaves the state undefined (read as off), unless a change event already set it.
+- **(aa) An empty or unreadable limit writes nothing** (review round one, non-blocking, taken). `capChange` returns undefined for an empty or non-finite value instead of the default, so clearing a saved 30 no longer saves 45. The field shows the saved value again. After a save that did not go through, the field is reset to the saved value too, since the reactive `value` did not change.
+- **(ab) The description says jobs are off by default** (review round one, non-blocking, taken). The build's "Everything here is off until you turn it on" was false: `wait_for_computer` and `push` default to on. It now reads "Jobs are off until you turn them on."
+- **(ac) The consent is checked again before Remote is turned on** (review round two, non-blocking, taken). The consent panel stayed open after `turnOn` answered `consent`; if the plan was read again and no longer offered the perk, or the block became locked or invalid, the click still turned Remote on and only then refused the write (REMOTE_STAYED_ON). `acceptConsent` now returns first, closing the panel and saying why (`BLOCKED`), unless `writeRefusal(view(), props.offered, {enabled: true})` is undefined, and the panel renders only while that holds. The model case is "an open consent is accepted only while turning jobs on could still be written".
+- **(ad) Continue is for a finished job** (review round two, non-blocking, taken: both options, in part). Continuing a running job starts an owner session, with network and the owner's permissions, in the checkout the unattended session is still writing to: the job's later commit or push can pick up the owner session's edits, and the owner session reads files the job writes mid-run. The page cannot read a job's status from the engine without loading its folder: `session.status` is instance-scoped, and GlobalSession carries none. So it uses what the app already has: ServerSync's session store, which takes `session.status` events from every folder on this server's event stream (`session.data.session_working`). While that says working, the button is disabled, `JOB_RUNNING` ("Still running. You can continue it in a new session once it has finished.") shows in its place, and `continueJob` refuses too. `CONTINUE_NOTE` now opens with "Continue a job in a new session only once it has finished". A job whose status this window has not heard since it opened, for example after a reload while the job runs, reads as finished (Left open).
+- **(ae) The hand copies are tied to their sources by tests** (review round two, non-blocking, taken: the test option). Moving the values into packages/schema would also change desktop everywhere-wiring.ts and everywhere-settings.ts and core v1/config/everywhere.ts, three files outside this brief. So the model test ties each copy to a source it can reach:
+  - `RULE_KEYS` (now exported) equals the list read from desktop everywhere-wiring.ts's source, since the app may not import desktop main.
+  - The folder cap: `ConfigEverywhereV1.Info` decodes 64 folders and refuses 65, and the page adds a 64th.
+  - Each limit's range: its `min` and `max` decode, and one step below `min` or above `max` does not.
+  The desktop's own `MAX_PROJECTS` (everywhere-settings.ts :40) is the runner's, not the page's, and stays as it is. One shared constant in packages/schema is the cleaner follow-up (Left open). *Review round four:* the folder cap and the limits' ranges belonged to the write helpers and went with them (aj). Only the `RULE_KEYS` tie stays, because `everywhereView` reads `rulesLocked` from it.
+- **(af) Style** (review round two, nit, taken): `capValue` takes `EverywhereView` and `CapKey`. The plain-copy test also covers `PAGE_DESCRIPTION` (moved into the model from the page), `CONSENT`, `NOT_OFFERED`, `JOB_RUNNING` and both new checks lines. *Review round four:* `capValue` went with the ruling's patch, and `CONSENT` and `NOT_OFFERED` with (aj). The plain-copy case now covers `HOW_JOBS_RUN` and every row of How jobs run in their place.
+- **(ag) Trust is read again only when the folder list changes** (review round three, non-blocking, taken). The trust resource's source read `view().projects`. `view()` is a new object after every save: updateConfig's onSuccess sets the query data, then the refetch lands. So changing a limit sent one `config.trust.get` for every listed folder open in Vector, usually twice. The source now reads `folders` (everywhere.tsx :173), a memo of `view().projects` that stays equal while the same directories are listed in the same order. Trust is per folder, so a changed repository beside an unchanged folder needs no new read. `trust.version()` and the open list still trigger one. No app test renders the page, so this is covered by the typecheck only.
+- **(ah) `offered`, not `listed`** (review round three, non-blocking, taken). `everywhereTab`'s input field and `useEverywhereTab`'s parameter receive `everywhereOffered()`: the perk listed and Remote in the plan, not the raw `status.listed` check that (d) says is not enough. Both are now `offered`, matching the page's prop and the dialog's `offersEverywhere`. `jobsPage`'s parameter is renamed too, since it also receives `props.offered`. The tests' object literals and three case titles follow; behaviour is unchanged (H1 below).
+- **(ai) "How jobs run" shows the settings read-only** (review round four, blocking, taken). `howJobsRun(view)` (model :195) returns eight rows, in this order:
+  - "US dollars per job", with `maxUsd` in cents (`toFixed(2)`);
+  - "Minutes per job", "Jobs at once" and "Jobs a day";
+  - "Model", or "Your default model" when none is saved;
+  - "Wait for my computer", On or Off;
+  - "Push the branch and open a draft pull request", On or Off, with `PUSH_RULE`;
+  - "Stay awake to take jobs while plugged in", On or Off, with `CLOSED_LID`.
+
+  It returns undefined until the settings are read, and also while a company lock or a block that does not decode keeps jobs off, so the page never shows defaults in place of a block it could not use. The jobs line already says which of those applies, and the card is then not rendered. Above the rows, `HOW_JOBS_RUN` says "From this computer's settings file. A job stops at its own limit for dollars or minutes when that is lower." That matches the runner, which takes the lower of the two (everywhere-runner.ts :267 and :359); jobs at once and a day count this computer's jobs. The card has no control and no `updateConfig`. The labels are the removed controls' own words, so the write path can reuse them. The brief's "caps clamped" test now reads as follows: a limit at the runner's cap shows as saved; one step past it, or a 0, makes the block invalid and off, and nothing is shown. The runner's own clamp is tested in the desktop runner tests.
+- **(aj) The unused write helpers are removed** (review round four, non-blocking, given twice: the preferred option). After the ruling, about 130 lines of exports had no production caller: `writeBlock`, `editable`, `writeRefusal` with `windsDown`, `turnOn`, `turnOff`, `capChange`, `addProject`, `removeProject`, `modelChoices` and `modelChange`, the `WriteBlock`, `TurnOn` and `CapKey` types, `CAPS`, `DEFAULTS` and `MAX_PROJECTS`, and the copy `CONSENT`, `NOT_OFFERED` and `REMOTE_STAYED_ON`. They went against AGENTS.md (no preemptive helpers), and their rules describe a user/global config write that the lead refused. `NOT_OFFERED`'s "You can still turn it off" was false for this build. The later write path moves to other storage, so these rules may not fit it, and it is rebuilt against that storage.
+  - `everywhereView` now reads `ConfigEverywhereV1.Defaults` directly. The four limits' defaults were the only thing `DEFAULTS` held.
+  - 19 cases went with the helpers. They are four of the five folder cases (adding, the refusals, the folder cap and removing), the four limit cases, the five turning-on cases, three of the four turning-off cases and the three model cases. The remaining turning-off case now reads a settings file that says `enabled: false`. The remote-loading line moved into "about jobs on this computer". Four "how jobs run" cases are new, so 47 − 19 + 4 = 32. Each mutation that targeted a removed helper no longer applies (Mutations).
+  - A reference copy is kept: /tmp/vector-v2/everywhere/ev21-fix4/write-helpers.patch (sha256 `1abc0f78…`). `git apply` on this round's tree puts back the model and its test as they were before this round, and `git apply --check` passes. The pre-round files are beside it in before/ (before.sha256). Scratch can be cleared. Nothing is committed yet, so no commit range holds them, and the write-path package rebuilds its rules from (b) to (ac) above if the patch is gone.
+- **(ak) Remote's first status answer never replaces a newer change event** (review round four, non-blocking, taken). `onMount` subscribed to `remote.onChange` and also set the result of `remote.status()` when it arrived. A change event that came first was then overwritten by the older answer, so the jobs line could say Remote is off when it is on, or the reverse. The answer is now used only while the state is still `loading` (everywhere.tsx :92-101), as the failure path already did. No app test renders the page, so this is covered by the typecheck only.
+- **(l2) Three shared files outside the brief** (review round one): ui context/helper.tsx gains `useOptional` (4 lines), and server-sdk.tsx and server-sync.tsx add it to their export destructuring. This is the smallest way to read the two contexts without throwing; the reviewer's other option (compute "already on" in a child under ServerSync) cannot tell from SettingsWorkspace whether a provider exists. `git diff HEAD...origin/<lane>` over the three files is empty for every lane (Coordination). *Review round two (non-blocking, taken: kept as built):* the change is additive, but it widens the shared UI context API for every package. The commit body and the PR description name the three files as shared-surface changes, and `git diff HEAD...origin/<lane>` over them is run again just before the push, since the connect and codium lanes import `createSimpleContext` widely. *Review round four (non-blocking, given twice, kept as built):* the commit body and the PR description list all three files under "Shared-surface changes", and the push gate re-runs the diff (Coordination has this round's run).
+- **(x) Search keywords** leave out words the registry tests pin exact results for (queue, github, actions, at once, budget, rules, sources, reports, update, memory, shell, terminal, push, project, trust, backup, restore) and "chat", the old Chat page's word. *Ruling on (a):* "wait for my computer", "stay awake", "plugged in" and "draft pull request" went with their controls.
+
+### Not changed
+
+- packages/desktop/src/main/config-skew.test.ts is at HEAD (Ruling on (a)).
+- No IPC, preload, platform or desktop source; parts/page.tsx, remote-model.ts and remote.tsx (Codium's), project-trust.tsx and context/project-trust.tsx are untouched. The shared context files changed only by the `useOptional` export (l2).
+- No flag, env var, route, config key, generated file, SDK, dependency, lockfile or workflow. `LAPTOP_ROUTE_WIRED` and `OFFER_KEYS` are unchanged.
+
+### Safe by default
+
+Line numbers and wording are after the ruling on (a).
+
+- **Where the tab shows:**
+  - It never shows on the web.
+  - Nobody is offered it while CODIUM_LISTED_PERKS is unset and readiness is false.
+  - Not offered, it is hidden on any server but the built-in one, and only a computer whose own block already says on sees it there.
+  - While offered, it shows on any desktop server, but the page reads only the built-in engine (the page's `ours` check).
+- **The page writes no config.** There is no `updateConfig` call and no PATCH /global/config. It never turns Remote on or off, and it adds or removes no folder. config-skew.test.ts is unchanged and passes. How jobs run is plain text with no control (ai), and the model has no write helper (aj).
+- **Off by default.** Everything is off by default, and nothing is listed by default.
+- **The page's only two actions** are ones the app already has:
+  - the trust approval for an open folder, the same as Settings → Repository trust;
+  - "Continue in a new session on this branch", which creates an ordinary session (o, ad).
+- **No trust read loads a folder.** Only folders already open in Vector are read (y).
+
+### Left open
+
+- The write path (Ruling on (a), deferred). The page writes nothing until there is skew-safe storage outside user/global config: the desktop store, as Hands keeps its per-user state. That storage moves the runner's, the engine's and this page's reading of the setting together. Everywhere stays off by default meanwhile, and a computer whose block says on is turned off in its settings file. *Review round four:* the model's write rules were removed; they are rebuilt against the new storage, with (aj)'s patch as a reference.
+- The continued session loads job-written instruction files (AGENTS.md, CLAUDE.md) with the owner's permissions and network from its first prompt (o). Optional hardening: hold in-workspace instruction files for a session continued from a `vector.unattended` folder until it is trusted. Not built; decide before listing the perk. *Review round four:* the reviewer recommends that engine-side hold, with an engine test that a continued session's system prompt omits a job-written AGENTS.md. Nothing in code enforces the precondition, so it stays an owner or lead gate before `CODIUM_LISTED_PERKS` lists `everywhere` (spec §10).
+- Trust for a listed folder that is not open is not shown (y). The page says jobs wait until it is open and trusted. Settings → Repository trust shows it once it is open. A folder listed with a different case from its open project, a Windows drive letter included, also reads as not open (y, round two).
+- Continue while a job runs (ad): a job whose session status this window never heard reads as finished, so Continue is offered. A global status read that loads no folder, or a settle mark in the job's session metadata, would close it. Next to (o).
+- One shared definition of `RULE_KEYS` in packages/schema, imported by the app, the desktop and core, in place of the tested copy (ae). The app's copy of the 64-folder cap went with the write helpers (aj).
+- Before listing the perk: harden or refuse `Worktree.remove` and `Worktree.reset` for `<data>/everywhere-worktree/**`, and the 7-day sweep, which must skip a checkout with another session or recent activity (o).
+- The wiring's `refresh()` has no caller; its doc comment still names the settings page (b). index.ts's comment above `startRemote` (EV-17 Left open) is still stale. Both for the final docs sweep.
+- The Remote page's job-only wording (Codium); the push path, the GitHub labels and the `localAllows` `remote` decision (EV-17 Left open); R-M4.
+- The vectordev.ai jobs link waits for /everywhere to leave drafts (h).
+
+### Mutations
+
+Twenty-three, one source change at a time (two for M12b), the named test file run alone, each restore checked by sha256 (/tmp/vector-v2/everywhere/ev21-mut/: mutate.py, one log per mutation, run.txt, before.sha256). All red:
+
+| Mutation | Test file | Result |
+| --- | --- | --- |
+| M1 the gate ignores `desktop` | everywhere-model | 34 pass, 1 fail |
+| M2 the gate ignores `written` | everywhere-model | 33 pass, 2 fail |
+| M3 the gate ignores `builtin` | everywhere-model | 34 pass, 1 fail |
+| M4 `everywhereOffered` without `remoteOffered` | everywhere-model | 34 pass, 1 fail |
+| M5 `enabled` ignores the lock | everywhere-model | 34 pass, 1 fail |
+| M6 the clamp removed | everywhere-model | 32 pass, 3 fail |
+| M7 `turnOn` ignores Remote | everywhere-model | 34 pass, 1 fail |
+| M8 `turnOff` adds a key | everywhere-model | 34 pass, 1 fail |
+| M9 the jobs filter ignores `by` | everywhere-model | 34 pass, 1 fail |
+| M10 `addProject` allows a repeated folder | everywhere-model | 34 pass, 1 fail |
+| M11 the registry entry removed | settings-registry | 20 pass, 1 fail |
+| M11b the same, the model test | everywhere-model | 34 pass, 1 fail |
+| M12 a second app file writes `everywhere` | config-skew | 2 pass, 1 fail |
+| M12b the exception widened to any file, plus that second writer | config-skew | 2 pass, 1 fail |
+| M13 the page writes a second key | config-skew | 2 pass, 1 fail |
+| M14 `turnOn` ignores the plan | everywhere-model | 34 pass, 1 fail |
+| M15 the page's built-in guard removed | config-skew | 2 pass, 1 fail |
+| M16 loading reads as locked | everywhere-model | 34 pass, 1 fail |
+| M17 free models that may train offered | everywhere-model | 33 pass, 2 fail |
+| M18 the jobs list uncapped | everywhere-model | 34 pass, 1 fail |
+| M19 the jobs page always linked | everywhere-model | 34 pass, 1 fail |
+| M20 a saved model dropped from the choices | everywhere-model | 34 pass, 1 fail |
+| M21 the untrusted-folder note dropped | everywhere-model | 34 pass, 1 fail |
+
+The plan's M12 (the exception widened alone) is an equivalent change while only the page writes the key, so it became M12 and M12b. The dialog's gate and mount lines have no test (no app test renders SettingsWorkspace); they are covered by the typecheck only.
+
+*Review round one* (/tmp/vector-v2/everywhere/ev21-fix/: mutate.py, mut/ with one log per mutation, run.txt and before.sha256). Thirteen new mutations, one source change each (two for F12b), every restore matched by sha256. All are red except F12b, which is meant to survive:
+
+| Mutation | Test file | Result |
+| --- | --- | --- |
+| F1 the tab ignores a missing server | everywhere-model | 40 pass, 1 fail |
+| F2 `turnOn` decides while Remote loads | everywhere-model | 40 pass, 1 fail |
+| F3 the jobs line reads loading as off | everywhere-model | 40 pass, 1 fail |
+| F4 an unreadable limit writes the default | everywhere-model | 38 pass, 3 fail |
+| F5 the write ignores `writeBlock` | everywhere-model | 40 pass, 1 fail |
+| F6 an unlisted computer may write anything | everywhere-model | 40 pass, 1 fail |
+| F7 a wind-down list may repeat a folder | everywhere-model | 40 pass, 1 fail |
+| F8 a wind-down list may change a repository | everywhere-model | 40 pass, 1 fail |
+| F9 no trust offered for a folder without settings | everywhere-model | 40 pass, 1 fail |
+| F10 a folder that is not open reads as fine | everywhere-model | 40 pass, 1 fail |
+| F11 Continue copy drops the instruction files | everywhere-model | 40 pass, 1 fail |
+| F12 the page's guard joined with `&&` in place of `||` | config-skew | 2 pass, 1 fail |
+| F12b the same, against the round-one config-skew case | config-skew | 3 pass, 0 fail (survives: why the case changed) |
+| F13 the tab ignores `desktop` (M1, re-anchored to the new line) | everywhere-model | 40 pass, 1 fail |
+
+M2 to M21 were re-run on the fixed files with the round-one script (copy at ev21-fix/mutate-again.py, logs in ev21-fix/mut-again/). All are still red, every restore matched, and M1's old anchor is gone (F13 replaces it). The page's other round-one changes have no app renderer test and are covered by the typecheck only: the optional contexts, the `writeRefusal` call in `save`, the cap field reset, the Remote-stayed-on note and the trust reads limited to open folders.
+
+*Review round two* (/tmp/vector-v2/everywhere/ev21-fix2/: mutate.py, mut/ with one log per mutation, run.txt and before.sha256). Ten new mutations, one source change each, against everywhere-model.test.ts run alone; every restore matched by sha256. All red:
+
+| Mutation | Result |
+| --- | --- |
+| G1 Linux with no probe answer says nothing | 45 pass, 2 fail |
+| G2 a probe that answers `none` reads as fine | 45 pass, 2 fail |
+| G3 folders compared by raw spelling | 46 pass, 1 fail |
+| G4 the page's folder cap one below the engine's | 46 pass, 1 fail |
+| G5 a rule key dropped from the copy | 46 pass, 1 fail |
+| G6 the minutes minimum below the engine's | 44 pass, 3 fail |
+| G7 the dollars minimum above the engine's | 45 pass, 2 fail |
+| G8 Continue copy drops the finished-job rule | 46 pass, 1 fail |
+| G9 NOT_OFFERED says "projects" | 46 pass, 1 fail |
+| G10 CONSENT names a token | 46 pass, 1 fail |
+
+The page's round-two changes have no app renderer test and are covered by the typecheck only: the consent re-check and the panel's condition (ac), Continue's disabled state and refusal (ad), the probe resource (q) and the trust read through `openWorktree` (y). config-skew.test.ts still finds exactly one `updateConfig` call, behind the guard (3 pass).
+
+*Review round three* (/tmp/vector-v2/everywhere/ev21-fix3/: H1.log, before.sha256). One new mutation against everywhere-model.test.ts run alone, restored and matched by sha256. Red:
+
+| Mutation | Result |
+| --- | --- |
+| H1 the tab ignores `offered` (`if (input.offered) return true` made `if (false)`) | 46 pass, 1 fail ("is hidden without the perk and shown when the plan offers it") |
+
+The trust memo (ag) has no app renderer test and is covered by the typecheck only.
+
+*Ruling on (a)* (/tmp/vector-v2/everywhere/ev21-no/: mutate.py, mut/ with one log per mutation). Two new mutations against everywhere-model.test.ts run alone, each restored and matched by sha256. Both red:
+
+| Mutation | Result |
+| --- | --- |
+| N1 `PAGE_DESCRIPTION` back to "Jobs are off until you turn them on." | 46 pass, 1 fail ("copy is plain: no price, token, claim or the word project") |
+| N2 `REPOSITORY_RULE` back to "Nothing is listed until you add it." | 46 pass, 1 fail (the same case) |
+
+M12, M12b, M13, M15, F12 and F12b tested the config-skew exception, which the ruling removed. They no longer apply. Every other mutation targets the model, which the ruling changed only in two texts and some comments.
+
+*Review round four* (/tmp/vector-v2/everywhere/ev21-fix4/: mutate.py, mut/ with one log per mutation, model.before-mut.sha256). There are seven new mutations against everywhere-model.test.ts run alone, one source change each. Every restore matched by sha256, and all are red:
+
+| Mutation | Result |
+| --- | --- |
+| K1 How jobs run ignores a company lock | 30 pass, 2 fail |
+| K2 How jobs run ignores a block that does not decode | 30 pass, 2 fail |
+| K3 the push row reads `stayAwake` | 30 pass, 2 fail |
+| K4 the model row always says "Your default model" | 31 pass, 1 fail |
+| K5 dollars shown without cents | 29 pass, 3 fail |
+| K6 the closed-lid note dropped from the stay-awake row | 30 pass, 2 fail |
+| K7 Wait for my computer always On | 31 pass, 1 fail |
+
+Some earlier mutations targeted helpers that this round removed (aj), and those no longer apply: M6, M7, M8, M10, M14, M17, M20, F2, F4 to F8, G4, G6, G7, G9 and G10. The rest still target code that exists. The Remote order fix (ak) has no app renderer test and is covered by the typecheck only.
+
+### Coordination
+
+- `git diff HEAD...origin/<lane>` over the seven files is empty for main `6a771354`, connect-finish `19c48b89`, hands-finish `8139e5fc`, codium-finish `58663f5b`, scope-finish `defd141b`, workspaces-finish `e37ec1b5`, review-fixes `1433d105`, brain-transport `0d18f750` and native-qualify `2677c32c` (2026-11-20), so the merged tree's registry total is 21. Re-check before the push.
+- connect-finish may edit the same registry: the hunks are one union line and one entry after `local`.
+- *Review round one* (2026-11-20, after `git fetch origin`): `git diff HEAD...origin/<lane>` over ui context/helper.tsx, app context/server-sdk.tsx and server-sync.tsx, the whole settings-v2 folder and config-skew.test.ts is empty for release-finish `67ec3a60`, everywhere-finish `6a74ac3b`, connect-finish, hands-finish, scope-finish, workspaces-finish, review-fixes, brain-transport and native-qualify. For main `6a771354` and codium-finish `58663f5b` it touches only memory-backup.tsx, memory-backup-model.ts and their tests, none of this package's files.
+- config-skew.test.ts is run by test.yml's desktop job (test.yml :625), not by a lane workflow.
+- *Review round two* (2026-11-20, after `git fetch origin` of every lane): no lane tip moved since round one (release-finish `67ec3a60`, main `6a771354`, connect-finish `19c48b89`, hands-finish `8139e5fc`, codium-finish `58663f5b`, scope-finish `defd141b`, workspaces-finish `e37ec1b5`, review-fixes `1433d105`, brain-transport `0d18f750`, native-qualify `2677c32c`). `git diff HEAD...origin/<lane>` over the three shared context files, the settings-v2 folder, config-skew.test.ts, utils/path-key.ts and desktop everywhere-wiring.ts (which the new tie test reads) touches only memory-backup.tsx, memory-backup-model.ts and their tests, for main and codium-finish. Run it again just before the push (l2).
+- *Review round three* (2026-11-20, after `git fetch origin`): no lane tip moved since round two, and the same diff over the same files again touches only main's and codium-finish's memory-backup files.
+- *Review round four* (2026-11-20, after `git fetch origin`): no lane tip moved since the ruling (release-finish `67ec3a60`, main `6a771354`, everywhere-finish `6a74ac3b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, codium-finish `58663f5b`, scope-finish `defd141b`, workspaces-finish `e37ec1b5`, review-fixes `1433d105`, brain-transport `0d18f750`, native-qualify `2677c32c`). `git diff HEAD...origin/<lane>` over the three shared context files, the settings-v2 folder, config-skew.test.ts, utils/path-key.ts and desktop everywhere-wiring.ts again touches only main's and codium-finish's memory-backup files. The registry total is still 21. Re-run it at the push gate (l2).
+- *Ruling on (a)* (2026-11-20, after `git fetch origin` of release-finish, main, everywhere-finish and the eight other lanes): no lane tip moved since round three. HEAD `6a74ac3b` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`. The same diff again touches only main's and codium-finish's memory-backup files, so the merged registry total is still 21.
+
+### Deferred verification
+
+- The page under Electron (the rules forbid starting the app). *Ruling on (a):* the Remote consent over IPC and an engine write reaching the wiring no longer apply to this page, because it writes nothing.
+- e2e/regression/account-settings.spec.ts (Playwright; the rules forbid running it locally). The fix for (v) is checked by reading the mount: with no provider, `useOptional` returns undefined and nothing else in SettingsWorkspace reads server context. test.yml's e2e step runs the spec.
+- The trust row against a real engine, open and not open (y).
+- CI after the commit: vector-everywhere.yml (it runs everywhere-model.test.ts) and typecheck.yml as workflow_dispatch on everywhere-finish; test.yml runs config-skew.test.ts and settings-registry.test.ts at the lane end.
+- VE-50.
+
+Receipts: vector-everywhere-progress.md, "EV-21".

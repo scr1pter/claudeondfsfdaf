@@ -614,7 +614,11 @@ export function createServerSyncContext(serverSDK: ServerSDK) {
 
 export type ServerSync = ReturnType<typeof createServerSyncContext>
 
-export const { use: useServerSync, provider: ServerSyncProvider } = createSimpleContext({
+export const {
+  use: useServerSync,
+  useOptional: useOptionalServerSync,
+  provider: ServerSyncProvider,
+} = createSimpleContext({
   name: "ServerSync",
   // Returns an accessor so the resolved server can change reactively without
   // re-instantiating the subtree (mirrors useServerSDK).

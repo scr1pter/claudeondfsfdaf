@@ -3389,3 +3389,309 @@ For the lead:
 - Whether Linear's 10 s applies to `prompted` (e).
 - The Jira `laptop` compare-and-set race, before Jira's laptop route goes live (p).
 - The Linear re-prompt loop without a production repository port (l, under EV-19 (i)'s gate).
+
+## EV-21: the desktop settings page (VE-41) (2026-11-20)
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `6a74ac3b` equals origin/everywhere-finish; origin/release-finish `67ec3a60` is an ancestor, so nothing was merged; origin/main `6a771354` (PR #33) is not merged here (the lead's). Preconditions, each `git merge-base --is-ancestor <sha> HEAD`: EV-08 `3443cfa3`, EV-10 `7146a98f`, EV-17 `c9275df0`, EV-18 `cf9195d0`.
+
+**Open precondition for the commit:** the lead's ruling on the config-skew exception (deviations, "2026-11-20, EV-21", (a)). No lead session was reachable during the build; the changes stay uncommitted until it is given. *Settled 2026-11-20: No (see "EV-21 ruling on (a)" below).*
+
+**EV-20's push receipts** (commit `6a74ac3b`, read with the GitHub tools): vector-everywhere [44684273933](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44684273933) success; typecheck [44684286488](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44684286488) success; vector-hosted-ci [44684277983](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44684277983) success; vector-at-mention [44684282421](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44684282421) success.
+
+**Files** (line numbers after the package):
+
+- new packages/app/src/components/settings-v2/everywhere-model.ts (363 lines): `EverywhereView` :20, `everywhereOffered` :161, `everywhereTab` :169, `everywhereView` :179, `writeBlock` :209, `editable` :220, `turnOn` :225, `turnOff` :234, `capChange` :241, `addProject` :253, `removeProject` :272, `modelChoices` :282, `modelChange` :299, `jobsLine` :304, `checksLine` :326, `everywhereJobs` :335, `jobsPage` :361; fixed texts :126-155.
+- new packages/app/src/components/settings-v2/everywhere.tsx (491 lines): `useEverywhereTab` :70, `SettingsEverywhereV2` :83, the one write `save` :136 (guard :139, `updateConfig({ everywhere: change })` :144), `acceptConsent` :161.
+- new packages/app/src/components/settings-v2/everywhere-model.test.ts (492 lines, 35 cases).
+- packages/app/src/components/settings-v2/settings-registry.ts: :22 and the entry :173-193.
+- packages/app/src/components/settings-v2/settings-registry.test.ts: :7 (`21`) and :16.
+- packages/app/src/components/settings-v2/dialog-settings-v2.tsx: :30-31, :74-76, :85, :93, :95, :99, :167.
+- packages/desktop/src/main/config-skew.test.ts: :12-15, :171-178 and the new case :181-215.
+- Lane documents: this receipt, the deviations entry, the spec's §3.12, §6.5 and §8 notes, the handoff's status bullet, four dated annotations (the job-only link, the offer hand-off, unattended worktrees, Vector Local after EV-15) and one Left open item, and main-requests.md's settings-page annotation.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000`; the app files with `--isolate`, the desktop file with `--no-env-file`.
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts (vector-everywhere.yml) | 35 pass, 0 fail, 201 expects |
+| app src/components/settings-v2/settings-registry.test.ts (no lane workflow; test.yml) | 21 pass, 0 fail, 141 expects |
+| app src/components/settings-v2/remote-model.test.ts | 6 pass, 0 fail, 55 expects |
+| app src/components/settings-v2/memory-backup-model.test.ts | 6 pass, 0 fail, 47 expects |
+| app src/features/onboarding/spotlight-steps.test.ts | 2 pass, 0 fail, 48 expects |
+| desktop src/main/config-skew.test.ts (test.yml's desktop job) | 3 pass, 0 fail, 44 expects |
+| root test/no-project-wording.test.ts (from test/) | 2 pass, 0 fail, 16 expects |
+| `bun typecheck` in packages/app and packages/desktop | exit 0, both |
+| web test/everywhere-lane.test.ts (the lane documents changed) | 13 pass, 0 fail, 155 expects |
+| root test/no-personal-paths.test.ts (from test/) | 1 pass, 0 fail, 2 expects |
+| prettier --check on the seven changed code and test files | clean (the three new files after `--write`) |
+| mutations M1 to M21 (23 runs, ev21-mut/mutate.py) | all red; table in the deviations entry; every restore matched before.sha256 |
+| `git diff --check` | clean |
+
+**Cross-lane probe** (2026-11-20): `git diff HEAD...origin/<lane>` over the seven code and test files is empty for main, connect-finish, hands-finish, codium-finish, scope-finish, workspaces-finish, review-fixes, brain-transport and native-qualify (SHAs in the deviations entry). The merged tree's registry total is 21.
+
+**Commit, push and CI (after the ruling).** One commit staging the paths above, plus packages/ui/src/context/helper.tsx and packages/app/src/context/server-sdk.tsx and server-sync.tsx from review round one: `feat(app): add the Vector everywhere settings page behind its perk`. Its body says: no IPC, preload or platform change; no generated file; the config-skew exception and its reason; the tab stays hidden; `LAPTOP_ROUTE_WIRED` is still false. *Review round two:* the body also names packages/desktop/src/main/config-skew.test.ts and quotes the lead's ruling with its date, and it names packages/ui/src/context/helper.tsx, packages/app/src/context/server-sdk.tsx and server-sync.tsx as shared-surface changes; the PR description repeats the last three. If the ruling is no, the read-only fallback in the deviations entry's Commit hold is applied first, and the body says so. *Ruling on (a), 2026-11-20: No. The fallback is applied; the commit plan is in "EV-21 ruling on (a)" below.* Push gate: `git fetch origin everywhere-finish`, merge anything new, the full turbo typecheck, a fast-forward push. CI: workflow_dispatch of vector-everywhere.yml and typecheck.yml on everywhere-finish (not vector-codium.yml); the run ids go in the next receipt.
+
+### EV-21 review round one (2026-11-20)
+
+Eleven findings from two reviewers: five blocking, two of them the same.
+
+**The config-skew hold.** Two blocking findings: the config-skew hunk reads as a loosened test, and no ruling is recorded. Nothing is committed; the step forbids it anyway. The deviations entry now carries a "Commit hold" with both answers spelled out and "Ruling on (a): none yet". No lead was reachable: ListAgents listed only the main session and this agent. The hunk stays uncommitted for the ruling. The guard case in it is stricter (F12, F12b).
+
+**Fixed:**
+- the server hooks at the top of SettingsWorkspace, which broke e2e/fixtures/account-settings.jsx (v), now read optional contexts (l2);
+- trust for listed folders that are open in Vector, with the existing approval (y);
+- Remote's loading state (z);
+- the limit inputs (aa);
+- the instruction files in the Continue note, and (o) corrected;
+- the description copy (ab);
+- Remote staying on after the consent (b3);
+- `save` checks `writeRefusal` itself (n);
+- the config-skew guard walks the `||` chain.
+
+**Files** (round one): everywhere-model.ts (455 lines), everywhere.tsx (595), everywhere-model.test.ts (611, 41 cases), config-skew.test.ts (:181-225), packages/ui/src/context/helper.tsx (+4), packages/app/src/context/server-sdk.tsx and server-sync.tsx (export lines), and the lane documents: the deviations entry, this receipt, the handoff's status and Left open bullets, and the spec's §3.12 and §8 notes.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000` (app files with `--isolate`, the desktop file with `--no-env-file`):
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts | 41 pass, 0 fail, 248 expects |
+| app src/components/settings-v2/settings-registry.test.ts | 21 pass, 0 fail, 141 expects |
+| desktop src/main/config-skew.test.ts | 3 pass, 0 fail, 44 expects |
+| app src/context/server-sync.test.ts (its export changed) | 8 pass, 0 fail, 14 expects |
+| app remote-model.test.ts, memory-backup-model.test.ts, onboarding spotlight-steps.test.ts | 6/0/55, 6/0/47, 2/0/48 |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| `bun typecheck` in packages/app, packages/ui and packages/desktop | exit 0, each |
+| web test/everywhere-lane.test.ts, after this receipt | 13 pass, 0 fail, 155 expects |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| prettier --check on the eight changed code and test files | clean (the model test after `--write`, line wrapping only) |
+| mutations F1 to F13 (ev21-fix/mutate.py) | F1-F12 and F13 red, F12b survives as intended; restores matched |
+| round-one mutations M2 to M21 re-run (ev21-fix/mutate-again.py) | all red; restores matched; M1's anchor replaced by F13 |
+| `git diff HEAD...origin/<lane>` over the touched files | none of this package's files changed elsewhere (deviations, Coordination) |
+
+Not run: e2e/regression/account-settings.spec.ts (Playwright; test.yml runs it), the page under Electron.
+
+### EV-21 review round two (2026-11-20)
+
+Ten findings from two reviewers: two blocking, both the config-skew hold; eight non-blocking, all taken.
+
+**The config-skew hold.** It stands. ListAgents found no reachable agent, the step forbids committing, and "Ruling on (a)" still reads "none yet". The deviations entry now has a round-two hold paragraph. It spells out both answers again, with the fallback's line numbers (`save` :203-225, `apply` :227, `acceptConsent` :236), and says that the commit body names config-skew.test.ts and the ruling. config-skew.test.ts is unchanged this round.
+
+**Fixed:**
+- (ac) `acceptConsent` checks `writeRefusal(view, offered, {enabled: true})` before it turns Remote on, and the consent panel shows only while that holds.
+- (ad) "Continue in a new session on this branch" is disabled, with `JOB_RUNNING`, while ServerSync's session store says the job's session is working, and `CONTINUE_NOTE` says Continue is for a finished job.
+- (ae) `RULE_KEYS`, the 64-folder cap and the limits' minimums are tied to their sources by model tests.
+- (q) The checks line reads the engine's unattended shell probe (GET /experimental/shell/unattended, no instance routing), so Linux without a bubblewrap that starts says jobs run no commands.
+- (y) Listed folders match open projects through `pathKey`, and the trust read uses the open project's spelling.
+- (af) `capValue`'s types, and the plain-copy loop now covers every fixed text, `PAGE_DESCRIPTION` (moved into the model) included.
+- (l2) The three shared context files are kept as built. The commit body and the PR description call them out, and the cross-lane check runs again just before the push.
+- The spec's "Codium listing" owner action has a note of 2026-11-20 naming the four preconditions for listing the perk, and the handoff's "Owner decisions" has the same line. The VE-41 row note points there.
+
+**Files** (round two): everywhere-model.ts (488 lines), everywhere.tsx (628), everywhere-model.test.ts (696, 47 cases), and the lane documents: the deviations entry, this receipt, the spec's §8 VE-41 note and §10 "Codium listing" note, and the handoff's "Owner decisions" and Left open bullets. No other code file changed this round.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000` (app files with `--isolate`, the desktop file with `--no-env-file`):
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts | 47 pass, 0 fail, 298 expects |
+| app src/components/settings-v2/settings-registry.test.ts | 21 pass, 0 fail, 141 expects |
+| desktop src/main/config-skew.test.ts (it parses everywhere.tsx) | 3 pass, 0 fail, 44 expects |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| web test/everywhere-lane.test.ts (the lane documents changed) | 13 pass, 0 fail, 155 expects |
+| `bun typecheck` in packages/app | exit 0 |
+| `git diff --check` | clean |
+| prettier on the three changed app files | everywhere.tsx and the model test reformatted by `--write`, the model unchanged; `--check` clean |
+| mutations G1 to G10 (ev21-fix2/mutate.py) | all red; restores matched before.sha256 |
+| `git diff HEAD...origin/<lane>` over the touched and shared files | no lane tip moved since round one; only main's and codium-finish's memory-backup files differ (deviations, Coordination) |
+
+Not run: the page under Electron, e2e/regression/account-settings.spec.ts (Playwright; test.yml runs it), and any renderer test of the page's round-two changes (none exists; typecheck only).
+
+### EV-21 review round three (2026-11-20)
+
+Five findings from two reviewers. Two are blocking, and both are the config-skew hold. The three non-blocking findings are all taken.
+
+**The config-skew hold.** It stands. ListAgents answered "No reachable agents", the step forbids committing, and "Ruling on (a)" still reads "none yet". config-skew.test.ts and `save` are unchanged. To make the No answer one step, it is now a checked patch: /tmp/vector-v2/everywhere/ev21-fix3/read-only.patch (sha256 `085f89421c95…`, built by make-readonly.py there). It makes the page read-only and puts config-skew.test.ts back at HEAD. With the patch applied, the app typecheck exits 0, the unchanged config-skew.test.ts passes 2/0/38, and prettier is clean. Both files were then restored, and every hash in yes.sha256 matched. On this round's tree, `git apply --check` passes. The deviations entry's round-three hold lists what the patch removes and what No costs.
+
+**Fixed:**
+- (ag) The trust resource follows a `folders` memo (everywhere.tsx :173), equal while the listed directories are unchanged, so a save that leaves the folders alone reads no trust again.
+- (ah) `everywhereTab`'s input field, `useEverywhereTab`'s parameter and `jobsPage`'s parameter are `offered`. The tests' literals and three case titles follow.
+- The deviations entry's "Safe by default" bullet now says that, while the plan offers the perk, the tab shows on any desktop server, but reads and writes only the built-in engine.
+
+**Files** (round three): everywhere.tsx (632 lines), everywhere-model.ts (489), everywhere-model.test.ts (698, 47 cases); the lane documents: the deviations entry (hold, What changed line numbers, (y), (ag), (ah), Safe by default, Left open, Mutations, Coordination), this receipt and the handoff's EV-21 Left open bullet. No other code file changed.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000` (app files with `--isolate`, the desktop file with `--no-env-file`):
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts | 47 pass, 0 fail, 298 expects |
+| app src/components/settings-v2/settings-registry.test.ts | 21 pass, 0 fail, 141 expects |
+| desktop src/main/config-skew.test.ts (it parses everywhere.tsx) | 3 pass, 0 fail, 44 expects |
+| the same file at HEAD, with read-only.patch applied | 2 pass, 0 fail, 38 expects |
+| `bun typecheck` in packages/app, final tree and with the patch applied | exit 0, both |
+| web test/everywhere-lane.test.ts (the lane documents changed) | 13 pass, 0 fail, 155 expects |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| prettier --check on the three changed app files and the patched page | clean (the model test after `--write`, one wrapped line) |
+| mutation H1, the tab ignores `offered` (ev21-fix3/H1.log) | red, 46 pass, 1 fail; restore matched before.sha256 |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over the touched and shared files | no lane tip moved since round two (deviations, Coordination) |
+
+Not run: the page under Electron, e2e/regression/account-settings.spec.ts (Playwright; test.yml runs it), and a renderer test of the trust memo (none exists; typecheck only).
+
+### EV-21 commit gate (2026-11-20)
+
+**Stopped at the config-skew hold.** "Ruling on (a)" still reads "none yet" (deviations, "2026-11-20, EV-21"), and ListAgents answered "No reachable agents", so nothing was staged, committed, pushed or dispatched. `git fetch origin release-finish main everywhere-finish`: HEAD `6a74ac3b` equals origin/everywhere-finish, and origin/release-finish `67ec3a60` is an ancestor. The tree matches round three's yes.sha256; read-only.patch (`085f8942…`) still passes `git apply --check`.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000` (app files with `--isolate`, the desktop file with `--no-env-file`):
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts | 47 pass, 0 fail, 298 expects |
+| app src/components/settings-v2/settings-registry.test.ts | 21 pass, 0 fail, 141 expects |
+| desktop src/main/config-skew.test.ts | 3 pass, 0 fail, 44 expects |
+| `bun typecheck` in packages/app, packages/ui and packages/desktop | exit 0, each |
+| web test/everywhere-lane.test.ts, after this receipt | 13 pass, 0 fail, 155 expects |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+
+Not run, because nothing is committed: the full turbo typecheck and the lane's CI dispatches. Both run at the gate that follows the ruling.
+
+### EV-21 ruling on (a): the read-only page (2026-11-20)
+
+**The ruling.** The lead, 2026-11-20: **No.** The config-skew test stays exactly as at HEAD. Engines before this release reject unknown top-level keys (hands-build-spec.md, the "Config skew" row; hands-deviations.md item 5). The built-in engine still writes the shared user/global config file that an older Vector on the same computer reads, so the built-in-engine guard does not make the write safe.
+- Recorded in the deviations entry, under "Ruling on (a)".
+- Deferred item: the write path needs skew-safe storage outside user/global config (the desktop store, as Hands keeps its per-user state). Everywhere stays off by default meanwhile.
+
+**Base.** `git fetch origin release-finish main everywhere-finish` and the eight other lanes: no tip moved since round three. HEAD `6a74ac3b` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged.
+
+**Applied.**
+- /tmp/vector-v2/everywhere/ev21-fix3/read-only.patch (`085f89421c95…`) applied cleanly.
+- config-skew.test.ts is byte-identical to HEAD (`c1ac9af0…`), so it is no longer a changed file.
+- everywhere.tsx matched the patch's prepared copy (`623a49af…`). The Yes copies of both files are at /tmp/vector-v2/everywhere/ev21-no/.
+
+Then, so that a page which writes nothing says nothing false:
+- `PAGE_DESCRIPTION` and `REPOSITORY_RULE` no longer point at a switch or an Add button.
+- The comments that said the page writes, or that the tab shows "so it can always be turned off", now say it reads: in the model, the page, dialog-settings-v2.tsx :74-75 and settings-registry.ts :174-175.
+- Two case titles follow, and the plain-copy case gains three assertions.
+- Four search keywords for removed controls are dropped from the registry entry.
+
+**Files** (final; sha256 in /tmp/vector-v2/everywhere/ev21-no/final.sha256):
+- new packages/app/src/components/settings-v2/everywhere.tsx (347 lines, read-only, with no `updateConfig` call), everywhere-model.ts (494) and everywhere-model.test.ts (701, 47 cases);
+- packages/app/src/components/settings-v2/settings-registry.ts (:22, the entry :174-190) and settings-registry.test.ts (:7, :16);
+- packages/app/src/components/settings-v2/dialog-settings-v2.tsx (:30-31, :74-76, :85, :93, :95, :99, :167);
+- packages/ui/src/context/helper.tsx, packages/app/src/context/server-sdk.tsx and server-sync.tsx: the `useOptional` export (deviations (l2));
+- the lane documents:
+  - the deviations entry: Ruling on (a), What changed, (a), (l), (x), Not changed, Safe by default, Left open, Mutations, Coordination and Deferred verification;
+  - this receipt;
+  - the spec's §3.12, §6.5, §8 and §10 notes;
+  - the handoff's EV-21 status and loose-ends bullets;
+  - main-requests.md's annotation.
+
+Not changed: packages/desktop/src/main/config-skew.test.ts.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000` (app files with `--isolate`, the desktop file with `--no-env-file`; logs in /tmp/vector-v2/everywhere/ev21-no/logs/):
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts | 47 pass, 0 fail, 300 expects |
+| app src/components/settings-v2/settings-registry.test.ts | 21 pass, 0 fail, 141 expects |
+| desktop src/main/config-skew.test.ts, unchanged from HEAD | 2 pass, 0 fail, 38 expects |
+| `bun typecheck` in packages/app, packages/ui and packages/desktop | exit 0, each |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| web test/everywhere-lane.test.ts, after this receipt | 13 pass, 0 fail, 155 expects |
+| prettier --check on the nine changed code and test files | clean |
+| mutations N1 and N2 (ev21-no/mutate.py) | red, 46 pass and 1 fail each; restores matched by sha256 |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over the touched and shared files | no lane tip moved; only main's and codium-finish's memory-backup files differ |
+
+Not run:
+- the full turbo typecheck and the CI dispatches, because this step does not commit;
+- e2e/regression/account-settings.spec.ts (Playwright; test.yml runs it);
+- the page under Electron.
+
+**Commit, push and CI** (for the commit gate):
+- **The commit:** one commit with explicit paths. It stages:
+  - the three new app files;
+  - settings-registry.ts and its test;
+  - dialog-settings-v2.tsx;
+  - packages/ui/src/context/helper.tsx, packages/app/src/context/server-sdk.tsx and server-sync.tsx;
+  - the five lane documents.
+
+  It does not stage config-skew.test.ts.
+- **The title:** `feat(app): add a read-only Vector everywhere settings page behind its perk`.
+- **The body** says:
+  - the page is read-only;
+  - the lead's ruling on (a), quoted with its date 2026-11-20;
+  - config-skew.test.ts is unchanged;
+  - the write is deferred to skew-safe storage;
+  - the three shared-surface files;
+  - no IPC, preload or platform change, and no generated file;
+  - the tab stays hidden, and `LAPTOP_ROUTE_WIRED` is still false.
+- **The push gate:** `git fetch origin everywhere-finish`, merge anything new, the full turbo typecheck, then a fast-forward push.
+- **CI:** workflow_dispatch of vector-everywhere.yml and typecheck.yml on everywhere-finish. test.yml runs config-skew.test.ts and settings-registry.test.ts at the lane end.
+
+### EV-21 review round four (2026-11-20)
+
+Eleven findings from two reviewers, after the ruling on (a). One is blocking, and two other reviewer findings repeat it; three more were given twice. Nothing is committed: the step forbids it. Each finding and what was done is in the deviations entry, "Review round four", with the items (ai), (aj) and (ak).
+
+**Base.** `git fetch origin`: no lane tip moved since the ruling. HEAD `6a74ac3b` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. Before the edits, the tree matched the ruling's final.sha256.
+
+**Fixed:**
+- *Blocking:* the page said it shows the settings and showed two of them. It now has a read-only "How jobs run" card, from the model's new `howJobsRun` with the limits, the model, Wait for my computer, push with `PUSH_RULE`, and stay awake with `CLOSED_LID`. `PAGE_DESCRIPTION` is unchanged and now true, and it is pinned whole (deviations (ai)).
+- The unused write helpers and their copy are removed: 19 cases went, and four "how jobs run" cases are new. A reference patch is at /tmp/vector-v2/everywhere/ev21-fix4/write-helpers.patch (sha256 `1abc0f78…`); `git apply --check` passes on this tree (deviations (aj)).
+- An older Remote status answer no longer overwrites a newer change event (deviations (ak)).
+- The own-session doc comment sits above `OWN_SESSION_LIMITS` again.
+
+**Recorded, no code:**
+- The three shared context files, kept as built. They are listed in the commit body and the PR description; the cross-lane diff was re-run this round and is re-run at the push gate ((l2)).
+- Continue and job-written instruction files (E1): kept as an owner or lead gate before listing the perk. The recommended engine-side hold is in the spec's §10 note ((o)).
+- The jobs link: the hard precondition is kept, and the optional constant is not taken ((h)).
+
+**Files** (pre-round copies and hashes in /tmp/vector-v2/everywhere/ev21-fix4/before/ and before.sha256):
+- packages/app/src/components/settings-v2/everywhere-model.ts (318 lines, sha256 `14bca6bf…`), everywhere.tsx (374, `d4b44416…`) and everywhere-model.test.ts (519 lines, 32 cases, `9872706b…`);
+- the lane documents: the deviations entry (Review round four; What changed; annotations on (h), (o), (r), (s), (z), (ae), (af) and (l2); the new (ai), (aj) and (ak); Safe by default, Left open, Mutations and Coordination), the spec's §3.12, §8 and §10 notes, the handoff's EV-21 bullets and this receipt.
+
+The other files of the package are byte-identical to the ruling's final.sha256: settings-registry.ts and its test, dialog-settings-v2.tsx, and the three shared context files.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000`, app files with `--isolate` (logs in /tmp/vector-v2/everywhere/ev21-fix4/logs/):
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts | 32 pass, 0 fail, 183 expects |
+| app src/components/settings-v2/settings-registry.test.ts | 21 pass, 0 fail, 141 expects |
+| `bun typecheck` in packages/app | exit 0 |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| web test/everywhere-lane.test.ts, after this receipt | 13 pass, 0 fail, 155 expects |
+| prettier --check on the nine changed code and test files | clean |
+| mutations K1 to K7 (ev21-fix4/mutate.py) | all red; table in the deviations entry; every restore matched by sha256 |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over the touched and shared files | no lane tip moved; only main's and codium-finish's memory-backup files differ |
+
+Not run: the full turbo typecheck and the CI dispatches (no commit in this step), e2e/regression/account-settings.spec.ts (Playwright) and the page under Electron.
+
+**For the commit gate**, on top of "EV-21 ruling on (a)" above:
+- The staged paths do not change.
+- The body also says that How jobs run shows the settings read-only. It says the write helpers were removed and that the write path is rebuilt against its new storage. It names the reference patch.
+- The body and the PR description list packages/ui/src/context/helper.tsx, packages/app/src/context/server-sdk.tsx and server-sync.tsx under "Shared-surface changes". The push gate re-runs `git diff HEAD...origin/<lane>` over them.
+
+### EV-21 commit gate, second run (2026-11-20)
+
+After the ruling on (a) and review round four. The title is the brief's, `feat(app): add the Vector everywhere settings page`, not the one proposed under "EV-21 ruling on (a)"; the body says the page is read-only.
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `6a74ac3b` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged (main is not merged here; the lead does that).
+
+**Staged** (explicit paths): the three new app files; settings-registry.ts and its test; dialog-settings-v2.tsx; packages/ui/src/context/helper.tsx, packages/app/src/context/server-sdk.tsx and server-sync.tsx (shared-surface changes, (l2)); the five lane documents. Not staged or changed: packages/desktop/src/main/config-skew.test.ts. Nothing else was in the tree.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000` (app files with `--isolate`, the desktop file with `--no-env-file`; logs in /tmp/vector-v2/everywhere/ev21-gate/logs/):
+
+| Check | Result |
+| --- | --- |
+| app src/components/settings-v2/everywhere-model.test.ts | 32 pass, 0 fail, 183 expects |
+| app src/components/settings-v2/settings-registry.test.ts | 21 pass, 0 fail, 141 expects |
+| desktop src/main/config-skew.test.ts, unchanged from HEAD | 2 pass, 0 fail, 38 expects |
+| `bun typecheck` in packages/app and packages/ui | exit 0, each |
+| full `bun turbo typecheck --concurrency=2` | 27/27 tasks successful |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| web test/everywhere-lane.test.ts, after this receipt | 13 pass, 0 fail, 155 expects |
+| prettier --check on the nine changed code and test files | clean |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over the six shared app and ui files (brain-transport, codium-finish, connect-finish, hands-finish, native-qualify, review-fixes, scope-finish, workspaces-finish, main) | empty for every lane |
+
+The commit sha, the push and the CI run ids are recorded in the next package's receipt (a commit cannot name its own sha).
