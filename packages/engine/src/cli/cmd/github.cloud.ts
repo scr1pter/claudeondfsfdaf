@@ -428,6 +428,12 @@ export async function heartbeat(input: {
 export async function settle(input: {
   token?: string
   outcome: GithubAgents.Outcome
+  /**
+   * The pull request this run opened, as https://github.com/<owner>/<repo>/pull/<n>. Optional: vectordev.ai passes it to
+   * its settle listener only for this run's own repository and ignores anything else (R-A3). No phase sets it yet: the
+   * agent phase settles before the publish job opens the pull request.
+   */
+  prUrl?: string
   services?: Services
   signal?: AbortSignal
 }) {
@@ -435,7 +441,7 @@ export async function settle(input: {
   const answer = await post(
     GithubAgents.ENDPOINT.settle,
     input.token,
-    { outcome: input.outcome },
+    { outcome: input.outcome, ...(input.prUrl === undefined ? {} : { prUrl: input.prUrl }) },
     input.services ?? services,
     { signal: input.signal, timeout: 5000 },
   )

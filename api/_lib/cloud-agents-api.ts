@@ -18,7 +18,7 @@ import {
 import { cloudAgentEntitlement, cloudAgentRevokedBefore } from "./cloud-agents-entitlement.js"
 import { liveRun, releaseRun, reportRun, reserveBoundRun, settleRecordedRun } from "./cloud-agents-ledger.js"
 import { mintRunToken, requireRunToken, requireSettlementToken } from "./cloud-agents-run-token.js"
-import { listCloudRuns, recordRunStart } from "./cloud-agents-runs.js"
+import { listCloudRuns, notifyRunSettle, notifyRunStart, recordRunStart } from "./cloud-agents-runs.js"
 import { peekRunTicket } from "./cloud-agents-start.js"
 import { githubProof } from "./github-api.js"
 import { githubApp, type createGithubApp } from "./github-app.js"
@@ -415,6 +415,9 @@ export function createCloudAgentsApi(
       source: reserved.source,
       purpose: reserved.purpose,
     })
+    // Only the mint whose reservation consumed its ticket fresh tells the start listeners (R-A2), after the run record is
+    // written; a renewal, and a concurrent mint of the same check run that RESERVE renewed, tell nobody.
+    if (ticket && !reserved.renewed) void notifyRunStart(ticket.ticketHash, rid, ticket.jobId)
     json(response, 200, {
       token: token.token,
       runId: rid,
@@ -457,8 +460,10 @@ export function createCloudAgentsApi(
     requireTrustedJsonRequest(request, 2_000)
     await ipLimit(request, response)
     const body = await objectBody(request)
+    // `prUrl` is optional (engines before it send only the outcome) and is never refused: the settle listener keeps it
+    // only when it is a pull request of this run's own repository (cloud-agents-runs.ts notifyRunSettle).
     if (
-      Object.keys(body).some((key) => key !== "outcome") ||
+      Object.keys(body).some((key) => key !== "outcome" && key !== "prUrl") ||
       !Schema.is(Schema.Literals(GithubAgents.OUTCOME))(body.outcome)
     )
       throw invalidRequest()
@@ -471,7 +476,14 @@ export function createCloudAgentsApi(
       windowSeconds: 3600,
       requirePersistent: true,
     })
-    await settleRecordedRun(claims.sub, claims.rid, claims, { outcome: body.outcome, now: at }, store)
+    const settled = await settleRecordedRun(claims.sub, claims.rid, claims, { outcome: body.outcome, now: at }, store)
+    // Only the call that ended the run tells the settle listeners (R-A3); a retry answers the same and tells nobody.
+    if (settled.committed)
+      void notifyRunSettle(
+        claims.rid,
+        { outcome: settled.outcome, ...(typeof body.prUrl === "string" ? { prUrl: body.prUrl } : {}) },
+        store,
+      )
     json(response, 200, { ok: true })
   }
 

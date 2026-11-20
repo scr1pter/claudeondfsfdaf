@@ -3122,3 +3122,218 @@ Ten findings, none blocking. Nine are fixed as the finding proposed, one of them
 | R13 a guide names a missing drafts path | name only paths and links that exist | 16 pass, 1 fail |
 
 Disagreements: none.
+
+## 2026-11-20, EV-25: @vector run hooks: the ticket's job id and the run start and settle listeners (R-A1, R-A2, R-A3)
+
+Spec §11 R-A1 to R-A3; §3.6 "Correlation"; §6.1 `CloudEvents`; §6.4's @vector row. The package was first checked at HEAD `3c3ddf29` (EV-24). It waited there: brain-transport's cloud-agents edits (#43 `7c7508d2`, BT01 `b4bb9b5c`, BT03 `c4ec2c83`, BT09 `aa925ff8`) were on origin/main only, in the files this package edits. The lead was asked to merge main and to rule on four findings (F-a to F-d below). The review-fixes precondition `e417c44d` (SEC-1/PUB-5) is an ancestor. Built uncommitted on the merge commit `1035f87c`.
+
+*Lead rulings (2026-11-20), recorded as given:*
+1. **Merge: authorised.** Merge origin/main (8e34d05e or newer) as a merge commit authored Vector <bot@vectordev.ai>, titled `chore(everywhere): merge main after #43`, with the RULES-v2 trailers. Resolve model-evidence.ts by keeping REVIEW_PIPELINE_REVISION 5 and recomputing REVIEW_PIPELINE_SOURCES exactly as the pin test reports. Regenerate the auto-merged SDK files only if the merged sources would produce different output. Typecheck every package the merge touched before committing. No push until EV-25 is reviewed.
+2. **F-a.** RESERVE accepts exactly the one new ticket field EV-25 needs, optional on read, so tickets without it still decode; every other unknown field stays refused. Test both: the new field accepted, an eighth unknown field still refused. No other ledger change.
+3. **F-b.** Hook the production path, settleRecordedRun, not recordRunEnd. Derive "committed" from the recorded run state it already has. Add no new caller-less code path. If the signal truly cannot be derived, stop and say why.
+4. **F-c.** Add an optional prUrl to the engine's settle payload. Accept it only if it parses as https://github.com/<owner>/<repo>/pull/<n> for the run's own repository; otherwise ignore it and record nothing. Engines that send only {outcome} keep working, and with no prUrl the hook posts without a link. Regenerate only if the settle route is part of the public Protocol/Server HttpApi.
+
+VECTOR_EVERYWHERE_ENABLED stays off by default throughout.
+
+*Additional lead ruling (2026-11-20), recorded as given:*
+5. **SETTLE_RECORDED's reply.** The script's commit path may reply `{'committed', outcome}` (retries keep the plain stored outcome), because settle listeners must fire exactly once from the call that ended the run. Every caller of the script must handle both reply shapes, with tests for the commit and the retry reply. Accepted open items: no engine phase sends prUrl yet (the agent phase settles before publish opens the PR), so listeners post without a link; the release order is safe because the hosted API deploys on merge and the engine ships only with the 2.0.0 release.
+
+### The merge (`1035f87c`)
+
+- origin/main `8e34d05e` was merged into everywhere-finish as `chore(everywhere): merge main after #43` (parents `3c3ddf29` and `8e34d05e`).
+- **One conflict**, packages/core/src/review/model-evidence.ts:
+  - REVIEW_PIPELINE_REVISION stays 5.
+  - REVIEW_PIPELINE_SOURCES is `01bf6f0a09add29b`, the digest core test/review/model-evidence.test.ts printed on the merged tree (it then passed: 30 pass, 0 fail).
+  - origin/scope-finish also edits this file (+42/-8 against main), so VectorScope will have to re-pin it again.
+- **Generated files.** packages/sdk/openapi.json and packages/sdk/js/src/{gen,v2/gen}/types.gen.ts auto-merged. Running ./packages/sdk/js/script/build.ts on the merged tree reproduced them byte for byte, and `bun run check:generated` in packages/client was clean, so nothing was regenerated.
+- **Checks before the merge commit:**
+  - the frozen install;
+  - `bun turbo typecheck` (27 of 27) and the hosted API typecheck;
+  - each alone: core local-mode/sources.test.ts (17/0), desktop remote-link.test.ts (33/0), test/codium-pool.test.ts (29/0, run from test/), engine tool/subagent-lifecycle.test.ts (18/0) and engine review/model.test.ts (21/0).
+- Not pushed, by ruling 1: the lane's commit gate pushes the merge and EV-25 together.
+
+### What changed
+
+- **api/_lib/cloud-agents-start.ts** (R-A1):
+  - the Ticket schema's optional `jobId` (:30-31), checked against JOB_ID_PATTERN from packages/schema/src/everywhere.ts (:4), a module that imports nothing;
+  - the new `CloudRunTrigger = RunTrigger & { readonly jobId?: string }` (:57-61);
+  - `startCloudRun` and `prepareCloudRun` take a CloudRunTrigger (:73, :79);
+  - an early check refuses a malformed id with 400 before any store command or entitlement call (:92-93);
+  - the ticket record keeps the id (:124);
+  - `peekRunTicket` also answers the ticket's `ticketHash` (:267).
+  - The dispatch inputs are unchanged.
+- **api/_lib/cloud-agents-ledger.ts:**
+  - RESERVE admits `jobId` as the only optional seventh field (:680-683), checked as `vej_` plus 22 lowercase Crockford characters (26 in all). A null, another seventh field or an eighth field is `corrupt`.
+  - SETTLE_RECORDED's commit path answers `{'committed', outcome}` (:843); a retry still answers the stored outcome.
+  - `settleRecordedRun` returns `{ outcome, committed }` (:339-391).
+- **api/_lib/cloud-agents-runs.ts** (R-A2, R-A3):
+  - the import of the schema's `PR_URL_PATTERN` (:3);
+  - a doc line on `recordRunEnd`: it has no production caller and tells no listener (:166-169);
+  - the hooks block (:206-343): RunEnd, RunStartListener and RunSettleListener; `registerRunStartListener` and `registerRunSettleListener`, each answering its remover; `notifyRunStart` and `notifyRunSettle`, each starting its notify's one 5 s budget; the private `runPages` (the run record's page, and the PR check); `tell` (every listener inside the budget, fixed warnings); and `afterRunResponse`.
+- **api/_lib/cloud-agents-api.ts:**
+  - mint calls `notifyRunStart(ticket.ticketHash, rid, ticket.jobId)` only when `ticket && !reserved.renewed`, after the run record and before the answer (:418-420).
+  - The settle body accepts `prUrl` beside `outcome` and refuses any other key (:463-467).
+  - settle calls `notifyRunSettle` only when `settled.committed` (:480-486).
+- **packages/engine/src/cli/cmd/github.cloud.ts:** `settle()` takes an optional `prUrl` and sends it only when given (:431-446).
+- **Tests:**
+  - packages/web/test/cloud-agents-start.test.ts: 11 cases and four helpers;
+  - packages/web/test/cloud-agents-runs.test.ts: two file-level cases without Redis (the second from review round one) and one Redis case;
+  - packages/engine/test/cli/github.cloud.test.ts: one case.
+  - No existing case changed.
+
+### Decisions
+
+- **(a) Whose files.** Every edited source file is in @vector's area (spec §6.4's @vector row), edited under the lead's brief and rulings 2 to 4. This includes the ledger and the engine, which the brief did not name (F-a, F-b, F-c). Codium's packages/schema/src/codium-run-trigger.ts is untouched (F-d): `RunTrigger` is shared with hosted jobs, ops and remote tickets, and codium-entitlements.test.ts:362 builds a `Required<RunTrigger>`. So the job id is on the cloud-agents-only `CloudRunTrigger`. cloud-agents-desktop.ts's `prepare?: typeof prepareCloudRun` stays compatible, and the desktop and ops callers pass no job id.
+- **(b) The job id grants nothing.**
+  - It never becomes a workflow input: the dispatch inputs stay `{ref, prompt, ticket, ownerId, installationId, brainUpload?}`, and S1 checks that no dispatch and no GitHub request carries the id.
+  - It comes only from internal callers of prepareCloudRun; no HTTP body reaches it.
+  - It is accepted on every enabled source (decision kept from the plan). The review asked for slack, linear and jira only, which are the only sources that will ever carry one. That restriction is deferred: until R-C8/R-A8, ENABLED_SOURCES refuses those three, so such a ticket cannot be built, even in a test (Left open).
+  - RESERVE does not compare the id it consumes with the one the peek read. Only a store writer could make them differ: ISSUE writes the ticket key once (`SET NX`), and READY compares the exact JSON. The start listener reports the peeked value. EV-30's `ticket:<hash> → jid` map stays the link, and the id only cross-checks it.
+- **(c) RESERVE's seventh field (ruling 2).**
+  - The check mirrors JOB_ID_PATTERN in Lua: a string, 26 characters, matching `^vej_[0-9a-hjkmnp-tv-z]+$`. A cjson null is not nil, so `"jobId": null` is refused.
+  - The field count is 6 without the id and 7 with it.
+  - A ticket without the id decodes and reserves as before. The existing six-field cases are unchanged and pass.
+  - The id is not copied onto the live run beside ticketHash. The plan's review asked for that, but ruling 2 says "No other ledger change". So R-A4, which must know that a run's ticket carried a job id, needs a further ledger change (Left open).
+- **(d) The start gate is `ticket && !reserved.renewed`.**
+  - The call comes after the token IIFE, so after recordRunStart, and before the answer.
+  - Nobody is told by a renewal (a bot mint with no ticket), by a concurrent mint of the same check run that peeked the same ticket (RESERVE answers `renew`), or by a mint that failed after its reservation.
+  - The event is at most once. A lost RESERVE reply, a START failure, a crash after the reservation, a failing listener or a cut-off listener loses it, and nothing retries. In production the engine's mint client retries only a 409 `OIDC_REPLAYED` and a 429 `RATE_LIMITED`, and polls an `at-once` 429 (github.cloud.ts:341-354). A 503 ends the step `unavailable`, so a lost reply belongs to a run that never starts its agent.
+  - One interleaving loses the start event of a run that does start (review round one). Two concurrent mints of one check run both peek the ticket. The second reserves as a renewal (`renewed` true) and rotates the jti. The first, which consumed the ticket fresh, then fails in recordRunStart, and its releaseRun leaves the run alone because the jti no longer matches. The run proceeds with the second mint's token, and neither mint tells the start listener. EV-30's ticketHash lookup (Left open) covers this case as it covers the others.
+  - EV-30's 900 s rule is not a backstop: under spec §3.6 it fails the job. Left open says what EV-30 must check first.
+- **(e) The settle signal comes from SETTLE_RECORDED (ruling 3).**
+  - The script already decides whether a call ends the run, from the run record it reads (`record[5]`, endedAt, absent), together with the live run. Only its reply hid that decision. The commit path now answers `{'committed', outcome}`, and the retry path still answers the stored outcome string.
+  - settleRecordedRun accepts a committed reply only when it carries this call's own outcome, and otherwise answers 503 as before.
+  - The change adds no key, field, read or code path, and recordRunEnd gains no caller.
+  - Deriving the signal outside the script was rejected:
+    - A read before the call races: two concurrent settles both see the run open.
+    - A read after the call (endedAt equal to this call's `now`, and the same outcome) has nothing unique per call: two settles of one run in the same millisecond with the same outcome would both claim the commit.
+  - Ruling 2 says "No other ledger change". This reply change was read as ruling 3's, not as part of F-a, and the lead's additional ruling 5 confirms it.
+  - **Both reply shapes.** The script has one caller, `settleRecordedRun`, and that has one caller, the settle route (cloud-agents-api.ts). `settleRecordedRun` reads both shapes:
+    - a two-element `['committed', outcome]` array is the commit;
+    - a plain outcome string is a retry;
+    - anything else answers 503.
+  - **Tests for both shapes.**
+    - The commit reply: S7 to S11, where each committing settle makes exactly one settle listener call.
+    - The retry reply: S7's retry; in S9, the two losing concurrent settles, the `cancelled` retry and the retry after a lost committing reply (200, no record read, no call).
+    - The mint-api interceptors match the script only by its six keys. They throw before it or replay it, and never fake its reply, so they are unaffected.
+- **(f) The pull request (ruling 4, F-c).**
+  - The settle body accepts `prUrl` and never refuses it; any other key is still 400. Only a string is considered.
+  - It is checked with the schema's `PR_URL_PATTERN` (packages/schema/src/everywhere.ts:182), the pattern Vector everywhere's job settle validates a pull request with (api/_lib/everywhere/jobs.ts:277 and :1312). So a URL this listener passes cannot later be refused there. The pattern's group is the repository, and its URL ends in `/pull/<number>`, so the number is the text after the last slash. The build had its own copy of the pattern with a number group; review round one replaced it.
+  - It is compared case-insensitively with the run record's repository, because GitHub owner and repository names are case-insensitive.
+  - The listener gets a URL rebuilt from the record's repository and the number, so its casing is canonical and no other caller bytes pass through. Anything else is dropped without a log, and nothing is stored.
+  - The run record is read once, after the response, and only when the settle committed and a settle listener is registered. Today none is, so production does no new work. If the read fails, the listener gets the outcome alone.
+  - The prUrl is not stored on the run record, by ruling 2.
+  - **Nothing regenerated.** The settle route is vectordev.ai's hosted API (api/cloud-agents/settle.ts over cloud-agents-api.ts), not the engine's Protocol or Server HttpApi, so no generated client or SDK file changes.
+  - **The engine.** `settle()` takes an optional `prUrl`. No phase passes it yet: the agent phase settles before the publish job opens the pull request, and the publish job holds no run token. So production listeners hear no pull request until @vector's publish phase reports one (Left open), and the spec's "the settle hook gives the PR URL" still waits for that.
+  - **Release order.** An engine that sends `prUrl` must not ship before this server is deployed: the settle route before EV-25 answers 400 to any key but `outcome`. The lead's ruling 5 accepts this as safe: the hosted API deploys on merge, and the engine ships only with the 2.0.0 release.
+- **(g) The listener contract.**
+  - Listeners run after the response, through a cloud-agents copy of api/_lib/usage.ts `afterResponse` (the request context's waitUntil). It imports neither usage.ts nor everywhere/after.ts. This follows the plan's review: the engine gives its whole settle 5 s (github.cloud.ts settle; github.lifecycle.ts shares one settlement and never retries), so a listener awaited inside the request could make a committed settle look failed.
+  - Every listener runs, unless its turn comes after the budget is spent (below). A sync throw becomes a rejection, through `Promise.resolve().then(call)`.
+  - **One budget per notify** (review round one). `notifyRunStart` and `notifyRunSettle` each start one LISTENER_MS (5 s) AbortSignal before any work; for a settle that is before the run record read. So the work handed to waitUntil ends within 5 s in all. The read is bounded by persistentStore's own 3 s fetch timeout, so a settle listener keeps at least about 2 s. When the budget is spent, one "… listeners timed out" line is logged and waitUntil is released, and a listener whose turn comes after that (after a slow read) is not started.
+  - Each failure logs exactly "Vector cloud-agents <start|settle> listener failed". Neither line carries an id or error text.
+  - **Each listener gets the budget's signal** (review round one), as a trailing argument: `(ticketHash, rid, jobId, signal)` and `(rid, end, signal)`. A listener written for R-A2's `(ticketHash, rid, jobId?)` or R-A3's `(rid, end)` still fits. Once waitUntil is released, Vercel may freeze a listener part-way, so EV-30's listeners must finish inside the budget and be idempotent (Left open).
+  - Each settle listener gets its own copy of the end.
+  - The registry is process-wide. Each registration is its own entry (the review's point): one function registered twice is called twice, and each remover removes only its own entry.
+  - No listener is registered anywhere in this package.
+- **(h) SEC-1.** Both handlers stay inside `safe`, which answers 503 (MODEL_PLANS_DISABLED or CLOUD_AGENTS_UNAVAILABLE) before the handler while the service is off, so no listener runs (case S11).
+- **(i) EV-30's registration.** EV-30 registers the listeners behind the everywhere config, from a module that api/cloud-agents/mint.ts and settle.ts import. Vercel bundles each function's own import graph, as with cloud-agents-run-registration.ts. This package edits neither route file.
+- **(j) Where the tests live.** In cloud-agents-start.test.ts, whose fixture drives the real mint and settle routes over loopback HTTP against Redis, and in cloud-agents-runs.test.ts. vector-at-mention.yml runs `test/cloud-agents-*.test.ts` in one Bun process, so every case removes its listeners in `finally`.
+- **(k) Negative checks after the response.** A start listener is called on a microtask queued before the answer is written, so it has run by the time the loopback client has the answer. A settle listener runs only after the route's one read of the run record, which the fixture's `onStore` sees before the answer is written. So "no read" proves "no call", and the settle negatives assert that.
+
+### The cases
+
+| Case | File | What it pins |
+| --- | --- | --- |
+| S1 "a ticket keeps a job id that only its pattern admits…" | start | the stored JSON is the six fields plus jobId; dispatch inputs exactly `{mode, prompt, ticket}`; no dispatch or GitHub request holds the id; ticketHash is sha256 of the ticket; the peek answers the record, key and ticketHash; the mint answers 200 (RESERVE takes 7 fields), and liveRun keeps the hash; the ticket is consumed; one start call; eight malformed ids (`vej_`, 21 and 23 characters, uppercase, an `i`, a trailing newline, a leading space, the number 42) are each 400 with no store command, no entitlement call and no new ticket |
+| S2 "RESERVE refuses a ticket changed after the peek…" | start | rewritten between the peek and RESERVE: another seventh field, an eighth field, a null id, an uppercase id, a 27-character id. Each gives a 503 mint; the ticket stays, no live run, no start call |
+| S3 "the mint that consumes a ticket tells the start listener once…" | start | `[{hash, rid, jobId}]`; a renewal (200, same rid) adds nothing; after settle a renewal and the spent ticket are 403 and add nothing; a ticket without an id on check run 1002 adds `{hash2, rid2, undefined}`; after the remover, a third mint adds nothing |
+| S4 "two check runs that peeked one ticket…" | start | [200, 403] and one call, for the winner's rid |
+| S5 "a concurrent mint of the same check run, which RESERVE renews…" | start | both peek before either reserves; the second reserves after the first answered; both 200, same rid, one call |
+| S6 "a mint that fails after its reservation…" | start | a START failure gives 503 and no call; a lost RESERVE reply gives 503, and its recovery re-mint gives 200 and still no call |
+| S7 "listener failures change no answer or record…" | start | a sync and an async throwing start listener and a throwing settle listener: the mint answers its five keys, then heartbeat, live run and run list; settle 200, outcome stored, live run gone, a retry 200; recorders called once; exactly three fixed warnings; none holds the hash, rid, jobId, account, repository id or "boom" |
+| S8 "a hanging listener delays no answer…" | start | with a start and a settle listener that never resolve, the mint and the settle each answer in under 4 s; each listener is called once; two "timed out" warnings, at least 4.9 s after the mint |
+| S9 "only the settle that ends the run tells the settle listener…" | start | three concurrent settles with different outcomes and PR numbers are all 200; one call with the stored outcome, the record's runUrl and that winner's PR URL; one record read; a `cancelled` retry reads nothing; a committing settle whose reply is lost gives 503, and its retry 200, with no read and no call |
+| S10 "F-c: the settle listener keeps only a pull request of the run's own repository…" | start | no prUrl: outcome and runUrl. Own repository: kept; uppercase: kept with the record's casing. Another repository, http, `/files`, `/issues/`, another host, `/pull/0`, 11 digits, a trailing newline, a number and null: each dropped, and the settle still 200. A body with a third key is 400 and the run stays live |
+| S11 "no listener runs while the cloud-agents service is off" | start | VECTOR_GITHUB_BRAIN_ENABLED and MODEL_PLANS_ENABLED each set false: the mint answers 503 with its code and the ticket stays; restored, one call. Off again, settle answers 503 with no read and no call; restored, settle 200 and one call |
+| R1 "run listeners: each registration hears each notify once…" | runs (no Redis) | a recorder, a sync thrower and an async rejecter: one call, two fixed warnings; every listener gets an AbortSignal that has not aborted; the same function registered twice is called twice; each remover removes only its own; with none left, nothing is called and nothing logged; an unreadable record gives each settle listener `{outcome}` alone, as distinct objects; with no settle listener the store is not read; no warning holds an id or "boom" |
+| R3 "one five-second budget covers a settle's record read and its listeners…" (review round one) | runs (no Redis) | a start listener that waits on its signal and a settle whose record read takes 6 s, notified together: both notifies answer after about 5 s and before the read ends; the start listener's signal was live when called and aborted at the budget; two fixed "timed out" lines; once the read ends, the settle listener is still not called and nothing more is logged |
+| R2 "recordRunEnd ends a record without telling any settle listener…" | runs (Redis) | the fixture's settleRun plus recordRunEnd ends the run with no call |
+| E1 "settle sends a pull request only when it is given…" | engine github.cloud | the body is `{outcome}` without prUrl and `{outcome, prUrl}` with it |
+
+### Left open
+
+- **The pull request in production** (R-A3's second half). @vector's publish phase must report the PR it opened. Today it holds no run token and settles nothing, so that needs @vector's design: a run token in the publish job, or another reporting route. Otherwise EV-30 finds the PR itself, for example from the run's branch. Until then the settle listener hears no prUrl.
+- **R-A4 needs a further ledger change.** RESERVE deletes the ticket and keeps only its hash on the live run, so nothing durable says that a run's ticket carried a job id.
+- **EV-30's reconciliation.** Before its 900 s rule fails a job, EV-30 must look for a live run of the sponsor's account whose ticketHash matches, and link it. This also covers the concurrent-mint interleaving in (d), whose run starts without a start event. liveRun returns ticketHash for a known rid, but no exported reader lists an account's live runs with their ticket hashes, so EV-30 needs one (a ledger reader, for the lead). A run past the longest-run limit with no settle call is still settled from listCloudRuns (§3.6).
+- **EV-30's listener contract.** Registered listeners must finish inside their notify's 5 s budget and be idempotent: when the budget is spent waitUntil is released, and Vercel may freeze a half-done store write. Each gets the budget's AbortSignal; a settle listener after a slow record read may have only about 2 s.
+- **A reported pull request is checked before it is posted.** `prUrl` is reported by whoever holds the run token, which is the agent phase, model-driven code. The only check here is that it names a pull request of the run's own repository, so a prompt-injected run could name another pull request there. Nothing consumes it today, and the link stays inside the same repository. Before EV-30 posts it to a shared place (E6, E17), it confirms with the installation token it already holds that the pull request's head branch belongs to this run, or drops the link.
+- **Restrict jobId** to slack, linear and jira when R-C8/R-A8 lands.
+- **R-A5, R-A6, R-A9**, and the `registerOpsRunStarter` mismatch that R-A3's spec line mentions: not addressed here.
+- **@vector's own documents**, which the lane does not edit, for the lead to forward: vector-at-mention-spec.md's ticket field list (the seventh field), its 2.16 run record and settle text (SETTLE_RECORDED's committed reply and the settle body's optional `prUrl`), and the release order in (f).
+
+### Mutations
+
+28 mutations, one source edit at a time, each with its named test file run alone through vector-serial against the disposable Redis (/tmp/vector-v2/everywhere/ev25-mut/: mutate.py, run.log, results.json and one log per run). Every mutation turned its named case red, and every file was restored from its saved bytes and matched its sha256. Afterwards, prettier rewrapped one line in cloud-agents-runs.ts (`notifyRunStart`'s `tell` call); the cases were re-run on the final files (progress receipt). The S, R and E codes are the case table's.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 jobId dropped from the ticket record | cloud-agents-start.ts | 34 pass, 4 fail | S1, S3, S4, S7 |
+| M2 no early jobId check | cloud-agents-start.ts | 37 pass, 1 fail | S1 |
+| M3 Lua counts exactly six fields | cloud-agents-ledger.ts | 30 pass, 8 fail | S1, S3, S4, S6, S7, S8, S9, S11 |
+| M4 Lua skips the job id check | cloud-agents-ledger.ts | 37 pass, 1 fail | S2 |
+| M5 Lua accepts any seventh field | cloud-agents-ledger.ts | 37 pass, 1 fail | S2 |
+| M6 Lua drops the length check | cloud-agents-ledger.ts | 37 pass, 1 fail | S2 |
+| M7 Ticket schema without jobId | cloud-agents-start.ts | 30 pass, 8 fail | S1, S3, S4, S6, S7, S8, S9, S11 |
+| M8 a renewal tells the start listener | cloud-agents-api.ts | 37 pass, 1 fail | S5 |
+| M9 start told before the run record is written | cloud-agents-api.ts | 30 pass, 8 fail | S1, S3, S4, S5, S6, S7, S8, S11 |
+| M10 every settle tells | cloud-agents-api.ts | 36 pass, 2 fail | S7, S9 |
+| M11 a retry reads as committed | cloud-agents-ledger.ts | 36 pass, 2 fail | S7, S9 |
+| M12 no catch on a listener | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M13 no Promise.resolve().then around a listener | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M14 no time bound | cloud-agents-runs.ts | 37 pass, 1 fail | S8 |
+| M15 the failure is logged with its error | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M16 empty run page | cloud-agents-runs.ts | 36 pass, 2 fail | S9, S10 |
+| M17 job id never passed | cloud-agents-api.ts | 34 pass, 4 fail | S1, S3, S4, S7 |
+| M18 the ticket key passed for its hash | cloud-agents-api.ts | 33 pass, 5 fail | S1, S3, S4, S5, S7 |
+| M19 a remover that removes nothing | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M20 one entry per function | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M21 any repository's pull request kept | cloud-agents-runs.ts | 37 pass, 1 fail | S10 |
+| M22 case-sensitive repository match | cloud-agents-runs.ts | 37 pass, 1 fail | S10 |
+| M23 the reported URL passed as sent | cloud-agents-runs.ts | 37 pass, 1 fail | S10 |
+| M24 settle refuses prUrl | cloud-agents-api.ts | 36 pass, 2 fail | S9, S10 |
+| M25 settle accepts any field | cloud-agents-api.ts | 37 pass, 1 fail | S10 |
+| M26 mint waits for its listeners | cloud-agents-api.ts | 37 pass, 1 fail | S8 |
+| M27 settle waits for its listeners | cloud-agents-api.ts | 37 pass, 1 fail | S8 |
+| M28 the engine never sends prUrl | github.cloud.ts | 74 pass, 1 fail | E1 |
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over the eight touched source and test files is empty for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify and brain-transport. The merge's model-evidence.ts re-pin collides with scope-finish (see the merge section).
+
+### Review round one (2026-11-20)
+
+Seven findings, none blocking. All are taken: three in code and tests, four in the lane documents only. Nothing is committed in this round.
+
+| Finding | Taken as |
+| --- | --- |
+| R1 "built, uncommitted" in the spec §3.6 note, the handoff bullet and the progress "Files" line goes stale once committed | "built (CI pending)" in the §3.6 note, "CI pending" in the handoff bullet, and the progress line now points to "What changed" for its line numbers. The header's "Built uncommitted on the merge commit `1035f87c`" stays: it is history |
+| R2 §11's header "Nothing here is edited by this branch" contradicts the built R-M and R-A items | a dated note under the header, the header itself unchanged |
+| R3 the 5 s bound covers only the listeners, not the settle's record read | code: one AbortSignal per notify, started before the read and passed into `tell`; a listener whose turn comes after the budget is not started ((g)); test R3 |
+| R4 a concurrent-mint interleaving loses the start event of a run that does start | documentation: (d), Left open, the handoff's EV-30 item and the spec §8 VE-30 note. No code change: EV-30's ticketHash lookup covers it |
+| R5 `PULL_URL` duplicated the schema's `PR_URL_PATTERN` | code: the check uses `PR_URL_PATTERN`; repository from its group, number after the last slash (equivalent to "after the last `/pull/`" for a URL the pattern accepts, and every mutation of it is visible to S9 and S10); the case-insensitive comparison and the rebuilt URL are kept ((f)) |
+| R6 a model-driven run reports `prUrl`, and EV-30 may post it to a shared place | documentation: Left open, the handoff and the VE-30 note; EV-30 confirms the head branch belongs to the run, or drops the link |
+| R7 nothing tells a listener its time is up, and Vercel may freeze it part-way | the budget's AbortSignal is passed to every listener as a trailing argument, which keeps R-A2's and R-A3's shapes compatible ((g); R1 and R3), and Left open, the handoff and the VE-30 note require listeners that finish inside the budget and are idempotent |
+
+Disagreements: none.
+
+*Mutations of the round's code* (/tmp/vector-v2/everywhere/ev25-r1/mut/: mutate.py, mutate2.py, results.json, results2.json and one log per run), one at a time against the disposable Redis, each file restored from its saved bytes and matched by sha256:
+
+| Mutation | Test file | Result | Red case |
+| --- | --- | --- | --- |
+| Ma a listener is started after the budget is spent | runs | 24 pass, 1 fail | R3 |
+| Mb the settle budget starts after the record read | runs | 24 pass, 1 fail | R3 |
+| Mc a listener gets a signal that is not the budget's | runs | 24 pass, 1 fail | R3 |
+| Md2 the number taken after the first slash | start | 36 pass, 2 fail | S9, S10 |
+| Me a local pattern that accepts any `/<word>/<n>` path in place of `PR_URL_PATTERN` | start | 37 pass, 1 fail | S10 |
+
+An earlier form of the number extraction (`lastIndexOf("/pull/")`) had a surviving mutant (`indexOf("/pull/")`, which differs only for an owner or repository named `pull`), so the round took the number after the last slash instead, whose mutants the existing cases catch.

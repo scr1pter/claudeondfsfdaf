@@ -3930,3 +3930,106 @@ CI is dispatched on everywhere-finish after the push: vector-everywhere.yml, vec
 | the 32 earlier mutations, re-run (ev24-r1/earlier-mutate.py) | all 32 red on their named cases; every restore matched by sha256 (earlier-results.json); `git status --porcelain` equal to status-before.txt |
 
 Nothing was committed in this round.
+
+## EV-25: @vector run hooks (R-A1, R-A2, R-A3) (2026-11-20)
+
+Spec §11 R-A1 to R-A3; §3.6 "Correlation". Deviations log: "2026-11-20, EV-25" (it records the lead's four rulings).
+
+**Base and the wait.** `git fetch origin release-finish main everywhere-finish`: HEAD `3c3ddf29` (EV-24) equalled origin/everywhere-finish and held origin/release-finish `67ec3a60`. origin/main `8e34d05e` (264 commits ahead) holds PR #33. review-fixes `e417c44d` is an ancestor. Brain-transport's cloud-agents edits were ancestors of origin/main only, so the package first waited, nothing was built, and the lead was asked:
+
+| Commit | What it changes in EV-25's files |
+| --- | --- |
+| `7c7508d2` (#43) | cloud-agents-api.ts +7 (artifactKey), cloud-agents-runs.ts, new cloud-agents-run-registration.ts |
+| `b4bb9b5c` (BT01) | the brain_upload dispatch input; github-app.test.ts and the fixture |
+| `c4ec2c83` (BT03) | cloud-agents-api.ts, cloud-agents-start.test.ts (+386), the cloud-agents-desktop and -brain tests |
+| `aa925ff8` (BT09) | cloud-agents-runs.ts (ownerCloudRun and RECORD), cloud-agents-runs.test.ts, cloud-agents-journey.test.ts |
+
+**The merge** (the lead's ruling 1): `1035f87c` `chore(everywhere): merge main after #43`, authored Vector, with parents `3c3ddf29` and `8e34d05e`. It is committed and not pushed: the commit gate pushes it with EV-25. Logs are in /tmp/vector-v2/everywhere/ev25/merge/.
+
+| Check on the merged tree | Result |
+| --- | --- |
+| `git merge-tree --write-tree --name-only HEAD origin/main` (before) | one conflict, packages/core/src/review/model-evidence.ts; ten files auto-merged |
+| model-evidence.ts | REVIEW_PIPELINE_REVISION 5 kept; REVIEW_PIPELINE_SOURCES `01bf6f0a09add29b` as printed; core test/review/model-evidence.test.ts 30 pass, 0 fail, 393 expects |
+| `bun install --ignore-scripts --frozen-lockfile` (47311 answered 200) | exit 0 |
+| ./packages/sdk/js/script/build.ts (fresh XDG roots) | exit 0; the three auto-merged generated files reproduced byte for byte (no worktree difference) |
+| `bun run check:generated` in packages/client | exit 0, no difference |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks, exit 0 |
+| hosted API typecheck | exit 0 |
+| core test/local-mode/sources.test.ts | 17 pass, 0 fail, 59 expects |
+| desktop src/main/remote-link.test.ts (`--no-env-file`) | 33 pass, 0 fail, 198 expects |
+| test/codium-pool.test.ts (from test/; the first run from the repository root hit the root guard and ran nothing) | 29 pass, 0 fail, 496 expects |
+| engine test/tool/subagent-lifecycle.test.ts | 18 pass, 0 fail, 80 expects |
+| engine test/review/model.test.ts | 21 pass, 0 fail, 90 expects |
+
+**Files** (line numbers in the deviations entry, "What changed"):
+
+- api/_lib/cloud-agents-start.ts, api/_lib/cloud-agents-ledger.ts, api/_lib/cloud-agents-runs.ts, api/_lib/cloud-agents-api.ts;
+- packages/engine/src/cli/cmd/github.cloud.ts;
+- packages/web/test/cloud-agents-start.test.ts (11 cases, four helpers), packages/web/test/cloud-agents-runs.test.ts (2 cases), packages/engine/test/cli/github.cloud.test.ts (1 case);
+- the lane documents: the deviations entry, this receipt, spec notes (§3.6 Correlation, §6.1 CloudEvents, §6.4, §8 VE-30, §11 R-A1 to R-A3) and the handoff's status bullet and EV-25 Left open block.
+
+No generated file, flag, env var, switch, workflow, dependency or lockfile changes in the package itself, and no listener is registered.
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, against a disposable loopback Redis 7.0.15 on port 6395, `--save '' --appendonly no`, under /tmp/vector-v2/everywhere/ev25/redis; logs in /tmp/vector-v2/everywhere/ev25/checks/):
+
+| Check | Result |
+| --- | --- |
+| web cloud-agents-start.test.ts, before the new cases (the edited sources only) | 27 pass, 0 fail |
+| web cloud-agents-runs.test.ts, before the new cases | 22 pass, 0 fail |
+| web cloud-agents-start.test.ts | 38 pass, 0 fail, 12,988 expects (27 existing cases, unchanged, and 11 new); about 20 s, 5 of them S8's bound |
+| web cloud-agents-runs.test.ts | 24 pass, 0 fail, 2,436 expects; without VECTOR_TEST_REDIS_URL: 1 pass, 1 skip, 0 fail |
+| engine test/cli/github.cloud.test.ts | 75 pass, 1 skip, 0 fail, 897 expects |
+| engine test/cli/github.agent-codium.test.ts (it settles) | 45 pass, 0 fail, 1,451 expects |
+| every other file vector-at-mention.yml's api step names, each alone | github-oidc 41/0, github-app 73/0, github-app-api 12/0, cloud-agents-artifact-key 3/0, -bind-api 16/0, -binding 42/0, -brain-api 3/0, -brain 11/0, -desktop 6/0, -entitlement-contract 6/0, -journey 4/0, -ledger 38/0, -mint-api 21/0, -owner-artifact 6/0, -readiness 8/0, -run-token 22/0, -service-off 4/0, -status 1/0, -unbind 3/0, -webhook 4/0, account-github-agents 8/0 |
+| root test/api-module-loading.test.ts, cli-token.test.ts, no-personal-paths.test.ts, no-project-wording.test.ts (from test/) | 3/0, 9/0, 1/0, 2/0 |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/engine | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 304 files, 0 errors, 0 warnings, 449 hints (448 on the merge; one is new in the tests). The first run had one error in the new S1 (the expected ticket's `source` and `purpose` widened to string), which was fixed with literal types before the runs above |
+| web test/everywhere-lane.test.ts and root test/no-personal-paths.test.ts, after the lane documents | 13 pass, 0 fail, 158 expects; 1 pass, 0 fail, 2 expects |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over the touched files, for review-fixes, scope-finish, codium-, connect-, hands- and workspaces-finish, native-qualify and brain-transport | empty for every lane |
+
+The one combined process with every cloud-agents file in it, where a leaked listener would show, is vector-at-mention.yml's api step; each file was run alone here.
+
+**Mutations** (/tmp/vector-v2/everywhere/ev25-mut/mutate.py; run.log, results.json and one log per run beside it): 28 mutations of the five source files, one at a time, each with its named test file run alone. All 28 turned their named case red, and every file was restored from its saved bytes and matched its sha256 (the digests are in results.json). Afterwards prettier rewrapped one line of cloud-agents-runs.ts, and the two web files, their no-Redis run and both typechecks were re-run on the final files (checks/final.txt): start 38/0/12,988, runs 24/0/2,436, runs without Redis 1 pass and 1 skip, web 0 errors, hosted API exit 0. Prettier `--check` is clean on the five source files, the engine test and the start test. cloud-agents-runs.test.ts was already not prettier-clean at HEAD (its line 491), so only this package's two hunks were formatted and the old line was left as it was. The table is in the deviations entry.
+
+**Re-verification after the lead's ruling 5** (same day; nothing in the source or tests changed; logs in /tmp/vector-v2/everywhere/ev25/verify/). The uncommitted tree was checked against the lead's description: merge `1035f87c` on parents `3c3ddf29` and `8e34d05e`; the four precondition commits and `e417c44d` are ancestors; origin/main has not moved. `SETTLE_RECORDED` has one caller, `settleRecordedRun`, which reads both the `['committed', outcome]` commit reply and the plain-outcome retry reply. That function has one caller, the settle route. No test fakes the script's reply. The deviations entry now records ruling 5 and drops its "for the lead to confirm" point, and the handoff bullet follows it.
+
+| Check (each alone through vector-serial, `--timeout 30000`, the disposable Redis on 6395) | Result |
+| --- | --- |
+| web cloud-agents-start.test.ts | 38 pass, 0 fail, 12,988 expects |
+| web cloud-agents-runs.test.ts (Redis; without it) | 24 pass, 0 fail, 2,437 expects; 1 pass, 1 skip, 0 fail |
+| engine test/cli/github.cloud.test.ts | 75 pass, 1 skip, 0 fail, 897 expects |
+| web cloud-agents-mint-api, -ledger, -journey, -service-off, -run-token, -desktop, -bind-api, -unbind | 21/0, 38/0, 4/0, 4/0, 22/0, 6/0, 16/0, 3/0 |
+| hosted API typecheck; `bun typecheck` in packages/engine; `bun typecheck` in packages/web | exit 0; exit 0; 0 errors, 0 warnings, 449 hints |
+| after these document edits: web test/everywhere-lane.test.ts; root test/no-personal-paths.test.ts (from test/); `git diff --check` | 13 pass, 0 fail, 158 expects; 1 pass, 0 fail, 2 expects; clean |
+
+The runs file's expect count is one more than the earlier 2,436, with the same pass and fail counts and no source or test change in between. The cause was not traced.
+
+**Not run here:** the commit, the push gate's full turbo typecheck and the CI dispatches, all of which belong to the commit gate.
+
+**For the commit gate:**
+- One package commit after the merge commit, staging explicit paths: `feat(api): add the @vector run ticket job id and run start and settle listeners`. The body names the ledger edits (RESERVE's optional field and SETTLE_RECORDED's committed reply), the engine settle's optional `prUrl`, that no listener is registered and nothing is enabled, and that no generated file, flag or dependency changed.
+- Then `git fetch origin everywhere-finish`, the full turbo typecheck, and `git push origin HEAD:everywhere-finish`, which pushes the merge too.
+- Dispatch on everywhere-finish: vector-at-mention.yml (Done-when: green) and typecheck.yml. Because of the main merge, also vector-everywhere.yml and vector-hosted-ci.yml, and never vector-codium.yml while a standalone vector-hosted-ci.yml run is in progress on the ref.
+- Record the run ids here and in the handoff.
+
+### EV-25 review round one (2026-11-20)
+
+Seven findings, none blocking; all taken (deviations log, "2026-11-20, EV-25", "Review round one"). Nothing was fetched, merged or committed in the round; HEAD is still the merge `1035f87c`. Logs in /tmp/vector-v2/everywhere/ev25-r1/ (a fresh disposable loopback Redis on port 6395, `--save '' --appendonly no`).
+
+**Files changed this round:** api/_lib/cloud-agents-runs.ts (one budget per notify started before the settle's record read, the budget's AbortSignal passed to each listener, the schema's `PR_URL_PATTERN` in place of the local copy); packages/web/test/cloud-agents-runs.test.ts (R1 checks each listener's signal; new R3); the lane documents: this receipt, the deviations entry ((d), (f), (g), the case table, Left open, What changed, the round's section), the spec (§3.6 note, §6.1 note, §8 VE-30 note, §11 header note, R-A2 note) and the handoff (status bullet, EV-25 Left open block).
+
+| Check (each alone through vector-serial, `--timeout 30000`) | Result |
+| --- | --- |
+| web cloud-agents-runs.test.ts (Redis) | 25 pass, 0 fail, 2,444 expects (2,443 on the first run; the count varies by one as before) |
+| web cloud-agents-runs.test.ts (no VECTOR_TEST_REDIS_URL) | 2 pass, 1 skip, 0 fail, 22 expects |
+| web cloud-agents-start.test.ts | 38 pass, 0 fail, 12,988 expects |
+| web cloud-agents-mint-api, -ledger, -journey, -service-off | 21/0, 38/0, 4/0, 4/0 |
+| root test/api-module-loading.test.ts, no-personal-paths.test.ts (from test/) | 3/0, 1/0 |
+| hosted API typecheck; `bun typecheck` in packages/web | exit 0; 0 errors, 0 warnings, 449 hints |
+| prettier `--check` on the four api sources and the start test; the runs test | clean; only its old line (now :551) differs, as before |
+| after the document edits: web test/everywhere-lane.test.ts; root no-personal-paths and no-project-wording (from test/); `git diff --check` | 13 pass, 0 fail, 158 expects; 1/0; 2/0; clean |
+| mutations Ma, Mb, Mc (runs) and Md2, Me (start) | all red on their named cases; every restore matched by sha256 (results.json, results2.json) |
+
+The engine was not changed in this round, so its typecheck and github.cloud.test.ts were not re-run.

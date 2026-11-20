@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
+import { PR_URL_PATTERN } from "../../packages/schema/src/everywhere.js"
 import { bindingKey, bindingsForAccount, generationKey, revokeBinding } from "./cloud-agents-binding.js"
 import { RUN_SOURCES, type RunSource, type RunTrigger } from "./cloud-agents-entitlement.js"
 import { liveKey, runRecordKey, type LedgerPurpose, type LedgerSource } from "./cloud-agents-ledger.js"
@@ -162,6 +163,10 @@ export async function recordRunStart(input: RunStart, store = persistentStore): 
   if (reply !== "ok") throw unavailable()
 }
 
+/**
+ * Ends a run record outside the settle route. It has no production caller: the settle route ends a run through the
+ * ledger's settleRecordedRun, which is the settle listener's only source (R-A3), so a call here tells no listener.
+ */
 export async function recordRunEnd(
   rid: string,
   outcome: GithubAgents.Outcome,
@@ -196,6 +201,145 @@ export async function recordRunEnd(
   )
   if (reply !== 0 && reply !== 1) throw unavailable()
   return reply === 1
+}
+
+/*
+ * Run hooks for Vector everywhere (spec 3.6 "Correlation"; R-A2 and R-A3). The mint tells start listeners once, when its
+ * reservation consumed a ticket fresh, with the ticket's hash, the run id and the ticket's job id. The settle route tells
+ * settle listeners once, when settleRecordedRun says this call ended the run, with the outcome, the run's page and, when
+ * the engine reported one for this run's own repository, its pull request. Both are at most once: a lost reply, a crash
+ * or a failing listener loses the event, and nothing retries it.
+ *
+ * Listeners run after the response, registered with the request context's waitUntil, so they never delay or change an
+ * answer or a record (the engine gives its whole settle 5 s). Every listener runs, and a failure is logged with a fixed
+ * line and no id. One LISTENER_MS budget covers the whole notify: for a settle, the run record read and then the
+ * listeners. When it is spent, one fixed line is logged, waitUntil is released, no listener is started any more, and
+ * Vercel may freeze a listener part-way. So each listener gets the budget's signal as its last argument, and a listener
+ * must finish inside the budget and be idempotent. Nothing registers a listener here: EV-30 registers them behind the
+ * everywhere config, from a module that api/cloud-agents/mint.ts and settle.ts import, because Vercel bundles each
+ * function's own import graph (as cloud-agents-run-registration.ts is imported). While the cloud-agents service is off,
+ * its routes answer 503 before any handler runs, so no listener does.
+ */
+
+/**
+ * A settled run as its listener hears it. `prUrl` is set only when the engine reported a pull request of this run's own
+ * repository, and `runUrl` only when the run record could be read.
+ */
+export type RunEnd = { outcome: GithubAgents.Outcome; prUrl?: string; runUrl?: string }
+/** `signal` aborts when the notify's LISTENER_MS budget is spent; a listener written for `(ticketHash, rid, jobId?)` fits. */
+export type RunStartListener = (
+  ticketHash: string,
+  rid: string,
+  jobId: string | undefined,
+  signal: AbortSignal,
+) => Promise<void>
+export type RunSettleListener = (rid: string, end: RunEnd, signal: AbortSignal) => Promise<void>
+
+const LISTENER_MS = 5_000
+const startListeners = new Set<{ listener: RunStartListener }>()
+const settleListeners = new Set<{ listener: RunSettleListener }>()
+
+/** Each registration is its own entry: one function registered twice is called twice, and a remover removes only its own. */
+export function registerRunStartListener(listener: RunStartListener) {
+  const entry = { listener }
+  startListeners.add(entry)
+  return () => void startListeners.delete(entry)
+}
+
+export function registerRunSettleListener(listener: RunSettleListener) {
+  const entry = { listener }
+  settleListeners.add(entry)
+  return () => void settleListeners.delete(entry)
+}
+
+/** Tells every start listener after the response. The answer never rejects. */
+export function notifyRunStart(ticketHash: string, rid: string, jobId?: string) {
+  if (!startListeners.size) return afterRunResponse(undefined)
+  const signal = AbortSignal.timeout(LISTENER_MS)
+  return afterRunResponse(
+    tell(
+      "start",
+      signal,
+      [...startListeners].map((entry) => () => entry.listener(ticketHash, rid, jobId, signal)),
+    ),
+  )
+}
+
+/**
+ * Tells every settle listener after the response. The run record gives the run's page and repository; a reported pull
+ * request is kept only when it is one of that repository's, and is otherwise dropped without a trace. The budget starts
+ * before the record read. Each listener gets its own copy of the end. The answer never rejects.
+ */
+export function notifyRunSettle(
+  rid: string,
+  input: { outcome: GithubAgents.Outcome; prUrl?: string },
+  store = persistentStore,
+) {
+  if (!settleListeners.size) return afterRunResponse(undefined)
+  const signal = AbortSignal.timeout(LISTENER_MS)
+  return afterRunResponse(
+    tell(
+      "settle",
+      signal,
+      runPages(rid, input.prUrl, store).then((pages) =>
+        [...settleListeners].map((entry) => () => entry.listener(rid, { outcome: input.outcome, ...pages }, signal)),
+      ),
+    ),
+  )
+}
+
+/**
+ * The run's page, and the reported pull request rebuilt from the record's repository. The check is the schema's
+ * PR_URL_PATTERN, the one Vector everywhere's job settle validates a pull request with: its group is the repository,
+ * which GitHub compares case-insensitively, and it ends in `/pull/<number>`, so the number follows the last slash.
+ */
+async function runPages(rid: string, prUrl: string | undefined, store: typeof persistentStore) {
+  const record = await command(["EVAL", RECORD, "1", runRecordKey(rid)], store)
+    .then((reply) => Option.getOrUndefined(decodeRecord(fields(reply))))
+    .catch(() => undefined)
+  if (!record || record.rid !== rid) return {}
+  const repository = prUrl === undefined ? undefined : PR_URL_PATTERN.exec(prUrl)?.[1]
+  const number =
+    repository?.toLowerCase() === record.repository.toLowerCase() ? prUrl?.slice(prUrl.lastIndexOf("/") + 1) : undefined
+  return {
+    runUrl: record.runUrl,
+    ...(number === undefined ? {} : { prUrl: `https://github.com/${record.repository}/pull/${number}` }),
+  }
+}
+
+/** Runs every call inside the budget; a call whose turn comes after the budget is spent is not started. */
+async function tell(
+  label: "start" | "settle",
+  signal: AbortSignal,
+  calls: Array<() => Promise<void>> | Promise<Array<() => Promise<void>>>,
+) {
+  const late = new Promise<boolean>((resolve) => signal.addEventListener("abort", () => resolve(true), { once: true }))
+  const all = Promise.resolve(calls)
+    .then((list) =>
+      Promise.all(
+        list.map((call) =>
+          Promise.resolve()
+            .then(() => (signal.aborted ? undefined : call()))
+            .catch(() => console.warn(`Vector cloud-agents ${label} listener failed`)),
+        ),
+      ),
+    )
+    .then(() => false)
+  if (await Promise.race([all, late])) console.warn(`Vector cloud-agents ${label} listeners timed out`)
+}
+
+/**
+ * Keeps listener work running after the response without delaying it. Vercel keeps a function up only for work
+ * registered with its request context's waitUntil, the hook api/_lib/usage.ts `afterResponse` reads; elsewhere the
+ * work runs on. A cloud-agents copy, so these functions do not bundle usage.ts.
+ */
+function afterRunResponse(work: Promise<void> | undefined) {
+  const settled = (work ?? Promise.resolve()).catch(() => undefined)
+  const context = Reflect.get(globalThis, Symbol.for("@vercel/request-context")) as
+    | { get?: () => { waitUntil?: (promise: Promise<unknown>) => void } | undefined }
+    | undefined
+  if (work) context?.get?.()?.waitUntil?.(settled)
+  return settled
 }
 
 export async function listCloudRuns(
