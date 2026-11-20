@@ -546,3 +546,65 @@ transpiling when `terminate()` runs after `open`, since this patch only closes t
 fix is confirmed (its source fetches came back empty), and @opentui/core 0.9.x still starts the real worker eagerly, so
 there is no version to bump to. When a Bun release fixes it, bump setup-bun and the Bun
 pin, re-run the raw amplifier on unpatched opentui, and drop this patch.
+
+## 2026-11-20: piped-output smoke hung in Bun's shell output capture
+
+Branch `piped-output-drain` from `14cb9720`. Changes: `vector.pipe` in `packages/engine/test/lib/cli-process.ts` and
+the size and comment in `packages/engine/test/cli/smokes/piped-output.test.ts`. `packages/engine/src/index.ts` and
+every assertion, deadline and flag are unchanged.
+
+Failure. PR #49 run 44705365424, engine (linux, shard 1/6), job 136185709075: "piped output larger than the pipe
+buffer all reaches a reader that starts late" timed out at 30003 ms. The helper's timeout fallback reported exit -1
+with empty stdout and stderr, so the log could not show which side hung. The next test in the file passed.
+
+Cause. The hang is in the test process, in Bun 1.3.14's shell output capture. The CLI's exit path is not involved.
+`vector.pipe` ran ``$`bun run ... debug config | <reader>`.quiet()``, so the test process captured the reader's
+stdout through an AF_UNIX socketpair that it polls with EPOLLIN|EPOLLHUP|EPOLLONESHOT. The reader echoes the CLI's
+161,040-byte JSON in one write and exits about 1 ms later. When the test process's event loop reaches that socket only
+after the reader has exited, the data and the hangup arrive as one event. `PosixBufferedReader.readWithFn` reads all
+161,040 bytes with one recvfrom. More than 128 KiB (`stack_buffer_cutoff`) is now buffered and the hangup has been
+seen, so it calls `onReadChunk(chunk, .eof)`. The shell's `PipeReader.onReadChunk` returns false and does not re-arm
+the poll, and `readWithFn` returns without reading the real EOF and without calling `done()`. The capture never closes
+and the ShellPromise never settles, although both processes have been reaped with exit 0. strace of a failing run
+shows the 161,040-byte recvfrom after the reader's `exit_group(0)` and no EPOLL_CTL_MOD or recvfrom on that socket
+afterwards; a healthy run reads before the reader exits, re-arms, reads 0 and closes. A loaded or starved event loop
+(CI shard runners) is what makes the late read likely.
+
+The window is a captured burst between 128 KiB and the socket buffer (212,992 bytes, `net.core.wmem_default` and
+`rmem_default`). A standalone repro (``$`bun -e 'process.stdout.write("x".repeat(N))'`.quiet()`` with the parent
+busy for 1.5 s) returned at N = 100,000, 125,000 and 300,000 and hung at 135,000, 160,000 and 200,000. Capturing
+stderr hangs the same way, and redirecting the child's stdout to a file does not. Instrumented failures showed the CLI
+writing all 161,040 bytes, `end()` calling back within about 1 ms, `process.exit(0)`, and the reader receiving
+everything. Contrary to the test's comments, Bun's shell joins the stages with a socketpair on Linux, not a 64 KB pipe,
+so 160 KB fitted in the link and the CLI's five-second flush at exit was never reached.
+
+Change.
+
+- `vector.pipe` sends the reader stage's stdout to a file in the fixture home (`| <reader> > <out>`) and the CLI
+  stage's stderr to another (`2> <cli.err>`), and reads them once the shell settles. The real link between the CLI and
+  the late reader, which the test exists to check, is unchanged. Bun's shell takes one redirect per command, so the
+  reader's own stderr stays captured; the readers passed here write nothing there.
+- On a timeout the result now carries the reader's output so far and a stderr that names the deadline, how many
+  characters the reader had written, and the CLI's stderr, so a repeat shows which side stopped. The deadline stays
+  30 s.
+- The test's prompt grows from 160,000 to 512,000 characters (it travels through the `VECTOR_AGENT_CONFIG` file), well
+  above the socketpair's capacity, so the CLI really is left with queued output and reaches its bounded flush when the
+  reader starts late. The comments now describe the socketpair and the capture bug. The larger size alone would also
+  have stepped outside the bug's window; it is not the fix.
+
+Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock, from `packages/engine`; "loaded" means
+six busy-loop shells alongside the test, as in the diagnosis):
+
+- Before, at `14cb9720`: 2 of 4 loaded runs hung at about 30.2 s (stopped after the second hang); the diagnosis saw
+  1 of 5 plain runs hang and 2 of 7 loaded.
+- After: 25 of 25 loaded runs pass, 15 of 15 plain runs pass. With the helper change and the size set back to 160,000,
+  10 of 10 loaded runs pass, so the helper change fixes it on its own.
+- A scratch call with a 2.5 s deadline and a reader that writes "early" then sleeps returned `timedOut`, stdout
+  "early" and the new timeout report. That scratch file was deleted.
+- `piped-output.test.ts` is the only `vector.pipe` caller. `packages/engine` `bun typecheck` exit 0; Prettier clean on
+  both files.
+
+Upstream. A Bun report with the standalone repro above (the fault is in `readWithFn`'s `stack_buffer_cutoff` branch in
+`src/io/PipeReader.zig`, which returns without `done()` when `onReadChunk(.eof)` returns false) is not filed: filing is
+a public action left to the lead or owner. Any other test that captures a 128 KiB to 208 KB burst through Bun's shell
+`.quiet()` or `.text()` can hang the same way.
