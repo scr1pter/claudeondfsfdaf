@@ -309,8 +309,12 @@ is exiting or its start time cannot be read, keeping the old identity, acknowled
 JSON instead of `ConvertTo-Json`, and `[Console]::Error` instead of `Write-Error`/`Write-Warning`. The `preparing`
 status now names its step (`identity`, `lock`, `hash`); `prepared()` ignores the extra field. The test's checkpoints
 add `at` and `elapsedMs`, and its early-exit error lists every fixture entry, so a recurrence names the phase and the
-lock's presence separates the identity step from the hash step. A new portable test fails if the generated worker or
-probe contains a Verb-Noun cmdlet or a common alias at command position; it failed against the `7c7508d2` script.
+lock's presence separates the identity step from the hash step. A new portable test strips string literals and
+comments from the generated worker and probe, then fails on any Verb-Noun word in any case, and on any bare word at
+command position (line start, after `;`, `{`, `}`, `(`, `|`, `=`, `&`, `return` or `throw`) that is not a language
+keyword or one of the script's own three functions. It reports every cmdlet in the `7c7508d2` script, and a scratch
+check showed it also catches lowercase `get-process`, `measure-object` inside a block and the aliases `gps`, `sleep`,
+`dir`, `gci` and `gc` after `=`, `&`, `(` and `return`.
 
 Not changed, flagged for the lead or owner: `packages/web/public/install.ps1` is a live-site asset whose deferred
 upgrade wait has the same exposure (`Get-FileHash` :105, :124, :148; `Get-Process` and `Start-Sleep` :151-167;
@@ -321,5 +325,8 @@ needs cmdlets such as `Expand-Archive`.
 Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock): `packages/engine`
 `bun test --timeout 30000 test/installation/ownership.test.ts` 6 pass, 2 skip (the Windows cases), 0 fail;
 `packages/engine` `bun typecheck` exit 0; `bun turbo typecheck --concurrency=2` 27 of 27 tasks successful. No PowerShell
-ran locally. CI must show every Windows engine shard green and
-ownership's two deferred cases back near 2 s.
+ran locally.
+
+Open check: the root cause counts as confirmed only once Windows CI on this branch's PR shows every Windows engine
+shard green and ownership's two deferred cases back near 2 s. That PR does not exist yet (the branch is not pushed);
+record its run ID, the shard jobs' IDs and both cases' durations here when they finish.

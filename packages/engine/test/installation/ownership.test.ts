@@ -175,16 +175,24 @@ test("Windows deferred-operation PowerShell runs no cmdlet that needs command di
     WindowsRemoval.identity(4242),
   ]
     .join("\n")
-    .replace(/FromBase64String\('[A-Za-z0-9+/=]*'\)/g, "FromBase64String('')")
-  expect(generated.match(/\b[A-Z][a-z]+-[A-Z]\w*/g) ?? []).toEqual([])
+    // String literals and comments may hold any words; only code can invoke a command.
+    .replace(/'(?:[^']|'')*'|"(?:[^"`]|`.)*"|#[^\n]*/g, (found) => (found.startsWith("#") ? "" : "''"))
+  // Any Verb-Noun word, whatever its case or verb, names a cmdlet or function that discovery would have to find.
+  expect(generated.match(/\b[a-z]\w*-[a-z]\w*/gi) ?? []).toEqual([])
+  // A bare word where PowerShell expects a command must be a language keyword or one of the script's own functions;
+  // anything else, such as an alias like gps or sleep, goes through command discovery.
+  const functions = [...generated.matchAll(/\bfunction\s+(\w+)/gi)].map((found) => found[1].toLowerCase())
+  const allowed = [
+    ...["try", "catch", "finally", "if", "elseif", "else", "while", "do", "until", "for", "foreach", "function"],
+    ...["param", "return", "throw", "exit", "break", "continue", "switch", "trap"],
+    ...functions,
+  ]
   expect(
-    generated.match(
-      /\b(get|set|new|remove|start|stop|write|out|convertto|convertfrom|test|import|add|select|where|foreach|invoke|join|split)-\w+/gi,
-    ) ?? [],
+    [...generated.matchAll(/(?<=(?:^|[;{}(|=&]|\breturn|\bthrow)[ \t]*)(?<![\w-])([a-z_][\w-]*)/gim)]
+      .map((found) => found[1])
+      .filter((word) => !allowed.includes(word.toLowerCase())),
   ).toEqual([])
-  expect(generated.match(/(^|[;{(|]\s*)(sleep|gps|ps|rm|ri|rd|del|echo|cat|ls|dir|iex|start|kill)\b/gim) ?? []).toEqual(
-    [],
-  )
+  expect(functions).toEqual(["parentticks", "executablehash", "preparing"])
   expect(generated).toContain("GetProcessById(4242)")
 })
 
