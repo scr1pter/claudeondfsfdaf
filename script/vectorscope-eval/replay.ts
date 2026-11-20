@@ -226,13 +226,18 @@ export const VARIANTS = {
     desktop: { pending: "VS-31" },
   },
   // Addendum A §1a's variants (pending Q18), registered once their package's first part has landed here, so a name
-  // whose package has begun reads as pending, not unknown. Each package's pure part landed with no key a runner applies,
-  // so every half is pending and none has keys. The desktop halves that §1a calls documented differences
-  // (`variant.applied: false`) say so.
+  // whose package has begun reads as pending, not unknown. A package's pure part lands with no key a runner applies, so
+  // its halves stay pending and set no keys until its wiring flips one. The desktop halves that §1a calls documented
+  // differences (`variant.applied: false`) say so.
+  // The engine half: Review.run holds credential files back from the prompt and redacts values in it, and its sessions'
+  // rules and tools hold them back from the read and grep tools too (VS-34). The desktop half waits for the desktop
+  // runner to read the key and call the same functions, or to record the difference.
   "holdback-secrets": {
-    planned: 'holdback: "secrets"',
-    engine: { pending: "VS-34 wiring" },
-    desktop: { pending: "VS-34 wiring" },
+    planned:
+      'holdback: "secrets": credential files held back and values redacted in the prompt and in the reviewer\'s read and grep results',
+    keys: { holdback: "secrets" },
+    engine: { from: "VS-34" },
+    desktop: { pending: "VS-34's desktop half (ai-review.ts holdbackFiles, or variant.applied: false)" },
   },
   "team-guarded": {
     planned: 'teamMemory: "guarded"',

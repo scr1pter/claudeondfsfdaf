@@ -53,7 +53,10 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // owner files they extend stay pinned. So are the fix planner the CLI step shares with the desktop (core
 // review/fix-plan.ts) and the desktop's fix adapter (app features/vectorscope/local-fix*.ts), for the same reason.
 // The route rules' admission (VS-23b's engine review/route.ts) is pinned from the day it lands: it decides which models
-// a review may send code to, and with privacy "zdr" whether it runs at all.
+// a review may send code to, and with privacy "zdr" whether it runs at all. The review sessions' permission rules (core
+// review/permission.ts) are pinned from SF-14: they hold the credential files the reviewer's read tool may not open
+// under holdback "secrets" (CREDENTIAL_FILES, which holdback.ts holds back from the prompt too), and so decide what a
+// review may read.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/connect/hub.ts",
   "packages/engine/src/connect/adapters/vectorscope.ts",
@@ -102,6 +105,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/prompt.ts",
   "packages/core/src/review/privacy.ts",
   "packages/core/src/review/holdback.ts",
+  "packages/core/src/review/permission.ts",
   "packages/core/src/review/trivial.ts",
   "packages/core/src/review/dispatch.ts",
   "packages/core/src/review/risk.ts",
@@ -811,6 +815,24 @@ describe("scope", () => {
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
     expect(promptsDigest({ guardrail: "strict" })).toBe("b98afb0e878dfe26")
     expect(promptsDigest({ runtime: "ask" })).toBe("7d9147298f5cdbaf")
+  })
+
+  // VS-34's tool half (SF-14): under "secrets" the prompts digest also counts what the reviewer's tools may read and
+  // show, so evidence scoped while only the payload half applied (SF-13b, printed at defd141b) no longer matches. The
+  // canonical prompts are SF-13b's, and every other digest holds. The value is pinned, so a change to the tool half's
+  // marker (the denies, the held paths' word, the tools that redact) moves it here and not only in the pipeline pin.
+  test("the prompts digest counts VS-34's tool half under holdback: secrets, and nothing else moves", () => {
+    const secrets = promptsDigest({ holdback: "secrets" })
+    expect(secrets).toBe("7f25a74fe7a28f91")
+    expect(secrets).not.toBe("2ea4244cd6d01e0b")
+    expect(promptsDigest({ holdback: "off" })).toBe("5d59e9ee06077c23")
+    expect(canonicalPrompts({ holdback: "secrets" }).slice(0, -4)).toEqual(canonicalPrompts())
+    expect(policyDigest(DEFAULT_REVIEW_CONFIG)).toBe("70512122f41ec160")
+    expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" })).toBe("fc36732a7163e50b")
+    expect(REVIEW_PIPELINE_REVISION).toBe(4)
+    expect(
+      evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" } }).prompts,
+    ).toBe(secrets)
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

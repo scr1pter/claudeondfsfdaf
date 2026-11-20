@@ -148,7 +148,8 @@ export interface ReplayInput {
   // mergeReviewConfig tags: the base's review.json may raise privacy (VS-23b, whose admission enforces it in
   // Review.run), and so may the engine:privacy-zdr variant (VS-23c); the eval attests no route (owner Q7), so under
   // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
-  // applies to the prompt since SF-13b; the engine:holdback-secrets variant waits for its tool rules (SF-14). Nor a key
+  // applies to the prompt since SF-13b and to the reviewer's read and grep tools since SF-14, and so may the
+  // engine:holdback-secrets variant (VARIANT_KEYS.engine), which may only raise it to "secrets". Nor a key
   // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's
   // guardrail, VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is also
   // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
@@ -1273,7 +1274,7 @@ function variantProblem(input: ReplayInput) {
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
   if (input.config && Object.hasOwn(input.config, "holdback"))
-    return "config sets holdback, which a replay takes only from the case's own review.json: the engine:holdback-secrets variant waits for VS-34's tool rules (SF-14)."
+    return "config sets holdback, which a replay takes only from the case's own review.json or the engine:holdback-secrets variant."
   const unwired = UNAPPLIED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
   if (unwired.length) {
     const packages = [...new Set(unwired.map((key) => WIRING[key]))]
@@ -1296,6 +1297,9 @@ function variantProblem(input: ReplayInput) {
   // "zdr" (engine:privacy-zdr) and never lower it.
   if (variant.keys.privacy !== undefined && variant.keys.privacy !== "zdr")
     return `${variant.name} sets privacy "${variant.keys.privacy}": a variant may raise privacy to "zdr", never lower it.`
+  // So is holdback (VS-34): a variant may raise it to "secrets" (engine:holdback-secrets) and never lower it.
+  if (variant.keys.holdback !== undefined && variant.keys.holdback !== "secrets")
+    return `${variant.name} sets holdback "${variant.keys.holdback}": a variant may raise holdback to "secrets", never lower it.`
   if (!keys.length && !variant.models)
     return `${variant.name} sets no key and no model requirement, so it would run the frozen pipeline under its name.`
   const triaged = input.triage && modelRecord(input.triage).id !== modelRecord(input.model).id

@@ -601,13 +601,22 @@ export function noteGeneratedHeaders(paths: readonly string[]): string | undefin
 
 // VS-34 (`holdback: "secrets"`): the files Review.run held back whole, the files it sent with values redacted, and the
 // changed files the repository's ignore rules exclude although they are committed (design items 4 and 6). Each is one
-// line for any number of files. Until SF-14 restricts the reviewer's read and grep tools, they say what left the
-// review prompt, not what never left the machine.
-export function noteHeldBack(paths: readonly string[]): string | undefined {
+// line for any number of files, and none says a file "is committed" with a secret. The held note says the value was
+// not sent (design item 6) since SF-14 denies the held paths to the reviewer's read and grep tools, but only where
+// nothing else the reviewer may run or read could show it: `promptOnly` is the caller's word that something could.
+// Review.run sets it under the local `--checks` (a check command the change controls can print any file, unredacted),
+// in a trusted review, whose reviewer may read back the saved long outputs of every session the user ran
+// (Truncate.GLOB), where an earlier `cat` of the file is redacted by shape alone, and with `allowDirs`, outside the
+// worktree the held paths are denied in. The note then says only what left the review prompt.
+export function noteHeldBack(paths: readonly string[], options: { promptOnly?: boolean } = {}): string | undefined {
   if (!paths.length) return undefined
+  if (options.promptOnly)
+    return paths.length === 1
+      ? `${codeSpan(paths[0])} may hold credentials, so Vector left it out of the review prompt.`
+      : `${listPaths(paths)} may hold credentials, so Vector left them out of the review prompt.`
   return paths.length === 1
-    ? `${codeSpan(paths[0])} may hold credentials, so Vector left it out of the review prompt.`
-    : `${listPaths(paths)} may hold credentials, so Vector left them out of the review prompt.`
+    ? `${codeSpan(paths[0])} may hold credentials, so Vector held it back from the model (its value was not sent).`
+    : `${listPaths(paths)} may hold credentials, so Vector held them back from the model (their values were not sent).`
 }
 
 export function noteRedacted(paths: readonly string[]): string | undefined {

@@ -506,8 +506,9 @@ export interface ReviewConfig {
   privacy?: "standard" | "zdr"
   // VS-34's opt-in (addendum A §1, Q23). Under "secrets", Review.run holds back from the model each changed file whose
   // new or old path names key material or credentials (holdback.ts holdbackFiles), records it as a `held-back` skip,
-  // and replaces secret-shaped values in every untrusted block it does send with `[redacted]` (SF-13b). The read and
-  // grep tools are not restricted yet (SF-14), so mergeReviewConfig warns that "secrets" covers only the prompt.
+  // and replaces secret-shaped values in every untrusted block it does send with `[redacted]` (SF-13b). Its sessions'
+  // rules then deny the read tool the credential files and the held paths, and the read and grep tools redact what
+  // they return the same way (SF-14).
   // Raise-only, as `privacy` is: the strictest of the global config (VS-23d's hidden source, SF-15), review.json and
   // REVIEW_HOLDBACK, and no pull request text sets it. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and
   // DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they were. Only mergeReviewConfig reads

@@ -11,6 +11,7 @@ import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { scopeOf, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
+import { holdsBack } from "@vectordevai/core/review/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -171,6 +172,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   // It only tightens listing output; read permission remains independently enforced.
   const restrictedReadListing =
     input.session.internal?.startsWith("vectorscope.") && (!reviewScope || reviewScope.restrictedReads === true)
+  // VS-34's tool half (SF-14): in a review session whose stored rules are those of holdback "secrets", the read, grep
+  // and glob tools redact what they return. Read from the session's rules, which Review.run set from its config, never
+  // from a tool's model arguments or the prompt's metadata, which a compaction can fold away.
+  const holdback = input.session.internal?.startsWith("vectorscope.") === true && holdsBack(input.session.permission)
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
     parentID: input.session.parentID,
@@ -181,6 +186,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     extra: {
       model: input.model,
       ...(restrictedReadListing ? { restrictedReadListing: true } : {}),
+      ...(holdback ? { holdback: "secrets" } : {}),
       ...(input.session.internal?.startsWith(PINNED_SESSION_PREFIX) ? { pinnedReviewInstructions: true } : {}),
       // Whether the model may train on prompts, for tools that keep the owner's personal memory away from such a model.
       mayTrain: freeModelMayTrain(input.model),

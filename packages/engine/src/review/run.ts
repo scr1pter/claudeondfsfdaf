@@ -6,7 +6,9 @@
 // ReviewEval.project) may run what the dollar cap alone refuses, against a fake provider on this computer; nothing
 // else sets it, and unset it changes nothing. Under privacy "zdr" (VS-23b) admission also holds every model and every
 // provider attempt to the route rules (route.ts), before any reservation; a refusal stops the review unreviewed. Under
-// holdback "secrets" (VS-34, SF-13b) the prompts leave out credential files and carry redacted values (holdback.ts).
+// holdback "secrets" (VS-34, SF-13b) the prompts leave out credential files and carry redacted values (holdback.ts),
+// and (SF-14) the sessions' rules deny the read tool the credential files and the held paths, and the read, grep and
+// glob tools redact what they return.
 
 import path from "path"
 import { Billing } from "@vectordevai/schema/billing"
@@ -351,12 +353,19 @@ export const run: (
     priceOf(model) !== undefined ||
     priceOf(triage) !== undefined ||
     (judgeModel !== undefined && priceOf(judgeModel) !== undefined)
+  // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
+  // untrusted block the prompts quote (holdback.ts). Only what the model is shown changes: anchors, the plan, stats,
+  // findings' suggestions and review state keep the change as it is. Unset, nothing here runs.
+  const hold = config.holdback === "secrets" ? holdback(input) : undefined
+  const heldPaths = new Set(hold?.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
   // The saved long outputs hold every session the user ever ran, so a review of someone else's pull request, which its
-  // author can steer, cannot read them back; it only loses the cut-off end of a long tool output.
+  // author can steer, cannot read them back; it only loses the cut-off end of a long tool output. Under holdback
+  // "secrets" the rules also deny the read tool the credential files and every held path, old paths included (SF-14).
   const rules = reviewPermissionRules({
     allowDirs: input.allowDirs,
     checks: input.checks,
     truncateGlob: input.trust === "untrusted" ? undefined : Truncate.GLOB,
+    ...(hold ? { holdback: "secrets" as const, held: [...heldPaths] } : {}),
     readDenies: input.admittedReads
       ? input.admittedReads.patternsFor((yield* InstanceState.context).worktree)
       : input.readDenies?.length
@@ -888,13 +897,8 @@ export const run: (
   }
 
   const body = Effect.gen(function* () {
-    // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
-    // untrusted block the prompts quote (holdback.ts). Only what the model is shown changes: anchors, the plan, stats,
-    // findings' suggestions and review state keep the change as it is. Unset, nothing here runs.
-    const hold = config.holdback === "secrets" ? holdback(input) : undefined
     const files = hold?.files ?? input.files
     const headFiles = hold ? hold.headFiles : input.headFiles
-    const heldPaths = new Set(hold?.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
     const focus = hold ? input.focus?.filter((hunk) => !heldPaths.has(hunk.path)) : input.focus
     // Nothing to send: holdback held every changed file back or, in an incremental review, every hunk new since the
     // last one, so no pass runs (the files sent would carry nothing new and go out as a full review).
@@ -1271,7 +1275,14 @@ export const run: (
     // VS-34's deterministic notes: what was held back, what was sent redacted, and what is committed although ignored.
     const holdNotes = hold
       ? [
-          noteHeldBack(hold.held.map((file) => file.path)),
+          // The value-unsent wording only where the reviewer can run no check and read nothing outside the worktree
+          // (the saved outputs of a trusted review, `allowDirs`), where the held paths are not denied.
+          noteHeldBack(
+            hold.held.map((file) => file.path),
+            {
+              promptOnly: input.checks === true || input.trust !== "untrusted" || (input.allowDirs?.length ?? 0) > 0,
+            },
+          ),
           noteRedacted(hold.redactions.map((row) => row.path)),
           input.ignored ? noteIgnoredCommitted(hold.ignoredCommitted) : noteIgnoreUnchecked(),
         ].filter((note) => note !== undefined)

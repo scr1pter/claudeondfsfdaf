@@ -18,6 +18,7 @@ import type { Report } from "./eval-report"
 import { fnv1a64 } from "./fingerprint"
 import { codeSpan } from "./format"
 import type { ImpactPrompt } from "./impact"
+import { CREDENTIAL_FILES } from "./permission"
 import {
   buildFinalizePrompt,
   buildLensPrompt,
@@ -59,7 +60,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "3d46608aa4c6898c"
+export const REVIEW_PIPELINE_SOURCES = "959aa1632830f1b0"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -78,7 +79,9 @@ export const MAX_CERTIFICATE_DAYS = 90
 // `depth: "auto"` conditions. VS-30's `runtime` is one (a runtime confirmation changes what is verified, and so what is
 // posted), counted from the VS-30 executor on, and then only as "ask". VS-34's `holdback` is one (a held-back file is
 // not reviewed, and redacted values change what the model reads), counted since SF-13b applied its payload half, and
-// then only as "secrets".
+// then only as "secrets". What its tool half (SF-14) changes, the files the reviewer may read and what the read,
+// grep and glob tools show, is counted in promptsDigest under "secrets", not here: this digest stays a digest of the
+// settings.
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -507,7 +510,11 @@ const prompts = new Map<string, string>()
 // strict, so it joins the memo key only there. VS-44's `verifyEvidence: "certificate"` adds the certificate verify schema
 // (verifyCertJsonSchema) after them, also only under strict. VS-28's lens prompts join canonicalPrompts only under
 // `depth: "auto"` with `lenses: "high"`, so only that pair joins the memo key. VS-30's runtime block joins only under
-// `runtime: "ask"`, and VS-34's input-redaction sentence only under `holdback: "secrets"`.
+// `runtime: "ask"`, and VS-34's input-redaction sentence only under `holdback: "secrets"`. Under "secrets" it also
+// digests what the reviewer's tools may read and show (SF-14): the read tool's added denies (CREDENTIAL_FILES, and the
+// held paths, which vary by change and so enter as a word) and the tools that redact. That is no prompt text, but it is
+// what the model reads through a tool call, and the held paths are denied by the same key: evidence scoped while only
+// the payload half applied (SF-13b) therefore no longer matches, and a change to the list moves the digest again.
 export function promptsDigest(
   keys: Partial<
     Pick<
@@ -534,7 +541,15 @@ export function promptsDigest(
     (schema) => schema !== undefined,
   )
   const digest = fnv1a64(
-    JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA, ...schemas]),
+    JSON.stringify([
+      ...canonicalPrompts(keys),
+      REVIEW_REPORT_JSON_SCHEMA,
+      VERIFY_JSON_SCHEMA,
+      ...schemas,
+      ...(keys.holdback === "secrets"
+        ? [{ holdbackTools: { readDenies: CREDENTIAL_FILES, held: "denied", redacts: ["read", "grep", "glob"] } }]
+        : []),
+    ]),
   )
   prompts.set(key, digest)
   return digest
@@ -614,7 +629,7 @@ export function evidenceScope(input: {
       ...(input.config.runtime === "ask" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "runtime")
         ? { runtime: "ask" as const }
         : {}),
-      // VS-34's input-redaction sentence, which Review.run adds under "secrets" since SF-13b.
+      // VS-34's input-redaction sentence (Review.run under "secrets" since SF-13b) and its tool half (SF-14).
       ...(input.config.holdback === "secrets" ? { holdback: "secrets" as const } : {}),
     }),
     policy: policyDigest(input.config),

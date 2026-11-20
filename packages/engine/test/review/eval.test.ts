@@ -25,7 +25,7 @@ import {
   type ReviewOutcome,
   UNAPPLIED_REVIEW_KEYS,
 } from "@vectordevai/core/review/types"
-import { HOLDBACK_TOOLS, parseReviewConfig } from "@vectordevai/core/review/config"
+import { parseReviewConfig } from "@vectordevai/core/review/config"
 import { noteHeldBack } from "@vectordevai/core/review/format"
 import { estimateDispatch } from "@vectordevai/core/review/dispatch"
 import { findingKey, type SliceUtilisation } from "@vectordevai/core/review/eval"
@@ -1635,22 +1635,22 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { zdrAttested: ["openrouter"], runtime: "ask" } })).toContain(
           "config sets zdrAttested, a route setting a replay cannot apply",
         )
-        // Nor VS-34's holdback, which Review.run applies since SF-13b and a replay takes only from the case's own
-        // review.json: it gets its own message, alone or beside an unapplied key, and a route setting beside it keeps
-        // the route message. Its variant waits for the tool rules (SF-14), so a variant cannot set it either.
+        // Nor VS-34's holdback, which a replay takes only from the case's own review.json or its variant: it gets its
+        // own message, alone or beside an unapplied key, and a route setting beside it keeps the route message. Since
+        // SF-14 the engine:holdback-secrets variant may raise it (the projection below), and never lower it.
         // @ts-expect-error VS-34's holdback is a sourced key, so a typed caller cannot set it.
         const holdback: ReplayInput["config"] = { holdback: "secrets" }
         expect(holdback).toBeDefined()
         const HOLD =
-          "config sets holdback, which a replay takes only from the case's own review.json: the engine:holdback-secrets variant waits for VS-34's tool rules (SF-14)."
+          "config sets holdback, which a replay takes only from the case's own review.json or the engine:holdback-secrets variant."
         expect(yield* refused({ config: { holdback: "secrets" } })).toContain(HOLD)
         expect(yield* refused({ config: { holdback: "off", depth: "auto" } })).toContain(HOLD)
         expect(yield* refused({ config: { holdback: "secrets", zdrAttested: ["openrouter"] } })).toContain(
           "config sets zdrAttested, a route setting a replay cannot apply",
         )
-        expect(
-          yield* refused({ variant: { name: "engine:holdback-secrets", keys: { holdback: "secrets" } } }),
-        ).toContain("engine:holdback-secrets sets holdback, which this replay does not apply")
+        expect(yield* refused({ variant: { name: "engine:holdback-secrets", keys: { holdback: "off" } } })).toContain(
+          'engine:holdback-secrets sets holdback "off": a variant may raise holdback to "secrets", never lower it.',
+        )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
           "engine:trivial-skip sets trivial, which this replay does not apply",
@@ -3044,7 +3044,8 @@ describe("VS-34 holdback in the replay and projection (SF-13b)", () => {
           check: recordingCheck().check,
         })
         expect(artifact.config.value.holdback).toBe("secrets")
-        expect(artifact.config.warnings).toContain(HOLDBACK_TOOLS)
+        // The key covers the reviewer's tools since SF-14, so the replay records no warning for it.
+        expect(artifact.config.warnings).toEqual([])
         expect(artifact.outcome?.partial).toBe("steps")
         expect(artifact.outcome?.unreviewed).toEqual([])
         expect(artifact.outcome?.held?.map((entry) => entry.path).toSorted()).toEqual(HELD.toSorted())
@@ -3058,10 +3059,69 @@ describe("VS-34 holdback in the replay and projection (SF-13b)", () => {
         const summary = artifact.posted.flatMap((write) => (write.write === "createIssueComment" ? [write.body] : []))
         expect(summary).toHaveLength(1)
         for (const path of HELD) expect(summary[0]).toContain(`\`${path}\` held back`)
-        // In the diff's order.
-        expect(summary[0]).toContain(noteHeldBack(["config/prod/.envrc", "deploy/.netrc"])!)
+        // In the diff's order; a trusted case's held note says only what left the prompt (SF-14).
+        expect(summary[0]).toContain(noteHeldBack(["config/prod/.envrc", "deploy/.netrc"], { promptOnly: true })!)
         // Four files changed, two were held back, none is unreviewed: the banner counts two of four reviewed.
         expect(summary[0]).toContain("Stopped at the 2-step limit after 2 of 4 files")
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // SF-14: the engine:holdback-secrets variant raises the key over a base review.json that does not set it, as the
+  // registry hands it out, and the reviewer's canned read and grep calls on the held files and on a file that is sent
+  // answer without a planted value: no later request body carries one, and the scope counts the tool half.
+  it.instance(
+    "engine:holdback-secrets holds the files back from the reviewer's read and grep calls too (SF-14)",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, "deploy/.netrc": "machine registry.example.test login old-ci\n" },
+          head: {
+            "src/list.ts": LIST_BASE + tally,
+            "src/use.ts": `import { tallyItems } from "./list"\nexport const count = tallyItems([1, 2]) // ${T.related}\n`,
+            "deploy/.netrc": "machine registry.example.test login ci\n",
+            "config/prod/.envrc": `export TOKEN=${T.envrc} # tallyItems\n`,
+          },
+          price: PRICE,
+        })
+        const at = (file: string) => path.join(checked.directory, file)
+        for (const [tool, args] of [
+          ["read", { filePath: at("config/prod/.envrc") }],
+          ["read", { filePath: at("deploy/.netrc") }],
+          ["grep", { pattern: "TOKEN|login|tallyItems" }],
+          ["grep", { pattern: T.related.slice(0, 8) }],
+          ["read", { filePath: at("src/use.ts") }],
+        ] as const)
+          yield* checked.llm.pushMatch(REVIEW, reply().tool(tool, args))
+        yield* checked.llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const variant = { name: "engine:holdback-secrets", keys: { holdback: "secrets" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(checked.directory, checked.base, checked.head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off", maxSteps: 8 },
+          variant,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value.holdback).toBe("secrets")
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.scope.prompts).toBe(promptsDigest({ holdback: "secrets" }))
+        expect(artifact.outcome?.specialists).toEqual([{ name: "review", status: "ok", steps: 6 }])
+        expect(artifact.outcome?.held?.map((entry) => entry.path)).toEqual(["config/prod/.envrc", "deploy/.netrc"])
+        const bodies = (yield* modelRequests(checked.llm)).map((body) => JSON.stringify(body))
+        expect(bodies).toHaveLength(6)
+        // The model's own calls name the held paths; no value of theirs, or of the sent file, comes back.
+        expect(
+          bodies.flatMap((body) =>
+            [T.envrc, T.related, "login ci", "login old-ci"].filter((value) => body.includes(value)),
+          ),
+        ).toEqual([])
+        const last = bodies.at(-1)!
+        expect(last).toContain("No files found")
+        expect(last).toContain("export const count = tallyItems([1, 2]) // [redacted]")
+        expect(last).toContain('import { tallyItems } from \\"./list\\"')
       }),
     GIT,
     TIMEOUT,

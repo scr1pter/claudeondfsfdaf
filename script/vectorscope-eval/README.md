@@ -632,11 +632,23 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `admitReplay`, `report.ts` and `certify.ts`. `ReplayInput.config`'s type
   leaves `VARIANT_KEYS.engine` out, so a typed caller cannot set one there;
   the refusal is the backstop for an untyped one.
-- `VARIANT_KEYS.engine` holds `verifyPolicy` and, since VS-23c, `privacy`. A
-  variant's keys go over the base's `review.json`, whose `privacy` is
-  raise-only (`config.ts`), so `replay()` refuses a variant that sets
-  `privacy` to anything but `"zdr"`. `privacy` in `config` is still refused
-  as a route setting a replay cannot apply.
+- `VARIANT_KEYS.engine` holds `verifyPolicy`, since VS-23c `privacy`, and
+  since VS-34 `holdback`. A variant's keys go over the base's `review.json`,
+  whose `privacy` and `holdback` are raise-only (`config.ts`), so `replay()`
+  refuses a variant that sets `privacy` to anything but `"zdr"` or
+  `holdback` to anything but `"secrets"`. `privacy` in `config` is still
+  refused as a route setting a replay cannot apply, and `holdback` in
+  `config` with its own message: it comes from the case's `review.json` or
+  the variant.
+- Under `engine:holdback-secrets` (or a base `review.json` that sets
+  `holdback: "secrets"`) `Review.run` holds credential files back from the
+  prompt and redacts secret-shaped values in what it sends, and its review
+  sessions' rules deny the read tool the credential files and every held
+  path, while the read, grep and glob tools redact what they return and grep
+  withholds a matching line that redaction would change. The artifact's
+  scope carries `promptsDigest({ holdback: "secrets" })`, which counts the
+  tool half too, so evidence from a run before the tool half applied does
+  not match it.
 - Under `engine:privacy-zdr` (or a base `review.json` that sets
   `privacy: "zdr"`) `Review.run` enforces the route rules at admission, at
   the transport and in the session runtime, and the artifact's
@@ -757,7 +769,7 @@ word, so only the registry keeps model ids out.
 | `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | pending VS-28 wiring        | pending, after VS-10                                                          |
 | `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)            | built (VS-29a)              | pending, after VS-10                                                          |
 | `precise`          | `mode: "precise"`                                                                       | pending VS-31               | pending VS-31                                                                 |
-| `holdback-secrets` | `holdback: "secrets"`                                                                   | pending VS-34 wiring        | pending VS-34 wiring                                                          |
+| `holdback-secrets` | `holdback: "secrets"`, in the prompt and the reviewer's read and grep results           | built (VS-34)               | pending, desktop half                                                         |
 | `team-guarded`     | `teamMemory: "guarded"`                                                                 | pending VS-35 wiring        | pending, documented difference                                                |
 | `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                     | pending VS-42 wiring        | pending VS-42 wiring, after VS-27c                                            |
 | `rule-strict`      | `ruleCheck: "strict"`                                                                   | pending VS-43 wiring        | pending VS-43 wiring                                                          |
@@ -794,7 +806,8 @@ word, so only the registry keeps model ids out.
   flip.
 - The seven rows after `precise` are addendum A's (§1a, pending Q18),
   registered once each package's first part landed here, so their names are
-  refused as pending rather than unknown. Addendum names whose package has
+  refused as pending rather than unknown; `holdback-secrets`' engine half is
+  built since VS-34's tool half. Addendum names whose package has
   not begun here (`rereview-focused`, `instructions-scoped`, `depth-rules`)
   are registered by that package's first part, and until then read as
   unknown. A desktop half that §1a calls a documented difference stays

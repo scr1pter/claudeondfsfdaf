@@ -22,7 +22,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { parseReviewConfig } from "@vectordevai/core/review/config"
-import { reviewPermissionRules } from "@vectordevai/core/review/permission"
+import { CREDENTIAL_FILES, holdsBack, reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { INPUT_REDACTION, PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { certificateProblems, evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import {
@@ -3963,8 +3963,8 @@ describe("VS-23b route admission", () => {
 })
 
 describe("VS-34 holdback payload (SF-13b)", () => {
-  // A credential file holdbackFiles holds back under "secrets" (CREDENTIAL_NAMES) that is not a sensitive path, so the
-  // plan stays the review pass alone.
+  // A credential file holdbackFiles holds back under "secrets" (CREDENTIAL_FILES, core review/permission.ts) that is
+  // not a sensitive path, so the plan stays the review pass alone.
   const NETRC = parseUnifiedDiff(
     [
       "diff --git a/deploy/.netrc b/deploy/.netrc",
@@ -4017,7 +4017,8 @@ describe("VS-34 holdback payload (SF-13b)", () => {
   // I-1 at the wire: unset and "off" send byte-identical requests under the same permission rules and return the same
   // outcome, with no input-redaction sentence. Under "secrets" the credential file is held back (absent from every
   // request body), recorded as a held-back skip with its status, never unreviewed, the review and security prompts
-  // carry the sentence, and the permission rules are still unset's (SF-14 adds the read rules).
+  // carry the sentence, and the permission rules are unset's with exactly the read denies SF-14 adds: the credential
+  // list and the held path.
   it.instance(
     "D3: unset and off send what they did, and secrets holds the credential file back",
     () =>
@@ -4082,8 +4083,24 @@ describe("VS-34 holdback payload (SF-13b)", () => {
           expect([...unset.bodies, ...off.bodies].some((body) => body.includes(INPUT_REDACTION))).toBe(false)
           expect(unset.outcome.skipped).toEqual([])
           expect(unset.outcome.held).toBeUndefined()
-          // Secrets: the same rules, the same passes, the credential file nowhere in what was sent.
-          expect({ name: scenario.name, rules: secrets.rules }).toEqual({ name: scenario.name, rules: unset.rules })
+          // Secrets: unset's rules plus the read denies alone, the same passes, the credential file nowhere in what was
+          // sent.
+          const added = [...CREDENTIAL_FILES, "deploy/.netrc"].map((pattern) => ({
+            permission: "read",
+            pattern,
+            action: "deny" as const,
+          }))
+          expect({
+            name: scenario.name,
+            rules: secrets.rules.map((rules) =>
+              rules?.filter((rule) => !added.some((deny) => Bun.deepEquals(deny, rule))),
+            ),
+          }).toEqual({ name: scenario.name, rules: unset.rules })
+          for (const rules of secrets.rules) {
+            for (const deny of added) expect(rules).toContainEqual(deny)
+            expect(holdsBack(rules)).toBe(true)
+          }
+          for (const rules of unset.rules) expect(holdsBack(rules)).toBe(false)
           expect(secrets.bodies.length).toBe(unset.bodies.length)
           expect(secrets.bodies.some((body) => body.includes(INPUT_REDACTION))).toBe(true)
           expect(secrets.bodies.filter((body) => body.includes("deploy/.netrc") || body.includes("login ci"))).toEqual(
@@ -4097,9 +4114,9 @@ describe("VS-34 holdback payload (SF-13b)", () => {
           expect(secrets.outcome.specialists).toEqual(unset.outcome.specialists)
           expect(secrets.outcome.stats).toEqual(unset.outcome.stats)
           // No ignore list was passed, so the review says it could not check one. Holdback's notes come before the
-          // cost and evidence notes.
+          // cost and evidence notes; a trusted review's held note says only what left the prompt (SF-14).
           expect(secrets.outcome.notes).toEqual([
-            noteHeldBack(["deploy/.netrc"])!,
+            noteHeldBack(["deploy/.netrc"], { promptOnly: true })!,
             noteIgnoreUnchecked(),
             ...unset.outcome.notes,
           ])
@@ -4280,7 +4297,7 @@ describe("VS-34 holdback payload (SF-13b)", () => {
         // Holdback's notes, before the cost note the fake provider's missing usage adds.
         const own = (notes: string[]) => notes.filter((note) => !note.startsWith("Reported cost may be incomplete"))
         expect(own(outcome.notes)).toEqual([
-          noteHeldBack([".env"])!,
+          noteHeldBack([".env"], { promptOnly: true })!,
           noteRedacted(["config.local.json"])!,
           noteIgnoredCommitted(["config.local.json"])!,
         ])
@@ -4301,7 +4318,10 @@ describe("VS-34 holdback payload (SF-13b)", () => {
             config: config({ holdback: "secrets" }),
           }),
         )
-        expect(own(checked.notes)).toEqual([noteHeldBack([".env"])!, noteRedacted(["config.local.json"])!])
+        expect(own(checked.notes)).toEqual([
+          noteHeldBack([".env"], { promptOnly: true })!,
+          noteRedacted(["config.local.json"])!,
+        ])
       }),
     TIMEOUT,
   )
@@ -4501,6 +4521,177 @@ describe("VS-34 holdback payload (SF-13b)", () => {
         expect(unset.specialists.map((entry) => entry.name)).toEqual(["review"])
         expect(lastUserText((yield* llm.hits).find(REVIEW)!.body)).toContain("deploy/.netrc:1-1")
       }),
+    TIMEOUT,
+  )
+})
+
+// VS-34's tool half (SF-14) at the wire: under "secrets" the review session's rules deny the read tool the credential
+// files and every held path, its old path included, and the read and grep tools redact what they return, so a canned
+// model that reads and greps held and other files sends no secret in any later request. Unset, the same calls send
+// the files as they are. Token-like literals and key headers are assembled at run time.
+describe("VS-34 holdback tools (SF-14)", () => {
+  const T = {
+    envrc: "npm_" + "r7E8".repeat(9),
+    config: "ghp_" + "r1U2".repeat(9),
+    minified: "sk-proj-" + "m1I2".repeat(8),
+  }
+  // A value no shape reads: only holding the file back keeps it out.
+  const PLAIN = "plain-words-only-pass"
+  const [keyBegin, keyEnd] = ["BEGIN", "END"].map((word) => `-----${word} RSA ${"PRIVATE"} KEY-----`)
+  const keyBody = Array.from(
+    { length: 20 },
+    (_, index) => `${"K".repeat(8)}${String(index).padStart(2, "0")}${"r5T6".repeat(13)}z`,
+  )
+  // A .netrc change, and .envrc renamed to notes.txt: both held, the second by its old path alone.
+  const HELD = parseUnifiedDiff(
+    [
+      "diff --git a/deploy/.netrc b/deploy/.netrc",
+      "--- a/deploy/.netrc",
+      "+++ b/deploy/.netrc",
+      "@@ -1 +1 @@",
+      "-machine registry.example.test login old-ci",
+      `+machine registry.example.test login ci password ${PLAIN}`,
+      "diff --git a/.envrc b/notes.txt",
+      "similarity index 90%",
+      "rename from .envrc",
+      "rename to notes.txt",
+      "--- a/.envrc",
+      "+++ b/notes.txt",
+      "@@ -1 +1 @@",
+      `-export DB_PASS=old-${PLAIN}`,
+      `+export DB_PASS=${PLAIN}`,
+    ].join("\n"),
+  )
+  const DISK = {
+    "deploy/.netrc": `machine registry.example.test login ci password ${PLAIN}\n`,
+    "notes.txt": `export DB_PASS=${PLAIN}\n`,
+    "config/prod/.envrc": `export TOKEN=${T.envrc}\n`,
+    "src/config.ts": `export const token = "${T.config}"\nexport const url = process.env.API_URL\n`,
+    "dist/app.min.js": `${"x".repeat(1989)}"${T.minified}"${"y".repeat(50)}\n`,
+    "fixtures/key.txt": ["# fixture", keyBegin, ...keyBody, keyEnd].join("\n"),
+  }
+  const CALLS: [string, Record<string, unknown>][] = [
+    ["read", { filePath: "config/prod/.envrc" }],
+    ["read", { filePath: "deploy/.netrc" }],
+    ["read", { filePath: "notes.txt" }],
+    ["read", { filePath: ".envrc" }],
+    ["grep", { pattern: "process.env" }],
+    ["grep", { pattern: "TOKEN|DB_PASS|password|token|K{8}" }],
+    ["grep", { pattern: T.config.slice(0, 8) }],
+    ["read", { filePath: "src/config.ts" }],
+    ["read", { filePath: "dist/app.min.js" }],
+    ["read", { filePath: "fixtures/key.txt", offset: 6, limit: 4 }],
+  ]
+  const SECRETS = [...Object.values(T), T.minified.slice(0, 10), PLAIN, ...keyBody]
+
+  it.instance(
+    "the reviewer's read and grep calls send no secret under secrets, and unset send the files as they are",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const files = yield* FSUtil.Service
+        for (const [file, text] of Object.entries(DISK)) yield* files.writeWithDirs(path.join(directory, file), text)
+        const sessions = yield* Session.Service
+        const runs = yield* Effect.forEach([undefined, "secrets"] as const, (holdback) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            for (const [tool, args] of CALLS) yield* llm.pushMatch(REVIEW, reply().tool(tool, args))
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+            const changed = [...LIST, ...HELD]
+            const outcome = yield* Review.run(
+              input(directory, {
+                model: priced,
+                files: changed,
+                anchors: changed,
+                config: config({ security: "off", maxSteps: 14, ...(holdback ? { holdback } : {}) }),
+              }),
+            )
+            const bodies = (yield* modelRequests(llm)).map((body) => JSON.stringify(body))
+            const rules = yield* sessions
+              .get(SessionID.make(outcome.sessions[0]))
+              .pipe(Effect.map((session) => session.permission))
+            return { outcome, bodies, rules }
+          }),
+        )
+        const [unset, secrets] = runs
+        for (const run of runs) {
+          expect(run.outcome.specialists).toEqual([{ name: "review", status: "ok", steps: CALLS.length + 1 }])
+          expect(run.bodies).toHaveLength(CALLS.length + 1)
+        }
+        // Unset, the calls read the files, values and all.
+        const sent = unset.bodies.join("\n")
+        for (const value of [T.envrc, T.config, PLAIN, keyBody[6], T.minified.slice(0, 10)])
+          expect([value, sent.includes(value)]).toEqual([value, true])
+        expect(holdsBack(unset.rules)).toBe(false)
+        // Secrets: no request after a tool call carries a value, and the tools said why.
+        expect(secrets.bodies.flatMap((body) => SECRETS.filter((value) => body.includes(value)))).toEqual([])
+        const last = secrets.bodies.at(-1)!
+        // The session's rules refuse the credential file, the held files and the renamed file's old path outright.
+        for (const file of ["config/prod/.envrc", "deploy/.netrc", "notes.txt", ".envrc"])
+          expect(last).toContain(`A permission rule denies read \\"${file}\\"`)
+        expect(last).toContain("process.env.API_URL")
+        expect(last).toContain("[redacted]")
+        expect(last).toContain("No files found")
+        // The rules hold the session back, held paths and the renamed file's old path among the denies.
+        expect(holdsBack(secrets.rules)).toBe(true)
+        for (const pattern of ["deploy/.netrc", "notes.txt", ".envrc"])
+          expect(secrets.rules).toContainEqual({ permission: "read", pattern, action: "deny" })
+        // A trusted review's reviewer may read the saved long outputs, which are redacted by shape alone, so its held
+        // note says only what left the prompt (the next test has the untrusted wording).
+        expect(secrets.outcome.notes).toContain(noteHeldBack(["deploy/.netrc", "notes.txt"], { promptOnly: true })!)
+      }),
+    { git: true },
+    120_000,
+  )
+
+  // The held note says the values were not sent only where the tools hold to it: an untrusted review without --checks,
+  // whose reviewer can run no check and read no saved output. Under the local --checks a check command can print any
+  // file unredacted, and a trusted review may read back the saved long outputs (Truncate.GLOB), redacted by shape
+  // alone, so there it says only what left the review prompt, as SF-13b's did; the rules deny the read tool the held
+  // files in all three.
+  it.instance(
+    "the held note says the values were not sent only in an untrusted review without --checks",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const sessions = yield* Session.Service
+        const changed = [...LIST, ...HELD]
+        const runs = yield* Effect.forEach(
+          [
+            { trust: "untrusted" as const },
+            { trust: "untrusted" as const, checks: true },
+            { trust: "trusted" as const },
+          ],
+          (overrides) =>
+            Effect.gen(function* () {
+              yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+              const outcome = yield* Review.run(
+                input(directory, {
+                  model: priced,
+                  files: changed,
+                  anchors: changed,
+                  ...overrides,
+                  config: config({ security: "off", holdback: "secrets" }),
+                }),
+              )
+              const rules = (yield* sessions.get(SessionID.make(outcome.sessions[0]))).permission
+              expect(holdsBack(rules)).toBe(true)
+              return outcome.notes
+            }),
+        )
+        const [untrusted, checked, trusted] = runs
+        const unsent = noteHeldBack(["deploy/.netrc", "notes.txt"])!
+        const prompt = noteHeldBack(["deploy/.netrc", "notes.txt"], { promptOnly: true })!
+        expect(unsent).toContain("(their values were not sent)")
+        expect(prompt).toContain("left them out of the review prompt")
+        expect(untrusted).toContain(unsent)
+        expect(untrusted).not.toContain(prompt)
+        for (const notes of [checked, trusted]) {
+          expect(notes).toContain(prompt)
+          expect(notes).not.toContain(unsent)
+        }
+      }),
+    { git: true },
     TIMEOUT,
   )
 })

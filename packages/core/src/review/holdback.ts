@@ -1,6 +1,6 @@
 // What of a change is held back from the model (VectorScope addendum A, VS-34, Now window). A changed file whose new or
-// old path names key material or credentials is held back whole: the read tool's secret and env patterns
-// (permission.ts) and a payload-only list of credential files, and so is a head file whose own path is one. Every
+// old path names key material or credentials is held back whole: the read tool's secret and env patterns and the
+// payload-only list of credential files (permission.ts), and so is a head file whose own path is one. Every
 // other changed file, and its head file, has the values a secret's own shape gives away replaced with `[redacted]` in
 // place (BrainScan read for shapes), so line numbers, hunks and anchors still line up. A gitignored file that was
 // committed is listed, never dropped.
@@ -15,18 +15,23 @@
 // earlier findings the review prompt lists as open. What quotes a held path, or a path holdback would hold, is dropped,
 // and every other text has its values redacted.
 //
-// Pure: neither function reads process.env (`env` defaults to none) or makes a git call (the collector computes
+// Pure: no function here reads process.env (`env` defaults to none) or makes a git call (the collector computes
 // `ignored`). Their imports are browser-safe, but `Wildcard.match` reads `process.platform` when called, which a
-// sandboxed renderer has to provide or the desktop half records as a difference. Review.run calls both before prompt
-// building under `holdback: "secrets"` (SF-13b), and only prompt rendering (the diff, the head files and the context
-// blocks) may use what they return: skips, review state, anchors, suggestions and patch IDs keep the files as they are.
-// Tool results (the read and grep tools) are SF-14's.
+// sandboxed renderer has to provide or the desktop half records as a difference. Review.run calls holdbackFiles and
+// holdbackContext before prompt building under `holdback: "secrets"` (SF-13b), and only prompt rendering (the diff,
+// the head files and the context blocks) may use what they return: skips, review state, anchors, suggestions and patch
+// IDs keep the files as they are.
+//
+// holdbackText and holdbackLines are the tool half (SF-14): the engine's read, grep and glob tools redact what they
+// return with them, in the same reading, only in a review session whose permission rules hold back (permission.ts
+// holdsBack). Those rules decide what the read tool may open (they deny the credential files and the held paths);
+// grep also reads heldReason, to withhold every line of a path this module holds back whatever the rules say.
 
 import { BrainScan } from "../brain/scan"
 import { Wildcard } from "../util/wildcard"
 import { matchPostImage, parseUnifiedDiff, type DiffFile, type DiffHunk, type DiffLine } from "./diff"
 import { isCodePath } from "./ignore"
-import { ENV_FILES, SECRET_FILES } from "./permission"
+import { CREDENTIAL_FILES, ENV_FILES, SECRET_FILES } from "./permission"
 import type { HeadFile, PromptInput } from "./prompt"
 import { REDACTED } from "./redact"
 import type { HeldFile, HoldbackReason } from "./types"
@@ -53,30 +58,6 @@ export interface HoldbackResult {
 const ENV_TEMPLATES = ["*.example", "*.sample", "*.template", "*.dist", "*.defaults"]
 const ENV_DOTFILES = [".env.*", "*/.env.*"]
 const ENV_SCRIPTS = ["*.sh", "*.bash", "*.zsh", "*.ps1", "*.sql"]
-
-// Credential files the read tool does not deny, each basename in a root and a nested form as SECRET_FILES writes
-// them. `id_ecdsa_sk` and `id_ed25519_sk` are OpenSSH's names for security-key private keys, beside the addendum's.
-const CREDENTIAL_NAMES = [
-  ".envrc",
-  ".netrc",
-  ".pypirc",
-  ".pgpass",
-  ".htpasswd",
-  "credentials",
-  "id_rsa",
-  "id_dsa",
-  "id_ecdsa",
-  "id_ecdsa_sk",
-  "id_ed25519",
-  "id_ed25519_sk",
-]
-const CREDENTIAL_FILES = [
-  ...CREDENTIAL_NAMES.flatMap((name) => [name, `*/${name}`]),
-  "*.ppk",
-  "*.pfx",
-  "*.jks",
-  "*.keystore",
-]
 
 const SHAPES = { shapes: true } as const
 
@@ -228,13 +209,25 @@ export function holdbackContext(
   }
 }
 
+// One text a read or grep tool returns, its values redacted as the prompt's are: by shape, with no environment.
+export function holdbackText(text: string) {
+  return reader({})(text)
+}
+
+// Lines a tool returns, redacted as one text so that a private key's header still marks the body lines after it, each
+// line kept where it was (redactTexts).
+export function holdbackLines(lines: readonly string[]) {
+  return redactTexts(lines, reader({}))
+}
+
 function reader(input: { env?: Record<string, string | undefined>; reading?: BrainScan.Reading }): Read {
   return (text) => BrainScan.named(text, input.env ?? {}, input.reading ?? SHAPES).text
 }
 
 // Lowercased first, as every pattern is, so a path is judged alike on every platform: Wildcard ignores case only on
-// Windows, and the read tool's rules follow it.
-function heldReason(path: string): HoldbackReason | undefined {
+// Windows, and the read tool's rules follow it. The grep tool reads it too (SF-14): under holdback it withholds every
+// line from a path this holds back, whatever the session's rules say (design item 2's backstop).
+export function heldReason(path: string): HoldbackReason | undefined {
   const lower = path.toLowerCase()
   const matches = (patterns: readonly string[]) => patterns.some((pattern) => Wildcard.match(lower, pattern))
   if (matches(SECRET_FILES)) return "secret-file"

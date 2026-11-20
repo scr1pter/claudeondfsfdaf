@@ -501,6 +501,7 @@ describe("the variant registry", () => {
       "desktop:shared-verify",
       "engine:privacy-zdr",
       "engine:cross-family",
+      "engine:holdback-secrets",
     ])
     for (const item of built) {
       const keys = Object.keys(item.entry.keys ?? {})
@@ -514,7 +515,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 4)
+    expect(pending).toHaveLength(2 * entries.length - 5)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -535,7 +536,6 @@ describe("the variant registry", () => {
       "engine:depth-auto": "VS-28 wiring",
       "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
-      "engine:holdback-secrets": "VS-34 wiring",
       "engine:team-guarded": "VS-35 wiring",
       "engine:scope-introduced": "VS-42 wiring",
       "engine:rule-strict": "VS-43 wiring",
@@ -544,10 +544,9 @@ describe("the variant registry", () => {
       "engine:receipt-json": "VS-47 runner wiring",
       "engine:verify-isolated": "VS-44c wiring (R3)",
     })
-    // Addendum A's and B's entries are pending on both runners and set no key yet, and an addendum name whose package
-    // has not begun here is still unknown.
+    // Addendum A's and B's entries but holdback-secrets are pending on both runners and set no key yet, and an addendum
+    // name whose package has not begun here is still unknown.
     for (const suffix of [
-      "holdback-secrets",
       "team-guarded",
       "scope-introduced",
       "rule-strict",
@@ -587,6 +586,20 @@ describe("the variant registry", () => {
     })
     expect(variantProblems("engine", { name: "engine:privacy-zdr", keys: { privacy: "zdr" } })).toEqual([])
     expect(resolveVariant("desktop:privacy-zdr")).toMatchObject({ ok: false, reason: "pending", package: "VS-23d" })
+    // VS-34 (SF-14): holdback-secrets' engine half is built and raises holdback, now that Review.run covers the prompt
+    // and the reviewer's read and grep tools; its desktop half waits for the desktop runner.
+    expect(resolveVariant("engine:holdback-secrets")).toEqual({
+      ok: true,
+      name: "engine:holdback-secrets",
+      adapter: "engine",
+      keys: { holdback: "secrets" },
+      frozen: false,
+    })
+    expect(variantProblems("engine", { name: "engine:holdback-secrets", keys: { holdback: "secrets" } })).toEqual([])
+    expect(pending).toContainEqual({
+      name: "desktop:holdback-secrets",
+      package: "VS-34's desktop half (ai-review.ts holdbackFiles, or variant.applied: false)",
+    })
   })
 
   test("a variant made by its models needs the review model, then a triage model other than it (VS-29a)", () => {

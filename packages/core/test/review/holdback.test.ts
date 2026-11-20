@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { matchPostImage, parseUnifiedDiff, renderPatch, type DiffFile } from "@vectordevai/core/review/diff"
-import { holdbackContext, holdbackFiles, type HoldbackContext } from "@vectordevai/core/review/holdback"
+import {
+  holdbackContext,
+  holdbackFiles,
+  holdbackLines,
+  holdbackText,
+  type HoldbackContext,
+} from "@vectordevai/core/review/holdback"
+import { CREDENTIAL_FILES } from "@vectordevai/core/review/permission"
 import type { HeadFile } from "@vectordevai/core/review/prompt"
 import type { PriorFinding } from "@vectordevai/core/review/types"
 
@@ -768,5 +775,52 @@ describe("holdbackContext", () => {
     const input = { requirements: "Deploy with placeholder-deploy-token-0001." }
     expect(holdbackContext(input, { held: [], env }).requirements).toBe("Deploy with [redacted].")
     expect(holdbackContext(input, { held: [] })).toEqual(input)
+  })
+})
+
+// VS-34's tool half (SF-14): the read and grep tools redact with these, in the prompt's reading, and the credential
+// list they hold back by path is permission.ts's, which the read tool's rules deny under the key.
+describe("the tool half's redaction", () => {
+  test("redacts a text as the prompt is redacted, by shape and with no environment", () => {
+    const text = `const token = "${t.ghp}" // and ${t.akia}`
+    expect(holdbackText(text)).toBe('const token = "[redacted]" // and [redacted]')
+    expect(holdbackText("process.env.GITHUB_TOKEN ?? tokenizer")).toBe("process.env.GITHUB_TOKEN ?? tokenizer")
+    // No environment value is read, however secret its name.
+    const env = { PROBE_SECRET_VALUE: "plain-words-value-1234" }
+    expect(holdbackText(`x = ${env.PROBE_SECRET_VALUE}`)).toBe(`x = ${env.PROBE_SECRET_VALUE}`)
+  })
+
+  test("reads lines as one text, so a key's header marks body lines a line at a time would miss, and keeps each line", () => {
+    const lines = ["# fixture", rsaBegin, ...rsaBody, rsaEnd, `token: ${t.npm}`]
+    const out = holdbackLines(lines)
+    expect(out).toHaveLength(lines.length)
+    expect(out[0]).toBe("# fixture")
+    expect(out[1]).toBe(rsaBegin)
+    for (const [index, line] of rsaBody.entries()) {
+      expect(out[2 + index]).toBe("[redacted]")
+      // Read alone, a body line has no header, so its shape gives nothing away.
+      expect(holdbackText(line)).toBe(line)
+    }
+    expect(out.at(-1)).toBe("token: [redacted]")
+    expect(holdbackLines([])).toEqual([])
+  })
+
+  test("redacts a key written on one line, with escaped breaks, as a service-account file holds it", () => {
+    const escaped = `{"private_key": "${pkBegin}\\n${rsaBody.join("\\n")}\\n${pkEnd}\\n"}`
+    const out = holdbackText(escaped)
+    for (const line of rsaBody) expect(out).not.toContain(line)
+    expect(out).toContain(pkBegin)
+  })
+
+  test("holds back the credential list permission.ts denies the read tool under the key", () => {
+    // Each pattern's root form or a nested file under it is held back as a credential file.
+    const files = CREDENTIAL_FILES.map((pattern) =>
+      pattern.startsWith("*") ? pattern.replace("*", "keys/app") : pattern,
+    )
+    const result = holdbackFiles(
+      files.map((file) => added(file, ["x"])),
+      { ignored: [] },
+    )
+    expect(result.held.map((file) => [file.path, file.reason])).toEqual(files.map((file) => [file, "credential-file"]))
   })
 })

@@ -25382,3 +25382,407 @@ tool-output redaction are SF-14's, the desktop half and the hidden global source
   rate measured; no paid run, model call or quality claim; no default change and no key enabled; no
   `REVIEW_PIPELINE_REVISION` change; no regeneration; no `cat-file --batch`; no spawn hot spot touched; no pinned
   connect file and no @vector-owned file touched; Q23 (whether "zdr" requires "secrets") still open.
+
+## 2026-11-20 · VS-34 Holdback tool rules and tool-output redaction (SF-14)
+
+VS-34 part b (`vectorscope-upgrade-addendum-a.md` VS-34 design item 2 "Tool rules under `holdback: secrets` only", the
+tool half of item 3, item 8 "Placement"; I-4 for the reviewer's tools, I-1). Built on `scope-finish` at `defd141b`
+(SF-13b) as lane package SF-14, from the SF-14 plan as corrected by its critique; where a critique point was taken in
+another form or rejected, the reason is under "Critique points". This entry is also the lane's progress record for
+SF-14. It closes the SF-13b hand-offs at `:25347-25376` that are SF-14's: the read and grep rules, tool-output
+redaction, `HOLDBACK_TOOLS` removed, the "(its value was not sent)" wording restored, the engine half flipped, and the
+change made visible to the evidence scope (SF-13b critique point 13).
+
+- **Status.** Built and tested in the working tree of `scope-finish` at `defd141b`, not committed, then corrected for
+  the review's ten findings (round one, below), still uncommitted: this package step leaves the change for the lane's
+  commit gate, which commits it as `feat(review): withhold secrets from review read and grep results`, pushes it and
+  dispatches CI. The SHA and each dispatched run's ID and result go in a later entry.
+
+- **SF-13b's CI, read with the GitHub tools** (SF-13b's entry left the runs to a later entry; this is it). On
+  `defd141b`, the runs its commit gate dispatched: `typecheck.yml` 44689228124 success; `scope-directory-identity.yml`
+  44689232067 success; `review-memory-fence.yml` 44689236538 success; `scope-app-validation.yml` 44689240943 success;
+  `vector-at-mention.yml` 44689244865 failure in one job of ten, "sandbox (codium, success, bun)" (job 136130833152:
+  "Run the unprivileged probe", "Observe the synthetic probe report" and "Assert isolation, crash protection and
+  cleanup"), the older probe failure SF-12b's, SF-13a's and SF-13b's entries record on this branch (the lead's to
+  root-cause); "engine and core" (job 136130832829: engine GitHub tests, session retry tests, core GitHub tests) and
+  the other eight jobs passed. `vector-site-smoke.yml` 44689869597 skipped. No `test.yml` or
+  `review-http-regression.yml` run on `defd141b` is listed for the branch, so SF-13b's two required dispatches are
+  still owed. SF-14's commit gate does not dispatch them either (its dispatch list is below), so both stay owed for
+  SF-13b and SF-14 together, the lead's to dispatch.
+
+- **Scope** (line numbers in the working tree).
+  - Core `review/permission.ts` (pinned from this package). `CREDENTIAL_FILES` (`:29-53`), exported and frozen: the
+    payload-only list moved here from `holdback.ts` (12 basenames, each in a root and a `*/` form, then `*.ppk`,
+    `*.pfx`, `*.jks`, `*.keystore`; `CREDENTIAL_NAMES` is inlined, its only use). `reviewPermissionRules` takes
+    `holdback?: ReviewConfig["holdback"]` and `held?: readonly string[]` (`:106-125`, type-only import of
+    `./types`, still browser-safe) and, under "secrets" only, adds read denies for `CREDENTIAL_FILES` and every held
+    path as written, in NFC and folded by `holdbackSpelling`, each `*` turned into `?` (round one, findings 5 and 6),
+    deduplicated, right after the `SECRET_FILES` denies and before `mcp:*` (`:140-149`), so the `.env.example` allow
+    cannot let a held path back in and the requester's denies stay last. `holdbackSpelling(file)` (`:169-175`):
+    forward slashes, NFC, lowercased, the spelling the read and grep tools check again. `holdsBack(rules)`
+    (`:177-189`): true only when the rules deny `read` every `CREDENTIAL_FILES` pattern. `ENV_FILES` and
+    `SECRET_FILES` are unchanged (comment `:10-13`).
+  - Core `review/holdback.ts` (pinned). The list is imported from `./permission` (`:34`); `heldReason` is exported,
+    its body unchanged, for grep's backstop (`:227-242`, round one finding 4). `holdbackText(text)` and
+    `holdbackLines(lines)` (`:212-221`): the prompt's reading (shapes, no environment), the second as one text with
+    every line kept (`redactTexts`). Header (`:1-28`) says what the tools use them for.
+  - Core `review/config.ts`. `HOLDBACK_TOOLS` and its push are removed: `mergeReviewConfig` gives no warning for
+    "secrets". `RAISE_ONLY` comment (`:145-151`) and the `mergeReviewConfig` doc (`:356-359`) updated.
+  - Core `review/types.ts`. Comment only, at `ReviewConfig.holdback` (`:507-511`).
+  - Core `review/format.ts`. `noteHeldBack(paths, { promptOnly })` (`:602-620`): without `promptOnly`, "`X` may
+    hold credentials, so Vector held it back from the model (its value was not sent)." (several: "held them back …
+    (their values were not sent)."); with it, SF-13b's prompt-only sentence. Status-neutral either way. The option was
+    `checks` before round one (finding 9).
+  - Core `review/model-evidence.ts`. Under `holdback: "secrets"` `promptsDigest` also digests
+    `{ holdbackTools: { readDenies: CREDENTIAL_FILES, held: "denied", redacts: ["read", "grep", "glob"] } }` after the
+    schemas (`:549-551`; `"glob"` since round one, finding 8); the memo key is unchanged. Comments at
+    `EVIDENCE_POLICY_KEYS` (`:82-84`), `promptsDigest` (`:513-517`) and the `evidenceScope` holdback line.
+    `REVIEW_PIPELINE_SOURCES` moves (Pin); `REVIEW_PIPELINE_REVISION` stays 4.
+  - Core `review/eval.ts`. `VARIANT_KEYS.engine` adds `holdback` (`:114-120`).
+  - Engine `session/tools.ts` (pinned). `holdback` is true for an internal `vectorscope.*` session (the pinned
+    `vectorscope.bound.` prefix included) whose stored rules `holdsBack` (`:175-178`), and the tool context's `extra`
+    then carries `holdback: "secrets"` (`:189`), for read, grep and glob alike. Not a spawn hot-spot file.
+  - Engine `tool/read.ts` (pinned). Under `extra.holdback === "secrets"` only (`:278-279`): after the ask, the
+    session's read rules are read again through `ctx.deniedResources` with every spelling folded by
+    `holdbackSpelling` (NFC since round one, finding 5), and a denied path, or any path when the context has no
+    `deniedResources`, fails "`<path>` may hold credentials, so this review does not read it (holdback "secrets");
+    nothing was read." (`:310-327`); `lines()` redacts each line whole before the 2,000-character cut (`:196-198`) and
+    keeps the last 200 lines before the offset, cut and never returned (`HOLDBACK_CONTEXT_LINES`, `:28-30`,
+    `:182-188`); the lines returned are redacted as one text with those before them (`:494-496`) and used for the
+    output (both the fenced and the plain form), the preview and the display; directory entries (`:343`) and loaded
+    instructions in the system reminder (`:523`) are redacted; an image or a PDF fails "`<path>` is an image or a PDF,
+    which cannot be redacted, so this review does not read it (holdback "secrets"); nothing was read." before its
+    bytes are read (`:394-401`). Unset, every branch is as before.
+  - Engine `tool/grep.ts` (pinned). Under the key (`:97-98`): after the read ask, admitted files whose spelling
+    folded by `holdbackSpelling` the session's read rules deny are not searched, and a file named directly fails "…
+    does not search it (holdback "secrets"); nothing was read." (`:183-201`); ripgrep may give up to `HOLDBACK_SCAN`
+    (1,000) matches (`:215`); every match from a path `heldReason` holds back is dropped, by its path in the worktree
+    or in the search, whatever the rules say (`:217-223`, round one finding 4); `clean` (`:41-82`) keeps, in
+    ripgrep's order, the first 101 matches whose line redaction leaves as it is, reading each file of at most
+    `HOLDBACK_FILE_BYTES` (1 MiB) and redacting it as one text, and returns each kept match with its whole line, so
+    the excerpt window is exact and ripgrep's cut (`Ripgrep.LINE_CAP`, round one finding 2) is moot; a larger file is
+    checked a line at a time and gives no line ripgrep cut; a line the file no longer holds or a file that cannot be
+    read again gives none; the file that would take the bytes read again past `HOLDBACK_REREAD_BYTES` (16 MiB,
+    `:15-22`) is not read and the search stops (round one findings 3 and 7); a scan that reached its cap or stopped at
+    the budget reads as truncated, with no match shown too ("Found 0 matches (more matches available)", `:224-236`).
+  - Engine `tool/glob.ts` (pinned; round one finding 8). Under `extra.holdback === "secrets"` the names it lists are
+    redacted as one text with `holdbackLines` (`:68-76`), as read redacts a directory's entries. Unset, unchanged.
+  - Core `ripgrep.ts` (not pinned; round one finding 2). `LINE_CAP` (2,000) is exported (`:22-24`) and used for the
+    cut (`:245`), so grep reads the same constant. Its pre-existing unformatted `decoded` line is left as at HEAD.
+  - Engine `review/run.ts` (pinned). `hold` (and `heldPaths`) move before the rules (`:356-360`; `holdback(input)` is
+    pure and reads only the input); the rules get `holdback: "secrets"` and `held` (every held path and old path,
+    `:368`) under the key; `noteHeldBack` gets `{ promptOnly: input.checks === true || input.trust !== "untrusted" ||
+    (input.allowDirs?.length ?? 0) > 0 }` (`:1278-1285`, round one finding 9); header `:8-11`.
+  - Engine `review/eval.ts`. The config refusal reads "config sets holdback, which a replay takes only from the case's
+    own review.json or the engine:holdback-secrets variant." (`:1276-1277`); a variant that sets holdback to anything
+    but "secrets" is refused (`:1300-1302`); comment `:142-156`.
+  - Eval `script/vectorscope-eval/replay.ts`. `holdback-secrets` (`:228-241`): keys `{ holdback: "secrets" }`, engine
+    `{ from: "VS-34" }`, desktop `{ pending: "VS-34's desktop half (ai-review.ts holdbackFiles, or variant.applied:
+    false)" }`, planned text in spec terms. README: the `VARIANT_KEYS.engine` bullet, a bullet on what the variant
+    runs and its scope, the table row ("built (VS-34)", "pending, desktop half") and the addendum-rows paragraph.
+  - Docs: this entry; `v2-notes/vectorscope-v2-plan.md` (the wiring list's `holdback` sentence and the VS-34 row,
+    `HOLDBACK_TOOLS` removed, SF-14's state, the engine-half flip and the citations).
+  - Unchanged: `ENV_FILES`, `SECRET_FILES`, the prompts and `canonicalPrompts`, `external-directory.ts` (there is no
+    list tool in the engine registry), `ai-review.ts`, `github.review.ts`, connect's files, `cli/cmd/review.ts`,
+    every generated file, `provider.ts`, `session/llm.ts` and every spawn hot-spot file. No regeneration.
+
+- **Default and parity proof (I-1).**
+  - Unset or "off": `hold` is undefined, so `reviewPermissionRules` gets no `holdback` and returns today's rules; the
+    VS-30c goldens hold with holdback "off" and with held paths it ignores (`permission.test.ts` "unset or off, the
+    rules are byte-identical to before, held paths or not": `03ee3c8b157dfcba`, `907b31028ef0edd2`,
+    `10537fa7f8acdd1d`). `holdsBack` is false, `tools.ts` adds nothing to `extra`, and the read, grep and glob tools
+    take exactly their old paths (the read, grep, glob, private-tools and session-tools suites unchanged; the tool
+    test's unset output equals the redacted one but for the token; a held path's `*`-to-`?` and NFC forms exist only
+    under "secrets").
+  - At the wire: engine `run.test.ts` "D3: unset and off send what they did…" still proves unset == "off" (bodies,
+    rules and outcome) in its four scenarios; under "secrets" its rules are now unset's plus exactly the
+    `CREDENTIAL_FILES` denies and the held path's (`deploy/.netrc`), in the ok, retry, finalizer and verify scenarios,
+    and `holdsBack` is true for every "secrets" session and false for every unset one.
+  - Digests: `promptsDigest()` `5d59e9ee06077c23` and the other pinned prompt digests hold; `policyDigest(DEFAULT)`
+    `70512122f41ec160` and `policyDigest({holdback:"secrets"})` `fc36732a7163e50b` are SF-13b's (printed at HEAD);
+    `promptsDigest({holdback:"secrets"})` moves off SF-13b's `2ea4244cd6d01e0b` (printed at HEAD), by design (decision
+    9), to `7f25a74fe7a28f91`, now pinned as a literal in `model-evidence.test.ts` (round one finding 1; it was
+    `03bd0731464c3121` before glob joined the marker); `REVIEW_PIPELINE_REVISION` 4.
+  - `mergeReviewConfig` gives the same config as before for every input, and for "secrets" one warning fewer.
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `3d46608aa4c6898c` -> `959aa1632830f1b0` (`e4d1b43fb668d6e9` before round one,
+  then `946d467030a3c744` before its last comment edits), computed after the last edit to a pinned file and after
+  Prettier, with `test/review/model-evidence.test.ts` then green (33, 0, 0, 429; 32, 1 with the previous pin). It
+  moves for two reasons: the pinned files changed (`run.ts`, `tools.ts`, `read.ts`, `grep.ts`, `glob.ts`,
+  `holdback.ts`), and `packages/core/src/review/permission.ts` joins `REVIEW_PIPELINE_FILES` (it holds the list the
+  reviewer's read tool may not open under the key, so it decides what a review may read; the comment above the list
+  says so, critique point 9). Merge note for the lead: connect-finish and everywhere-finish edit pinned files, so the
+  pin is recomputed after every merge of main.
+
+- **Replay variant.** `engine:holdback-secrets`: `{ pending: "VS-34 wiring" }` -> `{ from: "VS-34" }` with keys
+  `{ holdback: "secrets" }`; `VARIANT_KEYS.engine` adds `holdback`, raise-only as `privacy` is. `replay.test.ts` 49,
+  0, 0 (the built list gains `engine:holdback-secrets`, the pending count drops by one, and its resolution and desktop
+  label are asserted). The engine eval test "engine:holdback-secrets holds the files back from the reviewer's read and
+  grep calls too (SF-14)" runs it over a base review.json without the key.
+
+- **Desktop half.** Still pending, a documented difference: `ai-review.ts` is unchanged and reads `parseReviewConfig`,
+  which ignores the key; its sessions get `reviewPermissionRules({})`, so `holdsBack` is false there and the tools are
+  unchanged. The app test "holdback in review.json changes nothing on the desktop until SF-15…" passes (123, 0, 0,
+  517). SF-15 gets the tool half by passing `holdback` and `held` to the desktop's rules; nothing else is needed.
+
+- **Decisions and deviations.**
+  1. **Which read rules** (critique point 2 taken in full). Under "secrets": `CREDENTIAL_FILES` and every held path
+     and old path, each as written and lowercased. A credential file renamed to `notes.txt` is therefore denied as
+     `notes.txt` (and its old `.envrc`), so the held note's "(its value was not sent)" holds for it too. Corrected in
+     round one (finding 6): the plan took a held path as a Wildcard pattern as it stands, calling its `*` and `?`
+     harmless widening. That missed that Wildcard compiles `*` to `.*`, so a committed name chooses a backtracking
+     pattern (I-2). Each held path's `*` now becomes `?`, which still matches the literal `*`, widens only to names of
+     the same length, leaves no trailing " *" form, and cannot backtrack; `?` was already fixed-width. Each held path
+     is denied as written, in NFC and folded (`holdbackSpelling`, finding 5). Held paths are relative to the worktree,
+     as the read tool asks. The env half of the list
+     gets no rule: `ENV_FILES` already denies a superset, and a `.env`/`.env.*` deny would revoke the `.env.example`
+     exemption the spec keeps.
+  2. **Where the list lives.** `permission.ts`, exported and frozen; `holdback.ts` imports it (the reverse would be a
+     cycle). `permission.ts` is pinned from now on (Pin).
+  3. **How the tools know.** From the session's stored rules (`holdsBack`), set by Review.run from its config
+     (contract §0.3 item 1): prompt SCOPE metadata can be compacted away and a process registry is lost on restart.
+     The finalizer appends `DENY_ALL` and `ALLOW_OUTPUT`, which keeps `holdsBack` true.
+  4. **Where values are redacted.** Inside the tools, before the result is built, so the stored part, plugins,
+     compaction and the next request all carry redacted text. read redacts each line whole before the cut (critique
+     point 1) and the returned lines as one text with up to 200 lines before the offset, which also covers a read that
+     starts inside a private key's body (the plan listed that as not claimed); then the loaded instructions, directory
+     entries, preview and display.
+  5. **The backstop.** The session's own read rules read again with every spelling folded (`holdbackSpelling`: NFC
+     and lowercased since round one) through `ctx.deniedResources`. The credential lists are lowercase ASCII, and the
+     held paths' folded forms are among the rules, so this covers both the lists and the held paths in any case and
+     normal form (`config/.ENVRC` on Linux, a case-insensitive or NFD volume on macOS). It refuses when the context
+     cannot read the rules (fail-closed). Round one (finding 4) adds what the spec names as the backstop, apart from the
+     rules: grep drops every match from a path `heldReason` holds back (`SECRET_FILES`, the env files but templates,
+     `CREDENTIAL_FILES`), so it no longer rests on the lead accepting a rules-only backstop. `heldReason` is a subset
+     of what holdback's rules deny, so this withholds no line the rules would let through; the test gives grep rules
+     without the key's denies to show it acts alone. The read tool keeps the rules check alone.
+  6. **Images and PDFs are refused under the key** (I-4: an attachment cannot be redacted). Outside the spec; the lead
+     may reject it. The refusal names holdback and says nothing was read (critique point 11). Test: the tool test
+     "refuses an image or a PDF…"; mutation `read-media`.
+  7. **Not redacted, and the held note.** bash under the local `--checks` runs check commands the change controls,
+     which can print any file, and its output is not redacted. Since round one (finding 8) glob's names are redacted
+     like read's directory entries (there is no list tool in the engine registry). Round one (finding 9) chose, for
+     critique point 7, the wording over a new rule: the held note keeps SF-13b's prompt-only wording whenever the
+     reviewer could see a held value some other way, under `--checks`, in a trusted review (whose rules let it read
+     back every session's saved long outputs, `Truncate.GLOB`, which are redacted by shape alone) or with `allowDirs`
+     (outside the worktree, where the held paths are not denied). It says "(its value was not sent)" only in an
+     untrusted review without either. The other answer, denying `Truncate.GLOB` reads under the key, is the lead's to
+     take: it keeps the stronger wording for trusted reviews too, at the cost of the cut-off end of every long tool
+     output, and it needs an `external_directory` deny, not a read deny (the read tool asks with the path relative to
+     the worktree). No CLI warning is added for `--checks` with "secrets" (critique point 6).
+  8. **`HOLDBACK_TOOLS` is removed**, and so is the warning; the CLI holdback test now asserts that stderr under the
+     key is unset's.
+  9. **Evidence scope** (SF-13b critique point 13; critique point 8 kept as a flagged lead decision). The tool half is
+     digested into `promptsDigest` under "secrets": it is what the model reads through a tool call, the held-path
+     denies come from the same key, and evidence scoped between SF-13b and SF-14 then no longer matches. The
+     contract's "changes only when their text does" stays true of the marker (it changes when `CREDENTIAL_FILES` does).
+     Alternatives for the lead: a `policyDigest` contribution under "secrets", or a dedicated `EvidenceScope` field;
+     either is a small move of the same marker. `promptsDigest`'s comment and `EVIDENCE_POLICY_KEYS`' say where it is.
+     No revision bump (owner-gated).
+  10. **Replay variant labels in spec terms** (critique point 10): the desktop half is "VS-34's desktop half
+      (ai-review.ts holdbackFiles, or variant.applied: false)", the planned text names no lane package.
+  11. **Impact slice**: SF-18 applies `holdbackLines` to the slice it builds, or adds `impact` to `HoldbackContext`.
+  12. **grep withholds rather than redacts** (critique point 4, taken in a stronger form). A matching line that
+      redaction would change is left out, not shown with `[redacted]`: a redacted line still says that a pattern
+      matched inside the value, and alternation (`API_KEY|ghp_a`) would turn a per-submatch rule into an oracle.
+      Withheld lines are not counted in "Found N matches". The file is redacted as one text (as read redacts), so a
+      key's body lines are withheld too. Cost: a grep never shows a line that holds a secret-shaped value; the reviewer
+      can read the file, redacted.
+  13. **Critique point 5 is moot under decision 12**: a kept line is unchanged by redaction, so the submatch offset
+      is exact, and there is no fallback to the raw line.
+  14. **`hold` is computed before the session rules** in Review.run (it was computed inside `body`, after `ask` was
+      defined): pure, the same value, needed for the held-path denies. The sessions are created inside `ask`, so they
+      get the rules with the held paths.
+  15. Scratch: `/tmp/vector-v2/scope/sf-14/` (the task's path; each test file ran with a fresh `TMPDIR` and XDG roots
+      under `runs/`); 14 GB free on the root volume.
+  16. `review-http-regression.yml` (scope local) is owed (CI, below) although neither the review HttpApi nor
+      `service.ts` changes (critique point 11): the local review service runs `Review.run`, whose session rules and
+      tool context change under the key, and SF-13b's dispatch of it is still owed.
+
+- **Critique points.** 1 taken (decision 4, with a test at the 2,000-character edge, a one-line escaped key, and the
+  mutation `read-whole`). 2 taken (decision 1; the run test renames `.envrc` to `notes.txt` and reads `notes.txt`,
+  `.envrc` and greps; mutations `run-held`, `perm-lower`). 3 taken: `test/session/holdback-tools.test.ts` creates
+  sessions with `Session.create` (so the real `SessionAudience.register` runs) and checks a `vectorscope.*` session
+  with "secrets" rules (set), the pinned prefix (set), no internal name, `workflow.review`, `{}`, "off" and `checks`
+  rules (not set), and the finalizer's appended rules (still set); `tools-internal` is killed by its "only a review
+  session…" test, `tools-extra` by both of its tests. 4 taken in a stronger form (decision 12; probe tests for a
+  token's prefix and an alternation). 5 moot (decision 13). 6 taken as "note only, stated" (decision 7; connect-finish
+  hand-off rewritten below). 7 taken in round one as wording (decision 7); denying `Truncate.GLOB` under the key stays
+  the lead's alternative. 8 kept, alternatives documented (decision 9). 9 taken (Pin).
+  10 taken (decision 10). 11 taken (decisions 6 and 16; both refusal texts name holdback and say nothing was read).
+  12 taken: every bun, bunx, Prettier and oxlint command ran through `vector-serial`; the hand-offs are cited at
+  `:25347`.
+
+- **Review findings (round one).** Ten findings, one blocking; all ten fixed in the code, none left with a
+  disagreement.
+  - (1) `promptsDigest({ holdback: "secrets" })` unpinned: pinned as `7f25a74fe7a28f91`, the `not.toBe` line kept.
+  - (2) `RIPGREP_LINE` copied core's private `2_000`: core `ripgrep.ts` exports `LINE_CAP` and uses it for the cut, and
+     grep reads `Ripgrep.LINE_CAP`.
+  - (3, 7) No total budget for `clean`'s re-reads: `HOLDBACK_REREAD_BYTES` (16 MiB); the file that would pass it is
+     not read, the search stops and reads as truncated, and a truncated search with no line shown says "Found 0
+     matches (more matches available)" rather than "No files found". A byte budget, not a file count: a small file
+     costs a stat and a read, the 1 MiB files are what the finding measured. Test: "stops reading files again at its
+     byte budget, and reads as truncated" (16 files of about 1 MB: "No files found", not truncated; a 17th: truncated).
+  - (4) The backstop rested on the rules alone: grep also drops every match from a path `heldReason` holds back, apart
+     from the rules (decision 5). Test: "withholds every line of a listed path even when the session's rules let grep
+     search it" (rules without the key's denies; `config/.envrc`, `deploy/.netrc` and `keys/id_ed25519` give no
+     line; `.env.example` and source do).
+  - (5) No Unicode normalisation: `holdbackSpelling` (NFC, lowercased) in the rules and in the read and grep second
+     checks. Tests: `permission.test.ts` "denies a held non-ASCII path in either normal form, as the tools fold it",
+     and the tool test "refuses a held non-ASCII path in the other Unicode normal form, and grep does not search it"
+     (an NFD file name with an NFC held path, and the reverse).
+  - (6) Blocking, regex denial of service from held paths (`permission.ts`). Reproduced before the fix with the real
+     `reviewPermissionRules` and `Wildcard.match` (`/tmp/vector-v2/scope/sf-14/fix/redos.ts`): one evaluation of the
+     held path `a*a*a*a*a*a*a*a*a*a*a*a*a*/.envrc` took 17 ms at 32 characters and 59 ms at 34, growing about
+     fivefold per two characters. Fixed: each held path's `*` becomes `?` before it is a pattern (decision 1 and the
+     comment at `permission.ts:106-117` corrected); after the fix 0.1 ms at 64 characters. Test: `permission.test.ts`
+     "a starred held path cannot make a read deny backtrack" (three 64-character inputs under 50 ms, the real name
+     still denied) and the starred assertions in "denies every held path, as written and folded…" (`data/x.txt`
+     denied, `data/other.txt` allowed, a `Data/* *` name leaves no trailing " *" form, no held path adds a `*`).
+  - (8) read redacted directory entries while glob did not: glob now redacts its names under the key (the other choice,
+     dropping read's, would leave a token-shaped name on the wire). There is no list tool. Test: "redacts a file name
+     that spells a token…"; the marker's `redacts` gains `"glob"`.
+  - (9) The held note claimed more than trusted reviews guarantee: decision 7 (prompt-only wording under `--checks`, in
+     trusted reviews and with `allowDirs`). Tests: `run.test.ts` "the held note says the values were not sent only in
+     an untrusted review without --checks" (replaces "under --checks the held note says only what left the review
+     prompt"), and the trusted runs' notes in `run.test.ts` and `eval.test.ts` now expect the prompt-only wording.
+  - (10) The stale `CREDENTIAL_NAMES` comment in `run.test.ts` now cites `CREDENTIAL_FILES` (core
+      `review/permission.ts`).
+  The numbers are the review's. The comments that named only read and grep as redacting (`permission.ts`
+  `holdsBack`, `run.ts` header, `session/tools.ts`, `holdback.ts` header, `model-evidence.ts`) name glob too;
+  `v2-plan.md`'s VS-34 row and the eval README say the same. The replay variant's planned text stays in spec terms
+  (read and grep).
+
+- **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory; app with
+  `--isolate --preload ./happydom.ts`; fresh `TMPDIR` and XDG roots per file). HEAD `defd141b` -> working tree; pass,
+  skip, fail, expects. HEAD counts were run here at `defd141b` except where marked as SF-13b's commit-gate counts.
+  The list below is before round one; the round-one re-runs follow it.
+  - Core: `test/review/permission.test.ts` 15, 0, 0, 191 -> 22, 0, 0, 264 (describe "holdback's read rules (VS-34,
+    SF-14)", seven tests); `test/review/holdback.test.ts` 21, 0, 0, 180 -> 25, 0, 0, 199 (describe "the tool half's
+    redaction", four tests; the 40-odd fixture diffs unchanged and green); `test/review/config.test.ts` 84, 0, 0, 1227
+    -> 84, 0, 0, 1225 (no warning under "secrets"); `test/review/format.test.ts` 62, 0, 0, 327 -> 62, 0, 0, 333;
+    `test/review/model-evidence.test.ts` 32, 0, 0, 421 -> 33, 0, 0, 428 ("the prompts digest counts VS-34's tool half
+    under holdback: secrets, and nothing else moves"); unchanged: `test/review/eval.test.ts` 55, 0, 0, 297,
+    `test/review/prompt.test.ts` 50, 0, 0, 325, `test/brain/scan.test.ts` 20, 0, 0, 312.
+  - Engine: `test/tool/holdback-tools.test.ts` new, 10, 0, 0, 167; `test/session/holdback-tools.test.ts` new, 2, 0, 0,
+    32; `test/review/run.test.ts` 83, 1, 4, 873 (SF-13b) -> 85, 1, 4, 1056 (D3 rules assertion rewritten; describe
+    "VS-34 holdback tools (SF-14)", two tests; the four failures are the sandbox-only names SF-13b lists: "the durable
+    local runner preserves actual provider output…", "deletion without instance context joins the actual provider…",
+    "nested service placement roots relative denials…", "a resolver-time symlink retarget cannot release…");
+    `test/review/eval.test.ts` 47, 0, 0, 556 (SF-13b) -> 48, 0, 0, 567; `test/cli/review-holdback.test.ts` 6, 0, 0, 49
+    (SF-13b) -> 6, 0, 0, 48; unchanged: `test/tool/read.test.ts` 45, 0, 0, 106, `test/tool/grep.test.ts` 19, 0, 0, 62,
+    `test/session/private-tools.test.ts` 6, 0, 0, 49, `test/session/session-tools-writable.test.ts` 4, 0, 0, 49,
+    `test/review/read-authority.test.ts` 7, 0, 0, 68, `test/review/structured-output-review.test.ts` 5, 0, 0, 22,
+    `test/cli/review-privacy.test.ts` 6, 0, 0, 88, `test/review/service.test.ts` 4, 1, 10 (the verifier refusal "this
+    host has no supported unprivileged…", as at SF-13b; CI only).
+  - Eval script (from `packages/script`): `../../script/vectorscope-eval/replay.test.ts` 49, 0, 0, 659.
+  - App: `src/features/pull-requests/ai-review.test.ts` 123, 0, 0, 517 (unchanged; desktop parity).
+  - Never run: `test/cli/review.test.ts` (lane rule).
+  - Typecheck: `bun typecheck` in `packages/core` and `packages/engine`, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`: clean. Full TURBO typecheck
+    (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`, `--concurrency=2`): 27 of 27 tasks successful (25 cached).
+  - Prettier `--check` on the 25 changed TypeScript files and the eval README: clean. oxlint on the changed TypeScript
+    files: 0 errors; on this package's lines the warnings left are `no-useless-concat` and
+    `no-unnecessary-template-expression` on the run-time token and key-header assembly (the convention of
+    `holdback.test.ts`, so no token or key header sits in the source) and `consistent-return` in `read.ts`'s
+    `lines()` callback, whose existing early returns have the same shape.
+  - Round one, after the fixes (same procedure; each file once, after the last code edit but comment-only edits to
+    `permission.ts`, `run.ts` and `session/tools.ts`, after which `model-evidence.test.ts` ran again for the pin).
+    Core: `test/review/permission.test.ts` 24, 0, 0, 291 (two new tests); `test/review/format.test.ts` 62, 0, 0, 333;
+    `test/review/model-evidence.test.ts` 33, 0, 0, 429; `test/review/holdback.test.ts` 25, 0, 0, 199;
+    `test/ripgrep.test.ts` 5, 0, 0, 18. Engine: `test/tool/holdback-tools.test.ts` 14, 0, 0, 194 (four new tests);
+    `test/review/run.test.ts` 85, 1, 4, 1062 (the same four sandbox-only failures; the `--checks` test replaced by the
+    three-way note test); `test/review/eval.test.ts` 48, 0, 0, 567; `test/tool/grep.test.ts` 19, 0, 0, 62;
+    `test/tool/read.test.ts` 45, 0, 0, 106; `test/tool/glob.test.ts` 2, 0, 0, 6; `test/cli/review-holdback.test.ts` 6,
+    0, 0, 48; `test/session/holdback-tools.test.ts` 2, 0, 0, 32; `test/session/private-tools.test.ts` 6, 0, 0, 49;
+    `test/review/read-authority.test.ts` 7, 0, 0, 68. Not re-run in round one, their code unchanged since the counts
+    above: core `config.test.ts`, `eval.test.ts`, `prompt.test.ts`, `brain/scan.test.ts`; engine
+    `session-tools-writable.test.ts`, `structured-output-review.test.ts`, `review-privacy.test.ts`, `service.test.ts`;
+    the eval `replay.test.ts`; the app `ai-review.test.ts`. Typecheck: `bun typecheck` in `packages/core` and
+    `packages/engine` and the eval tsconfig, clean; full TURBO typecheck 27 of 27 successful (25 cached). Prettier
+    `--check` clean on the 15 TypeScript files round one touched and the eval README; core `ripgrep.ts` keeps the
+    unformatted `decoded` line it had at HEAD (Prettier's `--write` hunk for it was reverted, so the diff holds only
+    `LINE_CAP`). oxlint: 0 errors and no new warning on round one's lines.
+
+- **Done criterion.** Under the key, no planted secret-shaped value (nor a value no shape reads, in a held file) appears
+  in any recorded wire body across the fixtures: SF-13b's payload cases, the run test "the reviewer's read and grep
+  calls send no secret under secrets…" (a credential file, two held files, a renamed file's old path, a grep for
+  `process.env`, a grep that would match every value, a probe for a token's prefix, a token past the 2,000-character
+  cut and a read inside a key's body, 11 requests), and the eval variant case (6 requests); since round one also the
+  tool tests' outputs for a glob of a token-named file, a listed path grep may search, an NFD-named held file and a
+  search past the re-read budget. Seed cases are not claimed (owner-gated).
+
+- **Mutation checks** (`/tmp/vector-v2/scope/sf-14/mut/mutate.py`, list in `mutations.json`; each applied alone, its
+  test file run filtered through the lock, the file restored by a temp-and-rename copy and checked with `cmp`; the
+  tree's non-docs `git diff` hash was the same before and after, `c673dc2421584160`): 30 of 30 killed, each restored.
+  permission.ts: the gate as `!== undefined`; nested forms dropped; held paths without their lowercase form;
+  `holdsBack` with `some`; `holdsBack` ignoring the action. tools.ts: without the `vectorscope.` check; without the
+  extra. read.ts: no whole-line redaction before the cut; no joint pass; no context lines; loaded instructions
+  unredacted; no backstop; the backstop open without `deniedResources`; media allowed; directory entries unredacted.
+  grep.ts: no backstop; no `clean`; a line at a time instead of the file; redacted lines shown instead of withheld;
+  cut lines kept in a large file; ripgrep's cut line instead of the whole line. run.ts: rules without holdback; held
+  paths not passed; the note ignoring `checks`. model-evidence.ts: `promptsDigest` without the tool half. eval.ts:
+  holdback "off" admitted as a variant. core eval.ts: `VARIANT_KEYS.engine` without holdback. replay.ts: the engine
+  half pending. config.ts: a holdback warning reinstated. format.ts: the `--checks` wording always.
+  Round one (same harness; lists `/tmp/vector-v2/scope/sf-14/fix/mutations.json` and `remutations.json`; the tree's
+  non-docs `git diff` hash `19da52ca876693bf` before and after each list): 14 of 14 new mutations killed, each
+  restored. permission.ts: held paths' `*` kept; no NFC form among the denies; `holdbackSpelling` without NFC.
+  read.ts and grep.ts: the second check lowercasing only. grep.ts: no `heldReason` drop; a 1 GiB budget; `stopped`
+  ignored; an empty truncated search answered "No files found". glob.ts: names unredacted. run.ts: `promptOnly`
+  ignoring the trust; ignoring `--checks`. format.ts: `promptOnly` read inverted. model-evidence.ts: glob left out of
+  the marker. And 22 of 22 earlier mutations re-run against the fixed tree, killed and restored: the 17 whose anchors
+  still match (perm-gate, perm-nested, holdsback-some, holdsback-action, the eight read.ts ones, grep-backstop,
+  grep-perline, grep-big-cut, run-rules, run-held) and five rewritten for moved anchors (the folded form dropped from
+  the denies, no `clean`, redacted lines shown, the cut line instead of the whole one, no tool-half marker); the other
+  three moved ones are covered by the new run.ts, format.ts and model-evidence.ts mutations. The timing test is not
+  run against the reverted `*` pattern: the regex runs synchronously, so at 64 characters it would not finish within
+  any test timeout; the reverted pattern is killed by "denies every held path…" instead.
+
+- **CI** on `scope-finish` (each run's ID and result go in a later entry). The commit gate dispatches
+  `typecheck.yml`, `scope-directory-identity.yml` (core and engine `review/**`, engine `test/review/**`),
+  `review-memory-fence.yml` (`run.ts`), `scope-app-validation.yml` and `vector-at-mention.yml` (core `review/**`), the
+  list its task gives it, which names no other workflow. Still owed, the lead's to dispatch: `test.yml`, required
+  (runtime code in core and engine: `run.test.ts`, `eval.test.ts`, the new tool and session tests, the read, grep and
+  glob suites, core `ripgrep.test.ts`, and the top-level eval tests; it also covers SF-13b's owed run), and
+  `review-http-regression.yml` with scope local (decision 16). `scope-app-validation.yml` runs although no app code
+  changed. Deferred, CI only: the Windows and macOS legs of
+  `test.yml`, where Wildcard ignores case (Windows) or the volume does (macOS), so the rules and the backstop answer
+  in a different order than on Linux; the private-mount and HTTP-shard cases.
+
+- **Hand-offs.**
+  - SF-15: the desktop half: pass `holdback` and `held` to the desktop's `reviewPermissionRules`, with
+    `holdbackFiles` and `holdbackContext` in `ai-review.ts` (or `variant.applied: false`), and the hidden global source.
+  - SF-18 (VS-25 impact-slice wiring): redact the slice (`holdbackLines`), or add `impact` to `HoldbackContext`.
+  - SF-37: the GitHub job's move onto `mergeReviewConfig`, which brings the tool half with it through the same rules.
+  - connect-finish: connect's review runs get the tool half too (they run `Review.run` through `ReviewService.execute`);
+    the `HOLDBACK_TOOLS` warning SF-13b's hand-off asked connect's preview to show no longer exists, so moving the
+    preview onto `mergeReviewConfig` shows the key with no warning; `OutcomeFacts` and a connect test of a held-back
+    skip are still connect-finish's.
+  - VS-18: share the scanner (`holdbackText`) for its redacted output.
+  - The lead: decision 6 (media refusal), decision 9 (where the tool half's marker lives), decision 7's alternative
+    for critique point 7 (deny `Truncate.GLOB` reads under the key, which would let trusted reviews' held note claim
+    the value unsent), the pin on merge, and the older `vector-at-mention.yml` probe failure. Decision 5 no longer
+    needs sign-off: since round one the grep backstop stands apart from the rules, as the brief words it.
+
+- **Not claimed.** No commit, push or CI run in this step (the commit gate's). No seed-case or benchmark projection, no
+  false-positive rate, no paid run, model call or quality claim; no default change, no key enabled, no
+  `REVIEW_PIPELINE_REVISION` change, no regeneration, no `cat-file --batch`; Q23 still open. I-4 for tool output is
+  claimed for the engine runner's read, grep and glob tools only, and within these limits: bash output under
+  `--checks` is not redacted; a value no shape reads is redacted nowhere outside a held file (`password=plain words`
+  in a file that is not held is sent); a private key's body is redacted by read only when its header lies within 200
+  lines before the offset, and by grep a line at a time in a file over 1 MiB; in trusted reviews the saved long outputs
+  (`Truncate.GLOB`) and any `allowDirs` are only shape-redacted, so an earlier session's saved `cat .envrc` reaches the
+  model redacted by shape alone (critique point 7), and the held note there says only what left the prompt; glob's
+  names are redacted by shape, and a held path stays listed by glob, by name only; a held path that is a directory
+  (or a directory named `credentials`) cannot be listed with read; grep's "more matches available" marker still
+  depends on withheld lines once a search reaches the 1,000-match scan cap or the 16 MiB re-read budget, which bounds
+  each grep call (about half a second at the finding's 30 ms per MiB) and not a review's sum over calls; the
+  held-path denies are linear Wildcard matches whose cost grows with the held paths times the files a directory grep
+  checks (200 held paths against 5,000 files took 1.7 s for one pass of the rules, measured with
+  `/tmp/vector-v2/scope/sf-14/fix/scale.ts`, and grep under the key checks the rules twice); the fold is NFC and
+  lowercase only, not NFKC or full case folding, so a compatibility form of a held non-ASCII name is not refused by
+  the second check; Brain link rendering in read results (`Instruction.LINKS`, owner text rendered per request) is not
+  redacted; held-path denies are relative to the review's worktree (the nested credential forms apply wherever it
+  is). The Windows and macOS case paths are verified
+  here only by the Linux case-variant tests. No desktop, GitHub job or connect-preview application; no spawn hot spot,
+  `provider.ts`, `session/llm.ts`, pinned connect file or @vector-owned file touched.

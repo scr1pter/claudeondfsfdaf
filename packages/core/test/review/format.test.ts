@@ -955,18 +955,28 @@ describe("capBody", () => {
     expect(readState(body)).toEqual(STATE)
   })
 
-  // VS-34 (SF-13b): one line each for any number of files. Until SF-14 they say what left the review prompt, never
-  // that a value never left the machine, and none says a deleted file's credential "is committed".
-  test("holdback's notes name at most three files, and say only what left the review prompt", () => {
+  // VS-34 (SF-13b, SF-14): one line each for any number of files, and none says a deleted file's credential "is
+  // committed". Since SF-14 denies the held paths to the reviewer's tools, the held note says the value was not sent
+  // (design item 6), except where the caller says something else could show the file (`promptOnly`: the local
+  // --checks, a trusted review's saved outputs): then it says only what left the review prompt, as SF-13b's did.
+  test("holdback's notes name at most three files, and the held note claims the value unsent only when not promptOnly", () => {
     const paths = ["deploy/.netrc", ".env", "id_rsa", "config/prod/.envrc", "a.pem"]
     expect(noteHeldBack([])).toBeUndefined()
+    expect(noteHeldBack([], { promptOnly: true })).toBeUndefined()
     expect(noteHeldBack(paths.slice(0, 1))).toBe(
-      "`deploy/.netrc` may hold credentials, so Vector left it out of the review prompt.",
+      "`deploy/.netrc` may hold credentials, so Vector held it back from the model (its value was not sent).",
     )
     expect(noteHeldBack(paths.slice(0, 3))).toBe(
-      "`deploy/.netrc`, `.env` and `id_rsa` may hold credentials, so Vector left them out of the review prompt.",
+      "`deploy/.netrc`, `.env` and `id_rsa` may hold credentials, so Vector held them back from the model (their values were not sent).",
     )
     expect(noteHeldBack(paths)).toBe(
+      "`deploy/.netrc`, `.env`, `id_rsa` and 2 more may hold credentials, so Vector held them back from the model (their values were not sent).",
+    )
+    expect(noteHeldBack(paths, { promptOnly: false })).toBe(noteHeldBack(paths))
+    expect(noteHeldBack(paths.slice(0, 1), { promptOnly: true })).toBe(
+      "`deploy/.netrc` may hold credentials, so Vector left it out of the review prompt.",
+    )
+    expect(noteHeldBack(paths, { promptOnly: true })).toBe(
       "`deploy/.netrc`, `.env`, `id_rsa` and 2 more may hold credentials, so Vector left them out of the review prompt.",
     )
     expect(noteRedacted([])).toBeUndefined()
@@ -992,8 +1002,14 @@ describe("capBody", () => {
     expect(noteIgnoreUnchecked()).toBe(
       "Vector could not check which changed files the repository's ignore rules exclude, so none is listed as committed although ignored.",
     )
-    for (const note of [noteHeldBack(paths), noteRedacted(paths), noteHeldBack([".env"])])
+    for (const note of [
+      noteHeldBack(paths, { promptOnly: true }),
+      noteRedacted(paths),
+      noteHeldBack([".env"], { promptOnly: true }),
+    ])
       expect(note).not.toMatch(/not sent|never left|is committed in/)
+    for (const note of [noteHeldBack(paths), noteHeldBack([".env"])])
+      expect(note).not.toMatch(/never left|is committed/)
   })
 
   test("many generated-header notes are one line, and notes are trimmed before the file table", () => {

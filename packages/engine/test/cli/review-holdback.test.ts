@@ -6,7 +6,7 @@ import { Effect } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
-import { HOLDBACK_TOOLS, REVIEW_CONFIG_PATH } from "@vectordevai/core/review/config"
+import { REVIEW_CONFIG_PATH } from "@vectordevai/core/review/config"
 import { selectFindings } from "@vectordevai/core/review/select"
 import type { ReviewOutcome } from "@vectordevai/core/review/types"
 import { executeLocalReview, type LocalReviewDeps } from "../../src/cli/cmd/review"
@@ -150,14 +150,14 @@ describe("vector review: the ignored list under holdback (VS-34, SF-13b)", () =>
         const unset = fake()
         expect((yield* executeLocalReview({ directory: repo.dir, full: true, env: {} }, unset.deps)).exitCode).toBe(0)
         expect(Object.hasOwn(unset.calls[0], "ignored")).toBe(false)
-        expect(unset.err()).not.toContain(HOLDBACK_TOOLS)
         for (const env of [{ REVIEW_HOLDBACK: "secrets" }, {}]) {
           if (!Object.keys(env).length) yield* write(repo.dir, { [REVIEW_CONFIG_PATH]: '{"holdback": "secrets"}' })
           const run = fake()
           expect((yield* executeLocalReview({ directory: repo.dir, full: true, env }, run.deps)).exitCode).toBe(0)
           const call = run.calls[0]
           expect(call.config.holdback).toBe("secrets")
-          expect(run.err()).toContain(`Warning: ${HOLDBACK_TOOLS}`)
+          // Since SF-14 the key covers the reviewer's tools too, so it gives no warning: stderr is unset's.
+          expect(run.err()).toBe(unset.err())
           // In the change's order; the deleted ignored file is not asked about, and src/list.ts is not ignored.
           expect(call.files.find((file) => file.path === "old.local.json")?.status).toBe("deleted")
           expect(call.ignored).toEqual(["config.local.json", ...(posix ? [QUOTED] : []), "é.local.json"])
