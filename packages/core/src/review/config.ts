@@ -147,8 +147,9 @@ function attestedEntry(
 // it. mergeReviewConfig is their only reader.
 // - Raise-only: each level is stricter than the one before. Any source may raise the key and none may lower it, and a
 //   value that is not a level reads as the strictest. VS-34's `holdback` (addendum A §1) is the strictest of the global
-//   config, review.json and REVIEW_HOLDBACK, as `privacy` is; SF-15 adds the global source, hidden. Review.run applies
-//   its payload half since SF-13b and the reviewer's read and grep tools since SF-14.
+//   config, review.json and REVIEW_HOLDBACK, as `privacy` is. The global source is the user config's hidden `review`
+//   block since SF-15 (core v1/config/review.ts). Review.run applies holdback's payload half since SF-13b and the
+//   reviewer's read and grep tools since SF-14, and the desktop runner both halves since SF-15.
 const RAISE_ONLY = {
   privacy: { levels: ["standard", "zdr"], env: "REVIEW_PRIVACY" },
   holdback: { levels: ["off", "secrets"], env: "REVIEW_HOLDBACK" },
@@ -341,12 +342,13 @@ export function parseReviewConfig(
 /**
  * Review settings from sources tagged with where each comes from (contract §1.1). `vector review`, the local review
  * service (through the CLI's executeLocalReview) and the eval's replay call it on "local" from VS-23b, which enforces
- * the route rules there, with no `global` until VS-23d puts `review.*` in the global config (SF-15). The desktop
- * (VS-23d, SF-15), the GitHub job (SF-37) and connect's consent preview still read parseReviewConfig, which ignores the
- * keys below.
- * - `surface`: "local" for the CLI, the desktop and the eval's replay entry point, whose global config is the
- *   operator's (the eval passes its own settings as `global`); "github" for the CI job.
- * - `global`: the global config's `review` block (VS-23d adds it to the config schema).
+ * the route rules there. Since VS-23d (SF-15) the CLI and the local service pass the user config's hidden `review`
+ * block as `global`, the engine server reads that block alone for the review sessions it holds (engine
+ * review/route.ts serverPolicy), and the desktop calls this too, with the block the engine's global config route
+ * returns. The eval's replay passes none: an operator's own settings never change a replay. The GitHub job (SF-37) and
+ * connect's consent preview still read parseReviewConfig, which ignores the keys below.
+ * - `surface`: "local" for the CLI, the desktop and the eval's replay entry point; "github" for the CI job.
+ * - `global`: the user global config's `review` block (core v1/config/review.ts), read loosely.
  * - `json`: the one review.json the surface reads, at the base commit or in the working tree. `privacyOnly` is the
  *   desktop's base blob when a pull request changes review.json: it may raise the raise-only keys (`privacy`, VS-34's
  *   `holdback`), and every other key keeps today's defaults there.

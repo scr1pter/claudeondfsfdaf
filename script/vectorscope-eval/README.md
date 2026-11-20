@@ -652,10 +652,14 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
 - Under `engine:privacy-zdr` (or a base `review.json` that sets
   `privacy: "zdr"`) `Review.run` enforces the route rules at admission, at
   the transport and in the session runtime, and the artifact's
-  `scope.route` is `"zdr"`. The eval attests no route (owner Q7, D7), so
-  only a model server on this computer is admitted: on any other route the
-  run is a `privacy` stop, refused before anything is sent. A replay under
-  this name says nothing about quality on a ZDR route (Q9).
+  `scope.route` is `"zdr"`. A replay reads no operator's user config: the
+  hidden `review` block that raises privacy and holdback for `vector review`
+  (VS-23d) never reaches `replay()`, so a variant's name fixes its keys on
+  every machine; its `zdrAttested` is not read either. The eval attests no
+  route (owner Q7, D7), so only a model server on this computer is
+  admitted: on any other route the run is a `privacy` stop, refused before
+  anything is sent. A replay under this name says nothing about quality on a
+  ZDR route (Q9).
 - The verify policy (VS-06) is measured as the variant `engine:shared-verify`,
   `{ "verifyPolicy": "shared" }`, against the frozen pipeline's default
   (`"legacy"`). The replay reads it as a repository that opted in would be: the
@@ -695,13 +699,15 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `variant: { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" } }`.
   The desktop reads no environment, so the variant reaches it as the case's own
   `.vector/review.json` would carry it: the base's file with the variant's keys
-  set, its `verify` kept. Only the runner's settings read gets that text; any
+  set, its `verify` kept. Like `replay()`, it reads no operator's user config:
+  the runner gets the client without its `global` route. Only the runner's settings read gets that text; any
   later read of the file gets the file as it is. The runner never takes
   settings from a `review.json` the change itself edits, so for such a case,
   decided from the diff before the runner starts, the driver does not touch
   the file, the artifact's scope is the defaults' and `variant.applied` is
   `false`. A variant with no key, or with a key outside `VARIANT_KEYS.desktop`
-  (keys the desktop runner does not act on until its half lands), is not
+  (keys the desktop runner does not act on until its half lands; since
+  VS-23d it holds `verifyPolicy` and `holdback`), is not
   handed to the runner either, and is recorded `applied: false`. Such a case
   ran without the variant and must be left out of a comparison: `report.ts`
   loads desktop artifacts (VS-21c) and leaves such a run out, listing it, and
@@ -760,7 +766,7 @@ word, so only the registry keeps model ids out.
 | Suffix             | Sets                                                                                    | Engine                      | Desktop                                                                       |
 | ------------------ | --------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
 | `shared-verify`    | `verifyPolicy: "shared"`                                                                | built (VS-06)               | built (VS-06)                                                                 |
-| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run`, at the transport and in the session runtime | built (VS-23c)              | pending VS-23d                                                                |
+| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run`, at the transport and in the session runtime | built (VS-23c)              | pending, documented difference (VS-23d: the engine server holds the sessions) |
 | `trivial-skip`     | `trivial: "skip"`                                                                       | pending VS-24 wiring        | pending VS-24 wiring                                                          |
 | `impact-graph`     | `impact: "graph"`                                                                       | pending VS-25b wiring       | pending, after VS-10                                                          |
 | `cards-brain`      | `cards: "brain"`, local-only eval                                                       | pending VS-26               | pending, after VS-10                                                          |
@@ -769,7 +775,7 @@ word, so only the registry keeps model ids out.
 | `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | pending VS-28 wiring        | pending, after VS-10                                                          |
 | `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)            | built (VS-29a)              | pending, after VS-10                                                          |
 | `precise`          | `mode: "precise"`                                                                       | pending VS-31               | pending VS-31                                                                 |
-| `holdback-secrets` | `holdback: "secrets"`, in the prompt and the reviewer's read and grep results           | built (VS-34)               | pending, desktop half                                                         |
+| `holdback-secrets` | `holdback: "secrets"`, in the prompt and the reviewer's read and grep results           | built (VS-34)               | built (VS-34, desktop half)                                                   |
 | `team-guarded`     | `teamMemory: "guarded"`                                                                 | pending VS-35 wiring        | pending, documented difference                                                |
 | `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                     | pending VS-42 wiring        | pending VS-42 wiring, after VS-27c                                            |
 | `rule-strict`      | `ruleCheck: "strict"`                                                                   | pending VS-43 wiring        | pending VS-43 wiring                                                          |
@@ -807,7 +813,9 @@ word, so only the registry keeps model ids out.
 - The seven rows after `precise` are addendum A's (§1a, pending Q18),
   registered once each package's first part landed here, so their names are
   refused as pending rather than unknown; `holdback-secrets`' engine half is
-  built since VS-34's tool half. Addendum names whose package has
+  built since VS-34's tool half, and its desktop half since SF-15 (VS-23d),
+  which brought the desktop runner onto `mergeReviewConfig` and the same core
+  holdback functions. Addendum names whose package has
   not begun here (`rereview-focused`, `instructions-scoped`, `depth-rules`)
   are registered by that package's first part, and until then read as
   unknown. A desktop half that §1a calls a documented difference stays

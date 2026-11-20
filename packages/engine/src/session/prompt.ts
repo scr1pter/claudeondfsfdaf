@@ -2549,6 +2549,20 @@ const layer = Layer.effect(
         // replace the exact base instructions supplied by the owning service.
         if (pinnedReview && tasks.some((task) => task.type === "compaction"))
           throw new ReviewContextUnavailable("Compaction would discard the provided review context.")
+        // VS-23d (SF-15): a review session no review holds sends nothing while the user config's review privacy, or the
+        // review scope it was prompted with, says "zdr": the desktop's sessions are held when their HTTP prompt adopts
+        // them (handlers/session.ts), so this is one forgotten past ReviewRoutes' bound, one from before a restart, or
+        // one run by a command or a summary, which adopts nothing. Any other session takes the path it took before.
+        if (
+          session.internal?.startsWith(VECTORSCOPE) &&
+          !ReviewRoutes.known(sessionID) &&
+          (reviewScope(msgs).privacy === "zdr" ||
+            ReviewRoutes.serverPolicy((yield* config.getGlobal()).review).privacy === "zdr")
+        )
+          throw new ReviewContextUnavailable(
+            'This review\'s privacy is "zdr", and no review holds this session to a zero data retention route, so nothing was sent.',
+            "Start a new review.",
+          )
         // VS-23c (SF-12b): a "zdr" review's history is never summarised. The summary would be one more request, on the
         // compaction agent's model or the pass's, that is not one of the pass's own turns (ReviewRoutes.turn refuses it
         // as well). An overflow, a step that ends in "compact" and a pending compaction task all come back here first.

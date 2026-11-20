@@ -20,6 +20,7 @@ import {
   renderAnnotated,
   renderPatch,
   resolveAnchor,
+  revertPatch,
   suggestionAllowed,
   touched,
 } from "@vectordevai/core/review/diff"
@@ -440,6 +441,67 @@ describe("applyPatch", () => {
     expect(applyPatch("something\n", file("src/added.ts"))).toBeUndefined()
     expect(applyPatch("export function gone() {\n  return 1\n}\n", file("src/removed.ts"))).toBe("")
     expect(applyPatch("x", file("assets/logo.png"))).toBeUndefined()
+  })
+})
+
+// VS-23d (SF-15): the desktop rebuilds the base's review.json from a checkout at the pull request's head.
+describe("revertPatch", () => {
+  test("rebuilds the base from the head, across several hunks", () => {
+    expect(revertPatch(listHead, file("src/list.ts"))).toBe(listBase)
+  })
+
+  test("reads each hunk at its own start on the head's side", () => {
+    const [moved] = diff("--- a/x", "+++ b/x", "@@ -1,2 +1,3 @@", " a", "+new", " b", "@@ -5,1 +6,1 @@", "-e", "+E")
+    const base = "a\nb\nc\nd\ne\n"
+    const head = applyPatch(base, moved)
+    expect(head).toBe("a\nnew\nb\nc\nd\nE\n")
+    expect(revertPatch(head!, moved)).toBe(base)
+  })
+
+  test("returns undefined for a text that is not the head, and for a binary", () => {
+    expect(revertPatch(listBase, file("src/list.ts"))).toBeUndefined()
+    expect(revertPatch(listHead.replace("// padding 8", "// padding eight"), file("src/list.ts"))).toBeUndefined()
+    expect(revertPatch("x", file("assets/logo.png"))).toBeUndefined()
+  })
+
+  test("an added file's base is empty, and a deleted file's is its removed lines", () => {
+    expect(revertPatch('export async function added() {\n  return "added"\n}\n', file("src/added.ts"))).toBe("")
+    expect(revertPatch("something else\n", file("src/added.ts"))).toBeUndefined()
+    expect(revertPatch("", file("src/removed.ts"))).toBe("export function gone() {\n  return 1\n}\n")
+    expect(revertPatch("left over\n", file("src/removed.ts"))).toBeUndefined()
+  })
+
+  test("a rename's base is its old text, from the new path's text", () => {
+    const renamed = file("src/new-name.ts")
+    const head = 'export const name = "new"\nexport const keep = 1\nexport const a = 1\nexport const b = 2\n'
+    expect(revertPatch(head, renamed)).toBe(head.replace('"new"', '"old"'))
+  })
+
+  test("follows 'No newline at end of file' on either side, and keeps CRLF", () => {
+    expect(revertPatch("export const value = 1\nexport const other = 3", file("src/eof.ts"))).toBe(
+      "export const value = 1\nexport const other = 2",
+    )
+    const [adds] = diff("--- a/x", "+++ b/x", "@@ -1,2 +1,2 @@", " a", "-b", "\\ No newline at end of file", "+b")
+    expect(revertPatch("a\nb\n", adds)).toBe("a\nb")
+    const [drops] = diff("--- a/x", "+++ b/x", "@@ -1,2 +1,2 @@", " a", "-b", "+b", "\\ No newline at end of file")
+    expect(revertPatch("a\nb", drops)).toBe("a\nb\n")
+    const [crlf] = diff("--- a/a.txt", "+++ b/a.txt", "@@ -1,3 +1,3 @@", " one", "-two", "+2", " three")
+    expect(revertPatch("one\r\n2\r\nthree\r\n", crlf)).toBe("one\r\ntwo\r\nthree\r\n")
+  })
+
+  test("undoes applyPatch on every text file of the fixture whose base applyPatch rebuilds", () => {
+    const bases: Record<string, string> = {
+      "src/list.ts": listBase,
+      "src/eof.ts": "export const value = 1\nexport const other = 2",
+      "src/added.ts": "",
+      "src/removed.ts": "export function gone() {\n  return 1\n}\n",
+      "src/one.txt": "a\n",
+    }
+    for (const [name, base] of Object.entries(bases)) {
+      const head = applyPatch(base, file(name))
+      expect({ name, head: head !== undefined }).toEqual({ name, head: true })
+      expect({ name, base: revertPatch(head!, file(name)) }).toEqual({ name, base })
+    }
   })
 })
 

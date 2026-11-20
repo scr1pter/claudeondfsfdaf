@@ -1,12 +1,19 @@
 import { describe, expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
-import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
+import {
+  noteHeldBack,
+  noteIgnoreUnchecked,
+  notePrivacyRefused,
+  noteRedacted,
+  noteTriageUnchecked,
+  noteVerifyUnfinished,
+} from "@vectordevai/core/review/format"
 import { evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import { noteSameLabPair } from "@vectordevai/core/review/second-lab"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { parseReviewConfig } from "@vectordevai/core/review/config"
-import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
+import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "@vectordevai/core/review/types"
 import { buildFinalizePrompt, SCOPE } from "@vectordevai/core/review/prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
 import {
@@ -158,6 +165,8 @@ function fakeClient(
     onAbort?: () => void
     find?: ReviewClient["find"]
     uncommitted?: string // the engine's raw diff of the working tree
+    // The engine's global config, for its review block: what GET /global/config returns, or a read that fails.
+    global?: Record<string, unknown> | "fail" | "empty"
   } = {},
 ) {
   const calls = {
@@ -166,6 +175,7 @@ function fakeClient(
     update: [] as UpdateCall[],
     abort: [] as string[],
     raw: [] as (string | undefined)[],
+    global: 0,
   }
   const replies = new Map<string, ReviewMessage[]>()
   const client: ReviewClient = {
@@ -205,6 +215,19 @@ function fakeClient(
       },
     },
     ...(options.find ? { find: options.find } : {}),
+    ...(options.global
+      ? {
+          global: {
+            config: {
+              get: async () => {
+                calls.global++
+                if (options.global === "fail") throw new Error("The engine is not answering.")
+                return options.global === "empty" ? {} : { data: options.global as Record<string, unknown> }
+              },
+            },
+          },
+        }
+      : {}),
   }
   return { client, calls }
 }
@@ -871,31 +894,6 @@ describe("runReview", () => {
     )
   })
 
-  // VS-34 (SF-13b): the desktop half is a documented difference until SF-15. The desktop reads parseReviewConfig, which
-  // ignores holdback, so review.json's "secrets" changes nothing here: the same prompts, the credential file in them,
-  // and no held-back skip or holdback note. Engine reviews hold it back (engine test/review/run.test.ts).
-  test("holdback in review.json changes nothing on the desktop until SF-15 brings it onto mergeReviewConfig", async () => {
-    const netrcDiff = fileDiff("deploy/.netrc", [
-      "@@ -1 +1 @@",
-      "-machine example.test login old",
-      "+machine example.test login ci",
-    ])
-    const files = { "src/list.ts": HEAD, "deploy/.netrc": "machine example.test login ci\n" }
-    const runs = await Promise.all(
-      ['{"verify":"off"}', '{"verify":"off","holdback":"secrets"}'].map(async (json) => {
-        const fake = fakeClient({ files: { ...files, ".vector/review.json": json } })
-        const outcome = await run(fake.client, { diff: join(listDiff, netrcDiff) })
-        return { prompts: fake.calls.prompt.map((call) => call.parts?.[0]?.text ?? ""), outcome }
-      }),
-    )
-    expect(runs[1].prompts).toEqual(runs[0].prompts)
-    expect(runs[1].prompts.some((text) => text.includes("deploy/.netrc"))).toBe(true)
-    expect(runs[1].prompts.some((text) => text.includes("were removed before sending"))).toBe(false)
-    expect(runs[1].outcome?.skipped).toEqual(runs[0].outcome?.skipped)
-    expect(runs[1].outcome?.skipped.some((file) => file.reason === "held-back")).toBe(false)
-    expect(runs[1].outcome?.notes).toEqual(runs[0].outcome?.notes)
-  })
-
   test("reads review.json from the checkout, unless the pull request changes it", async () => {
     const strict = { "src/list.ts": HEAD, ".vector/review.json": '{"minConfidence":0.99}' }
     const checkout = await run(fakeClient({ files: strict }).client)
@@ -1013,6 +1011,343 @@ describe("runReview", () => {
     const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD } })
     await expect(run(client, { catalog: [small] })).rejects.toThrow("at least 32k tokens of context")
     expect(calls.create).toEqual([])
+  })
+})
+
+// VS-23d (SF-15): the user config's hidden review block, read from the engine's global config route, and review.json
+// through mergeReviewConfig. Under privacy "zdr" the sessions' review scope says so, and the engine server holds them to
+// the route rules (engine test/server/httpapi-review-privacy.test.ts); under holdback "secrets" the runner calls the
+// same core functions Review.run does.
+describe("review privacy and holdback on the desktop (VS-23d)", () => {
+  const scopeOf = (call: PromptCall) => call.parts?.[0]?.metadata?.[SCOPE] as Record<string, unknown> | undefined
+  const configDiffOf = (header: string[], lines: string[]) => [
+    "diff --git a/.vector/review.json b/.vector/review.json",
+    ...header,
+    ...lines,
+  ]
+
+  test("without a user review block, with an empty one or one at standard, the review is the one of before", async () => {
+    const files = { "src/list.ts": HEAD, ".vector/review.json": '{"verify":"off","maxComments":5}' }
+    const agree = await Promise.all(
+      [undefined, {}, { review: {} }, { review: { privacy: "standard", holdback: "off" } }].map(async (global) => {
+        const fake = fakeClient({ files, ...(global ? { global } : {}) })
+        const outcome = await run(fake.client)
+        expect(fake.calls.global).toBe(global ? 1 : 0)
+        return { create: fake.calls.create, prompt: fake.calls.prompt, outcome: { ...outcome, durationMs: 0 } }
+      }),
+    )
+    for (const each of agree.slice(1)) expect(each).toEqual(agree[0]!)
+    expect(agree[0]!.create[0]!.permission).toEqual(reviewPermissionRules({}))
+    expect(agree[0]!.prompt.every((call) => scopeOf(call)?.privacy === undefined)).toBe(true)
+  })
+
+  test("a user config that cannot be read rejects the review before any session", async () => {
+    for (const [global, error] of [
+      ["fail", "The engine is not answering."],
+      ["empty", "Vector could not read your review settings, so it did not start the review."],
+    ] as const) {
+      const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD }, global })
+      await expect(run(client)).rejects.toThrow(error)
+      expect(calls.create).toEqual([])
+      expect(calls.prompt).toEqual([])
+    }
+  })
+
+  test("under the user config's zdr every session's scope asks for it, and the server's refusal ends the review", async () => {
+    const refused = {
+      name: "UnknownError",
+      data: {
+        message:
+          'Vector did not send this request: this review\'s privacy is "zdr", and the route rules refused it (unattested-provider). Nothing was sent.',
+      },
+    }
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      global: { review: { privacy: "zdr" } },
+      reply: () => ({ ...answer(undefined, 0), info: { role: "assistant", error: refused } }),
+    })
+    await expect(run(client)).rejects.toThrow(
+      'Vector could not finish this review: Vector did not send this request: this review\'s privacy is "zdr"',
+    )
+    expect(calls.create.map((call) => call.internal)).toEqual(["vectorscope.review"])
+    expect(calls.prompt.length).toBeGreaterThan(0)
+    for (const call of calls.prompt) expect(scopeOf(call)).toMatchObject({ privacy: "zdr" })
+  })
+
+  test("review.json's zdr alone asks for it too, and a model its names refuse is refused before any session", async () => {
+    const files = { "src/list.ts": HEAD, ".vector/review.json": '{"privacy":"zdr","verify":"off"}' }
+    const held = fakeClient({ files })
+    const outcome = await run(held.client)
+    expect(scopeOf(held.calls.prompt[0]!)).toMatchObject({ privacy: "zdr" })
+    const plain = fakeClient({ files: { ...files, ".vector/review.json": '{"verify":"off"}' } })
+    const before = await run(plain.client)
+    // The settings key moves with the privacy, so a review made without it is not reused under it, wherever it comes
+    // from: the same files under the user config's zdr get another key too.
+    expect(outcome?.settingsKey).not.toBe(before?.settingsKey)
+    const raised = await run(
+      fakeClient({
+        files: { ...files, ".vector/review.json": '{"verify":"off"}' },
+        global: { review: { privacy: "zdr" } },
+      }).client,
+    )
+    expect(raised?.settingsKey).not.toBe(before?.settingsKey)
+    expect(scopeOf(plain.calls.prompt[0]!)?.privacy).toBeUndefined()
+
+    const free: ReviewModel = { providerID: "vector", modelID: "acme/coder:free", costKind: "free", context: 200_000 }
+    const codium: ReviewModel = {
+      providerID: "vector-plan",
+      modelID: "vector-flash",
+      costKind: "codium",
+      context: 200_000,
+    }
+    for (const [model, refusal] of [
+      [free, "free-model"],
+      [codium, "codium-unaccepted"],
+    ] as const) {
+      const { client, calls } = fakeClient({ files })
+      await expect(run(client, { catalog: [model], preferredModels: [modelName(model)] })).rejects.toThrow(
+        notePrivacyRefused({ model: modelName(model), refusal, attempts: 0 }).replaceAll("**", ""),
+      )
+      expect(calls.create).toEqual([])
+    }
+  })
+
+  test("a pull request that drops the base's zdr from review.json is still held to it, wherever the checkout is", async () => {
+    const modified = configDiffOf(
+      ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+      ["@@ -1 +1 @@", '-{"privacy":"zdr","minConfidence":0.99}', '+{"minConfidence":0.99}'],
+    )
+    const deleted = configDiffOf(
+      ["deleted file mode 100644", "index 1111111..0000000", "--- a/.vector/review.json", "+++ /dev/null"],
+      ["@@ -1 +0,0 @@", '-{"privacy":"zdr"}'],
+    )
+    const renamed = [
+      "diff --git a/.vector/review.json b/.vector/old-review.json",
+      "similarity index 50%",
+      "rename from .vector/review.json",
+      "rename to .vector/old-review.json",
+      "index 1111111..2222222 100644",
+      "--- a/.vector/review.json",
+      "+++ b/.vector/old-review.json",
+      "@@ -1 +1 @@",
+      '-{"privacy":"zdr"}',
+      "+{}",
+    ]
+    // A longer file whose change leaves the base's privacy outside the hunk: the checkout at either end still shows it.
+    const outside = configDiffOf(
+      ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+      ["@@ -5,1 +5,1 @@", '-  "minConfidence": 0.5', '+  "minConfidence": 0.9'],
+    )
+    const long = (confidence: string) =>
+      [
+        "{",
+        '  "privacy": "zdr",',
+        '  "verify": "off",',
+        '  "maxComments": 5,',
+        `  "minConfidence": ${confidence}`,
+        "}",
+        "",
+      ].join("\n")
+    const cases: [string, string[], Record<string, string>][] = [
+      ["checkout at the base", modified, { ".vector/review.json": '{"privacy":"zdr","minConfidence":0.99}\n' }],
+      ["checkout at the head", modified, { ".vector/review.json": '{"minConfidence":0.99}\n' }],
+      ["checkout elsewhere: the hunk's base side", modified, { ".vector/review.json": '{"verify":"all"}\n' }],
+      ["deleted by the pull request", deleted, {}],
+      ["renamed away, checkout at the head", renamed, { ".vector/old-review.json": "{}\n" }],
+      ["outside the hunk, checkout at the base", outside, { ".vector/review.json": long("0.5") }],
+      ["outside the hunk, checkout at the head", outside, { ".vector/review.json": long("0.9") }],
+    ]
+    for (const [name, lines, files] of cases) {
+      const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD, ...files } })
+      const outcome = await run(client, { diff: join(listDiff, lines) })
+      expect({ name, scope: scopeOf(calls.prompt[0]!)?.privacy }).toEqual({ name, scope: "zdr" })
+      // The base's other settings are not read from a review.json the pull request changes: its minConfidence of 0.99
+      // would drop the finding at 0.95, and the default keeps it.
+      expect({ name, listed: outcome?.selection.inline.length }).toEqual({ name, listed: 1 })
+    }
+    // A pull request that adds review.json raises nothing from a base that had none.
+    const added = configDiffOf(
+      ["new file mode 100644", "index 0000000..2222222", "--- /dev/null", "+++ b/.vector/review.json"],
+      ["@@ -0,0 +1 @@", '+{"privacy":"standard"}'],
+    )
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD, ".vector/review.json": '{"privacy":"standard"}\n' },
+    })
+    await run(client, { diff: join(listDiff, added) })
+    expect(scopeOf(calls.prompt[0]!)?.privacy).toBeUndefined()
+  })
+
+  // I-1: with the checkout at neither end, the base side of the hunks is a fragment that is not JSON. Only where it sets
+  // privacy or holdback is read from it, so a mention anywhere else, or a "standard" it sets, leaves the review the
+  // one of before SF-15: parseReviewConfig's defaults for a pull request that changes review.json.
+  test("a pull request's review.json hunks that set neither key leave the review as before, with the checkout elsewhere", async () => {
+    const hunk = (lines: string[]) =>
+      configDiffOf(
+        ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+        ["@@ -2,3 +2,3 @@", ...lines, '-  "minConfidence": 0.5', '+  "minConfidence": 0.9'],
+      )
+    // The control's hunk names neither key; the variants' lines, spelled in its place, give its prompts.
+    const control = ['   "ignore": ["docs/other/**"],', '   "verify": "all",']
+    const variants = [
+      ['   "ignore": ["docs/privacy/**"],', '   "privacy": "standard",'],
+      ['   "ignore": ["docs/privacy/**"],', '   "skipLabels": ["holdback", "privacy"],'],
+    ]
+    const review = async (lines: string[]) => {
+      const settings: ReviewConfig[] = []
+      const { client, calls } = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": '{"verify":"off"}\n' },
+      })
+      const outcome = await run(client, {
+        diff: join(listDiff, hunk(lines)),
+        onSettings: (read) => settings.push(read.config),
+      })
+      // In the prompts' JSON, where each line is spelled escaped.
+      const escaped = (line: string) => JSON.stringify(line.trim()).slice(1, -1)
+      const spelled = (text: string) =>
+        lines.reduce((result, line, index) => result.replaceAll(escaped(line), escaped(control[index]!)), text)
+      return {
+        config: settings[0],
+        create: calls.create,
+        prompt: JSON.parse(spelled(JSON.stringify(calls.prompt))) as PromptCall[],
+        settingsKey: outcome?.settingsKey,
+        notes: outcome?.notes,
+      }
+    }
+    const before = await review(control)
+    expect(before.config).toEqual(parseReviewConfig({ json: undefined, trigger: "desktop" }).config)
+    expect(before.prompt.every((call) => scopeOf(call)?.privacy === undefined)).toBe(true)
+    expect(before.create[0]!.permission).toEqual(reviewPermissionRules({}))
+    for (const lines of variants) expect({ lines, ...(await review(lines)) }).toEqual({ lines, ...before })
+  })
+
+  test("a fragment that sets a key, cuts its value off or gives no level reads as the stricter setting", async () => {
+    const elsewhere = { "src/list.ts": HEAD, ".vector/review.json": '{"verify":"off"}\n' }
+    const cases: [string, string[], Partial<ReviewConfig>, string[]][] = [
+      ["sets zdr", ['   "privacy": "zdr",', '-  "minConfidence": 0.5'], { privacy: "zdr" }, []],
+      [
+        "cut off",
+        ['-  "minConfidence": 0.5', '   "holdback":'],
+        { holdback: "secrets" },
+        ['.vector/review.json could not be read and mentions "holdback"; using "secrets", the stricter setting.'],
+      ],
+      [
+        "no level",
+        ['-  "privacy": "max",', '   "minConfidence": 0.5'],
+        { privacy: "zdr" },
+        ['.vector/review.json: "privacy" must be "standard" or "zdr"; using "zdr", the stricter setting.'],
+      ],
+    ]
+    for (const [name, lines, raised, notes] of cases) {
+      const settings: ReviewConfig[] = []
+      const { client } = fakeClient({ files: elsewhere })
+      const outcome = await run(client, {
+        diff: join(
+          listDiff,
+          configDiffOf(
+            ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+            ["@@ -4,2 +4,1 @@", ...lines],
+          ),
+        ),
+        onSettings: (read) => settings.push(read.config),
+      })
+      const config = settings[0]!
+      expect({ name, privacy: config.privacy, holdback: config.holdback }).toEqual({
+        name,
+        privacy: raised.privacy,
+        holdback: raised.holdback,
+      })
+      // The warning that says why is in the outcome's notes.
+      expect({ name, notes: outcome?.notes.filter((note) => note.startsWith(".vector/review.json")) }).toEqual({
+        name,
+        notes,
+      })
+    }
+  })
+
+  test("the privacy settings' warnings reach the outcome's notes and a refusal's text", async () => {
+    const warning =
+      'review.privacy in the global config must be "standard" or "zdr"; using "zdr", the stricter setting.'
+    const held = fakeClient({ files: { "src/list.ts": HEAD }, global: { review: { privacy: 1 } } })
+    const outcome = await run(held.client)
+    expect(scopeOf(held.calls.prompt[0]!)).toMatchObject({ privacy: "zdr" })
+    expect(outcome?.notes).toContain(warning)
+    const free: ReviewModel = { providerID: "vector", modelID: "acme/coder:free", costKind: "free", context: 200_000 }
+    const refused = fakeClient({ files: { "src/list.ts": HEAD }, global: { review: { privacy: 1 } } })
+    await expect(run(refused.client, { catalog: [free], preferredModels: [modelName(free)] })).rejects.toThrow(
+      `${notePrivacyRefused({ model: modelName(free), refusal: "free-model", attempts: 0 }).replaceAll("**", "")} ${warning}`,
+    )
+    expect(refused.calls.create).toEqual([])
+  })
+
+  test("under holdback secrets a credential file is held back and values are redacted, from either source", async () => {
+    const ghp = "ghp_" + "a1B2".repeat(9)
+    const netrcDiff = fileDiff("deploy/.netrc", [
+      "@@ -1 +1 @@",
+      "-machine example.test login old",
+      "+machine example.test login ci password hunter2",
+    ])
+    const tokenDiff = fileDiff("src/token.ts", ["@@ -0,0 +1 @@", `+export const token = "${ghp}"`])
+    const onHeld = { ...offByOne, path: "deploy/.netrc", line: 1, title: "The password is committed" }
+    for (const source of ["global", "review.json"] as const) {
+      const fake = fakeClient({
+        files: {
+          "src/list.ts": HEAD,
+          "src/token.ts": `export const token = "${ghp}"\n`,
+          "deploy/.netrc": "machine example.test login ci password hunter2\n",
+          ...(source === "review.json" ? { ".vector/review.json": '{"holdback":"secrets"}' } : {}),
+        },
+        ...(source === "global" ? { global: { review: { holdback: "secrets" } } } : {}),
+        find: {
+          text: async () => ({
+            data: [{ path: { text: "src/use.ts" }, lines: { text: `use("${ghp}", last(items))` }, line_number: 4 }],
+          }),
+        },
+        reply: (input) => (isVerify(input) ? answer(verdicts(input)) : answer(report([offByOne, onHeld]))),
+      })
+      const outcome = (await run(fake.client, {
+        pr: { ...pr, body: `Rotated ${ghp}.`, comments: [{ author: "bob", body: `Is ${ghp} still live?` }] },
+        diff: join(listDiff, netrcDiff, tokenDiff),
+        checks: [{ name: "unit", conclusion: "failure", excerpt: `request failed with ${ghp}` }],
+      }))!
+      const texts = fake.calls.prompt.map((call) => call.parts?.[0]?.text ?? "")
+      expect({ source, leaked: texts.filter((text) => text.includes(ghp) || text.includes("hunter2")).length }).toEqual(
+        {
+          source,
+          leaked: 0,
+        },
+      )
+      expect(texts[0]).toContain("[redacted]")
+      expect(texts[0]).toContain("were removed before sending")
+      expect(outcome.skipped).toContainEqual({ path: "deploy/.netrc", reason: "held-back" })
+      expect(outcome.files.map((file) => file.path)).not.toContain("deploy/.netrc")
+      expect(outcome.notes).toEqual(
+        expect.arrayContaining([
+          noteHeldBack(["deploy/.netrc"])!,
+          noteRedacted(["src/token.ts"])!,
+          noteIgnoreUnchecked(),
+        ]),
+      )
+      // The sessions' rules deny the read tool the credential files and the held path, so the engine's tools redact.
+      const rules = reviewPermissionRules({ holdback: "secrets", held: ["deploy/.netrc"] })
+      for (const call of fake.calls.create) expect(call.permission).toEqual(rules)
+      // The finding on the held path never reaches the double-check, and is not listed.
+      expect(texts.filter((_, index) => isVerify(fake.calls.prompt[index]!)).join("")).not.toContain(onHeld.title)
+      const listed = [...outcome.selection.inline, ...outcome.selection.outsideDiff, ...outcome.selection.overflow]
+      expect(listed.map((finding) => finding.path)).not.toContain("deploy/.netrc")
+    }
+  })
+
+  test("when holdback leaves nothing to send, no session is created and the held files are skipped", async () => {
+    const netrcDiff = fileDiff("deploy/.netrc", ["@@ -1 +1 @@", "-machine a login old", "+machine a login new"])
+    const { client, calls } = fakeClient({
+      files: { "deploy/.netrc": "machine a login new\n" },
+      global: { review: { holdback: "secrets" } },
+    })
+    const outcome = (await run(client, { diff: join(netrcDiff) }))!
+    expect(calls.create).toEqual([])
+    expect(outcome.skipped).toEqual([{ path: "deploy/.netrc", reason: "held-back" }])
+    expect(outcome.files).toEqual([])
+    expect(outcome.notes).toEqual([noteHeldBack(["deploy/.netrc"])!, noteIgnoreUnchecked()])
   })
 })
 

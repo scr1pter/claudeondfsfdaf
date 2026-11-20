@@ -19,6 +19,15 @@
 // whose parent is a "zdr" session, are refused there. prompt.ts never starts a compaction of a "zdr" session (`zdr`).
 // A model whose destination is computed at send time (a base URL with an unfilled `${VARIABLE}`, Vertex's and
 // Bedrock's URLs from project and region) has none admission can read, so it is refused as "unknown-destination".
+//
+// VS-23d (SF-15): the engine server's own hold. The desktop creates and prompts its review sessions over HTTP, so no
+// Review.run registers them. The session HTTP prompt (handlers/session.ts) adopts a `vectorscope.*` session no review
+// holds (`known`) when the server's policy (`serverPolicy`: the user config's hidden `review` block alone) or the
+// prompt's review scope says "zdr": it registers the session under "zdr", with the attestations of the user config,
+// for the prompt's agent and the decision for the prompt's model (`adopt`), so hold and turn refuse an unattested route
+// before anything is sent. prompt.ts refuses any run of a `vectorscope.*` session no review holds while either says
+// "zdr" (a session forgotten past RELEASED_LIMIT, one from before a restart, a command or a summary). Nothing here
+// changes under "standard": nothing is adopted, and every request is sent as before.
 
 import type { ModelV2 } from "@vectordevai/core/model"
 import type { ModelCatalog } from "@vectordevai/core/model-catalog"
@@ -38,6 +47,7 @@ import {
   type RouteModel,
   type RouteRefusal,
 } from "@vectordevai/core/review/privacy"
+import { mergeReviewConfig, type SourcedReviewKey } from "@vectordevai/core/review/config"
 import type { CostKind, ReviewConfig, ZdrAttestedEntry } from "@vectordevai/core/review/types"
 import { Effect, Option, Schema } from "effect"
 import type { Provider } from "@/provider/provider"
@@ -73,7 +83,8 @@ export interface Decided {
 // What a session Review.run created runs under: the review's policy, the agent its pass is prompted with and, under
 // "zdr", the model its pass was decided for, that decision, and what it was decided on, which the transport (hold)
 // decides again with what it sees. Under "zdr" `agent` is the only agent whose requests the session runtime sends for
-// the session (turn), so every registrant (SF-15's desktop path too) must set it, or no turn of the session is sent.
+// the session (turn), so every registrant must set it, or no turn of the session is sent: Review.run sets its pass's
+// agent, and the HTTP adoption (adopt, SF-15) the agent the desktop's prompt names.
 export interface Registered {
   readonly policy: Policy
   readonly agent?: string
@@ -230,6 +241,47 @@ export function shippedOrigins(input: {
   return undefined
 }
 
+/**
+ * VS-23d (SF-15): the route settings the engine server holds a `vectorscope.*` session to when no review registered it:
+ * the user config's `review` block alone (Config.getGlobal().review), as mergeReviewConfig reads it on "local". No
+ * repository and no environment variable is read here: the desktop, whose sessions these are, reads no REVIEW_*
+ * variable either, so both sides decide from the same sources. A value that is not a level reads as "zdr".
+ */
+export function serverPolicy(global: Partial<Record<SourcedReviewKey, unknown>> | undefined): Policy {
+  return policyOf(mergeReviewConfig({ surface: "local", ...(global ? { global } : {}) }).config)
+}
+
+/** VS-23d (SF-15): whether a review registered this session and has not released it, or released it under "zdr". */
+export function known(sessionID: string): boolean {
+  return sessions.has(sessionID) || released.has(sessionID)
+}
+
+/**
+ * VS-23d (SF-15): registers a `vectorscope.*` session no review holds, under `policy`, as the HTTP prompt that is about
+ * to run it names it: with the prompt's agent (turn sends only that agent's turns) and, with a model, the decision for
+ * it (decide), which the transport (hold) and attempt then hold each call to. Without a model nothing was decided, so
+ * every call is refused. A refused decision is registered too: its calls are refused with that refusal, before
+ * anything is sent. The desktop never releases its sessions, so past ADOPTED_LIMIT adoptions the oldest is released:
+ * a "zdr" one is remembered as released (release), so a call that still names it stays refused.
+ */
+export const adopt = Effect.fn("ReviewRoutes.adopt")(function* (
+  provider: Provider.Interface,
+  input: {
+    readonly sessionID: SessionID
+    readonly policy: Policy
+    readonly agent?: string
+    readonly subject?: Subject & { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
+  },
+): Effect.fn.Return<Registered> {
+  const decided = input.subject ? yield* decide(provider, input.subject, input.policy) : undefined
+  const entry: Registered = { policy: input.policy, ...(input.agent ? { agent: input.agent } : {}), ...decided }
+  register(input.sessionID, entry)
+  adopted.add(input.sessionID)
+  const oldest = adopted.values().next()
+  if (adopted.size > ADOPTED_LIMIT && !oldest.done) release(oldest.value)
+  return entry
+})
+
 export function register(sessionID: SessionID, entry: Registered) {
   released.delete(sessionID)
   sessions.set(sessionID, entry)
@@ -239,6 +291,7 @@ export function register(sessionID: SessionID, entry: Registered) {
 export function release(sessionID: SessionID) {
   if (sessions.get(sessionID)?.policy.privacy === "zdr") released.add(sessionID)
   sessions.delete(sessionID)
+  adopted.delete(sessionID)
   const oldest = released.values().next()
   if (released.size > RELEASED_LIMIT && !oldest.done) released.delete(oldest.value)
 }
@@ -398,6 +451,10 @@ const sessions = new Map<string, Registered>()
 // (turn). Bounded, so a long-running server keeps the most recent; one forgotten past the bound is unregistered again.
 const released = new Set<string>()
 const RELEASED_LIMIT = 4096
+// The sessions the engine server adopted (adopt) and has not released, oldest first, so that a long-running server
+// holds at most ADOPTED_LIMIT of them.
+const adopted = new Set<SessionID>()
+export const ADOPTED_LIMIT = 1024
 
 // The SDKs whose requests are Anthropic Messages requests, and Google's, for sendBody's feature checks.
 const ANTHROPIC_FORMAT = ["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic", "@ai-sdk/amazon-bedrock/anthropic"]

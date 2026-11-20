@@ -25786,3 +25786,447 @@ change made visible to the evidence scope (SF-13b critique point 13).
   is). The Windows and macOS case paths are verified
   here only by the Linux case-variant tests. No desktop, GitHub job or connect-preview application; no spawn hot spot,
   `provider.ts`, `session/llm.ts`, pinned connect file or @vector-owned file touched.
+
+## 2026-11-20 · VS-23d Hidden global review privacy and holdback with server and desktop enforcement (SF-15)
+
+VS-23d (`vectorscope-upgrade.md:440`: a global `review.privacy` the engine server enforces for every `vectorscope.*`
+session, the desktop's base blob, notes, regeneration, hidden until Q16) with VS-34's hidden global source and desktop
+half (`vectorscope-upgrade-addendum-a.md` §1 "Config schema changes", the `holdback` row, §1a VS-34), I-14 (ships
+hidden). Built on `scope-finish` at `86294f80` (SF-14) as lane package SF-15, from the SF-15 plan as corrected by its
+critique; where a critique point was taken in another form or rejected, the reason is under "Critique points". This
+entry is also the lane's progress record for SF-15. It closes the SF-14 hand-off at `:25771-25772` (the desktop half
+and the hidden global source) and the VS-23d acceptance the v2 plan's VS-23 row carried (the released-set bound), under
+the user config's privacy.
+
+- **Status.** Built and tested in the working tree of `scope-finish` at `86294f80`, with review findings round one
+  fixed in place (below), not committed: this package step leaves the change for the lane's commit gate. The plan's
+  three commits stand (feat(review) core and engine with the pin, chore(sdk) the generated files, feat(app) the
+  desktop with the eval scripts); the gate may combine them. The
+  generated SDK carries the field (Decision 2): the lead confirms that exposure under Q16 before the chore(sdk) commit.
+  The SHA and each dispatched run's ID and result go in a later entry.
+
+- **SF-14's CI, read with the GitHub tools** (SF-14's entry left the runs to a later entry). On `86294f80`:
+  `typecheck.yml` 44707599356 success; `scope-directory-identity.yml` 44707604507 success; `review-memory-fence.yml`
+  44707609647 success; `scope-app-validation.yml` 44707614639 success; `vector-at-mention.yml` 44707619700 failure in two
+  jobs of ten: "sandbox (codium, success, bun)" (job 136191044577: "Run the unprivileged probe", "Observe the synthetic
+  probe report", "Assert isolation, crash protection and cleanup"), the older probe failure SF-12b's to SF-14's entries
+  record on this branch; and "hosted API" (job 136191044355, step "Run GitHub API tests"), new on this branch:
+  `packages/web/test/cloud-agents-start.test.ts:772` "legacy bindings without installation identity require rebind
+  before any ticket or dispatch" compares two Redis `KEYS` listings with `toEqual`, and the received list holds the
+  same five ticket keys in another order (`KEYS` returns no order). Nothing SF-14 changed reaches that file; it is
+  another lane's test and not on the known-flake list, so it is the lead's to root-cause (an order-free comparison).
+  "engine and core" and the other jobs passed. `vector-site-smoke.yml` 44708424357 skipped. No `test.yml` or
+  `review-http-regression.yml` run is listed for `86294f80`: both stay owed for SF-13b, SF-14 and now SF-15.
+
+- **Scope, and what landed** (line numbers in the working tree).
+  - Core `v1/config/review.ts` (new, self-exported as `ConfigReviewV1` per AGENTS.md): `Info`, a struct of `privacy`,
+    `holdback` and `zdrAttested`, each `Schema.Unknown` (Decision 3), identifier `GlobalReviewConfig`; the header says
+    where it is read and why it is loose and hidden. Core `v1/config/config.ts:311-315`: `review` before `experimental`,
+    with a neutral description (critique point 16).
+  - Engine `config/config.ts:96-98` `projectExecutableConfig`: `delete next.review`, trusted or not, beside `local`
+    and `computer`. The block reaches the engine only as the user's own config (`Config.getGlobal`: config.json,
+    vector.json and vector.jsonc in the global config directory). The merged `Config.get()` carries the user's block
+    too; nothing reads it there.
+  - Engine `script/schema.ts:67-81` `withHidden`: the published `config.json` leaves out `Config.properties.review` and
+    `$defs.GlobalReviewConfig`, and throws if the generator stops producing either. `packages/web/public/config.json`
+    and `tui.json` regenerate byte-identical.
+  - Core `review/config.ts` (not pinned): comments only (`RAISE_ONLY`, `mergeReviewConfig`'s doc: who passes `global`).
+    Core `review/types.ts`: comments only at `privacy`, `holdback` and `zdrAttested`.
+  - Core `review/prompt.ts:236-245`, `scopeOf` `:258` (pinned): `Scope.privacy?: "zdr"`, read only when exactly "zdr".
+    The desktop sets it; it can only raise (Decision 4).
+  - Core `review/diff.ts:571-597` (pinned): `revertPatch(headText, file)`, applyPatch over the inverted diff.
+  - Core `util/wildcard.ts:13-15` (not pinned): `process.platform` read only where `process` exists, so the renderer
+    can run holdback's `heldReason` (Decision 9). Core `review/holdback.ts` header (pinned): comment only.
+  - Core `review/eval.ts:113-123`: `VARIANT_KEYS.desktop` gains `holdback`; `privacy` stays out (Decision 10).
+  - Engine `review/route.ts` (pinned): header `:23-32`; `serverPolicy(global)` `:244-252` (mergeReviewConfig on
+    "local" with the block alone, no environment); `known(id)` `:254-257` (registered, or released under "zdr");
+    `adopt(provider, { sessionID, policy, agent?, subject? })` `:259-284` (decide when there is a model, register the
+    entry, refused decisions included; past `ADOPTED_LIMIT` adoptions, 1024, the oldest is released, `adopted`
+    `:454-457`, and `release` takes an entry out of that count); the `Registered.agent` comment.
+  - Engine `server/routes/instance/httpapi/handlers/session.ts:448-485` (pinned): `holdReview(info, payload)`, called
+    in `prompt` and `promptAsync` after the audience admit and before the prompt (`:499`, `:516`). It returns at once
+    for a session whose internal name does not start with `vectorscope.` or that a review holds; otherwise it adopts
+    under "zdr" when the server policy or the prompt's review scope says "zdr", with the user config's attestations
+    alone, the prompt's agent, and the prompt's model with its catalog origins (`shippedOrigins`, the catalog read
+    through `Effect.serviceOption`, so the handler group gains no service requirement; without it the origin is
+    unknown and a provider-ID attestation covers no host).
+  - Engine `session/prompt.ts:2552-2565` (pinned): inside `runSteps`' loop, beside the compaction refusals: a
+    `vectorscope.*` session no review holds throws `ReviewContextUnavailable` before anything is sent while its first
+    user message's review scope or the server policy says "zdr" (Decision 5).
+  - Engine `cli/cmd/review.ts:279-297` (pinned): `executeLocalReview` reads the block through
+    `Effect.serviceOption(Config.Service)` and passes it as `global` (Decision 6; the comment says no production entry
+    may omit the service). `review/eval.ts`: unchanged (Decision 7).
+  - App `features/pull-requests/ai-review.ts` (pinned): `ReviewClient.global?` `:349`, the engine's `GET /global/config`
+    (the v2 SDK client already has it); `ReviewRunInput.onSettings?` `:322`; settings through `mergeReviewConfig`
+    `:741-770` (`userReviewSettings` `:1514-1521` rejects a read that fails or returns no data; when the pull request
+    changes review.json, `baseReviewSettings` `:1523-1558`, `fragmentSettings` `:1560-1568` and `strictest`
+    `:1570-1582`, Decision 8); the privacy, holdback and attestation warnings as notes (`settingNotes` `:771-777`, in
+    the outcome's notes and appended to a refusal's text); the settings key `:782-796`; holdback `:851-889` (Decision
+    9); the name-only route refusal `:931-942` with `routeRefusalOf` `:1585-1598`; `sent` files, head files and
+    `holdbackContext` in the prompt `:956-1021`; `Scope.privacy` and the rules `:1045-1051`; held findings dropped
+    `:1088-1091`; `verifyHeadFiles(sent, …)`; the notes `:1389`; the evidence scope's zdr route `:1498-1505`.
+    `browser-bundle.test.ts` asserts that holdback.ts, brain/scan.ts and wildcard.ts are in the renderer bundle with
+    no Node import.
+  - Eval `script/vectorscope-eval/desktop.ts`: the settings come from `onSettings` (the runner's own), the reader that
+    re-parsed review.json with `parseReviewConfig` is gone, the scope takes the zdr route under "zdr", and the runner
+    gets the client without `global`, so a desktop replay reads no operator's user config either (Decision 7; the
+    replay test gives the client a `global` that throws if asked).
+    `replay.ts`: `holdback-secrets.desktop` `{ pending }` -> `{ from: "VS-34" }`; `privacy-zdr.desktop` stays pending
+    with the reason (Decision 10). README: the two table rows, the `VARIANT_KEYS.desktop` sentence, the addendum-rows
+    paragraph and the privacy-zdr bullet (a replay reads no operator's user config).
+  - Generated (by `./packages/sdk/js/script/build.ts`, never by hand): `packages/sdk/openapi.json` (+15: the
+    `GlobalReviewConfig` schema, three untyped properties, and `review` on `Config` and `ConfigWithLocks`),
+    `packages/sdk/js/src/gen/types.gen.ts` and `src/v2/gen/types.gen.ts` (+8 each). `bun run generate` in
+    `packages/client` changes nothing (the client is generated from the Protocol, not the engine config); `bun run
+    check:generated` there is clean.
+  - Docs: this entry; `v2-notes/vectorscope-v2-plan.md` §4 (the VS-23 b/c/d row's VS-23d status and limits; the VS-34
+    row's desktop half and global source).
+  - Unchanged: `provider.ts`, `session/llm.ts`, every spawn hot-spot file, connect's files (`hub.ts`,
+    `adapters/vectorscope.ts`, `placement.ts`, `directory.ts`), `github.review.ts` and every @vector file,
+    `review/run.ts`, `review/model.ts`, `review/service.ts`, `review/local-run.ts`, the engine eval, the server package
+    and the Protocol, `packages/client`'s generated files, `test/cli/review.test.ts`.
+
+- **Decisions and deviations.**
+  1. **The global source** is `Config.getGlobal().review`, the user's own config files, as `--apply`'s VectorScope
+     switch reads it (`review.ts:1569-1572`). Project files, `VECTOR_CONFIG_CONTENT`, managed and remote org config
+     never supply it. A company lock on `review` is not honoured and a managed `review` block is not read (known limit).
+  2. **"Hidden"** means: decoded by the engine and the app, absent from the published editor schema (`withHidden`), no
+     docs page and no settings UI. The generated SDK and openapi do list it, as the brief's regeneration requires, as
+     `review?: { privacy?: unknown; holdback?: unknown; zdrAttested?: unknown }`; the openapi carries no description.
+     Critique point 16 asked for the lead's confirmation before the chore(sdk) commit: this step makes no commit, so
+     the confirmation is recorded as the gate's prerequisite (Hand-offs). Un-hiding is deleting `withHidden` and
+     regenerating.
+  3. **Loose field types** (critique point 6 taken): every key is `Schema.Unknown`, `zdrAttested` included, so no value
+     in the block makes the strict decoder refuse the user config. Corrected by review findings round one (finding 7):
+     a refused user config is not dropped. The load has no typed failure (`ConfigParse` throws, and Effect turns the
+     throw into a defect, which `getGlobal`'s `Effect.orElseSucceed` at `config.ts:1809-1817` does not catch), so
+     `getGlobal` fails, and keeps failing until the file is fixed and read again: every engine surface stops, reviews
+     included, fail-closed. What the loose types buy is that a bad review value does not stop everything else:
+     `mergeReviewConfig` reads a non-level as the strictest with a warning and drops an unreadable attestation with a
+     warning. A `review` value that is not an object (`"review": "zdr"`), like any unknown or wrongly typed top-level
+     key, fails the load in the same way (a union with `Unknown` would erase the field's shape from the SDK and the
+     app's type). Pinned by `config.test.ts` "a user config that does not load fails every read of it, never one
+     without its review block (SF-15)".
+  4. **Server enforcement of the desktop's sessions is an adoption at the HTTP prompt**, and the desktop's review
+     settings raise it through the prompt's review scope (critique point 4 taken in full: the plan's D7, a desktop
+     refusal of a zdr that comes from review.json alone, is dropped). `Scope.privacy: "zdr"` can only raise: a scope
+     without it leaves the server's policy, and attestations come from the user config alone, as the CLI takes them on
+     "local". A guest's prompt can raise a session it may prompt and lower nothing. A refused decision is registered,
+     so the assistant message carries `Refused`'s text and the desktop shows "Vector could not finish this review:
+     Vector did not send this request: … (unattested-provider). Nothing was sent." `provider.ts` and `llm.ts` are
+     untouched. The adoption reads no environment (critique point 11): the desktop reads no `REVIEW_*` variable, so both
+     sides decide from the user config and review.json; `REVIEW_PRIVACY` in the server's environment does not apply to
+     the desktop's reviews, as no `REVIEW_*` variable ever did (known limit).
+  5. **The fallback** (critique point 5 taken): the refusal sits inside `runSteps`' loop beside the compaction refusals,
+     not at the top of `runLoop`, and its condition is the first user message's review scope or the server policy. It
+     covers a session forgotten past `RELEASED_LIMIT`, one from before a restart, a `command` or a summary, which adopt
+     nothing. What the caller sees: over HTTP a 500 from the `command` route (the user message kept, the session idle
+     again, no request sent: the HTTP test asserts all three); in process the `ReviewContextUnavailable` defect, which
+     `Review.run` maps to `contextError` (`run.ts:820`), unchanged. Connect's `vectorscope.place` and
+     `vectorscope.directory` (critique point 7): they are parents and anchors, created and never prompted (their only
+     uses are `sessions.create` and parent IDs; connect prompts only the pass sessions `Review.run` registers), so the
+     prefix check is kept, fail-closed, rather than an exclusion list; no regression test was added for them.
+  6. **Every `Review.run` caller of `executeLocalReview` gets the block** through `Effect.serviceOption(Config.Service)`:
+     the CLI, the local service and the owner's local run (`local-run.ts` provides its captured context, which holds the
+     config service), and connect through `ReviewService.execute`. The function's requirements are unchanged, so
+     `review.test.ts` and connect's adapter need no edit. Critique point 3: taken as tests of the CLI and of the
+     context-shaped call the service makes (`review-privacy.test.ts` "a pull request's base and the local service's
+     pinned settings are raised the same way"), not through `ReviewService.execute` itself: that needs the private Git
+     view, which this host refuses (`service.test.ts` 4 pass, 1 skip, 10 fail here, as at SF-14). The residual: a caller
+     with no config service reads no block, as before SF-15; every engine runtime has one.
+  7. **The eval reads no operator's user config** (critique point 2 taken; the plan's D6/P is dropped): `ReviewEval.replay`
+     still passes no `global`, so a variant's name fixes its keys on every machine, and no `zdrAttested` is taken from
+     there either (Q7 stays open; the README's owner setup for the eval key is unchanged). Test: eval.test.ts "replays a
+     case as the frozen pipeline when the operator's user config raises privacy and holdback".
+  8. **The desktop's base blob is rebuilt from the diff, not read** (a departure from "reads the base blob", critique
+     point 9 taken): no route the desktop uses reads a git blob, and `cat-file --batch` is owner-gated. For every changed
+     file whose base path is review.json (a rename away included, compared without case): the checkout's text when the
+     diff applies to it (checkout at the base), `revertPatch` of the head text (checkout at the head, a deletion from
+     ""), else, from the diff's base-side hunk lines, only where they set privacy or holdback (`fragmentSettings`,
+     review findings round one, finding 6: each `"privacy": value` or `"holdback": value` as a one-key JSON text; a
+     value cut off, or not a JSON string or scalar, gives a text that is not JSON and mentions the key, read as the
+     stricter setting; a non-level value reads as that too; none when neither is set, so the defaults). Each is read
+     with `privacyOnly`, and the strictest privacy and holdback win. A file added at review.json or renamed onto it had
+     no base copy and gives nothing. Residual: a base setting outside the hunks while the checkout is at neither end
+     (the user config's privacy is still enforced by the server).
+  9. **The desktop's holdback** applies VS-34 with the core functions `Review.run` uses: `holdbackFiles` with
+     `ignored: []`, so `noteIgnoreUnchecked` says the ignore rules were not checked; `holdbackContext` over the pull
+     request's text, related code, CI excerpts and human comments; `inputsRedacted`; `reviewPermissionRules({ holdback,
+     held })`, so the engine's read, grep and glob tools redact the desktop's sessions too (`session/tools.ts` reads the
+     stored rules); held-back skips; held files out of `files`; findings on held paths dropped before the double-check;
+     `noteHeldBack` with "(its value was not sent)" (the desktop's rules add no `Truncate.GLOB`, `allowDirs` or checks) and
+     `noteRedacted`. Every reviewable file held: no session, an outcome with the skips and the notes. Related code is
+     looked up from the files sent. An incremental review whose new hunks are all held still runs a pass on the settled
+     files (Review.run skips it; known limit). `Wildcard.match` reads `process.platform` only where `process` exists.
+  10. **Replay variants.** `desktop:holdback-secrets` is built (`{ from: "VS-34" }`, `VARIANT_KEYS.desktop` gains
+      `holdback`). `desktop:privacy-zdr` stays pending as a documented difference: the enforcement is the engine
+      server's, and `desktop.ts` replays through a recording client with no server; its reason now says so.
+  11. **Settings key**: the merged privacy and holdback are appended only when either is set, so every review without
+      them keeps the key it had.
+  12. **The V2 session API** (critique point 1, option (b)): `POST /api/session/:id/prompt` admits input to SessionV2,
+      whose runner sends through `@vectordevai/llm`, which neither `hold` nor `turn` sees; V1 and V2 share the session
+      table, so a `vectorscope.*` session can be driven there unheld. Closing it needs a check the engine supplies to the
+      server package through core, which touches the V2 session core; it is left to the lead, and the HTTP test "known
+      limit: the V2 session API still admits a prompt of a review session under zdr" pins today's behaviour.
+
+- **Critique points.** 1 taken as (b) (Decision 12, a pinning test). 2 taken (Decision 7). 3 taken in another form
+  (Decision 6). 4 taken in full (Decision 4). 5 taken (Decision 5, with the caller-visible assertions). 6 taken
+  (Decision 3), the non-object block left as a known limit. 7 confirmed by reading, no exclusion (Decision 5). 8 taken:
+  the parity case runs first in its file and asserts that no unattributed request is held at its start and end; since
+  review findings round one the file also releases every session it creates and restores the user config files. 9
+  taken (Decision 8; rename-away tested). 10 taken: the name-only pre-check refuses with `notePrivacyRefused` (bold
+  markers dropped, since the panel shows the error as plain text), 0 attempts,
+  before any session. 11 taken (Decision 4: no environment on either side). 12 taken: build.ts and `check:generated` ran
+  at `86294f80` under fresh XDG roots with `VECTOR_DISABLE_MODELS_FETCH=1`, and `git status` stayed clean; the same
+  settings for the regeneration. 13 taken (the config and the catalog are bound before the input is built; no
+  `process.env` in the handler). 14 taken (Hand-offs, Known limits). 15 taken: `packages/desktop`, `packages/web` and
+  `packages/script` are typechecked too (Tests run), and no fixture writes a session row by SQL: the HTTP test creates
+  every session through the route. 16 recorded (Decision 2).
+
+- **Default and parity proof (I-1).** With no `review` block, an empty one, or one at "standard"/"off":
+  - CLI and the context-shaped service call: `review-privacy.test.ts` "no config service, an empty user config and an
+    empty block give the settings and warnings of before" (four variants equal, with a review.json that sets every
+    sourced key).
+  - HTTP: `httpapi-review-privacy.test.ts` "without a review block, or with privacy standard, nothing is registered and
+    the requests are as before" (three variants; one request each; bodies byte-identical after the session ID; nothing
+    registered; no unattributed request held before or after).
+  - Desktop: `ai-review.test.ts` "without a user review block, with an empty one or one at standard, the review is the
+    one of before" (no global route, `{}`, `{ review: {} }`, standard/off: the same creates, prompts and outcome,
+    settings key included; the rules are `reviewPermissionRules({})`; no scope carries `privacy`), and "a pull
+    request's review.json hunks that set neither key leave the review as before, with the checkout elsewhere" (review
+    findings round one, finding 6): the checkout at neither end, the hunk's context holding `"ignore":
+    ["docs/privacy/**"]` with `"privacy": "standard"`, or with `"skipLabels": ["holdback", "privacy"]`, against a
+    control whose hunk names neither key: the control's settings are HEAD's (`parseReviewConfig({ json: undefined,
+    trigger: "desktop" })`), and each variant has the control's settings, creates, prompts (the variant's two lines
+    spelled as the control's), settings key and notes; no scope carries `privacy`; the rules are
+    `reviewPermissionRules({})`. With the old fallback (the raw fragment) both variants read "zdr" (mutation below).
+  - Eval: unchanged code; the new eval test shows an operator's block changes nothing.
+  - Published schema: `config.json` and `tui.json` byte-identical (`generated-artifacts.test.ts`, 3 pass).
+  - Digests: `promptsDigest()` and `policyDigest(DEFAULT)` unchanged (`model-evidence.test.ts` green with only the pin
+    moved). `REVIEW_PIPELINE_REVISION` 4.
+  - User-visible differences, each limited to opted-in settings: a review.json with `"privacy": "zdr"` now holds the
+    desktop's sessions to the route rules (before, the desktop ignored it and sent anywhere), refuses Codium, free,
+    router and retention-required models before any session, and a review on an unattested provider ends with the
+    server's refusal; a pull request that drops the base's zdr is still held to it; a review.json that cannot be read
+    and mentions privacy or holdback reads as the stricter setting on the desktop too; `"holdback": "secrets"` now
+    holds credential files back on the desktop; a privacy, holdback or attestation setting that gives a warning now
+    has it in the outcome's notes and a refusal's text (none without such a setting).
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `959aa1632830f1b0` -> `e1132b857966895f` (`d5182548a20e81de` before review
+  findings round one, which changed `route.ts`, `cli/cmd/review.ts` and `ai-review.ts` again), computed after the last
+  edit to a pinned file and after Prettier, with `model-evidence.test.ts` then green (33, 0, 0, 429; 32, 1 with the
+  previous pin). The
+  pinned files changed: `route.ts`, `handlers/session.ts`, `prompt.ts` (engine), `cli/cmd/review.ts`, `ai-review.ts`,
+  core `diff.ts`, `prompt.ts` and `holdback.ts` (comment). No file joins `REVIEW_PIPELINE_FILES`: core
+  `v1/config/review.ts`, `review/config.ts` and `util/wildcard.ts` decide nothing a review finds beyond what
+  `mergeReviewConfig` and holdback already decide (wildcard.ts changes only where there is no `process`). Merge note for
+  the lead: connect-finish and everywhere-finish edit pinned files, so the pin is recomputed after every merge of main.
+
+- **Replay variants.** `desktop:holdback-secrets` `{ pending: "VS-34's desktop half (…)" }` -> `{ from: "VS-34" }`;
+  `desktop:privacy-zdr` stays pending with the documented-difference reason; `VARIANT_KEYS.desktop` adds `holdback`.
+  `replay.test.ts` 49 -> 50 tests: the built list gains `desktop:holdback-secrets`, the pending count is
+  `2n − 6`, the desktop privacy-zdr reason and `VARIANT_KEYS.desktop` lacking `privacy` are asserted, and "replays
+  desktop:holdback-secrets: the credential file is held back and the run says it applied" (`applied: true`, the frozen
+  run's prompts carry the credential's value and the variant's do not, a `held-back` skip, the scope's prompts digest
+  and the sessions' rules digest move).
+
+- **Desktop half**, as built: Decisions 4, 8, 9 and 11. The privacy half is the server's (adoption) and the desktop's
+  (scope, name-only refusal, evidence scope); the holdback half is the desktop's, with the engine's tools.
+
+- **Review findings (round one)** (eleven, three blocking; fixed in the working tree before the commit, so this entry
+  is corrected in place rather than by an appended note; one blocking finding is not taken, with the reason).
+  1. Blocking, `httpapi-review-privacy.test.ts`: the file leaked process-global state into later files of the same Bun
+     process (CI's engine shards): adopted "zdr" sessions stayed registered, so a malformed session header was refused
+     process-wide, and `PATCH /global/config` left `review.privacy: "zdr"` in `vector.jsonc` (the first of
+     `vector.jsonc`, `vector.json`, `config.json` that exists), which `afterAll` never restored. Taken: every session
+     the file creates (the desktop's and the user's own) is recorded and released in `afterEach` (a released "zdr"
+     session stays refused, and no longer makes a malformed header refused); the three user config files are read
+     before the first case, removed for the file's run, and written back or removed in `afterAll`, which then
+     invalidates the process runtime's config (`AppRuntime`, `Config.invalidate`) and asserts the files equal what
+     was there before and that no unattributed request is held. The file now uses `./httpapi-layer`'s
+     `httpApiLayer` and `request` instead of a copy. Proof: the file's own `afterAll` assertions, which check exactly
+     the preconditions `route.test.ts:482` ("… a malformed header only under zdr") and `zdr-route.test.ts:438` ("… sent
+     as it is otherwise") rely on, and a mutation (the release dropped) that fails them; `route.test.ts` and
+     `zdr-route.test.ts` pass on their own. The finding's proof, running those files after this one in one Bun process,
+     was not done: RULES-v2 runs tests one file at a time; the first CI `test.yml` engine shards are that proof.
+  2. Non-blocking, `run.ts` `reviewed` scope without `privacy`: not taken. It would close the released-set residual
+     for every zdr review session, but it moves the prompt metadata and the pin, which the finding itself leaves to the
+     lead; the known limit stays and is handed to the lead.
+  3. Non-blocking, `cli/cmd/review.ts` `Effect.serviceOption(Config.Service)` fails open without the service. Kept
+     (requiring the service changes `executeLocalReview`'s requirements, and `test/cli/review.test.ts`, which the lane
+     never edits, builds its runtime without it); the comment now says only hand-built test runtimes omit it and no
+     production entry may. Every production runtime provides it (Decision 6).
+  4. and 9. Non-blocking, `script/schema.ts` lost its executable bit (100755 -> 100644), the mutation harness's
+     temp-and-rename restore. Taken: `chmod +x`; `git diff HEAD --summary` shows no mode change, and none of the other
+     eleven files that harness restored changed mode. This round's mutations restore with `cp -p` and `cmp`.
+  5. Non-blocking, the desktop dropped `mergeReviewConfig`'s privacy and holdback warnings. Taken: the warnings about
+     `privacy`, `holdback` or `zdrAttested` (matched by their labels: `review.<key>` or `"<key>"`) are added to the
+     outcome's notes (the nothing-to-review, all-held and full outcomes) and appended to the text of a refusal before
+     any session and of "Vector could not finish this review"; other warnings stay out, as before SF-15. Without these
+     settings there are none, so I-1 holds. Tests: "the privacy settings' warnings reach the outcome's notes and a
+     refusal's text" and the fragment cases' notes.
+  6. Blocking, I-1 on the desktop: with the checkout at neither end, the hunks' base side, a fragment that never parses
+     as JSON, was handed to `mergeReviewConfig` whole, whose unreadable rule raised privacy and holdback whenever the
+     text mentioned either word anywhere (an ignore path, a label, `"privacy": "standard"`). Taken as the finding
+     proposed (Decision 8): `fragmentSettings` reads only where the fragment sets either key and builds one one-key JSON
+     text per setting; none when neither is set, so the defaults; a value cut off or not a JSON string or scalar still
+     reads as the stricter setting. Tests: the parity case in the Default and parity proof, and "a fragment that sets a
+     key, cuts its value off or gives no level reads as the stricter setting" (zdr set, holdback cut off, privacy
+     "max"); with the old fallback both fail.
+  7. Blocking, `config.ts:1809`, "the global source fails open": not taken; the premise does not hold. The finding
+     reads `Effect.orElseSucceed((): Info => ({}))` as turning any decode failure into an empty user config, but the
+     load has no typed failure: `ConfigParse.jsonc` and `ConfigParse.schema` throw, and Effect turns a throw inside the
+     generator into a defect, which `orElseSucceed` does not catch. Reproduced before any change: the test written for
+     the finding's fix (an unknown top-level key beside `review.privacy: "zdr"`) failed with `ConfigInvalidError` out of
+     `getGlobal`, not with an empty block. So every SF-15 reader fails closed: the CLI and the local service stop, the
+     server's adoption and prompt.ts's fallback fail the request before anything is sent, and `GET /global/config`
+     fails, on which the desktop rejects the review ("Vector could not read your review settings…"). The proposed
+     recovery would turn a broken user config from an error into a partly read one for every engine surface, a change
+     beyond SF-15. Kept the code; the new `config.test.ts` case pins the behaviour (four broken configs: an unknown key,
+     a wrongly typed unrelated key, text that is not JSON, a non-object `review`; each read fails; fixed, the block and
+     the server policy come back); Decision 3, Known limits and the core header comment (`v1/config/review.ts`, which
+     said the engine "falls back to none") are corrected.
+  8. Non-blocking, the same leak as 1, adding a `config.json` that existed before and was never restored. Taken with 1:
+     all three files are restored.
+  10. Non-blocking, adopted registrations are never released. Taken as the bound the finding offers: `adopted` keeps
+     the adopted IDs oldest first, and past `ADOPTED_LIMIT` (1024) the oldest is released, so a "zdr" one moves to the
+     released set and stays refused; `release` takes an entry out of the count. Release on session deletion is not
+     added: the desktop neither deletes nor archives its review sessions, so it would never fire. Test: `route.test.ts`
+     "past ADOPTED_LIMIT adoptions the oldest is released, and a call that still names it is refused". The process-wide
+     refusal of a malformed header while an adopted "zdr" session is registered stays a known limit.
+  11. Non-blocking, the V2 session API still admits a `vectorscope.*` session under the user config's zdr. Kept as the
+     hand-off it asks for (Decision 12): when the lead takes it, V2 admission of an internal `vectorscope.*` session is
+     refused while `ReviewRoutes.zdr(sessionID)` or `serverPolicy(getGlobal().review).privacy` says "zdr", through a
+     core port to the server package, and the pinning test is inverted.
+
+  Not changed by these findings: the generated SDK and openapi (no schema or description changed), the published
+  `config.json`, the replay variants, `REVIEW_PIPELINE_REVISION`, and every default.
+
+- **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory; app with
+  `--isolate --preload ./happydom.ts`; a fresh `TMPDIR` and XDG roots per file, `/tmp/vector-v2/scope/sf-15/bin/t.sh`).
+  HEAD `86294f80` -> working tree, as pass, skip, fail, expects (HEAD counts run here at `86294f80` before any edit).
+  - Core: `test/config/review.test.ts` new, 6, 0, 0, 46; `test/review/diff.test.ts` 52, 0, 0, 176 -> 59, 0, 0, 201
+    (describe "revertPatch", seven tests); `test/review/model-evidence.test.ts` 33, 0, 0, 429 -> 33, 0, 0, 429 (32, 1
+    with the old pin); unchanged: `test/review/config.test.ts` 84, 0, 0, 1225, `test/review/eval.test.ts` 55, 0, 0, 297,
+    `test/review/holdback.test.ts` 25, 0, 0, 199, `test/config/config.test.ts` 24, 0, 0, 130; also run:
+    `test/review/permission.test.ts` 24, 0, 0, 291, `test/review/prompt.test.ts` 50, 0, 0, 325,
+    `test/review/privacy.test.ts` 57, 0, 0, 844, `test/connect/policy.test.ts` 43, 0, 0, 768 (Wildcard).
+  - Engine: `test/server/httpapi-review-privacy.test.ts` new, 6, 0, 0, 50; `test/review/route.test.ts` 35, 0, 0, 154 ->
+    39, 0, 0, 186 (describe "ReviewRoutes.serverPolicy, known and adopt (SF-15)"); `test/config/config.test.ts` 175, 0,
+    0, 415 -> 179, 0, 0, 425; `test/cli/review-privacy.test.ts` 6, 0, 0, 88 -> 10, 0, 0, 103 (describe "the user
+    config's review block (VS-23d)"); `test/compliance/generated-artifacts.test.ts` 2, 0, 0, 9 -> 3, 0, 0, 14;
+    `test/review/eval.test.ts` 48, 0, 0, 567 -> 49, 0, 0, 574; unchanged: `test/provider/zdr-route.test.ts` 20, 0, 0,
+    283, `test/server/httpapi-session.test.ts` 26, 0, 0, 142; also run: `test/util/wildcard.test.ts` 8, 0, 0, 29,
+    `test/cli/review-holdback.test.ts` 6, 0, 0, 48, `test/cli/review.render.test.ts` 12, 0, 0, 29,
+    `test/server/httpapi-public-openapi.test.ts` 21, 0, 0, 233, `test/session/holdback-tools.test.ts` 2, 0, 0, 32,
+    `test/review/vectorscope-replay.test.ts` 29, 0, 0, 353, `test/session/prompt.test.ts` 157, 1, 0, 710,
+    `test/review/run.test.ts` 85, 1, 4, 1062 (the four sandbox-only failures SF-13b and SF-14 list: "the durable local
+    runner preserves actual provider output…", "deletion without instance context joins the actual provider…", "nested
+    service placement roots relative denials…", "a resolver-time symlink retarget cannot release…", as at SF-14), and
+    `test/review/service.test.ts` 4, 1, 10 (each failure the host's "no supported unprivileged Git verifier", as at
+    SF-14; CI only).
+  - App: `src/features/pull-requests/ai-review.test.ts` 123, 0, 0, 517 -> 129, 0, 0, 580 (the SF-13b placeholder
+    replaced by describe "review privacy and holdback on the desktop (VS-23d)", seven tests); `src/browser-bundle.test.ts`
+    4, 0, 0, 17 -> 4, 0, 0, 17 (three more modules asserted in the walk).
+  - Eval script (from `packages/script`): `../../script/vectorscope-eval/replay.test.ts` 49, 0, 0, 659 -> 50, 0, 0, 674;
+    `../../script/vectorscope-eval/run.test.ts` 18, 0, 0, 147.
+  - Web: `test/docs-config-reference.test.ts` 4, 0, 1, 37 at HEAD and after: "company computer policy samples decode and
+    state their minimum engine version" expects "1.99.112" in the published `computer` description, which no longer
+    names a version (the Hands lane's text); unrelated to SF-15, the lead's.
+  - Never run: `test/cli/review.test.ts` (lane rule).
+  - Regeneration: at HEAD, `./packages/sdk/js/script/build.ts` and `bun run check:generated` (fresh XDG roots,
+    `VECTOR_DISABLE_MODELS_FETCH=1`) left `git status` clean; after, build.ts changed exactly the three generated files
+    above, `bun run generate` in `packages/client` changed nothing, and `script/schema.ts` regenerated `config.json` and
+    `tui.json` byte-identical (`cmp`).
+  - Typecheck: `bun typecheck` in `packages/core`, `engine`, `app`, `client`, `sdk/js`, `desktop`, `web` and `script`,
+    and `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`: clean (engine after two test
+    type fixes). Full TURBO typecheck (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`,
+    `--concurrency=2`): 27 of 27 tasks successful (0 cached).
+  - Prettier `--check` on the 30 changed TypeScript files and the eval README: clean (seven files were formatted with
+    `--write`; each was clean at HEAD, so the diff holds only this package's lines).
+  - Re-run after review findings round one (same script, scratch `/tmp/vector-v2/scope/sf-15/fix`), as pass, skip,
+    fail, expects: core `test/review/model-evidence.test.ts` 33, 0, 0, 429 (32, 1 before the pin moved),
+    `test/config/review.test.ts` 6, 0, 0, 46; engine `test/server/httpapi-review-privacy.test.ts` 6, 0, 0, 50 (the
+    `afterAll` assertions pass; bun does not count them), `test/review/route.test.ts` 40, 0, 0, 193 (one new),
+    `test/config/config.test.ts` 180, 0, 0, 432 (one new), `test/provider/zdr-route.test.ts` 20, 0, 0, 283,
+    `test/cli/review-privacy.test.ts` 10, 0, 0, 103, `test/server/httpapi-session.test.ts` 26, 0, 0, 142; app
+    `src/features/pull-requests/ai-review.test.ts` 132, 0, 0, 595 (three new), `src/browser-bundle.test.ts` 4, 0, 0,
+    17; eval `../../script/vectorscope-eval/replay.test.ts` 50, 0, 0, 674. Typecheck: `bun typecheck` in
+    `packages/core`, `engine` (after one test type fix) and `app`, and the eval tsconfig: clean. Not re-run: the
+    client, SDK, desktop, web and script typechecks and the regeneration (no generated input or type surface changed),
+    and the full TURBO typecheck, which the commit gate runs before the push. Prettier `--check` on the eight changed
+    TypeScript files: clean.
+
+- **Mutation checks** (`/tmp/vector-v2/scope/sf-15/mut/mutate.py`, list in `mutations.json`; each applied alone, its test
+  file run through the lock, filtered by `-t` for the engine config and app files, the file restored by a
+  temp-and-rename copy and checked with `cmp`): 30 of 30 killed, each restored. Two survived the first run and were
+  killed after the tests were strengthened: `app-global-missing` (the missing-data throw removed; a TypeError still
+  rejected, so the test now asserts each refusal's message) and `app-settings-key` (privacy and holdback left out of the
+  settings key; the review.json text alone had moved the key, so the test now also runs the same files under the user
+  config's zdr). Engine: `delete next.review` dropped; the HTTP adoption off; the adoption deaf to the scope; the
+  `runSteps` fallback off; the CLI's `global` dropped; `serverPolicy` reading `process.env`; `adopt` without the agent;
+  `adopt` deciding under "standard"; `known` without the released set; `withHidden` dropped. Core: a strict `privacy`
+  type; `revertPatch` without swapping the hunk starts, or without swapping line kinds; `Scope.privacy` not read;
+  `VARIANT_KEYS.desktop` without `holdback`. Eval: the desktop holdback half pending again. App: no user config read; no
+  missing-data refusal; no `privacyOnly`; no hunk fallback; no `revertPatch` candidate; no scope privacy; no name-only
+  refusal; no holdback; no `holdbackContext`; rules without holdback; held findings kept; `promptOnly` wording; the
+  settings key without privacy and holdback; nothing-to-send ignored. The plan's "revertPatch without swapping
+  `newLine`" is not a mutation that can fail: `applyPatch` reads no line numbers, so the start swap and the kind swap
+  stand in for it. Not mutated: the Wildcard guard (Bun has a `process`; the browser-bundle walk checks imports only).
+  Round one's fixes, each applied alone and restored with `cp -p` and `cmp`, mode checked: the HTTP file's session
+  release dropped (its `afterAll` fails: an unattributed request is held); the desktop fallback given the raw fragment
+  again (the parity case and the fragment cases fail); `settingNotes` empty (the warnings test and the fragment cases
+  fail); the adoption bound dropped (the bound case fails). 4 of 4 killed.
+
+- **Known limits.**
+  - The released-set residual: a session forgotten past `RELEASED_LIMIT`, under a "zdr" that comes only from a
+    review.json read by the CLI or `REVIEW_PRIVACY` (not the user config, not a desktop scope), is unheld; no durable
+    marker is invented. `Review.run`'s own scope (`run.ts` `reviewed`) does not carry `privacy`; adding it would close
+    this for every zdr review session but moves the prompt metadata and the pin, so it is the lead's (review findings
+    round one, finding 2; Hand-offs).
+  - The V2 session API admits a review session unheld (Decision 12).
+  - Adopted desktop registrations are released only past `ADOPTED_LIMIT` (1024, oldest first, into the released set,
+    so still refused; review findings round one, finding 10). While any adopted "zdr" session is registered every
+    request in the process has its session header read, so a malformed header is refused process-wide
+    (`unattributed-request`) (critique point 8). An adopted session evicted while its review still runs has its later
+    calls refused (fail-closed); 1024 sessions is far beyond one desktop review.
+  - Managed and remote-org `review` blocks are not read; a company lock on `review` is not honoured.
+  - A user config that does not decode (a non-object `review`, or any unknown or wrongly typed top-level key) fails
+    every read of it until fixed and read again, so every engine surface stops, reviews included (fail-closed,
+    Decision 3).
+  - A provider-ID attestation at adoption relies on the catalog's shipped origins; the desktop's cost kind is not passed
+    to the server, so a free model the catalog does not list as free is refused there only by its names.
+  - The base-blob residual (Decision 8) and the incremental all-held pass (Decision 9).
+  - `REVIEW_PRIVACY` / `REVIEW_HOLDBACK` in the engine server's environment do not apply to the desktop (Decision 4).
+  - The GitHub surface (`cli/cmd/github.review.ts:1256`) reads `parseReviewConfig` and registers its sessions as
+    "standard", so a locally run `vector github` review ignores the user config's privacy, and its sessions count as
+    held for the fallback (critique point 14; SF-37).
+  - The SDK and openapi list `review` (Decision 2, Q16).
+  - The renderer's path without `process` is verified by the browser-bundle walk (imports only) and CI's app jobs, not
+    by a renderer run here.
+  - A guest's `GET /global/config` returns the owner's review block (it omits only `local`); privacy, holdback and
+    attestation names are visible to an invited guest.
+
+- **CI to dispatch on `scope-finish`** (each run's ID and result go in a later entry): `typecheck.yml`; `test.yml`
+  (required: runtime code in core, engine and app, the app unit files, `check:generated`; it also covers SF-13b's and
+  SF-14's owed runs); `scope-directory-identity.yml` (core and engine `src/review/**`, engine `test/review/**`);
+  `scope-app-validation.yml` (`ai-review.ts`); `vector-at-mention.yml` (core `review/**`);
+  `review-http-regression.yml` with scope local (`executeLocalReview`, which the local service runs).
+  `review-memory-fence.yml` is not required (`run.ts`, `model.ts` and `llm.ts` are untouched). Deferred, CI only: the
+  Windows and macOS legs of `test.yml`, the HTTP shard, and the Playwright and app e2e runs.
+
+- **Hand-offs.**
+  - The lead: whether `Review.run`'s scope carries `privacy: "zdr"` (review findings round one, finding 2: `run.ts`
+    `reviewed`, `...(route.privacy === "zdr" ? { privacy: "zdr" as const } : {})`, so prompt.ts's fallback covers a
+    forgotten zdr session whose zdr came from review.json or `REVIEW_PRIVACY`; it moves the prompt metadata and the
+    pin).
+  - The lead: confirm the SDK exposure under Q16 before the chore(sdk) commit (Decision 2); the V2 session API gap
+    (Decision 12); a durable marker for the released-set residual; the `cloud-agents-start.test.ts:772` order flake.
+  - SF-37: the GitHub job's move onto `mergeReviewConfig`, with the user config's block when it runs locally.
+  - connect-finish: connect's consent preview onto `mergeReviewConfig` (it reads `parseReviewConfig`).
+  - SF-42: the inventory refresh (`vectorscope-remaining.md`, `-continuation.md`) and the stale `:16000` sentence.
+
+- **Not claimed.** No commit, push or CI run in this step (the commit gate's). No default change, no key enabled, no
+  attestation supplied, no `REVIEW_PIPELINE_REVISION` change; no paid or benchmark run, model call or quality claim; no
+  `cat-file --batch`; no change to `provider.ts`, `session/llm.ts`, a spawn hot spot, a connect file, the server package
+  or an @vector file; no settings UI or docs page: the setting stays hidden (Q16).

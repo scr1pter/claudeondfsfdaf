@@ -501,8 +501,10 @@ export interface ReviewConfig {
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it: `vector review`, the local review service
-  // and the eval's replay call that from VS-23b, whose admission enforces it in model resolution and Review.run. The
-  // desktop (VS-23d) and the GitHub job (SF-37) still read parseReviewConfig, which ignores it.
+  // and the eval's replay call that from VS-23b, whose admission enforces it in model resolution and Review.run. Since
+  // VS-23d (SF-15) the user config's hidden `review.privacy` raises it too, and the desktop reads it: its review
+  // sessions are held to the route rules by the engine server (engine review/route.ts adopt). The GitHub job (SF-37)
+  // still reads parseReviewConfig, which ignores it.
   privacy?: "standard" | "zdr"
   // VS-34's opt-in (addendum A §1, Q23). Under "secrets", Review.run holds back from the model each changed file whose
   // new or old path names key material or credentials (holdback.ts holdbackFiles), records it as a `held-back` skip,
@@ -512,12 +514,14 @@ export interface ReviewConfig {
   // Raise-only, as `privacy` is: the strictest of the global config (VS-23d's hidden source, SF-15), review.json and
   // REVIEW_HOLDBACK, and no pull request text sets it. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and
   // DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they were. Only mergeReviewConfig reads
-  // it; parseReviewConfig ignores it, and so do the desktop, the GitHub job (SF-37) and connect's consent preview, which
-  // read that. Independent of `privacy`: whether "zdr" requires it is Q23, still open.
+  // it; the desktop does since SF-15 and applies both halves with the same functions (no gitignore check there).
+  // parseReviewConfig ignores it, and so do the GitHub job (SF-37) and connect's consent preview, which read that.
+  // Independent of `privacy`: whether "zdr" requires it is Q23, still open.
   holdback?: "off" | "secrets"
   // The routes the owner attests are zero data retention (Q2): provider IDs, `openrouter` for an OpenRouter account,
   // and model server hosts. A text entry is the legacy form and keeps its meaning; an attestation object (VS-33) adds
-  // what the owner attests beyond the ID. Read only from a trusted source (mergeReviewConfig); absent means none.
+  // what the owner attests beyond the ID. Read only from a trusted source (mergeReviewConfig): on your own computer
+  // the user config's hidden `review.zdrAttested` (SF-15); absent means none.
   zdrAttested?: ZdrAttestedEntry[]
   // VS-30's opt-in (D10), as proposed: contract §1.1 and §4 VS-30, with owner question Q8 open. Under "ask", a trusted
   // local review would ask, per operation and through `--checks`, before running the project's tests, coverage and

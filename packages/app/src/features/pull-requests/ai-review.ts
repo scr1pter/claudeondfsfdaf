@@ -14,11 +14,12 @@ import { requestComposerPrompt } from "@/utils/composer-handoff"
 // each step is testable without a model.
 
 import {
-  parseReviewConfig,
+  mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
   rulesForPaths,
+  type SourcedReviewKey,
 } from "@vectordevai/core/review/config"
 import {
   anchorText,
@@ -31,6 +32,7 @@ import {
   parseUnifiedDiff,
   renderPatch,
   resolveAnchor,
+  revertPatch,
   type AnchorIndex,
   type DiffFile,
 } from "@vectordevai/core/review/diff"
@@ -42,12 +44,17 @@ import {
   formatDuration,
   formatTokens,
   formatUsd,
+  noteHeldBack,
+  noteIgnoreUnchecked,
   noteNothingToReview,
+  notePrivacyRefused,
+  noteRedacted,
   noteTriageUnchecked,
   noteVerifyUnfinished,
   sanitizeModelMarkdown,
   type RepoRef,
 } from "@vectordevai/core/review/format"
+import { holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
 import { classifyFiles, classifyPath, isSensitivePath, parseGitAttributes } from "@vectordevai/core/review/ignore"
 import {
   assessReview,
@@ -58,6 +65,7 @@ import {
 } from "@vectordevai/core/review/model-evidence"
 import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
+import { decideRoute, type RouteRefusal } from "@vectordevai/core/review/privacy"
 import { redactSecrets } from "@vectordevai/core/review/redact"
 import {
   combineCostKinds,
@@ -310,6 +318,8 @@ export type ReviewRunInput = ReviewRequest & {
   // The certificates model evidence (VS-07) compares the models with under "modelEvidence": "warn"; MODEL_EVIDENCE
   // when absent. The eval and tests pass their own.
   certificates?: readonly ModelCertificate[]
+  // The settings the review runs under, once read (the eval's desktop replay records them).
+  onSettings?: (settings: { config: ReviewConfig; warnings: readonly string[] }) => void
 }
 
 type Tokens = { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
@@ -334,6 +344,9 @@ type Result<T> = Promise<{ data?: T }>
 
 // The part of the SDK client a review uses.
 export interface ReviewClient {
+  // The user config, for its hidden review block (VS-23d): the engine's GET /global/config. A client without it reads
+  // none, as before.
+  global?: { config: { get(): Result<{ review?: Partial<Record<SourcedReviewKey, unknown>> }> } }
   session: {
     create(input: {
       directory?: string
@@ -725,13 +738,59 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     ...REVIEW_RULES_PATHS.map(setting),
   ])
   const instructions = await repositoryInstructions(setting)
-  const { config } = parseReviewConfig({ json: json?.trim() ? json : undefined, trigger: "desktop" })
+  // VS-23d (SF-15): review privacy and holdback are the strictest of the user config's hidden review block, which the
+  // engine server also enforces, and review.json, as mergeReviewConfig reads them for `vector review`. When the pull
+  // request changes review.json, its settings stay the defaults and only the base's copy may raise these two.
+  const global = await userReviewSettings(client)
+  const settings = pr
+    ? files.filter(
+        (file) =>
+          (file.oldPath ?? file.path).toLowerCase() === REVIEW_CONFIG_PATH.toLowerCase() ||
+          file.path.toLowerCase() === REVIEW_CONFIG_PATH.toLowerCase(),
+      )
+    : []
+  const merged = settings.length
+    ? strictest(
+        (await baseReviewSettings(settings, read)).map((text) =>
+          mergeReviewConfig({
+            surface: "local",
+            ...(global ? { global } : {}),
+            json: { at: "base", text, privacyOnly: true },
+            trigger: "desktop",
+          }),
+        ),
+      )
+    : mergeReviewConfig({
+        surface: "local",
+        ...(global ? { global } : {}),
+        json: { at: "working-tree", text: json?.trim() ? json : undefined },
+        trigger: "desktop",
+      })
+  const config = merged.config
+  input.onSettings?.({ config, warnings: merged.warnings })
+  // The settings' warnings about privacy, holdback and attestations (a value read as the stricter setting, an
+  // attestation dropped) say why a review was raised to zdr or refused, so the outcome and a refusal carry them. The
+  // other warnings stay out, as before SF-15; without these settings there are none.
+  const settingNotes = merged.warnings.filter((warning) =>
+    /\breview\.(privacy|holdback|zdrAttested)\b|"(privacy|holdback|zdrAttested)"/.test(warning),
+  )
+  const withSettingNotes = (text: string) => [text, ...settingNotes].join(" ")
   const attributes = attributesText ? parseGitAttributes(attributesText) : undefined
   const { review, skipped } = classifyFiles(files, { config, attributes })
   const head = pr ? pr.headRefOid || pr.headRefName : "HEAD"
   const fileKeys = Object.fromEntries(review.map((file) => [file.path, fileKey(file)]))
   const settingsKey = fnv1a64(
-    [json, attributesText, ...rulesTexts, instructions, ...(input.preferredModels ?? [])]
+    [
+      json,
+      attributesText,
+      ...rulesTexts,
+      instructions,
+      ...(input.preferredModels ?? []),
+      // Only when either is set, so the key is what it was for every review without them.
+      ...(config.privacy || config.holdback
+        ? [`privacy:${config.privacy ?? ""}`, `holdback:${config.holdback ?? ""}`]
+        : []),
+    ]
       .map((part) => part ?? "")
       .join("\0"),
   )
@@ -769,7 +828,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       specialists: [],
       sessions: [],
       banners: [],
-      notes: [noteNothingToReview()],
+      notes: [noteNothingToReview(), ...settingNotes],
     }
 
   // Uncommitted changes are the checkout itself, so they are always reviewed in place.
@@ -789,6 +848,45 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     : "Reviewing the uncommitted changes in your checkout"
   input.onProgress?.({ type: "checkout", checkout, label })
   if (input.signal?.aborted) return undefined
+  // VS-34's desktop half (SF-15), under holdback "secrets": the same core functions Review.run calls. Credential files
+  // are held back whole and recorded as `held-back` skips, secret-shaped values in the diff, the head files and every
+  // untrusted block the prompts quote are redacted, and the sessions' rules deny the read tool the credential files
+  // and every held path, so the engine's read, grep and glob tools redact what they return. The desktop cannot ask git
+  // which changed files are ignored, so its note says so. Unset, nothing here runs and the prompts are as before.
+  const hold =
+    config.holdback === "secrets" ? holdbackFiles(review, { headFiles: checkout.headFiles, ignored: [] }) : undefined
+  const heldPaths = new Set(hold?.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
+  const sent = hold?.files ?? review
+  const reviewed = hold?.held.length
+    ? {
+        ...summary,
+        skipped: [...skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))],
+        files: summary.files.filter((file) => !heldPaths.has(file.path)),
+      }
+    : summary
+  const holdNotes = hold
+    ? [
+        // The desktop's sessions run no check and read nothing outside the checkout, so the held value was not sent.
+        noteHeldBack(hold.held.map((file) => file.path)),
+        noteRedacted(hold.redactions.map((row) => row.path)),
+        noteIgnoreUnchecked(),
+      ].filter((note) => note !== undefined)
+    : []
+  // Everything to review was held back: nothing is sent, the held files are skipped and nothing is unreviewed.
+  if (hold && !sent.length)
+    return {
+      ...reviewed,
+      checkout,
+      label,
+      report: { summary: "", risk: "low", files: [], findings: [] },
+      selection: emptySelection(),
+      anchored: {},
+      durationMs: now() - started,
+      specialists: [],
+      sessions: [],
+      banners: [],
+      notes: [...settingNotes, ...holdNotes],
+    }
   // Nothing changed since the last review, so its findings stand. The checkout is the one read just now: the user may
   // have switched branches since, and Apply fix and Ask the agent follow it.
   if (previous && unchanged.size === review.length && Object.keys(previous.fileKeys ?? {}).length === review.length)
@@ -830,13 +928,25 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     .map((item) => (item.context ? contextRefusal(modelName(item), item.context) : undefined))
     .find(Boolean)
   if (refusal) throw new Error(refusal)
+  // VS-23d (SF-15): under privacy "zdr" a model whose names alone the route rules refuse (Vector Codium, a free model,
+  // a router or preset, one whose provider requires retention) is refused before any session is created, as
+  // `vector review` refuses it. Where its requests go decides the rest, which the engine server holds each session to.
+  const privacyRefused =
+    config.privacy === "zdr"
+      ? [model, ...(triage ? [triage] : []), ...(judge ? [judge] : [])].flatMap((item) => {
+          const own = routeRefusalOf(item)
+          return own ? [{ model: modelName(item), refusal: own }] : []
+        })[0]
+      : undefined
+  if (privacyRefused)
+    throw new Error(withSettingNotes(notePrivacyRefused({ ...privacyRefused, attempts: 0 }).replaceAll("**", "")))
   const first = triage ?? model
 
   status("Finding the code that uses what changed…")
   const related = await relatedCode(
     client,
     directory,
-    review,
+    sent,
     (path) => classifyPath(path, { config, attributes }) !== undefined,
   )
   if (input.signal?.aborted) return undefined
@@ -845,27 +955,40 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     config.maxDiffChars,
   )
   // A re-review looks at what changed since the last one: the other files are shown by their changed lines only.
-  const changedSince = review.filter((file) => !unchanged.has(file.path))
+  // Under holdback the files sent: the held ones left out, values redacted.
+  const changedSince = sent.filter((file) => !unchanged.has(file.path))
   const focus = unchanged.size
     ? focusOfFiles(
-        review,
+        sent,
         changedSince.map((file) => file.path),
       )
     : undefined
   const { inline, notInlined } = budgetDiff(
-    [...changedSince, ...review.filter((file) => unchanged.has(file.path))],
+    [...changedSince, ...sent.filter((file) => unchanged.has(file.path))],
     budget,
   )
   const heads =
     checkout.trust === "untrusted"
-      ? promptHeadFiles(checkout.headFiles, new Set(inline.map((file) => file.path)), budget)
+      ? promptHeadFiles(hold?.headFiles ?? checkout.headFiles, new Set(inline.map((file) => file.path)), budget)
       : undefined
   const packed = packChanges({
     inline,
-    changed: review,
+    changed: sent,
     ...(heads ? { headFiles: heads } : {}),
     ...(focus ? { focus } : {}),
   })
+  const humanComments = (pr?.comments ?? []).map((comment) => ({ author: comment.author, body: comment.body }))
+  const quoted = hold
+    ? holdbackContext(
+        {
+          ...(pr ? { pr: { number: pr.number, title: pr.title, body: pr.body, author: pr.author } } : {}),
+          related,
+          checks,
+          humanComments,
+        },
+        { held: hold.held },
+      )
+    : undefined
   const rulesText = rulesTexts.find((text) => text?.trim())
   const prompt: PromptInput = {
     mode: focus ? "incremental" : "full",
@@ -875,7 +998,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     ...(pr
       ? {
           baseRef: pr.baseRefName,
-          pr: { number: pr.number, title: pr.title, body: pr.body, author: pr.author },
+          pr: quoted?.pr ?? { number: pr.number, title: pr.title, body: pr.body, author: pr.author },
         }
       : { uncommitted: true }),
     diff: packed.diff,
@@ -890,9 +1013,10 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     ),
     rulesSource: "working tree",
     ...(instructions ? { instructions, instructionsSource: "working tree" as const } : {}),
-    ...(related.length ? { related } : {}),
-    ...(checks.length ? { checks } : {}),
-    humanComments: (pr?.comments ?? []).map((comment) => ({ author: comment.author, body: comment.body })),
+    ...((quoted?.related ?? related).length ? { related: quoted?.related ?? related } : {}),
+    ...(checks.length ? { checks: quoted?.checks ?? checks } : {}),
+    humanComments: quoted?.humanComments ?? humanComments,
+    ...(hold ? { inputsRedacted: true as const } : {}),
     maxComments: config.maxComments,
   }
   const plan = planSpecialists(review, config)
@@ -918,8 +1042,13 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const subject = pr ? `#${pr.number}` : "uncommitted changes"
   // Which of the owner's memory lines the reviewers hear follows who wrote the change, never what the checkout holds.
   const authored = authorship(pr, "pr" in input ? input.viewer : undefined)
-  const scope: Scope = { paths: review.map((file) => file.path), trust: authored }
-  const rules = reviewPermissionRules({})
+  // Under "zdr" the scope says so, which can only raise what the engine server holds the session to.
+  const scope: Scope = {
+    paths: review.map((file) => file.path),
+    trust: authored,
+    ...(config.privacy === "zdr" ? { privacy: "zdr" as const } : {}),
+  }
+  const rules = reviewPermissionRules(hold ? { holdback: "secrets", held: [...heldPaths] } : {})
   const timeoutMs = input.timeoutMs ?? REVIEW_TIMEOUT_MS
   const stop = stopWhen(input.signal, timeoutMs)
   const runs = await Promise.all(
@@ -949,14 +1078,17 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     const spend = reviewProgressSpend(runs, first)
     if (spend) input.onProgress?.({ type: "spend", ...spend })
     throw new Error(
-      `Vector could not finish this review: ${(runs.find((run) => run.detail)?.detail ?? "no reviewer answered").replace(/[.\s]+$/, "")}.${spentSoFar(runs, first)}`,
+      withSettingNotes(
+        `Vector could not finish this review: ${(runs.find((run) => run.detail)?.detail ?? "no reviewer answered").replace(/[.\s]+$/, "")}.${spentSoFar(runs, first)}`,
+      ),
     )
   }
 
   const index = buildAnchorIndex(files)
-  const proposed = reports.flatMap(({ source, report }) =>
-    report.findings.map((finding) => toFinding(finding, source, index)),
-  )
+  // A finding on a held path is never quoted to the double-check or the judge, and is not shown.
+  const proposed = reports
+    .flatMap(({ source, report }) => report.findings.map((finding) => toFinding(finding, source, index)))
+    .filter((finding) => !heldPaths.has(finding.path))
   // What the last review found in files that did not change since. They were double-checked then, if at all.
   const carried = previous ? previousFindings(previous.selection).filter((finding) => unchanged.has(finding.path)) : []
 
@@ -996,7 +1128,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
             head,
             ...(pr ? {} : { uncommitted: true }),
             candidates,
-            headFiles: verifyHeadFiles(review, heads, candidates),
+            headFiles: verifyHeadFiles(sent, heads, candidates),
           }),
           model,
           rules,
@@ -1012,7 +1144,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           ...(pr ? {} : { uncommitted: true }),
           candidates,
           checks: verify.verdicts,
-          headFiles: verifyHeadFiles(review, heads, candidates),
+          headFiles: verifyHeadFiles(sent, heads, candidates),
         })
       : ""
   if (judgeText && judge) status(`Asking ${modelName(judge)} for the panel's final call…`)
@@ -1223,7 +1355,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     judged: judged?.status === "ok",
   })
   return {
-    ...summary,
+    ...reviewed,
     checkout,
     authored,
     label,
@@ -1256,6 +1388,8 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     banners: partialBanners(runs, timeoutMs),
     notes: [
       ...picked.notes,
+      ...settingNotes,
+      ...holdNotes,
       ...(judge && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(modelName(judge))] : []),
       ...verifyNotes,
       ...(config.triageModel && !triage && !named
@@ -1361,13 +1495,106 @@ function evidenceNotes(context: {
               ),
             }
           : {}),
-        scope: evidenceScope({ adapter: "desktop", config, ...(triage ? { triage: modelName(triage) } : {}) }),
+        // Under "zdr" the engine server holds the desktop's sessions to the route rules (VS-23d), so the scope is the
+        // zdr route's, as the engine's is.
+        scope: evidenceScope({
+          adapter: "desktop",
+          config,
+          ...(triage ? { triage: modelName(triage) } : {}),
+          ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
+        }),
         served: [...context.served],
         now: (context.input.now ?? Date.now)(),
         ...(context.input.certificates ? { certificates: context.input.certificates } : {}),
       }),
     ),
   ]
+}
+
+// The user config's hidden review block (VS-23d), from the engine's global config route. A read that fails or returns
+// nothing rejects the review: the block may be what holds it to zero data retention.
+async function userReviewSettings(client: ReviewClient) {
+  if (!client.global) return undefined
+  const result = await client.global.config.get()
+  if (!result.data) throw new Error("Vector could not read your review settings, so it did not start the review.")
+  return result.data.review
+}
+
+// VS-23d (SF-15): what the base's review.json may say when a pull request changes it, as texts for mergeReviewConfig's
+// privacy-only base read, which can only raise privacy and holdback. No route the desktop uses reads a git blob, so it
+// is rebuilt from the diff, for each changed file whose base path is review.json (a rename away from it included),
+// compared without case:
+// - the checkout's text at that path, when the diff applies to it (the checkout is at the base);
+// - the head's text rebuilt back with revertPatch, when the checkout holds the head;
+// - else the base side of the diff's hunks (context and removed lines), which is the base when its hunks cover the
+//   whole file and otherwise a fragment that is not JSON. Only where it sets one of the two keys is read from it
+//   (fragmentSettings), so a mention anywhere else (an ignore path, a label) raises nothing, as a real parse of the base
+//   would not.
+// A file added at review.json, or renamed onto it, had no base copy, so it gives nothing. A base setting outside the
+// hunks, with the checkout at neither end, is not seen; the engine server's own hold is the backstop for the user
+// config's privacy.
+async function baseReviewSettings(files: readonly DiffFile[], read: (path: string) => Promise<string | undefined>) {
+  const wanted = REVIEW_CONFIG_PATH.toLowerCase()
+  const texts = await Promise.all(
+    files
+      .filter((file) => file.status !== "added" && (file.oldPath ?? file.path).toLowerCase() === wanted)
+      .map(async (file) => {
+        const there = (await read(file.oldPath ?? file.path)) ?? ""
+        const here = file.oldPath && file.oldPath !== file.path ? ((await read(file.path)) ?? "") : there
+        const exact = [
+          applyPatch(there, file) === undefined ? undefined : there,
+          revertPatch(file.status === "deleted" ? "" : here, file),
+        ].filter((text) => text !== undefined)
+        if (exact.length) return exact
+        return fragmentSettings(
+          file.hunks
+            .flatMap((hunk) => hunk.lines.filter((line) => line.kind !== "add").map((line) => line.text))
+            .join("\n"),
+        )
+      }),
+  )
+  const all = texts.flat()
+  return all.length ? all : [undefined]
+}
+
+// Each place a fragment of review.json sets privacy or holdback, as a one-key JSON text for mergeReviewConfig: the key
+// as JSON spells it, and its value as written. A value the fragment cuts off, or one that is not a JSON string or
+// scalar, leaves a text that is not JSON and mentions the key, which mergeReviewConfig reads as the stricter setting;
+// a value that is not a level reads as that too. None when the fragment sets neither, so the review keeps the defaults.
+function fragmentSettings(text: string) {
+  return [...text.matchAll(/"(privacy|holdback)"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}\s]*)/g)].map(
+    (match) => `{"${match[1]}": ${match[2]}}`,
+  )
+}
+
+// The strictest of several readings of the settings: privacy and holdback raised to the highest any gives. Under the
+// privacy-only base read the rest are the same in each.
+function strictest(readings: readonly { config: ReviewConfig; warnings: string[] }[]) {
+  const zdr = readings.some((reading) => reading.config.privacy === "zdr")
+  const secrets = readings.some((reading) => reading.config.holdback === "secrets")
+  return {
+    config: {
+      ...readings[0]!.config,
+      ...(zdr ? { privacy: "zdr" as const } : {}),
+      ...(secrets ? { holdback: "secrets" as const } : {}),
+    },
+    warnings: [...new Set(readings.flatMap((reading) => reading.warnings))],
+  }
+}
+
+// The route rules' refusal a model's names and cost kind alone decide, as the engine's ReviewRoutes.modelRefusal
+// does; undefined when only where its requests go can decide.
+function routeRefusalOf(model: ReviewModel): RouteRefusal | undefined {
+  const decision = decideRoute(
+    {
+      providerID: model.providerID,
+      modelID: model.modelID,
+      destinations: [],
+      freeModel: model.costKind === "free" || model.freeModel !== undefined,
+    },
+    { privacy: "zdr", attested: [] },
+  )
+  return decision.allowed || decision.refusal === "unknown-destination" ? undefined : decision.refusal
 }
 
 // A file's diff as one key: its rename, status and hunks.

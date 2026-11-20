@@ -1357,6 +1357,49 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-23d (SF-15): a replay reads no operator's user config. The CLI raises privacy and holdback from the user
+  // config's review block and attests routes from it, but a replay under a variant's name must run that variant's keys
+  // alone, so the same case replays the same pipeline on every operator's machine.
+  it.instance(
+    "replays a case as the frozen pipeline when the operator's user config raises privacy and holdback",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const settings = yield* Config.Service
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        }).pipe(
+          Effect.provideService(Config.Service, {
+            ...settings,
+            getGlobal: () =>
+              settings.getGlobal().pipe(
+                Effect.map((global) => ({
+                  ...global,
+                  review: { privacy: "zdr", holdback: "secrets", zdrAttested: ["acme"] },
+                })),
+              ),
+          }),
+        )
+        for (const key of ["privacy", "holdback", "zdrAttested"])
+          expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.scope.route).toBeUndefined()
+        expect(artifact.scope.prompts).toBe(promptsDigest())
+        expect(artifact.outcome?.skipped.some((file) => file.reason === "held-back")).toBe(false)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
   // VS-23c (SF-12b): the engine:privacy-zdr variant raises privacy over the base's review.json, as the registry hands
   // it out. The eval attests nothing (owner Q7), so only the server on this computer is admitted, and the scope claims
   // the zdr route that admission, the transport and the session runtime enforce.

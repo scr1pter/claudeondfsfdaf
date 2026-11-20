@@ -93,6 +93,9 @@ export function projectExecutableConfig(config: Info, trusted: boolean, base: In
   // set Vector Local, so a cloned repository can neither loosen it nor turn it off.
   delete next.local
   delete next.computer
+  // VS-23d (SF-15): the review block is yours alone, trusted or not. A repository can attest no zero data retention
+  // route; it raises review privacy and holdback in .vector/review.json, which mergeReviewConfig reads as such.
+  delete next.review
   // Spend limits are one overall set across every repository, so a repository's own budget.run is ignored, trusted
   // or not. Its loop switch still follows the trust rules below.
   if (next.budget?.run) {

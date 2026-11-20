@@ -16,11 +16,11 @@
 // and every other text has its values redacted.
 //
 // Pure: no function here reads process.env (`env` defaults to none) or makes a git call (the collector computes
-// `ignored`). Their imports are browser-safe, but `Wildcard.match` reads `process.platform` when called, which a
-// sandboxed renderer has to provide or the desktop half records as a difference. Review.run calls holdbackFiles and
-// holdbackContext before prompt building under `holdback: "secrets"` (SF-13b), and only prompt rendering (the diff,
-// the head files and the context blocks) may use what they return: skips, review state, anchors, suggestions and patch
-// IDs keep the files as they are.
+// `ignored`). Their imports are browser-safe, and `Wildcard.match` reads `process.platform` only where there is a
+// `process`, so the desktop renderer runs them too (SF-15). Review.run calls holdbackFiles and holdbackContext before
+// prompt building under `holdback: "secrets"` (SF-13b), and so does the desktop runner (ai-review.ts, SF-15, with no
+// gitignore check); only prompt rendering (the diff, the head files and the context blocks) may use what they return:
+// skips, review state, anchors, suggestions and patch IDs keep the files as they are.
 //
 // holdbackText and holdbackLines are the tool half (SF-14): the engine's read, grep and glob tools redact what they
 // return with them, in the same reading, only in a review session whose permission rules hold back (permission.ts

@@ -21,7 +21,10 @@ import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { ModelV2 } from "@vectordevai/core/model"
+import { ModelCatalog } from "@vectordevai/core/model-catalog"
+import { scopeOf } from "@vectordevai/core/review/prompt"
 import { Provider } from "@/provider/provider"
+import { ReviewRoutes } from "@/review/route"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { freeModelMayTrain, FREE_MODEL_TRAINING_OWNER_ONLY } from "@vectordevai/core/free-model-choice"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -442,14 +445,58 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const admitted = (sessionID: SessionID) =>
       promptSvc.admit(sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
 
+    // VS-23d (SF-15): the desktop creates and prompts its review sessions over HTTP, so no Review.run holds them. The
+    // first prompt of a `vectorscope.*` session no review holds registers it under "zdr" when the user config's review
+    // privacy (the server's policy) or the prompt's review scope says "zdr" (the scope can only raise it), with the
+    // user config's attestations alone, for the prompt's agent and model. The transport and the session runtime then
+    // refuse an unattested route before anything is sent (ReviewRoutes.adopt). Under "standard" nothing is registered,
+    // and every other session pays one prefix check.
+    const holdReview = Effect.fn("SessionHttpApi.holdReview")(function* (
+      info: Session.Info,
+      payload: typeof PromptPayload.Type,
+    ) {
+      if (!info.internal?.startsWith("vectorscope.") || ReviewRoutes.known(info.id)) return
+      const server = ReviewRoutes.serverPolicy((yield* config.getGlobal()).review)
+      const asked = payload.parts.some((part) => part.type === "text" && scopeOf(part.metadata)?.privacy === "zdr")
+      if (server.privacy !== "zdr" && !asked) return
+      const model = payload.model
+      // Where the catalog ships the provider, which an attestation of the provider ID covers, as model.ts reads it.
+      // Without the catalog service it is unknown, so an attestation of the provider ID covers no host.
+      const catalog = yield* Effect.serviceOption(ModelCatalog.Service)
+      const catalogOrigins =
+        model && Option.isSome(catalog)
+          ? ReviewRoutes.shippedOrigins({
+              catalog: yield* catalog.value.get(),
+              configured: Object.hasOwn((yield* config.get()).provider ?? {}, model.providerID),
+              providerID: model.providerID,
+              modelID: model.modelID,
+            })
+          : undefined
+      yield* ReviewRoutes.adopt(provider, {
+        sessionID: info.id,
+        policy: { privacy: "zdr", attested: server.attested },
+        ...(payload.agent ? { agent: payload.agent } : {}),
+        ...(model
+          ? {
+              subject: {
+                providerID: model.providerID,
+                modelID: model.modelID,
+                ...(catalogOrigins ? { catalogOrigins } : {}),
+              },
+            }
+          : {}),
+      })
+    })
+
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      const info = yield* requireSession(ctx.params.sessionID)
       yield* requireOwnerToAllow({ tools: ctx.payload.tools })
       yield* admitted(ctx.params.sessionID)
       yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
+      yield* holdReview(info, ctx.payload)
       const message = yield* promptSvc
         .prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }, yield* promptOptions)
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
@@ -462,10 +509,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      const info = yield* requireSession(ctx.params.sessionID)
       yield* requireOwnerToAllow({ tools: ctx.payload.tools })
       yield* admitted(ctx.params.sessionID)
       yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
+      yield* holdReview(info, ctx.payload)
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }, yield* promptOptions).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {

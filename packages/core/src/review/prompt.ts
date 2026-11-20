@@ -233,7 +233,16 @@ export const PINNED_SESSION_PREFIX = "vectorscope.bound."
 /** Service-only helper identity, independent from general review/security Subagents. */
 export const VECTORSCOPE_AGENT = "vectorscope"
 
-export type Scope = { paths: string[]; trust: Trust; instructions?: "provided"; restrictedReads?: true }
+// `privacy: "zdr"` is the desktop's (VS-23d, SF-15): its review settings ask for zero data retention, so the engine
+// server holds the session to the route rules when it is first prompted (engine review/route.ts adopt). It can only
+// raise: a scope without it leaves the server's own setting in force.
+export type Scope = {
+  paths: string[]
+  trust: Trust
+  instructions?: "provided"
+  restrictedReads?: true
+  privacy?: "zdr"
+}
 
 const MAX_SCOPE_PATHS = 300
 
@@ -247,6 +256,7 @@ export function scopeOf(metadata: Record<string, unknown> | undefined): Scope | 
     trust: "trust" in value && value.trust === "trusted" ? "trusted" : "untrusted",
     ...("instructions" in value && value.instructions === "provided" ? { instructions: "provided" as const } : {}),
     ...("restrictedReads" in value && value.restrictedReads === true ? { restrictedReads: true as const } : {}),
+    ...("privacy" in value && value.privacy === "zdr" ? { privacy: "zdr" as const } : {}),
   }
 }
 

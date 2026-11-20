@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
-import { parseReviewConfig } from "../../packages/core/src/review/config"
+import { mergeReviewConfig, parseReviewConfig } from "../../packages/core/src/review/config"
 import { estimateDispatch } from "../../packages/core/src/review/dispatch"
 import { findingKey, VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "../../packages/core/src/review/eval"
 import { TOKEN_KINDS } from "../../packages/core/src/review/eval-report"
@@ -502,6 +502,7 @@ describe("the variant registry", () => {
       "engine:privacy-zdr",
       "engine:cross-family",
       "engine:holdback-secrets",
+      "desktop:holdback-secrets",
     ])
     for (const item of built) {
       const keys = Object.keys(item.entry.keys ?? {})
@@ -515,7 +516,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 5)
+    expect(pending).toHaveLength(2 * entries.length - 6)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -575,8 +576,9 @@ describe("the variant registry", () => {
       frozen: false,
     })
     expect(pending).toContainEqual({ name: "desktop:cross-family", package: "VS-29a's desktop half, after VS-10" })
-    // VS-23c (SF-12b): privacy-zdr's engine half is built and raises privacy; its desktop half waits for VS-23d, since
-    // the desktop's review sessions are not registered with the route rules.
+    // VS-23c (SF-12b): privacy-zdr's engine half is built and raises privacy. Its desktop half is a documented
+    // difference since VS-23d (SF-15): the engine server holds the desktop's sessions, which a desktop replay through a
+    // recording client cannot show, so the desktop runner does not take the key as a variant.
     expect(resolveVariant("engine:privacy-zdr")).toEqual({
       ok: true,
       name: "engine:privacy-zdr",
@@ -585,9 +587,15 @@ describe("the variant registry", () => {
       frozen: false,
     })
     expect(variantProblems("engine", { name: "engine:privacy-zdr", keys: { privacy: "zdr" } })).toEqual([])
-    expect(resolveVariant("desktop:privacy-zdr")).toMatchObject({ ok: false, reason: "pending", package: "VS-23d" })
+    expect(resolveVariant("desktop:privacy-zdr")).toMatchObject({
+      ok: false,
+      reason: "pending",
+      package:
+        "VS-23d: the engine server's hold on the desktop's review sessions, which only a desktop replay on an engine server can show; a documented difference",
+    })
+    expect(VARIANT_KEYS.desktop).not.toContain("privacy")
     // VS-34 (SF-14): holdback-secrets' engine half is built and raises holdback, now that Review.run covers the prompt
-    // and the reviewer's read and grep tools; its desktop half waits for the desktop runner.
+    // and the reviewer's read and grep tools; its desktop half since SF-15, with the desktop runner on the same functions.
     expect(resolveVariant("engine:holdback-secrets")).toEqual({
       ok: true,
       name: "engine:holdback-secrets",
@@ -596,10 +604,14 @@ describe("the variant registry", () => {
       frozen: false,
     })
     expect(variantProblems("engine", { name: "engine:holdback-secrets", keys: { holdback: "secrets" } })).toEqual([])
-    expect(pending).toContainEqual({
+    expect(resolveVariant("desktop:holdback-secrets")).toEqual({
+      ok: true,
       name: "desktop:holdback-secrets",
-      package: "VS-34's desktop half (ai-review.ts holdbackFiles, or variant.applied: false)",
+      adapter: "desktop",
+      keys: { holdback: "secrets" },
+      frozen: false,
     })
+    expect(variantProblems("desktop", { name: "desktop:holdback-secrets", keys: { holdback: "secrets" } })).toEqual([])
   })
 
   test("a variant made by its models needs the review model, then a triage model other than it (VS-29a)", () => {
@@ -929,6 +941,65 @@ describe("the desktop replay", () => {
       ["blocking", true],
       ["concern", false],
     ])
+  })
+
+  // VS-34's desktop half (SF-15): desktop:holdback-secrets reaches the runner as the case's review.json would carry it,
+  // and the runner holds a committed credential file back from every prompt, as the engine replay does.
+  test("replays desktop:holdback-secrets: the credential file is held back and the run says it applied", async () => {
+    const held = buildMirror(
+      join(root, "mirror-holdback"),
+      {},
+      { "deploy/.netrc": "machine a login ci password hunter2\n" },
+    )
+    const caseView = { repository: view.repository, base: held.base, head: held.head }
+    const replay = async (name: string, variant?: Pick<VariantRecord, "name" | "keys">) => {
+      const directory = checkoutDirectory(join(root, `desktop-holdback-${name}`), planned.id)
+      expect(prepareCheckout({ mirror: held.dir, view: caseView, directory })).toEqual([])
+      const fake = fakeClient(directory)
+      const artifact = await desktopReplay({
+        planned: { ...planned, case: { ...planned.case, base: held.base, head: held.head } },
+        directory,
+        diff: candidateDiff(directory, caseView),
+        model,
+        // An engine server's client also answers for the user config; a replay never asks it.
+        client: {
+          ...fake.client,
+          global: {
+            config: {
+              get: async () => {
+                throw new Error("a replay read the operator's user config")
+              },
+            },
+          },
+        },
+        ...(variant ? { variant } : {}),
+      })
+      return { artifact, prompts: fake.prompts }
+    }
+    const frozen = await replay("frozen")
+    const resolved = resolveVariant("desktop:holdback-secrets")
+    if (!resolved.ok) throw new Error(resolved.detail)
+    const secrets = await replay("secrets", { name: resolved.name, keys: resolved.keys })
+    for (const run of [frozen, secrets]) expect(run.artifact.error).toBeUndefined()
+    expect(secrets.artifact.variant).toEqual({
+      name: "desktop:holdback-secrets",
+      keys: { holdback: "secrets" },
+      applied: true,
+    })
+    expect(frozen.prompts.some((text) => text.includes("hunter2"))).toBe(true)
+    expect(secrets.prompts.some((text) => text.includes("hunter2"))).toBe(false)
+    expect(secrets.artifact.outcome?.skipped).toContainEqual({ path: "deploy/.netrc", reason: "held-back" })
+    expect(frozen.artifact.outcome?.skipped.some((file) => file.reason === "held-back")).toBe(false)
+    expect(secrets.artifact.scope).toEqual(
+      evidenceScope({
+        adapter: "desktop",
+        config: mergeReviewConfig({ surface: "local", json: { at: "working-tree", text: '{"holdback":"secrets"}' } })
+          .config,
+      }),
+    )
+    expect(secrets.artifact.scope.prompts).not.toBe(frozen.artifact.scope.prompts)
+    // The sessions' rules deny the read tool the credential files and the held path, so their digest moves.
+    expect(secrets.artifact.sessions[0]?.permission).not.toBe(frozen.artifact.sessions[0]?.permission)
   })
 
   // Phase 1 review: the wrapper used to answer every read of review.json, the changed file's own reads included.

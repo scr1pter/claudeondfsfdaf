@@ -106,7 +106,9 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
   const touched = changesFile(input.diff, REVIEW_CONFIG_PATH)
   const settings =
     variant && !touched && appliable(variant.keys) ? withReviewSettings(recording.client, variant.keys) : undefined
-  const read = settingsReader(settings?.client ?? recording.client, { ignore: touched })
+  // The settings the runner reviewed under, as it reports them (VS-23d: mergeReviewConfig, with the base's copy when
+  // the change touches review.json); the defaults when it stopped before reading them.
+  const used: { config?: ReviewConfig } = {}
   const repository = item.repository?.url
   const pr = {
     number: 1,
@@ -129,14 +131,17 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       preferredModels: [modelName(input.model)],
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.now ? { now: input.now } : {}),
+      onSettings: (read) => {
+        used.config = read.config
+      },
     },
-    read.client,
+    // A replay reads no operator's user config, as the engine replay reads none (VS-23d): its review block would
+    // change the pipeline under the variant's name.
+    { ...(settings?.client ?? recording.client), global: undefined },
   ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))))
   const done = outcome instanceof Error ? undefined : outcome
   const posting = done ? buildDesktopReview(done, pr.url) : undefined
-  // The settings as the runner parses them: what it read of review.json, or the defaults when it read none.
-  const json = read.text()
-  const { config } = parseReviewConfig({ json: json?.trim() ? json : undefined, trigger: "desktop" })
+  const config = used.config ?? parseReviewConfig({ trigger: "desktop" }).config
   return {
     version: 1,
     label: item.label,
@@ -163,7 +168,15 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
         ...(input.model.price ? { price: input.model.price } : {}),
       },
     },
-    scope: evidenceScope({ adapter: "desktop", config, ...(done?.triage ? { triage: done.triage } : {}) }),
+    // Under privacy "zdr" the engine server holds the desktop's sessions to the route rules (VS-23d), as the runner's
+    // own scope says; a replay through this recording client has no server, so the variant engine:privacy-zdr's desktop
+    // half stays a documented difference (replay.ts VARIANTS).
+    scope: evidenceScope({
+      adapter: "desktop",
+      config,
+      ...(done?.triage ? { triage: done.triage } : {}),
+      ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
+    }),
     sessions: recording.sessions,
     passes: recording.attempts.map((attempt) => ({
       pass: attempt.pass,
@@ -217,29 +230,6 @@ export function withReviewSettings(inner: ReviewClient, keys: Record<string, unk
     },
   }
   return { client, served: () => served }
-}
-
-// A client that passes every call through and keeps the text of the runner's settings read of review.json, its first
-// read of that file. With `ignore`, for a case whose change touches the file, it keeps none: the runner then reads the
-// file only as a changed file and runs under the defaults.
-function settingsReader(inner: ReviewClient, options: { ignore?: boolean } = {}) {
-  let text: string | undefined
-  let seen = false
-  const client: ReviewClient = {
-    ...inner,
-    file: {
-      ...inner.file,
-      read: async (request) => {
-        const result = await inner.file.read(request)
-        if (request.path === REVIEW_CONFIG_PATH && !seen && !options.ignore) {
-          seen = true
-          text = result?.data?.type === "text" ? result.data.content : undefined
-        }
-        return result
-      },
-    },
-  }
-  return { client, text: () => text }
 }
 
 // Whether the desktop runner applies every one of these keys: at least one, each with a value, all in

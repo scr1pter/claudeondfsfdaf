@@ -168,13 +168,18 @@ export const VARIANTS = {
     desktop: { from: "VS-06" },
   },
   // The engine half: Review.run's admission (VS-23b), the transport and the session runtime (VS-23c) enforce it, and the
-  // scope records the zdr route. The eval attests nothing (Q7), so only a model server on this computer is admitted. The
-  // desktop's review sessions are not registered with the route rules until VS-23d.
+  // scope records the zdr route. The eval attests nothing (Q7), so only a model server on this computer is admitted.
+  // The desktop half is a documented difference since VS-23d: the desktop asks for it in its sessions' review scope and
+  // the engine server holds them to the route rules, which a desktop replay through a recording client, with no engine
+  // server, cannot show.
   "privacy-zdr": {
     planned: 'privacy: "zdr", enforced in Review.run (VS-23b), at the transport and in the session runtime (VS-23c)',
     keys: { privacy: "zdr" },
     engine: { from: "VS-23c" },
-    desktop: { pending: "VS-23d" },
+    desktop: {
+      pending:
+        "VS-23d: the engine server's hold on the desktop's review sessions, which only a desktop replay on an engine server can show; a documented difference",
+    },
   },
   "trivial-skip": {
     planned: 'trivial: "skip"',
@@ -230,14 +235,14 @@ export const VARIANTS = {
   // its halves stay pending and set no keys until its wiring flips one. The desktop halves that §1a calls documented
   // differences (`variant.applied: false`) say so.
   // The engine half: Review.run holds credential files back from the prompt and redacts values in it, and its sessions'
-  // rules and tools hold them back from the read and grep tools too (VS-34). The desktop half waits for the desktop
-  // runner to read the key and call the same functions, or to record the difference.
+  // rules and tools hold them back from the read and grep tools too (VS-34). The desktop half: the desktop runner reads
+  // the key and calls the same functions, and its sessions get the same rules (VS-34's desktop half, built with VS-23d).
   "holdback-secrets": {
     planned:
       'holdback: "secrets": credential files held back and values redacted in the prompt and in the reviewer\'s read and grep results',
     keys: { holdback: "secrets" },
     engine: { from: "VS-34" },
-    desktop: { pending: "VS-34's desktop half (ai-review.ts holdbackFiles, or variant.applied: false)" },
+    desktop: { from: "VS-34" },
   },
   "team-guarded": {
     planned: 'teamMemory: "guarded"',

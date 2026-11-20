@@ -2361,6 +2361,12 @@ export type ConnectConfig = {
   review?: ConnectReviewConfig
 }
 
+export type GlobalReviewConfig = {
+  privacy?: unknown
+  holdback?: unknown
+  zdrAttested?: unknown
+}
+
 export type ConfigWithLocks = {
   $schema?: string
   shell?: string
@@ -2544,6 +2550,7 @@ export type ConfigWithLocks = {
   local?: LocalConfig
   research?: ResearchConfig
   connect?: ConnectConfig
+  review?: GlobalReviewConfig
   experimental?: {
     vectorscope?: boolean
     disable_paste_summary?: boolean
@@ -2743,6 +2750,7 @@ export type Config = {
   local?: LocalConfig
   research?: ResearchConfig
   connect?: ConnectConfig
+  review?: GlobalReviewConfig
   experimental?: {
     vectorscope?: boolean
     disable_paste_summary?: boolean

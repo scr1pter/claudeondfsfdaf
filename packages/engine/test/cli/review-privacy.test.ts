@@ -5,6 +5,7 @@ import path from "path"
 import { Effect } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
+import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { parseReviewConfig, REVIEW_CONFIG_PATH } from "@vectordevai/core/review/config"
 import { notePrivacyRefused } from "@vectordevai/core/review/format"
@@ -16,6 +17,8 @@ import type { FixStep } from "../../src/cli/cmd/review.fix"
 import { Git } from "../../src/git"
 import { ReviewModel, type ResolvedModel } from "../../src/review/model"
 import { Review } from "../../src/review/run"
+import { Config } from "../../src/config/config"
+import { TestConfig } from "../fixture/config"
 import { tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -322,6 +325,105 @@ describe("vector review: a review the route rules stop (VS-23b)", () => {
       expect(run.out().split("\n")).toContain("Not reviewed")
       expect(run.out()).not.toContain("Risk:")
       expect(run.out()).not.toContain("No issues found")
+      expect(yield* readState(repo.dir)).toBeUndefined()
+    }),
+  )
+})
+
+// VS-23d (SF-15): the user config's hidden `review` block, read through the config service, raises privacy and holdback
+// over review.json and REVIEW_*, and is the one source of zdrAttested here. Without the service, or without the block,
+// the review is what it was before SF-15.
+describe("vector review: the user config's review block (VS-23d)", () => {
+  const withGlobal = (global: ConfigV1.Info) =>
+    Effect.provideService(Config.Service, TestConfig.make({ getGlobal: () => Effect.succeed(global) }))
+
+  it.live("no config service, an empty user config and an empty block give the settings and warnings of before", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      const text = '{"verify":"off","privacy":"zdr","holdback":"secrets","zdrAttested":["acme"]}'
+      yield* write(repo.dir, { [REVIEW_CONFIG_PATH]: text })
+      const runs = []
+      for (const provide of [
+        <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+        withGlobal({}),
+        withGlobal({ review: {} }),
+        withGlobal({ review: { privacy: "standard", holdback: "off" } }),
+      ]) {
+        const run = fake()
+        yield* review({ directory: repo.dir, full: true, env: {} }, run.deps).pipe(provide)
+        runs.push({ config: run.calls[0]!.config, warnings: warnings(run.err()), route: run.resolved[0]!.route })
+      }
+      expect(runs[0]!.config.privacy).toBe("zdr")
+      expect(runs[0]!.config.zdrAttested).toBeUndefined()
+      for (const run of runs.slice(1)) expect(run).toEqual(runs[0]!)
+    }),
+  )
+
+  it.live("the block raises privacy and holdback that review.json and REVIEW_* set lower, and alone attests", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      yield* write(repo.dir, {
+        [REVIEW_CONFIG_PATH]: '{"privacy":"standard","holdback":"off","zdrAttested":["acme"]}',
+      })
+      const run = fake()
+      yield* review(
+        { directory: repo.dir, full: true, env: { REVIEW_PRIVACY: "standard", REVIEW_HOLDBACK: "off" } },
+        run.deps,
+      ).pipe(withGlobal({ review: { privacy: "zdr", holdback: "secrets", zdrAttested: ["models.invalid"] } }))
+      expect(run.calls[0]!.config).toMatchObject({
+        privacy: "zdr",
+        holdback: "secrets",
+        zdrAttested: ["models.invalid"],
+      })
+      expect(warnings(run.err())).toEqual([
+        `Warning: ${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: "zdrAttested" is read only from the global config.`,
+      ])
+      expect(run.resolved.map((input) => input.route)).toEqual([{ privacy: "zdr", attested: ["models.invalid"] }])
+    }),
+  )
+
+  it.live("a pull request's base and the local service's pinned settings are raised the same way", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      // The settings commit: main, holding a review.json that lowers nothing and attests nothing.
+      yield* git(repo.dir, "checkout", "-q", "main")
+      const settingsRef = yield* commit(repo.dir, "settings", { [REVIEW_CONFIG_PATH]: '{"privacy":"standard"}' })
+      yield* git(repo.dir, "checkout", "-q", "feature")
+      const head = yield* git(repo.dir, "rev-parse", "HEAD")
+      const run = fake()
+      yield* review(
+        {
+          directory: repo.dir,
+          base: "main",
+          full: true,
+          env: {},
+          json: true,
+          context: { expectedHead: head, settingsRef, stateless: true },
+        },
+        run.deps,
+      ).pipe(withGlobal({ review: { privacy: "zdr", zdrAttested: ["lmstudio"] } }))
+      expect(run.calls[0]!.config).toMatchObject({ privacy: "zdr", zdrAttested: ["lmstudio"] })
+      expect(run.resolved[0]!.route).toEqual({ privacy: "zdr", attested: ["lmstudio"] })
+    }),
+  )
+
+  it.live("under the block's zdr a model with no route is refused: exit 2, nothing run, nothing saved", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      const run = fake({ refuse: true })
+      const result = yield* review({ directory: repo.dir, env: {}, json: true }, run.deps).pipe(
+        withGlobal({ review: { privacy: "zdr" } }),
+      )
+      expect(result.exitCode).toBe(2)
+      expect(run.calls).toEqual([])
+      expect(run.resolved[0]!.route).toEqual({ privacy: "zdr", attested: [] })
+      expect(JSON.parse(run.out()).outcome).toMatchObject({
+        partial: "privacy",
+        sessions: [],
+        notes: [
+          notePrivacyRefused({ model: "lmstudio/claude-fable-5", refusal: "retention-required-model", attempts: 0 }),
+        ],
+      })
       expect(yield* readState(repo.dir)).toBeUndefined()
     }),
   )

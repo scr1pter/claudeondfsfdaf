@@ -671,6 +671,187 @@ describe("ReviewRoutes.turn and zdr (SF-12b)", () => {
   })
 })
 
+// VS-23d (SF-15): the engine server's own hold on the review sessions no Review.run registered (the desktop's): the
+// server's policy from the user config's review block alone, whether a review holds a session, and the adoption the
+// HTTP prompt makes.
+describe("ReviewRoutes.serverPolicy, known and adopt (SF-15)", () => {
+  // The registry is process-global: every session a case names is released after it, whatever the case does.
+  const named: SessionID[] = []
+  const session = (suffix: string) => {
+    const id = SessionID.make(`ses_adopttest${suffix}`)
+    named.push(id)
+    return id
+  }
+  afterEach(() => named.splice(0).forEach((id) => ReviewRoutes.release(id)))
+  const local = model("lmstudio/test-model")
+  const acme = model("acme/coder", { url: "https://models.invalid/v1" })
+  const setup = { models: [local, acme], asked: [] as string[] }
+  const adopt = (
+    id: SessionID,
+    policy: ReviewRoutes.Policy,
+    input: { agent?: string; name?: string; options?: Record<string, unknown>; catalogOrigins?: string[] } = {},
+  ) =>
+    Effect.gen(function* () {
+      const service = yield* Provider.Service
+      const ref = input.name ? Provider.parseModel(input.name) : undefined
+      return yield* ReviewRoutes.adopt(service, {
+        sessionID: id,
+        policy,
+        ...(input.agent ? { agent: input.agent } : {}),
+        ...(ref
+          ? {
+              subject: {
+                providerID: ref.providerID,
+                modelID: ref.modelID,
+                ...(input.catalogOrigins ? { catalogOrigins: input.catalogOrigins } : {}),
+              },
+            }
+          : {}),
+      })
+    }).pipe(Effect.provide(provider({ ...setup, options: input.options ?? {} })))
+
+  test("the server's policy is the user config's block alone: standard without one, zdr from it, read loosely", () => {
+    const standard: ReviewRoutes.Policy = { privacy: "standard", attested: [] }
+    expect(ReviewRoutes.serverPolicy(undefined)).toEqual(standard)
+    expect(ReviewRoutes.serverPolicy({})).toEqual(standard)
+    expect(ReviewRoutes.serverPolicy({ privacy: "standard", holdback: "secrets" })).toEqual(standard)
+    expect(ReviewRoutes.serverPolicy({ privacy: "zdr" })).toEqual({ privacy: "zdr", attested: [] })
+    // A value that is not a level reads as the strictest.
+    expect(ReviewRoutes.serverPolicy({ privacy: 1 }).privacy).toBe("zdr")
+    expect(ReviewRoutes.serverPolicy({ privacy: " ZDR " }).privacy).toBe("zdr")
+    // The user config is the trusted source of attestations, whatever the privacy; an unreadable entry is dropped.
+    expect(ReviewRoutes.serverPolicy({ zdrAttested: ["acme", "a b", 3] })).toEqual({
+      privacy: "standard",
+      attested: ["acme"],
+    })
+    expect(ReviewRoutes.serverPolicy({ privacy: "zdr", zdrAttested: [{ id: "acme", operator: "acme" }] })).toEqual({
+      privacy: "zdr",
+      attested: [{ id: "acme", operator: "acme" }],
+    })
+    // No environment is read: the desktop reads none either.
+    const previous = process.env.REVIEW_PRIVACY
+    process.env.REVIEW_PRIVACY = "zdr"
+    try {
+      expect(ReviewRoutes.serverPolicy(undefined)).toEqual(standard)
+    } finally {
+      if (previous === undefined) delete process.env.REVIEW_PRIVACY
+      else process.env.REVIEW_PRIVACY = previous
+    }
+  })
+
+  test("a session is known while registered, and after its release only when it was a zdr one", () => {
+    const zdrID = session("zdr")
+    const standardID = session("standard")
+    expect(ReviewRoutes.known(zdrID)).toBe(false)
+    ReviewRoutes.register(zdrID, { policy: zdr(), agent: "review" })
+    ReviewRoutes.register(standardID, { policy: { privacy: "standard", attested: [] }, agent: "review" })
+    expect(ReviewRoutes.known(zdrID)).toBe(true)
+    expect(ReviewRoutes.known(standardID)).toBe(true)
+    ReviewRoutes.release(zdrID)
+    ReviewRoutes.release(standardID)
+    expect(ReviewRoutes.known(zdrID)).toBe(true)
+    expect(ReviewRoutes.known(standardID)).toBe(false)
+    expect(ReviewRoutes.known("ses_adopttestnever")).toBe(false)
+  })
+
+  it.effect("adopts a session for the prompt's agent and the decision for its model", () =>
+    Effect.gen(function* () {
+      // A server on this computer: allowed, and the transport then sends the pass's own turns of that model only.
+      const loopback = session("loopback")
+      const entry = yield* adopt(loopback, zdr(), {
+        agent: "review",
+        name: "lmstudio/test-model",
+        options: { baseURL: "http://127.0.0.1:1234/v1" },
+      })
+      expect(entry).toMatchObject({ policy: zdr(), agent: "review", decision: { allowed: true, kind: "loopback" } })
+      expect(ReviewRoutes.registered(loopback)).toEqual(entry)
+      expect(ReviewRoutes.attempt(loopback, local)).toBeUndefined()
+      expect(ReviewRoutes.attempt(loopback, { ...local, id: ModelV2.ID.make("other-model") })).toBe(
+        "unknown-destination",
+      )
+      expect(ReviewRoutes.turn({ sessionID: loopback, agent: "review" })).toEqual({ runtime: "ai-sdk" })
+      expect(ReviewRoutes.turn({ sessionID: loopback, agent: "title", small: true })).toEqual({
+        refusal: "unknown-destination",
+      })
+
+      // An unattested provider is registered refused, so every call is refused before anything is sent.
+      const unattested = session("unattested")
+      const refused = yield* adopt(unattested, zdr(), { agent: "review", name: "acme/coder" })
+      expect(refused.decision).toEqual(refusal("unattested-provider"))
+      expect(ReviewRoutes.attempt(unattested, acme)).toBe("unattested-provider")
+      expect(
+        ReviewRoutes.hold({
+          session: () => ({ id: unattested }),
+          model: acme,
+          options: {},
+          destinations: () => ["https://models.invalid"],
+        }),
+      ).toEqual({ refusal: "unattested-provider" })
+
+      // Attested in the user config, where the catalog ships the provider, it is allowed.
+      const attested = session("attested")
+      const allowed = yield* adopt(attested, zdr(["acme"]), {
+        agent: "review",
+        name: "acme/coder",
+        catalogOrigins: ["https://models.invalid/v1"],
+      })
+      expect(allowed.decision).toEqual({ allowed: true, kind: "attested-provider" })
+      // Without the catalog's word, the attestation of the provider ID covers no host.
+      const unknown = session("unknown")
+      expect((yield* adopt(unknown, zdr(["acme"]), { agent: "review", name: "acme/coder" })).decision).toEqual(
+        refusal("unattested-provider"),
+      )
+    }),
+  )
+
+  it.effect("Codium and free models are refused before any lookup, and no model leaves the session undecided", () =>
+    Effect.gen(function* () {
+      setup.asked.length = 0
+      for (const [name, why] of [
+        ["vector-plan/vector-flash", "codium-unaccepted"],
+        ["vector/acme/coder:free", "free-model"],
+      ] as const) {
+        const id = session(why)
+        expect((yield* adopt(id, zdr(), { agent: "review", name })).decision).toEqual(refusal(why))
+      }
+      expect(setup.asked).toEqual([])
+      // No model: nothing was decided, so every call of the session is refused.
+      const bare = session("bare")
+      const entry = yield* adopt(bare, zdr(), { agent: "review" })
+      expect(entry).toEqual({ policy: zdr(), agent: "review" })
+      expect(ReviewRoutes.attempt(bare, local)).toBe("unknown-destination")
+      // No agent: no turn is sent.
+      const agentless = session("agentless")
+      yield* adopt(agentless, zdr(), {
+        name: "lmstudio/test-model",
+        options: { baseURL: "http://127.0.0.1:1234/v1" },
+      })
+      expect(ReviewRoutes.turn({ sessionID: agentless, agent: "review" })).toEqual({ refusal: "unknown-destination" })
+    }),
+  )
+
+  it.effect("past ADOPTED_LIMIT adoptions the oldest is released, and a call that still names it is refused", () =>
+    Effect.gen(function* () {
+      const service = yield* Provider.Service
+      const ids = Array.from({ length: ReviewRoutes.ADOPTED_LIMIT + 1 }, (_, index) => session(`bound${index}`))
+      for (const id of ids) yield* ReviewRoutes.adopt(service, { sessionID: id, policy: zdr(), agent: "review" })
+      const [oldest, next] = ids
+      expect(ReviewRoutes.registered(oldest!)).toBeUndefined()
+      expect(ReviewRoutes.known(oldest!)).toBe(true)
+      expect(
+        ReviewRoutes.hold({ session: () => ({ id: oldest }), model: local, options: {}, destinations: () => [] }),
+      ).toEqual({ refusal: "unknown-destination" })
+      expect(ReviewRoutes.turn({ sessionID: oldest!, agent: "review" })).toEqual({ refusal: "unknown-destination" })
+      expect(ReviewRoutes.registered(next!)).toEqual({ policy: zdr(), agent: "review" })
+      expect(ReviewRoutes.registered(ids.at(-1)!)).toEqual({ policy: zdr(), agent: "review" })
+      // A session released by its own review leaves the count, so the next adoption evicts nothing.
+      ReviewRoutes.release(next!)
+      yield* ReviewRoutes.adopt(service, { sessionID: session("bound-after"), policy: zdr(), agent: "review" })
+      expect(ReviewRoutes.registered(ids[2]!)).toEqual({ policy: zdr(), agent: "review" })
+    }).pipe(Effect.provide(provider({ ...setup, options: {} }))),
+  )
+})
+
 describe("ReviewRoutes.sendBody", () => {
   const send = (input: Partial<Parameters<typeof ReviewRoutes.sendBody>[0]> & { body: unknown }) =>
     ReviewRoutes.sendBody({

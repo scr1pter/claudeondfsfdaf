@@ -8,7 +8,7 @@ import { codiumPass, reviewForOutput } from "./review-output"
 import fs from "fs"
 import fsp from "fs/promises"
 import path from "path"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
 import {
   mergeReviewConfig,
@@ -277,8 +277,13 @@ export function executeLocalReview<RunR, ModelR>(
         : yield* resolveBase(git, root, { requested: options.base, suggested: pull?.baseRefName })
 
     // 2. Settings: your working tree for your own changes, the base for a pull request. review.json is read with its
-    // sources tagged (VS-23b): `privacy` there or in REVIEW_PRIVACY can only raise. There is no global config source
-    // until SF-15 (VS-23d), so `zdrAttested` is empty here and a "zdr" review refuses every route off this computer.
+    // sources tagged (VS-23b): `privacy` and `holdback` there or in REVIEW_PRIVACY / REVIEW_HOLDBACK can only raise,
+    // and so can your user config's hidden `review` block (VS-23d, SF-15), the one source of `zdrAttested` here.
+    // Every engine runtime has the config service: the CLI, the local review service, the owner's local run and
+    // connect's reviews. Only tests that build executeLocalReview's runtime by hand omit it, and they read no user
+    // config, as before SF-15. No production entry may omit it: without it the user config's privacy is not read.
+    const settings = yield* Effect.serviceOption(Config.Service)
+    const global = Option.isSome(settings) ? (yield* settings.value.getGlobal()).review : undefined
     const setting = (file: string) =>
       denied(file)
         ? Effect.succeed(undefined)
@@ -289,6 +294,7 @@ export function executeLocalReview<RunR, ModelR>(
             : readBlob(git, root, base!.sha, file)
     const parsed = mergeReviewConfig({
       surface: "local",
+      ...(global ? { global } : {}),
       json: {
         at: options.context || trust !== "trusted" ? "base" : "working-tree",
         text: yield* setting(REVIEW_CONFIG_PATH),

@@ -568,6 +568,31 @@ export function applyPatch(baseText: string, file: DiffFile): string | undefined
   return out.join(eol) + (endsWithNewline ? eol : "")
 }
 
+// Rebuilds the old version of a file from its new text: applyPatch over the inverted diff, so undefined when any
+// context or added line differs (the text is not the diff's head) or the file is binary. A deleted file's old text
+// comes from its removed lines alone (pass ""), and an added file's is "". The desktop rebuilds the base's
+// review.json with it when a pull request changes that file and the checkout holds the head (VS-23d, SF-15).
+export function revertPatch(headText: string, file: DiffFile): string | undefined {
+  const status = file.status === "added" ? "deleted" : file.status === "deleted" ? "added" : file.status
+  return applyPatch(headText, {
+    ...file,
+    status,
+    hunks: file.hunks.map((hunk) => ({
+      ...hunk,
+      oldStart: hunk.newStart,
+      oldLines: hunk.newLines,
+      newStart: hunk.oldStart,
+      newLines: hunk.oldLines,
+      lines: hunk.lines.map((line) => ({
+        ...line,
+        kind: line.kind === "add" ? "del" : line.kind === "del" ? "add" : line.kind,
+        oldLine: line.newLine,
+        newLine: line.oldLine,
+      })),
+    })),
+  })
+}
+
 // Why a model's fix patch is not posted as a patch (S6). "malformed": not one well-formed unified diff, a line outside
 // its hunks, or a hunk whose header counts or new start do not match its lines; "several-files" and "other-file": it
 // does not change the finding's own file in place; "hunks": more hunks than allowed; "context": a context or removed

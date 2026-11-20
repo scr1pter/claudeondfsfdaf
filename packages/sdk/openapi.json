@@ -38570,6 +38570,15 @@
         },
         "additionalProperties": false
       },
+      "GlobalReviewConfig": {
+        "type": "object",
+        "properties": {
+          "privacy": {},
+          "holdback": {},
+          "zdrAttested": {}
+        },
+        "additionalProperties": false
+      },
       "ConfigWithLocks": {
         "type": "object",
         "properties": {
@@ -39159,6 +39168,9 @@
           },
           "connect": {
             "$ref": "#/components/schemas/ConnectConfig"
+          },
+          "review": {
+            "$ref": "#/components/schemas/GlobalReviewConfig"
           },
           "experimental": {
             "type": "object",
@@ -39797,6 +39809,9 @@
           },
           "connect": {
             "$ref": "#/components/schemas/ConnectConfig"
+          },
+          "review": {
+            "$ref": "#/components/schemas/GlobalReviewConfig"
           },
           "experimental": {
             "type": "object",
