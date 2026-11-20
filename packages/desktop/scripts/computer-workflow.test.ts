@@ -721,6 +721,27 @@ test("macOS rebuilds and checks shipping bytes before enforcing the measured loc
   expect(commands(job("windows-arm64-test"))).toContain("--arch arm64")
 })
 
+test("Windows native compiles overlap small MSBuild projects, log the processor count and keep their deadlines", () => {
+  // The workflow, not the digest-bound build script, sets project parallelism: cmake turns it into MSBuild /m:2.
+  const builds = [
+    [steps(job("windows-build")).find((step) => step.name === "Build both channel helper architectures"), 20],
+    [
+      steps(record(record(main.document.jobs)["computer-helper-windows-units"])).find(
+        (step) => step.name === "Build only the x64 native diagnostic artifacts",
+      ),
+      15,
+    ],
+  ] as const
+  for (const [step, deadline] of builds) {
+    expect(step).toBeDefined()
+    expect(step!["timeout-minutes"]).toBe(deadline)
+    expect(record(step!.env)).toEqual({ CMAKE_BUILD_PARALLEL_LEVEL: "2" })
+    const script = lines(step!.run)
+    expect(script[0]).toBe('Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"')
+    expect(script[1]).toStartWith("bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 ")
+  }
+})
+
 test("shipping and test archives preserve executable modes while failure diagnostics remain available", () => {
   const required = new Set([
     "computer-helper-darwin.tar",
