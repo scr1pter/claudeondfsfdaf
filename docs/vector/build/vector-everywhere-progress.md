@@ -3695,3 +3695,81 @@ After the ruling on (a) and review round four. The title is the brief's, `feat(a
 | `git diff HEAD...origin/<lane>` over the six shared app and ui files (brain-transport, codium-finish, connect-finish, hands-finish, native-qualify, review-fixes, scope-finish, workspaces-finish, main) | empty for every lane |
 
 The commit sha, the push and the CI run ids are recorded in the next package's receipt (a commit cannot name its own sha).
+
+## EV-22: vectordev.ai account components (VE-42a) (2026-11-20)
+
+**Base.** `git fetch origin release-finish main everywhere-finish` and the eight other lanes: HEAD `8aff3462` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main `481973c9` holds PR #33 and is 257 commits ahead; it is the lead's to merge (deviations, "2026-11-20, EV-22", header). Precondition `d7e4aa54` (PUB-4) is an ancestor; the account routes api/everywhere/{installs,links,link,repos,oauth-finish}.ts are on HEAD. Built uncommitted; committed at the commit gate below.
+
+**EV-21's receipts** (commit `8aff3462`, read with the GitHub tools on 2026-11-20):
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| vector-everywhere | [44704099831](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44704099831) | success |
+| vector-at-mention | [44704105101](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44704105101) | success |
+| typecheck, attempt 1 | [44704110697](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44704110697) | failure: only `typecheck (engine)`, job 136179305187, in Setup Bun: "bun install v1.3.14 … panic: Segmentation fault at address 0x0 … Illegal instruction (core dumped)", exit code 132, the known Linux Bun segfault class (RULES-v2 flakes); every other job passed |
+| typecheck, attempt 2 (failed jobs re-run once) | 44704110697 | success: `typecheck (engine)` job 136190304910 passed |
+| vector-hosted-ci | [44704123491](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44704123491) | still queued when read |
+| vector-codium | [44704095050](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44704095050) | queued; dispatched against the lane rule (not by this package), recorded only; never dispatched for EV-22 |
+
+**Files** (new; line numbers in the deviations entry, "What changed"):
+
+- packages/web/src/components/marketing/everywhere/everywhere-model.ts (751 lines after review round one; 716 before)
+- packages/web/src/components/marketing/everywhere/EverywhereView.tsx (418 lines; 407 before)
+- packages/web/src/components/marketing/everywhere/EverywhereAccount.tsx (39 lines)
+- packages/web/src/components/marketing/everywhere/everywhere.css (112 lines)
+- packages/web/test/everywhere-pages.test.ts (1,355 lines, 36 cases; 1,154 lines and 29 cases before)
+- lane documents: the deviations entry, this receipt, the spec's §3.12, §6.5 (prune row) and §8 (VE-42 row) notes, and the handoff's status bullet, "Current gates" item (Linear teams and Jira keys cannot be mapped) and Left open item.
+
+sha256 of the five code and test files: /tmp/vector-v2/everywhere/ev22/final.sha256 (before review round one) and /tmp/vector-v2/everywhere/ev22-fix/final.sha256 (after).
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000`:
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-pages.test.ts (vector-everywhere.yml), before review round one | 29 pass, 0 fail, 1,237 expects |
+| web test/everywhere-link-api.test.ts | 13 pass, 0 fail, 85 expects |
+| web test/everywhere-install-api.test.ts | 17 pass, 0 fail, 139 expects |
+| web test/account-github-agents.test.ts | 8 pass, 0 fail, 71 expects |
+| web test/account-page.test.ts (its email scan covers src/components) | 3 pass, 0 fail, 15 expects |
+| web test/everywhere-lane.test.ts, after the lane documents | 13 pass, 0 fail, 156 expects |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| `bun typecheck` in packages/web (astro check, 299 files) | exit 0: 0 errors, 0 warnings, 421 hints (log: /tmp/vector-v2/everywhere/ev22/typecheck.log) |
+| prettier on the five new files | `--write`, then `--check` clean |
+| mutations M1 to M23 with M6a/b and M12b (25 runs, ev22-mut/mutate.py) | all red on their named cases; every restore matched before.sha256.json; script/prune-vector-site.mjs unchanged after M14 (`git diff --quiet`) |
+| `git diff --check` | clean |
+| `git diff HEAD...origin/<lane>` over the new and anchor paths | empty for main and the eight lanes (deviations, Coordination) |
+
+Not run here: the full turbo typecheck (the push gate; only packages/web changed, and its typecheck passes), and the CI dispatches, which follow the commit.
+
+**Review round one** (2026-11-20; deviations, "2026-11-20, EV-22", "Review round one"). Eight findings, one blocking; all fixed or answered, nothing committed. Each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000`:
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-pages.test.ts | 36 pass, 0 fail, 1,323 expects |
+| the reviewer's scratch reproduction (/tmp/vector-v2/everywhere/ev22-review/retry.test.ts) | 2 pass, 0 fail; the retry ends `{loaded: true}` with no problem, and the held old-token 401 leaves the state `ready` (log: /tmp/vector-v2/everywhere/ev22-fix/reviewer-scratch.log) |
+| each fix undone in turn (ev22-fix/revert/revert.py: R1, R2, R3, R4a, R4b, R7a, R7b, R7c) | every one red on its new case (R3 also on the readMappings decoder case), 34-35 pass; every restore matched by sha256 |
+| the 25 earlier mutations re-run on the fixed files (ev22-fix/mut/mutate.py, a copy writing to ev22-fix/mut/) | all red on their named cases; restores matched; `git diff --quiet script/prune-vector-site.mjs` after M14 |
+| web test/account-page.test.ts | 3 pass, 0 fail, 15 expects |
+| web test/everywhere-lane.test.ts, after the lane documents | 13 pass, 0 fail, 156 expects |
+| root test/no-project-wording.test.ts and no-personal-paths.test.ts (from test/) | 2/0/16 and 1/0/2 |
+| `bun typecheck` in packages/web (astro check, 299 files) | exit 0: 0 errors, 0 warnings, 421 hints, unchanged (log: /tmp/vector-v2/everywhere/ev22-fix/typecheck.log) |
+| prettier `--check` on the five files; `git diff --check` | clean |
+
+While writing the refused-token case, a POST with a body refused by the account check left the file's afterAll hook timing out at 30 s (`RouteHarness.stop()` waits on that connection); the case answers its writes' 401 in its request wrapper instead, and the shared fake is left for the lead (deviations, Left open).
+
+**Commit, push and CI** (for the commit gate):
+- One commit staging the five new files and the four lane documents (deviations, progress, spec, handoff) by explicit path: `feat(web): add unreleased Vector everywhere account components`. The body says what landed, that nothing is routed, that no route, api, env, flag, dependency, workflow or generated file changed, and the deferred items: the Linear and Jira mapping gate, the private mark's wiring rule, EV-23's pages.
+- Push gate: `git fetch origin everywhere-finish`, merge anything new, the full turbo typecheck, `git diff --quiet script/prune-vector-site.mjs`, a fast-forward push.
+- CI: workflow_dispatch of vector-everywhere.yml and typecheck.yml on everywhere-finish (not vector-codium.yml); the run ids go in the next receipt. Done when the file passes alone (it does), the web typecheck passes (it does), and vector-everywhere.yml is green.
+
+**Commit gate** (2026-11-20). `git fetch origin release-finish main everywhere-finish`: HEAD `8aff3462` still equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`; origin/main `481973c9` is 257 ahead and stays the lead's to merge. `git status` showed only this package's paths (the five new files and the four lane documents); nothing else was present. Each through /home/user/.tools/vector-serial (logs in /tmp/vector-v2/everywhere/ev22-commit/):
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-pages.test.ts | 36 pass, 0 fail, 1,323 expects |
+| web test/everywhere-lane.test.ts, after these lane-document edits | 13 pass, 0 fail, 156 expects |
+| `bun typecheck` in packages/web (astro check, 299 files) | exit 0: 0 errors, 0 warnings, 421 hints |
+| `TURBO_CACHE_DIR=… bun turbo typecheck --concurrency=2` (the push gate) | exit 0: 27 successful, 27 total (20 cached) |
+| `git diff --quiet script/prune-vector-site.mjs`; `git diff --check` | clean |
+
+Committed by explicit path as `feat(web): add unreleased Vector everywhere account components`. CI dispatched on everywhere-finish after the push: vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml and typecheck.yml. vector-codium.yml is not dispatched: main is not merged into this branch yet (lane rule), and its nested call of vector-hosted-ci.yml on the same ref cancels the standalone run (EV-20's receipt). The sha and run ids go in the next receipt (a commit cannot name its own sha).

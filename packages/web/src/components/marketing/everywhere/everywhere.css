@@ -1,0 +1,112 @@
+.everywhere {
+  display: grid;
+  gap: 0;
+}
+.everywhere > .auth-notice,
+.everywhere > .account-error {
+  margin-top: 20px;
+}
+.everywhere-status {
+  margin: 24px 0 0;
+  color: rgba(229, 221, 238, 0.6);
+  font-size: 14px;
+}
+.everywhere-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  border-top: 1px solid rgba(230, 219, 255, 0.08);
+}
+.everywhere-list > li {
+  min-width: 0;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(230, 219, 255, 0.08);
+  overflow-wrap: anywhere;
+}
+.everywhere-list .acct-fine {
+  margin: 6px 0 0 !important;
+}
+.everywhere-list .acct-button {
+  margin-top: 12px;
+}
+.everywhere-row {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 14px;
+}
+.everywhere-row code,
+.everywhere-repositories code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 12.5px;
+}
+.everywhere-repositories {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.everywhere-repositories li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.everywhere-repositories .acct-button {
+  margin-top: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+.everywhere-group {
+  margin-top: 18px;
+}
+.everywhere-group h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.everywhere-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 20px;
+}
+.everywhere-field label {
+  color: #e8ddf4;
+  font-size: 14px;
+}
+.everywhere-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.everywhere-field-row input {
+  flex: 1 1 230px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(230, 219, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(5, 4, 8, 0.6);
+  color: #f4effb;
+  font: inherit;
+}
+.everywhere-field-row input:focus-visible {
+  outline: 2px solid #bd9aff;
+  outline-offset: 2px;
+}
+.everywhere-field-row .acct-button {
+  margin-top: 0;
+}
+.everywhere-code {
+  margin-top: 18px;
+}
+.everywhere-confirm {
+  margin-top: 10px;
+}
+.everywhere-confirm .acct-actions {
+  margin-top: 10px;
+}
