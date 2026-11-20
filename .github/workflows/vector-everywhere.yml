@@ -78,6 +78,10 @@ on:
       - api/_lib/model-plan-config.ts
       - api/cloud-agents/mint.ts
       - api/cloud-agents/settle.ts
+      # The OIDC verifier the GitHub handoff uses (VE-31, R-A5), with its GitHub helpers and @vector's workflow constants.
+      - api/_lib/github-oidc.ts
+      - api/_lib/github-http.ts
+      - packages/core/src/github-agents.ts
   workflow_dispatch:
 
 concurrency:

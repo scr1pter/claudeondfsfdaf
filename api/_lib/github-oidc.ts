@@ -12,16 +12,20 @@ export const githubOidcAudiences = {
   installation: "https://vectordev.ai/api/github/installation",
   mint: GithubAgents.AUDIENCE.mint,
   bind: GithubAgents.AUDIENCE.bind,
+  /** VE-31 (R-A5): Vector everywhere's GitHub handoff, POST /api/everywhere/github/handoff. */
+  handoff: "https://vectordev.ai/api/everywhere/github/handoff",
 } as const
 export type GithubOidcPurpose = keyof typeof githubOidcAudiences
 
-// The events each audience takes (spec 2.10). The token and installation lists are the v2 App's, unchanged.
+// The events each audience takes (spec 2.10, and R-A5 for the handoff). The token and installation lists are the v2
+// App's, unchanged. A handoff is a person's own comment or issue, so never a dispatch or a schedule.
 const appEvents = ["issue_comment", "issues", "workflow_dispatch", "schedule"]
 const audienceEvents: Record<GithubOidcPurpose, string[]> = {
   token: appEvents,
   installation: appEvents,
   mint: [...appEvents, "pull_request_review_comment"],
   bind: ["workflow_dispatch"],
+  handoff: ["issue_comment", "issues", "pull_request_review_comment"],
 }
 const humanActor = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/
 // A GitHub App's bot login, `<slug>[bot]`, with the App slug's own pattern.
@@ -110,8 +114,10 @@ export function createGithubOidcVerifier(request: GithubRequest = fetch) {
     const owner = claim(payload.repository_owner, /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/)
     if (repository.split("/")[0] !== owner) throw oidcInvalid()
     const event = claim(payload.event_name, /^[a-z_]{1,80}$/)
-    // Only a mint takes a review comment, whose ref is the pull request's merge ref.
-    const review = purpose === "mint" && event === "pull_request_review_comment"
+    // The handoff takes the mint's workflow, ref and runner rules (R-A5); only its events differ.
+    const mintRules = purpose === "mint" || purpose === "handoff"
+    // Only the mint and the handoff take a review comment, whose ref is the pull request's merge ref.
+    const review = mintRules && event === "pull_request_review_comment"
     // Only a mint takes a bot, and only for a dispatch: the mint then requires Vector's App bot with a ticket (2.8).
     const actorIsBot =
       purpose === "mint" &&
@@ -122,11 +128,11 @@ export function createGithubOidcVerifier(request: GithubRequest = fetch) {
       payload.ref,
       review ? /^refs\/pull\/[1-9]\d{0,9}\/merge$/ : /^refs\/heads\/[^\s:~^?*\[\\]{1,240}$/,
     )
-    // Only mint and bind read the claims 2.10 adds, so only they refuse a malformed one. Token and installation record
-    // it as absent and accept exactly what they accepted before.
-    const strict = purpose === "mint" || purpose === "bind"
+    // Only mint, bind and the handoff read the claims 2.10 adds, so only they refuse a malformed one. Token and
+    // installation record it as absent and accept exactly what they accepted before.
+    const strict = mintRules || purpose === "bind"
     const runnerEnvironment = addedClaim(payload.runner_environment, /^[a-z][a-z0-9-]{0,39}$/, strict)
-    if (purpose === "mint" && runnerEnvironment === undefined) throw oidcInvalid()
+    if (mintRules && runnerEnvironment === undefined) throw oidcInvalid()
     const visibility = addedClaim(payload.repository_visibility, /^(?:public|private|internal)$/, strict)
     const identity = {
       repository,

@@ -320,6 +320,10 @@ describe("the lane's shape", () => {
       // @vector's routes that import the run hooks' registration (VE-30b); serverImports scans only everywhere code.
       "api/cloud-agents/mint.ts",
       "api/cloud-agents/settle.ts",
+      // The handoff verifier's JWKS fetch and id checks, and the workflow file and audiences it verifies against (VE-31):
+      // github-oidc.ts imports them, and serverImports scans only everywhere code.
+      "api/_lib/github-http.ts",
+      "packages/core/src/github-agents.ts",
     ]
     expect(helpers.filter((file) => !matches(file))).toEqual([])
     // A helper that moves on main would silently stop starting the lane.

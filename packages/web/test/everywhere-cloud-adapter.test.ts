@@ -775,7 +775,7 @@ describe("routing through the adapter", () => {
 
 describe("the handoff binding port", () => {
   test.each(["private", "internal", "public"])(
-    "H1: a binding stored %s maps with laptopFirst false and is always shared until EV-31 reads it live",
+    "H1: a binding stored %s maps with laptopFirst false and shared, the route's fallback for a token without visibility",
     async (visibility) => {
       const account = randomUUID()
       const binding = createHandoffBinding({
@@ -784,10 +784,12 @@ describe("the handoff binding port", () => {
       expect(await binding(123)).toEqual({
         account,
         githubId: 790,
+        ownerId: 456,
         installationId: 600,
         laptopFirst: false,
         codiumMode: true,
         workflowVersion: "3",
+        defaultRef: "refs/heads/main",
         repository: { id: 123, fullName: "fixture-owner/project", shared: true },
       })
     },

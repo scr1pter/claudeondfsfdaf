@@ -449,6 +449,20 @@ test("Github thread proof precedes the first accepted started report", async () 
   expect(f.results[0]?.outcome).toBe("changes")
 })
 
+test("a GitHub job whose pull request could not be opened settles changes naming its pushed branch (VE-31)", async () => {
+  const f = fixture()
+  Object.assign(f.job, { platform: "github", task: "", context: [], reply: { format: "markdown", maxChars: 1500 },
+    github: { kind: "issue", number: 7, commentId: 99, actorId: 789, event: "issue_comment" } })
+  // The thread was read; openEverywherePr then answers no URL (the repository is no longer private, or no PR opened).
+  await createEverywhereRunner({ ...f.deps, githubThread: async () => ({ thread: { task: "Fix retry handling", context: [] } }),
+    openPr: async () => { f.calls.push({ kind: "open-pr" }); return undefined } }).offer("fixture-offer")
+  const branch = branchFor(f.job.jid)
+  expect(f.calls.filter((call) => call.kind === "push").map((call) => call.value)).toEqual([branch])
+  expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(1)
+  expect(f.results).toEqual([{ jid: f.job.jid, lease: f.job.lease.id, outcome: "changes", summary: "Fixed retry handling.", branch,
+    headSha: "c".repeat(40), files: 1, checks: "skipped" }])
+})
+
 test("absence of the safe worktree capability never calls an unsafe engine endpoint", async () => {
   const f = fixture()
   await createEverywhereRunner({ ...f.deps, safeWorktree: undefined }).offer("fixture-offer")

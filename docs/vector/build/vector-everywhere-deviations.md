@@ -4058,6 +4058,7 @@ Recorded, no code change:
   - the minimum body life for any path that can dispatch late ((k)).
   *2026-11-20 annotation (EV-30):* built: the listeners and the settle index; not built: the reconciliation (a lead decision on EV-27's body-route fallback). The `liveMode` reader with the pinned-CLI check, the `visibility` field and the body route's live visibility read are not in the EV-30 brief and have no package yet; the minimum body life is still unneeded. See "2026-11-20, EV-30", (k), (o).
 - **EV-31:** wire `createHandoffBinding` with R-A5, and read `shared` live before laptop-first ((i)).
+  *2026-11-20 annotation (EV-31):* built: runtime.ts `productionHandoffDeps` wires `createHandoffBinding` and the new `createHandoffVerifier` (R-A5) only with the flag on, and the route's `shared` follows the token's signed `repository_visibility` claim (only `private` is unshared); the port's `shared: true` is now the fallback for a token with no claim. See "2026-11-20, EV-31", (e).
 - **For the lead:** the brief's "private or internal" versus the policy ((c)); `no-place` with `why` versus `public-repository`, and whether the reply carries `why` ((e)); the read count ((h)); the main merge, which the commit gate of 2026-11-20 did not make: its brief merges only origin/everywhere-finish, so origin/main `15f3ba77` is left for the lead.
 - **Owner:** R-C8/R-A8 (RESERVED in packages/schema/src/codium-run-trigger.ts). Until then no platform is an enabled source, and P12 is the tripwire.
 
@@ -4251,3 +4252,196 @@ Recorded, no code change:
 
 - vector-everywhere.yml (the Redis cases in its Valkey job), vector-at-mention.yml (cloud-agents-start, -runs and -service-off, which import the route files) and typecheck.yml on everywhere-finish, after the commit step's push.
 - Live use, after R-C8/R-A8, the live mode reader, the `visibility` field and a published CLI.
+
+## 2026-11-20, EV-31: the GitHub handoff's OIDC audience and verifier (VE-31)
+
+Spec §8 VE-31; §4.1 item 1; §11 R-A5 (R-A6 and §10 Q13 stay @vector's and the owner's). Base: HEAD `11f8f266` (EV-30), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` is an ancestor. The preconditions are ancestors of HEAD: EV-09 `735d592b` (the relay adapter) and EV-29 `3200acc2` (`createHandoffBinding`). No engine, shell, sandbox, worktree or relay file is touched, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+**origin/main.** origin/main `3670461a` (#51 to #53, desktop and engine files only, 12 commits) is not an ancestor. `git merge-tree --write-tree HEAD origin/main` is clean, and none of main's changed files is touched here. The critique asked for a merge commit or for the lead instruction that keeps main merges with the lead. The lane notes say: "This branch starts from origin/release-finish (PR #33, the combined v2 integration). When #33 merges into main, the lead merges main into this branch; until then never merge main yourself." This build's task also forbids commits, and a merge is a commit. So no main merge here; it stays the lead's, as at EV-14, EV-29 and EV-30.
+
+### What changed
+
+- **api/_lib/github-oidc.ts** (@vector's file; R-A5, built under the lead's brief, additive):
+  - `githubOidcAudiences.handoff` = `https://vectordev.ai/api/everywhere/github/handoff` (:15-16), a literal like `token` and `installation`;
+  - `audienceEvents.handoff` = issue_comment, issues and pull_request_review_comment (:28), with the :20-21 comment saying a handoff is never a dispatch or a schedule;
+  - in the verifier, `mintRules` (:118) is true for the mint and the handoff, and it drives the review comment's merge-ref rule (:120), the strict added claims (:133) and the required runner claim (:135). The bot rule stays the mint's alone for workflow_dispatch, so a handoff never takes a bot. The identity's shape and `consumeGithubOidc` are unchanged; `runAttempt`, `event` and `actorId` were already returned.
+- **api/_lib/everywhere/adapters/cloud-agents.ts** (EV-29's @vector adapter):
+  - `createHandoffBinding` (:142-158) adds `ownerId` and `defaultRef` from the binding, and its JSDoc (:135-141) says runtime.ts wires it and that `shared: true` is only the route's fallback;
+  - the new `createHandoffVerifier({verify?})` (:160-193) and its helper `verifiedHandoff` (:287-294): the lazy import of github-oidc.js, the `handoff` purpose, an audience recheck, then GitHub-hosted runners only (403 RUNNER_NOT_SUPPORTED). It maps the identity to `GithubHandoffIdentity`, and any non-ApiError becomes 503 GITHUB_UNAVAILABLE;
+  - imports: the type import of github-oidc.js (:13) and `ApiError` from http.js (:14). The module comment names VE-31.
+- **api/_lib/everywhere/github/adapter.ts** (VE-10's route, the lane's own; compact style kept):
+  - `GithubHandoffIdentity` (:16-20) gains `ownerId`, `ref` and an optional `repositoryVisibility`; `GithubHandoffBinding` (:21-24) gains `ownerId` and `defaultRef`;
+  - the 501 comment (:60-61) names productionHandoffDeps; the 401 check also requires a positive `ownerId` (:69);
+  - a review comment hands back before the binding read (:72-77, (d)); the comment names (d) and says GITHUB_EVENTS keeps the event on purpose;
+  - the binding check adds the mint's owner and default-ref rules (:79-83);
+  - `repository` (:100) carries the live `shared` into the trigger, the facts and the job (:103-110).
+- **api/_lib/everywhere/runtime.ts:** new `productionHandoffDeps(config = readConfig())` (:36-45): `{}` with the flag off, otherwise `{verify: createHandoffVerifier(), binding: createHandoffBinding(), ports: productionPorts(config)}`. Building them does no I/O.
+- **api/everywhere/github/handoff.ts:** `createGithubHandoff(productionHandoffDeps())`, evaluated at load like productionPlatformDeps. The route still reads its config per request.
+- **New packages/web/test/everywhere-github-live.test.ts** (22 cases, one of them real-Redis; the case table below). It uses @vector's `githubAppFixture` for the live-shaped tokens and the loopback JWKS (critique, taken), `installJourney([])` and `journeyPorts` for EV-09's fake relay, and the router fixture.
+- **packages/web/test/github-oidc.test.ts** (@vector's; vector-at-mention.yml): the handoff presets and branch events, and seven new cases (O3 to O9 below); "audiences are separate" now expects 5 audiences and the handoff literal. Its four-audience loop is unchanged.
+- **Fixture-only edits:** packages/web/test/everywhere-github.test.ts :19-22 (the identity's `ownerId` and `ref`, the binding's `ownerId` and `defaultRef`); packages/web/test/everywhere-cloud-adapter.test.ts H1 (the two new fields, and the title now says `shared` is the route's fallback).
+- **Desktop** (vector-everywhere.yml, `--no-env-file`): packages/desktop/src/main/everywhere-pr.test.ts D1 and everywhere-runner.test.ts D2 (below).
+- **Lane plumbing:** .github/workflows/vector-everywhere.yml (:81-84) adds `api/_lib/github-oidc.ts`, `api/_lib/github-http.ts` and `packages/core/src/github-agents.ts`. packages/web/test/everywhere-lane.test.ts (:322-326) lists the last two in `helpers`, because github-oidc.ts imports them and the scan reads only everywhere code. The scan itself finds github-oidc.ts through cloud-agents.ts's type import.
+- **docs/vector/owner-actions/vector-everywhere-github.md** (:7, :20, :75): 501 only while the flag is off, then 404 unless `github` is listed, then `{handled: false}`. R-A5 is built; R-A6 and Q13 are not. The `HANDOFF_UNAVAILABLE` string and the "Do not add `github`" line that everywhere-docs.test.ts pins are kept.
+- No generated file, flag, env var, switch, dependency or lockfile changes. Nothing is regenerated, and no engine HttpApi route is added. @vector's workflow generator, its route job, `laptopFirst` and `GithubAgents` are untouched.
+
+### Decisions
+
+- **(a) The audience literal lives in github-oidc.ts.** `GithubAgents.AUDIENCE` (packages/core/src/github-agents.ts) is @vector's generator module, and moving the string there is @vector's call. R-A6's route job must request a token for exactly `https://vectordev.ai/api/everywhere/github/handoff`.
+- **(b) The verifier's handoff rules are the mint's** (R-A5): the same top-level workflow file, `workflow_sha === sha`, the default-branch ref for comments and issues and the merge ref for a review comment, a required and well-formed `runner_environment`, strict `ref_protected` and `repository_visibility`, no bot, and its own three events. A handoff-signed token is refused by every other audience, and every other audience's token is refused by the handoff (O8).
+- **(c) The mapping (createHandoffVerifier).**
+  - Only GitHub's own runners, as the mint route requires (403 RUNNER_NOT_SUPPORTED).
+  - The audience is checked again, so a verifier injected for another purpose cannot pass (V4).
+  - github-oidc.js loads on first use, so jose never loads for the Slack, Linear or Jira intakes or the jobs routes (EV-29 (f)); the Node probe shows it is reachable only lazily.
+  - The jti is not consumed. The route's `handoff:<repository>:<run>` SET NX admits one handoff per run, which is stronger than one per token.
+  - The route's `now` is ignored, because the verifier keeps its own clock.
+  - Any failure that is not an ApiError becomes 503 GITHUB_UNAVAILABLE (critique, taken). Before, the route's catch would answer 503 HANDOFF_UNCERTAIN, which tells the route job not to start an Actions run although no job exists (V5).
+- **(d) The mint's route rules in the handoff (critique's major point, taken).**
+  - The route now requires `binding.ownerId === identity.ownerId` and `identity.ref === binding.defaultRef`, as the mint route does (cloud-agents-api.ts, after githubProof).
+  - **A review comment hands back** (`{handled: false}`, before any binding read or dedupe key). A pull_request_review_comment run takes the workflow at refs/pull/N/merge, which the pull request's author controls. The mint does not trust that alone: without the App it answers 403 EVENT_NEEDS_APP, and with it github-app.ts `verifyRun` checks that the pull request is open, that its head and base repositories are this one, that `merge_commit_sha` is the token's SHA, and that vector.yml at the workflow SHA equals the default branch's. Any writer could put a changed vector.yml on a PR branch, and the route job's writer, fork and binder checks would then run inside that writer's own code. So a review comment by the binder on that PR could start an unattended laptop job. The verifier still takes the event (the brief, R-A5), so R-A6 and an App check can open it later. **For the lead and @vector:** open review comments only with a check equal to verifyRun's review branch, which needs the App's token (github-app.ts). The plan's PR-number check (`pullRequest === body.issue`) belongs with that check, so it is not built, and the identity carries no `pullRequest`.
+  - **Not mirrored, with reasons:** the mint's live App checks (installation, archived, binder write access, a fork), which R-A6's own writer and fork checks or an App read would give (a lead decision), and the mint's revoked-CLI-session check (`requireUnrevokedAccount`). A laptop job's claim needs the computer's own current desktop sign-in, but whether the handoff should also refuse a binding whose account's CLI session was revoked is for the lead.
+- **(e) `shared` follows the token's signed `repository_visibility` claim** (EV-29 (i) and its Left open item).
+  - Why `shared` matters here: the runner holds every shared job (everywhere-runner.ts: no push, no PR), and E17 governs what a shared result shows. With `shared: true` from the port, no GitHub handoff could ever push.
+  - Only `private` is unshared; `public` and `internal` are shared, which is the safe direction and matches EV-29 (c), still waiting on the lead's ruling on private versus internal. With no claim the binding's `true` is kept (S1).
+  - **Why the claim and not the App read** (critique, taken as a record): `ports.visibility` (liveVisibility through attachmentRepository) never answers `private` yet, because attachmentRepository has no `visibility` field (EV-29 (c), EV-30 (o)). The claim is signed by GitHub and costs no request. It is up to 5 minutes old (maxTokenAge 300); the desktop rechecks `privateRepository` live before it pushes, and the post uses `job.shared`. **Tripwire:** once attachmentRepository answers `visibility`, decide whether `shared` takes the stricter of the two.
+  - H1 is unchanged in substance: the port still says `shared: true`.
+- **(f) The answers.** Verifier refusals keep their own codes, not VE-10's handled:false for a dispatch or a schedule. A verified token that fails the attempt, event, binding or owner rules gets handled:false. The table for R-A6 (whether the route job carries on in Actions):
+
+  | Answer | When | Carry on in Actions? |
+  | --- | --- | --- |
+  | 405 | not POST | yes |
+  | 501 HANDOFF_UNAVAILABLE | the flag off | yes |
+  | 404 EVERYWHERE_OFF | GitHub not listed | yes |
+  | 401 HANDOFF_IDENTITY_INVALID or OIDC_INVALID | no or bad token, wrong audience, expired, a bot, malformed claims | yes |
+  | 403 WORKFLOW_NOT_TRUSTED, EVENT_NOT_ALLOWED, RUNNER_NOT_SUPPORTED | another workflow or ref, a dispatch or schedule, a self-hosted runner | yes |
+  | 503 GITHUB_UNAVAILABLE | the JWKS read failed, or any other verifier failure | yes |
+  | 400 HANDOFF_INVALID | a bad body (nothing persisted) | yes |
+  | 200 `{handled: false}` | a re-run, a review comment, a non-binder, laptopFirst off, another owner or ref, a repeated run, no computer took it | yes |
+  | 200 `{handled: true, jid}` | the binder's computer claimed and started the job | no: output `kind=none` |
+  | 503 HANDOFF_UNCERTAIN | a failure after admission | no |
+
+  Only `handled: true` and HANDOFF_UNCERTAIN stop the Actions run.
+- **(g) The wiring.** Only `config.enabled` gates it, as the brief says; `ports` is productionPorts because the route's safePorts default can never offer. configuredPlatforms is unchanged (Left open).
+- **(h) No IP rate limit is added.** Before verification there is no store command, and JWKS fetches are bounded by jose's 30 s cooldown and 10-minute cache. Adding githubProof's rate limit is for the lead before R-A6.
+- **(i) Files outside the brief:** adapter.ts, cloud-agents.ts, the route file, the two fixture edits, D1 and D2, the workflow paths and the lane test's `helpers`, and the guide. **The helper move is dropped** (critique, taken): the new file has its own 12-line stub of @vector's store for bindingFor's one READ (`vectorBindings`), and everywhere-cloud-adapter.test.ts keeps its helpers. Its counts are unchanged without and with Redis.
+- **(j) github-oidc.test.ts's audience count goes from 4 to 5**, and the separate 5x5 matrix (O8) carries the new audience. The existing four-audience loop signs dispatch-shaped claims, which the handoff refuses at the event list, so it stays four.
+- **(k) The test route reads the body first, as Vercel's runtime does.** The route file sets no bodyParser option, so on Vercel `request.body` is already read, and readJson takes it. The new file mounts the route through `vercelBody`, which does the same. Under Bun's node:http, a body the route never reads (every refusal answers before it) keeps the harness's connection open after an await, and `server.close()` then never returns: reproduced alone in /tmp/vector-v2/everywhere/ev31/scratch/close*.ts. The route is unchanged.
+
+### Critique of the plan (2026-11-20)
+
+All nine points taken:
+- review comments hand back until an App check exists ((d), B4, M12);
+- D2 renamed to what it tests, J1 drives the real createGithubAdapter with a capturing status port, and the acceptance rows are marked module-level with production wiring pending (Left open);
+- githubAppFixture reused and the helper move dropped ((i));
+- non-ApiError failures mapped ((c), V5) and the response table given a carry-on column ((f));
+- the claim versus App-read record ((e));
+- issues cases with and without `bodySha256` (B5);
+- the separate 5x5 matrix, with the four-audience loop and its comments kept (O8, (j));
+- the main-merge record (above);
+- Node version and paths: the probe ran on Node 22.23, the only Node here. The lane workflows use Node 24, and neither vercel.json nor any package.json pins Vercel's Node version, so the deployed runtime is the project setting. github-http.ts and github-agents.ts are in the paths and `helpers`.
+
+### The cases
+
+| Code | File | What it shows |
+| --- | --- | --- |
+| V1 | live | a live-shaped issue_comment token maps to `{repositoryId, repository, ownerId 456, actorId 789, runId 1000, runAttempt 1, eventName, ref, repositoryVisibility private}`; a review comment's maps its merge ref; no claim, no field; one JWKS read for three tokens |
+| V2 | live | through the route, each before any everywhere store command, binding read, offer or relay action: workflow_dispatch and schedule 403 EVENT_NOT_ALLOWED; tokens signed for mint, token, installation and bind 401 OIDC_INVALID; a self-hosted runner 403 RUNNER_NOT_SUPPORTED; no runner claim, a bot, an expired token 401; another workflow file 403 WORKFLOW_NOT_TRUSTED |
+| V3 | live | run_attempt 2 verifies, then `{handled: false}` with no binding read |
+| V4 | live | an injected verifier answering a mint identity: 401 OIDC_INVALID |
+| V5 | live | an injected verifier that throws a plain Error: 503 GITHUB_UNAVAILABLE, no store command |
+| B1 | live | a non-binder (actor 790): handled:false after one binding read, no everywhere command, no offer, no job |
+| B2 | live | the production binding (laptopFirst false) with the binder's token: handled:false, one binding read, no everywhere command, no dedupe key, no offer, no job |
+| B3 | live | another owner (455) and a default ref of refs/heads/release: handled:false, one binding read, no everywhere command |
+| B4 | live | the binder's review comment on its own pull request: handled:false before the binding read, no everywhere command |
+| B5 | live | an issues token: without `bodySha256` 400 HANDOFF_INVALID, no job, no dedupe key, no offer; with it offered and claimed, the job's reference `{issue 7, actorId 789, event issues, bodySha256}` |
+| S1 | live | the job's `shared` and `repository.shared`: private false; public, internal and no claim true; each job running |
+| R1 | live | over the relay Worker on loopback (EV-09): the offer frame reaches the binder's computer, verifies against the pinned key, is claimed and started on the first poll; `{handled: true, jid}` within TIMING.offerWindowMs; relay actions exactly `presence`, `job-offer`; the job running with the issue reference; the same run again handled:false with no second offer |
+| R2 | live | an online computer that never claims: handled:false at exactly 20 s; the job refused `no-place`; one offer |
+| R3 | live | R1 on a real Redis (skips without VECTOR_TEST_REDIS_URL) |
+| J1 | live | a private claim settled `changes` with a branch and no PR, posted through the real createGithubAdapter and a capturing status port (R-C5's stand-in): "The changes are on the branch `vector/ve-…`.", the summary and the job marker, no PR link. A public claim settled `held`: no branch, no summary. With no App there is no port, and status.ts posts nothing |
+| P1 | live | `productionHandoffDeps(readConfig({}))` is `{}`, and the route over it answers 501 with no JWKS read |
+| P2 | live | the production route file loaded with the flag on, called with it off: 404 EVERYWHERE_OFF, not 501, with no JWKS read; after the load readConfig() reads the flag off again (review round one) |
+| P3 | live | with the flag on: exactly `binding`, `ports`, `verify`, and the ports are productionPorts(config)'s |
+| O1, O2 | oidc | the handoff and handoff review-comment presets join the job-workflow and environment cases; the handoff's branch events keep ref_type branch and no head or base ref |
+| O3 | oidc | the handoff takes issue_comment, issues and the review comment, and refuses workflow_dispatch, schedule, pull_request, pull_request_target, workflow_run, repository_dispatch, push and dynamic |
+| O4 | oidc | the runner claim is required and well formed; self-hosted is recorded |
+| O5 | oidc | malformed ref_protected and repository_visibility are refused; well-formed ones are recorded |
+| O6 | oidc | no bot on a comment, an issue or a review comment |
+| O7 | oidc | a handoff review comment takes the mint's merge-ref rules |
+| O8 | oidc | 5 audiences, the handoff literal, and an issue comment signed for each of the five accepted only by its own audience (bind: EVENT_NOT_ALLOWED) |
+| O9 | oidc | run_attempt 2, the event and the actor id are returned unchanged |
+| D1 | desktop pr | a GitHub handoff job's draft PR: draft, head `branchFor(jid)`, title "Vector: Fix retry handling", the job marker and "Refs #7" |
+| D2 | desktop runner | a GitHub job whose `openPr` answers no URL (no PR could be opened): the branch `branchFor(jid)` is pushed and the job settles `changes` with the branch, head SHA, one file and checks skipped, and no prUrl |
+
+### Mutations
+
+24 mutations, one source edit at a time, each with the named test files run alone through vector-serial, without Redis (/tmp/vector-v2/everywhere/ev31/mut/: mutate.py, run.log, stdout.txt, one log per mutation and file, before.sha256). Every mutation turned its named cases red, and `sha256sum -c` matched all seven source files after the run. "Result" is pass/fail.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 the handoff takes workflow_dispatch | github-oidc.ts | oidc 47/1; live 20/1 | O3, V2 |
+| M2 the handoff takes schedule | github-oidc.ts | oidc 47/1; live 20/1 | O3, V2 |
+| M3 `review` back to the mint only | github-oidc.ts | oidc 44/4; live 19/2 | O1, O3, O4, O7, V1, B4 |
+| M4 strict without the handoff | github-oidc.ts | oidc 47/1 | O5 |
+| M5 runner presence without the handoff | github-oidc.ts | oidc 47/1; live 20/1 | O4, V2 |
+| M6 the handoff audience equals the mint's | github-oidc.ts | oidc 46/2 | O8 (both) |
+| M7 the mapping drops the GitHub-hosted rule | cloud-agents.ts | live 20/1 | V2 |
+| M8 the mapping drops the audience recheck | cloud-agents.ts | live 20/1 | V4 |
+| M9 the mapping hard-codes runAttempt 1 | cloud-agents.ts | live 20/1 | V3 |
+| M10 the route drops the owner check | adapter.ts | live 20/1 | B3 |
+| M11 the route drops the default-ref check | adapter.ts | live 20/1 | B3 |
+| M12 the route takes review comments | adapter.ts | live 20/1; everywhere-github 17/0 | B4 |
+| M13 `shared` ignores the claim | adapter.ts | live 19/2 | S1 (private), J1 (private) |
+| M14 internal counts as private | adapter.ts | live 20/1 | S1 (internal) |
+| M15 productionHandoffDeps ignores the flag | runtime.ts | live 20/1 | P1 |
+| M16 productionHandoffDeps omits the ports | runtime.ts | live 20/1 | P3 |
+| M17 the route file passes no deps | handoff.ts | live 20/1 | P2 |
+| M18 createHandoffBinding says laptopFirst true | cloud-agents.ts | live 20/1; cloud-adapter 81/3 | B2, H1 |
+| M19 the dedupe key differs per call | adapter.ts | live 20/1 | R1 |
+| M20 ownerId mapped from the binder's id | cloud-agents.ts | live 12/9; cloud-adapter 81/3 | S1, R1, R2, B5, J1, H1 |
+| M21 the offer window + 1 ms | adapter.ts | live 20/1 | R2 |
+| M22 the runner drops `branch` from the publication | everywhere-runner.ts | runner 51/6 | D2, and five existing publication-receipt cases |
+| M23 events.ts drops `...job.result` | events.ts | live 20/1 | J1 (private) |
+| M24 a plain verifier failure is not mapped | cloud-agents.ts | live 20/1 | V5 |
+
+### Review round one (2026-11-20)
+
+Nine findings, none blocking. Changed:
+- **live test, `world()`:** the unused `jwks` counter is removed. V1 counts JWKS reads with its own `reads`; P1 and P2 compare `app.state.requests.length`.
+- **live test, P2:** the restore loop has no `else` (an early `continue`); a comment says why process.env is the only way in (handoff.ts builds its deps from readConfig() at load and takes no argument, and only P2 catches M17) and that `saved` holds every key everywhereEnv sets; the case now also asserts `readConfig().enabled` is false again after the load (126 → 127 expects without Redis, 136 → 137 with). The try/finally stays: the env must be restored even when the import throws. M17 re-run against the new P2: P2 red (20/1), handoff.ts restored, its sha256 unchanged.
+- **adapter.ts:** `GithubHandoffIdentity` is laid out like `GithubHandoffBinding`, with the JSDoc directly above `repositoryVisibility?:` and the closing brace on its own line; the review-comment comment (:72-75) names (d) and says GITHUB_EVENTS and the verifier keep the event for when an App check equal to verifyRun exists, so the early hand-back is not taken for dead code. No behaviour change.
+- **The owner's guide (:20):** now names all three answers: 501 `HANDOFF_UNAVAILABLE` with the flag off, 404 `EVERYWHERE_OFF` with it on but `github` unlisted, `{handled: false}` once `github` is listed, as :7 and spec §3.2 do.
+- **Left open:** the Codium switch's order and the rate limit's place (below).
+
+Not changed, with reasons:
+- **EVENT_NOT_ALLOWED's message** ("This workflow event is not eligible for Vector App credentials.") is left as it is for the handoff. It is @vector's shared message in @vector's file, and for the handoff it never leaves the API: createHandoffVerifier rethrows the ApiError and the route answers `{error: {code}}` only. A per-purpose message would add an untested branch to @vector's verifier for a string nobody sees. If @vector wants one, `"This workflow event cannot hand off a job."` for `handoff`.
+- **The jti and the IP rate limit** ((c), (h)): no change in this package, as the finding says; the Left open item now says where the limit goes.
+
+### Left open
+
+- **R-A6 and Q13 (@vector, the owner):** `id-token: write` on the route job, the `laptopFirst` option, the route job's handling of the answers in (f), the audience string in (a), and `bodySha256` for `issues` (EV-02). Until then `laptopFirst` is false in every binding and production handoffs answer handled:false.
+- **The review comment's App check** ((d)): equal to verifyRun's review branch (open, same-repository head and base, merge SHA, unchanged workflow blob), with the PR-number check. A lead and @vector decision.
+- **The desktop's GitHub calls are not wired** (critique): everywhere-wiring.ts passes no `githubThread` and sets `privateRepository: async () => false` and `openPr: async () => undefined`. So every production GitHub job declines `trigger-changed` after its claim, and none could push or open a PR. readEverywhereGithubThread and openEverywherePr exist and are tested (VE-10, D1), but nothing calls them. **This blocks live laptop-first.** The VE-31 acceptance rows are therefore met module by module (S1, R1, J1, D1, D2), with production wiring pending. "With no GitHub login" also cannot hold end to end: the laptop needs the login to read the thread, so with no login it declines.
+- **No GitHub platform adapter in production:** productionPlatforms (runtime.ts configuredPlatforms) has no `github` entry, so a GitHub job's settled result has no adapter and its outbox entry is re-queued each minute until the record expires. This is needed before laptop-first.
+- **The R-C5 status port:** without it github/status.ts posts nothing, so the branch-naming text in J1 reaches no GitHub thread.
+- **The rate limit** ((h)): before R-A6 makes the route live, add githubProof's `ipLimit` and `enforceRateLimit` (cloud-agents-api.ts) after the 404 check and before `deps.verify`. Today nothing is unbounded (failed tokens never reach the store, and the per-run SET NX lasts a day, KEEP_MS.handoff), but once the route job calls it, every unauthenticated POST costs a header parse and an RS256 verify with nothing in front.
+- **App-live parity** ((d)): for the lead before R-A6.
+- **The Codium switch comes too late** (review round one): the route reads @vector's binding (a persistentStore EVAL) and writes the `handoff:<repository>:<run>` dedupe key before routeFacts reads the `everywhere` switch. Spec §3.2 step 3 puts the switches first; the flag and the platform list do answer 404 before any read, but Codium's `everywhere` switch, on this branch since EV-07 (R-C6), is read only in routeFacts. The order is VE-10's; this package makes it reachable with the flag on and `github` listed. It does not fail open (no job is created on `stop` or `no-new`), but such a handoff costs one binding read and uses up the run's dedupe key. To tighten, in a later lane package: read `ports.switch("everywhere")` before `deps.binding` and `useOnce`, and hand back on `stop` or `no-new`.
+- **The owner's §4.1 step 1:** decode one real token's claims (`repository_visibility`, `runner_environment`, `ref_protected`, the job-workflow claims) to confirm the live shape the fixture assumes.
+
+### Safe by default
+
+- **Flag off:** productionHandoffDeps is `{}`, so the route answers 501 before any read, as before (P1, M15; the Node probe: no KV request).
+- **Flag on with GitHub unlisted** (the owner's guide says never list it): 404 before the token is read (P2, the probe).
+- **Flag on with GitHub listed:** tokens are verified, but every @vector binding says laptopFirst false, so the answer is handled:false after one binding read, with no everywhere store command, no offer and no job (B2). A JWKS failure is 503 GITHUB_UNAVAILABLE with no KV request (the probe).
+- @vector's route job never calls the route until R-A6, and the generator, the route job and `laptopFirst` are untouched.
+- Every refusal comes before any write, and nothing logs token or claim data.
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14`, brain-transport `0d18f750` and main `3670461a`. github-oidc.ts and its test are @vector's files, edited additively under the lead's brief (R-A5); the workflow hunk follows EV-30's block.
+
+### Deferred verification
+
+- vector-everywhere.yml (the new file, R3 in its Valkey job, D1 and D2, the lane and docs tests), vector-at-mention.yml (github-oidc, github-app*, cloud-agents-* and api-module-loading) and typecheck.yml on everywhere-finish, after the commit step's push.
+- A real GitHub token's claims (the owner's §4.1 step 1); R-A6's handling of the answers; live acceptance on a private test repository after R-A6, Q13, the desktop wiring and the App; a real laptop.

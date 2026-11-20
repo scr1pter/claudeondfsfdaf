@@ -4503,3 +4503,105 @@ No generated file, flag, env var, switch, dependency or lockfile changes; nothin
 | prettier | as in the receipt above: the difference count is unchanged for jobs.ts (475), keys.ts (27) and everywhere-jobs.test.ts (130); sweep.ts's 16 → 18 only inside `createSweep`'s signature |
 
 **Commit.** One package commit, `feat(everywhere): settle Actions jobs from run start and settle hooks`, Vector identity and the trailers; then the push to everywhere-finish and the dispatches of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on that ref (the gate's brief names all five). Their run ids and results go in the next receipt.
+
+### EV-30 CI (recorded by EV-31, 2026-11-20)
+
+Dispatched on everywhere-finish at `11f8f266` after the EV-30 commit gate's push, read back with the GitHub tools (head `11f8f266`, workflow_dispatch):
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| Vector everywhere | [44829742463](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44829742463) | success, 9/9 jobs (tests job `136612934808`, with the workflow rules check; typecheck api, app, core, desktop, engine, schema, web) |
+| Vector at-mention | [44829754784](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44829754784) | success |
+| Vector Codium | [44829760638](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44829760638) | success |
+| typecheck | [44829765253](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44829765253) | success |
+| Vector hosted CI | [44829747503](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44829747503) | cancelled: all 12 jobs stopped 5 s after they started (22:32:15 to 22:32:20), beside the Vector Codium run that calls the same reusable workflow, as for EV-28 and EV-29. It gives no result; the cause (a shared concurrency group) is inferred, not read from a log |
+
+## EV-31: the GitHub handoff's OIDC audience and verifier (VE-31) (2026-11-20)
+
+Spec §8 VE-31; §4.1 item 1; §11 R-A5. Deviations log: "2026-11-20, EV-31".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `11f8f266` (EV-30) equals origin/everywhere-finish; origin/release-finish `67ec3a60` is an ancestor; EV-09 `735d592b` and EV-29 `3200acc2` are ancestors. origin/main `3670461a` (12 commits, desktop and engine files only) is not an ancestor and is the lead's to merge (the lane notes; the deviations entry, "origin/main"); `git merge-tree --write-tree HEAD origin/main` is clean and none of main's changed files is touched. Built uncommitted.
+
+**Files** (line numbers in the deviations entry, "What changed"):
+
+- api/_lib/github-oidc.ts (@vector's: the `handoff` audience, its events, the mint's rules through `mintRules`);
+- api/_lib/everywhere/adapters/cloud-agents.ts (`createHandoffVerifier`, `verifiedHandoff`; `createHandoffBinding`'s `ownerId` and `defaultRef`);
+- api/_lib/everywhere/github/adapter.ts (the identity and binding types, the owner and default-ref rules, review comments hand back, `shared` from the claim);
+- api/_lib/everywhere/runtime.ts (`productionHandoffDeps`); api/everywhere/github/handoff.ts (wired);
+- new packages/web/test/everywhere-github-live.test.ts (22 cases, one real-Redis);
+- packages/web/test/github-oidc.test.ts (+7 cases; the audience count 4 → 5; the presets and branch events);
+- fixture-only: packages/web/test/everywhere-github.test.ts, packages/web/test/everywhere-cloud-adapter.test.ts (H1);
+- packages/desktop/src/main/everywhere-pr.test.ts (D1), everywhere-runner.test.ts (D2);
+- .github/workflows/vector-everywhere.yml (three paths), packages/web/test/everywhere-lane.test.ts (two `helpers` entries);
+- docs/vector/owner-actions/vector-everywhere-github.md (:7, :20, :75);
+- the lane documents: the deviations entry and the annotation on EV-29's Left open "EV-31" item; this receipt (with EV-30's CI above); spec notes (§3.3, §4.1, §6.1, §6.3, §6.4, §8 VE-31, §11 R-A5 and R-A6); the handoff's status bullet, the annotation on EV-29's loose end, EV-30's CI ids and an EV-31 loose-ends block.
+
+No generated file, flag, env var, switch, dependency or lockfile changes; nothing is regenerated, and no engine HttpApi route is added.
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from the owning package; logs in /tmp/vector-v2/everywhere/ev31/{base,base-redis,after,after-redis,probe,mut}/; the Redis runs used a disposable loopback redis-server on port 46392 with `--save '' --appendonly no`, flushed before each file and shut down after). "pass/fail (expects)":
+
+| Check | Before (HEAD) | After |
+| --- | --- | --- |
+| web everywhere-github | 17/0 (137) | 17/0 (137) |
+| web everywhere-cloud-adapter, without and with Redis | 84/0, 3 skip (1,167); 85/0 (1,189) | the same |
+| web everywhere-remote-adapter; -router; -lane; -docs | 20/0 (185); 9/0 (37); 13/0 (161); 17/0 (215) | the same |
+| web everywhere-journey-laptop, -journey-laptop-tracker, without and with Redis | 5/0, 2 skip (211); 5/0, 4 skip (345); 7/0 (329); 9/0 (666) | the same |
+| web github-oidc | 41/0 (386) | 48/0 (479): +7 cases |
+| web github-app; cloud-agents-readiness | 75/0 (6,416); 8/0 (170) | the same |
+| web github-app-api, cloud-agents-mint-api, -bind-api, -journey, -start, without Redis | 0/0, 1 skip each | the same |
+| the same five with Redis | 12/0 (2,795); 21/0 (6,398); 19/0 (5,793); 4/0 (4,442); 38/0 (12,988) | the same |
+| web cloud-agents-binding, without and with Redis | 0/1 (it fails by design without VECTOR_TEST_REDIS_URL); 46/0 (683) | the same |
+| web cloud-agents-runs, without and with Redis | 2/0, 1 skip (22); 25/0 (2,445) | 2/0, 1 skip (22); 25/0 (2,443): the expect count varies on its own (EV-30's receipt); the file and cloud-agents-runs.ts are untouched |
+| **new** web everywhere-github-live, without and with Redis | none | 21/0, 1 skip (126); 22/0 (136) |
+| desktop (`--no-env-file`) everywhere-pr; everywhere-runner; everywhere-github | 1/0 (14); 56/0 (457); 6/0 (83) | 2/0 (20); 57/0 (461); 6/0 (83) |
+| root test/ api-module-loading; no-personal-paths; no-project-wording (from test/) | 3/0 (22); 1/0 (2); 2/0 (16) | the same |
+| packages/cloud src/workflow-compliance.test.ts | 58/0 (1,104) | 58/0 (1,104) |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | | exit 0 |
+| `bun typecheck` in packages/web (astro check) | 306 files, 0 errors, 454 hints (EV-30's gate) | exit 0: 307 files, 0 errors, 0 warnings, 454 hints |
+| `bun typecheck` in packages/desktop | | exit 0 |
+| prettier `--check` | | clean: github-oidc.ts, cloud-agents.ts, runtime.ts, handoff.ts, github-oidc.test.ts, everywhere-cloud-adapter.test.ts, everywhere-lane.test.ts, the workflow and the new file. adapter.ts, everywhere-github.test.ts and the two desktop test files were not prettier-clean at HEAD and keep their compact style: prettier's difference count grows only by the added lines (adapter.ts 221 → 247, everywhere-github.test.ts 170 → 175, everywhere-pr.test.ts 60 → 98, everywhere-runner.test.ts 547 → 580) |
+| `git diff --check` | | clean |
+| `git diff HEAD...origin/<lane>` over every touched file, for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify, process-finish, brain-transport and main `3670461a` | | empty for every lane |
+| after every lane document edit: web everywhere-lane, everywhere-docs; root test/no-personal-paths, no-project-wording (from test/); `git diff --check` | | 13/0 (161); 17/0 (215); 1/0 (2); 2/0 (16); clean. The first docs run was red once (16/1): the guide's "Turning it on" section had lost the `HANDOFF_UNAVAILABLE` string that everywhere-docs.test.ts:341 pins there; the sentence now names both answers |
+
+**Node ESM probe** (/tmp/vector-v2/everywhere/ev31/probe/build.ts, probe.log): handoff.ts's import tree compiled module by module (73 files static, 150 with lazy imports; github-oidc.ts is reachable only lazily), run under Node 22.23 (the only Node here; the lane workflows use Node 24, and no file in the repository pins Vercel's Node version) in three fresh processes, each with a loopback KV and a fetch guard that allows 127.0.0.1 only. All three exit 0:
+- **flag off:** 501 HANDOFF_UNAVAILABLE, no KV command, no refused host;
+- **flag on, GitHub unlisted:** 404 EVERYWHERE_OFF, no KV command;
+- **flag on, `VECTOR_EVERYWHERE_PLATFORMS=github`, a JWT-shaped token:** github-oidc.js loads lazily, the guard refuses `token.actions.githubusercontent.com` (the JWKS), and the answer is 503 GITHUB_UNAVAILABLE with no KV command.
+
+**Mutations** (/tmp/vector-v2/everywhere/ev31/mut/: mutate.py, run.log, stdout.txt, before.sha256, one log per mutation and file): 24 mutations, one at a time, the named test files alone without Redis. All 24 end red; `sha256sum -c` matched github-oidc.ts, cloud-agents.ts, adapter.ts, runtime.ts, handoff.ts, events.ts and everywhere-runner.ts after the run. The table is in the deviations entry.
+
+**A test-harness finding** (deviations (k)): under Bun's node:http, a request body the route never reads keeps the RouteHarness's connection open once the route has awaited something, and `server.close()` then never returns, so the journey's afterAll timed out at 30 s. Reproduced alone (/tmp/vector-v2/everywhere/ev31/scratch/close.ts, close2.ts, close3.ts: a delayed answer without reading hangs; reading the body, or answering at once, closes; `request.resume()` or a socket destroy after the answer does not help). The new file mounts the route through `vercelBody`, which reads the body into `request.body` first, as Vercel's runtime does for a route with no bodyParser option.
+
+**Not run here:** the commit, the push gate's full turbo typecheck, and the dispatches, which belong to the commit step.
+
+**Review round one (2026-11-20; deviations entry, "Review round one").** Nine findings, none blocking. Code: adapter.ts lays out `GithubHandoffIdentity` like `GithubHandoffBinding` (:16-20) and the review-comment comment names deviation (d) (:72-75), with no behaviour change; the live test drops `world()`'s unused `jwks` counter, and P2's restore has no `else`, a comment on why process.env is the only way in, and a check that the flag reads off again after the load. Docs: the owner's guide :20 names the 404 `EVERYWHERE_OFF` answer; the deviations entry's Left open records the Codium switch's late read and the rate limit's place, and the handoff's EV-31 block gains both. Recorded with no code change: EVENT_NOT_ALLOWED's message for the handoff, and the jti and rate limit. Checks (logs in /tmp/vector-v2/everywhere/ev31/review1/), each through vector-serial, one file at a time with `--timeout 30000`:
+
+| Check | Result |
+| --- | --- |
+| web everywhere-github-live, without and with Redis (disposable loopback redis-server on 46392, as above) | 21/0, 1 skip (127); 22/0 (137): one expect more, P2's after-load check |
+| web everywhere-github; everywhere-docs; everywhere-lane | 17/0 (137); 17/0 (215); 13/0 (161) |
+| M17 (the route file passes no deps) against the new P2 | live 20/1, P2 red; handoff.ts restored, sha256 `6eab2b96…` unchanged |
+| root test/ no-personal-paths; no-project-wording (from test/) | 1/0 (2); 2/0 (16) |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web | exit 0: 307 files, 0 errors, 0 warnings, 454 hints |
+| prettier `--check` on the new test file and the owner's guide | clean; adapter.ts's prettier difference count 247 → 243 (the type's new layout) |
+| `git diff --check` | clean |
+
+**For the commit step:**
+- No main merge; the lead owns it (the deviations entry, "origin/main").
+- One package commit, staging explicit paths: `feat(everywhere): verify GitHub handoff tokens with a handoff audience`. The body names the files outside the brief (adapter.ts, cloud-agents.ts, the route file, the two fixture edits, D1 and D2, the workflow paths and the lane test, the guide) and the behaviour changes: verifier refusals answer their own 401/403/503 codes rather than handled:false; review comments hand back until an App check exists; the handoff takes the mint's owner and default-ref rules; `shared` follows the token's visibility claim. It says nothing was regenerated, no flag, env, switch, dependency or lockfile changed, and the generator, the route job and `laptopFirst` are untouched. Vector identity and the trailers.
+- Then `git fetch origin everywhere-finish`, the full `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2`, and `git push origin HEAD:everywhere-finish`.
+- Dispatch vector-everywhere.yml (the new file, R3 in its Valkey job, D1, D2), vector-at-mention.yml (github-oidc, github-app*, cloud-agents-*, api-module-loading) and typecheck.yml on everywhere-finish. Record the run ids in the next receipt and on the handoff.
+
+**Commit gate (2026-11-20).** `git fetch origin release-finish main everywhere-finish`: HEAD `11f8f266` equals origin/everywhere-finish; origin/release-finish `67ec3a60` is an ancestor; origin/main `3670461a` is not and stays the lead's. Every uncommitted change is this package's. Re-run through vector-serial, one file at a time with `--timeout 30000`, without Redis (logs in /tmp/vector-v2/everywhere/ev31/gate/):
+
+| Check | Result |
+| --- | --- |
+| web everywhere-github-live; github-oidc; everywhere-github; everywhere-cloud-adapter; everywhere-lane; everywhere-docs | 21/0, 1 skip (127); 48/0 (479); 17/0 (137); 84/0, 3 skip (1,167); 13/0 (161); 17/0 (215) |
+| desktop (`--no-env-file`) everywhere-pr; everywhere-runner | 2/0 (20); 57/0 (461) |
+| root test/ api-module-loading; no-personal-paths; no-project-wording (from test/) | 3/0 (22); 1/0 (2); 2/0 (16) |
+| hosted API typecheck; `bun typecheck` in packages/web and packages/desktop | exit 0; exit 0 (307 files, 0 errors, 0 warnings, 454 hints); exit 0 |
+| `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2` | exit 0, 27/27 tasks |
+
+The commit is `feat(everywhere): verify GitHub handoff tokens with a handoff audience`; the push and the dispatches of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on everywhere-finish follow it. Their run ids and results go in the next receipt.

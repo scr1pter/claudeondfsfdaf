@@ -184,6 +184,7 @@ test("JWKS network/redirect/size failures fail closed without alternate issuers 
 
 // V08 (spec 2.10): the mint and bind audiences, job-workflow claims, review comments and the App bot. Every case above
 // is unchanged; each one below signs its claims for the audience it is verified against, unless it tests that reuse.
+// VE-31 (R-A5) adds the handoff audience, which takes the mint's rules with its own three events.
 const mint = { aud: githubOidcAudiences.mint, runner_environment: "github-hosted" }
 const bind = { aud: githubOidcAudiences.bind, event_name: "workflow_dispatch" }
 const review = {
@@ -195,13 +196,17 @@ const review = {
   head_ref: "feature",
   base_ref: "main",
 }
-// One valid token's claims for each audience, and a review comment, which only the mint takes.
+const handoff = { aud: githubOidcAudiences.handoff, runner_environment: "github-hosted" }
+const handoffReview = { ...review, aud: githubOidcAudiences.handoff }
+// One valid token's claims for each audience, and a review comment, which only the mint and the handoff take.
 const presets: Array<[string, GithubOidcPurpose, Record<string, unknown>]> = [
   ["token", "token", {}],
   ["installation", "installation", { aud: githubOidcAudiences.installation }],
   ["mint", "mint", mint],
   ["bind", "bind", bind],
   ["mint review comment", "mint", review],
+  ["handoff", "handoff", handoff],
+  ["handoff review comment", "handoff", handoffReview],
 ]
 
 // Each case's outcome by its label, "accepted" or the error code, so a failure names the case.
@@ -366,6 +371,8 @@ test("events other than review comments keep ref_type branch and no head or base
     ["mint issue_comment", "mint", mint],
     ["mint workflow_dispatch", "mint", { ...mint, event_name: "workflow_dispatch" }],
     ["bind", "bind", bind],
+    ["handoff issue_comment", "handoff", handoff],
+    ["handoff issues", "handoff", { ...handoff, event_name: "issues" }],
   ]
   for (const [label, purpose, preset] of branchEvents) {
     const accepted = {
@@ -580,7 +587,8 @@ test("mint takes its five events and no others", async () => {
 test("audiences are separate", async () => {
   expect(githubOidcAudiences.mint).toBe(GithubAgents.AUDIENCE.mint)
   expect(githubOidcAudiences.bind).toBe(GithubAgents.AUDIENCE.bind)
-  expect(new Set(Object.values(githubOidcAudiences)).size).toBe(4)
+  expect(githubOidcAudiences.handoff).toBe("https://vectordev.ai/api/everywhere/github/handoff")
+  expect(new Set(Object.values(githubOidcAudiences)).size).toBe(5)
   // Claims every audience takes (a dispatch from a GitHub-hosted runner), signed for each audience in turn and
   // verified against all four: only the audience it was signed for accepts it.
   const purposes = ["token", "installation", "mint", "bind"] as const
@@ -596,6 +604,137 @@ test("audiences are separate", async () => {
     expect([signedFor, result]).toEqual([
       signedFor,
       Object.fromEntries(purposes.map((purpose) => [purpose, purpose === signedFor ? "accepted" : "OIDC_INVALID"])),
+    ])
+  }
+})
+
+// VE-31 (R-A5): the handoff audience.
+test("handoff takes issue_comment, issues and the review comment, and never a dispatch or a schedule", async () => {
+  const accepted = {
+    issue_comment: handoff,
+    issues: { ...handoff, event_name: "issues" },
+    pull_request_review_comment: handoffReview,
+  }
+  expect(await outcomes("handoff", accepted)).toEqual(every(accepted, "accepted"))
+  const refused = Object.fromEntries(
+    [
+      "workflow_dispatch",
+      "schedule",
+      "pull_request",
+      "pull_request_target",
+      "workflow_run",
+      "repository_dispatch",
+      "push",
+      "dynamic",
+    ].map((event) => [event, { ...handoff, event_name: event }]),
+  )
+  expect(await outcomes("handoff", refused)).toEqual(every(refused, "EVENT_NOT_ALLOWED"))
+})
+
+test("handoff requires a well-formed runner_environment and records a self-hosted one", async () => {
+  const verify = verifier()
+  for (const preset of [handoff, handoffReview])
+    for (const runner of ["github-hosted", "self-hosted"])
+      expect((await verify(await token({ ...preset, runner_environment: runner }), "handoff")).runnerEnvironment).toBe(
+        runner,
+      )
+  const malformed = {
+    uppercase: { runner_environment: "GitHub-Hosted" },
+    empty: { runner_environment: "" },
+    "a space": { runner_environment: "github hosted" },
+    "not a string": { runner_environment: 1 },
+  }
+  const cases = {
+    missing: { ...handoff, runner_environment: undefined },
+    "missing on a review comment": { ...handoffReview, runner_environment: undefined },
+    ...prefixed(handoff, malformed),
+  }
+  expect(await outcomes("handoff", cases)).toEqual(every(cases, "OIDC_INVALID"))
+})
+
+test("handoff refuses a malformed added claim and records well-formed ones", async () => {
+  const verify = verifier()
+  const read = async (change: Record<string, unknown>) => {
+    const identity = await verify(await token({ ...handoff, ...change }), "handoff")
+    return [identity.refProtected, identity.repositoryVisibility]
+  }
+  expect(await read({ ref_protected: "true", repository_visibility: "private" })).toEqual([true, "private"])
+  expect(await read({ ref_protected: "false", repository_visibility: "public" })).toEqual([false, "public"])
+  expect(await read({ repository_visibility: "internal" })).toEqual([false, "internal"])
+  expect(await read({})).toEqual([false, undefined])
+  const malformed = prefixed(handoff, {
+    "ref_protected true as a boolean": { ref_protected: true },
+    "ref_protected yes": { ref_protected: "yes" },
+    "repository_visibility secret": { repository_visibility: "secret" },
+    "repository_visibility Private": { repository_visibility: "Private" },
+    "repository_visibility not a string": { repository_visibility: 1 },
+  })
+  expect(await outcomes("handoff", malformed)).toEqual(every(malformed, "OIDC_INVALID"))
+})
+
+test("handoff never takes a bot, on a comment, an issue or a review comment", async () => {
+  const bot = { actor: "vector-fixture[bot]" }
+  const cases = {
+    issue_comment: { ...handoff, ...bot },
+    issues: { ...handoff, ...bot, event_name: "issues" },
+    "review comment": { ...handoffReview, ...bot },
+  }
+  expect(await outcomes("handoff", cases)).toEqual(every(cases, "OIDC_INVALID"))
+})
+
+test("a handoff review comment takes the mint's pull request ref rules", async () => {
+  expect(await verifier()(await token(handoffReview), "handoff")).toMatchObject({
+    event: "pull_request_review_comment",
+    ref: "refs/pull/12/merge",
+    pullRequest: 12,
+    headRef: "feature",
+    baseRef: "main",
+    audience: githubOidcAudiences.handoff,
+  })
+  const invalid = {
+    "branch ref": { ...handoffReview, ...pullRef("refs/heads/main") },
+    "head ref": { ...handoffReview, ...pullRef("refs/pull/12/head") },
+    "branch subject": { ...handoffReview, sub: "repo:fixture-owner/project:ref:refs/heads/main" },
+  }
+  expect(await outcomes("handoff", invalid)).toEqual(every(invalid, "OIDC_INVALID"))
+  const untrusted = {
+    "head_ref missing": { ...handoffReview, head_ref: undefined },
+    "base_ref empty": { ...handoffReview, base_ref: "" },
+    "workflow at the default branch": {
+      ...handoffReview,
+      workflow_ref: "fixture-owner/project/.github/workflows/vector.yml@refs/heads/main",
+    },
+    "workflow at another commit": { ...handoffReview, workflow_sha: "b".repeat(40) },
+  }
+  expect(await outcomes("handoff", untrusted)).toEqual(every(untrusted, "WORKFLOW_NOT_TRUSTED"))
+})
+
+test("handoff returns the run attempt, the event and the actor id unchanged", async () => {
+  const identity = await verifier()(await token({ ...handoff, run_attempt: "2", event_name: "issues" }), "handoff")
+  expect([identity.runAttempt, identity.event, identity.actorId, identity.audience]).toEqual([
+    "2",
+    "issues",
+    "789",
+    githubOidcAudiences.handoff,
+  ])
+})
+
+test("an issue comment signed for each of the five audiences is accepted only by that audience", async () => {
+  const purposes = ["token", "installation", "mint", "bind", "handoff"] as const
+  for (const signedFor of purposes) {
+    const signed = { aud: githubOidcAudiences[signedFor], runner_environment: "github-hosted" }
+    const verify = verifier()
+    const result: Record<string, unknown> = {}
+    for (const purpose of purposes)
+      result[purpose] = await verify(await token(signed), purpose).then(
+        () => "accepted",
+        (error: { code?: unknown }) => error.code,
+      )
+    // bind takes only workflow_dispatch, so an issue comment signed for it is refused at the event list.
+    const own = signedFor === "bind" ? "EVENT_NOT_ALLOWED" : "accepted"
+    expect([signedFor, result]).toEqual([
+      signedFor,
+      Object.fromEntries(purposes.map((purpose) => [purpose, purpose === signedFor ? own : "OIDC_INVALID"])),
     ])
   }
 })

@@ -4,7 +4,7 @@ Written on 2026-11-20 (EV-24) from the build contract (docs/vector/build/vector-
 
 ## Where things stand
 
-@vector's own GitHub launch needs nothing from Vector everywhere: mentions keep running in the repository's own Actions (spec §4.1). What Vector everywhere would add, laptop-first for the binder's own mentions, waits for @vector and for you (Q13). Until then production `/api/everywhere/github/handoff` answers 501 `HANDOFF_UNAVAILABLE` (`api/_lib/everywhere/github/adapter.ts`), and the route job carries on in Actions. Laptop jobs from Slack, Linear and Jira open their draft pull requests with each person's own GitHub sign-in in the desktop app, which needs no step from you.
+@vector's own GitHub launch needs nothing from Vector everywhere: mentions keep running in the repository's own Actions (spec §4.1). What Vector everywhere would add, laptop-first for the binder's own mentions, waits for @vector and for you (Q13). While `VECTOR_EVERYWHERE_ENABLED` is off, production `/api/everywhere/github/handoff` answers 501 `HANDOFF_UNAVAILABLE` (`api/_lib/everywhere/github/adapter.ts`). With it on, the route answers 404 unless `github` is listed, and even then `{handled: false}`, because no repository binding turns laptop-first on (EV-31). Either way the route job carries on in Actions, and today it never calls the route. Laptop jobs from Slack, Linear and Jira open their draft pull requests with each person's own GitHub sign-in in the desktop app, which needs no step from you.
 
 ## Before you start
 
@@ -17,7 +17,7 @@ These gates are in the code or with the lead, not yours. Check that each one is 
 - The desktop page cannot turn jobs on or allow a folder yet: Settings → Vector everywhere is read-only until the write path is built (vector-everywhere-deviations.md, "2026-11-20, EV-21", "Ruling on (a)").
 - The decisions are the ones you confirmed on 2026-11-11 (spec §10): Q5 (Slack reads a mention's thread once), Q13 (GitHub laptop-first only if @vector agrees) and Q14 (a platform goes live when its own steps are met).
 - The platform facts here were last read on 2026-11-12 (VE-11 to VE-13); re-read the current platform pages when you register.
-- Laptop-first waits for @vector's R-A5 (the OIDC handoff) and R-A6 (the route job's `id-token: write` and the `laptopFirst` option), and for your Q13 decision. Until then the handoff answers `HANDOFF_UNAVAILABLE`.
+- Laptop-first waits for @vector's R-A6 (the route job's `id-token: write` and the `laptopFirst` option) and for your Q13 decision. R-A5, the OIDC handoff audience and its verifier, is built (EV-31). Until R-A6, the handoff answers 501 `HANDOFF_UNAVAILABLE` with the flag off, 404 `EVERYWHERE_OFF` with it on but `github` unlisted, and `{handled: false}` once `github` is listed.
 - The GitHub `help` line in `renderHelp` (`packages/schema/src/everywhere-policy.ts`) says the binder's mentions can run on their computer. That wording changes before anyone sees it, unless laptop-first ships first.
 
 ## Keys (once, for every platform)
@@ -72,7 +72,7 @@ Spec §4.1, owner registration steps 1 to 3:
 
 ## Turning it on
 
-Nothing to turn on for GitHub yet. Do not add `github` to `VECTOR_EVERYWHERE_PLATFORMS`: `readConfig` in `api/_lib/everywhere/config.ts` counts GitHub as always configured, so listing it opens the platform, while the handoff still answers 501 `HANDOFF_UNAVAILABLE` before it checks anything. When @vector's laptop-first exists and you have decided Q13, this section gains its own order.
+Nothing to turn on for GitHub yet. Do not add `github` to `VECTOR_EVERYWHERE_PLATFORMS`: `readConfig` in `api/_lib/everywhere/config.ts` counts GitHub as always configured, so listing it opens the platform. While `VECTOR_EVERYWHERE_ENABLED` is off the handoff answers 501 `HANDOFF_UNAVAILABLE` before it checks anything; with the flag on and `github` listed it verifies tokens but answers `{handled: false}`, because laptop-first is off in every binding. When @vector's laptop-first exists and you have decided Q13, this section gains its own order.
 
 ## Live acceptance
 
