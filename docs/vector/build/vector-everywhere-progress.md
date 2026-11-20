@@ -33,7 +33,7 @@ here.
 | F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
 | F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`) |
 | F4, erase registration and the sweep cron | Done: registration, and the cron by EV-04 (`dbf9bca1`); CI green: vector-everywhere 43678721793, vector-hosted-ci 43678724007, typecheck 43678728633. The cron runs after the owner's deploy | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`). EV-04: vercel.json:559-562 (`/api/everywhere/sweep`, `* * * * *`); api/_lib/everywhere/sweep.ts:29 (200 `{enabled: false}` after the 405 and 401 checks, before any switch, store or platform call); tests packages/web/test/everywhere-sweep.test.ts (the `counting` helper at :101, five cases at :125, :176, :204, :231, :251) | Request to review-fixes (FIT-4): add `vercel.json` to vector-everywhere.yml's `pull_request` paths (deviations log, EV-04, known gap) |
-| F5, an engine test imports desktop | Accepted; deviation entry. *2026-11-17 (EV-18): the import surface grew with `everywhereSettings`, imported from desktop everywhere-settings.ts (core and schema only), so the engine compiles three desktop files; still open* | packages/engine/test/everywhere/unattended-session.test.ts:9, :13 | done in EV-01; a later move of the pure settings and rules functions, or the client, into core/everywhere |
+| F5, an engine test imports desktop | Accepted; deviation entry. *2026-11-17 (EV-18): the import surface grew with `everywhereSettings`, imported from desktop everywhere-settings.ts (core and schema only), so the engine compiles three desktop files; still open. 2026-11-20 (EV-19): packages/web test/everywhere-journey-laptop.test.ts also imports eight desktop files (the runner, offer, ledger, engine, git, settings, scan and github-api, no electron); deviations EV-19 (a)* | packages/engine/test/everywhere/unattended-session.test.ts:9, :13 | done in EV-01; a later move of the pure settings and rules functions, or the client, into core/everywhere |
 | F6, a second keep-awake owner | Closed by EV-18 (2026-11-17; CI pending) | At `dcb93939`: everywhere-awake.ts:2-13 called `start`/`stop` itself. Now everywhere-awake.ts holds keep-awake.ts `holdDesktopWork()` (:471), the same `desktopWork` set as `whileDesktopWorks` (:455) under the one blocker index.ts:640-651 sets (`setDesktopWorkBlocker`, :396); it takes no blocker id, and holds only while the link can deliver offers. "One owner" means keep-awake.ts: engine-session keep-awake (`startKeepAwake`, which also keeps an unattended job's own session awake) keeps its own `powerSaveBlocker` id through the same `blocker` object, unchanged, so while a job runs two ids can be held, each released by its own holder. Tests: everywhere-awake.test.ts A1 to A5 (:58, :95, :108, :136, :151), everywhere-wiring.test.ts W28 (:1725) and W29 (:1794); deviations log, "2026-11-17, EV-18", (k) | the package commit's SHA and its CI run ids (the next receipt; a commit cannot name itself) |
 | `75532fc36` (not a finding) | Account authority wired | api/_lib/everywhere/runtime.ts:16-18 (`productionPorts` returns `codiumAccountAuthority`); adapters/account.ts:2 (`tombstoneKey`), :7-13 | none |
 
@@ -3173,3 +3173,97 @@ The runs dispatched for `dcb93939` (the EV-16 CI fix, on top of EV-17): vector-e
 | packages/desktop src/main/everywhere-wiring.test.ts (--no-env-file) | 31 pass, 0 fail, 324 expects |
 | `bun typecheck` in packages/desktop | exit 0 |
 | `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+## EV-19: the laptop journey harness and the Slack journey (VE-22a) (2026-11-20)
+
+VE-22 (Slack half), §9; E4, E8, E12, E17. Deviations log: "2026-11-20, EV-19".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `503bab3b` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. EV-09 `735d592b`, EV-17 `c9275df0` and EV-18 `cf9195d0` are ancestors (`git merge-base --is-ancestor`). origin/main `7c7508d2` holds PR #33 and is 144 commits ahead; merging it stays the lead's (EV-14's receipt: "The lead also owns merging origin/main"). Among the journey's 148 compiled repository files, main changed only packages/core/src/github-agents.ts. No review-fixes or brain-transport precondition applies.
+
+**Files** (line numbers after the change and after review round one):
+
+- packages/web/test/everywhere-journey-laptop.test.ts (new, 894 lines): `STORE_LATENCY_MS` :63, `CASE_MS` :76, the relay Worker on 127.0.0.1 :88, `bounded` :143, `gate` :150, `codiumFetcher` :164, `seedPlan` :176, `world` :207 (the slow store :235-246, the ports :248-262, the routing sleep :265-270, the jobs routes and the sweep :281-310, the native call log :313-322, the desktop :324-470, `turn` :477, the teardown :508), `onlyJob` :548, `admit` :563 (the E12 bound :573), `laptopJourney` :582 (routing :585, started :614, editing :637, pushing :653, settle :668, E8 :689), `offlineJourney` :708, `expectSharedResult` :750; the cases :781 to :883.
+- api/_lib/everywhere/slack/adapter.ts: `SlackDeps.sleep?` :26 (additive).
+- api/_lib/everywhere/slack/routes.ts: `sleep: deps.sleep` in the intake's options :18.
+- packages/web/test/lib/everywhere-router.ts: `routerFixture(options)` :17 (its comment :13-16), `env` :20 and in the return :71.
+- packages/web/test/lib/everywhere-slack.ts: the `Store` type import :5, `slackFixture(options)` :44-45.
+- Lane documents: this receipt and the F5 row annotation above, the deviations entry, a dated note under the spec's §8 Phase 3 rows, a handoff status bullet, a "Current gates" bullet and two "Left open" items, and the F5 row of v2-notes/v2-complete-plan.md.
+
+**The cases.**
+
+| Case | Line | What it pins |
+| --- | --- | --- |
+| J1 | :781 | the Slack journey in a shared channel, steps 1 to 9 (deviations entry, "The journey"), the job record `shared`: 200 before any store command; the first signal within 2,500 ms with 19 slow store commands before it; one presence and one offer; one claim inside the window; `started`, `editing` and `pushing` each with its own setStatus and plan update; push only after the `pushing` acknowledgement; settle `changes` with the PR in the job's repository; body and summary erased; only the outcome and link in the thread, the summary and checks line in the ephemeral; no device id in any Slack call; nothing in plaintext in the store's command log; late claims 409 `JOB_TAKEN` |
+| J2 | :798 | the same journey from a direct message: private place, the summary in the reply, the repository and task in the title, no ephemeral |
+| J3 | :818 | no computer online: waits until `receivedAt + queueMs` (before the body expires), a sweep 1 ms before ends nothing, the sweep at the limit expires it with Slack's own text |
+| J4 | :826 | an offer the pinned key does not verify: no claim, no decline, no jti consumed, ten polls, then the job waits |
+| J5 | :849 | the fetch guard is the fetch in place and stops a probe to a reserved `.invalid` name, the file's only non-loopback request |
+| R1 | :869 | J1 on a real Redis (VECTOR_TEST_REDIS_URL), the job settled and `shared` there and the FakeStore untouched |
+| R2 | :883 | J3 on a real Redis, the job expired there and the FakeStore untouched |
+
+**Checks** (each through /home/user/.tools/vector-serial, one file at a time from the package, `--timeout 30000`; logs in /tmp/vector-v2/everywhere/ev19/).
+
+| Check | Before (HEAD) | After |
+| --- | --- | --- |
+| web test/everywhere-journey-laptop.test.ts (vector-everywhere.yml), three runs | (new) | 5 pass, 2 skip, 0 fail, 208 expects, each run (211 after review round one, below) |
+| the same file with a disposable loopback redis-server 7.0.15 (informational; CI's Valkey job is the receipt) | (new) | 7 pass, 0 fail, 324 expects; the database empty afterwards (329 after review round one) |
+| web everywhere-slack-events / -slack-render / -slack-oauth | 12 / 10 / 4 pass, 94 / 51 / 26 expects | identical |
+| web everywhere-intake / -router / -remote-adapter | 8 / 9 / 20 pass, 68 / 37 / 185 expects | identical |
+| web everywhere-authority / -control / -github / -sweep | 20 pass 7 skip / 13 / 17 / 11 pass; 225 / 123 / 137 / 99 expects | identical |
+| web everywhere-linear-oauth / -linear-render / -linear-webhook | 15 / 11 / 15 pass (4 skip); 112 / 74 / 146 expects | identical |
+| web everywhere-jira-a2a / -jira-fit / -jira-render | 20 pass 3 skip / 4 / 6; 251 / 26 / 48 expects | identical |
+| web everywhere-jobs-api / -lane | 22 / 13 pass; 226 / 153 expects | identical |
+| desktop src/main/everywhere-offer.test.ts and everywhere-runner.test.ts (--no-env-file; unchanged) | | 2 pass 11 expects; 56 pass 457 expects |
+| `bun typecheck` in packages/web (astro check) | | 0 errors, 0 warnings, 415 hints (the new file adds 3 `await expect(...).rejects` hints, ts(80007), the pattern other web tests have; 412 before). After review round one: 414 (the new file adds 2) |
+| hosted API: `bun typecheck --project ../../tsconfig.json` from packages/engine | | exit 0 |
+| `bun typecheck` in packages/desktop | | exit 0 |
+| `bun x tsgo --noEmit --listFiles -p /tmp/vector-v2/everywhere/ev19/tc/tsconfig.json` (extends packages/web's) | | exit 0; eight desktop files (everywhere-runner, -engine, -scan, -git, -ledger, -settings, -offer, github-api), no electron file, every core (25) and schema (17) file under `src/` |
+| prettier --check on the new file | | clean |
+| prettier drift, HEAD → after (hand-packed files keep their style) | router 140, slack 76, slack/adapter 339, slack/routes 60 lines | 141, 76, 339, 61 |
+| `git diff --check`; personal paths or emails in the changed files | | clean; none |
+
+**Mutations.** Fourteen, M1 to M14, each red; the table with the failing lines is in the deviations entry. M12 (the router fixture ignoring `options.store`) is red only with a Redis: locally against the loopback redis-server, in CI in the Valkey job.
+
+**E12 measurement.** 19 store commands before the first `setStatus` at HEAD (1,900 ms at 100 ms each); 50 with the acknowledgement moved after `routeFacts` (5,000 ms).
+
+**Cross-lane probe.** review-fixes `1433d105` and connect-finish `19c48b89` touch none of this package's paths; codium-finish `58663f5b`, brain-transport `0d18f750` and main `7c7508d2` change v2-notes/v2-complete-plan.md at :219-221 only, away from the F5 row this package annotates (:197).
+
+### EV-19 review round one (2026-11-20)
+
+Eight findings, none blocking. How each was taken is in the deviations log, "2026-11-20, EV-19", "Review round one". **Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `503bab3b` still equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main moved from `7c7508d2` to `b5cbad1c` (185 commits ahead of HEAD); merging it stays the lead's. Of the 148 repository files the journey compiles, main's new commits change three: api/_lib/codium-pool.ts, packages/core/src/local-mode/sources.ts and packages/web/test/fixture/codium-spend-emulation.ts. The journey is to be run again once the lead has merged main.
+
+**Changed in the round:**
+
+- packages/web/test/everywhere-journey-laptop.test.ts (899 to 894 lines): J1 asserts the record is `shared` (:786) and R1 the same on Valkey (:877); the routing step asserts a `chat.update` before reading the last (:609-611) and the editing step that `limits.maxUsd` is a number (:644); J5 drops the jobs client's request to its default origin and keeps the `.invalid` probe (:849-856); `createJobId` is no longer imported.
+- Lane documents: the deviations entry (opening paragraph, the case table, (b), (e), (n), Safe by default, Left open, the mutation lines, the review round), this receipt (the case table, the line numbers, the check annotations, this round, the commit section), the handoff's EV-19 bullet and the spec's EV-19 note (the Codium fakes, deviation (d)).
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time from packages/web with `--timeout 30000`; logs in /tmp/vector-v2/everywhere/ev19-fix/.
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-journey-laptop.test.ts (vector-everywhere.yml), three runs | 5 pass, 2 skip, 0 fail, 211 expects, each run |
+| the same file with a disposable loopback redis-server 7.0.15 (informational; CI's Valkey job is the receipt) | 7 pass, 0 fail, 329 expects; the database empty afterwards |
+| mutations M1 to M14 again (ev19-fix/mutate.py; M12 against the loopback redis-server) | each red in the same cases as before, first at the same assertion (lines in the deviations entry) |
+| `bun typecheck` in packages/web (astro check) | 0 errors, 0 warnings, 414 hints (the new file's 2 `rejects` hints) |
+| prettier --check on the new file | clean |
+
+No production file changed in the round, so the hosted API and desktop typechecks above stand.
+
+### EV-19 commit, push and CI
+
+One package commit, `test(everywhere): add the mocked laptop journey for Slack` (the commit gate's title, in place of the planned `test(everywhere): add the laptop journey harness and the Slack journey`), staging by path the five code and test files above and the five lane documents (deviations, progress, spec, handoff and v2-notes/v2-complete-plan.md). Its body names the `SlackDeps.sleep` change and says that no generated file was regenerated and no flag, env var, route, config key, dependency or workflow changed. The commit SHA, the push and the CI run ids go in the next receipt (a commit cannot name itself):
+
+- the push gate: `git fetch origin everywhere-finish`, the full turbo typecheck and a fast-forward push;
+- workflow_dispatch runs of vector-everywhere.yml (R1 and R2 run in its Valkey job), vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on everywhere-finish, as for EV-12 to EV-18, their run ids also on the handoff's EV-19 bullet. origin/main holds PR #33 and its merge base with HEAD is origin/release-finish `67ec3a60` (EV-12's commit gate), so vector-codium.yml's changed-since-main picker selects the lane's files, not the 570 the brief warns about; it also runs root test/no-project-wording.test.ts, which caught EV-17's and EV-18's wording.
+
+**Commit gate (2026-11-20).** `git fetch origin release-finish main everywhere-finish`: HEAD `503bab3b` still equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`; origin/main is `b5cbad1c` (185 ahead, not merged here). The working tree held only this package's ten paths. Re-run at the gate, each through `vector-serial`, one file at a time from packages/web with `--timeout 30000` (logs in /tmp/vector-v2/everywhere/ev19-gate/):
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-journey-laptop.test.ts | 5 pass, 2 skip, 0 fail, 211 expects |
+| web test/everywhere-router.test.ts / -slack-events / -intake (the changed fixtures' callers) | 9 / 12 / 8 pass, 0 fail; 37 / 94 / 68 expects |
+| `bun typecheck` in packages/web (astro check) | 0 errors, 0 warnings, 414 hints |
+| hosted API: `bun typecheck --project ../../tsconfig.json` from packages/engine | exit 0 |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+For the lead: the missing production `repository` port (deviations EV-19 (i); handoff "Current gates") as its own package, and the lane path-filter gap (EV-19 (l)) for review-fixes' FIT-4.
