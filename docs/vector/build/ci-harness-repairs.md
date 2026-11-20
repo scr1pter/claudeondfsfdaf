@@ -981,3 +981,13 @@ Mutations (each red, then restored and checked against its recorded sha256):
 23-30 s; the refusal test in the 11-17 s range of its one-child sibling; each guest test near 8.7-12 s (30-40%); the
 Plan mode approval test about 6-9 s. This branch has not run on Windows CI yet. A real cut to the guest tests needs a
 product change: rev-parse lookups are repeated many times in each isolation.
+
+Follow-up on this branch's first CI run (test.yml run 44829529636): `unit (windows)` job 136610691971 failed in
+`packages/core/test/config/plugin.test.ts` "ConfigExternalPlugin > imports the approved plugin bytes from a private
+snapshot after the live file changes" with `Expected: "approved"`, `Received: ""` after 187 ms. That is a race in the
+test, not a slow VM: it polled for the marker file to exist and then read it, but the plugin's `Bun.write` creates the
+file before it writes the bytes, and on Windows the reader saw the empty file in between. The test now polls for the
+marker's content (same 100 × 10 ms bound) and asserts it. Locally 9/9 pass; pointing `executablePath` at the live file
+instead of the approved snapshot still fails it with `Received: "changed"`. The same run's other two failures were
+infrastructure: Bun 1.3.14 segfaulted in `bun install` before any test ran (`engine (windows, shard 5/12)`, job
+136610692430, re-run class d), and HF-7 at stage `uia-runtime-id` in the Windows overlay Stop (job 136611151009).
