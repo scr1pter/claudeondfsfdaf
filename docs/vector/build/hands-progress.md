@@ -1473,6 +1473,8 @@ Fast Windows run42125718778 at `9e1ec121` successfully completed a separate fixe
 
 The next source-bound control invokes only CI's protected PowerShell7 path under the local SystemRoot drive's Program Files/PowerShell/7 directory. UNC or non-drive roots fail closed; there is no PATH search, executable/DLL selector, policy bypass or fallback. PowerShell7's Add-Type uses in-process Roslyn compilation; the embedded C# source, stdin,15-second observer limit,120-second parent limit and every actual parent/owner/DPI/SIMPLE/exact-extent check are unchanged. Independent review, the9 region tests/111 assertions, desktop typecheck, formatting and actionlint passed. Actual native readback remains CI work.
 
+2026-11-20: main's windows-build job 136479415862 hit deadline_compile again on cold PowerShell 7 (15.58 s, owned=0). Cold/warm pairs from the same VMs show the first Add-Type paying the cost and a later separate pwsh compile of the same source finishing fast (10.91/1.15 s, 14.60/1.41 s), so a separate PowerShell 7 process does warm the next one; the 5.1 precedent above was csc-based and out of process. Branch `region-compile-budget` adds a fixed separate PowerShell 7 warm-up step (60 s own limit, 2 minutes, grants nothing) before the real proof and logs Node-measured phase arrival times as `elapsed`. The 15-second observer limit, 120-second parent limit and the embedded script (UTF-16LE SHA-256 `0049ef86…baac8`) are unchanged. Details: [CI harness repairs](./ci-harness-repairs.md).
+
 
 ## Complete helper15 ordinary regression
 
