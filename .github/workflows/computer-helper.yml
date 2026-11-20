@@ -785,6 +785,12 @@ jobs:
         run: |
           node node_modules/electron/install.js
           if ($LASTEXITCODE -ne 0) { throw "The pinned Electron installation failed." }
+      # PowerShell 7's first Add-Type in a fresh VM pays a cold Roslyn cost inside the 15-second region observer.
+      # This separate fixed compile grants nothing; the observer still compiles its own source within that limit.
+      - name: Warm the protected PowerShell 7 compiler
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 2
+        run: bun --no-env-file ./scripts/computer-overlay-smoke-region-warm.ts
       - name: Run real Electron overlay properties and controller lifecycle
         if: ${{ needs.plan.outputs.desktop == 'true' }}
         timeout-minutes: 3
