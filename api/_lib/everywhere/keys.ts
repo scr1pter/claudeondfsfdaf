@@ -39,7 +39,13 @@ export const KEEP_MS = {
   deliveryDone: 7 * DAY,
   offer: TIMING.offerReplayMs,
   seen: 30 * DAY,
-  ticket: DAY,
+  /**
+   * EV-27: an Actions job's links (its ticket, its run's link and that run's body-read marker) never outlive its body.
+   * Each write is also capped at that job's own body end, and all three are deleted when the job ends.
+   */
+  ticket: TIMING.bodyTtlMs,
+  run: TIMING.bodyTtlMs,
+  bodyRead: TIMING.bodyTtlMs,
   jiraTask: 2 * DAY,
   audit: 90 * DAY,
 } as const
@@ -68,6 +74,11 @@ const STATE_ID = /^[A-Za-z0-9_-]{16,128}$/
 const COUNT_WINDOW = /^(?:d[0-9]{8}|h[0-9]{10})$/
 /** @vector's ticket hash (R-A1), hex or base64url. */
 const TICKET_HASH = /^[A-Za-z0-9_-]{16,128}$/
+/**
+ * An Actions run id (R-A2's rid), such as @vector's `gh-<repository>-<run>-<attempt>-<check run>`: the jobs module's
+ * own rule. It has no colon, so `run:<rid>` and its `body-read` marker can never be one key.
+ */
+const RUN_ID = /^[A-Za-z0-9_-]{1,128}$/
 
 function invalid(): never {
   throw new ApiError(400, "EVERYWHERE_INVALID_ID", "An id in this request is not valid.")
@@ -192,6 +203,13 @@ export const everywhereKeys = {
   offer: (jti: string) => key("offer", matching(jti, RANDOM_ID_PATTERN)),
   seen: (accountId: string) => key("seen", account(accountId)),
   ticket: (hash: string) => key("ticket", matching(hash, TICKET_HASH)),
+  /**
+   * EV-27: the job an Actions run works on, written when that run starts (`startDispatched`). It is the body route's
+   * correlation only: it ends with the body, and a run can settle later, so a settle must never find its job by it.
+   */
+  run: (rid: string) => key("run", matching(rid, RUN_ID)),
+  /** EV-27: present once that run has read its job's body, which it may do once. */
+  runBodyRead: (rid: string) => key("run", matching(rid, RUN_ID), "body-read"),
   jiraTask: (taskId: string) => key("jira", "task", freePart(taskId)),
   jiraTaskDraft: (taskId: string) => key("jira", "draft", matching(taskId, UUID)),
   jiraTasks: (installationKey: string) => key("jira", "tasks", installation(installationKey)),

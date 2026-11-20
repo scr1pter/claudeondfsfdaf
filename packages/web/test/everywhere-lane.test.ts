@@ -302,6 +302,7 @@ describe("the lane's shape", () => {
       "api/_lib/remote-config.ts",
       "api/_lib/remote-relay.ts",
       "packages/schema/src/codium-copy.ts",
+      "api/_lib/cloud-agents-run-token.ts",
       "packages/desktop/src/main/github-auth.ts",
       "packages/desktop/src/main/github-api.ts",
     ]

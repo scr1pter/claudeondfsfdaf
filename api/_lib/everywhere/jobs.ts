@@ -89,7 +89,9 @@ import {
  * Each live job is in four indexes: `jobs:due` (by its next timeout, for the sweep), `jobs:<sponsor>` (live and
  * waiting jobs, which the live cap counts), `livejobs:<installation>` (for erasing an installation) and
  * `history:<sponsor>` (every job of the last 30 days, for the job list and for erasing an account). A job leaves the
- * first three when it ends, in the same script that ends it, and its encrypted body is deleted then too.
+ * first three when it ends, in the same script that ends it, and its encrypted body is deleted then too. An Actions job's
+ * links (`ticket:<hash>`, `run:<rid>` and that run's body-read marker) end with its body and are deleted, best effort,
+ * when it ends (EV-27).
  *
  * The body (task and context) is sealed under the data key and lives at most 2 hours; no job waits longer than its
  * body lives, and a claim that finds the body gone ends the job `expired`. Nothing here stores code, diffs, file names
@@ -608,13 +610,32 @@ function recordTtl(record: Pick<JobRecord, "receivedAt">, now: number) {
   return Math.max(60_000, record.receivedAt + KEEP_MS.job - now)
 }
 
+/** EV-27: a link's TTL, which never outlives the job's body. */
+function untilBodyEnds(job: Pick<JobRecord, "bodyExpiresAt">, now: number, keep: number) {
+  return Math.max(1, Math.min(keep, job.bodyExpiresAt - now))
+}
+
+/** EV-27: an Actions job's links, which end with it: its ticket, its run's link and that run's body-read marker. */
+function runLinks(job: Pick<JobRecord, "ticketHash" | "rid">): string[] {
+  return [
+    ...(job.ticketHash ? [everywhereKeys.ticket(job.ticketHash)] : []),
+    ...(job.rid ? [everywhereKeys.run(job.rid), everywhereKeys.runBodyRead(job.rid)] : []),
+  ]
+}
+
 type Next = Omit<JobRecord, "version" | "due">
 type BodyMode = "keep" | "delete" | "require"
 
 /** What a step decides after reading the job: answer at once, or write `next` and then answer. */
 type Decision<T> =
   | { readonly answer: T }
-  | { readonly next: Next; readonly body?: BodyMode; readonly done: (written: JobRecord) => T }
+  | {
+      readonly next: Next
+      readonly body?: BodyMode
+      /** Writes made under the guards `change()` has just read, before the transition (EV-27: the start's run link). */
+      readonly before?: readonly (readonly (string | number)[])[]
+      readonly done: (written: JobRecord) => T
+    }
 
 class Busy extends Error {}
 
@@ -635,6 +656,9 @@ async function change<T>(
     const guards = ctx.erasing ? [] : await jobGuards(ctx, job)
     const decision = await step(job)
     if ("answer" in decision) return decision.answer
+    // No second record read or authority lookup for a step's own writes. No erase step has any: an erase reads no
+    // guards, and authorizedCommands refuses an empty proof.
+    if (decision.before) await authorizedCommands(ctx.store, guards, decision.before)
     const terminal = TERMINAL_STATES.has(decision.next.state)
     const due = terminal ? undefined : dueOf(decision.next)
     const written = { ...decision.next, version: job.version + 1, ...(due === undefined ? {} : { due }) } as JobRecord
@@ -666,7 +690,15 @@ async function change<T>(
         ],
       )),
     )
-    if (result === 1) return decision.done(written)
+    if (result === 1) {
+      // An Actions job's links go when it ends (EV-27). Best effort, as `audit` is: the change happened, the links'
+      // TTLs end with the body anyway, and their reader re-checks the record. A laptop job has none, so sends nothing.
+      if (terminal && !TERMINAL_STATES.has(job.state))
+        await Promise.resolve()
+          .then(() => deleteKeys(ctx.store, ...runLinks(written)))
+          .catch((error) => report("unlink", error, jid))
+      return decision.done(written)
+    }
     if (result === 0) return missing()
     if (result !== -1 && result !== -2) throw storeUnavailable()
   }
@@ -916,7 +948,12 @@ export function openSummary(ctx: Pick<JobsContext, "keys">, job: JobRecord) {
 
 export type Moved =
   | { readonly ok: true; readonly job: JobRecord }
-  | { readonly ok: false; readonly state?: JobState; readonly code: "not-found" | "wrong-state" | "no-offer-key" }
+  | {
+      readonly ok: false
+      readonly state?: JobState
+      /** `body-gone`: the job's body has ended, so it is not dispatched (EV-27), whatever its state. */
+      readonly code: "not-found" | "wrong-state" | "no-offer-key" | "body-gone"
+    }
 
 const notFound = (): Moved => ({ ok: false, code: "not-found" })
 const wrongState = (job: JobRecord): Moved => ({ ok: false, state: job.state, code: "wrong-state" })
@@ -979,7 +1016,9 @@ export async function queueJob(ctx: JobsContext, jid: string, until: number): Pr
 /**
  * Hands a job to the binder's GitHub Actions: `received` or `offered` to `dispatched`, with @vector's ticket hash
  * (R-A1), which `ticket:<hash>` maps back to the job for the start hook. A claim after this gets 409, and a job any
- * computer ever claimed is never dispatched (3.4: the laptop never hands a claimed job to Actions).
+ * computer ever claimed is never dispatched (3.4: the laptop never hands a claimed job to Actions). The ticket lives
+ * only as long as the body (EV-27), and a job whose body has ended is not dispatched: its run could never read it. That
+ * answers `body-gone`, not `wrong-state`, so a router can tell it from a lost race.
  */
 export async function dispatchJob(
   ctx: JobsContext,
@@ -990,7 +1029,10 @@ export async function dispatchJob(
   if (!JOB_ID_PATTERN.test(jid)) return notFound()
   const candidate = await readJob(ctx.store, jid)
   if (!candidate) return notFound()
-  await authorizedCommands(ctx.store, await jobGuards(ctx, candidate), [["SET", everywhereKeys.ticket(input.ticketHash), jid, "PX", KEEP_MS.ticket]])
+  if (!(ctx.now < candidate.bodyExpiresAt)) return { ok: false, state: candidate.state, code: "body-gone" }
+  await authorizedCommands(ctx.store, await jobGuards(ctx, candidate), [
+    ["SET", everywhereKeys.ticket(input.ticketHash), jid, "PX", untilBodyEnds(candidate, ctx.now, KEEP_MS.ticket)],
+  ])
   const moved = await change<Moved>(
     ctx,
     jid,
@@ -1012,7 +1054,12 @@ export async function dispatchJob(
   return moved
 }
 
-/** @vector's start hook (R-A2): the run for this ticket started, so `dispatched` becomes `running` with its run id. */
+/**
+ * @vector's start hook (R-A2): the run for this ticket started, so `dispatched` becomes `running` with its run id.
+ * The step first links the run to the job (`run:<rid>`, until the body ends, EV-27) under the guards `change()` has
+ * just read, then moves the job, as the dispatch writes its ticket before moving the job. A link left by a change that
+ * then lost is harmless: the body route re-checks the record's rid. The link adds one EVAL to a start, nothing else.
+ */
 export async function startDispatched(ctx: JobsContext, ticketHash: string, rid: string): Promise<Moved> {
   if (!TICKET_HASH_PATTERN.test(ticketHash) || !RID_PATTERN.test(rid)) return notFound()
   const jid = await getValue(ctx.store, everywhereKeys.ticket(ticketHash))
@@ -1024,6 +1071,7 @@ export async function startDispatched(ctx: JobsContext, ticketHash: string, rid:
       if (job.state !== "dispatched" || job.ticketHash !== ticketHash) return { answer: wrongState(job) }
       return {
         next: next(job, { state: "running", startedAt: ctx.now, rid }),
+        before: [["SET", everywhereKeys.run(rid), jid, "PX", untilBodyEnds(job, ctx.now, KEEP_MS.run)]],
         done: (written) => ({ ok: true, job: written }),
       }
     },
@@ -1094,6 +1142,115 @@ export async function clearSummary(ctx: JobsContext, jid: string): Promise<boole
     (job) =>
       job.summaryEnc ? { next: withoutKeys(next(job, {}), "summaryEnc"), done: () => true } : { answer: false },
     () => false,
+  )
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The body by reference (R-A4, EV-27): what an Actions run reads, once
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Hands a run its job's sealed body once, fenced like a transition: only while the record still starts with the
+ * version and state it was read with, and only while the body exists, it sets the run's body-read marker (NX) for as
+ * long as the body has left in Redis's own clock (at most ARGV[3]) and answers the body. KEYS: job, body, the run's
+ * marker. ARGV: expected version, expected state, the marker's longest TTL. Answers {1, body}, {0} (no record), {-1}
+ * (someone changed it first), {-2} (the body is gone) or {-3} (this run already read it).
+ */
+export const READ_BODY_ONCE_SCRIPT =
+  luaKeyTypes(["string", "string", "string"]) +
+  [
+    "local raw = redis.call('GET', KEYS[1])",
+    "if not raw then return {0} end",
+    'local version, state = string.match(raw, \'^{"version":(%d+),"state":"([a-z]+)"\')',
+    "if version ~= ARGV[1] or state ~= ARGV[2] then return {-1} end",
+    "local body = redis.call('GET', KEYS[2])",
+    "if not body then return {-2} end",
+    "local ttl = redis.call('PTTL', KEYS[2])",
+    "if ttl < 1 or ttl > tonumber(ARGV[3]) then ttl = tonumber(ARGV[3]) end",
+    "if not redis.call('SET', KEYS[3], '1', 'NX', 'PX', ttl) then return {-3} end",
+    "return {1, body}",
+  ].join(" ")
+
+/** What an Actions run reads (R-A4): the requester's words, the untrusted context and the platform it came from. */
+export type RunBody = {
+  readonly task: string
+  readonly context: readonly UntrustedItem[]
+  /** The outside marker: the platform id (6.6). */
+  readonly outside: PlatformId
+}
+
+export type RunBodyVerdict =
+  | { readonly ok: true; readonly body: RunBody }
+  | { readonly ok: false; readonly status: 404; readonly code: "NOT_FOUND" }
+  | { readonly ok: false; readonly status: 410; readonly code: "EVERYWHERE_BODY_GONE" }
+
+/** What a run's verified `vrt_` token says (the repository id is decimal), and whether a platform is still on. */
+export type RunBodyRequest = {
+  readonly jid: string
+  readonly account: string
+  readonly rid: string
+  readonly repository: string
+  readonly platformOn: (platform: PlatformId) => boolean
+}
+
+const RUN_NOT_FOUND = { ok: false, status: 404, code: "NOT_FOUND" } as const
+const BODY_GONE = { ok: false, status: 410, code: "EVERYWHERE_BODY_GONE" } as const
+
+/**
+ * An Actions run reads its job's body by reference (3.6, R-A4, VE-30): `input` is what its verified `vrt_` token
+ * says (the account, the rid and the repository id, decimal), plus whether a platform is still on (`platformOn` of
+ * the route's config). Only the run that `run:<rid>` links to this job gets it, only while that job is a running
+ * Actions job of that account, of that repository, from a platform that is still on (not GitHub, whose laptop reads
+ * the thread itself) and on a private repository (E11), and only once (410 after): the read and its marker are one
+ * fenced EVAL under the job's authority. Every other caller gets the same 404, with the read left unspent, and the
+ * link is checked before the record is read, so a run that is not this job's reads none of it. The label is never
+ * answered.
+ */
+export async function readRunBody(ctx: JobsContext, input: RunBodyRequest): Promise<RunBodyVerdict> {
+  if (!JOB_ID_PATTERN.test(input.jid) || !RID_PATTERN.test(input.rid)) return RUN_NOT_FOUND
+  if ((await getValue(ctx.store, everywhereKeys.run(input.rid))) !== input.jid) return RUN_NOT_FOUND
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    const job = await readJob(ctx.store, input.jid)
+    if (!job || !linkedRun(job, input)) return RUN_NOT_FOUND
+    if (!(ctx.now < job.bodyExpiresAt)) return BODY_GONE
+    const answer = await authorizedScript(
+      ctx.store,
+      await jobGuards(ctx, job),
+      READ_BODY_ONCE_SCRIPT,
+      [everywhereKeys.job(job.jid), everywhereKeys.jobBody(job.jid), everywhereKeys.runBodyRead(input.rid)],
+      [job.version, job.state, KEEP_MS.bodyRead],
+    )
+    if (!Array.isArray(answer)) throw storeUnavailable()
+    const code = storeInteger(answer[0])
+    if (code === -1) continue
+    if (code === 0) return RUN_NOT_FOUND
+    if (code === -2 || code === -3) return BODY_GONE
+    if (code !== 1 || typeof answer[1] !== "string") throw storeUnavailable()
+    // The read is spent: a body that does not open is damage, answered 503, never a second read.
+    const opened = openJson(ctx.keys, answer[1], bodyContext(job.jid), decodeBody)
+    if (!opened.ok) throw storeUnavailable()
+    return {
+      ok: true,
+      body: {
+        task: opened.value.task,
+        context: opened.value.context.map((item) => ({ from: item.from, text: item.text })),
+        outside: job.platform,
+      },
+    }
+  }
+  throw new Busy()
+}
+
+function linkedRun(job: JobRecord, input: RunBodyRequest) {
+  return (
+    sponsored(job, input.account) &&
+    job.route === "actions" &&
+    job.rid === input.rid &&
+    job.state === "running" &&
+    String(job.repository.id) === input.repository &&
+    !job.repository.shared &&
+    job.platform !== "github" &&
+    input.platformOn(job.platform)
   )
 }
 
@@ -1630,7 +1787,10 @@ export async function offerWaiting(ctx: JobsContext, account: string): Promise<{
 // Erasing (E13): the jobs half of erase.ts
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** Cancels every live job on an installation and erases their bodies. */
+/**
+ * Cancels every live job on an installation and erases their bodies and Actions links. A job that already ended has
+ * left this index, so its links are reached only by account erase and by their TTL, which ends with the body.
+ */
 export async function eraseInstallationJobs(ctx: JobsContext, installation: string): Promise<number> {
   ctx = { ...ctx, erasing: true }
   const key = everywhereKeys.installationJobs(installation)
@@ -1646,8 +1806,10 @@ export async function eraseInstallationJobs(ctx: JobsContext, installation: stri
       await deleteKeys(ctx.store, everywhereKeys.job(jid))
       await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
     }
-    // A job that is gone or already ended may still hold a body: erase it all the same.
-    await deleteKeys(ctx.store, everywhereKeys.jobBody(jid))
+    // A job that is gone or already ended may still hold a body, and an Actions job may still hold links that its
+    // end-of-job delete missed: erase them all the same.
+    const job = await readJob(ctx.store, jid).catch(() => undefined)
+    await deleteKeys(ctx.store, everywhereKeys.jobBody(jid), ...(job ? runLinks(job) : []))
   }
   await deleteKeys(ctx.store, key)
   return cancelled
@@ -1655,7 +1817,7 @@ export async function eraseInstallationJobs(ctx: JobsContext, installation: stri
 
 /**
  * Erases everything the jobs module keeps for an account being deleted: its live jobs are cancelled, then every job
- * record and body of its last 30 days, its history and the readiness its last computer sent.
+ * record and body of its last 30 days with its Actions links, its history and the readiness its last computer sent.
  */
 export async function eraseAccountJobs(ctx: JobsContext, account: string): Promise<void> {
   ctx = { ...ctx, erasing: true }
@@ -1672,7 +1834,7 @@ export async function eraseAccountJobs(ctx: JobsContext, account: string): Promi
   for (const jid of members(await ctx.store(["ZRANGE", history, 0, -1]))) {
     const job = await readJob(ctx.store, jid).catch(() => undefined)
     if (job && job.sponsor !== owner) continue
-    await deleteKeys(ctx.store, everywhereKeys.job(jid), everywhereKeys.jobBody(jid))
+    await deleteKeys(ctx.store, everywhereKeys.job(jid), everywhereKeys.jobBody(jid), ...(job ? runLinks(job) : []))
     await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
     await ctx.store(["ZREM", everywhereKeys.jobsPosts(), jid])
   }

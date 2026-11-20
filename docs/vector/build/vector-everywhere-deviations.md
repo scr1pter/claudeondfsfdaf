@@ -3264,8 +3264,10 @@ VECTOR_EVERYWHERE_ENABLED stays off by default throughout.
 
 - **The pull request in production** (R-A3's second half). @vector's publish phase must report the PR it opened. Today it holds no run token and settles nothing, so that needs @vector's design: a run token in the publish job, or another reporting route. Otherwise EV-30 finds the PR itself, for example from the run's branch. Until then the settle listener hears no prUrl.
 - **R-A4 needs a further ledger change.** RESERVE deletes the ticket and keeps only its hash on the live run, so nothing durable says that a run's ticket carried a job id.
+  *2026-11-20 annotation (EV-27):* for the server half, the link replaces that ledger change: `startDispatched` writes `run:<rid> → jid` from the start event's ticket hash, and only a 200 from GET /api/everywhere/jobs/<jid>/body proves that a run belongs to an everywhere job. EV-28 must never decide from the prompt line alone. A lost start event is still open (see "2026-11-20, EV-27", Left open).
 - **EV-30's reconciliation.** Before its 900 s rule fails a job, EV-30 must look for a live run of the sponsor's account whose ticketHash matches, and link it. This also covers the concurrent-mint interleaving in (d), whose run starts without a start event. liveRun returns ticketHash for a known rid, but no exported reader lists an account's live runs with their ticket hashes, so EV-30 needs one (a ledger reader, for the lead). A run past the longest-run limit with no settle call is still settled from listCloudRuns (§3.6).
 - **EV-30's listener contract.** Registered listeners must finish inside their notify's 5 s budget and be idempotent: when the budget is spent waitUntil is released, and Vercel may freeze a half-done store write. Each gets the budget's AbortSignal; a settle listener after a slow record read may have only about 2 s.
+  *2026-11-20 annotation (EV-27):* the start listener's `startDispatched` now also writes the run's link. It makes one record read and one authority read (`jobGuards`), as before, and one EVAL more than a start without the link: the ticket GET, the record GET, the authority reads, the link's EVAL and the transition's EVAL. A link written before a frozen transition is harmless, because the body route re-checks the record's rid (see "2026-11-20, EV-27", review round one).
 - **A reported pull request is checked before it is posted.** `prUrl` is reported by whoever holds the run token, which is the agent phase, model-driven code. The only check here is that it names a pull request of the run's own repository, so a prompt-injected run could name another pull request there. Nothing consumes it today, and the link stays inside the same repository. Before EV-30 posts it to a shared place (E6, E17), it confirms with the installation token it already holds that the pull request's head branch belongs to this run, or drops the link.
 - **Restrict jobId** to slack, linear and jira when R-C8/R-A8 lands.
 - **R-A5, R-A6, R-A9**, and the `registerOpsRunStarter` mismatch that R-A3's spec line mentions: not addressed here.
@@ -3481,3 +3483,226 @@ Four findings, none blocking. Code: one type-level change and one comment line i
 - **For the lead to forward to @vector:** vector-at-mention-spec 2.5 (the binding shape gains `workflowMode`), 2.7 bind (the best-effort contents read at the verified SHA, which never fails a bind; the one extra GitHub request per App-verified bind; and that this read can add up to 10 s to a bind when GitHub stalls, under `api()`'s shared timeout, (b)) and the rollback hazard in (h). If @vector wants a shorter timeout for this read, it is a per-call option on `api()` in its own file.
 - **A systematic read failure shows only downstream (review round two, finding 4).** The best-effort read counts nothing, so a lost contents permission or a changed answer shape would record no mode on every bind, silently. EV-30's tests and VE-50's GitHub acceptance check that a known codium binding has `workflowMode: "codium"` stored (spec §8 VE-30 note).
 - **The commit gate.** The precondition is met (the lead's ruling of 2026-11-20 under "Commit precondition"). What remains: one package commit whose body says a client's mode is "refused (400)", never "ignored"; the push; and the vector-at-mention.yml and typecheck.yml dispatches on everywhere-finish (progress receipt).
+
+## 2026-11-20, EV-27: the job body route (R-A4, server half)
+
+Spec §11 R-A4; §3.6 (no Actions route until R-A4; Correlation); §3.13 (the store keys); §8 VE-30 ("the body route answers only a `vrt_` token whose run is linked to that job, once per run"); §5 E4, E11. Base: HEAD `5b040d39` (EV-26), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` and origin/main `8e34d05e` are ancestors, so nothing was merged. Preconditions: EV-25 `7a806f91` and the review-fixes commits `53e98294`, `268bc877`, `e417c44d`, `d7e4aa54`, `ce91a261` and FIT-4 `f251ac2c` are ancestors. No engine, shell, sandbox or worktree code is touched, so v2-spawn-review.md does not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+### What changed
+
+- **New api/everywhere/jobs/[jid]/body.ts** (98 lines): `GET /api/everywhere/jobs/<jid>/body` with `Authorization: Bearer vrt_…`. It exports `config` (`bodyParser: false`), `BodyRouteDeps`, `createJobBodyRoute(deps)` and the default handler. The handler lives in the route file, as api/vault/snapshots/[id].ts's does ((o)). In order: the method (405); the flag and the data key (404 `EVERYWHERE_OFF` before the token or the store); `requireRunToken(request, { allowAfterDeadline: false })` (401); the `everywhere` switch, where `stop` or an unreadable switch answers 404 `EVERYWHERE_OFF` and `no-new` passes; then `readRunBody` with the token's `sub`, `rid` and `repo`, and `platformOn` of the route's config (the config is the local `everywhere`, not `config`, which is the exported Vercel config). Busy answers 503 `EVERYWHERE_BUSY` with retry-after 2, and `EVERYWHERE_AUTHORITY_CHANGED` answers the same 404 as every other refusal. The account authority defaults to `codiumAccountAuthority` (`../../../_lib/everywhere/adapters/account.js`, inside the everywhere zone).
+- **api/_lib/everywhere/keys.ts:**
+  - `RUN_ID` (:77-81), the jobs module's rid rule. It has no colon, so `run:<rid>` and `run:<rid>:body-read` can never be one key;
+  - `everywhereKeys.run(rid)` and `everywhereKeys.runBodyRead(rid)` (:206-212). `run`'s comment says it is the body route's correlation only, which a settle must never use to find a job;
+  - `KEEP_MS.ticket` goes from one day to `TIMING.bodyTtlMs`, with new `run` and `bodyRead` at the same value (:42-48).
+- **api/_lib/everywhere/jobs.ts:**
+  - the header says an Actions job's links end with its body and are deleted, best effort, when it ends (:92-94);
+  - `untilBodyEnds` and `runLinks` (:613-625);
+  - `Decision` gains an optional `before` (:630-638): writes a step makes under the guards `change()` has just read. `change()` sends them with `authorizedCommands` after the step decides and before the transition (:659-661). No erase step has any;
+  - `change()`: when a transition newly ends a job, `Promise.resolve().then(() => deleteKeys(ctx.store, ...runLinks(written))).catch(report("unlink"))` runs before `done` (:693-701). A laptop job has no links, so nothing is sent;
+  - `Moved` gains the code `body-gone` (:949-956). `dispatchJob` answers it for a job whose body has ended, before any ticket write, and caps the ticket's PX at the body's end (:1018-1021, :1032-1035);
+  - `startDispatched`'s step, only for a `dispatched` job with that ticket hash, writes `run:<rid> → jid` through `before`, capped at the body's end. So the link is written under the job's authority and before the fenced transition, on the one record read and authority read `change()` makes (:1057-1080);
+  - the new section "The body by reference" (:1148-1255): `READ_BODY_ONCE_SCRIPT` (:1159), `RunBody`, `RunBodyVerdict`, `RunBodyRequest` (:1188), `readRunBody` (:1209) and `linkedRun` (:1244), which also requires the job's platform to be on;
+  - `eraseInstallationJobs` reads each job after its cancel and deletes its body and its links (:1790-1793 comment, :1809-1812);
+  - `eraseAccountJobs`'s history loop deletes the links with the record and the body (:1820, :1837).
+- **Files outside the brief's list ((l)):**
+  - packages/web/test/lib/everywhere-store.ts: the FakeStore's TypeScript twin of `READ_BODY_ONCE_SCRIPT` (:12-17 import, :137, :575-590);
+  - .github/workflows/vector-everywhere.yml: `api/_lib/cloud-agents-run-token.ts` added to the pull_request paths under "The helpers on main";
+  - packages/web/test/everywhere-lane.test.ts: the same path in `helpers`.
+- **New packages/web/test/everywhere-body-api.test.ts:** 27 cases (24 local, 3 real-Redis). See "The cases".
+- api/_lib/cloud-agents-run-token.ts is imported, not edited. No generated file, flag, env var, switch, dependency or lockfile changes. The route is the hosted API, not the engine's HttpApi, so nothing is regenerated. VECTOR_EVERYWHERE_ENABLED stays off.
+
+### Decisions
+
+- **(a) `requireRunToken`, not `verifyRunToken`.** Both are exported from api/_lib/cloud-agents-run-token.ts. `requireRunToken` is the module's documented path for "our service endpoints" with a `Bearer vrt_` header. It runs the same checks: the signature, the claims, `now < dl` (with `allowAfterDeadline: false`), the live run's jti, the binding's account and generation, and revocation. It also reads the header and returns `repo`, so the route copies neither the header rule nor the rid grammar. If the lead wants `verifyRunToken` literally, the route parses the header itself and takes the repository from the rid's first number.
+- **(b) The link is Vector everywhere's own key.** `startDispatched` writes `run:<rid> → jid` from the start event's ticket hash (EV-25's start listener, which EV-30 registers). That answers EV-25's Left open "R-A4 needs a further ledger change" for the server half only: only a 200 from this route proves that a run belongs to an everywhere job. The `vej_…` in the dispatch prompt is untrusted input, so EV-28 must never decide from the prompt line alone ((b) is the annotation on EV-25's Left open).
+- **(c) The ticket and the link end with the body.** The brief says their TTLs are no longer than the body's, so spec §3.13's one-day `ticket:<hash>` row changes. Each write is capped at the job's own `bodyExpiresAt`. A start that arrives after the body ended finds no ticket, so the job stays `dispatched` and the 900 s rule fails it as not started. Its run could not have read the body anyway. The schema's TIMING.dispatchStartMs comment is unchanged.
+- **(d) The marker (critique, taken with a refinement).**
+  - It is per rid. The only place it is set is inside the fenced EVAL that answers the body, and only while the body still exists.
+  - Its PX is the body's own remaining PTTL, read in Redis's clock in the same script and capped at `KEEP_MS.bodyRead`. So the marker lives exactly as long as the body it guards.
+  - The critique asked for `untilBodyEnds(job, now, KEEP_MS.bodyRead)` on the server's clock. That cap could, by the skew between the server and Redis clocks, let the marker expire a few milliseconds before the body. In that window the body is still in Redis while the server still sees time left, so a second read could succeed. Reading the body's PTTL inside the script closes that window, and it meets the critique's point that no new key outlives the body. In the FakeStore the two forms agree exactly (K1).
+  - M18 is now "the marker is uncapped", for both the Lua (R2) and the twin (K1).
+- **(e) Answers.**
+  - **200** `{task, context, outside}`.
+  - **410 `EVERYWHERE_BODY_GONE`:** this run already read the body; or the body is gone; or the server's clock has reached `bodyExpiresAt`.
+  - **404 `NOT_FOUND`:** every other refusal, identical to a missing job's 404, and none spends the read. That includes another account's job, another run's token, an unlinked or stray-linked rid, another repository's run, a GitHub job, a public repository's job, a record not on the Actions route, a job no longer running, a job whose platform is no longer listed in VECTOR_EVERYWHERE_PLATFORMS (review round one), a closed account and a removed platform link (authority changed).
+  - **401:** from the token module (`RUN_TOKEN_INVALID`, or `MODEL_PLAN_RUN_EXPIRED` past the deadline or for a settled run).
+  - **404 `EVERYWHERE_OFF`:** while the flag or the data key is off, answered before the token; under `stop` or an unreadable switch, after the token. Reading the switch is a call to Codium, and an unauthenticated caller should not cause one.
+  - **405** for any method but GET.
+  - **503:** `EVERYWHERE_BUSY` (retry-after 2) after eight lost fences; `PERSISTENT_STORE_UNAVAILABLE` for a store failure, a failed token check or a body that does not open.
+- **(f) `outside` is the platform id** (spec §6.6: the outside-marker values are the platform ids). No label, kind, repository, sponsor, reply reference, ticket, rid or lease is answered. EV-28's framing needs `kind` and `repository` (Left open).
+- **(g) The end-of-job delete is best effort**, not atomic with TRANSITION_SCRIPT: one `DEL` after the committed transition, whose failure logs a fixed `unlink` line with the jid and never turns a committed change into an error (as `audit` does). The reader re-checks the record, the TTLs end with the body, and account erase is the backstop. It covers cancel, the sweep's failures and EV-30's future Actions settle, which all go through `change()`.
+- **(h) The body is not deleted at the read:** Slack's progress post reads it (api/_lib/everywhere/slack/adapter.ts:211). It still ends with the job or at 2 hours.
+- **(i) A body that does not open answers 503, and the read stays spent** (critique, taken). That would be damage, and a second chance would make the read not once-only. With a lost 200 answer this means one run can never read its job's body. So EV-28 must settle the run at once with a failed outcome on any answer other than 200, so EV-30's settle listener ends the job promptly rather than after 135 minutes (Left open).
+- **(j) Body reads are not audited:** E16's list has no such event.
+- **(k) `startDispatched` is not made idempotent.** A repeated start for a job already `running` with the same rid answers `wrong-state` and does not rewrite the link. EV-30 decides (Left open).
+- **(l) Three files outside the brief's list.**
+  - The FakeStore twin: every package that added a script did the same, and a script the fake does not know is an error.
+  - The workflow path line: the lane test's computed `serverImports` check fails without it, because the route imports api/_lib/cloud-agents-run-token.ts. FIT-4 (review-fixes) has landed, so this is one added path.
+  - The lane test's `helpers` line (EV-09 precedent).
+- **(m) The order of checks.** The link (`run:<rid>` must hold this jid) is checked before any read of the record, so a caller whose run is not this job's reads nothing of it. Then the record: the sponsor is the token's account, the route is `actions`, the record's rid is the token's, the state is `running`, the repository id is the token's `repo`, the repository is not shared (E11), the platform is not GitHub, and the platform is still on (`platformOn`, review round one). Then the server's clock against `bodyExpiresAt`. Then the fenced EVAL under `jobGuards`, which checks the account-closed mark, the deletion tombstone and the platform installation and link revisions. A version that changed under the read (`-1`) reads again, up to eight times.
+- **(n) A job whose body has ended is never dispatched** (critique, taken in its second form). `dispatchJob` answers `body-gone` before any ticket write (review round one: it was `wrong-state`, which a router could not tell from a lost race), so no Actions run is started, on the sponsor's @vector hours, that could only get 404 or 410. A minimum body life for the Actions route is the router's choice (Left open).
+- **(o) Where the handler lives.** It is in the route file, not in jobs-api.ts, so the desktop jobs routes' bundles do not gain the run token module's import graph (cloud-agents-entitlement.ts, codium-cloud-agents.ts, codium-provisioners.ts). It stays within the brief's files.
+- **(p) The switch.** Reading a body is work on a job already taken, so `no-new` lets it through (`admits(state, "running")`), and `stop` refuses it. That matches the jobs routes.
+- **(q) Logging.** The body, its context and the requester's label are never logged. Only fixed lines with a rid (the token module's `failClosed`) or a jid (`report`) are. B12 checks every console line of a run of the route's paths.
+
+### Critique of the plan (2026-11-20)
+
+All fourteen points were taken; (d) with a refinement, explained there.
+
+1. **A fresh Node import of the route** (major). Taken, before the commit, not deferred. A scratch probe (/tmp/vector-v2/everywhere/ev27/node-probe/probe.ts, a copy of test/api-module-loading.test.ts's `writeNodeTree` and `nodeProbe`) compiles the route's 109 modules one file each. It imports the route in fresh Node 22 ESM processes in five orders: first; after cloud-agents-run-token.ts; after model-plan-caller.ts; after both; and before both. With the flag and the store variables left out and `fetch` forbidden, the route's default handler then answers 404 `{error: {code: "EVERYWHERE_OFF"}}` with no I/O, and the model-plan caller still refuses a forged `vrt_` token with MODEL_PLAN_RUN_EXPIRED. All five pass. A copy that expects 200 fails all five, so the probe can fail. **For the lead:** add `api/everywhere/jobs/[jid]/body.ts` to test/api-module-loading.test.ts's second test's `entries`. That file is outside this brief.
+2. **Installation erase** (major). Taken. B7d is a live, linked Actions job whose cancel's own `DEL` is made to fail during the erase; the delete after the cancel removes the ticket, the link and the marker (M15). B7e shows that links left on an already ended job are not reached by installation erase, because the job left `livejobs:<installation>` when it ended. They are reached only by account erase (B7c) and by their TTL, which ends with the body. jobs.ts's doc comment says so.
+3. **Settle has no account** (major). Taken: Left open, the handoff and the VE-30 note say it precisely.
+4. **A lost start event** (major). Taken: a decision for the lead in Left open, with the concrete option.
+5. **B3's third sub-case** (minor). Taken. "No record read" is asserted only for the same account's other run and Bob's own run. For a planted link tying Bob's run to A's job, and for Bob's token naming A's own run, B3 asserts one GET of A's record, nothing written, no script run and no marker.
+6. **The marker's TTL** (minor). Taken with a refinement ((d)).
+7. **Dispatch near the body's end** (minor). Taken ((n), K1b, M27). The minimum body life is Left open.
+8. **No recovery path for a spent read** (minor). Taken ((i), Left open).
+9. **The EV-25 annotation** (minor). Taken, conditional ((b)).
+10. **FrameJob's `kind` and `repository`** (minor). Taken (Left open).
+11. **Live visibility at the read** (minor). Taken (Left open, the E11 note).
+12. **Two more files to run** (minor). Taken: everywhere-docs.test.ts and everywhere-authority.test.ts ran alone, with and without Redis. packages/web/test/everywhere-cloud-adapter.test.ts and everywhere-journey-actions.test.ts (spec §8 VE-30 and VE-33) do not exist yet.
+13. **Two wordings** (minor). Taken: (q) and the route's header, and the import path in "What changed".
+14. **The synchronous throw in `change()`, and the route check** (minor). Taken: `Promise.resolve().then(...)` around the delete, and `job.route === "actions"` in `linkedRun` (M26).
+
+### The cases
+
+packages/web/test/everywhere-body-api.test.ts (B7's cases are in the "ending and erasing" block; R1 to R3 skip without VECTOR_TEST_REDIS_URL):
+
+| Case | What it pins |
+| --- | --- |
+| K1 | `run:` and `run:…:body-read` key shapes; seven malformed rids refused `EVERYWHERE_INVALID_ID`; the three new KEEP_MS values equal `KEEP_MS.jobBody`. Dispatch at +10 min, start at +20 min and read at +30 min: the ticket's and the link's PTTL equal `bodyExpiresAt − now`, and the marker's equals the body's own (90 min). At `bodyExpiresAt` the ticket, the link, the marker and the body are gone, and the route answers 404 |
+| K1b | a job one millisecond before its body ends is dispatched with a 1 ms ticket; at its end, exactly `{ok: false, code: "body-gone", state: "received"}` and no ticket key |
+| K2 | a losing second dispatch's ticket, and a cancelled job's leftover ticket, each name the job; the start answers `wrong-state` and writes no link; the job's own ticket links the run and the record names it |
+| K3 | a start whose link write fails rejects `PERSISTENT_STORE_UNAVAILABLE` and leaves the job `dispatched` with no link; the retry links and starts with one GET of the record and one of the installation's record (one authority read) |
+| B1 (Slack, Linear) | 200 with exactly `{task, context, outside}`, context items exactly `{from, text}`, `outside` the platform; the answer holds no label, account, reply reference, `ves1.`, ticket hash, rid, jid or lease; `cache-control: no-store`; the marker is set; one script run and one token check |
+| B2 | the second and later reads, with the same token and with one minted again for the same rid: 410 with no body |
+| B3 | the same account's other run and Bob's own run: the 404 a missing job gets, no command touching A's record, nothing written. A planted link tying Bob's run to A's job, and Bob's token naming A's run: one GET of A's record, nothing written, no script. No marker for any run; A then reads 200 |
+| B4 | a dispatched job with no run started: 404, A's record never read; a stray link whose record names another rid: 404 and no script; no markers; the job's own run then reads 200 |
+| B5 | flag `false`, flag unset and no data key, each with a good token, a bad token and none: 404 `EVERYWHERE_OFF`, no store command and no token check. `stop` and an unreadable switch: 404 `EVERYWHERE_OFF` after the token check, no store command, no marker. `no-new`: 200 |
+| B6 | no header, Basic, the desktop app's `vct_` token, a token under another key and a changed payload give 401 `RUN_TOKEN_INVALID`; past the deadline gives `MODEL_PLAN_RUN_EXPIRED`, with no token check and no store command; a settled run gives `MODEL_PLAN_RUN_EXPIRED`; POST gives 405 with nothing read. No marker; the good token then reads 200 |
+| B7a | a cancel deletes the ticket, the link and the marker; the route then answers 404 |
+| B7b | 900 s without a start: the sweep fails the job and its ticket is gone |
+| B7c | a cancel whose end-of-job `DEL` fails logs exactly one fixed `unlink` line and leaves the links; account erase deletes them with the record |
+| B7d | installation erase of a live linked job whose cancel's `DEL` fails: one `unlink` line, the job `cancelled`, the ticket, link, marker and body gone |
+| B7e | an ended job's surviving links are left by installation erase and expire at the body's end |
+| B8 | 404, no script and no marker for: a public repository's job (E11), a run of repository 202 linked to a job of 101, a GitHub job, a record rewritten to the laptop route, and a job that ended while its links survived |
+| B9 | a deleted body gives 410 with no marker; the server's clock at `bodyExpiresAt` gives 410 with no script run, though the store still holds the body |
+| B10 | the everywhere account-closed mark, the account's deletion tombstone (checked inside the script) and a removed platform link each give 404 and no marker |
+| B11 | five reads at once: one 200 (the only answer with the task) and four 410 |
+| B15 | VECTOR_EVERYWHERE_PLATFORMS without `slack`: 404 `NOT_FOUND`, no script and no marker; with it back, the same token reads 200 |
+| B12 | across a 200, a 410, a 404, a 401, a failing token check (503), a body that does not open (503, the marker set, then 410) and a failed unlink: the console lines include the two fixed lines and never the task, the context, "Safari", "redirect", the label or the reply reference |
+| B13 | the default export is a function; `config` is `{api: {bodyParser: false}}` |
+| B14 | a record changed under the read once is read again and answers 200; one that changes every time answers 503 `EVERYWHERE_BUSY` with retry-after 2, no marker, and a later read gets 200 |
+| R1 (Redis) | twelve `readRunBody` calls behind a barrier on the record's GET: exactly one ok and eleven 410; the marker's PTTL is in (0, `KEEP_MS.bodyRead`] |
+| R2 (Redis) | a job made 30 minutes earlier: the ticket's and the link's real PTTL are at most the body's remaining life (plus 1 s); six route reads at once give one 200 and five 410; the marker's PTTL is at most the body's; a cancel leaves `EXISTS` 0 for the ticket, the link and the marker |
+| R3 (Redis) | a deleted body gives 410 and no marker |
+
+### Left open
+
+- **The start listener and the agent phase can race.** The start listener runs after the mint's answer, within its 5 s budget, so the agent phase can ask before its run is linked and get 404. EV-28 should retry a 404 for about 6 s, or the lead decides otherwise.
+- **A lost start event loses the job (decision for the lead).**
+  - EV-25's start event is at most once. If it is lost, the job stays `dispatched` with no rid, and this route answers 404 for the whole run. EV-30's reconciliation acts only at the 900 s mark, long after the agent phase has given up, so the job then fails with the "no start hook" help although its run did start.
+  - A concrete option: when the link is missing, the route calls @vector's exported `liveRun(claims.sub, claims.rid)`. The token's CHECK has just proven that run live, and `liveRun` returns its `ticketHash`. The route maps `ticket:<hash>` to the jid, requires it to equal the path's jid, and calls an idempotent `startDispatched` before reading.
+  - Until the lead decides, losing the start event loses the job.
+- **Settle has no account, and the link ends with the body.** (`everywhereKeys.run`'s comment now says so in code, review round one.)
+  - EV-25's settle listener receives `(rid, end, signal)` and no account, so EV-30 cannot look among `jobs:<sponsor>` without already knowing the sponsor.
+  - `run:<rid>` lives only as long as the body, at most 2 hours from intake. A run that starts at +60 min and runs 120 minutes settles at about +3 h, when no rid-to-jid key exists. The sweep would then fail the job at ACTIONS_OVERDUE_MS, and its result would never be posted.
+  - So EV-30's settle listener must do one of two things. It can get the account from @vector's run record (`runRecordKey(rid)`), which needs an exported reader and is a lead decision. Or it can keep its own settle index that holds only the jid and does not end with the body. That index is allowed, because it holds no platform text.
+- **EV-30's reconciliation** must treat a `running` job with the same rid as already linked. `startDispatched` is not idempotent ((k)).
+- **A minimum body life for the Actions route.** EV-29's and EV-30's router should refuse the Actions route unless `bodyExpiresAt − now` exceeds `TIMING.dispatchStartMs` plus the run's own start. `dispatchJob` refuses only a body that has already ended ((n)), and answers it `body-gone`, so the router can tell it from a lost race (`wrong-state`). Today's router (api/_lib/everywhere/router.ts:79-80) abandons the dispatch on any refusal, which is right for both.
+- **EV-28's recovery.** On any answer other than 200 from this route (after the 404 retry above), the agent phase settles at once with a failed outcome, so EV-30's settle listener ends the job promptly ((i)). The read is spent before the answer is delivered, on purpose, so a lost 200 or a 503 for a body that does not open leaves the job `running` until the Actions overdue sweep unless EV-28 does this. EV-28's tests must include: a 503, a 410, and a 404 that outlasts the retry each settle the run at once with a failed outcome, and no second read is made (review round one).
+- **EV-28's framing.** The answer has no `kind` or `repository`, which `FrameJob` (packages/core/src/everywhere/frame.ts:58) and `everywhereSystemInstructions` need. EV-28 passes the repository from GITHUB_REPOSITORY and a fixed kind. That is correct, because `kind` matters only for an empty task, and `decodeJob` refuses an empty task on every non-GitHub job at creation (packages/schema/src/everywhere.ts:864).
+- **Live visibility at the read (E11).** Visibility is read live only before dispatch. A repository made public between the dispatch and the read still receives the platform text, because the route can only check the record's `repository.shared` snapshot. A re-read needs the App's single-repository token, which belongs to EV-30's port. It is not built here. **For EV-30:** once the cloud-agents visibility port exists, `readRunBody` (or the route, before the EVAL) takes a live visibility read through it, where a failed read counts as public, and answers the same 404 without setting the marker. Add a B8-style case whose fake port reports public, and one whose port fails (review round one).
+- **No everywhere run can exist yet.** Until R-C8/R-A8 (owner-gated), run tokens accept only `github-*` sources and ENABLED_SOURCES reserves slack, linear and jira. Even with the flag on, production answers 404 to every caller: nothing writes `run:<rid>` until EV-30 registers the start listener, and nothing dispatches (EV-29 is not built).
+- **The documents.** Spec §3.13's ticket row and the TIMING.dispatchStartMs comment's wording are annotated, not rewritten.
+- **For the lead:**
+  - add the route to test/api-module-loading.test.ts's second test (critique 1);
+  - observed outside scope and not fixed here: the production jobs routes (`createJobsApi({events})`, jobs-api.ts:320) and account routes (`createAccountApi()`, account-api.ts:494) build `everywhereStore()` with no account authority. Once the flag is on, `accountGuards` falls to `missingAccountAuthority`, and every desktop jobs route and account route would answer 503 `EVERYWHERE_ACCOUNT_UNVERIFIED`. The new route defaults to `codiumAccountAuthority` and does not have this problem.
+
+### Mutations
+
+33 mutations, one source edit at a time, each with packages/web/test/everywhere-body-api.test.ts run alone through vector-serial (/tmp/vector-v2/everywhere/ev27/mut/: mutate.py, run.log, one junit file and log per mutation, before.sha256). Lua mutations ran against the disposable loopback Redis; the FakeStore keeps its own unmutated twin, so only R1 to R3 can see them. Twin mutations ran without Redis. Every mutation turned its named cases red, and every file was restored from its saved bytes and matched its sha256.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1L the Lua drops NX and ignores the SET's answer | jobs.ts (Redis) | 23/2 | R1, R2 |
+| M1T the twin drops NX | everywhere-store.ts | 19/3 | B2, B11, B12 |
+| M2L the Lua sets the marker before the body check | jobs.ts (Redis) | 24/1 | R3 |
+| M2T the twin sets the marker before the body check | everywhere-store.ts | 21/1 | B9 |
+| M3 the link check dropped | jobs.ts | 19/3 | K1, B3, B4 |
+| M4 the sponsor check dropped | jobs.ts | 21/1 | B3 |
+| M5 the record's rid check dropped | jobs.ts | 21/1 | B4 |
+| M6 the running-state check dropped | jobs.ts | 21/1 | B8 |
+| M7 the repository check dropped | jobs.ts | 21/1 | B8 |
+| M8 the public-repository check dropped | jobs.ts | 21/1 | B8 |
+| M9 the GitHub check dropped | jobs.ts | 21/1 | B8 |
+| M10 the server-clock body-end check dropped | jobs.ts | 21/1 | B9 |
+| M11 a gone body (-2) answers 404 | jobs.ts | 21/1 | B9 |
+| M12 `runScript` replaces `authorizedScript` | jobs.ts | 21/1 | B10 |
+| M13 no end-of-job DEL in `change()` | jobs.ts | 17/5 | B7a, B7b, B7c, B7d, B12 |
+| M14 account erase leaves the links | jobs.ts | 21/1 | B7c |
+| M15 installation erase leaves the links | jobs.ts | 21/1 | B7d |
+| M16 the ticket TTL uncapped | jobs.ts | 20/2 | K1, K1b |
+| M17 the link TTL uncapped | jobs.ts | 21/1 | K1 |
+| M18L the Lua marker TTL uncapped | jobs.ts (Redis) | 24/1 | R2 |
+| M18T the twin marker TTL uncapped | everywhere-store.ts | 21/1 | K1 |
+| M19 the answer adds the label | jobs.ts | 20/2 | B1 (both rows) |
+| M20 the flag check after the token check | body.ts | 21/1 | B5 |
+| M21 the switch ignored | body.ts | 21/1 | B5 |
+| M22 `allowAfterDeadline: true` | body.ts | 21/1 | B6 |
+| M23 authority changed answered 409 | body.ts | 21/1 | B10 |
+| M24 `startDispatched` links without checking the candidate (superseded in review round one: the link moved into the start step; see R-M24, R-M32, R-M33, R-M36) | jobs.ts | 21/1 | K2 |
+| M26 the Actions-route check dropped | jobs.ts | 21/1 | B8 |
+| M27 `dispatchJob` dispatches a job whose body ended | jobs.ts | 21/1 | K1b |
+| M28 a changed record (-1) answers 404 | jobs.ts | 21/1 | B14 |
+| M29 a body that does not open answers 410 | jobs.ts | 21/1 | B12 |
+| M30 the run id rule admits a colon | keys.ts | 21/1 | K1 |
+| M31 the end-of-job DEL's failure not caught | jobs.ts | 17/5 | B7c, B7d, B7e, B8, B12 |
+
+The plan's M25 ("the Lua script drops NX") is M1L. M1 and M2 are split into their Lua and twin halves.
+
+### Review round one (2026-11-20)
+
+Ten findings, none blocking. Six are taken in code. Four are taken in the lane documents only; one of those, the module-loading test, stays with the lead. Built uncommitted.
+
+| Finding | Taken |
+| --- | --- |
+| body.ts: the handler's `const config` shadows the exported Vercel `config` | Renamed to `everywhere` |
+| the test's `Answer.body` is `any` | Typed as `AnswerBody \| undefined` (optional `task`, `context`, `outside` and `error`), narrowed with `?.` and `?? {}` where it is read |
+| `startDispatched` read the record and the authority twice (its own candidate read, then `change()`'s) on the start listener's 5 s budget | Taken in code: `Decision` carries `before`, writes made under the guards `change()` has just read, so the start makes one record read and one authority read. One EVAL more than a start without the link remains; EV-25's listener-budget note is annotated with it. K3 pins the order and the single reads |
+| the receipt says "four" Lua mutations | It was three (M1L, M2L, M18L): corrected in the progress receipt |
+| `dispatchJob`'s body-ended refusal answers `wrong-state`, which a router cannot tell from a lost race | Taken in code: the new `Moved` code `body-gone`, with the job's state. Nothing reads Moved's codes exhaustively; the router (router.ts:79-80) abandons on any refusal. K1b pins the exact answer |
+| E11 at read time uses only the dispatch-time `repository.shared` snapshot | Not built here: no visibility port exists yet. Left open now gives EV-30 the concrete step (a live read through the port, a failed read counts as public, the same 404 and no marker) and its two cases |
+| the route does not check that the job's platform is still listed | Taken in code: `readRunBody` takes `platformOn`, and `linkedRun` refuses a platform that is no longer on with the same 404 and no marker, so the read is not spent. B15 |
+| test/api-module-loading.test.ts's second test does not list the route | Not changed: the file is outside the brief, and the finding asks for a follow-up the lead approves. Still in "For the lead"; the scratch Node probe was re-run after these edits and passes in all five orders |
+| the read is spent before the answer is delivered | Kept, deliberately ((i)). EV-28's test list (Left open and the handoff) now names the 503, 410 and lasting-404 cases that must settle at once with a failed outcome |
+| `run:<rid>` must not be how EV-30's settle finds a job | Taken: `everywhereKeys.run`'s comment says it is the body route's correlation only. The jid-only settle index, or the run-record reader, stays EV-30's (Left open) |
+
+Mutations for the changed code, one at a time, each with everywhere-body-api.test.ts run alone without Redis (/tmp/vector-v2/everywhere/ev27/review1/mut/: mutate.py, run.log, one log per mutation, before.sha256). The mutations whose text the edits changed (M9, M17, M20, M21, M24, M27) were re-run in their new form. Every one turned its named cases red, and `sha256sum -c` matched both restored files.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| R-M9 the GitHub check dropped | jobs.ts | 23/1 | B8 |
+| R-M17 the link TTL uncapped, in the start step | jobs.ts | 23/1 | K1 |
+| R-M20 the flag check after the token check | body.ts | 23/1 | B5 |
+| R-M21 the switch ignored | body.ts | 23/1 | B5 |
+| R-M24 the start step does not check the ticket hash | jobs.ts | 23/1 | K2 |
+| R-M27 `dispatchJob` dispatches a job whose body ended | jobs.ts | 23/1 | K1b |
+| R-M32 `change()` ignores a step's `before` | jobs.ts | 4/20 | K1, K2, K3, B1 to B6, B7a, B7c to B7e, B8, B9, B11, B12, B14, B15 |
+| R-M33 a failed `before` write is swallowed and the job moves | jobs.ts | 23/1 | K3 |
+| R-M34 the platform-listed check dropped | jobs.ts | 23/1 | B15 |
+| R-M35 a body-ended dispatch answers `wrong-state` | jobs.ts | 23/1 | K1b |
+| R-M36 the start reads the record and the authority twice again | jobs.ts | 23/1 | K3 |
+
+The receipts are in vector-everywhere-progress.md, "EV-27", "Review round one".
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over the eight touched files (and api/_lib/cloud-agents-run-token.ts, which is imported) is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, brain-transport `0d18f750` and process-finish `3ec7fb14`.
+
+### Deferred verification
+
+- The real CHECK script with this route: the route's token check uses a stand-in store, and the script itself is covered by cloud-agents-run-token.test.ts.
+- vector-everywhere.yml and typecheck.yml on everywhere-finish, after the commit gate's push (R1 to R3 run there in the Valkey job).
+- Live use, after EV-28, EV-29, EV-30 and R-C8/R-A8.

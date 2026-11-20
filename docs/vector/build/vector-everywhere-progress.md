@@ -4165,3 +4165,69 @@ Checks (each through vector-serial, one file at a time with `--timeout 30000`, f
 | `git diff --check` | clean |
 
 The commit is `feat(cloud-agents): record the workflow mode on repository bindings`; its body says a client's mode is "refused (400)", never "ignored". The gate then pushes it to everywhere-finish and dispatches vector-at-mention.yml, typecheck.yml, vector-everywhere.yml, vector-hosted-ci.yml and vector-codium.yml on that ref; their run ids and results go in the next receipt.
+
+## EV-27: the job body route (R-A4, server half) (2026-11-20)
+
+Spec §11 R-A4; §3.6; §8 VE-30; §5 E4, E11. Deviations log: "2026-11-20, EV-27".
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `5b040d39` (EV-26) equals origin/everywhere-finish; origin/release-finish `67ec3a60` and origin/main `8e34d05e` are ancestors, so nothing was merged (re-checked after the build: nothing had moved). Preconditions: EV-25 `7a806f91`, review-fixes `53e98294`, `268bc877`, `e417c44d`, `d7e4aa54`, `ce91a261` and FIT-4 `f251ac2c` are ancestors. Built uncommitted.
+
+**Files** (line numbers in the deviations entry, "What changed"):
+
+- new api/everywhere/jobs/[jid]/body.ts;
+- api/_lib/everywhere/jobs.ts, api/_lib/everywhere/keys.ts;
+- outside the brief's list: packages/web/test/lib/everywhere-store.ts (the script's twin), .github/workflows/vector-everywhere.yml (one path), packages/web/test/everywhere-lane.test.ts (one helper line);
+- new packages/web/test/everywhere-body-api.test.ts (25 cases: 22 local, 3 real-Redis);
+- the lane documents: the deviations entry and a dated annotation on EV-25's Left open; this receipt; spec notes (§3.6 Correlation, §3.13, E4, E11, §8 VE-30, §11 R-A1 and R-A4); the handoff's status bullet, an annotation in the EV-25 block and an EV-27 loose-ends block.
+
+api/_lib/cloud-agents-run-token.ts is imported, not edited. No generated file, flag, env var, switch, dependency or lockfile changes; nothing is regenerated (the route is the hosted API, not the engine's HttpApi).
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named; "Redis" is a disposable loopback Redis 7.0.15 on port 6397, free before start (a `/dev/tcp` probe was refused), run with `--save '' --appendonly no` under /tmp/vector-v2/everywhere/ev27/redis, `dbsize` 0 after every run, shut down with `redis-cli -p 6397 shutdown nosave` and its folder removed afterwards; logs in /tmp/vector-v2/everywhere/ev27/runs/):
+
+| Check | Result |
+| --- | --- |
+| baselines at HEAD, before any edit (pass/fail, expects): everywhere-jobs, -jobs-api, -keys, -erase, -sweep, -lane, -authority, -docs | 43/0 (9 skip, 329), 22/0 (226), 15/0 (126), 11/0 (152), 11/0 (99), 13/0 (158), 20/0 (7 skip, 225), 17/0 (215) |
+| web everywhere-body-api.test.ts | 22 pass, 5 skip (R1 to R3 and two hooks), 0 fail, 312 expects; Redis: 25 pass, 0 fail, 338 expects |
+| the neighbours, each alone, no Redis: everywhere-jobs, -jobs-api, -keys, -erase, -sweep, -router, -journey-laptop, -journey-laptop-tracker, -pages, -github, -slack-events, -linear-webhook, -jira-a2a, -intake, -audit, -lane, -account-adapter, -docs, -authority | 43/0 (9 skip, 329), 22/0 (226), 15/0 (126), 11/0 (152), 11/0 (99), 9/0 (37), 5/0 (2 skip, 211), 5/0 (4 skip, 345), 65/0 (1 skip, 1,943), 17/0 (137), 12/0 (94), 15/0 (4 skip, 146), 20/0 (3 skip, 251), 8/0 (68), 11/0 (3 skip, 127), 13/0 (158), 4/0 (24), 17/0 (215), 20/0 (7 skip, 225): every count equals its baseline |
+| the same files with Redis | 50/0 (393), 22/0 (226), 15/0 (126), 11/0 (152), 11/0 (99), 9/0 (37), 7/0 (329), 9/0 (666), 66/0 (1,953), 17/0 (137), 12/0 (94), 17/0 (163), 21/0 (310), 8/0 (68), 12/0 (131), 13/0 (158), 4/0 (24), 17/0 (215), 25/0 (331) |
+| after the last edits (prettier's wrap, R3): body-api, jobs, keys, erase, lane, each alone, no Redis | 22/0 (5 skip, 312), 43/0 (9 skip, 329), 15/0 (126), 11/0 (152), 13/0 (158) |
+| packages/cloud src/workflow-compliance.test.ts | 58 pass, 0 fail, 1,104 expects |
+| root test/api-module-loading.test.ts, no-personal-paths.test.ts, no-project-wording.test.ts (from test/) | 3/0 (22), 1/0, 2/0. The first test's relative-import scan covers the new route; its second test does not list it (for the lead), so: |
+| fresh Node ESM import probe (/tmp/vector-v2/everywhere/ev27/node-probe/: probe.ts, result.txt) | 109 modules compiled one file each; the route imported first, after cloud-agents-run-token.ts, after model-plan-caller.ts, after both, and before both: all five exit 0 with empty stderr, the handler answers 404 `EVERYWHERE_OFF` with no I/O and the caller still refuses a forged `vrt_` token. A copy expecting 200 fails all five |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 305 files, 0 errors, 0 warnings, 450 hints (EV-26: 304 files, 450 hints; the new file adds none) |
+| prettier `--check` on the route, the new test, the lane test and the workflow | clean. jobs.ts, keys.ts and everywhere-store.ts were not prettier-clean at HEAD (479, 27 and 183 differing lines); a script over `git diff -U0` and prettier's output shows that none of prettier's changes falls on a line this package changed |
+| `git diff HEAD...origin/<lane>` over the touched files for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify, brain-transport and process-finish | empty for every lane |
+| after the lane document edits: web everywhere-lane.test.ts, everywhere-docs.test.ts; root no-personal-paths and no-project-wording (from test/); `git diff --check` and a trailing-space search of the two new files | 13/0 (158), 17/0 (215), 1/0, 2/0; clean; none |
+
+**Mutations** (/tmp/vector-v2/everywhere/ev27/mut/: mutate.py, run.log, before.sha256, one junit file and log per mutation): 33 mutations, one at a time, each with everywhere-body-api.test.ts run alone; the three Lua ones (M1L, M2L, M18L) against the Redis. All 33 turned their named cases red, and `sha256sum -c` matched every restored file. The table is in the deviations entry.
+
+**Not run here:** the commit, the push gate's full turbo typecheck, and the vector-everywhere.yml and typecheck.yml dispatches, which belong to the commit gate. packages/web/test/everywhere-cloud-adapter.test.ts and everywhere-journey-actions.test.ts (spec §8 VE-30, VE-33) do not exist yet.
+
+**For the commit gate:**
+- One package commit, staging explicit paths: `feat(everywhere): serve an Actions run its job body once by run token`. The body names the three files outside the brief's list (the FakeStore twin, the workflow path, the lane test's helper) and says that nothing was regenerated. Vector identity and the trailers.
+- Then `git fetch origin everywhere-finish`, the full `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2`, and `git push origin HEAD:everywhere-finish`.
+- Dispatch vector-everywhere.yml (Done-when: green, with R1 to R3 in its Valkey job) and typecheck.yml on everywhere-finish. Record the run ids here and in the handoff.
+- For the lead: add `api/everywhere/jobs/[jid]/body.ts` to test/api-module-loading.test.ts's second test.
+
+### Review round one (2026-11-20)
+
+Ten findings, none blocking; the dispositions are in the deviations entry, "Review round one". Built uncommitted.
+
+**Files:** api/everywhere/jobs/[jid]/body.ts (the local `everywhere`; `platformOn` passed to `readRunBody`); api/_lib/everywhere/jobs.ts (`Decision.before` and its write in `change()`; `startDispatched` links in its step; `Moved`'s `body-gone` and `dispatchJob`'s use of it; `RunBodyRequest` and the platform check in `linkedRun`); api/_lib/everywhere/keys.ts (the comment on `everywhereKeys.run`); packages/web/test/everywhere-body-api.test.ts (`AnswerBody` in place of `any`; K1b's exact answer; new K3 and B15; R1 and R3 pass `platformOn`; now 27 cases: 24 local, 3 real-Redis); the lane documents (the deviations entry's edits, its review section and an annotation on EV-25's listener contract; this receipt and the "three" above; the handoff; the spec's VE-30 and E11 notes).
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from packages/web unless named; "Redis" is a disposable loopback Redis on port 6397, free before start, run with `--save '' --appendonly no` under /tmp/vector-v2/everywhere/ev27/review1/redis, `dbsize` 0 after every run, shut down with `redis-cli -p 6397 shutdown nosave` and its folder removed; logs in /tmp/vector-v2/everywhere/ev27/review1/):
+
+| Check | Result |
+| --- | --- |
+| web everywhere-body-api.test.ts | 24 pass, 5 skip, 0 fail, 327 expects; Redis: 27 pass, 0 fail, 353 expects |
+| the neighbours, each alone, no Redis: everywhere-jobs, -jobs-api, -keys, -erase, -sweep, -router, -lane, -docs, -authority, -journey-laptop, -pages | 43/0 (9 skip, 329), 22/0 (226), 15/0 (126), 11/0 (152), 11/0 (99), 9/0 (37), 13/0 (158), 17/0 (215), 20/0 (7 skip, 225), 5/0 (2 skip, 211), 65/0 (1 skip, 1,943): every count equals its baseline |
+| with Redis: everywhere-body-api, -jobs, -jobs-api, -erase, -sweep, -router, -authority | 27/0 (353), 50/0 (393), 22/0 (226), 11/0 (152), 11/0 (99), 9/0 (37), 25/0 (331) |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 305 files, 0 errors, 0 warnings, 451 hints. The one new hint is K3's `await expect(...).rejects` (ts 80007), which other everywhere tests' `rejects` lines also give |
+| root test/api-module-loading.test.ts (from test/) | 3/0 (22) |
+| the scratch fresh Node ESM import probe, re-run with TMPDIR under /tmp/vector-v2/everywhere/ev27/review1/node-tmp (node-probe.txt) | 109 modules; all five orders exit 0 |
+| prettier `--check` on the route and the test | clean, after prettier's one wrap in B15. For jobs.ts and keys.ts, none of prettier's changes falls on a line this package changed |
+| mutations (/tmp/vector-v2/everywhere/ev27/review1/mut/) | 11, one at a time, test file alone without Redis: all red; `sha256sum -c` matched jobs.ts and body.ts |
+
+**Not run here:** the commit, the push gate's full turbo typecheck, and the vector-everywhere.yml and typecheck.yml dispatches, which still belong to the commit gate.
