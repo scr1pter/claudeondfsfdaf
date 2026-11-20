@@ -1370,7 +1370,7 @@ describe("isolated task merge and discard", () => {
     // The root sees the task among its descendants but is not its parent; a caller naming another session is refused
     // too, even when the session it names is the parent: only TaskManager refuses that one, as TaskIsolation checks
     // `by` alone. Nothing is asked, written or discarded. Every call names the same settled, changed child: a refused
-    // discard that went through would turn the next merge into a state error and the last check below from "changed".
+    // discard that went through would fail its own `forbidden` check, and the state check below would fail too.
     for (const [sessionID, actor] of [[root.id, root.id], [lead.id, root.id], [root.id, lead.id]] as const) {
       const merge = yield* manager.merge({ sessionID, taskID: kept.id, by: by(asked, actor) }).pipe(Effect.flip)
       expect(merge.code).toBe("forbidden")
