@@ -241,3 +241,31 @@ test("Linux properties and dev e2e run real pinned Electron and actual Node with
   )!
   expect(record(actual.env).VECTOR_COMPUTER_E2E_FAKE_HELPER).toBe("${{ runner.temp }}/computer-fake-helper.mjs")
 })
+
+test("Windows warms the protected PowerShell 7 compiler right before the unchanged real overlay proof", () => {
+  const current = steps("windows-build")
+  const index = (name: string) => current.findIndex((step) => step.name === name)
+  const warm = index("Warm the protected PowerShell 7 compiler")
+  const smoke = index("Run real Electron overlay properties and controller lifecycle")
+  expect(warm).toBe(index("Install the exact pinned Electron runtime") + 1)
+  expect(smoke).toBe(warm + 1)
+  const step = current[warm]!
+  expect(step.run).toBe("bun --no-env-file ./scripts/computer-overlay-smoke-region-warm.ts")
+  expect(step["timeout-minutes"]).toBe(2)
+  expect(step["continue-on-error"]).toBeUndefined()
+  expect(step.shell).toBeUndefined()
+  expect(step.env).toBeUndefined()
+  expect(step.if).toBe(current[smoke]!.if)
+  expect(source.match(/computer-overlay-smoke-region-warm\.ts/g)).toHaveLength(1)
+
+  // The proof steps themselves are unchanged: the same commands and limits decide the region and Stop results.
+  expect(lines(current[smoke]!.run)).toEqual([
+    "bun --no-env-file ./scripts/computer-overlay-smoke.ts",
+    'if ($LASTEXITCODE -ne 0) { throw "The actual Electron overlay properties or controller lifecycle failed." }',
+  ])
+  expect(current[smoke]!["timeout-minutes"]).toBe(3)
+  expect(current[smoke]!["continue-on-error"]).toBeUndefined()
+  const isolated = current.find((step) => step.name === "Run actual isolated medium-token Windows overlay Stop")!
+  expect(isolated["timeout-minutes"]).toBe(3)
+  expect(String(isolated.run)).not.toContain("region-warm")
+})

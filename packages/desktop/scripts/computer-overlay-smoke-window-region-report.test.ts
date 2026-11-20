@@ -87,3 +87,52 @@ test("the aggregate receipt rejects arbitrary private data, invalid counts and c
     expect(() => parseComputerSmokeWindowRegionSummary(line({ ...value, ...patch }))).toThrow()
   expect(() => parseComputerSmokeWindowRegionSummary(line(value) + " ".repeat(513))).toThrow()
 })
+
+test("measured phase timing is logged in a closed bounded shape and never decides the aggregate verdict", () => {
+  const timed = { ...result(), elapsed: { compile: 210, input: 1800, parent: 1810, region: 1815, output: 1830 } }
+  const value = computerSmokeWindowRegionSummary(expected, 2, timed)
+  expect(value).toEqual({
+    protocol: 1,
+    windows: 2,
+    owned: 2,
+    simple: 2,
+    matched: 2,
+    painted: 2,
+    ok: true,
+    elapsed: timed.elapsed,
+  })
+  expect(parseComputerSmokeWindowRegionSummary(line(value))).toEqual(value)
+  const deadline = computerSmokeWindowRegionSummary(expected, 2, {
+    ok: false,
+    reason: "deadline_compile",
+    elapsed: { compile: 140 },
+  })
+  expect(deadline).toEqual({
+    protocol: 1,
+    windows: 2,
+    owned: 0,
+    simple: 0,
+    matched: 0,
+    painted: 2,
+    ok: false,
+    reason: "deadline_compile",
+    elapsed: { compile: 140 },
+  })
+  expect(parseComputerSmokeWindowRegionSummary(line(deadline))).toEqual(deadline)
+  expect(parseComputerSmokeWindowRegionSummary(line({ ...deadline, elapsed: {} })).elapsed).toEqual({})
+  for (const elapsed of [
+    { compile: 15_001 },
+    { compile: -1 },
+    { compile: 0.5 },
+    { compile: "1" },
+    { input: 10 },
+    { compile: 20, input: 10 },
+    { compile: 1, PRIVATE: 2 },
+    { compile: 1, input: 2, parent: 3, region: 4, output: 5, extra: 6 },
+    [1],
+    null,
+    "PRIVATE",
+  ])
+    expect(() => parseComputerSmokeWindowRegionSummary(line({ ...deadline, elapsed }))).toThrow()
+  expect(() => parseComputerSmokeWindowRegionSummary(line({ ...value, ok: false }))).toThrow()
+})

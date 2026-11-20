@@ -815,6 +815,117 @@ lock) goes to the lead as its own package, and the cap is not changed silently. 
 since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows exe hash changes for that reason alone. PR #51
 needs no code change: once this merges, merge main into `policy-acl-timeout` to re-run it.
 
+## 2026-11-20: Windows region observer at deadline_compile on a cold PowerShell 7 compiler
+
+Branch `region-compile-budget` from `15f3ba77`. Changes: `packages/desktop/scripts/computer-overlay-smoke-window-region.ts`
+(a bounded compiler warm-up and Node-side phase timing), `computer-overlay-smoke-window-region-report.ts` (an optional
+closed `elapsed` field), a new entry `scripts/computer-overlay-smoke-region-warm.ts`, one new windows-build step in
+`.github/workflows/computer-helper.yml`, and their Linux tests. `REGION_SCRIPT`, the 15 s observer limit, the 120 s
+parent limit, the command path and flags, stdin, `maxBytes`, the receipt parser and every native check are unchanged.
+
+Failure. main's push run 44791067930 of test.yml (head `c776fb60`) failed only in computer-helper / windows-build job
+136479415862, step 15 "Run real Electron overlay properties and controller lifecycle":
+`computer-smoke-window-region {"windows":4,"owned":0,"simple":0,"matched":0,"painted":4,"ok":false,"reason":"deadline_compile"}`,
+then overlay-bounds and computer-smoke-failure assertion_failed. Both follow from the region line, because on Windows
+`boundsMatch` is the region proof.
+
+Cause (inferred, not measured). Consistent with a cold first Add-Type; launch versus compile is not yet measured, and
+contention with the first Electron launch is not excluded. Step 15 is the job's first Roslyn use: the only Add-Type in
+`.github` and `packages/desktop/scripts` is the observer's (`computer-overlay-smoke-window-region.ts:306` at
+`15f3ba77`), and it runs while PowerShell 7's compiler and reference assemblies are still cold on a fresh VM. The
+observer arms one 15 s timer at spawn; it fired after the `compile` marker and before `input`, which is exactly
+`deadline_compile`.
+
+Evidence (job log timestamps):
+
+| Job                         | Step 15 properties to region line (cold) | Step 18 observer (new pwsh, same source) | Note                              |
+| --------------------------- | ---------------------------------------- | ---------------------------------------- | --------------------------------- |
+| 136479415862 (this failure) | 15.58 s, deadline_compile                | not reached                              | step 9 446.5 s, controller 5.48 s |
+| 136368889023                | 14.60 s, ok 4/4/4/4                      | 1.41 s                                   | passed, at least 0.4 s left (1)   |
+| 136322885617                | 10.91 s, ok 4/4/4/4                      | 1.15 s                                   | step 9 469.6 s                    |
+
+(1) Step 9 561.8 s. The 14.60 s span also covers work done before the observer spawns (about 0.58 s in the failing job,
+whose observer was capped at 15 s), so this observer finished in at most 14.60 s and had at least 0.4 s left, probably
+about 0.9 s. Step 9 figures come from job log timestamps; the job API's whole-second step times agree (470 s, 562 s).
+
+- Step 18 starts a new pwsh process and compiles the same embedded source again, and finishes the whole observer in
+  1.15-1.41 s in the two tabled jobs. That shows only that the first observer span in a job takes 10.9-15.6 s and a
+  later one 1.15-1.41 s. It is consistent with an earlier compile in another process warming the next one (file cache and
+  assembly scans), but step 18 also runs after a second Electron launch and the native-stage build step, so these pairs
+  do not separate cold Roslyn from cold Electron or Defender contention.
+- The failing VM was not generally slow. Step 9 took 446.5 s, faster than both tabled passing jobs (469.6 s and
+  561.8 s), and the controller phase took 5.48 s against the usual 5.2-5.8 s. Today's ~1.75x slow Windows runner group
+  does not explain this job.
+- The PowerShell 5.1 warm-up in run 42125718778 (`hands-progress.md`, "Windows region compiler control") was also a
+  separate-process compile placed right before the first Electron proof, and it did not help. 5.1's Add-Type runs
+  csc.exe out of process, but under the theory that one process warms the file cache for the next, csc.exe should have
+  benefited the same way. So that result is consistent with the Electron first-launch alternative, unless 5.1 was slow
+  even when warm, which no run shows. The new `elapsed` field and the warm-up `ms` are what will decide between the
+  two.
+- Still open: the stderr phase marks were consumed and never logged, so no run shows how the 15 s splits between pwsh
+  launch and Add-Type. Launch is very likely small (every earlier step already runs under pwsh). Contention with the
+  first Electron launch's file scans in step 15 is the other candidate, which step 18 would also not pay.
+
+Change.
+
+- `warmComputerSmokeRegionCompiler()` runs the same protected `<SystemRoot drive>\Program Files\PowerShell\7\pwsh.exe`
+  with the same `-NoProfile -NonInteractive -EncodedCommand`, a separate fixed script
+  (`Add-Type -TypeDefinition 'public static class VectorRegionWarm {}' -Language CSharp`, then stdout `ok`), empty
+  stdin, and its own 60 s timer (`COMPUTER_SMOKE_REGION_WARM_TIMEOUT_MS`). It returns only `{ok, ms}` or a closed
+  reason (unsupported_platform, launch, compile, output, deadline). It never produces a region result and grants
+  nothing. Add-Type emits in memory, so nothing compiled there survives for the observer to load; the observer still
+  compiles exactly its embedded source inside the unchanged 15 s.
+- New windows-build step "Warm the protected PowerShell 7 compiler", right after "Install the exact pinned Electron
+  runtime" and right before step 15, `timeout-minutes: 2`, no `continue-on-error`. It prints
+  `computer-smoke-region-warm {"protocol":1,"ok":...,"ms":N}` and exits 0 on a warm-up failure or deadline, since the
+  real observer still decides.
+- The runner (now exported as `runComputerSmokeRegionBridge`) records, in Node, the whole milliseconds from spawn to the
+  first arrival of each valid marker, capped at `timeoutMs` (the parsers need values within the limit), so a logged
+  value of exactly 15000 means at or after the limit, not an arrival measured at 15000. The logged
+  `computer-smoke-window-region` summary gains an optional `elapsed` object keyed by the phases reached (`compile`,
+  `input`, `parent`, `region`, `output`): an ordered prefix with nondecreasing integers in 0..15000. `elapsed.compile` is the launch time and `elapsed.input -
+elapsed.compile` the Add-Type time. The script stays byte-identical. Timing is diagnostic only: a malformed value is
+  dropped by the observer and rejected by the summary parser, and it never enters the pass condition.
+- Rejected: a separate 60 s compile budget with the 15 s starting at `input`. That lets the child run up to 75 s
+  before a verdict and lets the proof's own compile take 60 s, which lengthens the proof's deadline. The chosen design
+  also gives the first cold compile 60 s, but only in the warm-up step: there the cold cost, which has nothing to do
+  with the proof, is paid in a separate step that grants nothing and cannot fail the job, while the observation
+  deadline and the proof's own compile stay inside the unchanged 15 s observer limit.
+
+Validation (Linux; no PowerShell or native code runs here):
+
+- `computer-overlay-smoke-window-region.test.ts` (16 pass): timeoutMs is still 15_000 and the UTF-16LE SHA-256 of
+  `REGION_SCRIPT` equals the `15f3ba77` value `0049ef8603fe93d3f5fa48184d3100adba2d582c362165e22ab49640328baac8`;
+  the warm-up uses the identical command and flags, its decoded script is exactly the fixed source, it sends empty
+  stdin, its limit is 60_000, and its failures stay closed; `ok` output and warm-up-shaped JSON can never satisfy
+  `observeComputerSmokeWindowRegions`. The real runner is driven by local `process.execPath` children that write the
+  fixed markers (no external host): elapsed values are monotonic and at most `timeoutMs`, deadline cases carry only
+  the phases reached, and the deadline_launch, deadline_compile, deadline_input and invalid-order mappings are
+  unchanged.
+- `computer-overlay-smoke-window-region-report.test.ts` (5 pass) covers `elapsed` in the summary and rejects
+  out-of-range, fractional, non-prefix, decreasing, unknown-key and non-object values.
+- `computer-overlay-workflow.test.ts` (7 pass) pins the warm-up step's position, exact run line, `timeout-minutes: 2`,
+  its missing `continue-on-error`, and that step 15's run lines and 3 minutes and step 18's 3 minutes are unchanged.
+  `computer-workflow.test.ts` (37), `computer-overlay-smoke-source.test.ts` (19), `build-computer-overlay-smoke.test.ts`
+  (7) and `computer-overlay-smoke-report.test.ts` (51) pass unchanged.
+- Mutations, each red and then restored to its recorded sha256: the observer limit 15_000 to 60_000; dropping the
+  marker timing line; the warm-up's stdin `""` to `"{}"`; the elapsed bound `limit` to `limit * 2`; the warm-up step's
+  2 to 5 minutes; one character of `REGION_SCRIPT`.
+- `packages/desktop` `bun typecheck` passes. actionlint is not installed in this container.
+
+What Windows CI must show, on at least 3-5 computer-helper runs: the warm-up line `ok` with its `ms` (the 3-14 s cold
+cost should now show up there); step 15 `computer-smoke-window-region` ok 4/4/4/4 with `elapsed.compile` (launch)
+small, `elapsed.input - elapsed.compile` close to step 18's range (about 2 s or less), and the total well under 15 s;
+step 18 unchanged. If the instrumented runs instead show launch as the large share, or compile still slow after a
+successful warm-up, the cold-Roslyn cause is refuted; plan for the measured phase next (Electron first-launch
+contention is the next candidate). Do not widen the deadline. Moving the readback into the built native test binary
+changes what the proof is bound to and is the lead's decision. Two workflow_dispatch-only test.yml lanes still run a
+fresh-VM overlay smoke without this warm-up and can still hit the same deadline_compile: the
+`computer-helper-windows-overlay` fast lane (the same step 15 smoke) and the staged overlay diagnostic in
+`computer-helper-windows-units` (`computer-overlay-smoke.ts --native-stage`). Neither is changed here; if either is
+used for evidence, add the same fixed warm-up step there as its own reviewed change, with no `continue-on-error` and a
+bounded timeout.
+
 ## 2026-11-20: Windows engine tests running close to their 30 s budget
 
 Branch `windows-test-budgets` from `15f3ba77`. Four test files, one commit each. No product code, test deadline,
