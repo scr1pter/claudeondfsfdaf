@@ -3773,3 +3773,97 @@ While writing the refused-token case, a POST with a body refused by the account 
 | `git diff --quiet script/prune-vector-site.mjs`; `git diff --check` | clean |
 
 Committed by explicit path as `feat(web): add unreleased Vector everywhere account components`. CI dispatched on everywhere-finish after the push: vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml and typecheck.yml. vector-codium.yml is not dispatched: main is not merged into this branch yet (lane rule), and its nested call of vector-hosted-ci.yml on the same ref cancels the standalone run (EV-20's receipt). The sha and run ids go in the next receipt (a commit cannot name its own sha).
+
+## EV-23: vectordev.ai draft pages, OAuth landing, jobs and audit log (VE-42b) (2026-11-20)
+
+**Base.** `git fetch origin release-finish main everywhere-finish` and the eight other lanes: HEAD `f11330ef` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main moved from `481973c9` to `14cb9720` during the package and is 261 commits ahead; it is the lead's to merge (deviations, "2026-11-20, EV-23", header), and it changes none of this package's code paths. Precondition `d7e4aa54` (PUB-4) is an ancestor. Built uncommitted: this step leaves every change in the working tree for the lane's commit gate.
+
+**EV-22's receipts** (commit `f11330ef`, pushed to everywhere-finish; read with the GitHub tools on 2026-11-20):
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| vector-everywhere | [44714090336](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44714090336) | success |
+| vector-hosted-ci | [44714096221](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44714096221) | success |
+| vector-at-mention | [44714102624](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44714102624) | success |
+| typecheck | [44714108728](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44714108728) | success |
+
+EV-21's two runs left open in EV-22's receipt (commit `8aff3462`): vector-hosted-ci [44704123491](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44704123491) completed with success; vector-codium 44704095050 (dispatched against the lane rule, not by EV-22) ended cancelled.
+
+**Files** (line numbers in the deviations entry, "What changed"):
+
+- api/_lib/everywhere/jobs.ts (+38, -6 after review round one: `readJobHistory` and the shared `parseRecord`) and api/_lib/everywhere/account-api.ts (+154, -5 after review round one: the two routes and their helpers; not reformatted, as at HEAD)
+- api/everywhere/history.ts and api/everywhere/audit.ts (new, 5 lines each)
+- packages/web/src/components/marketing/everywhere/everywhere-model.ts (1,358 lines; 751 before), EverywhereView.tsx (684; 418 before), EverywhereAccount.tsx (52; 39 before), EverywhereLink.tsx (new, 39), everywhere.css (134; 112 before)
+- packages/web/src/drafts/everywhere.astro and packages/web/src/drafts/everywhere/link.astro (new, 16 lines each)
+- packages/web/test/everywhere-pages.test.ts (2,808 lines and 66 cases after review round one; 2,757 and 65 before it; 1,355 lines and 36 cases at EV-22)
+- lane documents: the deviations entry, this receipt, the spec's §3.12, §3.7, §6.5 (prune row), §8 (VE-42 row) and §10 (Legal and pages) notes, the handoff's three status and gate bullets, two annotations and its EV-23 Left open block, and a PUB-8 note after v2-notes/v2-complete-plan.md §4.5's table
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time with `--timeout 30000`, from the owning package (logs in /tmp/vector-v2/everywhere/ev23/):
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-pages.test.ts (vector-everywhere.yml), after the last edit | 64 pass, 1 skip (the real-Redis case), 0 fail, 1,913 expects |
+| web test/everywhere-link-api.test.ts | 13 pass, 0 fail, 85 expects |
+| web test/everywhere-install-api.test.ts | 17 pass, 0 fail, 139 expects |
+| web test/everywhere-audit.test.ts | 11 pass, 3 skip (Redis), 0 fail, 127 expects |
+| web test/everywhere-jobs.test.ts (jobs.ts changed) | 43 pass, 9 skip (Redis), 0 fail, 329 expects |
+| web test/everywhere-jobs-api.test.ts | 22 pass, 0 fail, 226 expects |
+| web test/everywhere-erase.test.ts | 11 pass, 0 fail, 152 expects |
+| web test/everywhere-slack-oauth.test.ts | 4 pass, 0 fail, 26 expects |
+| web test/everywhere-linear-oauth.test.ts | 15 pass, 0 fail, 112 expects |
+| web test/everywhere-lane.test.ts, after the lane documents | 13 pass, 0 fail, 157 expects |
+| web test/account-page.test.ts (its email scan covers src/components) | 3 pass, 0 fail, 15 expects |
+| web test/docs-hands.test.ts (reads src/drafts) | 6 pass, 0 fail, 55 expects |
+| web test/vector-mention-copy.test.ts (reads src/drafts; a web test, not a root one) | 5 pass, 0 fail, 103 expects |
+| root test/no-project-wording.test.ts, no-personal-paths.test.ts, api-module-loading.test.ts (from test/) | 2/0/16, 1/0/2 and 2/0/16 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 302 files (299 at EV-22, plus the two drafts and EverywhereLink.tsx), 0 errors, 0 warnings, 423 hints (checks/web-typecheck-2.log). The first run after the new cases found three type errors in the test file (a table's problem column, two `toEqual` arguments); fixed, the file re-run green |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| prettier `--check` on everywhere-model.ts, EverywhereView.tsx, EverywhereAccount.tsx, EverywhereLink.tsx, everywhere.css, the pages test and the two route files | clean after `--write` of the four that EV-22 kept formatted; jobs.ts and account-api.ts are not prettier-formatted at HEAD and were left as they were; the .astro files have no plugin |
+| `git diff --check`; `git diff --quiet script/prune-vector-site.mjs` | clean; unchanged |
+| `git diff HEAD...origin/<lane>` over the touched paths | see the deviations entry, Coordination |
+
+**Drafts and astro check.** astro check covers src/drafts: /tmp/vector-v2/everywhere/ev23/drafts-proof.py put `const broken: number = "not a number"` after `export const prerender = true` in drafts/everywhere.astro, ran `bun typecheck` in packages/web through vector-serial and restored the file in `finally`: exit 1, "src/drafts/everywhere.astro:10:7 - error ts(2322): Type 'string' is not assignable to type 'number'." (Result: 302 files, 1 error; drafts-proof.log), and the restored file's sha256 matched (`b8d2af0d…b10cb`). The two drafts and EverywhereLink.tsx are the three files astro check gained.
+
+**Mutations** (/tmp/vector-v2/everywhere/ev23-mut/mutate.py; results.json beside it): 35 mutations (the plan's M1 to M24 and eleven from the critique), each red on its named case, every restore matched by sha256, src/pages/everywhere.astro removed after M22, and script/prune-vector-site.mjs unchanged after M20 (`git diff --quiet`). After prettier re-indented one anchor, M19 was re-run alone and is red. Table in the deviations entry.
+
+**Not run here:** the CI dispatches and the push gate's full turbo typecheck, which belong to the commit gate; the real-Redis case (it skips locally without VECTOR_TEST_REDIS_URL and runs in vector-everywhere.yml's Valkey job).
+
+**For the commit gate:** one commit staging these paths explicitly, as `feat(web): add the unreleased Vector everywhere pages, OAuth landing, jobs and audit log`; the body names the two new read routes (off by default), that nothing is routed, that no generated file, env, flag, dependency or workflow changed, and the deferred items (the summary rule for the lead, the ended-summary erase, cancelled and directory OAuth returns, the drafts' path filter, the 2.0.0 move). Then `git fetch origin everywhere-finish`, the full turbo typecheck, a fast-forward push, and workflow_dispatch of vector-everywhere.yml (Done-when: green), typecheck.yml and vector-at-mention.yml; not vector-codium.yml.
+
+**Review round one (2026-11-20).** Ten findings, one blocking (deviations, "2026-11-20, EV-23", "Review round one"). `privateSummary` now passes the summary through `sanitizeReply` before GET history answers it, the route reads each installation once, and `readJob` shares `parseRecord`. The off case also pins POST and DELETE (405, nothing read), and one case was added (66). Checks, each through vector-serial, one file at a time with `--timeout 30000` (logs in /tmp/vector-v2/everywhere/ev23-fix/checks/):
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-pages.test.ts | 65 pass, 1 skip (the real-Redis case), 0 fail, 1,943 expects |
+| web test/everywhere-jobs.test.ts (`readJob` changed) | 43 pass, 9 skip (Redis), 0 fail, 329 expects |
+| web test/everywhere-jobs-api.test.ts | 22 pass, 0 fail, 226 expects |
+| web test/everywhere-erase.test.ts | 11 pass, 0 fail, 152 expects |
+| web test/everywhere-lane.test.ts, after the lane documents | 13 pass, 0 fail, 157 expects |
+| root test/no-project-wording.test.ts, no-personal-paths.test.ts, api-module-loading.test.ts (from test/) | 2/0/16, 1/0/2 and 2/0/16 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 302 files, 0 errors, 0 warnings, 423 hints |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| prettier `--check` on the pages test and the two route files | clean |
+| `git diff --check`; `git diff --quiet script/prune-vector-site.mjs` | clean; unchanged |
+| mutations (/tmp/vector-v2/everywhere/ev23-fix/mutate.py; M1, M5, M6, M6b and M7 re-anchored, M35 and M36 new) | all 37 red on their named cases; every restore matched by sha256 (ev23-fix/mut/results.json) |
+
+/tmp/vector-v2/everywhere/ev23-fix/probe.ts checked first that the four new summaries pass the settle decoder's code check and what `sanitizeReply` makes of each. Nothing was committed in this round.
+
+**Commit gate (2026-11-20).** `git fetch origin release-finish main everywhere-finish`: HEAD `f11330ef` still equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`; `d7e4aa54` is an ancestor. `git status` held only this package's paths. Committed by explicit path as `feat(web): add unreleased Vector everywhere draft pages` (the commit gate's title, in place of the one proposed above). Checks, each through vector-serial, one file at a time with `--timeout 30000` (logs in /tmp/vector-v2/everywhere/ev23-gate/):
+
+| Check | Result |
+| --- | --- |
+| web test/everywhere-pages.test.ts | 65 pass, 1 skip (the real-Redis case), 0 fail, 1,943 expects |
+| web test/everywhere-jobs.test.ts | 43 pass, 9 skip (Redis), 0 fail, 329 expects |
+| web test/everywhere-jobs-api.test.ts | 22 pass, 0 fail, 226 expects |
+| web test/everywhere-erase.test.ts | 11 pass, 0 fail, 152 expects |
+| web test/everywhere-audit.test.ts | 11 pass, 3 skip (Redis), 0 fail, 127 expects |
+| web test/everywhere-link-api.test.ts | 13 pass, 0 fail, 85 expects |
+| web test/everywhere-lane.test.ts, after this receipt | 13 pass, 0 fail, 157 expects |
+| root test/api-module-loading.test.ts, no-project-wording.test.ts, no-personal-paths.test.ts (from test/) | 2/0/16, 2/0/16 and 1/0/2 |
+| `bun typecheck` in packages/web (astro check) | exit 0: 302 files, 0 errors |
+| hosted API typecheck (`cd packages/engine && bun typecheck --project ../../tsconfig.json`) | exit 0 |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | exit 0: 27 of 27 tasks |
+| prettier `--check` on the four components, everywhere.css, the pages test and the two route files | clean |
+| `git diff --check`; `git diff --quiet script/prune-vector-site.mjs packages/web/astro.config.mjs`; no src/pages/everywhere* | clean; unchanged; none |
+
+CI is dispatched on everywhere-finish after the push: vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml and typecheck.yml. vector-codium.yml is not: main is not merged into this branch yet (lane rule), and its nested call of vector-hosted-ci.yml on the same ref cancels the standalone run (EV-20's receipt). The sha and run ids go in the next receipt.

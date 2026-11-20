@@ -4,11 +4,15 @@ import {
   EVERYWHERE_COPY,
   PLATFORM_NAMES,
   formatDay,
+  formatTime,
   installationLabel,
   placeLabel,
   signInPath,
   type EverywhereAccountModel,
+  type EverywhereAuditEntry,
   type EverywhereInstall,
+  type EverywhereJob,
+  type EverywhereLanding,
   type EverywhereMapping,
   type EverywhereReady,
   type EverywhereState,
@@ -17,37 +21,18 @@ import {
 /*
  * The account's Vector everywhere controls: a pure render of the model's state. Every action goes through the model,
  * which talks only to the account routes. There is no <form> anywhere, so no browser fallback can send a code in a
- * query string, and no allowlist (Q2).
+ * query string, and no allowlist (Q2). Text a platform or a computer wrote (a summary) is rendered as text only.
  */
 
 type Props = { readonly state: EverywhereState; readonly model: EverywhereAccountModel; readonly pathname: string }
 
-export function EverywhereAccountView(props: Props) {
+export function EverywhereAccountView(props: Props & { readonly focus?: string | undefined }) {
   const state = props.state
-  if (state.kind === "loading") return <p className="everywhere-status">{EVERYWHERE_COPY.loading}</p>
-  if (state.kind === "signed-out")
-    return (
-      <section className="acct-section">
-        <p>{EVERYWHERE_COPY.signIn}</p>
-        <a className="acct-button" href={signInPath(props.pathname)}>
-          {EVERYWHERE_COPY.signInButton}
-        </a>
-      </section>
-    )
-  if (state.kind === "session-expired")
-    return (
-      <section className="acct-section">
-        <p>{EVERYWHERE_COPY.expired}</p>
-        <button className="acct-button" type="button" onClick={() => void props.model.signInAgain(props.pathname)}>
-          {EVERYWHERE_COPY.expiredButton}
-        </button>
-      </section>
-    )
-  if (state.kind === "accounts-unavailable")
-    return <p className="account-error">{EVERYWHERE_COPY.accountsUnavailable}</p>
-  if (state.kind === "off") return <p className="everywhere-status">{EVERYWHERE_COPY.off}</p>
+  if (state.kind !== "ready")
+    return <Gate state={state} model={props.model} pathname={props.pathname} signIn={EVERYWHERE_COPY.signIn} />
   return (
     <div className="everywhere">
+      <LandingNotice landing={state.landing} />
       {state.notice && (
         <p className="auth-notice" role="status">
           {EVERYWHERE_COPY.notice[state.notice]}
@@ -70,9 +55,290 @@ export function EverywhereAccountView(props: Props) {
           <InstallsSection state={state} model={props.model} />
           <LinksSection state={state} model={props.model} />
           <MappingsSection state={state} model={props.model} />
+          <JobsSection state={state} focus={props.focus} />
+          <AuditSection state={state} />
         </>
       )}
     </div>
+  )
+}
+
+/** vectordev.ai/everywhere/link: the Linear sign-in that links (3.8). It finishes on /everywhere, the OAuth landing. */
+export function EverywhereLinkView(props: Props) {
+  const state = props.state
+  const copy = EVERYWHERE_COPY.linkPage
+  if (state.kind !== "ready")
+    return <Gate state={state} model={props.model} pathname={props.pathname} signIn={copy.signIn} />
+  const linked = state.links.filter((link) => link.platform === "linear")
+  return (
+    <div className="everywhere">
+      {state.problem && (
+        <p className="account-error" role="alert">
+          {EVERYWHERE_COPY.problem[state.problem]}
+        </p>
+      )}
+      <section className="acct-section">
+        <h2>{copy.heading}</h2>
+        <p>{copy.intro}</p>
+        <p className="acct-fine">{copy.connectedFirst}</p>
+        <p className="acct-fine">{copy.back}</p>
+        <div className="acct-actions">
+          <button
+            className="acct-button"
+            type="button"
+            disabled={state.busy}
+            onClick={() => void props.model.startLink()}
+          >
+            {copy.button}
+          </button>
+        </div>
+      </section>
+      {state.loaded && (
+        <section className="acct-section">
+          <h2>{copy.listHeading}</h2>
+          {linked.length === 0 && <p>{copy.empty}</p>}
+          {linked.length > 0 && (
+            <ul className="everywhere-list">
+              {linked.map((link) => (
+                <li key={`${link.installation} ${link.userId}`}>
+                  <p className="everywhere-row">
+                    <span>{installationLabel(link.installation)}</span>{" "}
+                    <span>
+                      user <code>{link.userId}</code>
+                    </span>
+                  </p>
+                  <p className="acct-fine">Linked {formatDay(link.linkedAt)}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
+
+/** Every state before the lists: loading, the sign-in prompts, accounts unavailable and off, with a landing's word. */
+function Gate(props: {
+  readonly state: Exclude<EverywhereState, { readonly kind: "ready" }>
+  readonly model: EverywhereAccountModel
+  readonly pathname: string
+  readonly signIn: string
+}) {
+  const state = props.state
+  // A return a 401 kept is lost if the page goes to sign in again, so the page says so.
+  const held = state.kind === "session-expired" && state.landing?.kind === "finishing"
+  const landing = held ? undefined : state.landing
+  const note = (
+    <LandingNotice landing={landing?.kind === "finishing" || landing?.kind === "failed" ? landing : undefined} />
+  )
+  if (state.kind === "loading")
+    return (
+      <>
+        {note}
+        <p className="everywhere-status">{EVERYWHERE_COPY.loading}</p>
+      </>
+    )
+  if (state.kind === "signed-out")
+    return (
+      <section className="acct-section">
+        {note}
+        <p>{props.signIn}</p>
+        <a className="acct-button" href={signInPath(props.pathname)}>
+          {EVERYWHERE_COPY.signInButton}
+        </a>
+      </section>
+    )
+  if (state.kind === "session-expired")
+    return (
+      <section className="acct-section">
+        {note}
+        <p>{EVERYWHERE_COPY.expired}</p>
+        {held && <p className="acct-fine">{EVERYWHERE_COPY.landing.held}</p>}
+        <button className="acct-button" type="button" onClick={() => void props.model.signInAgain(props.pathname)}>
+          {EVERYWHERE_COPY.expiredButton}
+        </button>
+      </section>
+    )
+  if (state.kind === "accounts-unavailable")
+    return (
+      <>
+        {note}
+        <p className="account-error">{EVERYWHERE_COPY.accountsUnavailable}</p>
+      </>
+    )
+  return (
+    <>
+      {note}
+      <p className="everywhere-status">{EVERYWHERE_COPY.off}</p>
+    </>
+  )
+}
+
+function LandingNotice(props: { readonly landing?: EverywhereLanding | undefined }) {
+  const landing = props.landing
+  if (!landing) return null
+  if (landing.kind === "failed")
+    return (
+      <p className="account-error" role="alert">
+        {EVERYWHERE_COPY.landing.problem[landing.problem]}
+      </p>
+    )
+  return (
+    <p className="auth-notice" role="status">
+      {landingText(landing)}
+    </p>
+  )
+}
+
+function landingText(landing: Exclude<EverywhereLanding, { readonly kind: "failed" }>) {
+  const copy = EVERYWHERE_COPY.landing
+  if (landing.kind === "finishing") return copy.finishing(landing.platform)
+  const label = installationLabel(landing.installation)
+  if (landing.kind === "linked")
+    return landing.already ? copy.already(landing.userId, label) : copy.linked(landing.userId, label, landing.hint)
+  if (landing.change === "renewed") return copy.renewed(label)
+  if (landing.change === "connector-change") return copy.replaced(label)
+  return copy.installed(label)
+}
+
+function JobsSection(props: { readonly state: EverywhereReady; readonly focus?: string | undefined }) {
+  const state = props.state
+  const unread = state.activityUnread.includes("jobs")
+  if (state.jobs === undefined && !unread) return null
+  const jobs = state.jobs ?? []
+  const focus = props.focus
+  return (
+    <section className="acct-section" id="jobs">
+      <h2>{EVERYWHERE_COPY.jobsHeading}</h2>
+      {unread && <p className="acct-fine">{EVERYWHERE_COPY.jobsUnread}</p>}
+      {!unread && <p className="acct-fine">{EVERYWHERE_COPY.jobsNote}</p>}
+      {!unread && focus !== undefined && !jobs.some((job) => job.jid === focus) && (
+        <p className="acct-fine">{EVERYWHERE_COPY.focusMissing}</p>
+      )}
+      {!unread && jobs.length === 0 && <p>{EVERYWHERE_COPY.jobsEmpty}</p>}
+      {jobs.length > 0 && (
+        <ul className="everywhere-list">
+          {jobs.map((job) => (
+            <li
+              key={job.jid}
+              id={`job-${job.jid}`}
+              className={job.jid === focus ? "everywhere-job everywhere-focus" : "everywhere-job"}
+              {...(job.jid === focus ? { "aria-current": "true" as const } : {})}
+            >
+              <JobRow job={job} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {state.jobsCapped && <p className="acct-fine">{EVERYWHERE_COPY.jobsCapped}</p>}
+    </section>
+  )
+}
+
+function JobRow(props: { readonly job: EverywhereJob }) {
+  const job = props.job
+  const copy = EVERYWHERE_COPY
+  const status = [
+    copy.jobState[job.state],
+    ...(job.route ? [copy.jobRoute[job.route]] : []),
+    ...(job.outcome ? [copy.jobOutcome[job.outcome]] : []),
+  ]
+  return (
+    <>
+      <p className="everywhere-row">
+        <strong>{PLATFORM_NAMES[job.platform]}</strong> <code>{job.repository}</code>
+        {job.issue && <span>{job.issue}</span>}
+      </p>
+      <p className="acct-fine">{status.join(" · ")}</p>
+      <p className="acct-fine">
+        {installationLabel(job.installation)} · <code>{job.jid}</code>
+      </p>
+      <p className="acct-fine">
+        {copy.received} <time dateTime={new Date(job.receivedAt).toISOString()}>{formatTime(job.receivedAt)}</time>
+        {job.endedAt !== undefined && (
+          <>
+            {" "}
+            · {copy.endedAt} <time dateTime={new Date(job.endedAt).toISOString()}>{formatTime(job.endedAt)}</time>
+          </>
+        )}
+      </p>
+      {job.code && (
+        <p className="acct-fine">
+          {copy.reason} <code>{job.code}</code>
+        </p>
+      )}
+      {job.ending && (
+        <p className="acct-fine">
+          {copy.ending} <code>{job.ending}</code>
+        </p>
+      )}
+      {job.prUrl && (
+        <p className="acct-fine">
+          <a href={job.prUrl} rel="noopener noreferrer">
+            {copy.pullRequest}
+          </a>
+        </p>
+      )}
+      {!job.shared && job.summary !== undefined && <p className="everywhere-summary">{job.summary}</p>}
+      {job.shared && <p className="acct-fine">{copy.sharedSummary}</p>}
+    </>
+  )
+}
+
+function AuditSection(props: { readonly state: EverywhereReady }) {
+  const state = props.state
+  const unread = state.activityUnread.includes("audit")
+  if (state.audit === undefined && !unread) return null
+  const entries = state.audit ?? []
+  return (
+    <section className="acct-section" id="audit">
+      <h2>{EVERYWHERE_COPY.auditHeading}</h2>
+      {unread && <p className="acct-fine">{EVERYWHERE_COPY.auditUnread}</p>}
+      {!unread && <p className="acct-fine">{EVERYWHERE_COPY.auditNote}</p>}
+      {!unread && entries.length === 0 && <p>{EVERYWHERE_COPY.auditEmpty}</p>}
+      {entries.length > 0 && (
+        <ul className="everywhere-list everywhere-audit">
+          {entries.map((entry) => (
+            <li key={entry.id}>
+              <AuditRow entry={entry} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function AuditRow(props: { readonly entry: EverywhereAuditEntry }) {
+  const entry = props.entry
+  return (
+    <>
+      <p className="everywhere-row">
+        <time dateTime={new Date(entry.at).toISOString()}>{formatTime(entry.at)}</time>{" "}
+        <strong>{EVERYWHERE_COPY.auditEvent[entry.event]}</strong>
+        {entry.byOther && <span>{EVERYWHERE_COPY.byOther}</span>}
+      </p>
+      {entry.installation && <p className="acct-fine">{installationLabel(entry.installation)}</p>}
+      {!entry.installation && entry.platform && <p className="acct-fine">{PLATFORM_NAMES[entry.platform]}</p>}
+      {(entry.jid || entry.code || entry.userId) && (
+        <p className="acct-fine">
+          {entry.jid && <code>{entry.jid}</code>}
+          {entry.code && (
+            <span>
+              {" "}
+              {EVERYWHERE_COPY.code} <code>{entry.code}</code>
+            </span>
+          )}
+          {entry.userId && (
+            <span>
+              {" "}
+              user <code>{entry.userId}</code>
+            </span>
+          )}
+        </p>
+      )}
+    </>
   )
 }
 

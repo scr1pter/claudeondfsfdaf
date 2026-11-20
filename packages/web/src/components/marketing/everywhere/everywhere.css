@@ -110,3 +110,25 @@
 .everywhere-confirm .acct-actions {
   margin-top: 10px;
 }
+.everywhere-job {
+  scroll-margin-top: 24px;
+}
+.everywhere-focus {
+  border-left: 2px solid #bd9aff;
+  padding-left: 12px !important;
+}
+.everywhere-summary {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.everywhere-audit > li {
+  padding: 10px 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.everywhere-audit time,
+.everywhere-job time {
+  font-variant-numeric: tabular-nums;
+}

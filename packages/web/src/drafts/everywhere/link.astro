@@ -1,0 +1,16 @@
+---
+// Unreleased draft: Astro routes only src/pages, so this page is not built, linked or listed in the sitemap.
+// At 2.0.0 the owner moves it to src/pages/everywhere/link.astro, with src/drafts/everywhere.astro and the
+// "everywhere" keep line in script/prune-vector-site.mjs, in the same change (spec §6.5). Linear's return from this
+// sign-in lands on /everywhere, which finishes the link.
+import { EverywhereLink } from "../../components/marketing/everywhere/EverywhereLink"
+import MarketingLayout from "../../components/marketing/MarketingLayout.astro"
+
+export const prerender = true
+---
+
+<MarketingLayout title="Link Linear · Vector everywhere" description="Link your Linear account to Vector everywhere by signing in to Linear." noindex>
+  <div class="account-environment">
+    <EverywhereLink client:only="react" />
+  </div>
+</MarketingLayout>

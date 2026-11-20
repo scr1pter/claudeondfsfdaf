@@ -242,6 +242,8 @@ Tiers: **A** = must land before the PR is ready (security or privacy, off-by-def
 | PUB-8: no `/everywhere` landing page | **Remains.** The Slack and Linear OAuth callbacks redirect to `/everywhere#…`, which does not exist and is not in the prune keep list. Harmless while `VECTOR_EVERYWHERE_ENABLED` is off (the callbacks answer 404 first). **C**: add the page and its keep-list entry before enabling any platform; part of the Everywhere activation checklist. |
 | PUB-2: `computer` and `connect` in the published `config.json` | **Interim.** Their descriptions say they are not available in Vector 1.99.112 or earlier, but the published schema still offers both keys and `workflow.json` still carries the `Connect.*` definitions. Pending the lead's decision: keep the interim, or omit the flagged sections from the public schema build until the release that ships them. Either way, remove the version sentence (also in `core/src/v1/config/config.ts`) when Hands or Connect ships. |
 
+*2026-11-20 note (EV-23, everywhere-finish), on PUB-8:* the landing exists as an unreleased draft, packages/web/src/drafts/everywhere.astro (with drafts/everywhere/link.astro), unrouted and noindex. It takes the fragment, posts `{code, state}` once with the bearer token, and shows the result. Moving both drafts to src/pages with the `"everywhere"` keep line is the owner's activation step at 2.0.0 (vector-everywhere-spec.md §6.5), before any platform is enabled.
+
 ---
 
 ## 5. Order of work (write steps)

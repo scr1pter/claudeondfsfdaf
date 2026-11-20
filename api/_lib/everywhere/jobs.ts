@@ -384,15 +384,47 @@ export async function readJob(store: Store, jid: string): Promise<JobRecord | un
   if (!JOB_ID_PATTERN.test(jid)) return undefined
   const raw = await getValue(store, everywhereKeys.job(jid))
   if (raw === undefined) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    throw new UndecodableJob()
-  }
-  const job = decodeJobRecord(parsed)
+  const job = decodeJobRecord(parseRecord(raw))
   if (!job) throw new UndecodableJob()
   return job
+}
+
+/**
+ * The account's jobs of the last 30 days, newest first, at most `limit`, for its job list on vectordev.ai (3.12). Only
+ * jobs it sponsors (E18): an id in its history whose record names another sponsor is left out, as is a record older
+ * than 30 days. Unlike `readJob`, a record that does not decode (damage, or a newer deployment's field after a
+ * rollback) is counted in `skipped` and left out, so one such record never hides the rest; a store that cannot answer
+ * still throws (503). `capped` says the 30 days hold more jobs than the list.
+ */
+export async function readJobHistory(store: Store, account: string, options: { readonly now: number; readonly limit: number }) {
+  if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 500) throw new RangeError("Pick 1 to 500.")
+  const owner = account.toLowerCase()
+  const history = everywhereKeys.jobHistory(owner)
+  const cutoff = options.now - KEEP_MS.job
+  const jids = members(await store(["ZREVRANGE", history, 0, options.limit - 1]))
+  // History scores are receipt times, so a member past the limit within the 30 days means the list was cut.
+  const beyond = members(await store(["ZRANGEBYSCORE", history, cutoff, "+inf", "LIMIT", options.limit, 1]))
+  const raw = jids.length ? await store(["MGET", ...jids.map((jid) => everywhereKeys.job(jid))]) : []
+  if (!Array.isArray(raw) || raw.length !== jids.length) throw storeUnavailable()
+  const read = raw.map((value: unknown, index) => {
+    if (value === null || value === undefined) return "gone" as const
+    if (typeof value !== "string") throw storeUnavailable()
+    const job = decodeJobRecord(parseRecord(value))
+    return job && job.jid === jids[index] ? job : ("undecodable" as const)
+  })
+  const jobs = read.filter(
+    (job): job is JobRecord => typeof job === "object" && job.sponsor === owner && job.receivedAt >= cutoff,
+  )
+  return { jobs, capped: beyond.length > 0, skipped: read.filter((job) => job === "undecodable").length }
+}
+
+/** A stored record's JSON, or undefined when it does not parse: `readJob` and `readJobHistory` share it. */
+function parseRecord(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return undefined
+  }
 }
 
 /** A step that failed for one job only: logged with its fixed name, the job id and an error code, never a message. */

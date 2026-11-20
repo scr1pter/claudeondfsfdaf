@@ -2,19 +2,22 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react"
 import { vectorAccountClient } from "../../../lib/account-client"
 import { EverywhereAccountView } from "./EverywhereView"
-import { connectAccountSession, createEverywhereAccountModel } from "./everywhere-model"
+import { connectAccountSession, createEverywhereAccountModel, focusJob, takeOAuthReturn } from "./everywhere-model"
 import "../account/account.css"
 import "./everywhere.css"
 
 /*
- * The root a vectordev.ai/everywhere page mounts with `client:only="react"` (EV-23). It follows the browser's Vector
- * sign-in and never reads the URL: the account client has `detectSessionInUrl: false`, so an OAuth landing's fragment
- * is never taken for a sign-in. A link code is forgotten when the page is hidden for good.
+ * The root vectordev.ai/everywhere mounts with `client:only="react"` (the draft in src/drafts/everywhere.astro). It is
+ * also the OAuth landing (PUB-8): the Slack and Linear callbacks redirect here with `#platform=…&code=…&state=…`, which
+ * is taken out of the address bar before anything else and posted once to oauth-finish with the bearer token. It
+ * follows the browser's Vector sign-in, which never reads the URL: the account client has `detectSessionInUrl: false`,
+ * so the fragment is never taken for a sign-in. A link code is forgotten when the page is hidden for good.
  */
 export function EverywhereAccount() {
   const model = useMemo(
     () =>
       createEverywhereAccountModel({
+        activity: true,
         signOut: () => vectorAccountClient().then((client) => client.auth.signOut({ scope: "local" })),
       }),
     [],
@@ -22,6 +25,9 @@ export function EverywhereAccount() {
   const state = useSyncExternalStore(model.subscribe, model.state, model.state)
 
   useEffect(() => {
+    // Before the session is followed, so the return waits for it and is sent at most once.
+    const back = takeOAuthReturn({ location: globalThis.location, history: globalThis.history })
+    if (back) void model.finishOAuth(back)
     const disconnect = connectAccountSession(
       model,
       vectorAccountClient().then((client) => client.auth),
@@ -35,5 +41,12 @@ export function EverywhereAccount() {
     }
   }, [model])
 
-  return <EverywhereAccountView state={state} model={model} pathname={globalThis.location?.pathname ?? "/everywhere"} />
+  return (
+    <EverywhereAccountView
+      state={state}
+      model={model}
+      pathname={globalThis.location?.pathname ?? "/everywhere"}
+      focus={focusJob(globalThis.location?.search)}
+    />
+  )
 }
