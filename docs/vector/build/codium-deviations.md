@@ -6384,6 +6384,11 @@ These are pointers only; nothing is fixed here.
   - item 3: the engine (linux) shard step limits;
     21 Nov 2026: superseded. PR #38 (`7e440a27`) split the Linux engine suite into six shards (`9506de79`), and
     `test.yml` on main runs `--shard=<n>/6`. The 30-minute step limit is unchanged;
+    21 Nov 2026 (v2-closeout-ci): closed. Green 6-shard main runs took 16.3/8.1/8.9/13.2/15.0/12.5 min (run
+    44848275007, `f3d7ac74`), 14.4/8.2/10.4/18.1/10.6/11.8 (44822880542, `3670461a`) and 11.4/7.8/9.7/10.5/15.5/8.1
+    (44869120445, `3e90df62`). The largest shard reached 15.5-18.1 min, so the Linux engine job now runs the same
+    round-robin over eight shards (`--shard=<n>/8`, required checks in `policy-199113.json` renamed to match) and keeps
+    the 30-minute step limit. The 8-shard times are to be added after the first PR run;
   - item 4: the app `memory-*-model` suites, which no visible log shows;
   - item 5: the review-memory MISS lines, fixed upstream by 0f6fce89 and 225905e2;
     16 Nov 2026: closed. Vector Codium run 43844651835 at `34c20b62` (main `b362fdf6` merged), Codium tests (shard
@@ -7292,6 +7297,9 @@ Its commit message and the entry it appends to `connected-workspace-deviations.m
   the likelier cause (the slowdown sits in a few long tests), but the scoped resolver adds one `import.meta.resolve` per
   catch-all resolve. Compare this PR's Linux 4/4 and Windows 12/12 step durations with run 43929693613 (Linux 4/4 took
   802 s). If either nears 30 minutes, profile the wrapper's extra resolve. The timeout is not to be raised.
+  21 Nov 2026 (v2-closeout-ci): checked. No 6-shard main run came near 30 minutes (largest shard 18.1 min, run
+  44822880542; 16.3 in 44848275007; 15.5 in 44869120445), so the resolver was not profiled. The Linux engine suite now
+  runs in eight shards under the same 30-minute limit (TB item 3 above).
 - **Merge note.** The pick appends connect-finish's "2026-11-16 — connect-finish lane: root cause and fix for the
   hub.test.ts load error on Linux shard 2" entry at the end of `connected-workspace-deviations.md` (about line 235
   here, about 2134 on connect-finish), and it cites connect-finish jobs and commits (`a320bdbe`, `973895e3`) that are
