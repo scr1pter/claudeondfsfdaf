@@ -223,6 +223,8 @@ The current hosted evidence is the finish lane's runs on `workspaces-finish`, ea
 
 `test.yml` has not yet run this lane's new steps: neither "Run website account and workspace page tests" nor "Run hosted API tests", which runs `account-delete.test.ts` (with WS-02's real-supervisor describe and WS-03's 101-day loop) in one Bun process with the rest of `test/`. Its first run on this branch, `workflow_dispatch` run `43681163575` (run 773) on `12c80f2c`, failed in its `unit (linux)` job (`132711913292`) at the earlier step "Run HttpApi exerciser gates": the coverage mode found no scenario for the four owner-only `/experimental/review-memory` routes (`pass=359 fail=0 skip=0 missing=4`), so both steps were skipped. That failure is inherited, not this lane's: `release-finish` fixed it in `0f6fce89`, which came after this branch's base `0ee486e3`. The `test.yml` evidence therefore stays open until a run on a head that contains `0f6fce89` (D32).
 
+_2026-11-21 note (v2-closeout-ci, D32):_ closed. PR #34's `pull_request` `test.yml` run `43840871674` (run 787, attempt 2, conclusion success) on `e37ec1b5`, which contains `0f6fce89`, passed `unit (linux)` in job `133261028999` (attempt 2), with "Run HttpApi exerciser gates", "Run hosted API tests" (`account-delete.test.ts` in one Bun process with the rest of `test/`) and "Run website account and workspace page tests" each green; run and job read through GitHub MCP. PR #34 merged into `main` as `1b1563dd`. The "pending" and "stays open" lines below about D32 are superseded by this note; D9 and D34 are unchanged.
+
 No production service, cloud account infrastructure, real provider inference, live GitHub publication or production `runsc`/quota-driver isolation was validated by those checks. The remaining operator gates are:
 
 - provision and validate the dedicated host, quota driver, network policy, image distribution, TLS ingress, private data backups and cleanup under infrastructure failures;
@@ -634,6 +636,7 @@ Deviations:
 - D30: the two "pending" findings ask for the run-record commit `docs(workspaces): record the green WS-05 dispatch runs` and a dispatch of both workflows on it. This step's instructions are to fix in the worktree and not commit, so the edits stay in the tree for the commit gate, and no dispatch was made on a new commit. The commit gate made one commit, `fix(workspaces): workspaces-finish lane review`, the title its instructions name: this document and the two comments in `protocol.ts` and `cloud-workspaces-client.ts`. It is the run-record commit D26 planned, but not docs-only as D26 said; the two comments change no behavior.
 - D31: `connected-workspace-spec.md` lines 347 ("Its owner, CW-24"), 473 ("CW-24: proxy routes and the engine's place. | Its owner") and 523 ("Done by its owner (section 6)"), like lines 399 and 594 in D28, still name cloud-workspaces as CW-24's owner. They stay as they are until the Connect lane rewrites them, because that lane owns the file; at `origin/connect-finish` `5c81f9f1` the three rows are unchanged. Until then, read them through `connected-workspace-deviations.md` on `connect-finish`: CW-24's engine half is CN-15 (CW-24a) and its proxy half is CN-19 (CW-24b), both Connect-lane packages and neither built. Neither is an open item of this lane (D22).
 - D32: the `test.yml` finding asks for one run that contains this lane's commits, by a dispatch on `workspaces-finish` or a draft PR's `pull_request` run, before the PR merges. `test.yml` was dispatched on `workspaces-finish` at `12c80f2c` with its default inputs: run `43681163575` (run 773). `12c80f2c` holds every code and test commit of WS-01 to WS-05; the uncommitted changes above are docs and two comments, so they do not change what such a run tests. Its `unit (linux)` job (`132711913292`) passed "Run unit tests", "Run desktop computer-use tests" and "Check generated client", then failed at "Run HttpApi exerciser gates" with four `MISS` lines for the `/experimental/review-memory` routes (`pass=359 missing=4`), so "Run hosted API tests" and "Run website account and workspace page tests" were skipped. This is the failure `release-finish`'s `0f6fce89` ("exercise the owner review-memory routes in the HttpApi gates") fixed after `0ee486e3`; it is not in this branch (`git merge-base --is-ancestor 0f6fce89 HEAD` is false), and this lane did not touch those routes. The finding is not met and nothing here claims it is. To meet it, the lead merges `origin/release-finish` (`cf2373c4`, which `git merge-tree` merges cleanly) into this branch, or merges `main` after PR #33, and then dispatches `test.yml` again or opens the draft PR; this step neither commits nor merges. Locally, `account-delete.test.ts` runs its 42 tests in 2.27 s in all (41 pass, 1 skip), so no single test comes near the 5-second default limit on this machine.
+  _2026-11-21 (v2-closeout-ci):_ D32 closed by `test.yml` run `43840871674`, job `133261028999` (see "Evidence scope").
 - D33: merge checklist for when `main` (with PR #33) or `review-fixes` reaches this branch. `git merge-tree` of `12c80f2c` with `origin/review-fixes` `1433d105` conflicts in exactly four files, `.env.example`, `.github/workflows/vector-workspaces.yml`, `api/_lib/codium-erase.ts` and this document; with `origin/release-finish` `cf2373c4` and `origin/connect-finish` `5c81f9f1` it merges cleanly. Resolve as follows:
   1. `api/_lib/codium-erase.ts`: keep this branch's strict revoke hunk (D8). Only if the lead chooses best effort in writing, take `cbf83048`'s side and replace test (b) with one that pins that choice. If the strict side is lost by mistake, test (b) ("a refused revocation write stops the pass at revoke ...") fails.
   2. `.env.example`: keep exactly one `VECTOR_WORKSPACES_*` block (D23): `268bc877`'s hunk with its "# Cloud workspaces" sub-block replaced by this branch's block. `grep -c '^VECTOR_WORKSPACES_' .env.example` returns 4. A resolution that keeps both blocks fails `codium-configuration.test.ts`.
@@ -658,6 +661,7 @@ Follow-ups:
 
 - The commit gate's commit (D30) passes the full typecheck before its push and dispatches `vector-workspaces.yml`, `typecheck.yml` and `test.yml` on it; it cannot list its own runs, so they go in the final report and the PR description (D26). That `test.yml` run is not the one D32 asks for, because this head still lacks `0f6fce89`.
 - Before the PR merges, one `test.yml` run on a head that contains `0f6fce89` (after a `release-finish` or `main` merge, or the draft PR's `pull_request` run); its `unit (linux)` result, and in particular the "Run hosted API tests" and "Run website account and workspace page tests" steps, goes in "Evidence scope" (D32).
+  _2026-11-21 (v2-closeout-ci):_ D32 closed by `test.yml` run `43840871674`, job `133261028999` (see "Evidence scope").
 - The lead accepts or rejects D9, reconciles CN-19's scope (D34), and applies D33 at the merge.
 - The Connect lane rewrites the CW-24 rows of `connected-workspace-spec.md` to name CN-15 and CN-19 (D31).
 
@@ -673,6 +677,8 @@ Follow-ups:
 
 No generated file is involved. The head now contains `0f6fce89`, so the `test.yml` run D32 asks for can be made on it once the lead pushes; until then D32 stays open.
 
+_2026-11-21 (v2-closeout-ci):_ D32 closed by `test.yml` run `43840871674`, job `133261028999` (see "Evidence scope").
+
 Local evidence (merge tree before the commit, Bun 1.3.14, through the workload lock, one file per process, logs under `/tmp/vector-v2/workspaces-merge/`):
 
 - `test/`: `account-delete.test.ts` 41 pass, 1 skip (the Valkey-only describe), 0 fail; `account-delete-api.test.ts` 8 pass; `cloud-workspaces-node.test.ts` 2 pass.
@@ -681,6 +687,8 @@ Local evidence (merge tree before the commit, Bun 1.3.14, through the workload l
 - Hosted API typecheck (`bun typecheck --project ../../tsconfig.json` from `packages/engine`) clean; full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
 
 Follow-ups: the lead pushes, then dispatches `test.yml` (or opens the draft PR) for D32 and records its `unit (linux)` result in "Evidence scope"; D9 and D34 are unchanged.
+
+_2026-11-21 (v2-closeout-ci):_ D32 closed by `test.yml` run `43840871674`, job `133261028999` (see "Evidence scope").
 
 ### workspaces-finish lane: merged main after #33 (2026-11-16)
 
