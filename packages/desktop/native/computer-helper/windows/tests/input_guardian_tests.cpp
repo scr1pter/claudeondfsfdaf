@@ -601,12 +601,15 @@ size_t run_input_guardian_tests() {
     auto first=std::async(std::launch::async,[&] { return releaser.drain(20,true); });
     entering.wait();
     auto control=std::async(std::launch::async,[&] { return releaser.drain(300); });
+    // The first drain is parked inside SendInput holding the release lock, so the control drain must still
+    // be waiting for that lock here. A drain that gives up when the lock is taken has already returned 0.
+    const bool blocked=control.wait_for(std::chrono::milliseconds(20))==std::future_status::timeout;
     proceed.set_value(); (void)first.get();
     // The control drain takes the release lock once the first drain's 20 ms budget ends; the UP lands
     // well inside the control drain's own 300 ms budget.
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     check(ledger.observe(event(ticket.release,false)),"guardian.counted-fixture-up"); releaser.notify();
-    check(control.get()==1 && releases.load()==1 && !ledger.pending(),"guardian.concurrent-drain-counts-the-in-flight-up");
+    check(blocked && control.get()==1 && releases.load()==1 && !ledger.pending(),"guardian.concurrent-drain-counts-the-in-flight-up");
   });
   test([] {
     InputGuardianLedger ledger(own_tag); std::atomic<int> releases{0};
