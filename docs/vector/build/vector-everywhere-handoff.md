@@ -121,7 +121,7 @@ gh workflow run typecheck.yml -R scr1pter/claudeondfsfdaf --ref vector-everywher
 
 Read failures with `gh run view <id> -R scr1pter/claudeondfsfdaf --log-failed`. Re-run once with `--failed` only when the failure is a known flake and nothing else failed in that job. Known flakes:
 - a Bun segfault on a Linux shard;
-- Windows: `local-fit.test.ts`, `prompt.test.ts` (3 s), `task-size.test.ts` (30 s), effect-flock contention, `local.test.ts` probe 400, engine `test/tool/task-manage-abort.test.ts` (2 s wait);
+- Windows: `local-fit.test.ts`, `prompt.test.ts` (3 s), `task-size.test.ts` (30 s), effect-flock contention, engine `test/tool/task-manage-abort.test.ts` (2 s wait) (`local.test.ts` probe 400 was dropped on 21 Nov 2026: `e817fe51`, merged with PR #40, gives one-address identity reads the full identify budget, and later Windows shards holding `local.test.ts` are green);
 - packet capture DNS, or the 55-minute packet-capture setup timeout.
 
 ## Rules (from the owner; all still binding)
