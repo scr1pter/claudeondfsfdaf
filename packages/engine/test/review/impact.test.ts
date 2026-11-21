@@ -415,30 +415,121 @@ describe("ReviewImpact.build", () => {
     Effect.gen(function* () {
       const dir = (yield* scopedTmpdir({ git: true })).path
       const { base, head, files } = yield* fixture(dir)
-      const many = Object.fromEntries(
-        Array.from({ length: 300 }, (_, at) => [
-          `deep/${"segment/".repeat(8)}user${String(at).padStart(3, "0")}.ts`,
-          `import { computeTotal } from "${"../".repeat(9)}src/util"\ncomputeTotal([${at}])\n`,
-        ]),
+      const service = yield* Git.Service
+      // Collect actual Git answers once. Replaying this immutable tree lets the test stall a named read without
+      // relying on a native process to start within 1, 20 or 150 ms on a particular runner.
+      const answers = new Map<string, Git.Result>()
+      const complete = yield* build({ directory: dir, base, head, files }).pipe(
+        Effect.provideService(Git.Service, {
+          ...service,
+          run: (args, options) =>
+            service
+              .run(args, options)
+              .pipe(Effect.tap((result) => Effect.sync(() => answers.set(args.join("\0"), result)))),
+        }),
       )
-      const later = yield* commit(dir, "users", many)
-      for (const budgetMs of [0, 1, 20, 150]) {
-        const { slice } = yield* ReviewImpact.build({
-          directory: dir,
-          base,
-          head: later,
-          files,
-          context: 200_000,
-          budgetMs,
-        })
+      expect(complete.slice.incomplete).toBeUndefined()
+      const empty = yield* build({ directory: dir, base, head, files, budgetMs: 0 }).pipe(
+        Effect.provideService(Git.Service, { ...service, run: () => Effect.die("zero-budget build started Git") }),
+      )
+      expect(empty.slice).toMatchObject({ incomplete: ["time"], gitVersion: "", stages: { candidates: 0 } })
+      invariants(empty.slice)
+
+      for (const stop of [
+        (args: string[]) => args[0] === "version",
+        (args: string[]) => args[0] === "show" && args.at(-1) === `${head}:src/util.ts`,
+        (args: string[]) => args[0] === "grep" && args.includes("-l"),
+        (args: string[]) => args[0] === "show" && args.at(-1) === `${head}:src/a.ts`,
+      ]) {
+        let interrupted = 0
+        const { slice } = yield* build({ directory: dir, base, head, files, budgetMs: 500 }).pipe(
+          Effect.provideService(Git.Service, {
+            ...service,
+            run: (args) => {
+              if (stop(args))
+                return Effect.never.pipe(
+                  Effect.onInterrupt(() =>
+                    Effect.sync(() => {
+                      interrupted++
+                    }),
+                  ),
+                )
+              const answer = answers.get(args.join("\0"))
+              if (!answer) return Effect.die(`unexpected Git read: ${args.join(" ")}`)
+              return Effect.succeed(answer)
+            },
+          }),
+        )
+        expect(interrupted).toBe(1)
+        expect(slice.incomplete).toContain("time")
         invariants(slice)
-        if (budgetMs === 0)
-          expect(slice).toMatchObject({ incomplete: ["time"], gitVersion: "", stages: { candidates: 0 } })
       }
-      const { slice } = yield* build({ directory: dir, base, head: later, files })
-      // 300 users, a.ts, b.ts, the test and the bundle, which nothing ignores here.
+    }),
+  )
+
+  it.live("a complete build confirms at most 200 of 304 gated paths", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* fixture(dir)
+      // This is a path cap. Stage 300 paths with one importer blob directly in the index, so a cold Windows
+      // disk need not create, hash and remove 300 worktree files.
+      const importer = Buffer.from(`import { computeTotal } from "${"../".repeat(9)}src/util"\ncomputeTotal([1])\n`)
+      const blob = (yield* Effect.promise(() =>
+        $`git hash-object -w --stdin < ${importer}`.cwd(dir).quiet().text(),
+      )).trim()
+      const paths = Array.from(
+        { length: 300 },
+        (_, at) => `users/${"segment/".repeat(8)}user${String(at).padStart(3, "0")}.ts`,
+      )
+      const entries = Buffer.from(paths.map((file) => `100644 ${blob}\t${file}\n`).join(""))
+      yield* Effect.promise(() => $`git update-index --index-info < ${entries}`.cwd(dir).quiet())
+      yield* git(dir, "commit", "-q", "-m", "users")
+      const later = yield* git(dir, "rev-parse", "HEAD")
+      // Verify every synthetic path, mode and object in the committed tree before reusing one real Git answer for
+      // exactly those reads. Scan, diff, grep and the four different importers below still run real Git.
+      const tree = yield* git(dir, "ls-tree", "-rz", later, "--", "users")
+      expect(tree.split("\0").slice(0, -1)).toEqual(paths.map((file) => `100644 blob ${blob}\t${file}`))
+      const service = yield* Git.Service
+      const copies = new Set(paths.map((file) => `${later}:${file}`))
+      const mixed = ["dist/bundle.js", "src/a.ts", "src/b.ts", "src/util.test.ts"].map((file) => `${later}:${file}`)
+      const changed = [`${base}:src/util.ts`, `${later}:src/util.ts`]
+      const answer = yield* service.run(["show", "--no-textconv", `${later}:${paths[0]}`], {
+        cwd: dir,
+        env: { GIT_NO_LAZY_FETCH: "1" },
+      })
+      expect(answer.exitCode).toBe(0)
+      expect(answer.truncated).toBe(false)
+      expect(answer.stdout).toEqual(importer)
+      const {
+        result: { slice },
+        shown,
+      } = yield* recorded(build({ directory: dir, base, head: later, files })).pipe(
+        Effect.provideService(Git.Service, {
+          ...service,
+          run: (args, options) => {
+            if (args[0] !== "show") return service.run(args, options)
+            const spec = args[2]!
+            expect(args).toEqual(["show", "--no-textconv", spec])
+            if (!copies.has(spec)) {
+              expect([...changed, ...mixed]).toContain(spec)
+              return service.run(args, options)
+            }
+            expect(options.cwd).toBe(dir)
+            expect(options.env).toEqual({ GIT_NO_LAZY_FETCH: "1" })
+            expect(options.stdin).toBeUndefined()
+            expect(options.maxOutputBytes).toBeGreaterThanOrEqual(importer.byteLength)
+            return Effect.succeed(answer)
+          },
+        }),
+      )
+      // All 304 import the same module and tie on rank. Lexical path order puts the four mixed files first, then
+      // user000 through user195. Equality on the whole list also detects duplicate reads and reads past the cap.
+      expect(shown.toSorted()).toEqual(
+        [...changed, ...mixed, ...paths.slice(0, 196).map((file) => `${later}:${file}`)].toSorted(),
+      )
       expect(slice.stages.gated).toBe(304)
       expect(slice.dropped.cap).toHaveLength(104)
+      expect(slice.dropped.cap).toEqual(paths.slice(196))
       expect(slice.incomplete).toBeUndefined()
       invariants(slice)
       expect(head).not.toBe(later)
@@ -1273,13 +1364,13 @@ describe("ReviewImpact.importLines", () => {
 })
 
 describe("partial clones", () => {
-  const source = (dir: string) =>
+  const source = (dir: string, filesPerFolder = 350) =>
     Effect.gen(function* () {
       yield* git(dir, "config", "uploadpack.allowfilter", "true")
       yield* git(dir, "config", "uploadpack.allowanysha1inwant", "true")
       const big = Object.fromEntries(
         ["big1", "big2"].flatMap((top) =>
-          Array.from({ length: 350 }, (_, at) => [
+          Array.from({ length: filesPerFolder }, (_, at) => [
             `${top}/some/deeper/folder/for/files/file-number-${String(at).padStart(3, "0")}.ts`,
             `export const ${top}v${at} = ${at}\n`,
           ]),
@@ -1340,18 +1431,24 @@ describe("partial clones", () => {
     () =>
       Effect.gen(function* () {
         const root = (yield* scopedTmpdir({ git: true })).path
-        const { base, head } = yield* source(root)
+        // The sparse case needs 700 missing blobs to overflow a command line. Here every blob is missing, even
+        // the changed file and its importer; three head blobs exercise the search and lazy-fetch refusals.
+        const { base, head } = yield* source(root, 0)
         const dir = path.join(root, "..", `${path.basename(root)}-blobless`)
         yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
         yield* clone(root, dir, "--filter=blob:none", "--no-checkout")
         const files = yield* ReviewSource.prDiff({ directory: root, mergeBase: base, head })
         const before = yield* missing(dir, head)
+        expect(before).toBe(3)
+        const missingBase = yield* missing(dir, base)
+        expect(missingBase).toBe(3)
         const { slice, changed } = yield* build({ directory: dir, base, head, files })
         expect(slice.incomplete).toEqual(["partial-clone"])
         expect(slice.unsearched).toBe(before)
         expect(slice.stages.candidates).toBe(0)
         expect(changed.missing).toEqual(["base:src/util.ts", "src/util.ts"])
         expect(yield* missing(dir, head)).toBe(before)
+        expect(yield* missing(dir, base)).toBe(missingBase)
         // parseChanged and importLines list what the clone lacks first, and never read it.
         const parsed = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files })
         expect(parsed.missing).toEqual(["base:src/util.ts", "src/util.ts"])
@@ -1359,11 +1456,14 @@ describe("partial clones", () => {
           false,
         )
         expect(yield* missing(dir, head)).toBe(before)
+        expect(yield* missing(dir, base)).toBe(missingBase)
         // The backstop: told nothing is missing and asked to read a missing blob, git refuses rather than fetch it.
         const direct = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files, missing: () => false })
+        expect(direct.text("src/util.ts", "LEFT")).toBeUndefined()
         expect(direct.text("src/util.ts", "RIGHT")).toBeUndefined()
         expect(direct.missing).toEqual([])
         expect(yield* missing(dir, head)).toBe(before)
+        expect(yield* missing(dir, base)).toBe(missingBase)
       }),
     LARGE_REPOSITORY,
   )

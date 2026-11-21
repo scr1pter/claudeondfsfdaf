@@ -26230,3 +26230,15 @@ the user config's privacy.
   attestation supplied, no `REVIEW_PIPELINE_REVISION` change; no paid or benchmark run, model call or quality claim; no
   `cat-file --batch`; no change to `provider.ts`, `session/llm.ts`, a spawn hot spot, a connect file, the server package
   or an @vector file; no settings UI or docs page: the setting stays hidden (Q16).
+
+## 2026-11-20 · VS-25 Windows timing repairs for impact and local task fixtures
+
+Three integration cases used a substantial fraction of their deadlines on Windows. A time-box run reached 30.00 seconds. A separate run took 114.66 seconds for the no-checkout clone. The isolated task test used four real isolated launches and three successful merges. The original failure logs identify the affected tests but give no per-stage breakdown for the old time-box case. [Time-box run](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44800897274/job/136513156019) · [Partial-clone job](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44778999824/job/136436433728)
+
+The impact test captures a real Git transcript from a small repository. It checks interruption at version discovery, changed-file loading, candidate search and dependent confirmation. A separate zero-budget case fails on any Git invocation. The 304-path cap test stages one identical importer at 300 distinct paths, verifies every mode and object ID in the committed tree, then shares one real blob result across those exact reads. It checks all 200 confirmation paths and all 104 omissions. The no-checkout case uses three distinct head blobs and checks the missing-object counts of both revisions before and after reading. The sparse case still crosses the argument-length limit with 700 missing blobs.
+
+The isolated task fixture reuses the child of the shared and unchanged dependencies as the changed dependency of the next child. The test checks both inherited files in the child's checkout, the exact stacked task ID, the early merge refusal, the two successful Git merges and the file contents in the parent worktree. It checks second.txt after the first merge, then first.txt and third.txt after the second.
+
+Both changes are confined to test fixtures. The review runner, prompts, defaults, desktop behavior and replay variants are identical to the merge baseline. The source pin is `c1356b88102ce805` before and after these repairs, at revision 4.
+
+Linux verification with Bun 1.3.14 passed all 37 impact tests and all 161 task tests. The engine, evaluation TypeScript project and all 27 workspace packages passed typechecking. Three one-line mutations each failed the intended test by removing a scheduled interruption, checking out the supposedly blobless worktree, and omitting the changed dependency. Each restoration reproduced the original file hash. The existing deadlines apply throughout. Hosted Windows timings require the standard test workflow’s Windows engine shard. These test results measure neither model quality nor review cost.
