@@ -243,8 +243,10 @@ describe("the docs draft", () => {
     has("On macOS and Windows a job edits files and runs no commands.")
     has("Only a private repository's branch is pushed. A public repository's branch stays on your computer.")
     // A push already admitted is never interrupted (desktop everywhere-runner.ts, the publishing git), so a stop that
-    // comes after it leaves the branch, and the pull request opened after the push.
-    has("a push that has already started finishes, and its draft pull request can still open")
+    // comes after it leaves the branch; since EV-03 the runner opens no draft pull request after a stop.
+    has("Stopping it aborts the job on your computer and nothing more is pushed.")
+    has("A push that has already started finishes, but no draft pull request opens for it.")
+    expect(text.toLowerCase()).not.toContain("draft pull request can still open")
     has("it refuses every approval request")
     has("the summary may name files but carries no code")
     has("Nobody else's request runs on your computer or uses your plan.")
