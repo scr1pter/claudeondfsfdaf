@@ -58,6 +58,8 @@ test("fresh Node ESM callers, run tokens and readiness initialize in either impo
     "api/model-plans/chat.ts",
     "api/model-plans/estimate.ts",
     "api/model-plans/models.ts",
+    // Vector everywhere's job body route (EV-27); a TDZ or cycle in api/_lib/everywhere would fail its rotation.
+    "api/everywhere/jobs/[jid]/body.ts",
   ]
   const temporary = await mkdtemp(path.join(tmpdir(), "vector-api-import-"))
   try {
@@ -145,6 +147,94 @@ test("each function that reads GitHub runs registers the one run reader by itsel
          await import(${JSON.stringify(nodeUrl("api/_lib/cloud-agents-run-registration.ts"))});
          for (const url of ${JSON.stringify(urls)}) await import(url);
          assert.equal(leaf.cloudRunReader(), first);`,
+      },
+    ]
+    for (const probe of scripts) {
+      const result = nodeProbe(temporary, probe.script, env)
+      expect({ name: probe.name, status: result.status, error: result.error?.message, stderr: result.stderr }).toEqual({
+        name: probe.name,
+        status: 0,
+        error: undefined,
+        stderr: "",
+      })
+    }
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
+}, 120_000)
+
+// WP A59: the functions that read a repository's binding or start a "Fix it" run each register @vector's binding
+// reader and run starter by themselves (api/_lib/ops-registration.ts); with both service switches off, both answer
+// without I/O.
+test("each function that reads ops bindings or starts fix runs registers the reader and starter by itself, with no I/O", async () => {
+  const entries = [
+    "api/ops/repos.ts",
+    "api/ops/incidents.ts",
+    "api/ops/uploads.ts",
+    "api/ops/worker.ts",
+    "api/_lib/github-webhook-handlers/ops.ts",
+    "api/github/webhook.ts",
+  ]
+  const temporary = await mkdtemp(path.join(tmpdir(), "vector-api-ops-"))
+  try {
+    const nodeUrl = await writeNodeTree(temporary, [
+      ...entries,
+      "api/_lib/ops-registration.ts",
+      "api/_lib/ops-settings.ts",
+      "api/_lib/ops-incidents.ts",
+    ])
+    const urls = entries.map(nodeUrl)
+    const settings = JSON.stringify(nodeUrl("api/_lib/ops-settings.ts"))
+    const incidents = JSON.stringify(nodeUrl("api/_lib/ops-incidents.ts"))
+    const env = Object.fromEntries(
+      Object.entries({ ...process.env, VECTOR_RUN_TOKEN_SECRET: "fixture-isolated-node-run-token-secret" }).filter(
+        ([name]) =>
+          ![
+            "MODEL_PLANS_ENABLED",
+            "VECTOR_GITHUB_BRAIN_ENABLED",
+            "KV_REST_API_URL",
+            "KV_REST_API_TOKEN",
+            "UPSTASH_REDIS_REST_URL",
+            "UPSTASH_REDIS_REST_TOKEN",
+          ].includes(name),
+      ),
+    )
+    const trigger = JSON.stringify({
+      source: "ops",
+      account: "00000000-0000-4000-8000-000000000001",
+      target: { kind: "github-run", repositoryId: 1 },
+      prompt: "fixture",
+      purpose: "incident",
+    })
+    const scripts = [
+      ...urls.map((entry) => ({
+        name: path.relative(temporary, fileURLToPath(entry)),
+        script: `const settings = await import(${settings});
+         const incidents = await import(${incidents});
+         assert.equal(settings.repoBindingsAvailable(), false);
+         assert.equal(incidents.opsRunStarter(), undefined);
+         await import(${JSON.stringify(entry)});
+         assert.equal(settings.repoBindingsAvailable(), true);
+         const starter = incidents.opsRunStarter();
+         assert.equal(typeof starter, 'function');
+         assert.equal(await settings.repositoryBinding(1), undefined);
+         await assert.rejects(starter(${trigger}),
+           error => error?.statusCode === 503 && error?.code === 'OPS_FIX_UNAVAILABLE');
+         for (const url of ${JSON.stringify([entry, ...urls.filter((url) => url !== entry)])}) await import(url);
+         assert.equal(incidents.opsRunStarter(), starter);`,
+      })),
+      {
+        name: "a reader and starter registered first",
+        script: `const settings = await import(${settings});
+         const incidents = await import(${incidents});
+         const binding = { account: '00000000-0000-4000-8000-000000000001', repository: 'fixture-owner/project' };
+         settings.registerRepoBindingReader(async () => binding);
+         const first = async () => ({});
+         incidents.registerOpsRunStarter(first);
+         await import(${JSON.stringify(nodeUrl("api/_lib/ops-registration.ts"))});
+         for (const url of ${JSON.stringify(urls)}) await import(url);
+         assert.equal(incidents.opsRunStarter(), first);
+         assert.deepEqual(await settings.repositoryBinding(1), binding);`,
       },
     ]
     for (const probe of scripts) {

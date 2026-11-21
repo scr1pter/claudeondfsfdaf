@@ -502,6 +502,7 @@ class KeeperDiagnosticTests(unittest.TestCase):
             ("bwrap-initial-caps", b"bwrap: Unexpected capabilities but not setuid, old file caps config?", True),
             ("bwrap-capset", b"bwrap: capset failed: ", False),
             ("bwrap-userns-denied", b"bwrap: No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with 'sysctl kernel.unprivileged_userns_clone=1'.", True),
+            ("bwrap-userns-denied", b"bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>.", True),
             ("bwrap-clone", b"bwrap: Creating new namespace failed: ", False),
             ("bwrap-clone", b"bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.", True),
             ("bwrap-uid-map", b"bwrap: setting up uid map: ", False),
@@ -521,7 +522,7 @@ class KeeperDiagnosticTests(unittest.TestCase):
             ("bwrap-pivot", b"bwrap: pivot_root(/newroot): ", False),
             ("bwrap-exec", b"bwrap: execvp /usr/bin/python3: ", False),
         )
-        self.assertEqual(len(labels), 21)
+        self.assertEqual(len(labels), 22)
         self.assertEqual(len({category for category, _, _ in labels}), 18)
         for category, label, exact_label in labels:
             suffix = b"" if exact_label else b"Permission denied /owner/private synthetic-private-token\xff"
@@ -564,6 +565,21 @@ class KeeperDiagnosticTests(unittest.TestCase):
             b"bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.\n",
             b"VECTOR_NATIVE_KEEPER_STAGE capabilities\n" + complete,
         ):
+            with self.subTest(data=data):
+                self.assertEqual(classify(data), "invalid")
+
+    def test_ubuntu_userns_denied_text_is_exact(self):
+        # NQ-D4: Ubuntu 0.9.0-1ubuntu0.3's rewritten userns-denied line, and near copies of it that must not match.
+        classify = NATIVE["keeper_log_classification"]
+        ubuntu = b"bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>."
+        self.assertEqual(classify(ubuntu + b"\n"), "bwrap-userns-denied")
+        for data in (
+            ubuntu + b" private-suffix\n", ubuntu.lower() + b"\n",
+            ubuntu[: ubuntu.index(b" See <https://deb.li/bubblewrap>") + len(b" See <https://deb.li/bubblewrap>")] + b"\n",
+        ):
+            with self.subTest(data=data):
+                self.assertEqual(classify(data), "no-marker")
+        for data in (ubuntu, ubuntu + b"\n" + ubuntu + b"\n"):
             with self.subTest(data=data):
                 self.assertEqual(classify(data), "invalid")
 

@@ -362,7 +362,8 @@ async function privateJSON(file: string, value: unknown) {
  * an antivirus scan of the new temp file), and to open one whose replacement is still pending, and the refusal clears
  * once that handle closes. There an error LockFs counts as transient is retried for its short window before it is
  * reported; elsewhere every error is reported at once. Engine (windows) job 136057825288 left a record short of
- * "changed" when a save's rename met the test's own `find` poll.
+ * "changed" when a save's rename met the test's own `find` poll. Merges and their rollback (`place`) write into the
+ * parent project the same way, where an editor, an indexer or an antivirus scan may hold the file open.
  */
 async function cleared<A>(run: () => Promise<A>, start = performance.now(), delay = LockFs.TRANSIENT_BASE_DELAY_MS) {
   return run().catch(async (cause): Promise<A> => {
@@ -404,10 +405,10 @@ export async function place(target: string, entry: { symlink: string } | { bytes
     // Windows renames neither a link to a folder over an entry nor anything over such a link, so there the old entry
     // goes first. The new link exists by then, so only that rename is left to fail.
     if ("symlink" in entry && process.platform === "win32")
-      await unlink(target).catch((cause) => {
+      await cleared(() => unlink(target)).catch((cause) => {
         if (!missing(cause)) throw cause
       })
-    await rename(temp, target)
+    await cleared(() => rename(temp, target))
   })().catch(async (cause) => {
     await unlink(temp).catch(() => undefined)
     throw cause

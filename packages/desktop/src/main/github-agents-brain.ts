@@ -38,6 +38,8 @@ type Selection = {
   artifactId?: string
   // A returned run's own visibility at its first download, as its approval in the artifact records it.
   publicRun?: boolean
+  // The visibility the server recorded for the run's Brain context (the owner read's `historicalPublicRepository`).
+  historicalPublic?: boolean
 }
 const LIMIT = 512 * 1024
 const LIFE = 5 * 60_000
@@ -295,7 +297,8 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
       !/^[A-Za-z0-9_-]{43}$/.test(key.key) ||
       typeof key.keyId !== "string" ||
       !/^[0-9a-f]{16}$/.test(key.keyId) ||
-      typeof key.publicRepository !== "boolean"
+      typeof key.publicRepository !== "boolean" ||
+      ("historicalPublicRepository" in key && typeof key.historicalPublicRepository !== "boolean")
     )
       throw new Error("Vector could not authorize this run artifact.")
     await fence()
@@ -330,14 +333,19 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
     const descriptor = decoded?.manifest.files.find((file) => file.path === RunProposalsCodec.PATH)
     if (!decoded?.proposals || !descriptor || digest(decoded.proposals) !== descriptor.sha256)
       throw new Error("This run has no valid returned repository Brain proposals.")
-    // The owner read and the context answer the repository's current visibility. The run's own visibility, at its first
-    // download, is the approval the run's engine wrote beside the bundle. Only a holder of this run's key could write
-    // it, and it can only make screening more conservative, so a run that was public stays publicly screened.
-    const publicRun =
-      decoded.manifest.files.find((file) => file.path === "brain/bundle.json")?.approval?.publicRepository === true
+    // The owner read and the context answer the repository's current visibility. The run's own visibility is answered
+    // twice: by the server, as the visibility it recorded for the run's Brain context (`historicalPublicRepository`),
+    // and by the approval the run's engine wrote beside the bundle at its first download. Only a holder of this run's
+    // key could write the approval, and each can only make screening more conservative, so drafts are screened by the
+    // strictest visibility known, never by the current one alone. With neither, the run's visibility is unknown.
+    const approved = decoded.manifest.files.find((file) => file.path === "brain/bundle.json")?.approval
+    const historicalPublic = key.historicalPublicRepository === true
+    if (typeof key.historicalPublicRepository !== "boolean" && typeof approved?.publicRepository !== "boolean")
+      throw new Error("This run has no recorded visibility for its returned proposals.")
+    const publicRun = approved?.publicRepository === true
     const current = await fence()
     const currentPublicRepository = !current.info.private
-    const publicRepository = key.publicRepository || currentPublicRepository || publicRun
+    const publicRepository = key.publicRepository || currentPublicRepository || publicRun || historicalPublic
     const file = RunProposalsCodec.parse({ path: RunProposalsCodec.PATH, bytes: decoded.proposals, publicRepository })
     const id = randomUUID()
     const bytes = Uint8Array.from(decoded.proposals)
@@ -354,6 +362,7 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
       rid: input.rid,
       artifactId: input.artifactId,
       publicRun,
+      historicalPublic,
     })
     return {
       id,
@@ -384,11 +393,17 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
         key.repositoryId !== item.repositoryId ||
         key.rid !== item.rid ||
         key.artifactId !== item.artifactId ||
-        typeof key.publicRepository !== "boolean"
+        typeof key.publicRepository !== "boolean" ||
+        ("historicalPublicRepository" in key && typeof key.historicalPublicRepository !== "boolean")
       )
         throw new Error("This returned attachment is no longer authorized.")
       const current = await checkItem(item)
-      const publicRepository = key.publicRepository || !current.info.private || item.publicRun === true
+      const publicRepository =
+        key.publicRepository ||
+        !current.info.private ||
+        item.publicRun === true ||
+        item.historicalPublic === true ||
+        key.historicalPublicRepository === true
       RunProposalsCodec.parse({ path: RunProposalsCodec.PATH, bytes: item.bytes, publicRepository })
       const result = await local(
         item.cwd,

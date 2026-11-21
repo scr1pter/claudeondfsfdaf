@@ -318,7 +318,8 @@ describe("the desktop's GitHub backend", () => {
       expect(result.ok).toBe(false)
       expect([
         "Brain Vault could not finish the backup. Try again.",
-        "Vector could not set up its copy of the vault: Git could not start on this computer. Check that Git works in a terminal, then try again.",
+        // The store adds none of git's text, its runner's fixed copy included (R45-4b).
+        "Vector could not set up its copy of the vault.",
       ]).toContain(result.message)
       expect(JSON.stringify(settings)).not.toMatch(/ENOEXEC|posix_spawn|spawn git/)
       expect(JSON.stringify(settings)).not.toContain(dir)

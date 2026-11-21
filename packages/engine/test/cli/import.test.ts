@@ -249,3 +249,58 @@ cliIt.live(
     }),
   30_000,
 )
+
+// F44b: the CLI's own `export --sanitize`, not only localArchive, keeps a child's lifecycle text out. A real `vector
+// serve` makes the parent and a child whose record holds a title and a mailbox entry; a plain export shows both and the
+// sanitized export holds neither, with the record's markers in their place.
+cliIt.live(
+  "a sanitized CLI export of a child session redacts its lifecycle title and mailbox text",
+  ({ vector, home }) =>
+    Effect.gen(function* () {
+      const env = { VECTOR_AGENT_DB: path.join(home, "child.db") }
+      const title = "Child title naming /home/person/private-repo"
+      const mailbox = "Mailbox note quoting the private plan"
+      const child = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* vector.serve({ env })
+          const create = (body: object) =>
+            Effect.promise(() =>
+              fetch(`${server.url}/session`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+              }).then((response) => response.json()),
+            )
+          const parent = yield* create({ title: "Lifecycle parent" })
+          return yield* create({
+            parentID: parent.id,
+            title,
+            metadata: {
+              subagent: {
+                kind: "subagent",
+                agent: "general",
+                title,
+                parentSessionID: parent.id,
+                status: "completed",
+                startedAt: 1,
+                mailbox: [{ id: "mail_1", sender: "Lead", text: mailbox, delivery: "steer", createdAt: 1 }],
+              },
+            },
+          })
+        }),
+      )
+      expect(child.id, JSON.stringify(child)).toStartWith("ses_")
+      const plain = yield* vector.spawn(["export", child.id], { env })
+      expect(plain.exitCode, plain.stderr).toBe(0)
+      expect(plain.stdout).toContain(title)
+      expect(plain.stdout).toContain(mailbox)
+      const sanitized = yield* vector.spawn(["export", "--sanitize", child.id], { env })
+      expect(sanitized.exitCode, sanitized.stderr).toBe(0)
+      expect(sanitized.stdout).not.toContain(title)
+      expect(sanitized.stdout).not.toContain(mailbox)
+      const record = JSON.parse(sanitized.stdout).info.metadata.subagent
+      expect(record.title).toBe(`[redacted:subagent-title:${child.id}]`)
+      expect(record.mailbox[0]).toMatchObject({ id: "mail_1", text: `[redacted:subagent-mailbox-text:${child.id}-0]` })
+    }),
+  PROCESSES,
+)

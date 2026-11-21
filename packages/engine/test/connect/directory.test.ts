@@ -37,15 +37,24 @@ import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
-const script: { calls: number; gate?: Deferred.Deferred<void>; oversized: boolean; verdict: "clean" | "incomplete" } = {
+const script: {
+  calls: number
+  gate?: Deferred.Deferred<void>
+  oversized: boolean
+  verdict: "clean" | "incomplete"
+  state: Connect.State
+} = {
   calls: 0,
   oversized: false,
   verdict: "clean",
+  state: "ready",
 }
 beforeEach(() => {
   script.calls = 0
   script.oversized = false
   script.verdict = "clean"
+  script.state = "ready"
+  delete settled.wait
   delete script.gate
   delete hold.written
 })
@@ -66,7 +75,8 @@ const adapter: ConnectAdapter.Adapter = {
       summary: "Directory receipt fixture",
       place: "local",
       sendsTo: "provider:fixture",
-      state: "ready",
+      state: script.state,
+      ...(script.state === "ready" ? {} : { reason: "the fixture member is offline" }),
       reach: "connect",
       actions: [{ id: "review", title: "Review", effects: ["read"], background: true, result: "review" }],
     }),
@@ -146,6 +156,37 @@ const holdingLedger = LayerNode.make({
   deps: [Global.node, EffectFlock.node],
 })
 
+// The real hub, except that a test can have its run answer only once the run ended, as the hub does when a run is done
+// by the time it reads it back: the owner then gets a terminal run for a key the binding gate already bound.
+const settled: { wait?: boolean } = {}
+const settlingHub = LayerNode.make({
+  service: ConnectHub.Service,
+  layer: Layer.effect(
+    ConnectHub.Service,
+    Effect.map(ConnectHub.Service, (real) =>
+      ConnectHub.Service.of({
+        ...real,
+        run: (input) =>
+          real
+            .run(input)
+            .pipe(
+              Effect.flatMap((run) =>
+                !settled.wait || run.status === "done"
+                  ? Effect.succeed(run)
+                  : pollWithTimeout(
+                      real
+                        .runs()
+                        .pipe(Effect.map((runs) => runs.find((row) => row.id === run.id && row.status === "done"))),
+                      "The directory run never ended",
+                    ).pipe(Effect.orDie),
+              ),
+            ),
+      }),
+    ),
+  ).pipe(Layer.provide(ConnectHub.nodeWith([adapter]).implementation as Layer.Layer<ConnectHub.Service>)),
+  deps: ConnectHub.DEPS,
+})
+
 const graph = (enabled: boolean) =>
   AppNodeBuilder.build(
     LayerNode.group([
@@ -163,7 +204,7 @@ const graph = (enabled: boolean) =>
       InstanceStore.node,
     ]),
     [
-      [ConnectHub.node, ConnectHub.nodeWith([adapter])],
+      [ConnectHub.node, settlingHub],
       [ConnectDirectoryRequest.node, holdingLedger],
       [SessionPrompt.node, Layer.mock(SessionPrompt.Service)({})],
       [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
@@ -318,6 +359,40 @@ it.instance(
 )
 
 it.instance(
+  "a key bound before the member gate refused keeps the refused run, as its replay answers it",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      script.state = "unavailable"
+      // The hub as it runs: the gate refuses inside the released job, so the start answers the queued run.
+      const queued = yield* f.owner.directoryReview(reviewInput())
+      expect(queued.status).toBe("queued")
+      expect((yield* f.ended(queued.id)).result).toMatchObject({ state: "refused", refusal: "unavailable" })
+      // C6: a run that is already done when the hub answers. The binding gate bound the key before the gate refused,
+      // so the start answers that refused run, as every retry's replay does; it is not an invalid start.
+      settled.wait = true
+      const input = reviewInput()
+      const first = yield* f.owner.directoryReview(input)
+      expect(first.status).toBe("done")
+      expect(first.result).toMatchObject({
+        state: "refused",
+        refusal: "unavailable",
+        summary: "VectorScope is not ready: the fixture member is offline",
+      })
+      delete settled.wait
+      expect(yield* f.owner.directoryReview({ ...input, requestKey: input.requestKey.toUpperCase() })).toEqual(first)
+      const anchors = (yield* f.sessions.list({ internal: true, roots: true })).filter(
+        (row) => row.internal === ConnectDirectory.INTERNAL,
+      )
+      expect(anchors).toHaveLength(2)
+      for (const anchor of anchors) expect(yield* f.jobs.forParent(anchor.id)).toHaveLength(1)
+      expect(script.calls).toBe(0)
+      expect(yield* f.permission.list()).toEqual([])
+    }),
+  options,
+)
+
+it.instance(
   "a consumed key whose receipt was retired cannot create a replacement review",
   () =>
     Effect.gen(function* () {
@@ -330,7 +405,12 @@ it.instance(
       yield* Effect.promise(() =>
         fs.rm(path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${first.id}.json`)),
       )
-      expect(Exit.isFailure(yield* f.owner.directoryReview(input).pipe(Effect.exit))).toBe(true)
+      const retry = yield* f.owner.directoryReview(input).pipe(Effect.flip)
+      // C6: the key is bound, so its retry answers consumed (which the app turns into "Start a new review"), not invalid.
+      expect(retry.code).toBe("consumed")
+      expect(retry.message).toBe(
+        "This request key is consumed, but its original owned run is unavailable. No new review was started.",
+      )
       expect(yield* f.jobs.forParent(ask.sessionID)).toHaveLength(1)
       expect(
         (yield* f.sessions.list({ internal: true, roots: true })).filter(

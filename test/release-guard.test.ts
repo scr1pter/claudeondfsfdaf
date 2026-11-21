@@ -82,6 +82,9 @@ const recordAlert: AlertSender = async (account, alert, options) => {
 let triggers: CodiumRunTrigger.RunTrigger[] = []
 
 beforeEach(() => {
+  // The routes register the production starter at import (api/_lib/ops-registration.ts, A59); each test starts
+  // without one, whichever file imported a route first.
+  registerOpsRunStarter(undefined)
   world = new OpsWorld()
   alerts = []
   triggers = []

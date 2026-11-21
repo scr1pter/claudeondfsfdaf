@@ -8,6 +8,7 @@ import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
 import { Storage } from "@/storage/storage"
+import { InstanceState } from "@/effect/instance-state"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -63,6 +64,77 @@ describe("desktop bridge payloads", () => {
       const task = (yield* manager.list({ sessionID: parent.id })).tasks.find((item) => item.id === "workspace:review")
       expect(task?.isolation).toEqual({ mode: "worktree", state: "rebasing", branch: "vector/review" })
       expect(task?.waiting?.kind).toBe("review")
+    }),
+  )
+
+  // F6: a stored record a newer engine wrote may name a cost kind this one does not know (a downgrade, or a stale
+  // record left behind). It reads as "unknown" instead of marking the parent's whole desktop record damaged.
+  it.instance("a stored task with a cost kind a newer version added reads as unknown", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const storage = yield* Storage.Service
+      const desktop = yield* DesktopTasks.Service
+      const directory = yield* InstanceState.directory
+      const parent = yield* sessions.create()
+      const child = yield* sessions.create({ parentID: parent.id })
+      const stored = (sessionID: string, id: string) => ({
+        runtimeID: "another-runtime",
+        directory,
+        leaseHash: "lease",
+        expiresAt: 0,
+        commands: [],
+        tasks: [
+          {
+            ...observation(sessionID),
+            id,
+            costKind: "future-kind",
+            budgetScopes: [
+              {
+                kind: "run",
+                id: "run-1",
+                budget: {},
+                spentUsd: 0,
+                steps: 1,
+                unpricedSteps: 0,
+                costKind: "future-kind",
+              },
+            ],
+          },
+        ],
+      })
+      yield* storage.write(["task-bridge", parent.id], stored(parent.id, "workspace:parent")).pipe(Effect.orDie)
+      yield* storage.write(["task-bridge", child.id], stored(child.id, "workspace:child")).pipe(Effect.orDie)
+      const own = (yield* desktop.list({ sessionID: parent.id })).tasks
+      expect(own.map((task) => [task.id, task.costKind, task.budgetScopes?.[0]?.costKind])).toEqual([
+        ["workspace:parent", "unknown", "unknown"],
+      ])
+      // The child's record, read with the parent's descendants, does not break the parent's listing either.
+      const family = (yield* desktop.list({ sessionID: parent.id, descendants: true })).tasks
+      expect(family.map((task) => [task.id, task.costKind])).toEqual([
+        ["workspace:parent", "unknown"],
+        ["workspace:child", "unknown"],
+      ])
+    }),
+  )
+
+  it.instance("a stored task whose cost kind is not a string still marks the record damaged", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const storage = yield* Storage.Service
+      const desktop = yield* DesktopTasks.Service
+      const parent = yield* sessions.create()
+      yield* storage
+        .write(["task-bridge", parent.id], {
+          runtimeID: "another-runtime",
+          directory: yield* InstanceState.directory,
+          leaseHash: "lease",
+          expiresAt: 0,
+          commands: [],
+          tasks: [{ ...observation(parent.id), costKind: 7 }],
+        })
+        .pipe(Effect.orDie)
+      const exit = yield* desktop.list({ sessionID: parent.id }).pipe(Effect.flip)
+      expect(exit.code).toBe("invalid")
     }),
   )
 })

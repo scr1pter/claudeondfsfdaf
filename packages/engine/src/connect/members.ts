@@ -173,13 +173,16 @@ export function gate(member: MemberInput, local: boolean): MemberInput {
 
 /**
  * An adapter's member reached through a tool (Hands, through `computer`) follows the registry as toolMembers' members
- * do: left out without the tool ids, and not installed, with nothing to reach, when the registry does not offer its
- * tool. Any later adapter whose `reach` is a tool id falls under this rule too.
+ * do: left out without the tool ids, and with nothing to reach when the registry does not offer its tool. A member the
+ * adapter reported not ready keeps its own state and reason then (Hands' "unavailable" says why the computer tool is
+ * absent); only a ready member whose tool is missing reads as not installed. Any later adapter whose `reach` is a tool
+ * id falls under this rule too.
  */
 function registered(member: MemberInput, tools: readonly string[] | undefined): MemberInput[] {
   if (member.reach === "connect" || member.reach === "ui" || member.reach === "none") return [member]
   if (!tools) return []
   if (tools.includes(member.reach)) return [member]
+  if (member.state !== "ready") return [{ ...member, reach: "none" }]
   return [{ ...member, state: "not-installed", reason: "Not in this build.", reach: "none" }]
 }
 

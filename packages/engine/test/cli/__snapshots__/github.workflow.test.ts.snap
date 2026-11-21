@@ -36,7 +36,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "env": {
@@ -153,7 +153,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "env": {
@@ -189,7 +189,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "uses": "actions/checkout@v4",
@@ -238,7 +238,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "uses": "actions/checkout@v4",
@@ -311,7 +311,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "env": {
@@ -479,13 +479,13 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
         {
           "uses": "actions/cache/restore@v4",
           "with": {
-            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "key": "vector-cli-1.99.121-\${{ runner.os }}",
             "path": "~/.npm",
           },
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "uses": "actions/checkout@v4",
@@ -572,7 +572,7 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "env": {
@@ -610,7 +610,7 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "uses": "actions/checkout@v4",
@@ -700,13 +700,13 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
         {
           "uses": "actions/cache@v4",
           "with": {
-            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "key": "vector-cli-1.99.121-\${{ runner.os }}",
             "path": "~/.npm",
           },
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "env": {
@@ -857,13 +857,13 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
         {
           "uses": "actions/cache/restore@v4",
           "with": {
-            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "key": "vector-cli-1.99.121-\${{ runner.os }}",
             "path": "~/.npm",
           },
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "uses": "actions/checkout@v4",
@@ -950,7 +950,7 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "env": {
@@ -988,7 +988,7 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "uses": "actions/checkout@v4",
@@ -1070,13 +1070,13 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
         {
           "uses": "actions/cache@v4",
           "with": {
-            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "key": "vector-cli-1.99.121-\${{ runner.os }}",
             "path": "~/.npm",
           },
         },
         {
           "name": "Install Vector",
-          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+          "run": "npm install -g @vectordevai/cli@1.99.121 --prefer-offline --no-audit --no-fund",
         },
         {
           "env": {

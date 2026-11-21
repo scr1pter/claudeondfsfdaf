@@ -8,8 +8,11 @@ export const WORKFLOW_FILE = ".github/workflows/vector.yml"
 export const WORKFLOW_VERSION = "3"
 // Compare workflow versions as numbers: as strings, "10" sorts below "3".
 export const MIN_CODIUM_WORKFLOW_VERSION = 3
-// Provisional unpublished release reservation; setup remains gated until this CLI actually ships.
-export const MIN_AGENTS_CLI = "1.99.113"
+// Provisional unpublished release reservation; setup remains gated until this CLI actually ships. The desktop and its
+// bundled engine pass their own product version as the pinned CLI, so this must stay above packages/desktop/package.json
+// "version" (the 1.99.120 placeholder) until the owner publishes a CLI at or above this floor; github.workflow.test.ts
+// fails once the desktop version reaches it.
+export const MIN_AGENTS_CLI = "1.99.121"
 
 export const JOB = {
   agent: "Vector agent",

@@ -105,7 +105,7 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 
 1. **Codium:**
    - B08: job dispatch screen, live run reader, Redis/Lua upload hardening, Brain-history encryption.
-   - The A59 joint check with @vector.
+   - The A59 joint check with @vector. The last two registrations (repository binding reader, ops run starter) are built on `codium-api-fixes` (2026-11-21, `api/_lib/ops-registration.ts`); the joint check on main follows its merge.
 2. **@vector:** V27 runtime (save and restore, runner attestation, desktop Brain transport, preview and import) and V30 acceptance. V31 comes after A49.
 3. **VectorScope:**
    - The VS-12 executor, VS-14, 15, 18, 19 and 26.

@@ -149,6 +149,15 @@ searched for vault, backup and restore lines:
   reading that "the URL carries no credential" holds only for Vector's own URL. The repair belongs in core's store:
   drop the stderr line, or keep it only after removing anything that looks like a path or a URL. That file is A43's
   and outside R45a's restricted scope, so it is recorded under For the lead.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`): `failed()` now takes only the fixed copy and returns
+    `${what}.`; git's stderr is never appended (the comment there says why). The push branch's stale/rejected test of
+    stderr is unchanged and still answers its own copy. Two cases in `packages/core/test/vault/github.test.ts` wrap the
+    real git: `ls-remote` and, separately, `push` exit 128 with a token URL and a `/home/person` path on stderr. They
+    assert the exact fixed message and that it holds none of `ghp_`, `/home/person`, `fatal` or `https://`. On the old
+    `failed()` both fail (9 pass, 2 fail, the token URL in the message). Stripping paths and URLs by pattern was not
+    taken: it misses Windows paths and home folders. One consequence: desktop's runner copy "Git could not start on
+    this computer…" is no longer appended to "Vector could not set up its copy of the vault"; the desktop case
+    "git that cannot start shows plain copy" now lists the bare fixed copy as its second accepted text.
 
 ### Checks that hold
 
@@ -283,7 +292,7 @@ searched for vault, backup and restore lines:
 ### For the lead (recorded, not repaired here)
 
 - **R45-4(b).** Core's `failed()` (`packages/core/src/vault/github.ts:115-118`), as above. A43's file, outside this
-  package's scope.
+  package's scope. Repaired 21 Nov 2026 on branch `engine-core-fixes` (see R45-4 (b) above).
 - **R45-18. Confirmed: an exported `VECTOR_VAULT_RECOVERY_CODE` reaches agents' shells.** The CLI reads it
   (`cli/cmd/vault.ts:214`). `privateRuntimeKey` (`packages/core/src/child-environment.ts:163-174`) drops `VECTOR_*`
   names ending `_TOKEN`, `_KEY`, `_PASSWORD` or `_SECRET` and the names in `PRIVATE_RUNTIME_ENVIRONMENT` (`:5-14`), and
@@ -293,6 +302,10 @@ searched for vault, backup and restore lines:
   name in `PRIVATE_RUNTIME_ENVIRONMENT`, in core's shared child-environment file. The critique's alternative, deleting
   the variable inside `vault restore`, does not help: agents' shells inherit from the long-running `vector` process,
   not from `vault restore`.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`): `VECTOR_VAULT_RECOVERY_CODE` is in
+    `PRIVATE_RUNTIME_ENVIRONMENT` (`packages/core/src/child-environment.ts`), so `untrustedChildEnvironment` drops it
+    in any letter case. `packages/core/test/child-environment.test.ts`'s first case now passes it upper and lower case
+    and expects both gone; without the one-name fix it fails (11 pass, 1 fail, the two names left in the output).
 - **R45-19. Confirmed: the shell sandbox does not hide the CLI's vault key file.** `credentialStorePaths`
   (`packages/engine/src/tool/shell/sandbox.ts:496-514`, with `CREDENTIAL_FILES` at `:83`) lists `auth.json`,
   `mcp-auth.json`, `cli-auth.json`, `plugin-oauth-approvals.json` and the databases, not `<data>/vault/vault.json`
@@ -306,6 +319,19 @@ searched for vault, backup and restore lines:
   `VECTOR_SHELL_SANDBOX`, or Web access None, to matter at all. Two repair sites: move the CLI's copy to
   `Global.Path.data` (this lane's CLI file), or deny the copy in the sandbox. Left for the lead because it changes the
   CLI's on-disk layout and touches the sandbox's chosen soft spot.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`), sandbox untouched: the CLI's copy is now
+    `Global.Path.data/vault/github/<owner>/<name>.git` (`githubCopy` in `cli/cmd/vault.ts`), beside `vault.json`, and
+    `gitRunner` runs in the data folder. `storeFor` removes the old `Global.Path.cache/vault` before use, so a copy
+    that was already tampered with is never fetched into again; the next backup sets up a fresh copy from GitHub. In
+    core, `init`, `fetch`, `update-ref` and `push` all pass `-c core.hooksPath=<copy>/no-hooks` (push alone did), so a
+    `reference-transaction` hook cannot run even where the copy is writable (the desktop's copy in its own cache
+    included). Tests: engine `test/cli/vault.test.ts` asserts the copy resolves under data and outside the cache (red
+    with the cache path put back); core `test/vault/github.test.ts` "hooks planted in the copy…" plants the hook in
+    `hooks/` and in a folder the copy's config names as `core.hooksPath`, backs up twice against a local bare remote,
+    and asserts no marker (red on the old core: 11 pass, 1 fail). The B10 overlap case's subcommand reader now skips
+    each `-c` value. Not done: a `credential.helper=` reset, which would also drop the person's own helper that the
+    push relies on; with the copy out of the sandbox's reach a planted helper has nowhere to be written. R45-19 (the
+    sandbox's deny list) stays with `v2-closeout-ci`.
 - **R45-21. Reading: `versions()` is not exclusive** (`vault-backup.ts:449-479`). It can fetch into the same bare copy
   while a backup runs and answer a transient "changed while Vector read it". Not a defect.
 - **R45-22. Reading for A41's next review:** `remote-runtime.ts:43-45` reads its sealed identity the way R45-1
@@ -1172,7 +1198,16 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
   concurrent watches; that limit is unverified here (developers.cloudflare.com is outside this session's network). The
   Worker's own bounds (100 releases a day, 120 minutes) do not keep the row under it. If it were exceeded, `release()`
   would answer 500 and the API 503, and a failing save in a wake skips the wake count, so the account wakes once per
-  25 s. Lane follow-up: move watches to their own table if the repository cap grows.
+  25 s. Lane follow-up: move watches to their own table if the repository cap grows. **Bounded in the Worker 21 Nov
+  2026 (`codium-api-fixes`):** `OPS_LIMITS.maxRunStateBytes` 1,900,000 and `maxConcurrentWatches` 31, derived from
+  the worst watch (`limits.ts`); `release()` records a release past the cap as skipped and answers 200
+  `{accepted: false, reason: "daily-limit"}` (a reason the API already records), and `save()` drops the cached DNS
+  answers and then ends the oldest watches (stopped) instead of writing a row over the bound. Test: an Ultra account
+  with 10 monitors and 10 domains at 2,048-character URLs and 31 watches of five such paths, each with a passed
+  baseline and a failure per path, stores a run row above 80 % and below the bound, and a 32nd release answers 200
+  unwatched (dropping the cap fails it). `test/ops-worker-contract.test.ts` pins `OPS_SETTINGS_LIMITS.repos` (20) at
+  or below the cap. The trim in `save()` is a backstop: at these limits the API cannot reach it. Needs the owner's
+  Worker deploy to take effect; no API change.
 - A `release` to a fresh object that is accepted or refused with 200 stores `meta.account` and nothing else (`:231`);
   an erasure in between now refuses it (R46-20).
 - Running watches continue after `releaseGuard` becomes null (paused) until they end, matching "no new watches".
@@ -1198,7 +1233,9 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
     `handleRequest` and `offeredTicket` (`:32`, `:41`), which workerd accepts.
   - `api/_lib/ops-cleanup.ts:94` skips the Worker's erase silently when `!opsErasable()`: if the Worker's address or
     secret was removed after an account used ops, deletion finishes while the Worker may still hold its data.
-    Proposed: keep the erase pending for accounts in `ops:accounts`.
+    Proposed: keep the erase pending for accounts in `ops:accounts`. **Fixed 21 Nov 2026 (`codium-api-fixes`):** an
+    account on `ops:accounts` in either mode now throws 503 `OPS_UNAVAILABLE` before any erase step, so the ops part
+    fails and the deletion is retried; codium-deviations "A46 tombstone".
   - `github-webhook-handlers/ops.ts:276` could forward `repo.environment`; after R46-23 that only changes display, and
     the incident record stores the lower-case environment either way.
   - P5 on the API side of R46-20: `api/_lib/ops-incidents.ts:328-357`. A report already in flight in the Worker's
@@ -1209,8 +1246,11 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
     (`api/_lib/codium-erase.ts:566`) probably removes them, but only if it runs after the late report lands. Proposed:
     before any write, drop the events of a report whose account has a tombstone (`accountDeleting(report.account)`,
     `api/_lib/codium-tombstone.ts:106`) and answer 2xx so the Worker stops resending, with a root test in
-    `test/account-delete.test.ts`. A48/A57 code, outside R46b's files; not fixed here.
-- R46-17's row bound (above) if the repository cap grows.
+    `test/account-delete.test.ts`. A48/A57 code, outside R46b's files; not fixed here. **Fixed 21 Nov 2026
+    (`codium-api-fixes`)** as proposed: `handleOpsReport` answers `{taken: 0, duplicates: 0, skipped: n}` before the
+    loop when the tombstone is set; codium-deviations "A46 tombstone".
+- R46-17's row bound (above) if the repository cap grows. (21 Nov 2026: the Worker now bounds it itself; the contract
+  test fails if the cap grows past `maxConcurrentWatches`.)
 
 ### Review round (15 Nov 2026)
 

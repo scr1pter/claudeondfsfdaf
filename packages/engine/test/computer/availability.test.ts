@@ -28,7 +28,12 @@ const ready: Computer.Capabilities = {
 
 afterEach(disposeAllInstances)
 
-function fixture(body: unknown = ready, status = 200, config: ConfigV1.Info = {}) {
+function fixture(
+  body: unknown = ready,
+  status = 200,
+  config: ConfigV1.Info = {},
+  flags: Parameters<typeof RuntimeFlags.layer>[0] = { client: "cli" },
+) {
   const calls: HttpClientRequest.HttpClientRequest[] = []
   const client = HttpClient.make((request) => {
     calls.push(request)
@@ -39,7 +44,7 @@ function fixture(body: unknown = ready, status = 200, config: ConfigV1.Info = {}
     it: testEffect(
       LayerNode.compile(ComputerAvailability.node, [
         [Config.node, TestConfig.layer({ get: () => Effect.succeed(config) })],
-        [RuntimeFlags.node, RuntimeFlags.layer({ client: "cli" })],
+        [RuntimeFlags.node, RuntimeFlags.layer(flags)],
         [httpClient, Layer.succeed(HttpClient.HttpClient, client)],
       ]),
     ),
@@ -134,6 +139,43 @@ describe("computer availability", () => {
       ),
     )
   }
+
+  // CW-24: inside a cloud workspace container Hands is unavailable for that reason, before WSL and the platform, with no
+  // bridge probe even when the bridge variables are set; company policy still wins.
+  const cloud = fixture(ready, 200, {}, { client: "cli", cloudWorkspace: true })
+  cloud.it.instance("a cloud workspace reads cloud-workspace and never probes a bridge", () =>
+    environment(
+      Effect.gen(function* () {
+        const service = yield* ComputerAvailability.Service
+        expect(yield* service.unavailable()).toBe("cloud-workspace")
+        expect(yield* service.capabilities()).toEqual({ available: false, reason: "no_desktop_bridge" })
+        expect(yield* service.actions()).toEqual([])
+        expect(cloud.calls).toHaveLength(0)
+        expect(ComputerAvailability.message("cloud-workspace")).toContain("cloud workspace")
+      }),
+    ),
+  )
+  const cloudWsl = fixture(ready, 200, {}, { client: "cli", cloudWorkspace: true })
+  cloudWsl.it.instance("a cloud workspace reads cloud-workspace ahead of WSL", () =>
+    environment(
+      Effect.gen(function* () {
+        const service = yield* ComputerAvailability.Service
+        expect(yield* service.unavailable()).toBe("cloud-workspace")
+        expect(cloudWsl.calls).toHaveLength(0)
+      }),
+      { url: "http://127.0.0.1:45100", token: "computer-test", wsl: "TestDistribution" },
+    ),
+  )
+  const cloudPolicy = fixture(ready, 200, { computer: { enabled: false } }, { client: "cli", cloudWorkspace: true })
+  cloudPolicy.it.instance("company policy still wins inside a cloud workspace", () =>
+    environment(
+      Effect.gen(function* () {
+        const service = yield* ComputerAvailability.Service
+        expect(yield* service.unavailable()).toBe("policy")
+        expect(cloudPolicy.calls).toHaveLength(0)
+      }),
+    ),
+  )
 
   const wsl = fixture()
   const wslTest = process.platform === "linux" ? wsl.it.instance : wsl.it.instance.skip
