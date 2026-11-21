@@ -1,0 +1,481 @@
+---
+// What happens after a task once both opt-in checks are on: Vector does the task, LLM-as-a-judge checks it against
+// the request (repairing for up to three rounds on a FAIL), then Vectorscope reviews the code and reports. With the
+// judge off, the review follows the task directly. The homepage and the verified-completion docs both show it, and
+// both label it Coming soon until the desktop setting ships; test/review-pipeline.test.ts pins its wording.
+//
+// It is markup, not a picture: three cards in an ordered list, so the words stay real text in reading order, with
+// small decorative arrows between them. Its colours come from the page around it, the landing tokens on the homepage
+// and the docs tokens in the docs. The site is dark only, so a light theme would only redefine those tokens. Wide, the
+// cards sit in a row with the judge's repair loop drawn under them and the judge-off path above; narrow, they stack,
+// the arrows turn downward and the judge-off path becomes a line of text under the first card.
+interface Props {
+  /** Unique on the page: the figure's id, and the prefix of its caption's. */
+  id: string
+  tone: "landing" | "docs"
+}
+---
+
+<figure
+  id={Astro.props.id}
+  class:list={["rp", `rp-${Astro.props.tone}`]}
+  role="group"
+  aria-labelledby={`${Astro.props.id}-caption`}
+>
+  <div class="rp-flow">
+    <div class="rp-bypass" aria-hidden="true">
+      <span class="rp-tag">Judge off: straight to review</span>
+      <svg class="rp-bypass-head" viewBox="0 0 12 8" width="12" height="8" focusable="false" aria-hidden="true">
+        <path d="M1.5 1.5 6 6.5l4.5-5"></path>
+      </svg>
+    </div>
+
+    <ol class="rp-steps" role="list">
+      <li class="rp-step">
+        <div class="rp-card">
+          <div class="rp-card-head">
+            <span class="rp-num" aria-hidden="true">1</span>
+          </div>
+          <h3 class="rp-title">Vector does the task</h3>
+          <p class="rp-text">Makes the changes you asked for and tells you what it did.</p>
+          <p class="rp-skip">Judge off? Step 2 is skipped.</p>
+        </div>
+        <svg class="rp-arrow" viewBox="0 0 40 16" width="40" height="16" focusable="false" aria-hidden="true">
+          <path d="M2 8h34"></path>
+          <path d="m31 3 5 5-5 5"></path>
+        </svg>
+      </li>
+
+      <li class="rp-step">
+        <div class="rp-card rp-optional">
+          <div class="rp-card-head">
+            <span class="rp-num" aria-hidden="true">2</span>
+            <span class="rp-chip">If you turned it on</span>
+          </div>
+          <h3 class="rp-title">LLM-as-a-judge checks</h3>
+          <p class="rp-text">
+            Compares the result with your request. On a FAIL, Vector repairs the work and the judge looks again, up to
+            three rounds.
+          </p>
+        </div>
+        <div class="rp-loop" aria-hidden="true">
+          <svg class="rp-loop-head" viewBox="0 0 12 8" width="12" height="8" focusable="false" aria-hidden="true">
+            <path d="M1.5 6.5 6 1.5l4.5 5"></path>
+          </svg>
+          <span class="rp-tag">
+            <svg class="rp-loop-icon" viewBox="0 0 16 16" width="14" height="14" focusable="false" aria-hidden="true">
+              <path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"></path>
+              <path d="M12.4 1.6v2.9H9.5"></path>
+            </svg>
+            FAIL: repair, then judge again · up to 3 rounds
+          </span>
+        </div>
+        <svg class="rp-arrow" viewBox="0 0 40 16" width="40" height="16" focusable="false" aria-hidden="true">
+          <path d="M2 8h34"></path>
+          <path d="m31 3 5 5-5 5"></path>
+        </svg>
+      </li>
+
+      <li class="rp-step">
+        <div class="rp-card">
+          <div class="rp-card-head">
+            <span class="rp-num" aria-hidden="true">3</span>
+          </div>
+          <h3 class="rp-title">Vectorscope reviews the code</h3>
+          <p class="rp-text">
+            Reviews your uncommitted changes once the work is done and reports its findings. It doesn't edit your
+            files.
+          </p>
+          <p class="rp-end">
+            <svg viewBox="0 0 16 16" width="14" height="14" focusable="false" aria-hidden="true">
+              <path d="m3.5 8.5 3 3 6-7"></path>
+            </svg>
+            Findings in Local reviews
+          </p>
+        </div>
+      </li>
+    </ol>
+  </div>
+
+  <figcaption id={`${Astro.props.id}-caption`} class="rp-caption">
+    With both settings on, Vector finishes the task, the judge checks it, then Vectorscope reviews the code as the
+    judge's last round left it. With the judge off, the review follows the task directly.
+  </figcaption>
+  <p class="rp-fine">
+    Both checks are opt-in and off by default, and each one costs extra model calls. Code review needs Vectorscope
+    local reviews turned on and covers all uncommitted changes in the repository, yours included. Greetings, questions,
+    plan mode and tasks that change no files aren't reviewed.
+  </p>
+</figure>
+
+<style>
+  /* The page's own tokens: the landing ones on the homepage, the docs ones in the docs. */
+  .rp {
+    --rp-accent: var(--landing-accent, var(--d-accent));
+    --rp-surface: var(--landing-surface, var(--dx-surface));
+    --rp-line: var(--landing-line, var(--d-line-strong));
+    --rp-title: var(--landing-title, var(--d-heading));
+    --rp-text: var(--landing-secondary, var(--d-muted));
+    --rp-ground: var(--page);
+    --rp-dash: color-mix(in srgb, var(--rp-accent) 58%, transparent);
+    --rp-gap: 56px;
+    --rp-radius: 20px;
+    /* The paths' ends sit under the middle of the first and last cards. */
+    --rp-center: calc((100% - 2 * var(--rp-gap)) / 6);
+    container-type: inline-size;
+    width: 100%;
+    margin: 0;
+    text-align: left;
+  }
+
+  .rp-docs {
+    --rp-gap: 40px;
+    margin-top: 28px;
+  }
+
+  .rp-flow {
+    position: relative;
+    padding: 64px 0 66px;
+  }
+
+  /* These out-specify the docs' own svg and h3 rules, since scoped styles add no specificity. */
+  .rp .rp-flow svg {
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* ---- the cards ---- */
+
+  .rp .rp-steps {
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: var(--rp-gap);
+    list-style: none;
+  }
+
+  .rp .rp-step {
+    position: relative;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .rp-card {
+    flex: 1;
+    padding: 22px 22px 20px;
+    display: flex;
+    flex-direction: column;
+    /* Opaque, so the page's moving backdrop stays behind the card. */
+    background: linear-gradient(var(--rp-surface), var(--rp-surface)), var(--rp-ground);
+    border: 1px solid var(--rp-line);
+    border-radius: var(--rp-radius);
+  }
+
+  /* The judge is the step only some runs take. */
+  .rp-card.rp-optional {
+    border: 1.5px dashed var(--rp-dash);
+  }
+
+  .rp-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .rp-num {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    color: var(--rp-accent);
+    background: color-mix(in srgb, var(--rp-accent) 13%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rp-accent) 36%, transparent);
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rp-chip {
+    padding: 4px 10px;
+    color: var(--rp-accent);
+    background: color-mix(in srgb, var(--rp-accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rp-accent) 26%, transparent);
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .rp .rp-step .rp-title {
+    margin: 18px 0 0;
+    color: var(--rp-title);
+    font-size: 19px;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.012em;
+  }
+
+  .rp .rp-text {
+    max-width: none;
+    margin: 8px 0 0;
+    color: var(--rp-text);
+    font-size: 16px;
+    line-height: 1.55;
+    text-wrap: pretty;
+  }
+
+  /* Said by the judge-off path above the row when it is wide; written out when the cards stack. */
+  .rp .rp-skip {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .rp .rp-end {
+    margin: auto 0 0;
+    padding-top: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--rp-title);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.3;
+  }
+
+  .rp-end svg {
+    color: var(--success, var(--rp-accent));
+  }
+
+  /* ---- the arrows and the two dashed paths ---- */
+
+  .rp-arrow {
+    position: absolute;
+    top: 50%;
+    left: calc(100% + (var(--rp-gap) - 40px) / 2);
+    margin-top: -8px;
+    color: var(--rp-accent);
+  }
+
+  .rp-tag {
+    padding: 5px 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--rp-title);
+    background: var(--rp-ground);
+    border: 1px solid var(--rp-line);
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.25;
+    white-space: nowrap;
+  }
+
+  /* From the top of the first card, over the judge, down into the review. */
+  .rp-bypass {
+    position: absolute;
+    top: 14px;
+    left: var(--rp-center);
+    right: var(--rp-center);
+    height: 50px;
+    color: var(--rp-dash);
+    border: 1.5px dashed currentColor;
+    border-bottom: 0;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .rp-bypass .rp-tag {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translate(-50%, calc(-50% - 0.75px));
+  }
+
+  .rp-bypass-head {
+    position: absolute;
+    right: -6.75px;
+    bottom: 0;
+    color: var(--rp-accent);
+  }
+
+  /* From under the judge back to Vector, which repairs and hands the work to the judge again. */
+  .rp-loop {
+    position: absolute;
+    top: 100%;
+    right: 50%;
+    width: calc(100% + var(--rp-gap));
+    height: 34px;
+    color: var(--rp-dash);
+    border: 1.5px dashed currentColor;
+    border-top: 0;
+    border-radius: 0 0 18px 18px;
+  }
+
+  .rp-loop .rp-tag {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translate(-50%, calc(-50% + 0.75px));
+  }
+
+  .rp-loop-head {
+    position: absolute;
+    top: 0;
+    left: -6.75px;
+    color: var(--rp-accent);
+  }
+
+  .rp-loop-icon {
+    display: none;
+    color: var(--rp-accent);
+  }
+
+  /* ---- caption and fine print ---- */
+
+  .rp .rp-caption {
+    max-width: 720px;
+    margin: 8px auto 0;
+    color: var(--rp-text);
+    font-size: 15px;
+    line-height: 1.6;
+    text-align: center;
+    text-wrap: pretty;
+  }
+
+  .rp .rp-fine {
+    max-width: 720px;
+    margin: 12px auto 0;
+    color: color-mix(in srgb, var(--rp-text) 82%, transparent);
+    font-size: 13.5px;
+    line-height: 1.6;
+    text-align: center;
+    text-wrap: pretty;
+  }
+
+  /* ---- the docs column: smaller type ---- */
+
+  .rp-docs .rp-card {
+    padding: 18px 16px 16px;
+  }
+
+  .rp-docs .rp-step .rp-title {
+    margin-top: 14px;
+    font-size: 16px;
+  }
+
+  .rp-docs .rp-text {
+    font-size: 14.5px;
+    line-height: 1.6;
+  }
+
+  .rp-docs .rp-end {
+    padding-top: 14px;
+    font-size: 13.5px;
+  }
+
+  .rp-docs .rp-tag {
+    font-size: 12.5px;
+  }
+
+  .rp-docs .rp-caption {
+    font-size: 13.5px;
+  }
+
+  .rp-docs .rp-fine {
+    font-size: 13px;
+  }
+
+  /* ---- narrow: the cards stack and the arrows point down ----
+     Three cards in a row need about 860px of the figure; below that their text wraps word by word, so they stack.
+     The docs column is always narrower than that. */
+
+  @container (max-width: 859px) {
+    .rp-flow {
+      padding: 0;
+    }
+
+    .rp .rp-steps {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 48px;
+    }
+
+    .rp-landing .rp-steps {
+      max-width: 560px;
+      margin-inline: auto;
+    }
+
+    .rp-bypass {
+      display: none;
+    }
+
+    .rp-arrow {
+      top: 100%;
+      left: 50%;
+      margin: 0;
+      transform: translate(-50%, 16px) rotate(90deg);
+    }
+
+    .rp .rp-skip {
+      position: static;
+      width: auto;
+      height: auto;
+      margin: 14px 0 0;
+      padding-top: 12px;
+      overflow: visible;
+      clip-path: none;
+      color: var(--rp-title);
+      border-top: 1px dashed var(--rp-dash);
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.4;
+      white-space: normal;
+    }
+
+    .rp-loop {
+      position: static;
+      width: auto;
+      height: auto;
+      margin-top: 14px;
+      display: flex;
+      justify-content: center;
+      border: 0;
+    }
+
+    .rp-loop .rp-tag {
+      position: static;
+      transform: none;
+      white-space: normal;
+      text-align: center;
+    }
+
+    .rp-loop-head {
+      display: none;
+    }
+
+    .rp-loop-icon {
+      display: block;
+    }
+
+    .rp .rp-caption {
+      margin-top: 28px;
+    }
+  }
+</style>

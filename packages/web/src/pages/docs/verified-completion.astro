@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import ReviewPipeline from "../../components/marketing/ReviewPipeline.astro"
 
 export const prerender = true
 ---
@@ -17,5 +18,31 @@ export const prerender = true
           <p class="note">
             Opt-in, and it spends extra model calls on every prompt it covers. It cannot apply to the plan lane, which
             produces nothing to verify, or to the quick lane, which has no ability to spawn the judge at all.
+          </p>
+
+          <h2 id="then-code-review">Then code review</h2>
+          <p class="note">Coming soon. This describes a desktop setting that is being built.</p>
+          <ReviewPipeline id="then-code-review-diagram" tone="docs" />
+          <p>
+            Code review after each task is a separate setting next to LLM-as-a-judge in Settings, General. It is off by
+            default and appears once Vectorscope local reviews are turned on. When it is on, each task you send from the
+            desktop app that changes files goes to Vectorscope once Vector is done. With the judge off, the review
+            follows the task. With the judge on, the review waits until the judge's last round is done, then reviews the
+            code as that round left it, whatever the verdict. If you stop the judge, nothing is reviewed. A task that
+            ends by asking you something is reviewed after you answer.
+          </p>
+          <p>
+            The review reports and doesn't fix. It covers all uncommitted changes in the repository, your own included,
+            and runs on your Vectorscope model. A repository whose <code>.vector/review.json</code> picks another model
+            or turns on the panel isn't reviewed automatically, and neither is a model with no price Vector can read.
+            When the review finishes, its findings appear under Pull requests, Local reviews, and Vector reads them with
+            your next message, so you can ask it to fix them.
+          </p>
+          <p>
+            Each review costs extra model calls. On a priced model it stops at $0.50, or at $2 when the run's spend limit
+            has that much left, and it doesn't start with less than $0.10 left. On Vector Codium it counts as plan usage.
+            A finished task is reviewed once. While a review runs, the next finished task waits for it, then gets its
+            own. Greetings, questions, plan mode, subagents, and runs that were stopped, reverted or changed no files are
+            never reviewed, and a review cut off by a restart doesn't report back.
           </p>
 </DocsPage>
