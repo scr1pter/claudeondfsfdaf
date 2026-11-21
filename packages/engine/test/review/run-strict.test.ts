@@ -9,6 +9,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { buildInlineBody, buildSummaryBody } from "@vectordevai/core/review/format"
+import { INTRODUCED_SCOPE } from "@vectordevai/core/review/prompt"
 import { strictResultJsonSchema } from "@vectordevai/core/review/schema"
 import {
   DEFAULT_REVIEW_CONFIG,
@@ -85,7 +86,7 @@ const git = (cwd: string, ...args: string[]) =>
 const strict = { guardrail: "strict" } as const
 const config = { ...DEFAULT_REVIEW_CONFIG, security: "off", verify: "off", minSeverity: "nit", nits: true } as const
 
-const checkout = Effect.gen(function* () {
+const checkoutWith = Effect.fnUntraced(function* (helper = false) {
   const { directory } = yield* TestInstance
   const fs = yield* FSUtil.Service
   const llm = yield* TestLLMServer
@@ -93,10 +94,32 @@ const checkout = Effect.gen(function* () {
   yield* Effect.promise(() => trustWorkspace(directory))
   const write = (text: string) => fs.writeWithDirs(path.join(directory, file), source(text))
   yield* write(original)
+  if (helper) {
+    yield* fs.writeWithDirs(path.join(directory, "src/old-helper.ts"), "export const oldHelper = () => null\n")
+    // Only the base version is invalid UTF-8. Its distant comment leaves the head quote on line 1 unchanged.
+    yield* Effect.promise(() =>
+      Bun.write(
+        path.join(directory, "src/old-history.ts"),
+        Buffer.concat([
+          Buffer.from("export const history = () => null\n\n\n\n// "),
+          Buffer.from([255]),
+          Buffer.from("\n"),
+        ]),
+      ),
+    )
+    yield* git(directory, "add", "src/old-helper.ts", "src/old-history.ts")
+  }
   yield* git(directory, "add", file)
   yield* git(directory, "commit", "-qm", "base")
   const base = yield* git(directory, "rev-parse", "HEAD")
   yield* write(changed)
+  if (helper) {
+    yield* fs.writeWithDirs(
+      path.join(directory, "src/old-history.ts"),
+      "export const history = () => null\n\n\n\n// updated\n",
+    )
+    yield* git(directory, "add", "src/old-history.ts")
+  }
   yield* git(directory, "add", file)
   yield* git(directory, "commit", "-qm", "change last")
   const head = yield* git(directory, "rev-parse", "HEAD")
@@ -172,6 +195,8 @@ const checkout = Effect.gen(function* () {
   return { input, run }
 })
 
+const checkout = checkoutWith()
+
 const listed = (outcome: ReviewOutcome) =>
   [
     ...outcome.selection.inline,
@@ -192,6 +217,94 @@ function checked(outcome: ReviewOutcome) {
 }
 
 const native = process.platform === "linux" ? it.instance : it.instance.skip
+
+it.instance(
+  "scope wire D3 keeps ordinary and strict requests stable until both keys are on",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* checkout
+      const labelled = { ...finding, scope: "pre-existing" as const }
+      const ordinary = yield* run([labelled])
+      const ignored = yield* run([labelled], { config: { ...config, scopeGate: "introduced" } })
+      expect(ignored.parity).toEqual(ordinary.parity)
+      const plain = yield* run([labelled], { config: { ...config, ...strict } })
+      const off = yield* run([labelled], { config: { ...config, ...strict, scopeGate: "off" } })
+      expect(off.parity).toEqual(plain.parity)
+      const enabled = yield* run([labelled], { config: { ...config, ...strict, scopeGate: "introduced" } })
+      for (const hit of enabled.hits) expect(firstUserText(hit.body)).toContain(INTRODUCED_SCOPE)
+      expect(enabled.hits).toHaveLength(2)
+      const schema = (enabled.hits[0]!.body.tools as { function?: { name?: string; parameters?: unknown } }[]).find(
+        (tool) => tool.function?.name === "StructuredOutput",
+      )?.function?.parameters
+      expect(schema).toMatchObject({
+        properties: {
+          findings: { items: { properties: { scope: { enum: ["introduced", "exacerbated", "pre-existing"] } } } },
+        },
+      })
+      expect(firstUserText(enabled.hits[1]!.body)).toContain("Claimed scope: pre-existing")
+      for (const hit of [...plain.hits, ...ordinary.hits]) {
+        expect(firstUserText(hit.body)).not.toContain(INTRODUCED_SCOPE)
+        expect(hit.text).not.toContain("Required on blocking findings. Does this change")
+      }
+    }),
+  { git: true },
+  90_000,
+)
+
+native(
+  "fork checkout applies S9 from immutable base and head without publishing dropped finding details",
+  () =>
+    Effect.gen(function* () {
+      const { input, run } = yield* checkoutWith(true)
+      const old = {
+        ...finding,
+        title: "The helper already fails",
+        scope: "introduced" as const,
+        quotes: [
+          { path: "src/old-helper.ts", line: 1, side: "RIGHT" as const, code: "export const oldHelper = () => null" },
+        ],
+      }
+      const worse = { ...finding, scope: "exacerbated" as const }
+      const labelled = {
+        ...finding,
+        title: "The model calls this pre-existing",
+        scope: "pre-existing" as const,
+        quotes: [{ path: file, line: 2, side: "RIGHT" as const, code: changed }],
+      }
+      const events: Review.Observation[] = []
+      const result = yield* run([old, worse, labelled], {
+        config: { ...config, ...strict, scopeGate: "introduced" },
+        observe: (event) => events.push(event),
+      })
+      expect(listed(result.outcome)).toEqual([worse.title])
+      expect(result.outcome.strict?.dropped).toEqual([{ reason: "pre-existing", count: 2 }])
+      const id = Review.normalizeFindings([old], "review", input.anchors)[0]!.id
+      expect(events.filter((event) => event.type === "scope-drops")).toEqual([
+        {
+          type: "scope-drops",
+          base: input.base,
+          drops: [{ path: "src/old-helper.ts", start: 1, end: 1, class: "bug", fingerprint: id }],
+        },
+      ])
+      expect(result.summary).toContain("2 pre-existing")
+      for (const hidden of [old.title, labelled.title, id]) {
+        expect(result.summary).not.toContain(hidden)
+        expect(JSON.stringify(result.outcome)).not.toContain(hidden)
+      }
+      const retained = {
+        ...old,
+        quotes: [
+          { path: "src/old-history.ts", line: 1, side: "RIGHT" as const, code: "export const history = () => null" },
+        ],
+      }
+      const unknown = yield* run([retained], { config: { ...config, ...strict, scopeGate: "introduced" } })
+      expect(listed(unknown.outcome)).toEqual([old.title])
+      expect(unknown.outcome.strict?.dropped).toEqual([])
+      expect(unknown.outcome.notes.join(" ")).toContain("merge-base evidence was unavailable for 1 retained finding")
+    }),
+  { git: true },
+  90_000,
+)
 
 native(
   "strict sends its schema and verify-all policy, then posts only findings supported by immutable head and base quotes",

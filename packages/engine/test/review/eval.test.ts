@@ -1388,18 +1388,88 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-42a: the same for `scopeGate`. A base review.json that sets it, with or without strict, is replayed and recorded
-  // without the pending scope check. Strict selection still runs when the base opts in.
   it.instance(
-    "replays a base review.json that sets VS-42's scopeGate without it, keeping the parser's warnings",
+    "records a real S9 omission at its base span only in the local replay artifact",
     () =>
       Effect.gen(function* () {
-        const UNAPPLIED =
-          '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
+        const settings = { guardrail: "strict", scopeGate: "introduced" } as const
+        const { directory, llm, base, head } = yield* checkout({
+          base: {
+            "src/list.ts": LIST_BASE,
+            "src/old-helper.ts": "export const oldHelper = () => null\n",
+            ".gitignore": "vector.json\n",
+          },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+        const candidate: ModelFinding = {
+          ...listBug,
+          title: "Existing defect in list helper",
+          failure: {
+            class: "crash",
+            mechanism: "logic",
+            trigger: "Call the list helper.",
+            impact: "The operation fails before returning.",
+          },
+          quotes: [{ path: "src/old-helper.ts", line: 1, side: "RIGHT", code: "export const oldHelper = () => null" }],
+          suggestion: "  return items.at(-1)",
+          scope: "introduced",
+        }
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const id = Review.normalizeFindings([candidate], "review", anchors)[0]!.id
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([candidate])))
+        yield* llm.pushMatch(
+          VERIFY,
+          reply().tool("StructuredOutput", {
+            results: [{ id, verdict: "confirmed", reason: "The old helper can fail." }],
+          }),
+        )
+        const time = new Date("2026-01-01T00:00:00Z")
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant: { name: "engine:scope-introduced", keys: settings },
+          config: { maxCostUsd: 2 },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+          now: () => time.getTime(),
+        })
+        expect(artifact.variant).toEqual({ name: "engine:scope-introduced", keys: settings })
+        expect(artifact.config.value.scopeGate).toBe("introduced")
+        expect((yield* llm.hits).filter(REVIEW)).toHaveLength(1)
+        if (process.platform === "linux") {
+          expect(artifact.drops).toEqual([
+            {
+              path: "src/old-helper.ts",
+              base: { sha: base, start: 1, end: 1 },
+              class: "bug",
+              fingerprint: id,
+              at: time.toISOString(),
+            },
+          ])
+          expect(artifact.outcome?.strict?.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+          expect(artifact.placed).toEqual([])
+          expect(JSON.stringify(artifact.posted)).toContain("1 pre-existing")
+        } else {
+          expect(artifact.drops).toBeUndefined()
+        }
+        const publicData = JSON.stringify([artifact.outcome, artifact.placed, artifact.posted])
+        for (const value of [id, candidate.title, '"fingerprint"', '"scopeDrops"'])
+          expect(publicData).not.toContain(value)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "uses the introduced-by-change gate from the base only with strict, and records the effective prompt",
+    () =>
+      Effect.gen(function* () {
         const IGNORED =
           '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
         for (const [settings, warnings] of [
-          [{ guardrail: "strict", scopeGate: "introduced" }, [UNAPPLIED]],
+          [{ guardrail: "strict", scopeGate: "introduced" }, []],
           [{ scopeGate: "introduced" }, [IGNORED]],
         ] as const) {
           const { directory, llm, base, head } = yield* checkout({
@@ -1418,11 +1488,13 @@ describe("ReviewEval.replay", () => {
           })
           const strict = "guardrail" in settings
           expect(artifact.config.value.guardrail).toBe(strict ? "strict" : undefined)
-          expect(artifact.config.value.scopeGate).toBeUndefined()
+          expect(artifact.config.value.scopeGate).toBe("introduced")
           expect(artifact.config.warnings).toEqual([...warnings])
           expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest(strict ? { guardrail: "strict" } : {}))
-          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", scopeGate: "introduced" }))
+          expect(artifact.scope.prompts).toBe(
+            promptsDigest(strict ? { guardrail: "strict", scopeGate: "introduced" } : {}),
+          )
+          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict" }))
           expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual(
             strict ? [] : [listBug.title],
           )
@@ -1868,12 +1940,12 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { guardrail: "strict" } })).toContain(
           "config sets guardrail, a pipeline variant's setting",
         )
-        // Nor VS-42's scopeGate, which VS-42 wiring applies, alone or with the guardrail.
+        // The introduced-by-change gate also belongs to its named variant or the base.
         expect(yield* refused({ config: { scopeGate: "introduced" } })).toContain(
-          "config sets scopeGate, which no runner applies yet (VS-42 wiring), so the artifact would record a setting the run did not have.",
+          "config sets scopeGate, a pipeline variant's setting",
         )
         expect(yield* refused({ config: { guardrail: "strict", scopeGate: "off" } })).toContain(
-          "config sets guardrail, a pipeline variant's setting",
+          "config sets guardrail, scopeGate, a pipeline variant's setting",
         )
         // Nor VS-44's verifyEvidence, which VS-44 wiring applies, alone or beside the guardrail and VS-42's key.
         expect(yield* refused({ config: { verifyEvidence: "certificate" } })).toContain(
@@ -1881,7 +1953,7 @@ describe("ReviewEval.replay", () => {
         )
         expect(
           yield* refused({ config: { guardrail: "strict", scopeGate: "introduced", verifyEvidence: "off" } }),
-        ).toContain("config sets guardrail, a pipeline variant's setting")
+        ).toContain("config sets guardrail, scopeGate, a pipeline variant's setting")
         // Nor VS-28's depth and lenses, which VS-28 wiring applies, alone or together.
         expect(yield* refused({ config: { depth: "auto" } })).toContain(
           "config sets depth, which no runner applies yet (VS-28 wiring), so the artifact would record a setting the run did not have.",
@@ -1928,6 +2000,24 @@ describe("ReviewEval.replay", () => {
           { name: "engine:impact-graph", keys: { verifyPolicy: "shared" as const } },
         ])
           expect(yield* refused({ variant })).toContain('engine:impact-graph variant sets only impact: "graph"')
+        for (const variant of [
+          { name: "engine:scope-introduced", keys: { guardrail: "strict" as const } },
+          { name: "engine:scope-introduced", keys: { scopeGate: "introduced" as const } },
+          {
+            name: "engine:scope-introduced",
+            keys: { guardrail: "strict" as const, scopeGate: "introduced" as const },
+            models: "triage-pair" as const,
+          },
+          { name: "engine:guardrail-strict", keys: { guardrail: "strict" as const, scopeGate: "introduced" as const } },
+          { name: "engine:scope-introduced", keys: { guardrail: "strict" as const, scopeGate: "off" as const } },
+          {
+            name: "engine:scope-introduced",
+            keys: { guardrail: "strict" as const, scopeGate: "introduced" as const, verifyPolicy: "shared" as const },
+          },
+        ])
+          expect(yield* refused({ variant })).toContain(
+            'engine:scope-introduced variant sets only guardrail: "strict" and scopeGate: "introduced"',
+          )
         for (const variant of [
           { name: "engine:guardrail-strict", keys: { guardrail: "off" as const } },
           { name: "engine:shared-verify", keys: { guardrail: "strict" as const } },

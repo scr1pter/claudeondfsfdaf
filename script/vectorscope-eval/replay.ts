@@ -256,8 +256,9 @@ export const VARIANTS = {
   // engine:guardrail-strict. VS-42 wiring may revise it before it flips.
   "scope-introduced": {
     planned: 'guardrail: "strict" and scopeGate: "introduced"',
-    engine: { pending: "VS-42 wiring" },
-    desktop: { pending: "VS-42 wiring, after VS-27c" },
+    keys: { guardrail: "strict", scopeGate: "introduced" },
+    engine: { from: "VS-42" },
+    desktop: { pending: "VS-27c desktop strict selection requires immutable base and head evidence" },
   },
   "rule-strict": {
     planned: 'ruleCheck: "strict"',

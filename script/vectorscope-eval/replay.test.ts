@@ -506,6 +506,7 @@ describe("the variant registry", () => {
       "engine:cross-family",
       "engine:holdback-secrets",
       "desktop:holdback-secrets",
+      "engine:scope-introduced",
     ])
     for (const item of built) {
       const keys = Object.keys(item.entry.keys ?? {})
@@ -519,7 +520,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 9)
+    expect(pending).toHaveLength(2 * entries.length - 10)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -538,7 +539,6 @@ describe("the variant registry", () => {
       "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
       "engine:team-guarded": "VS-35 wiring",
-      "engine:scope-introduced": "VS-42 wiring",
       "engine:rule-strict": "VS-43 wiring",
       "engine:verify-cert": "VS-44 wiring",
       "engine:explore-slice": "VS-49 wiring",
@@ -549,7 +549,6 @@ describe("the variant registry", () => {
     // name whose package has not begun here is still unknown.
     for (const suffix of [
       "team-guarded",
-      "scope-introduced",
       "rule-strict",
       "verify-cert",
       "explore-slice",
@@ -560,6 +559,10 @@ describe("the variant registry", () => {
       expect(Object.hasOwn(entry, "keys") || Object.hasOwn(entry, "models")).toBe(false)
       expect(resolveVariant(`desktop:${suffix}`)).toMatchObject({ ok: false, reason: "pending" })
     }
+    expect(variantRecord("engine:scope-introduced")).toMatchObject({
+      record: { name: "engine:scope-introduced", keys: { guardrail: "strict", scopeGate: "introduced" } },
+    })
+    expect(resolveVariant("desktop:scope-introduced")).toMatchObject({ ok: false, reason: "pending" })
     expect(resolveVariant("engine:rereview-focused")).toMatchObject({ ok: false, reason: "unknown" })
     // VS-44c's desktop half is a documented difference until VS-27's desktop guardrail.
     expect(pending).toContainEqual({ name: "desktop:verify-isolated", package: "VS-27 desktop guardrail" })

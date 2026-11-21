@@ -246,12 +246,7 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  // Only under "strict": without it the key is ignored (settle's note), so it is never also "not applied".
-  scopeGate: {
-    applies: (config) => config.scopeGate === "introduced" && config.guardrail === "strict",
-    warning: '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.',
-  },
-  // The same: only under "strict".
+  // Only under strict, where the certificate rule applies.
   verifyEvidence: {
     applies: (config) => config.verifyEvidence === "certificate" && config.guardrail === "strict",
     warning:

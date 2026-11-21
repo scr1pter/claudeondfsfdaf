@@ -569,9 +569,7 @@ describe("the strict schemas (VS-27a)", () => {
     expect(violations(schema, { ...STRICT_RESULT, findings: [unverified] })).toEqual(["$.findings[0] lacks verifier"])
   })
 
-  // VS-42a: under scopeGate "introduced" the result schema's drop enum gains pre-existing, and nothing else changes; the
-  // report schema's `scope` field and its decoding wait for VS-42 wiring, with VS-27c.
-  test("VS-42's scopeGate adds only the pre-existing drop, and changes neither the report schema nor the decoder", () => {
+  test("requests and decodes the three scope labels only when strict and introduced are both effective", () => {
     const GATE = { guardrail: "strict", scopeGate: "introduced" } as const
     const gated = strictResultJsonSchema(GATE)!
     const plain = strictResultJsonSchema(STRICT)!
@@ -584,12 +582,18 @@ describe("the strict schemas (VS-27a)", () => {
       },
     }).toEqual(plain)
     expect(strictResultJsonSchema({ guardrail: "strict", scopeGate: "off" })).toEqual(plain)
-    expect(strictReportJsonSchema(GATE)).toEqual(strictReportJsonSchema(STRICT))
+    const reportSchema = strictReportJsonSchema(GATE)!
+    const fields = reportSchema.properties.findings.items.properties
+    const { scope, ...rest } = fields
+    expect(scope?.enum).toEqual([...FINDING_SCOPES])
+    expect(scope?.description).toContain("Required on blocking findings")
+    expect(rest).toEqual(strictReportJsonSchema(STRICT)!.properties.findings.items.properties)
+    expect(strictReportJsonSchema({ ...STRICT, scopeGate: "off" })).toEqual(strictReportJsonSchema(STRICT))
+    expect(strictReportJsonSchema({ scopeGate: "introduced" })).toBeUndefined()
     const dropped = { ...STRICT_RESULT, dropped: [{ reason: "pre-existing", count: 1 }] }
     expect(violations(gated, dropped)).toEqual([])
     expect(violations(plain, dropped)).toEqual(["$.dropped[0].reason is not in its enum"])
     expect([...FINDING_SCOPES]).toEqual(["introduced", "exacerbated", "pre-existing"])
-    // A model's scope label is not read before VS-42 wiring, under any keys.
     const report = {
       summary: "s",
       findings: [
@@ -605,10 +609,14 @@ describe("the strict schemas (VS-27a)", () => {
         },
       ],
     }
-    const decoded = decodeReport(report, GATE)!
-    expect(decoded).toEqual(decodeReport(report, STRICT)!)
-    expect(Object.hasOwn(decoded.findings[0], "scope")).toBe(false)
-    expect(Object.hasOwn(decodeReport(report)!.findings[0], "scope")).toBe(false)
+    for (const scope of FINDING_SCOPES) {
+      const labelled = { ...report, findings: [{ ...report.findings[0], scope }] }
+      expect(decodeReport(labelled, GATE)!.findings[0].scope).toBe(scope)
+      for (const keys of [{}, STRICT, { ...STRICT, scopeGate: "off" }, { scopeGate: "introduced" }] as const)
+        expect(decodeReport(labelled, keys)!.findings[0]).not.toHaveProperty("scope")
+    }
+    const malformed = { ...report, findings: [{ ...report.findings[0], scope: "unrelated" }] }
+    expect(decodeReport(malformed, GATE)!.findings[0]).not.toHaveProperty("scope")
   })
 
   test("a strict finding conforms to the strict report schema, and a legacy one still does", () => {

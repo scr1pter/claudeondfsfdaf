@@ -785,7 +785,7 @@ word, so only the registry keeps model ids out.
 | `precise`          | `mode: "precise"`                                                                       | pending VS-31               | pending VS-31                                                                 |
 | `holdback-secrets` | `holdback: "secrets"`, in the prompt and the reviewer's read and grep results           | built (VS-34)               | built (VS-34, desktop half)                                                   |
 | `team-guarded`     | `teamMemory: "guarded"`                                                                 | pending VS-35 wiring        | pending, documented difference                                                |
-| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                     | pending VS-42 wiring        | pending VS-42 wiring, after VS-27c                                            |
+| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                     | built, VS-42                | pending, desktop lacks immutable base and head evidence                        |
 | `rule-strict`      | `ruleCheck: "strict"`                                                                   | pending VS-43 wiring        | pending VS-43 wiring                                                          |
 | `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                               | pending VS-44 wiring        | pending VS-44 wiring, after VS-27c                                            |
 | `explore-slice`    | `explore: "slice"`                                                                      | pending VS-49 wiring        | pending, documented difference                                                |
@@ -1822,7 +1822,7 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
     not, the decision being the owner's. `latentDrops` reads an artifact's
     `drops` (path, base span, class as a finding category, base SHA,
     fingerprint and a per-drop `at`, a UTC instant as `toISOString` writes
-    it), a provisional shape that R5's producer owns. `latentForecast`
+    it). The engine emits a record only when the immutable base verifies its span. `latentForecast`
     checks every outcome first (the drop as `latentDrops` reads it, and
     `fixedDays` a finite number of days at or above 0) and refuses them all
     on one malformed outcome. No package joins drops to later fixes yet, so
@@ -1838,7 +1838,7 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   a per-finding dismissal reason, so those read unavailable on it; adding
   either is a /3. The exact verdict needs SF-39 and a ledger field (/3). The
   latent join (following a drop's base lines through later history, and
-  where its result is kept) has no owner yet, and R5 records no drops yet.
+  where its result is kept) still has no owner. SF-21 supplies the local drop records.
   Run on a real repository only after Q30.
 
 The tests use a fake GitHub client and git repositories they build, and

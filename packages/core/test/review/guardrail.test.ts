@@ -21,6 +21,7 @@ import {
   strictCandidates,
   strictRules,
   strictSelect,
+  strictSelection,
   type StrictBlob,
   type StrictInput,
 } from "@vectordevai/core/review/guardrail"
@@ -838,6 +839,88 @@ function uncheckedOf(findings: Finding[], overrides: Partial<StrictInput> = {}) 
 }
 
 describe("S9: the introduced-by-change check (VS-42a)", () => {
+  test("observes base spans only for actual S9 drops with matched immutable evidence", () => {
+    const entry = onFlush({ quotes: [NAME_QUOTE] })
+    const review = strictSelection([entry], input(gated()), true)
+    expect(review.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(review.scopeDrops).toEqual([
+      {
+        path: "src/auth/old-token.ts",
+        start: 2,
+        end: 2,
+        class: entry.category,
+        fingerprint: entry.id,
+      },
+    ])
+    expect(review.result).not.toHaveProperty("scopeDrops")
+    const sameFile = onFlush({ quotes: [RESET_QUOTE] })
+    expect(strictSelection([sameFile], input(gated()), true).scopeDrops[0]).toMatchObject({
+      path: SESSION,
+      start: 8,
+      end: 8,
+    })
+    const changed = onFlush({ scope: "pre-existing", quotes: [FLUSH_QUOTE] })
+    const labelled = strictSelection([changed], input(gated()), true)
+    expect(labelled.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(labelled.scopeDrops).toEqual([])
+    const supported = onFlush({ scope: "pre-existing", quotes: [FLUSH_QUOTE, NAME_QUOTE] })
+    expect(suspectOf(supported)).toBe(false)
+    const labelOnly = strictSelection([supported], input(gated()), true)
+    expect(labelOnly.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(labelOnly.scopeDrops).toEqual([])
+    expect(strictSelection([{ ...entry, verified: false }], input(gated()), true).scopeDrops).toEqual([])
+    expect(strictSelection([entry], input(gated())).scopeDrops).toEqual([])
+    const unavailable = strictSelection(
+      [sameFile],
+      input(gated({ blobs: { head: GATED_BLOBS.head, base: new Map() } })),
+      true,
+    )
+    expect(unavailable.result.findings.map((item) => item.id)).toEqual([sameFile.id])
+    expect(unavailable.preExistingUnchecked).toBe(1)
+    expect(unavailable.scopeDrops).toEqual([])
+  })
+
+  test("overlapping renames retain the matched quote's own side and base path for local scoring", () => {
+    const head = "src/auth/token.ts"
+    const base = "src/auth/old-token.ts"
+    const older = "src/auth/other-token.ts"
+    const renamed = anchors.find((file) => file.path === head)!
+    const files = [...anchors, { ...renamed, path: base, oldPath: older }]
+    const source = blobs({ [base]: TOKEN_HEAD }, { [older]: TOKEN_BASE })
+    const options = input(gated({ anchors: files, blobs: source }))
+    const left: Quote = { path: head, side: "LEFT", line: 1, code: "export const ttl = 60" }
+    const entry = finding({ path: head, line: 1, side: "LEFT", scope: "pre-existing", quotes: [left] })
+    expect(strictBlobRequests([entry], files, GATE).base).toEqual([base])
+    expect(suspectOf(entry, source, files)).toBe(false)
+    // Both base blobs contain these bytes. Only b supplied S4 for this LEFT quote of c.
+    const labelled = strictSelection([entry], options, true)
+    expect(labelled.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(labelled.scopeDrops).toEqual([
+      { path: base, start: 1, end: 1, class: entry.category, fingerprint: entry.id },
+    ])
+    // Each RIGHT quote maps once from its own head path. The independent suspect agrees for both renames.
+    for (const [path, expected] of [
+      [head, base],
+      [base, older],
+    ]) {
+      const right = finding({ path, line: 1, scope: "introduced", quotes: [{ ...NAME_QUOTE, path }] })
+      expect(suspectOf(right, source, files)).toBe(true)
+      expect(strictSelection([right], options, true).scopeDrops[0]).toMatchObject({ path: expected, start: 2, end: 2 })
+    }
+    // A RIGHT quote at b is not the finding's own file just because c was called b at base.
+    const differentFile = finding({
+      path: head,
+      line: 1,
+      scope: "pre-existing",
+      quotes: [
+        { ...NAME_QUOTE, path: base },
+        { path: head, line: 1, side: "RIGHT", code: "export const ttl = 0" },
+      ],
+    })
+    expect(suspectOf(differentFile, source, files)).toBe(false)
+    expect(strictSelection([differentFile], options, true).scopeDrops).toEqual([])
+  })
+
   test("introduced: a finding that quotes the line the change added is kept", () => {
     for (const scope of [undefined, "introduced", "exacerbated"] as const) {
       const entry = onFlush(scope ? { scope } : {})

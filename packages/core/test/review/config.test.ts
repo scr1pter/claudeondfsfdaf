@@ -1139,12 +1139,8 @@ describe("VS-27's guardrail key", () => {
   })
 })
 
-// VS-42a: `scopeGate` is parsed, and no runner reads it before VS-42 wiring. It acts inside the strict guardrail, so it
-// is effective only with `guardrail: "strict"`: with it, the value says it is not applied yet; without it, it is ignored
-// with a note, and the two warnings never appear together. A plain key with no environment variable.
+// The introduced-by-change check runs inside the strict engine review.
 describe("VS-42's scopeGate key", () => {
-  const UNAPPLIED =
-    '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
   const IGNORED =
     '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
 
@@ -1154,15 +1150,15 @@ describe("VS-42's scopeGate key", () => {
     expect(Object.hasOwn(config, "scopeGate")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.scopeGate).toBe("off")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("scopeGate")
+    expect(UNAPPLIED_REVIEW_KEYS).not.toContain("scopeGate")
     expect(SOURCED_REVIEW_KEYS).not.toContain("scopeGate")
   })
 
-  test("under strict it says it is not applied; without strict it is ignored with a note, its value kept", () => {
+  test("runs under strict and explains why the key is ignored when strict is off", () => {
     const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
     expect(json({ guardrail: "strict", scopeGate: "introduced" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", scopeGate: "introduced" },
-      warnings: [UNAPPLIED],
+      warnings: [],
     })
     for (const value of [{ scopeGate: "introduced" }, { guardrail: "off", scopeGate: "introduced" }] as const)
       expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
@@ -1172,7 +1168,7 @@ describe("VS-42's scopeGate key", () => {
     expect(
       parseReviewConfig({ json: JSON.stringify({ scopeGate: "introduced" }), env: { REVIEW_GUARDRAIL: "strict" } })
         .warnings,
-    ).toEqual([UNAPPLIED])
+    ).toEqual([])
     expect(
       parseReviewConfig({
         json: JSON.stringify({ guardrail: "strict", scopeGate: "introduced" }),
@@ -1215,8 +1211,6 @@ describe("VS-44's verifyEvidence key", () => {
     '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
   const IGNORED =
     '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
-  const GATE_UNAPPLIED =
-    '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
   const GATE_IGNORED =
     '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
 
@@ -1261,7 +1255,6 @@ describe("VS-44's verifyEvidence key", () => {
     ).toEqual([IGNORED])
     // Beside VS-42's key, each gets its own warning, in the keys' order.
     expect(json({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([
-      GATE_UNAPPLIED,
       UNAPPLIED,
     ])
     expect(json({ scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([GATE_IGNORED, IGNORED])

@@ -8,7 +8,7 @@ import { strictFindingBody } from "@vectordevai/core/review/format"
 import {
   MAX_FIX_HUNKS,
   strictBlobRequests,
-  strictSelect,
+  strictSelection,
   strictIncomplete,
   type StrictBlobs,
   type StrictInput,
@@ -54,6 +54,7 @@ export const checkStrict = Effect.fn("Review.checkStrict")(function* (
   input: Omit<StrictInput, "blobs" | "parses"> & {
     findings: Finding[]
     directory: string
+    recordScope?: boolean
     changePaths: string[]
     pending: string[]
     base: string
@@ -103,16 +104,24 @@ export const checkStrict = Effect.fn("Review.checkStrict")(function* (
       if (result.parsed) versions.set(text, !result.hasError)
     }
   }
-  const strict = strictSelect(input.findings, {
-    ...input,
-    blobs,
-    parses: (file, text) => {
-      if (!ReviewParse.languageOf(file)) return undefined
-      const result = parsed.get(file)?.get(text)
-      if (result === undefined) throw new Error("The patch could not be parsed.")
-      return result
+  const {
+    result: strict,
+    scopeDrops,
+    preExistingUnchecked,
+  } = strictSelection(
+    input.findings,
+    {
+      ...input,
+      blobs,
+      parses: (file, text) => {
+        if (!ReviewParse.languageOf(file)) return undefined
+        const result = parsed.get(file)?.get(text)
+        if (result === undefined) throw new Error("The patch could not be parsed.")
+        return result
+      },
     },
-  })
+    input.recordScope,
+  )
   for (const kept of strict.findings) if (input.judge?.answered.has(kept.id)) kept.verifier = input.judge.model
   const retry = new Set(input.coverage.unreviewed)
   if (!strict.complete) {
@@ -152,7 +161,13 @@ export const checkStrict = Effect.fn("Review.checkStrict")(function* (
         },
       )
   }
-  return { result: strict, listed: postableStrict(strict.findings, input.findings), unreviewed: [...retry] }
+  return {
+    result: strict,
+    listed: postableStrict(strict.findings, input.findings),
+    unreviewed: [...retry],
+    scopeDrops,
+    preExistingUnchecked,
+  }
 })
 
 function postableStrict(accepted: readonly StrictFinding[], candidates: readonly Finding[]): Finding[] {

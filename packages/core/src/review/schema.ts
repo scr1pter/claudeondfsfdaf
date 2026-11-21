@@ -8,6 +8,7 @@ import {
   CERTIFICATE_VERDICTS,
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
+  FINDING_SCOPES,
   SEVERITIES,
   STRICT_DROPS,
   STRICT_FIX_KINDS,
@@ -149,9 +150,8 @@ export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail" | "scopeGa
 // finding's `failure`, `quotes` and `patch` added. A finding's `required` list is the legacy one, because conservative
 // JSON Schema cannot say "required when blocking": S2 and S5 drop a blocking finding without them. Built from a deep copy,
 // so nothing it returns shares an object with REVIEW_REPORT_JSON_SCHEMA. The quote cap is in the description, not in
-// maxItems, so a provider sees only the keywords the legacy schema already sends; the decoder enforces it. VS-42's
-// `scope` field joins it only with VS-42 wiring (with VS-27c), under `scopeGate: "introduced"`; until then this schema,
-// and decodeReport, are the same whatever scopeGate says.
+// maxItems, so a provider sees only the keywords the legacy schema already sends; the decoder enforces it.
+// S9 requests a scope label under the introduced-by-change gate only.
 export function strictReportJsonSchema(keys: StrictSchemaKeys) {
   if (keys.guardrail !== "strict") return undefined
   const legacy = structuredClone(REVIEW_REPORT_JSON_SCHEMA)
@@ -187,6 +187,16 @@ export function strictReportJsonSchema(keys: StrictSchemaKeys) {
               description: `Required on every blocking finding: up to ${MAX_FINDING_QUOTES} quotes of the code it rests on, each copied exactly.`,
               items: quoteSchema(),
             },
+            ...(keys.scopeGate === "introduced"
+              ? {
+                  scope: {
+                    type: "string",
+                    enum: [...FINDING_SCOPES],
+                    description:
+                      "Required on blocking findings. Does this change introduce or exacerbate the defect, or did it already exist at the merge-base?",
+                  },
+                }
+              : {}),
             patch: {
               type: "string",
               maxLength: MAX_SUGGESTION_CHARS,
@@ -443,7 +453,7 @@ export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): Model
     }),
     findings: candidates
       .flatMap((entry) => {
-        const finding = decodeFinding(entry, strict)
+        const finding = decodeFinding(entry, keys)
         return finding ? [finding] : []
       })
       .slice(0, MAX_REPORT_FINDINGS),
@@ -622,7 +632,7 @@ function ruleLines(input: unknown): RuleCitation["lines"] {
   return { start, end }
 }
 
-function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefined {
+function decodeFinding(input: unknown, keys: StrictSchemaKeys): ModelFinding | undefined {
   if (!isRecord(input)) return undefined
   const path = cleanPath(text(input.path))
   const title = oneLine(text(input.title)).slice(0, MAX_TITLE_CHARS)
@@ -652,7 +662,11 @@ function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefine
   if (rule) finding.rule = rule
   const duplicateOf = text(input.duplicateOf)
   if (duplicateOf) finding.duplicateOf = duplicateOf
-  if (!strict) return finding
+  if (keys.guardrail !== "strict") return finding
+  if (keys.scopeGate === "introduced") {
+    const scope = FINDING_SCOPES.find((value) => value === input.scope)
+    if (scope) finding.scope = scope
+  }
   // An unreadable severity stays "concern" as above, so strict mode never reads it as blocking, and is marked, so S2
   // drops it as `severity-unreadable` rather than as a concern the model chose (VS-27b, [GP3]).
   if (!severity) finding.severityUnreadable = true

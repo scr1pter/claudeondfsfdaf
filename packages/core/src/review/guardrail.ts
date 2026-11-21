@@ -341,6 +341,23 @@ export function strictCandidates(findings: readonly Finding[], input: StrictInpu
       ...(gate
         ? {
             preExisting: () => finding.scope === "pre-existing" || suspect(finding, anchor, matched, context),
+            baseSpan: () => {
+              const own = lookupFile(index, finding.path)?.file
+              const inFinding = (quote: Quote) =>
+                quote.path === (quote.side === "LEFT" ? (own?.oldPath ?? finding.path) : finding.path)
+              const firstSpan = (quotes: Quote[]) => {
+                for (const quote of quotes) {
+                  const span = baseQuoteSpan(quote, context)
+                  if (typeof span === "object") return span
+                }
+              }
+              const span = firstSpan(matched.filter(inFinding))
+              if (span) return span
+              // An old helper line is evidence for a cross-file drop only when the deterministic
+              // check establishes it. A model's label alone cannot attach a later fix to that helper.
+              if (suspect(finding, anchor, matched, context) === true)
+                return firstSpan(matched.filter((quote) => !inFinding(quote)))
+            },
           }
         : {}),
       impact: finding.failure !== undefined && bounded(finding.failure.trigger) && bounded(finding.failure.impact),
@@ -369,10 +386,34 @@ export function strictCandidates(findings: readonly Finding[], input: StrictInpu
   })
 }
 
+// Local eval may retain a base coordinate only for an actual S9 drop with matching immutable evidence.
+// StrictResult is also used in public outputs and never contains these records.
+export interface ScopeDrop {
+  path: string
+  start: number
+  end: number
+  class: Finding["category"]
+  fingerprint: string
+}
+
 export function strictSelect(findings: readonly Finding[], input: StrictInput): StrictResult {
+  return strictSelection(findings, input).result
+}
+
+export function strictSelection(findings: readonly Finding[], input: StrictInput, recordScope = false) {
+  const capture = recordScope && scopeGateApplies(input.config)
+  const scopeDrops: ScopeDrop[] = []
   const pass = strictRules(strictCandidates(findings, input), {
     maxComments: input.config.maxComments,
     unanswered: input.unanswered,
+    ...(capture
+      ? {
+          onPreExisting: (candidate: StrictCandidate) => {
+            const span = candidate.baseSpan?.()
+            if (span) scopeDrops.push({ ...span, class: candidate.finding.category, fingerprint: candidate.finding.id })
+          },
+        }
+      : {}),
   })
   const kept = pass.kept.flatMap((entry): StrictFinding[] => {
     const failure = entry.finding.failure
@@ -399,7 +440,7 @@ export function strictSelect(findings: readonly Finding[], input: StrictInput): 
     ]
   })
   const incomplete = strictIncomplete(input.coverage, pass.unreadable)
-  return {
+  const result: StrictResult = {
     version: 1,
     head: input.head,
     complete: incomplete.length === 0,
@@ -408,6 +449,7 @@ export function strictSelect(findings: readonly Finding[], input: StrictInput): 
     dropped: pass.dropped,
     fixUnchecked: kept.filter((finding) => finding.fix.kind === "unchecked").length,
   }
+  return { result, scopeDrops, preExistingUnchecked: pass.preExistingUnchecked }
 }
 
 // What the rule pass reads about one candidate, worked out by its caller: strictSelect from the diff and the blobs, and
@@ -423,6 +465,7 @@ export interface StrictCandidate {
   // label, or preExistingSuspect), and "unchecked" keeps it because a base the check needed could not be read, which
   // the pass counts. strictCandidates sets it only under scopeGateApplies.
   preExisting?: () => boolean | "unchecked"
+  baseSpan?: () => Pick<ScopeDrop, "path" | "start" | "end"> | undefined
   // S6, read only once S1 to S5 and S9 hold, since checking a patch applies it and may parse the file.
   fix: () => StrictFinding["fix"] | undefined
   code: string // sameFinding's anchored code, normalized; "" when unknown
@@ -447,7 +490,7 @@ export interface StrictPass {
 // order), each dropped at the first rule it fails, and S7 compares a candidate only with those already kept.
 export function strictRules(
   candidates: readonly StrictCandidate[],
-  input: { maxComments: number; unanswered: readonly string[] },
+  input: { maxComments: number; unanswered: readonly string[]; onPreExisting?: (candidate: StrictCandidate) => void },
 ): StrictPass {
   const unanswered = new Set(input.unanswered)
   const codes = new Map(candidates.map((candidate) => [candidate.finding, candidate.code]))
@@ -456,6 +499,7 @@ export function strictRules(
     (state: { accepted: Accepted[]; drops: Judged[] }, candidate) => {
       const verdict = judge(candidate, { unanswered, accepted: state.accepted, code: codeOf })
       if ("fix" in verdict) return { ...state, accepted: [...state.accepted, { candidate, ...verdict }] }
+      if (verdict.drop === "pre-existing") input.onPreExisting?.(candidate)
       return { ...state, drops: [...state.drops, verdict] }
     },
     { accepted: [], drops: [] },
@@ -597,17 +641,35 @@ function addedIn(index: AnchorIndex, anchor: Anchor) {
 // base line its first line maps to, read at the base path; "unchecked" when that base is null or missing from the map.
 // A head line with no base line (the change added it) is a change, and a base the tree lacks holds no old code.
 function unchangedSinceBase(quote: Quote, context: SuspectContext): boolean | "unchecked" {
+  const span = baseQuoteSpan(quote, context)
+  return span === "unchecked" ? span : !!span
+}
+
+// A matched LEFT quote already names its base coordinate. A RIGHT quote must map to an
+// uninterrupted run of unchanged lines and match the private base text at that position.
+function baseQuoteSpan(quote: Quote, context: SuspectContext) {
   const trimmed = trimQuote(quote)
   if (!trimmed) return false
-  const span = trimmed.code.split(LINE_BREAK).length
-  const lines = Array.from({ length: span }, (_, offset) => trimmed.line + offset)
-  if (lines.some((line) => touched(context.anchors, quote.path, line, 0))) return false
-  const file = lookupFile(context.index, quote.path)?.file
-  const line = file ? otherSide(file, "RIGHT")(trimmed.line) : trimmed.line
-  if (line === undefined) return false
-  const base = context.base(blobKey(context.index, quote.path, "LEFT").path)
-  if (base === "unreadable") return "unchecked"
-  return base !== "absent" && matchAt(base, { ...trimmed, side: "LEFT", line })
+  const length = trimmed.code.split(LINE_BREAK).length
+  // S4 already resolved a LEFT quote to its base path. In overlapping renames (a→b, b→c),
+  // looking up that base path as a head path a second time can move evidence to a different file.
+  const file = quote.side === "RIGHT" ? lookupFile(context.index, quote.path)?.file : undefined
+  const path = file?.oldPath ?? quote.path
+  let start = trimmed.line
+  if (quote.side === "RIGHT") {
+    const toBase = file ? otherSide(file, "RIGHT") : (line: number) => line
+    const first = toBase(start)
+    if (first === undefined) return false
+    for (let offset = 0; offset < length; offset++) {
+      if (touched(context.anchors, quote.path, start + offset, 0) || toBase(start + offset) !== first + offset)
+        return false
+    }
+    start = first
+  }
+  const base = context.base(path)
+  if (base === "unreadable") return "unchecked" as const
+  if (base === "absent" || !matchAt(base, { ...trimmed, side: "LEFT", line: start })) return false
+  return { path, start, end: start + length - 1 }
 }
 
 // What certified() reads beside a finding: the diff, and each file's lines as lineReader gives them. Shared, so VS-44

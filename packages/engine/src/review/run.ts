@@ -29,6 +29,7 @@ import {
   type DiffFile,
 } from "@vectordevai/core/review/diff"
 import { strictSelect } from "@vectordevai/core/review/guardrail"
+import type { ScopeDrop } from "@vectordevai/core/review/guardrail"
 import { strictReviewConfig } from "@vectordevai/core/review/config"
 import {
   decideDispatch,
@@ -255,6 +256,7 @@ export interface Projection {
 
 export type Observation =
   | { type: "strict-candidates"; findings: Finding[]; unanswered: string[] }
+  | { type: "scope-drops"; base: string; drops: ScopeDrop[] }
   | { type: "impact"; record: ImpactRecord; locations: string[] }
   | { type: "dispatch"; estimate: DispatchEstimate; step?: Shrink }
   // A pass is about to run with this prompt and step cap, or was planned and skipped (verify with no budget or time
@@ -1253,6 +1255,10 @@ export const run: (
       ? earlier.filter((entry) => !strictDenied(entry.path) && (!hold || !containsHeldValue(entry)))
       : earlier
     const checkFiles = overBudget.size ? headFiles?.filter((file) => !overBudget.has(file.path)) : headFiles
+    const strictKeys = {
+      guardrail: "strict",
+      ...(config.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}),
+    } as const
     const promptInput: PromptInput = {
       mode: input.mode,
       trust: input.trust,
@@ -1281,7 +1287,7 @@ export const run: (
       prior,
       maxComments: config.maxComments,
       nits: wantsNits(config),
-      ...(strictMode ? { guardrail: "strict" as const, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
+      ...(strictMode ? { ...strictKeys, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
     }
     let activePayload = promptInput
     let activeImpact = impact?.slice
@@ -1293,7 +1299,6 @@ export const run: (
           locations: sent ? [...activeImpact.locations] : [],
         })
     }
-    const strictKeys = { guardrail: "strict" } as const
     const reportSchema = strictMode ? strictReportJsonSchema(strictKeys)! : REVIEW_REPORT_JSON_SCHEMA
     const names = nothingToSend ? [] : planSpecialists(input.files, config)
     const primaryRequests = (payload: PromptInput) =>
@@ -1947,8 +1952,9 @@ export const run: (
               ]
           if (!refused && input.observe)
             observe({ type: "strict-candidates", findings: structuredClone(pool), unanswered: [...unanswered] })
-          return yield* checkStrict({
+          const review = yield* checkStrict({
             findings: pool,
+            recordScope: !!input.observe && !refused && !uncommitted,
             anchors: input.anchors,
             directory: input.directory,
             head: input.head,
@@ -1974,6 +1980,9 @@ export const run: (
               ? { judge: { model: nameOf(judgeModel), answered: new Set(finalCall.map((row) => row.id)) } }
               : {}),
           })
+          if (input.observe && review.scopeDrops.length)
+            observe({ type: "scope-drops", base: input.base, drops: review.scopeDrops })
+          return review
         })
       : undefined
     const unreviewed = strict?.unreviewed ?? missedCoverage
@@ -2144,6 +2153,11 @@ export const run: (
         : [
             ...(noRequestSent ? [BUDGET_REQUEST_CHANGED] : []),
             ...picked.notes,
+            ...(strict?.preExistingUnchecked
+              ? [
+                  `The merge-base evidence was unavailable for ${strict.preExistingUnchecked} retained ${strict.preExistingUnchecked === 1 ? "finding" : "findings"}. The introduced-by-change check could not rule out a pre-existing defect.`,
+                ]
+              : []),
             ...(graph && uncommitted
               ? ["Impact context is unavailable for staged or uncommitted changes."]
               : graph && !impact && !input.stopSignal?.aborted

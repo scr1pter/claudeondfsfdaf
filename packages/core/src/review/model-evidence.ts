@@ -62,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "df49a0ed5b2121b8"
+export const REVIEW_PIPELINE_SOURCES = "ee10fd1a5bb6171f"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -451,10 +451,15 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // Under `holdback: "secrets"`, VS-34's input-redaction sentence comes after them: the review and security prompts with
 // every input set and their inputs marked redacted, for both trusts. The verify and judge prompts carry no sentence.
 export function canonicalPrompts(
-  keys: Partial<Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime" | "holdback" | "guardrail">> = {},
+  keys: Partial<
+    Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime" | "holdback" | "guardrail" | "scopeGate">
+  > = {},
 ): string[] {
+  const gate =
+    keys.guardrail === "strict" && keys.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}
+  const finding = gate.scopeGate ? { ...STRICT_FINDING, scope: "introduced" as const } : STRICT_FINDING
   const reviewers = (input: PromptInput) => {
-    const effective: PromptInput = keys.guardrail === "strict" ? { ...input, guardrail: "strict" } : input
+    const effective: PromptInput = keys.guardrail === "strict" ? { ...input, guardrail: "strict", ...gate } : input
     return [buildReviewPrompt(effective), buildSecurityPrompt(effective)]
   }
   const impact =
@@ -484,13 +489,20 @@ export function canonicalPrompts(
       ...canonicalInputs(trust).flatMap(reviewers),
       ...(keys.guardrail === "strict"
         ? [
-            buildVerifyPrompt({ trust, guardrail: "strict", head: CANONICAL_INPUT.head, candidates: [STRICT_FINDING] }),
-            buildVerifyPrompt({ ...POPULATED_VERIFY, trust, guardrail: "strict", candidates: [STRICT_FINDING] }),
+            buildVerifyPrompt({
+              trust,
+              guardrail: "strict",
+              ...gate,
+              head: CANONICAL_INPUT.head,
+              candidates: [finding],
+            }),
+            buildVerifyPrompt({ ...POPULATED_VERIFY, trust, guardrail: "strict", ...gate, candidates: [finding] }),
             buildJudgePrompt({
               ...POPULATED_VERIFY,
               trust,
               guardrail: "strict",
-              candidates: [STRICT_FINDING],
+              ...gate,
+              candidates: [finding],
               checks: [{ id: STRICT_FINDING.id, verdict: "confirmed", reason: "Re-read the cited line." }],
             }),
           ]
@@ -631,10 +643,7 @@ export function evidenceScope(input: {
     prompts: promptsDigest({
       ...(input.adapter === "engine" && input.config.impact === "graph" ? { impact: "graph" as const } : {}),
       ...(input.adapter === "engine" && input.config.guardrail === "strict" ? { guardrail: "strict" as const } : {}),
-      ...(input.adapter === "engine" &&
-      input.config.guardrail === "strict" &&
-      input.config.scopeGate === "introduced" &&
-      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "scopeGate")
+      ...(input.adapter === "engine" && input.config.guardrail === "strict" && input.config.scopeGate === "introduced"
         ? { scopeGate: "introduced" as const }
         : {}),
       ...(input.adapter === "engine" &&

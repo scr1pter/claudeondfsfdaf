@@ -158,7 +158,7 @@ export interface ReplayInput {
   // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
   // applies to the prompt since SF-13b and to the reviewer's read and grep tools since SF-14, and so may the
   // engine:holdback-secrets variant (VARIANT_KEYS.engine), which may only raise it to "secrets". Nor a key
-  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-42's scopeGate, VS-44's verifyEvidence,
+  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-44's verifyEvidence,
   // VS-28's depth and lenses, VS-30's runtime, which is also
   // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
@@ -237,6 +237,14 @@ export interface PlacedRecord {
 }
 
 export interface ReplayArtifact {
+  // Actual S9 drops with a verified base location, for local latent-forecast scoring only.
+  drops?: {
+    path: string
+    base: { sha: string; start: number; end: number }
+    class: Finding["category"]
+    fingerprint: string
+    at: string
+  }[]
   version: 1
   label: string
   adapter: "engine"
@@ -842,6 +850,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // 6. The review. A projection runs every decision the dollar cap refuses and keeps it; one made at admission is
   // followed at once by the attempt it admitted, so that attempt's seq is the next one.
   const observed: Observation[] = []
+  const drops: NonNullable<ReplayArtifact["drops"]> = []
   const over: ProjectedOverCap[] = []
   // Only a trusted committed checkout can supply SF-16 evidence. The helper derives it from the private Git view.
   const trivialProof =
@@ -884,7 +893,22 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     rulesSource: "base branch",
     inlinePosted: 0,
     ...(ignoredPaths ? { ignored: ignoredPaths } : {}),
-    observe: (event) => observed.push(event),
+    observe: (event) => {
+      observed.push(event)
+      if (event.type !== "scope-drops" || event.base !== plan.mergeBase) return
+      const at = new Date(now()).toISOString()
+      for (const drop of event.drops) {
+        // Redacting a path would give the downstream history join a different file. Omit that location.
+        if (clean(drop.path) !== drop.path || drop.path.length > 4096) continue
+        drops.push({
+          path: drop.path,
+          base: { sha: event.base, start: drop.start, end: drop.end },
+          class: drop.class,
+          fingerprint: drop.fingerprint,
+          at,
+        })
+      }
+    },
     ...(projecting
       ? {
           projection: {
@@ -1138,6 +1162,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
         }
       : {}),
     ...(strictCandidates ? { strictCandidates } : {}),
+    ...(drops.length ? { drops } : {}),
     ...(impact ? { tier1: impact.record } : {}),
     files: {
       reviewed: quoted ? files.flatMap((file) => (excluded.has(file.path) ? [] : [file.path])) : [],
@@ -1354,7 +1379,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  scopeGate: "VS-42 wiring",
   verifyEvidence: "VS-44 wiring",
   depth: "VS-28 wiring",
   lenses: "VS-28 wiring",
@@ -1426,6 +1450,17 @@ function variantProblem(input: ReplayInput) {
     (variant.name !== "engine:impact-graph" || variant.keys.impact !== "graph" || keys.length !== 1 || variant.models)
   )
     return 'The engine:impact-graph variant sets only impact: "graph".'
+  if (variant.name === "engine:scope-introduced" || variant.keys.scopeGate !== undefined) {
+    if (
+      variant.name !== "engine:scope-introduced" ||
+      variant.keys.guardrail !== "strict" ||
+      variant.keys.scopeGate !== "introduced" ||
+      keys.length !== 2 ||
+      variant.models
+    )
+      return 'The engine:scope-introduced variant sets only guardrail: "strict" and scopeGate: "introduced".'
+    return undefined
+  }
   if (
     (variant.name === "engine:guardrail-strict" || variant.keys.guardrail !== undefined) &&
     (variant.name !== "engine:guardrail-strict" ||
