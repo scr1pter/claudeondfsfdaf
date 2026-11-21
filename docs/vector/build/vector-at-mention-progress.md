@@ -1818,7 +1818,7 @@ None yet (contract section 4).
   - The capture ticket in the capture step's log header (BT12 item 11's addendum, recorded at the PR finish), with the V31 items above.
   - V24's carries, `VECTOR_AGENT_RESULT` and `VECTOR_APP_BOT_ID` (BT02 item 5).
   - The `WORKFLOW_VERSION` bump question (BT08b item 1) and the BT08a observations (its item 1).
-  - BT13's deviation item 2 (the INV-H1 string "Reviews every pull request.", on `origin/main` too) with item 5's app copy guard, which lands with it, before owner step 9 (listing `github-agents`) or any activation; items 3 and 4 (the legacy auto-review text, the 1.3 B and C copy).
+  - BT13's deviation item 2 (the INV-H1 string "Reviews every pull request.", on `origin/main` too) with item 5's app copy guard, which lands with it, before owner step 9 (listing `github-agents`) or any activation; items 3 and 4 (the legacy auto-review text, the 1.3 B and C copy; item 3 fixed 21 Nov 2026 on `codium-api-fixes`, deviations BT13 item 3 "As fixed").
   - test.yml's first cross-OS result for this branch.
   - Merges: `origin/codium-finish` conflicts in `codium-track-b-checkpoint.md`; `origin/connect-finish`'s `b7c20d1a` and `6895687e` fix the same `useradd` timeout as `a5280117` and conflict in `github.sandbox.ts`, and its V16 item 11 records the same cause as "2026-11-16 V16 account skeleton" (deviation item 6).
   - After merging `origin/main`: `9be63d68` and `ec859732` should clear both lane baselines; spec INV-S5's ship gate (`:268`) and "2026-11-14 V16 bubblewrap floor held" are to be checked against #35's `docs/vector/build/native-isolation-status.md`.
