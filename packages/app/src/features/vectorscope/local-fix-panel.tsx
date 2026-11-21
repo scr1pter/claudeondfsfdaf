@@ -183,10 +183,10 @@ export function LocalFixView(props: {
           “Apply” on a finding, which edits your checkout.
         </p>
         <p class="mt-1.5 leading-relaxed text-[color:var(--vx-text-muted)]">
-          Reviewing again, opening another pull request or your changes, merging, switching project, closing this panel,
+          Reviewing again, opening another pull request or your changes, merging, switching repositories, closing this panel,
           a reconnect or a settings change closes this section: a running step stops (its approval is spent) and Vector
           cancels the fix checkout it prepared here; a commit on its new branch is kept. At most{" "}
-          {ReviewFixControl.LIMIT.fixes} fixes can be open in a project, other conversations’ included. A fix left open
+          {ReviewFixControl.LIMIT.fixes} fixes can be open in a repository, other conversations’ included. A fix left open
           is removed when the engine restarts.
         </p>
       </div>

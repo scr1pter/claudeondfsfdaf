@@ -377,7 +377,7 @@ describe("the fix panel's view", () => {
     expect(section.textContent).toContain("Posting this review to GitHub, suggestions included, approves none of them.")
     expect(section.textContent).toContain("The engine did not check those findings again.")
     expect(section.textContent).toContain(
-      `At most ${ReviewFixControl.LIMIT.fixes} fixes can be open in a project, other conversations’ included.`,
+      `At most ${ReviewFixControl.LIMIT.fixes} fixes can be open in a repository, other conversations’ included.`,
     )
     expect(view.calls).toEqual([])
     for (const label of ["Preview apply", "Preview checks", "Preview commit", "Preview push"])
