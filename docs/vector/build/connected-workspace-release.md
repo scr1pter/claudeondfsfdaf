@@ -96,6 +96,10 @@ The vector-codium.yml failures are inherited, not lane-caused. Each red shard ha
 - **@vector:** CN-13's `github-agent.ts` pin against `GithubAgents.MIN_AGENTS_CLI`.
 - **The lead, for two changes that work whatever `VECTOR_EXPERIMENTAL_CONNECT` says.** The lane brief asks that new behaviour be reachable only with the flag on; these two are deliberate exceptions. (1) CN-16's Playbooks rule (`core/src/playbooks/check.ts`) refuses to publish or install a Playbook whose connect stage is anything but a read-only VectorScope review. It only refuses, and a refusal hidden behind the flag would fail open (deviations CN-16). (2) CN-07's `owner` marker: ReadOnlyGit's `open()` writes it into every private snapshot folder, also for VectorScope and task isolation with Connect off; only the sweep is gated. The marker must not depend on the flag, because a Connect-on process sweeps every matching snapshot in the temporary folder, and without a marker a Connect-off process's live snapshot older than 24 hours would be judged by age alone (deviations CN-07, "Flag-off exception").
 
+_21 Nov 2026 (v2-closeout-ci):_ none of the §1.5 acknowledgements is recorded yet. PR #38 merged as `7e440a27`
+with no reviews and no non-bot comments (read through GitHub MCP), so each item above still waits for its owner or the
+lead.
+
 ### 1.6 Deferred verification
 
 - No real Mac, Windows machine, phone, relay, container, supervisor host or model provider was used by the lane; tests use local fakes only.

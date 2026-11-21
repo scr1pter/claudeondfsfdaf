@@ -2165,3 +2165,18 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   and other folders' events to stay on the computer. Without the `STREAMED` entry the case fails ("condition never
   held"); with it the file passes (33 pass). No flag, route or protocol change: the event already crosses the same
   watched-events path, and `VECTOR_EXPERIMENTAL_CONNECT` stays off.
+
+## 2026-11-21 — docs refresh after PR #38 merged (v2-closeout-ci)
+
+Docs only. PR #38 merged as `7e440a27` on 16 Nov.
+
+- **v2-complete-plan §4.1.** Each superseded Status cell now says Fixed (or, for F1, still Partly fixed) with its
+  source, and keeps the old text after "Was:": C1, F4/C2 (platform part), F8, F9, C10, C9 and C7 cite "2026-11-14 —
+  v2 integration safety and visibility repairs" above; C4, F5/C11 (config part only) and F7 cite
+  main-integration-2026-11-14.md by the handoff's reading; C3 cites CN-03 to CN-05, C5 CN-07, C6 CN-08 to CN-10, F10
+  CN-01 and F1's Git half CN-02, with the commits from the handoff's CN table, each an ancestor of main. No version
+  wording changed.
+- **Handoff and release checklist.** A dated line under "For the lead at PR review" gives each lead item's state, and
+  §1.5 says the acknowledgements are still pending (PR #38 has no reviews).
+- **Still open.** D34 and the supervisor's optional `sessionID` (cloud-workspaces.md D34, proposed for the lead to
+  confirm); Q1 and Q6 (owner); C11's instance-store part (review-fixes lane).

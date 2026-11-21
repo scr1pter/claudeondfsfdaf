@@ -41,6 +41,8 @@ PR finishing fixes, 2026-11-16 (deviations, "connect-finish lane: PR finishing f
 
 For the lead at PR review: D34 gains a run's cancel (or protocol.ts drops it), and the raw-versus-normalized engine path note goes to the cloud-workspaces owner (both CN-19); the run read's optional `sessionID` on the supervisor (CN-19); the owners' and the lead's acknowledgements in the release checklist §1.5, which since the phase-review fixes also name CN-18's phone refactor, CN-14's two Hands anchors and the two changes that work with Connect off; and v2-complete-plan §4.1's rows for C2, C3, C5, C6 and F10, which the CN packages above supersede.
 
+21 Nov 2026 (v2-closeout-ci): PR #38 merged as `7e440a27` on 16 Nov, and the inherited vector-codium failures were fixed in `9be63d68` and `39865a55`, both on main. State of the lead items above: v2-complete-plan §4.1's rows are refreshed (C2, C3, C5, C6 and F10 among them, citing the CN commits). D34 and the supervisor's optional `sessionID` are still open: cloud-workspaces.md has a 21 Nov D34 note proposing the CN-19 cancel decision for the lead to confirm. The §1.5 acknowledgements are still pending: PR #38 has no reviews and no comments other than bots (read through GitHub MCP), so none was recorded there.
+
 ## Connect-finish checkpoint, 2026-11-14
 
 This section supersedes the head statements below. They are `6070835df` in the 2026-11-12 updates, and `a8234d9ac`, the `build-connect` head that the v2 reviews read but this file never recorded. Nothing below is deleted. The older sections remain the record of what ran at their own sources, and the owner rules at the end of this file still apply.
