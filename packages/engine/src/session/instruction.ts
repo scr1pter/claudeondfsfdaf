@@ -22,6 +22,9 @@ import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainPaths } from "@vectordevai/core/brain/paths"
 import { Project } from "@vectordevai/core/project"
+import { fetchRef } from "@vectordevai/core/everywhere/git"
+import { HEAD_SHA_PATTERN, JOB_ID_PATTERN } from "@vectordevai/schema/everywhere"
+import { Git } from "@/git"
 import type { MessageID } from "./schema"
 
 /** Memory entries attached to a read result are recorded in its `loaded` metadata as `memory:<id>,<id>`. */
@@ -39,6 +42,31 @@ export const KNOWLEDGE_LOADED = "knowledge:"
 export const LINKS = "vector.memory.links"
 
 export type Link = { readonly mode: "pointer" | "guard"; readonly file: string; readonly ids: readonly string[] }
+
+/** A Vector everywhere job's untrusted checkout (EV-21): its real root, and the job's base commit when it can be read. */
+type Job = { readonly root: string; readonly base: string | undefined }
+
+// A git that may not fetch: in a partial clone a missing object would otherwise be fetched from the remote.
+const NO_FETCH = { GIT_NO_LAZY_FETCH: "1" }
+
+// Where a path really lands, or the resolved path when that cannot be told (a link loop).
+function real(input: string) {
+  try {
+    return FSUtil.realpath(input)
+  } catch {
+    return path.resolve(input)
+  }
+}
+
+// A folder as Worktree compares folders: its real path, case folded on Windows.
+function fold(input: string) {
+  const normalized = path.normalize(input)
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized
+}
+
+function canonical(input: string) {
+  return fold(real(input))
+}
 
 // How many remote instruction URLs, and texts of each, are remembered for the research check.
 const REMOTE_URLS = 32
@@ -108,7 +136,12 @@ export interface Interface {
   ) => Effect.Effect<{ readonly text?: string; readonly links: readonly Link[] }>
   /** Where this instance's requests run, as the brain needs it: the repository, its rules and memory files, trust. */
   readonly place: () => Effect.Effect<Brain.Place>
+  /**
+   * The instruction files a prompt may carry, each found where it would be. A file a Vector everywhere job's checkout
+   * holds (EV-21) stays in this set, which the computer tool protects, and keeps its place in it.
+   */
   readonly systemPaths: () => Effect.Effect<Set<string>, FSUtil.Error>
+  /** The instruction texts for a prompt: systemPaths() without what a job's checkout holds, and remote instructions. */
   readonly system: () => Effect.Effect<string[], FSUtil.Error>
   /**
    * What system() puts in a prompt, by whose it is: the repository's own instruction files are the work; the user's
@@ -117,7 +150,10 @@ export interface Interface {
    */
   readonly contents: () => Effect.Effect<{ readonly work: string[]; readonly private: string[] }, FSUtil.Error>
   readonly find: (dir: string) => Effect.Effect<string | undefined, FSUtil.Error>
-  /** Instruction files near a file, the memory about it, and with `asking`, the line naming what is linked to it. */
+  /**
+   * Instruction files near a file (never one a job's checkout holds), the memory about it, and with `asking`, the line
+   * naming what is linked to it.
+   */
   readonly resolve: (
     messages: SessionV1.WithParts[],
     filepath: string,
@@ -138,11 +174,13 @@ const layer: Layer.Layer<
   | RuntimeFlags.Service
   | Brain.Service
   | BrainKnowledge.Service
+  | Git.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
     const cfg = yield* Config.Service
     const fs = yield* FSUtil.Service
+    const git = yield* Git.Service
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
     const brain = yield* Brain.Service
@@ -225,6 +263,77 @@ const layer: Layer.Layer<
         Effect.catch(() => Effect.succeed([] as string[])),
         Effect.flatMap((matches) => Effect.filter(matches, landsInProject)),
       )
+
+    // EV-21: a Vector everywhere job's checkout holds files the job wrote from platform text, and Continue opens an
+    // ordinary owner session there, with network and the owner's permissions. While the owner has not trusted that
+    // folder, an instruction file inside it reaches a prompt only with the content the job's base gave it, so the
+    // repository's own words go and the job's never do. This answers whether this instance is such a checkout: exactly
+    // <data>/everywhere-worktree/<project id>/<jid>, where Worktree.createUnattended puts one, compared as Worktree
+    // compares folders (real paths, so macOS's /var and /private/var agree; case folded on Windows). The base is the
+    // commit the runner fetched into the job's private ref, which createUnattended checked out; with the ref gone, or
+    // any git error, there is no base and every instruction file inside the checkout is held.
+    const jobBase = Effect.fnUntraced(function* () {
+      const ctx = yield* InstanceState.context
+      const tree = canonical(ctx.worktree)
+      const jid = path.basename(tree)
+      if (!JOB_ID_PATTERN.test(jid)) return undefined
+      if (tree !== fold(path.join(real(Global.Path.data), "everywhere-worktree", ctx.project.id, jid))) return undefined
+      if ((yield* cfg.trust()).trusted) return undefined
+      const found = yield* git.run(
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", `${fetchRef(jid)}^{commit}`],
+        { cwd: ctx.worktree, env: NO_FETCH },
+      )
+      const base = found.exitCode === 0 ? found.text().trim() : ""
+      return { root: real(ctx.worktree), base: HEAD_SHA_PATTERN.test(base) ? base : undefined } satisfies Job
+    })
+
+    // Whether a job's checkout holds this instruction file: one inside it is held unless its bytes, unfiltered, are the
+    // base's blob at the path where it really lands (a link inside the checkout is read through, and so is compared
+    // through). A file that is new, changed, outside the base or unreadable to git is held. --no-filters runs no
+    // filter driver or line-ending conversion, and nothing here fetches, so these two calls start no other program.
+    const held = Effect.fnUntraced(function* (job: Job | undefined, file: string) {
+      if (!job) return false
+      const ctx = yield* InstanceState.context
+      // A file outside the checkout is the user's own, which PromptTrust decides on.
+      if (!containsPath(file, ctx)) return false
+      const target = real(file)
+      const relative = path.relative(job.root, target)
+      const inside =
+        relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+      const [blob, hashed] =
+        job.base && inside
+          ? yield* Effect.all(
+              [
+                git.run(
+                  [
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    `${job.base}:${relative.split(path.sep).join("/")}`,
+                  ],
+                  { cwd: ctx.worktree, env: NO_FETCH },
+                ),
+                git.run(["hash-object", "--no-filters", "--", target], { cwd: ctx.worktree, env: NO_FETCH }),
+              ],
+              { concurrency: 2 },
+            )
+          : [undefined, undefined]
+      const expected = blob?.exitCode === 0 ? blob.text().trim() : ""
+      if (expected !== "" && hashed?.exitCode === 0 && hashed.text().trim() === expected) return false
+      yield* Effect.logWarning("holding an instruction file that differs from the Vector everywhere job's base", {
+        file,
+      })
+      return true
+    })
+
+    // systemPaths() less what a job's checkout holds. The set itself stays whole, and a held root AGENTS.md keeps its
+    // place in it, so CLAUDE.md does not stand in for it.
+    const admitted = Effect.fnUntraced(function* () {
+      const paths = Array.from(yield* systemPaths())
+      const job = yield* jobBase()
+      return yield* Effect.filter(paths, (item) => held(job, item).pipe(Effect.map((value) => !value)))
+    })
 
     const fetch = Effect.fnUntraced(function* (url: string) {
       // Instruction URLs are remote config: with Vector Local on, one that is not on this computer or the list, or
@@ -321,12 +430,12 @@ const layer: Layer.Layer<
 
     const system = Effect.fn("Instruction.system")(function* () {
       const config = yield* cfg.get()
-      const paths = yield* systemPaths()
+      const paths = yield* admitted()
       const urls = (config.instructions ?? []).filter(
         (item) => item.startsWith("https://") || item.startsWith("http://"),
       )
 
-      const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
+      const files = yield* Effect.forEach(paths, read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
       urls.forEach((url, i) => {
         if (!remote[i]) return
@@ -337,7 +446,7 @@ const layer: Layer.Layer<
       })
 
       return [
-        ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
+        ...paths.flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
         ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
       ]
     })
@@ -345,7 +454,7 @@ const layer: Layer.Layer<
     const contents = Effect.fn("Instruction.contents")(function* () {
       const ctx = yield* InstanceState.context
       const config = yield* cfg.get()
-      const paths = Array.from(yield* systemPaths())
+      const paths = yield* admitted()
       const files = yield* Effect.forEach(paths, read, { concurrency: 8 })
       const local = paths.flatMap((item, i) =>
         files[i] ? [{ text: `Instructions from: ${item}\n${files[i]}`, own: containsPath(item, ctx) }] : [],
@@ -376,6 +485,7 @@ const layer: Layer.Layer<
       asking?: Asking,
     ) {
       const sys = yield* systemPaths()
+      const job = yield* jobBase()
       const already = extract(messages)
       const results: { filepath: string; content: string; link?: Link }[] = []
       const s = yield* InstanceState.get(state)
@@ -384,10 +494,18 @@ const layer: Layer.Layer<
       const target = path.resolve(filepath)
       let current = path.dirname(target)
 
-      // Walk upward from the file being read and attach nearby instruction files once per message.
+      // Walk upward from the file being read and attach nearby instruction files once per message. One a job's checkout
+      // holds is passed over, and the walk goes on upward.
       while (current.startsWith(root) && current !== root) {
         const found = yield* find(current)
-        if (!found || found === target || sys.has(found) || already.has(found) || !(yield* landsInProject(found))) {
+        if (
+          !found ||
+          found === target ||
+          sys.has(found) ||
+          already.has(found) ||
+          !(yield* landsInProject(found)) ||
+          (yield* held(job, found))
+        ) {
           current = path.dirname(current)
           continue
         }
@@ -536,7 +654,16 @@ function requestOf(messages: readonly SessionV1.WithParts[]) {
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, FSUtil.node, Global.node, RuntimeFlags.node, httpClient, Brain.node, BrainKnowledge.node],
+  deps: [
+    Config.node,
+    FSUtil.node,
+    Global.node,
+    RuntimeFlags.node,
+    httpClient,
+    Brain.node,
+    BrainKnowledge.node,
+    Git.node,
+  ],
 })
 
 export * as Instruction from "./instruction"
