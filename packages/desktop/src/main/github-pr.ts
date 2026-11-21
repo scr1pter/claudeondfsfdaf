@@ -642,7 +642,7 @@ export async function fetchAutoReviewStatus(access: GithubAccess, repo: GithubRe
 
 // `vector github install` leaves out the pull_request trigger when asked to review only on a `/vector review` comment.
 // A file that names no pull_request event in any form (`pull_request:`, `[push, pull_request]`, `- pull_request`) is
-// that workflow; anything else, including a file someone rewrote, counts as reviewing every pull request.
+// that workflow; anything else, including a file someone rewrote, counts as automatic reviews.
 function reviewsOnlyOnRequest(content: string) {
   return content.includes("issue_comment") && !/(^|[\s[,])pull_request\s*(:|,|\]|$)/m.test(content)
 }
@@ -753,7 +753,7 @@ async function createAutoReviewBranch(access: GithubAccess, repo: GithubRepoRef,
 function autoReviewRefusal(status: AutoReviewStatus) {
   if (status.state === "installed") return `Automatic reviews are already set up in ${status.repo}.`
   if (status.state === "on-request")
-    return `${status.repo} already has ${WORKFLOW_FILE}, set up to review when someone comments /vector review. Run \`vector github install\` and choose to review every pull request to change it.`
+    return `${status.repo} already has ${WORKFLOW_FILE}, set up to review when someone comments /vector review. Run \`vector github install\` and answer yes to "Review pull requests automatically?" to change it.`
   if (status.state === "pending")
     return `A pull request that sets up automatic reviews is already open in ${status.repo}: ${status.url}`
   if (status.state === "read-only") return `You need write access to ${status.repo} to add a workflow.`
@@ -764,7 +764,7 @@ function autoReviewRefusal(status: AutoReviewStatus) {
 
 function autoReviewBody(workflow: AutoReviewWorkflow) {
   return [
-    `Adds \`${workflow.path}\`, the workflow \`vector github install\` writes, so Vectorscope reviews every pull request when it opens and on every push. Reviews run on \`${workflow.model}\` and stop at $${workflow.monthlyUsd} a month (\`REVIEW_MAX_COST_USD_PER_MONTH\`).`,
+    `Adds \`${workflow.path}\`, the workflow \`vector github install\` writes, so Vectorscope reviews pull requests automatically when they open and on every push. Reviews run on \`${workflow.model}\` and stop at $${workflow.monthlyUsd} a month (\`REVIEW_MAX_COST_USD_PER_MONTH\`).`,
     "",
     "Before merging, add these repository secrets under Settings → Secrets and variables → Actions:",
     "",
