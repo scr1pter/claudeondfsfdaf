@@ -907,6 +907,7 @@ describe("VS-24's keys", () => {
       lenses: "off",
       cards: "off",
       runtime: "off",
+      diagnostics: "off",
       holdback: "off",
     })
   })
@@ -1682,4 +1683,31 @@ test("largeChanges defaults to the existing size skip and opts into batches in t
   })
   expect(UNAPPLIED_REVIEW_KEYS as readonly string[]).not.toContain("largeChanges")
   expect(parseReviewConfig({ json: '{"largeChanges":"forever"}' }).config).toEqual(standard.config)
+})
+
+test("offline diagnostics accepts only a trusted owner setting or a complete base read", () => {
+  const text = '{"diagnostics":"offline","diagnosticRules":["repository-supplied"]}'
+  for (const surface of ["local", "github"] as const) {
+    const admitted = mergeReviewConfig({ surface, json: { at: "base", text } })
+    expect(admitted.config.diagnostics).toBe("offline")
+    expect(admitted.config).not.toHaveProperty("diagnosticRules")
+    for (const at of ["snapshot", "working-tree"] as const) {
+      const denied = mergeReviewConfig({ surface, json: { at, text }, env: { REVIEW_DIAGNOSTICS: "offline" } })
+      expect(denied.config).not.toHaveProperty("diagnostics")
+      expect(denied.warnings.join(" ")).toContain('"diagnostics" is read only')
+    }
+    expect(mergeReviewConfig({ surface, json: { at: "base", text, privacyOnly: true } }).config).not.toHaveProperty(
+      "diagnostics",
+    )
+    expect(mergeReviewConfig({ surface, json: { at: "base", text: '{"diagnostics":"off"}' } })).toEqual(
+      mergeReviewConfig({ surface }),
+    )
+  }
+  expect(mergeReviewConfig({ surface: "local", global: { diagnostics: "offline" } }).config.diagnostics).toBe("offline")
+  expect(mergeReviewConfig({ surface: "github", global: { diagnostics: "offline" } }).config).not.toHaveProperty(
+    "diagnostics",
+  )
+  expect(
+    mergeReviewConfig({ surface: "local", global: { diagnostics: { command: "anything" } } }).config,
+  ).not.toHaveProperty("diagnostics")
 })

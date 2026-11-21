@@ -41,7 +41,7 @@ import {
 } from "@vectordevai/core/review/format"
 import { reviewVerdict } from "@vectordevai/core/review/verdict"
 import { decideSkip } from "@vectordevai/core/review/skip"
-import { nextState } from "@vectordevai/core/review/state"
+import { nextState, type BatchCursor } from "@vectordevai/core/review/state"
 import {
   DEFAULT_REVIEW_CONFIG,
   REVIEW_LENSES,
@@ -6583,3 +6583,162 @@ describe("SF-26 local review context", () => {
     90_000,
   )
 })
+
+describe("VS-18 offline diagnostics (SF-32)", () => {
+  it.instance(
+    "filters pinned redacted evidence on the wire and keeps explicit off byte-for-byte equivalent",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const marker = "ghp_" + "kX8j".repeat(9)
+        const files = parseUnifiedDiff(
+          [
+            "diff --git a/src/fixture.ts b/src/fixture.ts",
+            "--- a/src/fixture.ts",
+            "+++ b/src/fixture.ts",
+            "@@ -1 +1 @@",
+            "-export const sample = null",
+            '+export const sample = "' + marker + '"',
+          ].join("\n"),
+        )
+        const run = (setting: "offline" | "off" | undefined, accept: boolean) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            const match = finding({
+              path: "src/fixture.ts",
+              line: 1,
+              category: "security",
+              title: "A credential is committed",
+              body: "The synthetic test fixture should be removed.",
+              evidence: ["src/fixture.ts:1", "vectorscope-diagnostic:offline-v1:secret-added"],
+            })
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report(accept ? [match] : [])))
+            const observations: Review.Observation[] = []
+            const progress: unknown[] = []
+            const historical = {
+              id: "abc123def456", where: "summary" as const,
+              path: `src/old-${marker}.ts`, line: 1, side: "RIGHT" as const,
+              severity: "concern" as const, category: "bug" as const,
+              title: `Historical fixture: ${marker}`, sha: "a".repeat(40), status: "open" as const,
+            }
+            const outcome = yield* Review.run(
+              input(directory, {
+                files,
+                anchors: files,
+                prior: [historical],
+                observe: (entry) => observations.push(entry),
+                onProgress: (entry) => { progress.push(entry) },
+                config: config({ security: "off", ...(setting ? { diagnostics: setting } : {}) }),
+              }),
+            )
+            const hits = yield* modelRequests(llm)
+            const { durationMs, sessions: ids, ...stable } = outcome
+            const sessions = yield* Session.Service
+            const permissions = yield* Effect.forEach(ids, (id) =>
+              sessions.get(SessionID.make(id)).pipe(Effect.map((s) => s.permission)),
+            )
+            return { outcome, stable, permissions, observations, progress, wire: hits.map((hit) => JSON.stringify(hit)) }
+          })
+        const ordinary = yield* run(undefined, false)
+        const explicit = yield* run("off", false)
+        expect(explicit.wire).toEqual(ordinary.wire)
+        expect(explicit.stable).toEqual(ordinary.stable)
+        expect(explicit.permissions).toEqual(ordinary.permissions)
+        expect(explicit.wire.join("")).not.toContain("untrusted_offline_diagnostics")
+        expect(explicit.wire.join("")).toContain(marker)
+        const ignored = yield* run("offline", false)
+        expect(ignored.wire).toHaveLength(1)
+        expect(ignored.outcome.selection.inline).toEqual([])
+        expect(ignored.wire.join("")).not.toContain(marker)
+        expect(JSON.stringify(ignored.outcome)).not.toContain(marker)
+        expect(ignored.outcome.selection.stillOpen).toHaveLength(1)
+        expect(JSON.stringify(ignored.observations)).not.toContain(marker)
+        expect(JSON.stringify(ignored.progress)).not.toContain(marker)
+        expect(ordinary.outcome.selection.stillOpen[0]?.title).toContain(marker)
+        if (process.platform !== "linux") {
+          expect(ignored.wire.join("")).not.toContain("untrusted_offline_diagnostics")
+          expect(ignored.outcome.notes).toContain("Offline diagnostics did not run on this platform.")
+          return
+        }
+        expect(ignored.wire.join("")).toContain("untrusted_offline_diagnostics")
+        expect(ignored.wire.join("")).toContain("offline-v1 secret-added RIGHT src/fixture.ts:1")
+        const accepted = yield* run("offline", true)
+        expect(accepted.wire.join("")).not.toContain(marker)
+        expect(JSON.stringify(accepted.outcome)).not.toContain(marker)
+        expect(accepted.outcome.selection.inline.map((row) => row.diagnostics)).toEqual([
+          [{ source: "offline-v1", rule: "secret-added" }],
+        ])
+      }),
+    { git: true },
+    90000,
+  )
+})
+
+it.instance(
+  "offline diagnostics inspect only the active batch and recognize a lockfile in another batch",
+  () =>
+    Effect.gen(function* () {
+      const { llm, directory } = yield* useServer()
+      const marker = "ghp_" + "kX8j".repeat(9)
+      const manifest = "packages/a/package.json"
+      const lock = "packages/a/yarn.lock"
+      const code = "src/later.ts"
+      const files = [
+        [manifest, '  "dependencies": {'],
+        [lock, "# local fixture lock change"],
+        [code, 'export const fixture = "' + marker + '"'],
+      ].flatMap(([file, line]) =>
+        parseUnifiedDiff(
+          [
+            `diff --git a/${file} b/${file}`,
+            `--- a/${file}`,
+            `+++ b/${file}`,
+            "@@ -1 +1 @@",
+            "-previous",
+            "+" + line,
+          ].join("\n"),
+        ),
+      )
+      let cursor: BatchCursor | undefined
+      const reviewed = new Set<string>()
+      for (let i = 0; i < files.length; i++) {
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+        yield* Review.run(
+          input(directory, {
+            files,
+            anchors: files,
+            config: config({
+              diagnostics: "offline",
+              largeChanges: "batch",
+              maxFiles: 1,
+              security: "off",
+              ignoreDefaults: false,
+            }),
+            model: { ...ref, context: 100_000, costKind: "local" },
+            batchStore: {
+              resume: () => cursor,
+              spent: () => 0,
+              record: (_plan, next) => {
+                cursor = next
+              },
+            },
+          }),
+        )
+        const wire = yield* modelRequests(llm)
+        expect(wire).toHaveLength(1)
+        const body = JSON.stringify(wire)
+        const active = files.filter((file) => body.includes(`diff --git a/${file.path} b/${file.path}`))
+        expect(active).toHaveLength(1)
+        reviewed.add(active[0]!.path)
+        expect(body).not.toContain("offline-v1 manifest-without-lock")
+        expect(body).not.toContain(marker)
+        expect(body.includes(`offline-v1 secret-added RIGHT ${code}:1`)).toBe(
+          process.platform === "linux" && active[0]!.path === code,
+        )
+      }
+      expect([...reviewed].sort()).toEqual([manifest, lock, code].sort())
+    }),
+  { git: true },
+  TIMEOUT,
+)

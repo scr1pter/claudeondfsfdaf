@@ -1392,6 +1392,36 @@ describe("ReviewEval.replay", () => {
   )
 
   it.instance(
+    "committed base diagnostics reach the ordinary offline replay without a new variant",
+    () =>
+      Effect.gen(function* () {
+        const marker = "ghp_" + "aB1x".repeat(9)
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": '{"diagnostics":"offline"}' },
+          head: { "src/list.ts": LIST_HEAD + "\n// " + marker + "\n", ".vector/review.json": '{"diagnostics":"off"}' },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const record = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(record.config.value.diagnostics).toBe("offline")
+        expect(record.variant).toBeUndefined()
+        const requests = (yield* llm.hits).map((hit) => hit.text).join("\n")
+        expect(requests).not.toContain(marker)
+        expect(JSON.stringify(record)).not.toContain(marker)
+        if (process.platform === "linux") expect(requests).toContain("untrusted_offline_diagnostics")
+        else expect(record.outcome?.notes).toContain("Offline diagnostics did not run on this platform.")
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
     "the named strict rule replay retains only citations present in the base instructions",
     () =>
       Effect.gen(function* () {
@@ -2124,6 +2154,7 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { privacy: "zdr", zdrAttested: ["openrouter"] } })).toContain(
           "config sets privacy, zdrAttested, a route setting a replay cannot apply",
         )
+        expect(yield* refused({ config: { diagnostics: "offline" } })).toContain("only from the committed base")
         expect(yield* refused({ config: { privacy: "standard" } })).toContain("config sets privacy, a route setting")
         // @ts-expect-error A trivial policy belongs to a named variant or the committed base, not the eval's overrides.
         const unwired: ReplayInput["config"] = { trivial: "skip" }

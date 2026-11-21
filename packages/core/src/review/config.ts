@@ -21,6 +21,8 @@ export const DESKTOP_CARDS_NOTICE = "Brain context cards are available in local 
 export const DESKTOP_STRICT_NOTICE =
   'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".'
 
+export const DESKTOP_DIAGNOSTICS_NOTICE = "Offline diagnostics did not run. They require a Linux engine review."
+
 export const REVIEW_CONFIG_PATH = ".vector/review.json"
 export const REVIEW_RULES_PATHS = [".vector/review.md", ".vector/REVIEW.md"] as const
 export const MAX_RULES_BYTES = 16 * 1024
@@ -162,6 +164,7 @@ const RAISE_ONLY = {
 // - Trusted-only: read from the surface's trusted source alone, never from the working tree or the environment. This
 //   holds for `zdrAttested`'s attestation objects (VS-33) as for its text entries, and for VS-30's `runtime`.
 const TRUSTED_ONLY = {
+  diagnostics: oneOf(["off", "offline"]),
   ruleCheck: oneOf(["off", "strict"]),
   zdrAttested: attestations,
   runtime: oneOf(["off", "ask"]),
@@ -387,7 +390,9 @@ export function mergeReviewConfig(input: {
       values: source,
       // The desktop's base blob may raise the raise-only keys and nothing else, so it is never the trusted source.
       trusted: (key) =>
-        input.json?.at === "base" && !input.json.privacyOnly && (input.surface === "github" || key === "ruleCheck"),
+        input.json?.at === "base" &&
+        !input.json.privacyOnly &&
+        (input.surface === "github" || key === "ruleCheck" || key === "diagnostics"),
       label: (key) => `${REVIEW_CONFIG_PATH}: "${key}"`,
     },
   ]
@@ -423,7 +428,7 @@ export function mergeReviewConfig(input: {
       const label = item.label(key)
       if (!item.trusted(key)) {
         const authority =
-          key === "ruleCheck" && input.surface === "local"
+          (key === "ruleCheck" || key === "diagnostics") && input.surface === "local"
             ? "the global config or review.json on the base branch"
             : trusted
         warnings.push(`${label} is ignored: "${key}" is read only from ${authority}.`)
@@ -446,6 +451,7 @@ export function mergeReviewConfig(input: {
       (key) => SOURCED_REVIEW_KEYS.some((item) => item === key) && UNAPPLIED[key].applies(config),
     ).map((key) => UNAPPLIED[key].warning),
   )
+  if (input.trigger === "desktop" && config.diagnostics === "offline") warnings.push(DESKTOP_DIAGNOSTICS_NOTICE)
   return { config, warnings }
 }
 

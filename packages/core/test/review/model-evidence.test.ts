@@ -65,6 +65,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/engine/src/review/batch.ts",
   "packages/engine/src/review/batch-local.ts",
+  "packages/engine/src/review/checks.ts",
   "packages/engine/src/review/trivial.ts",
   "packages/engine/src/review/card-access.ts",
   "packages/engine/src/review/card-sources.ts",
@@ -140,6 +141,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/prompt.ts",
   "packages/core/src/review/privacy.ts",
   "packages/core/src/review/holdback.ts",
+  "packages/core/src/review/diagnostic.ts",
   "packages/core/src/review/permission.ts",
   "packages/core/src/review/trivial.ts",
   "packages/core/src/review/dispatch.ts",
@@ -147,6 +149,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/guardrail.ts",
   "packages/core/src/review/citation.ts",
   "packages/core/src/review/config.ts",
+  "packages/core/src/v1/config/review.ts",
   "packages/core/src/review/schema.ts",
   "packages/core/src/review/runtime.ts",
   "packages/core/src/review/team.ts",
@@ -1286,4 +1289,28 @@ describe("assessing a review's models", () => {
       "`acme/cheap` is retired by its provider, so no evaluation applies to it. Choose a current model. Vector used it because triageModel in .vector/review.json names it, and does not switch a chosen model.",
     ])
   })
+})
+
+test("offline diagnostics evidence identifies the Linux engine prompt and keeps desktop and disabled scopes stable", () => {
+  const config = { ...DEFAULT_REVIEW_CONFIG, diagnostics: "offline" } as const
+  const prompt = canonicalPrompts({ diagnostics: "offline" }).join("\n")
+  expect(prompt).toContain("untrusted_offline_diagnostics")
+  expect(prompt).toContain("vectorscope-diagnostic:offline-v1:secret-added")
+  const ordinary = evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG })
+  const disabled = evidenceScope({
+    adapter: "engine",
+    config: { ...config, diagnostics: "off" },
+    offlineDiagnostics: true,
+  })
+  const scanned = evidenceScope({ adapter: "engine", config, offlineDiagnostics: true })
+  const redacted = evidenceScope({ adapter: "engine", config, offlineDiagnostics: false })
+  expect(disabled).toEqual(ordinary)
+  expect(scanned.prompts).not.toBe(redacted.prompts)
+  expect(scanned.policy).not.toBe(redacted.policy)
+  expect(redacted).toEqual(
+    evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" } }),
+  )
+  expect(evidenceScope({ adapter: "desktop", config })).toEqual(
+    evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+  )
 })

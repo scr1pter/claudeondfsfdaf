@@ -14,7 +14,7 @@ import {
 import { evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import { noteSameLabPair } from "@vectordevai/core/review/second-lab"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
-import { DESKTOP_STRICT_NOTICE, parseReviewConfig } from "@vectordevai/core/review/config"
+import { DESKTOP_DIAGNOSTICS_NOTICE, DESKTOP_STRICT_NOTICE, parseReviewConfig } from "@vectordevai/core/review/config"
 import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "@vectordevai/core/review/types"
 import { buildFinalizePrompt, MAX_TRUSTED_CHARS, SCOPE } from "@vectordevai/core/review/prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, strictReportJsonSchema, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
@@ -3742,4 +3742,22 @@ describe("desktop rule citations (VS-43)", () => {
     expect(localConfig.calls.prompt[0]?.format?.schema).toBe(REVIEW_REPORT_JSON_SCHEMA)
     expect(off.settingsKey).not.toBe(previous.settingsKey)
   })
+})
+
+test("desktop reviews report Linux-only offline diagnostics on fresh and cached runs", async () => {
+  const files = { "src/list.ts": HEAD }
+  const baseline = fakeClient({ files })
+  const ordinary = (await run(baseline.client))!
+  const current = fakeClient({ files, global: { review: { diagnostics: "offline" } } })
+  const result = (await run(current.client, { previous: ordinary }))!
+  expect(result.notes).toContain(DESKTOP_DIAGNOSTICS_NOTICE)
+  expect(result.selection).toEqual(ordinary.selection)
+  expect(JSON.stringify(current.calls.prompt)).not.toContain("untrusted_offline_diagnostics")
+  const reusable = fakeClient({ files, global: { review: { diagnostics: "offline" } } })
+  const previous = { ...result, notes: [] }
+  expect((await run(reusable.client, { previous }))!.notes).toContain(DESKTOP_DIAGNOSTICS_NOTICE)
+  await expect(run(reusable.client, { diff: "" })).rejects.toThrow(DESKTOP_DIAGNOSTICS_NOTICE)
+  expect(reusable.calls.prompt).toEqual([])
+  const disabled = fakeClient({ files, global: { review: { diagnostics: "off" } } })
+  expect((await run(disabled.client, { previous: result }))!.notes).not.toContain(DESKTOP_DIAGNOSTICS_NOTICE)
 })

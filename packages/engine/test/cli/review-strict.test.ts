@@ -19,6 +19,7 @@ import { Git } from "@/git"
 import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
 import { Review } from "@/review/run"
+import { ReviewModelError } from "@/review/model"
 import { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
 import { SessionPrompt } from "@/session/prompt"
 import { Session } from "@/session/session"
@@ -80,9 +81,12 @@ const setup = Effect.gen(function* () {
     runReview: LocalReviewDeps<R>["runReview"],
     input: Partial<LocalReviewOptions> = {},
     guardrail: "strict" | "off" | undefined = "strict",
+    resolveModel: LocalReviewDeps<never>["resolveModel"] = () => Effect.succeed(selected),
+    post?: Pick<LocalReviewDeps, "github" | "confirm">,
   ) =>
     Effect.gen(function* () {
       const chunks: string[] = []
+      const messages: string[] = []
       const result = yield* executeLocalReview(
         {
           directory,
@@ -98,18 +102,21 @@ const setup = Effect.gen(function* () {
         },
         {
           runReview,
-          resolveModel: () => Effect.succeed(selected),
+          resolveModel,
           color: false,
           stdout: async (text) => {
             chunks.push(text)
           },
-          stderr: () => {},
+          stderr: (text) => {
+            messages.push(text)
+          },
           confirm: async () => false,
           posting: async ({ parts }) => parts,
           now: () => 1_700_000_000_000,
+          ...post,
         },
       )
-      return { result, text: chunks.join("") }
+      return { result, text: chunks.join(""), stderr: messages.join("") }
     })
   return { directory, cache, git, base, head, invoke, llm }
 })
@@ -561,6 +568,399 @@ it.instance(
       }))
       expect(unavailable.result.error).toBeUndefined()
       expect(JSON.parse(unavailable.text).cached).toBeUndefined()
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "offline diagnostics changes invalidate the same-head local cache in both directions",
+  () =>
+    Effect.gen(function* () {
+      const { invoke } = yield* setup
+      const service = yield* Config.Service
+      const global = yield* service.getGlobal()
+      const calls: Review.RunInput[] = []
+      const run = (input: Review.RunInput) =>
+        Effect.sync(() => {
+          calls.push(input)
+          return fixed(input)
+        })
+      const review = (diagnostics: "off" | "offline") =>
+        invoke(run, {}, "off").pipe(
+          Effect.provideService(Config.Service, {
+            ...service,
+            getGlobal: () => Effect.succeed({ ...global, review: { diagnostics } }),
+          }),
+        )
+      for (const diagnostics of ["off", "offline", "off"] as const) {
+        const before = calls.length
+        expect((yield* review(diagnostics)).result.error).toBeUndefined()
+        expect(calls).toHaveLength(before + 1)
+        expect(calls.at(-1)?.config.diagnostics).toBe(diagnostics === "offline" ? "offline" : undefined)
+        expect(JSON.parse((yield* review(diagnostics)).text).cached).toBe(true)
+        expect(calls).toHaveLength(before + 1)
+      }
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "offline diagnostics starts fresh when a persistent batch came from an unsupported host",
+  () =>
+    Effect.gen(function* () {
+      if (process.platform !== "linux") return
+      const { directory, cache, invoke } = yield* setup
+      const service = yield* Config.Service
+      const global = yield* service.getGlobal()
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(directory, ".vector"), { recursive: true })
+        await fs.writeFile(path.join(directory, ".vector", "review.json"), JSON.stringify({ largeChanges: "batch" }))
+      })
+      const calls: Review.RunInput[] = []
+      const run = (input: Review.RunInput) =>
+        Effect.sync(() => {
+          calls.push(input)
+          return fixed(input)
+        })
+      const review = () =>
+        invoke(run, {}, "off").pipe(
+          Effect.provideService(Config.Service, {
+            ...service,
+            getGlobal: () => Effect.succeed({ ...global, review: { diagnostics: "offline" } }),
+          }),
+        )
+      expect((yield* review()).result.error).toBeUndefined()
+      expect(calls[0]?.batchStore).toBeDefined()
+      expect(calls[0]?.restartBatch).toBe(false)
+      expect(JSON.parse(calls[0]!.batchStore!.policy!).at(-1)).toBe("linux")
+      yield* Effect.promise(async () => {
+        const stored = JSON.parse(await fs.readFile(cache, "utf8"))
+        expect(stored.diagnosticsHost).toBe("linux")
+        await fs.writeFile(cache, JSON.stringify({ ...stored, diagnosticsHost: "unsupported" }))
+      })
+      expect((yield* review()).result.error).toBeUndefined()
+      expect(calls).toHaveLength(2)
+      expect(calls[1]?.restartBatch).toBe(true)
+      expect(calls[1]?.mode).toBe("full")
+      expect(yield* Effect.promise(async () => JSON.parse(await fs.readFile(cache, "utf8")).diagnosticsHost)).toBe(
+        "linux",
+      )
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "offline diagnostics scrub old credential-shaped titles that the CLI reconciles as newly fixed",
+  () =>
+    Effect.gen(function* () {
+      const { directory, cache, invoke, head, git } = yield* setup
+      const service = yield* Config.Service
+      const global = yield* service.getGlobal()
+      const start = yield* invoke((input) => Effect.succeed(fixed(input)), {}, "off")
+      expect(start.result.error).toBeUndefined()
+      const marker = "ghp_" + "aB1x".repeat(9)
+      const id = "112233445566"
+      yield* Effect.promise(async () => {
+        const record = JSON.parse(await fs.readFile(cache, "utf8"))
+        const state = decodeState(record.state)!
+        state.findings.push({
+          id,
+          path: "one.ts",
+          line: 1,
+          side: "RIGHT",
+          severity: "blocking",
+          category: "security",
+          title: marker,
+          sha: head,
+          status: "open",
+        })
+        record.state = encodeState(state)
+        await fs.writeFile(cache, JSON.stringify(record))
+        await fs.appendFile(path.join(directory, "one.ts"), "export const two = 2\n")
+        await git("add", "one.ts")
+        await git("commit", "-qm", "adjust the nearby code")
+      })
+      const after = yield* invoke(
+        (input) =>
+          Effect.sync(() => {
+            const outcome = fixed(input)
+            expect(input.prior?.[0]?.id).toBe(id)
+            expect(input.prior?.[0]?.title).not.toContain(marker)
+            outcome.report.priorStatus = [{ id, status: "fixed", reason: "The changed code fixes the defect." }]
+            return outcome
+          }),
+        {},
+        "off",
+      ).pipe(
+        Effect.provideService(Config.Service, {
+          ...service,
+          getGlobal: () => Effect.succeed({ ...global, review: { diagnostics: "offline" } }),
+        }),
+      )
+      expect(after.result.error).toBeUndefined()
+      const output = JSON.parse(after.text)
+      expect(output.outcome.selection.fixed.map((finding: { id: string }) => finding.id)).toContain(id)
+      expect(after.text).not.toContain(marker)
+      const saved = yield* Effect.promise(async () => JSON.parse(await fs.readFile(cache, "utf8")))
+      expect(JSON.stringify(decodeState(saved.state))).not.toContain(marker)
+      expect(JSON.stringify(saved.outcome)).not.toContain(marker)
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "offline diagnostic output masks early changed paths, progress, withheld stops and errors from Git",
+  () =>
+    Effect.gen(function* () {
+      const { directory, base, invoke, git } = yield* setup
+      const settings = yield* Config.Service
+      const global = yield* settings.getGlobal()
+      const offline = Effect.provideService(Config.Service, {
+        ...settings,
+        getGlobal: () => Effect.succeed({ ...global, review: { diagnostics: "offline" } }),
+      })
+      const marker = "ghp_" + "bQ2z".repeat(9)
+      const file = "sensitive-" + marker + ".ts"
+      const head = yield* Effect.promise(async () => {
+        await fs.writeFile(path.join(directory, file), "export const count = 2\n")
+        await git("add", file)
+        await git("commit", "-qm", "two changed files")
+        return git("rev-parse", "HEAD")
+      })
+      const stop = (input: Review.RunInput) =>
+        Effect.sync(() => ({
+          ...fixed(input),
+          partial: "budget-estimate" as const,
+          unreviewed: input.files.map((file) => file.path),
+          specialists: [],
+        }))
+      const refused = () =>
+        Effect.fail(new ReviewModelError({ message: marker, model: marker, refusal: "unattested-provider" }))
+      const ordinary = yield* invoke(stop, {}, "off", refused)
+      expect(ordinary.text).toContain(marker)
+      expect(ordinary.result.outcome?.unreviewed).toContain(file)
+      for (const json of [true, false]) {
+        const early = yield* invoke(stop, { json }, "off", refused).pipe(offline)
+        expect(early.result.exitCode).toBe(2)
+        expect(early.result.outcome?.partial).toBe("privacy")
+        expect(early.result.outcome?.unreviewed).toHaveLength(2)
+        expect(early.text + JSON.stringify(early.result)).not.toContain(marker)
+        if (json) expect(JSON.parse(early.text).outcome.unreviewed).toEqual(early.result.outcome?.unreviewed)
+      }
+      const withheld = yield* invoke(
+        stop,
+        {
+          context: { expectedHead: head, settingsRef: base, stateless: true, readDenies: [path.join(directory, file)] },
+        },
+        "off",
+        () => Effect.succeed({ ...selected, modelID: ModelV2.ID.make(marker) }),
+      ).pipe(offline)
+      expect(withheld.result.outcome?.partial).toBe("budget-estimate")
+      expect(withheld.result.outcome?.unreviewed).toHaveLength(2)
+      expect(withheld.stderr).toContain("Reviewing")
+      expect(withheld.text + withheld.stderr + JSON.stringify(withheld.result)).not.toContain(marker)
+      // This failure happens before the base's settings have been read, so only the owner's global policy is available.
+      const invalid = { base: "missing-" + marker }
+      expect((yield* invoke(stop, invalid, "off")).result.error).toContain(marker)
+      const protectedError = (yield* invoke(stop, invalid, "off").pipe(offline)).result.error
+      expect(protectedError).toContain("Could not find")
+      expect(protectedError).not.toContain(marker)
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "an offline diagnostics budget retry masks the preserved legacy outcome while keeping its accounting",
+  () =>
+    Effect.gen(function* () {
+      const { invoke, cache } = yield* setup
+      const settings = yield* Config.Service
+      const global = yield* settings.getGlobal()
+      const marker = "ghp_" + "cA3y".repeat(9)
+      const ordinary = yield* invoke(
+        (input) =>
+          Effect.sync(() => {
+            const out = fixed(input)
+            out.report.summary = "Previously reviewed " + marker
+            return out
+          }),
+        {},
+        "off",
+      )
+      expect(ordinary.text).toContain(marker)
+      const readRecord = () => Effect.promise(async () => JSON.parse(await fs.readFile(cache, "utf8")))
+      const before = yield* readRecord()
+      const stopped = yield* invoke(
+        (input) =>
+          Effect.succeed({
+            ...fixed(input),
+            partial: "budget-estimate" as const,
+            unreviewed: input.files.map((f) => f.path),
+            specialists: [],
+          }),
+        { full: true },
+        "off",
+      ).pipe(
+        Effect.provideService(Config.Service, {
+          ...settings,
+          getGlobal: () => Effect.succeed({ ...global, review: { diagnostics: "offline" } }),
+        }),
+      )
+      expect(stopped.result.exitCode).toBe(2)
+      const after = yield* readRecord()
+      expect(after.outcome.report.summary).toContain("Previously reviewed")
+      expect(JSON.stringify(after)).not.toContain(marker)
+      expect(after.outcome.cost).toEqual(before.outcome.cost)
+      expect(decodeState(after.state)?.head).toBe(decodeState(before.state)?.head)
+      expect(decodeState(after.state)?.retryFullAfterBudget).toBe(true)
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "offline diagnostic output masks the base and login in the real post formatter without sending HTTP",
+  () =>
+    Effect.gen(function* () {
+      const { invoke, git } = yield* setup
+      const service = yield* Git.Service
+      const settings = yield* Config.Service
+      const global = yield* settings.getGlobal()
+      // This synthetic npm shape belongs to offline diagnostics, beyond the ordinary posting redactor.
+      const marker = "npm_" + "da4x".repeat(9)
+      const base = "base-" + marker
+      yield* Effect.promise(async () => {
+        await git("branch", base, "main")
+        await git("update-ref", "refs/pull/7/head", "HEAD")
+        await git("remote", "add", "origin", ".")
+      })
+      // Actual fetches always use this test checkout. Only the separate post label has a synthetic host.
+      const labeled = Effect.provideService(Git.Service, {
+        ...service,
+        run: (args, opts) => {
+          if (args.length === 3 && args.join(" ") === "config --get remote.origin.url") {
+            const label = "https://example.invalid/owner/project.git"
+            return Effect.succeed({
+              exitCode: 0,
+              stdout: Buffer.from(label),
+              stderr: Buffer.alloc(0),
+              text: () => label,
+              truncated: false,
+            })
+          }
+          return service.run(args, opts)
+        },
+      })
+      for (const diagnostics of ["off", "offline"] as const) {
+        const confirmed: string[] = []
+        const posted: string[] = []
+        const result = yield* invoke(
+          (input) => Effect.succeed(fixed(input)),
+          { pr: 7, post: true, base },
+          "off",
+          undefined,
+          {
+            confirm: async (question) => {
+              confirmed.push(question)
+              return true
+            },
+            github: {
+              token: async () => "fixture-token",
+              login: async () => marker,
+              create: async () => ({
+                createReview: async () => {
+                  throw new Error("no inline findings to send")
+                },
+                createIssueComment: async (_, body) => {
+                  posted.push(body)
+                  return { id: 1, html_url: "https://example.invalid/fixture/comment" }
+                },
+              }),
+            },
+          },
+        ).pipe(
+          labeled,
+          Effect.provideService(Config.Service, {
+            ...settings,
+            getGlobal: () => Effect.succeed({ ...global, review: { diagnostics } }),
+          }),
+        )
+        expect(result.result.error).toBeUndefined()
+        expect(confirmed).toHaveLength(1)
+        expect(posted).toHaveLength(1)
+        expect(posted[0]).toContain("against")
+        if (diagnostics === "offline") {
+          expect(confirmed[0]).not.toContain(marker)
+          expect(posted[0]).not.toContain(marker)
+        } else {
+          expect(confirmed[0]).toContain(marker)
+          expect(posted[0]).toContain(marker)
+        }
+      }
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "offline diagnostics mask a newer batch checkpoint when a stale ordinary review settles its own charge",
+  () =>
+    Effect.gen(function* () {
+      const { invoke, cache } = yield* setup
+      const settings = yield* Config.Service
+      const global = yield* settings.getGlobal()
+      const marker = "npm_" + "st4x".repeat(9)
+      const fundedHead = "b".repeat(40)
+      const initial = yield* invoke((input) => Effect.succeed(fixed(input)), {}, "off")
+      expect(initial.result.exitCode).toBe(0)
+      const readRecord = () => Effect.promise(async () => JSON.parse(await fs.readFile(cache, "utf8")))
+      const first = yield* readRecord()
+      const firstState = decodeState(first.state)!
+      for (const diagnostics of ["off", "offline"] as const) {
+        yield* Effect.promise(() => fs.writeFile(cache, JSON.stringify(first) + "\n"))
+        const result = yield* invoke(
+          (input) =>
+            Effect.promise(async () => {
+              // A funded checkpoint reaches disk between this invocation's read and its final settlement lock.
+              const newer = {
+                ...first,
+                batchAccounting: true,
+                batchUncertainMonth: "2023-11",
+                state: encodeState({ ...firstState, head: fundedHead, costUsd: 4.5, unreviewed: [marker + ".ts"] }),
+                outcome: { ...first.outcome, head: fundedHead, report: { ...first.outcome.report, summary: "Funded " + marker } },
+              }
+              await fs.writeFile(cache, JSON.stringify(newer) + "\n")
+              return fixed(input)
+            }),
+          { full: true },
+          "off",
+        ).pipe(Effect.provideService(Config.Service, {
+          ...settings,
+          getGlobal: () => Effect.succeed({ ...global, review: { diagnostics } }),
+        }))
+        expect(result.result.exitCode, result.result.error).toBe(0)
+        const saved = yield* readRecord()
+        const state = decodeState(saved.state)!
+        expect(state.head).toBe(fundedHead)
+        expect(state.costUsd).toBe(4.625)
+        expect(saved.outcome.head).toBe(fundedHead)
+        expect(saved.outcome.report.summary).toContain("Funded ")
+        expect(saved.batchAccounting).toBe(true)
+        expect(saved.batchUncertainMonth).toBe("2023-11")
+        expect(state.unreviewed).toHaveLength(1)
+        if (diagnostics === "offline") {
+          expect(state.unreviewed[0]).not.toContain(marker)
+          expect(JSON.stringify(saved)).not.toContain(marker)
+        } else {
+          expect(state.unreviewed[0]).toContain(marker)
+          expect(saved.outcome.report.summary).toContain(marker)
+        }
+      }
     }),
   { git: true },
   90_000,

@@ -83,6 +83,7 @@ import { Git } from "@/git"
 import { ReviewGit } from "@/review/git"
 import { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
 import { concurrentBatchRecord, lockBatchFile, localBatchStore, uncertainBatchMonth, unknownOwnSpend } from "@/review/batch-local"
+import { redactDiagnosticData } from "@/review/checks"
 import { ReviewTrivial } from "@/review/trivial"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { Database } from "@vectordevai/core/database/database"
@@ -238,6 +239,35 @@ export function executeLocalReview<RunR, ModelR>(
   deps: LocalReviewDeps<RunR, ModelR>,
 ): Effect.Effect<LocalReviewResult, never, Git.Service | RunR | ModelR> {
   return Effect.gen(function* () {
+    // Each execution has its own output policy, including when the same Effect runs concurrently.
+    const output: { diagnostics?: boolean } = {}
+    const result = yield* localReview(options, deps, output)
+    // Git can fail before a base settings blob is available. The owner's independent config still applies.
+    if (result.error && output.diagnostics === undefined) {
+      const settings = yield* Effect.serviceOption(Config.Service)
+      output.diagnostics = Option.isSome(settings)
+        ? yield* settings.value.getGlobal().pipe(
+            Effect.map(
+              ({ review }) =>
+                !!review &&
+                mergeReviewConfig({ surface: "local", global: review, trigger: "local" }).config.diagnostics ===
+                  "offline",
+            ),
+            // When the owner's policy cannot be read, disclose only a masked error.
+            Effect.catchDefect(() => Effect.succeed(true)),
+          )
+        : false
+    }
+    return output.diagnostics ? redactDiagnosticData(result) : result
+  })
+}
+
+function localReview<RunR, ModelR>(
+  options: LocalReviewOptions,
+  deps: LocalReviewDeps<RunR, ModelR>,
+  output: { diagnostics?: boolean },
+): Effect.Effect<LocalReviewResult, never, Git.Service | RunR | ModelR> {
+  return Effect.gen(function* () {
     const refused = refuseFlags(options)
     if (refused) return yield* new LocalReviewError({ message: refused })
     if (options.context?.identity === "vectorscope" && !(yield* ReviewGit.Current))
@@ -245,8 +275,11 @@ export function executeLocalReview<RunR, ModelR>(
     const git = yield* ReviewGit.client
     const env = options.env ?? process.env
     const now = deps.now ?? Date.now
-    const say = (text: string) => deps.stderr(text + "\n")
-    const print = (text: string) => Effect.promise(() => deps.stdout(text))
+    const publicValue = <T>(value: T) => (output.diagnostics ? redactDiagnosticData(value) : value)
+    const say = (text: string) => deps.stderr(publicValue(text) + "\n")
+    const print = (text: string) => Effect.promise(() => deps.stdout(publicValue(text)))
+    const printJson = (data: unknown) =>
+      Effect.promise(() => deps.stdout(JSON.stringify(publicValue(data), null, 2) + "\n"))
     // Every --apply refusal comes before a model is resolved or anything is reviewed.
     const fixRefused = !options.apply
       ? undefined
@@ -331,6 +364,7 @@ export function executeLocalReview<RunR, ModelR>(
       env,
       trigger: "local",
     })
+    output.diagnostics = parsed.config.diagnostics === "offline"
     for (const warning of parsed.warnings) say(`Warning: ${warning}`)
     const config = withFlags(
       parsed.config,
@@ -477,7 +511,7 @@ export function executeLocalReview<RunR, ModelR>(
     }
     // A strict cache can be reused before resolving a model. The batch plan below also binds its resolved routes.
     const strictPolicy = config.guardrail === "strict" ? contextPolicy : undefined
-    const stored =
+    const record =
       statePath && (!branchCache || branchCache.fingerprint)
         ? yield* readLocalState(
             statePath,
@@ -487,6 +521,16 @@ export function executeLocalReview<RunR, ModelR>(
             branchCache ? (bytes) => branchFingerprint(bytes) === branchCache.fingerprint : undefined,
           )
         : undefined
+    // Retain the literal stored text for the atomic retry check. Older review state can have raw finding
+    // titles that local carry/fixed reconciliation reintroduces after the engine returns.
+    const stored =
+      record && config.diagnostics === "offline"
+        ? {
+            ...record,
+            state: redactDiagnosticData(record.state),
+            ...(record.outcome ? { outcome: redactDiagnosticData(record.outcome) } : {}),
+          }
+        : record
     const retryFull = stored?.state.retryFullAfterBudget === true
     // A strict result certifies one immutable pair and one policy. Even an unchanged patch on a new
     // commit must get its own strict result. Preserve the previous findings and spend when requesting that full run.
@@ -506,7 +550,9 @@ export function executeLocalReview<RunR, ModelR>(
     // Trusted instructions and their clipped, path-specific blocks are gathered after target resolution.
     // Recheck all findings when entering or leaving this policy, including an unchanged branch.
     const recheckRules = config.ruleCheck === "strict" || stored?.checkedRules === true
-    const fullRetry = retryFull || retryStrict === true || recheckRules
+    const diagnosticsHost =
+      config.diagnostics === "offline" ? (process.platform === "linux" ? "linux" : "unsupported") : undefined
+    const fullRetry = retryFull || retryStrict === true || recheckRules || stored?.diagnosticsHost !== diagnosticsHost
     const saved = !options.full || fullRetry || batchKey ? stored?.state : undefined
     // Full review still starts with no prior findings, but cannot reset this target's accumulated spend.
     const accounting = saved ?? (stored?.batchAccounting ? { ...emptyState(), ...accountingOf(stored.state) } : undefined)
@@ -514,6 +560,7 @@ export function executeLocalReview<RunR, ModelR>(
       return yield* new LocalReviewError({
         message: "The existing local review checkpoint is unreadable. No batch ran.",
       })
+    const writeOptions = { strictPolicy, checkedRules: config.ruleCheck === "strict", diagnosticsHost, locked } as const
     const batchState =
       locked && contextPolicy
         ? localBatchStore(
@@ -528,22 +575,11 @@ export function executeLocalReview<RunR, ModelR>(
               options.context?.settingsRef,
               contextPolicy,
               authority?.patterns,
+              ...(diagnosticsHost ? [diagnosticsHost] : []),
             ]),
             !fullRetry && !!stored?.outcome,
             (pending, metadata) =>
-              writeLocalState(
-                stored,
-                now(),
-                statePath,
-                pending,
-                say,
-                stored?.outcome,
-                undefined,
-                strictPolicy,
-                config.ruleCheck === "strict",
-                locked,
-                metadata,
-              ),
+              writeLocalState(stored, now(), statePath, pending, say, { ...writeOptions, outcome: stored?.outcome, batch: metadata }),
             { now, carriedMonth: stored?.batchUncertainMonth, knownMonthLedger: stored?.batchAccounting },
           )
         : undefined
@@ -567,7 +603,7 @@ export function executeLocalReview<RunR, ModelR>(
 
     const early = (note: string, left: SummaryFinding[] = []) =>
       Effect.gen(function* () {
-        if (options.json) yield* print(JSON.stringify({ version: 1, target, outcome: null, note }, null, 2) + "\n")
+        if (options.json) yield* printJson({ version: 1, target, outcome: null, note })
         else yield* print(note + "\n")
         return { exitCode: countAtOrAbove(left, failOn) ? 1 : 0, target } satisfies LocalReviewResult
       })
@@ -580,8 +616,7 @@ export function executeLocalReview<RunR, ModelR>(
       error = 'Vector did not review this change: privacy is "zdr", and a model this review would use has no zero data retention route Vector may use.',
     ) =>
       Effect.gen(function* () {
-        if (options.json)
-          yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
+        if (options.json) yield* printJson({ version: 1, target, outcome: reviewForOutput(outcome) })
         else if (outcome.partial === "budget-estimate") {
           const count = outcome.unreviewed.length
           yield* print(`${error} ${count} changed ${count === 1 ? "file remains" : "files remain"} unreviewed.\n`)
@@ -616,10 +651,7 @@ export function executeLocalReview<RunR, ModelR>(
         )
       const last = stored?.outcome?.head === range.head ? stored.outcome : undefined
       if (!last) return yield* early(note, open)
-      if (options.json)
-        yield* print(
-          JSON.stringify({ version: 1, target, outcome: reviewForOutput(last), cached: true }, null, 2) + "\n",
-        )
+      if (options.json) yield* printJson({ version: 1, target, outcome: reviewForOutput(last), cached: true })
       else
         yield* print(
           `${note}\n\n(from the last review of ${short(range.head)})\n` +
@@ -662,11 +694,7 @@ export function executeLocalReview<RunR, ModelR>(
         statePath,
         nextState(accounting, { head: range.head, base: range.mergeBase, mode: "carry", now: now(), prior }),
         say,
-        undefined,
-        undefined,
-        strictPolicy,
-        config.ruleCheck === "strict",
-        locked,
+        writeOptions,
       )
       return yield* early(
         `Nothing new to review: rebased onto ${target.baseRef} with no change to this branch's own diff.${stillOpen(open)}`,
@@ -886,7 +914,7 @@ export function executeLocalReview<RunR, ModelR>(
     // VS-34 item 4: under holdback "secrets", which changed files the repository's ignore rules exclude although they
     // are committed, read before the last preflight so the bound view's read is checked like the others.
     const ignoredPaths =
-      config.holdback === "secrets"
+      config.holdback === "secrets" || config.diagnostics === "offline"
         ? yield* ReviewGit.ignoredPaths(
             root,
             review.filter((file) => file.status !== "deleted").map((file) => file.path),
@@ -949,7 +977,9 @@ export function executeLocalReview<RunR, ModelR>(
         ? { uncommittedDiff: true as const }
         : {}),
       ...((config.trivial === "skip" && forceFull) || (batchKey && options.full) ? { forceFull: true } : {}),
-      ...(batchKey ? { restartBatch: options.full === true } : {}),
+      ...(batchKey
+        ? { restartBatch: options.full === true || (!!stored && stored.diagnosticsHost !== diagnosticsHost) }
+        : {}),
       ...(batchState ? { batchStore: batchState.store } : {}),
       ...(stored?.batchAccounting ? { accountBatchSpend: true as const } : {}),
       ...(batchState?.continues(range.head) ? { continuingBatch: true } : {}),
@@ -1012,11 +1042,7 @@ export function executeLocalReview<RunR, ModelR>(
       stored.outcome.head === range.head &&
       !withheld.length
     ) {
-      if (options.json)
-        yield* print(
-          JSON.stringify({ version: 1, target, outcome: reviewForOutput(stored.outcome), cached: true }, null, 2) +
-            "\n",
-        )
+      if (options.json) yield* printJson({ version: 1, target, outcome: reviewForOutput(stored.outcome), cached: true })
       else
         yield* print(
           renderLocalReview({
@@ -1050,24 +1076,15 @@ export function executeLocalReview<RunR, ModelR>(
           }),
         )
         if (progress)
-          yield* writeLocalState(
-            stored,
-            now(),
-            statePath,
-            progress,
-            say,
-            reviewed,
-            undefined,
-            strictPolicy,
-            config.ruleCheck === "strict",
-            locked,
-            batchState.metadata,
-          )
+          yield* writeLocalState(stored, now(), statePath, progress, say, {
+            ...writeOptions,
+            outcome: reviewed,
+            batch: batchState.metadata,
+          })
       })
     if (reviewed.trivial) {
       const open = reviewed.selection.stillOpen
-      if (options.json)
-        yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(reviewed) }, null, 2) + "\n")
+      if (options.json) yield* printJson({ version: 1, target, outcome: reviewForOutput(reviewed) })
       else yield* print(noteTrivialSkip() + stillOpen(open) + "\n")
       return { exitCode: countAtOrAbove(open, failOn) ? 1 : 0, target, outcome: reviewed } satisfies LocalReviewResult
     }
@@ -1080,18 +1097,10 @@ export function executeLocalReview<RunR, ModelR>(
       // A forced full run can refuse a head an earlier review completed. Retain that result and its spend, but
       // retry the whole branch on the next invocation even if its head or token cap changes in the meantime.
       if (options.full && stored && !retryFull && !batchState?.recorded)
-        yield* writeLocalState(
-          stored,
-          now(),
-          statePath,
-          { ...stored.state, retryFullAfterBudget: true },
-          say,
-          undefined,
-          stored.text,
-          strictPolicy,
-          config.ruleCheck === "strict",
-          locked,
-        )
+        yield* writeLocalState(stored, now(), statePath, { ...stored.state, retryFullAfterBudget: true }, say, {
+          ...writeOptions,
+          unchangedRecord: stored.text,
+        })
       return yield* notReviewed(reviewed, noteBudgetEstimate(reviewed.notes))
     }
     // Under holdback "secrets" a change whose every file, or in an incremental review every new hunk, was held back
@@ -1118,7 +1127,7 @@ export function executeLocalReview<RunR, ModelR>(
         "",
       )
       const visible = reviewForOutput(reviewed)
-      if (options.json) yield* print(JSON.stringify({ version: 1, target, outcome: visible }, null, 2) + "\n")
+      if (options.json) yield* printJson({ version: 1, target, outcome: visible })
       const spent =
         visible.cost && !("input" in visible.cost)
           ? `Used before it stopped: ${"costUsd" in visible.cost && visible.cost.costUsd > 0 ? `${formatUsd(visible.cost.costUsd)} + ` : ""}Codium.`
@@ -1146,7 +1155,8 @@ export function executeLocalReview<RunR, ModelR>(
       stillOpen: reviewed.selection.stillOpen.filter((entry) => !fixedIds.has(entry.id)),
       fixed: [...reviewed.selection.fixed, ...fixed],
     }
-    const outcome: ReviewOutcome = { ...reviewed, selection, notes: [...reviewed.notes, ...headers.notes] }
+    const completed: ReviewOutcome = { ...reviewed, selection, notes: [...reviewed.notes, ...headers.notes] }
+    const outcome = config.diagnostics === "offline" ? redactDiagnosticData(completed) : completed
 
     // Locally every finding is listed rather than commented, so the ones GitHub would carry inline are kept too.
     const next = nextState(accounting, {
@@ -1162,23 +1172,14 @@ export function executeLocalReview<RunR, ModelR>(
     })
     if (retryFull && unfinishedCauses(outcome).length) next.retryFullAfterBudget = true
     const progress = batchState?.coverage(next)
-    yield* writeLocalState(
-      stored,
-      now(),
-      statePath,
-      progress ?? next,
-      say,
+    yield* writeLocalState(stored, now(), statePath, progress ?? next, say, {
+      ...writeOptions,
       outcome,
-      undefined,
-      strictPolicy,
-      config.ruleCheck === "strict",
-      locked,
-      batchState?.metadata,
-      branchCache ? (bytes) => branchCache.written(branchFingerprint(bytes)) : undefined,
-    )
+      batch: batchState?.metadata,
+      written: branchCache ? (bytes) => branchCache.written(branchFingerprint(bytes)) : undefined,
+    })
 
-    if (options.json)
-      yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
+    if (options.json) yield* printJson({ version: 1, target, outcome: reviewForOutput(outcome) })
     else
       yield* print(
         renderLocalReview({
@@ -1285,7 +1286,10 @@ const postToPull = Effect.fnUntraced(function* (input: {
     })
   const login = yield* Effect.promise(() => input.access.login(token, baseUrl))
   const secrets = [...collectSecretValues(input.env), token]
-  const clean = (text: string) => redactSecrets(text, secrets)
+  const clean = (text: string) => {
+    const value = redactSecrets(text, secrets)
+    return input.config.diagnostics === "offline" ? redactDiagnosticData(value) : value
+  }
   const repo = { owner: where.owner, repo: where.repo }
   const head = input.target.head
   const inline = input.outcome.selection.inline
@@ -1304,7 +1308,10 @@ const postToPull = Effect.fnUntraced(function* (input: {
   }
   const count = payload.comments.length
   const question = `Post ${count} ${count === 1 ? "comment" : "comments"} and a summary to ${slug} as ${login ? `@${login}` : "you"}? (y/N)`
-  if (!input.yes && !(yield* Effect.promise(() => input.confirm(question)))) {
+  if (
+    !input.yes &&
+    !(yield* Effect.promise(() => input.confirm(input.config.diagnostics === "offline" ? clean(question) : question)))
+  ) {
     input.say("Nothing was posted.")
     return
   }
@@ -1816,6 +1823,7 @@ interface LocalReviewRecord {
   batch?: unknown
   batchAccounting?: true
   batchUncertainMonth?: string
+  diagnosticsHost?: "linux" | "unsupported"
   strictPolicy?: string
   outcome?: ReviewOutcome
 }
@@ -1841,7 +1849,7 @@ function readLocalState(
       Object.hasOwn(data, "strictPolicy") ||
       (typeof data.outcome === "object" && data.outcome !== null && Object.hasOwn(data.outcome, "strict")) ||
       (isOutcome(data.outcome) && Object.hasOwn(data.outcome.selection, "strict"))
-    const record = {
+    const record: LocalReviewRecord = {
       text,
       state,
       strict,
@@ -1854,6 +1862,9 @@ function readLocalState(
         ? { batchAccounting: true as const }
         : {}),
       ...(typeof data.batchUncertainMonth === "string" ? { batchUncertainMonth: data.batchUncertainMonth } : {}),
+      ...(data.diagnosticsHost === "linux" || data.diagnosticsHost === "unsupported"
+        ? { diagnosticsHost: data.diagnosticsHost }
+        : {}),
       ...(typeof data.strictPolicy === "string" ? { strictPolicy: data.strictPolicy } : {}),
     }
     if (
@@ -1931,17 +1942,31 @@ function writeLocalState(
   file: string | undefined,
   state: ReviewState,
   say: (text: string) => void,
-  outcome?: ReviewOutcome,
-  unchangedRecord?: string,
-  strictPolicy?: string,
-  checkedRules = false,
-  locked?: Awaited<ReturnType<typeof lockBatchFile>>,
-  batch?: ReturnType<typeof localBatchStore>["metadata"],
-  written?: (bytes: string) => void,
+  {
+    outcome,
+    unchangedRecord,
+    strictPolicy,
+    checkedRules,
+    diagnosticsHost,
+    locked,
+    batch,
+    written,
+  }: Partial<Pick<LocalReviewRecord, "outcome" | "strictPolicy" | "checkedRules" | "diagnosticsHost">> & {
+    locked?: Awaited<ReturnType<typeof lockBatchFile>>
+    batch?: ReturnType<typeof localBatchStore>["metadata"]
+    unchangedRecord?: string
+    written?: (bytes: string) => void
+  } = {},
 ) {
   if (!file) return Effect.void
-  const publish = async (record: object, notify = false) => {
-    const text = JSON.stringify(record) + "\n"
+  const encodeLocal = (value: ReviewState) => encodeState(diagnosticsHost ? redactDiagnosticData(value) : value)
+  const publish = async (record: { state: string }, notify = false) => {
+    // Compare the original bytes under the lock. Mask the visible fields at publication for both a normal
+    // write and a stale charge reconciled against a newer checkpoint. The decoded state was masked by encodeLocal.
+    const saved = diagnosticsHost
+      ? { ...redactDiagnosticData({ ...record, state: undefined }), state: record.state }
+      : record
+    const text = JSON.stringify(saved) + "\n"
     if (locked) return locked.replace(text)
     const temporary = `${file}.${crypto.randomUUID()}.tmp`
     try {
@@ -1972,7 +1997,7 @@ function writeLocalState(
         const settledMonth = monthKey(now)
         const olderMonth = !!latest.state.month && latest.state.month.key > settledMonth
         if (olderMonth) totals.month = latest.state.month
-        const row = { ...latest.row, state: encodeState({ ...latest.state, ...accountingOf(totals) }) }
+        const row = { ...latest.row, state: encodeLocal({ ...latest.state, ...accountingOf(totals) }) }
         // An older head's charge belongs to the month and branch total, but predates the
         // current head's per-plan allowance. Advance its starting balance by that same amount.
         if (row.batch?.cursor?.head !== outcome.head && Number.isFinite(row.batch?.initialCostUsd)) {
@@ -2006,7 +2031,7 @@ function writeLocalState(
           ? monthKey(now)
           : uncertainBatchMonth(previous.state, previous.batch, previous.batchUncertainMonth, now)
         : undefined
-    const encoded = encodeState(state)
+    const encoded = encodeLocal(state)
     const record =
       unchangedRecord === undefined
         ? {
@@ -2017,6 +2042,7 @@ function writeLocalState(
             ...(carried ? { batchUncertainMonth: carried } : {}),
             ...(strictPolicy ? { strictPolicy } : {}),
             ...(checkedRules ? { checkedRules: true } : {}),
+            ...(diagnosticsHost ? { diagnosticsHost } : {}),
           }
         : { ...JSON.parse(unchangedRecord), state: encoded }
     return publish(record, unchangedRecord === undefined)

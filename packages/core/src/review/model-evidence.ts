@@ -62,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 5
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "0388fc5ac3eea403"
+export const REVIEW_PIPELINE_SOURCES = "dde3befebc6cc55a"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -107,6 +107,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "lenses",
   "runtime",
   "holdback",
+  "diagnostics",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -467,6 +468,7 @@ export function canonicalPrompts(
       | "scopeGate"
       | "ruleCheck"
       | "verifyEvidence"
+      | "diagnostics"
     >
   > = {},
 ): string[] {
@@ -479,6 +481,19 @@ export function canonicalPrompts(
       : {}
   const effective = (input: PromptInput): PromptInput => ({
     ...input,
+    ...(keys.diagnostics === "offline"
+        ? {
+            diagnostics: [
+              {
+                source: "offline-v1" as const,
+                rule: "secret-added" as const,
+                path: "sample.ts",
+                side: "RIGHT" as const,
+                line: 1,
+              },
+            ],
+          }
+        : {}),
     ...(keys.guardrail === "strict" ? { guardrail: "strict", ...gate } : {}),
     ...(keys.ruleCheck === "strict" ? { ruleCheck: "strict" } : {}),
   })
@@ -618,6 +633,7 @@ export function promptsDigest(
       | "lenses"
       | "runtime"
       | "holdback"
+      | "diagnostics"
     >
   > = {},
 ): string {
@@ -632,6 +648,7 @@ export function promptsDigest(
     keys.depth === "auto" && keys.lenses === "high" ? "lenses:high" : "",
     keys.runtime === "ask" ? "runtime:ask" : "",
     keys.holdback === "secrets" ? "holdback:secrets" : "",
+    keys.diagnostics === "offline" ? "diagnostics:offline" : "",
   ]
     .filter(Boolean)
     .join(",")
@@ -695,7 +712,11 @@ export function evidenceScope(input: {
   config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>
   triage?: string
   route?: "zdr"
+  // Set by an engine that can run the pinned offline scanner on this host.
+  offlineDiagnostics?: boolean
 }): EvidenceScope {
+  const requested = input.adapter === "engine" && input.config.diagnostics === "offline"
+  const scanning = requested && input.offlineDiagnostics === true
   return {
     adapter: input.adapter,
     pipeline: REVIEW_PIPELINE_REVISION,
@@ -724,13 +745,16 @@ export function evidenceScope(input: {
         ? { runtime: "ask" as const }
         : {}),
       // VS-34's input-redaction sentence (Review.run under "secrets" since SF-13b) and its tool half (SF-14).
-      ...(input.config.holdback === "secrets" ? { holdback: "secrets" as const } : {}),
+      ...(input.config.holdback === "secrets" || requested ? { holdback: "secrets" as const } : {}),
+      ...(scanning ? { diagnostics: "offline" as const } : {}),
     }),
     // Graph context, the trivial proof and the strict guardrail are applied only by the engine.
     policy: policyDigest(
       input.adapter === "desktop"
-        ? { ...input.config, largeChanges: "skip", depth: "fixed", lenses: "off", cards: "off", trivial: "review", impact: "grep", guardrail: "off" }
-        : input.config,
+        ? { ...input.config, largeChanges: "skip", depth: "fixed", lenses: "off", cards: "off", trivial: "review", impact: "grep", guardrail: "off", diagnostics: "off" }
+        : requested
+          ? { ...input.config, holdback: "secrets", diagnostics: scanning ? "offline" : "off" }
+          : input.config,
     ),
     ...(input.triage ? { triage: input.triage } : {}),
     ...(input.route ? { route: input.route } : {}),

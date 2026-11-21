@@ -45,7 +45,7 @@ import {
   type Shrink,
 } from "@vectordevai/core/review/dispatch"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
-import { heldReason, holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
+import { heldReason, holdbackContext, holdbackFiles, holdbackText } from "@vectordevai/core/review/holdback"
 import {
   IMPACT_LIMITS,
   impactRecord,
@@ -181,6 +181,8 @@ import {
   containsHeldValue,
   type CertificateAnswer,
 } from "./strict"
+import { offlineChecks, redactDiagnosticData } from "./checks"
+import { diagnosticReference, withDiagnosticEvidence } from "@vectordevai/core/review/diagnostic"
 
 export interface RunInput {
   batchStore?: ReviewBatchStore
@@ -500,7 +502,12 @@ export const run: (
   | EventV2Bridge.Service
   | Provider.Service
   | SpendGuard.Service
-> = Effect.fn("Review.run")(function* (input: RunInput) {
+> = (input) => {
+  const result = execute(input)
+  return input.config.diagnostics === "offline" ? result.pipe(Effect.map((outcome) => redactDiagnosticData(outcome))) : result
+}
+
+const execute = Effect.fn("Review.run")(function* (input: RunInput) {
   const sessions = yield* Session.Service
   const guard = yield* SpendGuard.Service
   const prompts = yield* SessionPrompt.Service
@@ -523,7 +530,19 @@ export const run: (
   // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
   // untrusted block the prompts quote (holdback.ts). Only what the model is shown changes: anchors, the plan, stats,
   // findings' suggestions and review state keep the change as it is. Unset, nothing here runs.
-  const hold = config.holdback === "secrets" ? holdback(input) : undefined
+  const diagnostics = config.diagnostics === "offline"
+  // A diagnostics run never sends evidence alongside the raw value it found. Use the existing payload and tool
+  // holdback, including on unsupported hosts, and rely on the caller's supplied review rules for this session.
+  if (diagnostics) {
+    const { observe, onProgress } = input
+    input = {
+      ...input,
+      instructionsFromContext: true,
+      ...(observe ? { observe: (event) => observe(redactDiagnosticData(event)) } : {}),
+      ...(onProgress ? { onProgress: (event) => onProgress(redactDiagnosticData(event)) } : {}),
+    }
+  }
+  const hold = config.holdback === "secrets" || diagnostics ? holdback(input) : undefined
   if (config.trivial === "skip" && !input.forceFull && input.trivialProof) {
     // Only the complete diff can justify skipping every reviewer. A filtered model payload, withheld reads,
     // or a failed proof keeps the normal review path. The GitHub job has no proof until its posting path handles skips.
@@ -965,7 +984,7 @@ export const run: (
     model: { providerID: spec.model.providerID, modelID: spec.model.modelID },
     ...(spec.model.variant ? { variant: spec.model.variant } : {}),
     format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: spec.schema, retryCount: 0 }),
-    parts: [{ type: "text" as const, text, metadata: { [SCOPE]: reviewed } }],
+    parts: [{ type: "text" as const, text: diagnostics ? holdbackText(text) : text, metadata: { [SCOPE]: reviewed } }],
   })
 
   // One session: the prompt, and when it was stopped or returned nothing usable, a finalize prompt in the same
@@ -1579,6 +1598,29 @@ export const run: (
       reviewed.paths = files.map((file) => file.path)
       impact = graph && files.length ? yield* collectImpact : undefined
     }
+    // Inspect only the admitted batch's original lines. Lockfile presence is metadata about the full change:
+    // a matching lock in a different batch still accompanies its manifest.
+    const checks = !diagnostics
+      ? undefined
+      : process.platform !== "linux"
+        ? { evidence: [], incomplete: "unavailable" as const }
+        : yield *
+          Effect.promise(() =>
+            offlineChecks(
+              input.files.filter((file) => !denied(file.path) && (!file.oldPath || !denied(file.oldPath))),
+              fullInput.anchors,
+              input.stopSignal,
+            ),
+          )
+    const checkNotes = !checks?.incomplete
+      ? []
+      : [
+          checks.incomplete === "unavailable"
+            ? "Offline diagnostics did not run on this platform."
+            : checks.incomplete === "cancelled"
+              ? "Offline diagnostics were cancelled."
+              : "Offline diagnostics reached their scan limit. Their evidence is incomplete.",
+        ]
     const { ordered, split, overBudget, packed } = layout(impact?.changedRanks, impact?.dependentsByFile)
     const index = buildAnchorIndex(input.anchors)
     const strictDenied = (file: string) => {
@@ -1673,6 +1715,7 @@ export const run: (
             history: (hold?.context.history ?? input.context.history)?.filter((entry) => batch!.paths.has(entry.path)),
           }
         : {}),
+      ...(checks?.evidence.length ? { diagnostics: checks.evidence } : {}),
       ...(impact ? { impact: impact.slice } : {}),
       ...(hold ? { inputsRedacted: true as const } : {}),
       rules: ruleInput.rules,
@@ -2083,6 +2126,7 @@ export const run: (
             ...result.notes,
             ...(auto ? ReviewDepth.notes(auto, []) : []),
             ...snapshotNotes,
+            ...checkNotes,
             ...holdNotes,
           ],
           ...(hold?.held.length ? { held: hold.held } : {}),
@@ -2161,7 +2205,7 @@ export const run: (
     // 6. Normalize.
     const reports = asked.flatMap((entry) => {
       if (!entry.value) return []
-      let report = entry.value
+      let report = diagnostics ? redactDiagnosticData(entry.value) : entry.value
       if (trusted) {
         const checked = checkedRuleFindings(report.findings, trusted)
         ruleCounts.push(checked)
@@ -2179,7 +2223,8 @@ export const run: (
     const hidden = new Set<string>()
     const lensCandidates = new Set<Finding>()
     const allFindings = reports.flatMap(({ report, source, lens }) => {
-      const findings = normalizeFindings(report.findings, source, input.anchors)
+      const modelFindings = normalizeFindings(report.findings, source, input.anchors)
+      const findings = checks ? withDiagnosticEvidence(modelFindings, checks.evidence) : modelFindings
       if (strictMode)
         for (const [i, finding] of findings.entries()) {
           const raw = report.findings[i]!
@@ -2189,7 +2234,9 @@ export const run: (
             targets.some(strictDenied) ||
             strictDenied(raw.path) ||
             raw.quotes?.some((quote) => strictDenied(quote.path)) ||
-            raw.evidence?.some((reference) => strictDenied(evidencePath(reference))) ||
+            raw.evidence?.some(
+              (reference) => !(checks && diagnosticReference(reference)) && strictDenied(evidencePath(reference)),
+            ) ||
             (hold && containsHeldValue(raw))
           )
             hidden.add(finding.id)
@@ -2669,6 +2716,8 @@ export const run: (
               ...(triaged ? { triage: subjectOf(triage) } : {}),
               scope: evidenceScope({
                 adapter: "engine",
+                offlineDiagnostics:
+                  checks !== undefined && checks.incomplete !== "unavailable" && checks.incomplete !== "cancelled",
                 config,
                 ...(triaged ? { triage: nameOf(triage) } : {}),
                 ...(zdr ? { route: "zdr" as const } : {}),
@@ -2735,6 +2784,7 @@ export const run: (
               attempts: [...tracks.values()].reduce((sum, track) => sum + track.attempts + track.finalizeAttempts, 0),
             }),
             ...snapshotNotes,
+            ...checkNotes,
             ...holdNotes,
             ...incomplete,
           ]
@@ -2766,6 +2816,7 @@ export const run: (
             ...dispatchNotes,
             ...(auto ? ReviewDepth.notes(auto, specialists) : []),
             ...(lenses.length ? [`Single-class lens passes: ${lenses.join(", ")}.`] : []),
+            ...checkNotes,
             ...holdNotes,
             ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
             ...(strictMode ? [] : verifyNotes),

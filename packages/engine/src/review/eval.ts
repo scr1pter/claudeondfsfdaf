@@ -767,6 +767,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     // rules at admission, at the transport and in the session runtime (VS-23c), so the scope claims the zdr route.
     scope: evidenceScope({
       adapter: "engine",
+      offlineDiagnostics: process.platform === "linux",
       config,
       ...(triaged ? { triage: triaged } : {}),
       ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
@@ -853,7 +854,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   const known = yield* ReviewSource.knownPath({ directory, rev: item.head })
   // VS-34 item 4: under holdback "secrets", the changed files this checkout's ignore rules exclude although committed.
   const ignoredPaths =
-    config.holdback === "secrets"
+    config.holdback === "secrets" || config.diagnostics === "offline"
       ? yield* ReviewGit.ignoredPaths(
           directory,
           files.filter((file) => file.status !== "deleted").map((file) => file.path),
@@ -1143,7 +1144,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       ))
   const relatedLocations = quoted
     ? quotedLocations(
-        config.holdback === "secrets"
+        config.holdback === "secrets" || config.diagnostics === "offline"
           ? (holdbackContext({ related: gathered.related }, { held: outcome.held ?? [] }).related ?? [])
           : gathered.related,
       )
@@ -1440,6 +1441,7 @@ function variantProblem(input: ReplayInput) {
   const sourced = SOURCED_REVIEW_KEYS.filter(
     (key) =>
       key !== "ruleCheck" &&
+      key !== "diagnostics" &&
       key !== "holdback" &&
       input.config &&
       Object.hasOwn(input.config, key) &&
@@ -1447,6 +1449,8 @@ function variantProblem(input: ReplayInput) {
   )
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
+  if (input.config && Object.hasOwn(input.config, "diagnostics"))
+    return "config sets diagnostics, which a replay takes only from the committed base."
   if (input.config && Object.hasOwn(input.config, "ruleCheck"))
     return "config sets ruleCheck, which a replay takes from the committed base or the engine:rule-strict variant."
   if (input.config && Object.hasOwn(input.config, "holdback"))

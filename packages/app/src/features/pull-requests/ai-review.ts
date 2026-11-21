@@ -16,6 +16,7 @@ import { requestComposerPrompt } from "@/utils/composer-handoff"
 import {
   DESKTOP_CARDS_NOTICE,
   DESKTOP_STRICT_NOTICE,
+  DESKTOP_DIAGNOSTICS_NOTICE,
   mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
@@ -745,8 +746,12 @@ const NO_USAGE: Usage = { messages: [], complete: true }
 
 type SpecialistResult = SpecialistRun & { report?: ModelReport; usage: Usage }
 
-function withStrictNotice(text: string, config: ReviewConfig) {
-  return config.guardrail === "strict" ? `${text} ${DESKTOP_STRICT_NOTICE}` : text
+function withSurfaceNotes(text: string, config: ReviewConfig) {
+  return [
+    text,
+    ...(config.guardrail === "strict" ? [DESKTOP_STRICT_NOTICE] : []),
+    ...(config.diagnostics === "offline" ? [DESKTOP_DIAGNOSTICS_NOTICE] : []),
+  ].join(" ")
 }
 
 export async function runReview(input: ReviewRunInput, client: ReviewClient): Promise<ReviewOutcomeLite | undefined> {
@@ -771,12 +776,15 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       : "There are no uncommitted changes to review."
     // There is no changed settings file in an empty diff. Guardrail is set only by this checkout's review.json.
     const json = await read(REVIEW_CONFIG_PATH)
+    // No review can run on an empty diff. Keep that reason even if an optional settings read fails.
+    const global = await userReviewSettings(client).catch(() => undefined)
     const { config } = mergeReviewConfig({
       surface: "local",
+      ...(global ? { global } : {}),
       json: { at: "working-tree", text: json },
       trigger: "desktop",
     })
-    throw new Error(withStrictNotice(problem, config))
+    throw new Error(withSurfaceNotes(problem, config))
   }
 
   // Settings come from the user's checkout, as for `vector review`, unless a pull request changes them: a pull
@@ -830,6 +838,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     (warning) =>
       warning === DESKTOP_STRICT_NOTICE ||
       warning === DESKTOP_CARDS_NOTICE ||
+      warning === DESKTOP_DIAGNOSTICS_NOTICE ||
       /\breview\.(privacy|holdback|zdrAttested)\b|"(privacy|holdback|zdrAttested)"/.test(warning),
   )
   const withSettingNotes = (text: string) => [text, ...settingNotes].join(" ")
@@ -845,6 +854,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       instructions,
       ...(input.preferredModels ?? []),
       ...(ruleCheck ? ["ruleCheck:strict"] : []),
+      ...(config.diagnostics === "offline" ? ["diagnostics:offline"] : []),
       // Only when either is set, so the key is what it was for every review without them.
       ...(config.privacy || config.holdback
         ? [`privacy:${config.privacy ?? ""}`, `holdback:${config.holdback ?? ""}`]
@@ -1012,7 +1022,11 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     unchanged.clear()
   // Nothing changed since the last review, so its findings stand. The checkout is the one read just now: the user may
   // have switched branches since, and Apply fix and Ask the agent follow it.
-  if (previous && sameDiff && unchanged.size === review.length)
+  if (previous && sameDiff && unchanged.size === review.length) {
+    const missingNotes = [
+      ...(config.guardrail === "strict" ? [DESKTOP_STRICT_NOTICE] : []),
+      ...(config.diagnostics === "offline" ? [DESKTOP_DIAGNOSTICS_NOTICE] : []),
+    ].filter((note) => !previous.notes.includes(note))
     return {
       ...previous,
       ...(carriedRules ? { report: { ...previous.report, findings: carriedRules.findings } } : {}),
@@ -1020,12 +1034,13 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       checkout,
       label,
       unchanged: true,
-      // Older desktop outcomes with this settings key used ordinary selection but did not retain its warning.
       notes: [
         ...previous.notes.filter((note) => note !== DESKTOP_CARDS_NOTICE),
-        ...settingNotes.filter((note) => note === DESKTOP_CARDS_NOTICE || (note === DESKTOP_STRICT_NOTICE && !previous.notes.includes(note))),
+        ...settingNotes.filter((note) => note === DESKTOP_CARDS_NOTICE),
+        ...missingNotes,
       ],
     }
+  }
 
   // An explicit model in review.json wins; otherwise the review runs on the agent's model (see preferredModels).
   // The resolved model is passed explicitly to every prompt.
@@ -1038,7 +1053,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const named = config.triageModel ? pickReviewModel([config.triageModel], catalog) : undefined
   if (!chosen)
     throw new Error(
-      withStrictNotice(
+      withSurfaceNotes(
         catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
           ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
           : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
@@ -1065,7 +1080,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const refusal = [model, ...(triage ? [triage] : []), ...(judge ? [judge] : [])]
     .map((item) => (item.context ? contextRefusal(modelName(item), item.context) : undefined))
     .find(Boolean)
-  if (refusal) throw new Error(withStrictNotice(refusal, config))
+  if (refusal) throw new Error(withSurfaceNotes(refusal, config))
   // VS-23d (SF-15): under privacy "zdr" a model whose names alone the route rules refuse (Vector Codium, a free model,
   // a router or preset, one whose provider requires retention) is refused before any session is created, as
   // `vector review` refuses it. Where its requests go decides the rest, which the engine server holds each session to.

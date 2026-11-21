@@ -38809,6 +38809,7 @@
         "properties": {
           "privacy": {},
           "holdback": {},
+          "diagnostics": {},
           "ruleCheck": {},
           "zdrAttested": {}
         },

@@ -63,6 +63,8 @@ export interface Finding extends ModelFinding {
   id: string
   side: Side
   source: "review" | "security"
+  // Versioned offline rules observed at an anchor this model finding cites. They do not confirm the finding.
+  diagnostics?: import("./diagnostic").DiagnosticProvenance[]
   verified?: boolean
   // Who confirmed it (VS-27a). `verified` stays a boolean, so every `verified === true` check keeps its meaning: a
   // runtime confirmation sets both `verified: true` and `verifiedBy: "runtime"`. No runner sets it before VS-27c or VS-30.
@@ -489,6 +491,8 @@ export interface ReviewConfig {
   // Under "strict" the engine verifies every candidate and reports verified blocking findings in the five
   // production-breaking classes. The default and desktop use ordinary review selection.
   guardrail?: "off" | "strict"
+  // Pinned in-process evidence. Only the trusted configuration can select the Linux engine implementation.
+  diagnostics?: "off" | "offline"
   // VS-42's opt-in (Q18). Under "introduced", the strict guardrail drops a finding the model labels pre-existing, or
   // whose quoted code is all unchanged since the base (S9, guardrail.ts preExistingSuspect). It acts inside
   // strictSelect, so it is effective only with `guardrail: "strict"`; set without it, it is ignored with a parser note.
@@ -622,6 +626,7 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   impact: "grep",
   ruleCheck: "off",
   guardrail: "off",
+  diagnostics: "off",
   scopeGate: "off",
   verifyEvidence: "off",
   depth: "fixed",

@@ -26,6 +26,9 @@ export const Info = Schema.Struct({
   holdback: Schema.optional(Schema.Unknown).annotate({
     description: 'Review secret holdback: "secrets" only raises what a repository asks.',
   }),
+  diagnostics: Schema.optional(Schema.Unknown).annotate({
+    description: "Run the pinned offline diagnostics in Linux engine reviews.",
+  }),
   ruleCheck: Schema.optional(Schema.Unknown).annotate({
     description: "Check repository rule citations against the trusted text sent for this review.",
   }),
