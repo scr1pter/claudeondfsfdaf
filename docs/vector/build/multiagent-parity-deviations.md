@@ -2433,8 +2433,8 @@ Remaining:
 
 ## 2026-11-21 CI-ISOLATION-PLACE - merge writes into the parent retry Windows' open-handle refusal
 
-Belongs under ci-harness-repairs.md "2026-11-20: Windows isolated save renamed over an open record"; that file is held
-by open PR #59 (`wal-busy-timeout`), so the note is here until it merges and the lead moves it.
+A short cross-reference also sits under ci-harness-repairs.md "2026-11-20: Windows isolated save renamed over an open
+record" (added once PR #59, which held that file, had merged).
 
 - Gap: the 2026-11-20 change gave record saves (`privateJSON`) and reads (`privateRead`) `cleared()`, the win32-only
   retry over LockFs's transient window, but `place()` (merges and their rollback, writing into the parent project)

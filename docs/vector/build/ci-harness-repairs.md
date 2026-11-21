@@ -445,6 +445,12 @@ Windows, look first at its one timing gap: once the poll sees the .tmp file, the
 the test does one more `find` and closes the handle, and the test's own deadline does not cover that gap. Do not
 lengthen any deadline for it.
 
+Follow-up, 21 Nov 2026 (branch `engine-core-fixes`, CI-ISOLATION-PLACE): `place()`, which merges and their rollback
+use to write into the parent project, now runs its rename and the win32 symlink pre-unlink through `cleared()` too, so
+an editor, indexer or antivirus handle on a parent file waits out the same 2 s window instead of failing with EPERM.
+Two `place()` tests in `test/task/isolation.test.ts` mirror the record-save pair above; their Windows branches run only
+on Windows CI. Details: `multiagent-parity-deviations.md`, "2026-11-21 CI-ISOLATION-PLACE".
+
 ## 2026-11-20: Bun 1.3.14 crash in scrollback.surface (Worker terminated while loading)
 
 Branch `scrollback-bun-crash` from `6a771354`. Changes: `patches/@opentui%2Fcore@0.3.4.patch` (registered in the root
