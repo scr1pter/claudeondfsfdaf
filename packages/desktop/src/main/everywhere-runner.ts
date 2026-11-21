@@ -220,13 +220,17 @@ export function createEverywhereRunner(deps: RunnerDeps) {
     let settled = false
     let publication: Settle | undefined
     const needs = new Set<string>()
+    // EV-03: latched, because the timer keeps running after an abort and a later deadline or lease abort overwrites
+    // `outcome`. A cancel heard once stays heard.
+    let cancelHeard = false
     const abort = async (reason: Outcome) => {
       outcome = reason
+      if (reason === "cancelled") cancelHeard = true
       controller.abort()
       if (session && engine) await engine.abort(session).catch(() => undefined)
     }
-    /** Read through a function: `abort` sets `outcome` from callbacks, which the inline narrowing cannot see. */
-    const abortedFor = (reason: Outcome) => controller.signal.aborted && outcome === reason
+    /** Read through a function: `abort` sets the latch from callbacks, which the inline narrowing cannot see. */
+    const stopHeard = () => cancelHeard
     try {
       const claimed = decodeJob(await deps.jobs.claim(jid))
       if (!claimed.ok || claimed.value.jid !== jid) throw new Error("Invalid Everywhere claim")
@@ -399,8 +403,9 @@ export function createEverywhereRunner(deps: RunnerDeps) {
             } else {
               publication = { jid, lease: job.lease.id, outcome: "changes", summary, branch, headSha, files: staged.files, checks: "skipped" }
               await deps.ledger.remember(publication)
-              // EV-03: a cancel heard during the push (stop, lost, a switch turned off) opens no draft PR; a deadline still does.
-              const prUrl = abortedFor("cancelled") ? undefined : await deps.openPr({ job: { ...job, task }, branch, base: project.base, summary, held: staged.held.length }).catch(() => undefined)
+              // EV-03: a cancel heard during the push (stop, lost, a switch turned off) opens no draft PR, even when a later
+              // deadline or lease abort replaced the outcome; a deadline or lease alone still opens it.
+              const prUrl = stopHeard() ? undefined : await deps.openPr({ job: { ...job, task }, branch, base: project.base, summary, held: staged.held.length }).catch(() => undefined)
               if (prUrl) {
                 publication = { ...publication, prUrl }
                 await deps.ledger.remember(publication)

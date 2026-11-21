@@ -182,6 +182,42 @@ test("a lease that runs out during an admitted push still opens the draft PR, si
   }])
 })
 
+// EV-03: the runner's timer keeps running after an abort, and a later deadline or lease abort overwrites the outcome.
+// A stop heard first must still suppress the draft PR.
+for (const [later, minutes, wait] of [
+  ["the deadline passes", 5, 4 * 60_000],
+  ["the lease runs out", 30, TIMING.leaseMs],
+] as const) {
+  test(`a stop heard during an admitted push still opens no draft PR when ${later} before the push ends (EV-03)`, async () => {
+    const f = fixture()
+    f.settings({ minutes })
+    f.git.push = async (_, __, branch) => {
+      f.calls.push({ kind: "push", value: branch })
+      // The heartbeat a minute in hears the stop; then the job's deadline or its lease runs out before git returns.
+      await f.tick(TIMING.heartbeatMs)
+      await f.tick(wait)
+      return true
+    }
+    await createEverywhereRunner({
+      ...f.deps,
+      jobs: {
+        ...f.deps.jobs,
+        report: async (job, seq, milestone, files) => {
+          await f.deps.jobs.report(job, seq, milestone, files)
+          return milestone === "heartbeat" ? "stop" : "continue"
+        },
+      },
+    }).offer("fixture-offer")
+    expect(f.calls.filter((call) => call.kind === "report").map((call) => (call.value as { milestone: string }).milestone)).toEqual(["started", "pushing", "heartbeat"])
+    expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(0)
+    expect(f.results).toEqual([{
+      jid: f.job.jid, lease: f.job.lease.id, outcome: "changes", summary: "Fixed retry handling.", branch: branchFor(f.job.jid),
+      headSha: "c".repeat(40), files: 1, checks: "skipped",
+    }])
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
+
 test("a deadline reached while journaling still prevents admission of the remote push", async () => {
   const f = fixture()
   await createEverywhereRunner({ ...f.deps, ledger: { ...f.ledger, remember: async (result) => {
