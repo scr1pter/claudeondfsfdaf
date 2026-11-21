@@ -45,7 +45,7 @@ import {
   type Shrink,
 } from "@vectordevai/core/review/dispatch"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
-import { heldReason, holdbackContext, holdbackFiles, holdbackText } from "@vectordevai/core/review/holdback"
+import { heldReason, holdbackContext, holdbackFiles, holdbackText, safeRulePrompt } from "@vectordevai/core/review/holdback"
 import {
   IMPACT_LIMITS,
   impactRecord,
@@ -123,7 +123,7 @@ import {
   REVIEW_REPORT_JSON_SCHEMA,
   VERIFY_JSON_SCHEMA,
 } from "@vectordevai/core/review/schema"
-import { trustedRules, safeRulePrompt } from "@vectordevai/core/review/citation"
+import { trustedRules } from "@vectordevai/core/review/citation"
 import type { RulePart } from "@vectordevai/core/review/config"
 import {
   checkedRuleFindings,

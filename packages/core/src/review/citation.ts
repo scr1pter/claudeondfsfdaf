@@ -36,22 +36,7 @@ import {
   type DiffLine,
 } from "./diff"
 import { MAX_TRUSTED_CHARS, type PromptInput } from "./prompt"
-import { holdbackText } from "./holdback"
-import type { ModelFinding, ReviewConfig, RuleCitation } from "./types"
-
-// A credential in trusted instructions is still a credential. Omit the affected block as a
-// whole so clipping and source offsets on the remaining block agree with the transmitted text.
-export function safeRulePrompt(
-  input: { instructions?: string; rules?: string; ruleParts?: readonly RulePart[] },
-  config: Pick<ReviewConfig, "ruleCheck" | "holdback">,
-) {
-  if (config.ruleCheck !== "strict" || config.holdback !== "secrets") return input
-  return {
-    ...input,
-    ...(input.instructions && holdbackText(input.instructions) !== input.instructions ? { instructions: "" } : {}),
-    ...(input.rules && holdbackText(input.rules) !== input.rules ? { rules: "", ruleParts: [] } : {}),
-  }
-}
+import type { ModelFinding, RuleCitation } from "./types"
 
 export type RulesSource = NonNullable<PromptInput["rulesSource"]>
 

@@ -24,7 +24,7 @@ import {
   rulePromptInput,
   type SourcedReviewKey,
 } from "@vectordevai/core/review/config"
-import { safeRulePrompt, trustedRules } from "@vectordevai/core/review/citation"
+import { trustedRules } from "@vectordevai/core/review/citation"
 import {
   anchorText,
   applyPatch,
@@ -66,7 +66,7 @@ import {
   sanitizeModelMarkdown,
   type RepoRef,
 } from "@vectordevai/core/review/format"
-import { holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
+import { holdbackContext, holdbackFiles, safeRulePrompt } from "@vectordevai/core/review/holdback"
 import { classifyFiles, classifyPath, isSensitivePath, parseGitAttributes } from "@vectordevai/core/review/ignore"
 import {
   assessReview,

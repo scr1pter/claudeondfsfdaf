@@ -500,6 +500,9 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
                 ))
             const bridge = yield* EffectBridge.make()
             const out: string[] = []
+            // Check 1 again: nothing may have edited the settings while connect asked or loaded.
+            const before = yield* settings()
+            if (before.edited.length > 0) return settingsResult(target, before.edited)
             // A result from another head, base or read authority cannot answer this request.
             const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
             const authority = statePath
@@ -577,9 +580,6 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
               posting: async () => [],
               requirements: (input) => requirements({ files: input.files, personal: personal && !input.shared }),
             }
-            // Check 1 again: nothing may have edited the settings while connect asked or loaded.
-            const before = yield* settings()
-            if (before.edited.length > 0) return settingsResult(target, before.edited)
             // Every question is behind it: a background run's caller stops waiting here.
             if (context.working) yield* context.working(cap.value !== undefined ? { maxCostUsd: cap.value } : {})
             yield* say("review", "Reviewing")

@@ -29,12 +29,13 @@
 
 import { BrainScan } from "../brain/scan"
 import { Wildcard } from "../util/wildcard"
+import type { RulePart } from "./config"
 import { matchPostImage, parseUnifiedDiff, type DiffFile, type DiffHunk, type DiffLine } from "./diff"
 import { isCodePath } from "./ignore"
 import { CREDENTIAL_FILES, ENV_FILES, SECRET_FILES } from "./permission"
 import type { HeadFile, PromptInput } from "./prompt"
 import { REDACTED } from "./redact"
-import type { HeldFile, HoldbackReason } from "./types"
+import type { HeldFile, HoldbackReason, ReviewConfig } from "./types"
 
 // The `[redacted]` placeholders holdback added to one path: in its diff (hunk headers and lines) and in its head file.
 export interface HoldbackRedaction {
@@ -206,6 +207,20 @@ export function holdbackContext(
             .map((entry) => ({ ...entry, title: read(entry.title) })),
         }
       : {}),
+  }
+}
+
+// A credential in trusted instructions is still a credential. Omit the affected block as a
+// whole so clipping and source offsets on the remaining block agree with the transmitted text.
+export function safeRulePrompt(
+  input: { instructions?: string; rules?: string; ruleParts?: readonly RulePart[] },
+  config: Pick<ReviewConfig, "ruleCheck" | "holdback">,
+) {
+  if (config.ruleCheck !== "strict" || config.holdback !== "secrets") return input
+  return {
+    ...input,
+    ...(input.instructions && holdbackText(input.instructions) !== input.instructions ? { instructions: "" } : {}),
+    ...(input.rules && holdbackText(input.rules) !== input.rules ? { rules: "", ruleParts: [] } : {}),
   }
 }
 

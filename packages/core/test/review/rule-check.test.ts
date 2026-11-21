@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { safeRulePrompt, trustedRules } from "@vectordevai/core/review/citation"
+import { trustedRules } from "@vectordevai/core/review/citation"
+import { safeRulePrompt } from "@vectordevai/core/review/holdback"
 import {
   mergeReviewConfig,
   parseReviewConfig,

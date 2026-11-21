@@ -26518,3 +26518,11 @@ The model-evidence file passed 37 tests. The core typecheck and 27 workspace typ
 ## 2026-11-21 · Integrate the Everywhere push and cancellation fixes from main
 
 Merged main at `23d09a96b4ca`. The merged desktop scanner and runner passed 70 tests, the Everywhere documentation passed 17 tests, and the review evidence file passed 37 tests. All 27 workspace typechecks passed. The review pipeline uses revision 5 and source digest `31a9837d871ec207`.
+
+## 2026-11-21 · Resolve the hosted ledger and Connect failures
+
+Moved the existing credential screening helper from citation verification to the holdback code that prepares live prompts. Desktop and engine callers use the same function. The offline ledger import check now passes without allowing the Brain scanner into its module graph. [Linux unit job](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44936504715/job/136949163481)
+
+Connect checks again for changed settings before looking up the branch checkpoint. The existing cache receipt and Git collector isolation remain in place. The original cache cases passed in the hosted run, which reported the settings and checkpoint lookup in the opposite order. The native collector tests require hosted verification on the repaired commit. [Linux engine job](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44936504715/job/136949163682)
+
+The focused checks passed 176 tests (ledger 86, rule 4, selector 45, pin 37, cache 1, connect 3). The evaluation project and all 27 workspace packages passed typechecking. The pipeline remains at revision 5 and the source digest moved from `31a9837d871ec207` to `e9374c25be7600bf`.
