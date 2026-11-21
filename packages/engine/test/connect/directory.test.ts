@@ -330,7 +330,12 @@ it.instance(
       yield* Effect.promise(() =>
         fs.rm(path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${first.id}.json`)),
       )
-      expect(Exit.isFailure(yield* f.owner.directoryReview(input).pipe(Effect.exit))).toBe(true)
+      const retry = yield* f.owner.directoryReview(input).pipe(Effect.flip)
+      // C6: the key is bound, so its retry answers consumed (which the app turns into "Start a new review"), not invalid.
+      expect(retry.code).toBe("consumed")
+      expect(retry.message).toBe(
+        "This request key is consumed, but its original owned run is unavailable. No new review was started.",
+      )
       expect(yield* f.jobs.forParent(ask.sessionID)).toHaveLength(1)
       expect(
         (yield* f.sessions.list({ internal: true, roots: true })).filter(

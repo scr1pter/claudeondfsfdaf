@@ -2188,3 +2188,18 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   guard on `touchFile` sits beside the formatter's in the same tools.
 - Local note: `test/tool/write.test.ts` "throws error when OS denies write access" fails when run as root, as in this
   container (chmod 0444 does not stop root); unrelated and unchanged.
+
+## 2026-11-21 — C6: a bound key whose receipt is gone answers consumed (part 1 of 2)
+
+- Gap: `owner.ts`'s bound branch answered a key whose original run could not be replayed (its receipt pruned after a
+  done run, CN-09) with `invalid`, so the app kept the marker and the key stayed stuck. A binding means the key already
+  ran a review, so the answer is now `consumed`, with the same message ("…its original owned run is unavailable. No new
+  review was started."). The app (CN-10) already handles a typed 400 consumed by dropping that marker and offering
+  "Start a new review", which mints a new key only when clicked.
+- Test: `packages/engine/test/connect/directory.test.ts` "a consumed key whose receipt was retired cannot create a
+  replacement review" now asserts the code and message, not only a failure; it still checks one job, one anchor and one
+  model call. Red on the old code ("Received: invalid"). `test/connect/owner.test.ts` (7 pass) and
+  `test/server/httpapi-connect.test.ts` (12 pass) are unchanged.
+- Not done (part 2, left for the morning list): returning a bound member-gate refusal as a 200 refused run instead of
+  400 invalid. It needs a fixture that reaches the hub's member gate after the binding, which the current tests do not
+  build.

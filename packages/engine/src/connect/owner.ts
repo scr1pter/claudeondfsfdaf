@@ -426,9 +426,11 @@ const layer = Layer.effect(
                   runID: attempt.binding.runID,
                   anchorID: attempt.binding.anchorID,
                 })
+                // A binding means this key already ran a review; only a pruned receipt leaves it unreplayable (CN-09). The
+                // app's typed consumed answer drops the marker and offers a new review, so the key is not held for good.
                 if (!original)
                   return yield* new Error({
-                    code: "invalid",
+                    code: "consumed",
                     message:
                       "This request key is consumed, but its original owned run is unavailable. No new review was started.",
                   })
