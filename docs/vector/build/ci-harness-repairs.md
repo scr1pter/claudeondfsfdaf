@@ -816,6 +816,23 @@ since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows exe hash ch
 did not wait for this merge: the fix was ported into it as merge commit `a3fe7af1`, and both merged (#52 as
 `c776fb60`, #51 as `15f3ba77`).
 
+21 Nov 2026, measurement step added (branch `hands-native-diag`, commit `d2a1c918`; phase 1 only). windows-build in
+`computer-helper.yml` now runs "Report the per-architecture native build window" right after "Build both channel
+helper architectures" (`if: always()`, `continue-on-error: true`, `timeout-minutes: 1`, `shell: pwsh`). For x64 and
+arm64 it reads file times under `packages/desktop/native/build/win32-<arch>`, the tree `buildWindows` passes to
+`cmake -B`, and prints one `computer-helper-build-window {...}` JSON line with `configureSeconds`, `buildSeconds`
+(newest `.sln`/`.vcxproj` write to newest `Release` `.exe`/`.lib`/`.pdb`, the `cmake --build` window),
+`firstObjectSeconds` and `buildHeadroomSeconds` against the 300 s per-call cap. It writes nothing; a restored attempt
+reports `restored: true`. `build-computer-helper.ts`, `CMakeLists.txt`, the 300 s cap, the 20 and 15 minute limits and
+every digest input are unchanged. The test.yml x64 cross-check step was not added, because test.yml belonged to another
+open branch at the time. No numbers yet: the step had not run in CI when this note was written. Owed: the per-arch
+configure and build seconds and the headroom from at least two windows-build jobs (one slow-group job if one occurs),
+added here as a later dated note, plus a data-based recommendation for phase 2 (a per-phase budget or precompiled
+headers, a helperVersion bump and a macOS lock re-measure), which stays the lead's call.
+Also owed: the test.yml x64 cross-check step. No open PR changes test.yml any more (#56 and #59 merged, #58 does
+not touch it), but the sibling branch `hands-stop-guardian` edits the same Hands workflows, so the step is added on a
+later branch once that one merges.
+
 ## 2026-11-20: Windows region observer at deadline_compile on a cold PowerShell 7 compiler
 
 Branch `region-compile-budget` from `15f3ba77`. Changes: `packages/desktop/scripts/computer-overlay-smoke-window-region.ts`
@@ -1084,3 +1101,87 @@ Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 
 `brain/database.test.ts`, `background-job-store.test.ts` and `engine/test/storage/storage.test.ts` passed (the last
 does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
 change has not run on Windows CI yet.
+
+## 2026-11-21: EV-18 worktree test cleanup hit EBUSY on the job's checkout on Windows
+
+Branch `worktree-test-cleanup` from `4fc245b6`. The first commit (`4d72d6a4`) is test-only; the second path below
+adds a test-side cleanup retry and one product change in `src/project/vcs.ts`. No assertion, deadline or timeout was
+skipped, loosened or lengthened.
+
+Evidence. PR #58 test.yml run 44889738895, attempt 1, `engine (windows, shard 9/12)` job 136807229583:
+`packages/engine/test/everywhere/worktree.test.ts` "POST /experimental/worktree/unattended (EV-13) > the job's
+checkout is never trusted, so its own config, or one written into it, loads no formatter or server" failed with
+`EBUSY: resource busy or locked, rm '...\share\vector\everywhere-worktree\5742053554...'` at `worktree.test.ts:737:49`,
+the `afterEach` cleanup `rm(item, { recursive: true, force: true })` that runs right after `store.disposeAll()`.
+The shard otherwise passed (748 pass, 23 skip, 1 fail). The test came with #56 and passed on main's `153f9a22` run
+in 2666 ms; here it took 1935 ms. #58 does not touch it.
+
+Cause. This is the only test in the file that loads an engine instance in the job's checkout, and it loads it twice
+(before and after `/instance/dispose`). Every load runs `Vcs.init()`, which forks the Vcs state lookup into the Vcs
+layer's app-wide scope (`src/project/vcs.ts`), and bootstrap does not wait for it. The lookup runs
+`git symbolic-ref`, `git remote`, `git for-each-ref refs/heads` and `git config init.defaultBranch` with the
+checkout as their working folder. `InstanceState`'s disposer only calls `ScopedCache.invalidate`, which closes the
+entry's scope but does not interrupt a lookup still running in the caller's fiber, so neither `/instance/dispose`
+nor `store.disposeAll()` waits for those processes. On Windows a running process holds its working folder open, so
+the cleanup `rm`, which has no retry, failed with EBUSY when it ran before git had exited. `Worktree.remove` already
+tolerates the same leftover handle with its 50 x 100 ms win32 `rm` retry in `cleanDirectory`. File watchers,
+formatters and language servers are not the cause: the checkout watcher is behind `VECTOR_EXPERIMENTAL_FILEWATCHER`
+(off), the git-folder watcher targets the source repository's `.git`, and the untrusted checkout starts no
+formatter or server.
+
+Change. The test now calls `GET /vcs` in the checkout (through its existing `read` helper, which also expects
+status 200) right before `/instance/dispose` and again after its last `state()` check. `GET /vcs` awaits
+`vcs.branch()` and `vcs.defaultBranch()`, which join the in-flight lookup, so both loads' git processes have exited
+before the instance is disposed and before `afterEach` removes the checkout. The cleanup loop is unchanged.
+
+At `4d72d6a4` this was left as a product follow-up: `Vcs.init` forking its lookup outside the instance's scope means
+disposal neither waits for nor stops git in the instance's folder. It is fixed by the second path's product change
+below.
+
+Validation, one file at a time through the Bun lock: `worktree.test.ts` 5 of 5 runs passed on Linux (20 tests each,
+17.3-24.3 s); `packages/engine` `bun typecheck` passes. Linux does not reproduce the EBUSY (it removes a process's
+working folder), so the local runs show only that the added waits succeed. CI must show the `engine (windows)` shard
+that runs `worktree.test.ts` passing this test, with no EBUSY from the `afterEach` cleanup, across repeated runs.
+
+### Second path: the createUnattended fixture finalizer
+
+Evidence. With `4d72d6a4` in place, Windows failed a different test in the same file on three PRs: #61 job
+136821212417, #62 job 136827690549 and #63 job 136829137042 (at `4d72d6a4`). Each failed
+"Worktree.createUnattended > refuses malformed ids, branches that are not the job's, and a directory other than the
+loaded checkout" with `EBUSY: resource busy or locked, rm '...\share\vector\everywhere-worktree\<project id>'` at
+`worktree.test.ts:115:13`, the `fixture()` finalizer's `rm(root, { recursive: true, force: true })`. The other
+createUnattended cases passed.
+
+Cause. The holder is the test's own instance load, not `createUnattended`. Near its end the case runs
+`refusal(seeded).pipe(provideInstance(made.directory))`, which loads an instance in the job's checkout under `root`.
+Layer memoization gives that load the test layer's store, which runs the real `InstanceBootstrap`, so `Vcs.init` forks
+the same background git lookup (`symbolic-ref --quiet HEAD`, `remote`, `for-each-ref refs/heads`,
+`config init.defaultBranch`) with the checkout as its working folder. The refusal needs no git, the case ends within
+milliseconds, and the finalizer runs before the shared store disposes the instance (and disposal would not have
+waited for the forked lookup anyway). `createUnattended` itself awaits every git call, forks nothing and loads no
+instance.
+
+Change.
+
+- Product (`src/project/vcs.ts`): `Vcs.init` now awaits `InstanceState.get(state)` instead of forking it into the
+  layer's app-wide scope, as `Snapshot.init`, `Format.init`, `LSP.init` and `Project.init` already do. The lookup now
+  runs in the bootstrap fiber, which `InstanceStore` joins and interrupts, so its git has exited before a load
+  returns. `InstanceBootstrap.run` already runs every init concurrently, so the boot waits only for the slowest init.
+  New test `test/project/vcs.test.ts` "Vcs init > init() returns only after the branch lookup's git has exited"
+  counts git processes at the `AppProcess` boundary for the instance's folder; it failed before the change (no git
+  had started when `init()` returned) and passes after it. The EV-18 comment now describes the new behaviour; its two
+  `GET /vcs` reads stay.
+- Test (`test/everywhere/worktree.test.ts`): one helper, `removeFolder`, retries `rm` 50 times 100 ms apart on win32
+  for EBUSY or EPERM only, as `Worktree.remove`'s `cleanDirectory` does; on Linux and macOS, and for any other error,
+  the first failure stands. It replaces the `fixture()` finalizer's two folder removals and the EV-13 `afterEach`
+  cleanup loop. It is still needed with the product change: the seeded instance is still loaded when the finalizer
+  runs. The shared `tmpdir` disposals (errors already swallowed), the mid-test junction removal, the managed policy
+  folder and the file removals are unchanged.
+
+Validation, one file at a time through the Bun lock, on Linux: `worktree.test.ts` 5 of 5 runs passed (20 tests each,
+16.9-19.8 s); `test/project/vcs.test.ts` 26 of 26 (the new test failed before the product change, 25 of 26);
+`instance-bootstrap.test.ts`, `instance.test.ts`, `instance-store-exclusive.test.ts`, `test/project/worktree.test.ts`,
+`worktree-remove.test.ts`, `test/worktree/create-for-task.test.ts` and `test/server/httpapi-workspace.test.ts` passed;
+`packages/engine` `bun typecheck` passes. Linux does not reproduce the EBUSY, so CI must show the `engine (windows)`
+shard that runs `worktree.test.ts` passing both the EV-13/EV-18 test and the createUnattended refusal case, across
+repeated runs.
