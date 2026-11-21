@@ -204,7 +204,6 @@ describe("the read tool under holdback (VS-34, SF-14)", () => {
           "config/.ENVRC": `export TOKEN=${T.npm}\n`,
           "deploy/.netrc": "machine registry.example.test login ci password plain-words\n",
           "notes.txt": "export DB_PASS=plain-words-only\n",
-          "Notes.TXT": "export DB_PASS=plain-words-only\n",
         })
         // The rules refuse the listed and the held paths as written.
         for (const file of ["config/prod/.envrc", "deploy/.netrc", "notes.txt"]) {
@@ -214,8 +213,16 @@ describe("the read tool under holdback (VS-34, SF-14)", () => {
         }
         // An ask that would let every read through still meets the case-folded rules: nothing is read.
         const lenient = context(HELD, { ask: "allow" })
-        for (const file of ["config/prod/.envrc", "config/.ENVRC", "deploy/.netrc", "notes.txt", "Notes.TXT"])
-          expect([file, yield* failure(read(dir, { filePath: file }, lenient))]).toEqual([file, `${file} ${REFUSED}`])
+        for (const file of ["config/prod/.envrc", "config/.ENVRC", "deploy/.netrc", "notes.txt"])
+          expect([file, yield* failure(read(dir, { filePath: file }, lenient))]).toEqual([
+            file,
+            `${path.normalize(file)} ${REFUSED}`,
+          ])
+        // Give the case variant its own checkout so its stored name survives on case-insensitive volumes.
+        const other = yield* tmpdirScoped({ git: true })
+        yield* write(other, { "Notes.TXT": "export DB_PASS=plain-words-only\n" })
+        expect(yield* failure(read(other, { filePath: "Notes.TXT" }, lenient))).toBe(`Notes.TXT ${REFUSED}`)
+        expect((yield* read(other, { filePath: "Notes.TXT" }, unset)).output).toContain("plain-words-only")
         // With no way to read the rules, nothing is read either.
         const blind = { ...lenient, deniedResources: undefined }
         expect(yield* failure(read(dir, { filePath: "src.txt" }, blind))).toBe(`src.txt ${REFUSED}`)
@@ -240,7 +247,7 @@ describe("the read tool under holdback (VS-34, SF-14)", () => {
           expect([held, file, yield* failure(read(dir, { filePath: file }, lenient))]).toEqual([
             held,
             file,
-            `${file} ${REFUSED}`,
+            `${path.normalize(file)} ${REFUSED}`,
           ])
         expect([held, (yield* grep(dir, { pattern: "needle", path: "docs" }, lenient)).output]).toEqual([
           held,
@@ -262,7 +269,7 @@ describe("the read tool under holdback (VS-34, SF-14)", () => {
       yield* write(dir, { "docs/screen.png": png, "docs/spec.pdf": "%PDF-1.4\n%fake\n" })
       for (const file of ["docs/screen.png", "docs/spec.pdf"])
         expect(yield* failure(read(dir, { filePath: file }, held))).toBe(
-          `${file} is an image or a PDF, which cannot be redacted, so this review does not read it (holdback "secrets"); nothing was read.`,
+          `${path.normalize(file)} is an image or a PDF, which cannot be redacted, so this review does not read it (holdback "secrets"); nothing was read.`,
         )
       expect((yield* read(dir, { filePath: "docs/screen.png" }, unset)).attachments).toHaveLength(1)
     }),
@@ -314,7 +321,7 @@ describe("the grep tool under holdback (VS-34, SF-14)", () => {
         yield* write(dir, tree)
         const result = yield* grep(dir, { pattern: "needle|M{8}" }, held)
         for (const file of ["config/.envrc", "config/prod/.envrc", "deploy/.netrc", "notes.txt"])
-          expect([file, result.output.includes(file)]).toEqual([file, false])
+          expect([file, result.output.replaceAll("\\", "/").includes(file)]).toEqual([file, false])
         for (const value of [T.npm, T.ghp, "plain-words-only", "login ci", ...keyBody.map((line) => line.slice(0, 16))])
           expect([value, result.output.includes(value)]).toEqual([value, false])
         // The lines without a value are shown, the key's header and comment among them.
@@ -334,7 +341,7 @@ describe("the grep tool under holdback (VS-34, SF-14)", () => {
       const dir = yield* tmpdirScoped({ git: true })
       yield* write(dir, tree)
       const env = yield* grep(dir, { pattern: "process.env" }, held)
-      expect(env.output).toContain("src/config.ts:")
+      expect(env.output).toContain(`${path.join("src", "config.ts")}:`)
       expect(env.output).toContain("Line 3: export const mode = process.env.MODE")
       // Whether a probe matched inside the value is never told: the line is withheld, not shown redacted.
       for (const pattern of [T.ghp.slice(0, 8), `${T.ghp.slice(0, 8)}|process.env.MODE`, "h1T2h1T2"]) {
@@ -352,15 +359,16 @@ describe("the grep tool under holdback (VS-34, SF-14)", () => {
       const dir = yield* tmpdirScoped({ git: true })
       yield* write(dir, {
         ...tree,
-        "config/.ENVRC": `export TOKEN=${T.npm} # needle\n`,
+        "config/staging/.ENVRC": `export TOKEN=${T.npm} # needle\n`,
         "dist/app.min.js": `${"a".repeat(2600)}needle${"b".repeat(50)}\n${"c".repeat(1989)} ${T.akia} needle\n`,
       })
       for (const file of ["config/.envrc", "config/prod/.envrc", "notes.txt"])
         expect(Exit.isFailure(yield* grep(dir, { pattern: "needle", path: file }, held).pipe(Effect.exit))).toBe(true)
       const lenient = context(HELD, { ask: "allow" })
-      expect(yield* failure(grep(dir, { pattern: "needle", path: "config/.ENVRC" }, lenient))).toBe(
-        'config/.ENVRC may hold credentials, so this review does not search it (holdback "secrets"); nothing was read.',
+      expect(yield* failure(grep(dir, { pattern: "needle", path: "config/staging/.ENVRC" }, lenient))).toBe(
+        'config/staging/.ENVRC may hold credentials, so this review does not search it (holdback "secrets"); nothing was read.',
       )
+      expect((yield* grep(dir, { pattern: "needle", path: "config/staging/.ENVRC" }, unset)).output).toContain(T.npm)
       expect((yield* grep(dir, { pattern: "needle", path: "config" }, lenient)).output).toBe("No files found")
       // A match past ripgrep's 2,000-character cut is shown from the whole line; a line with a value is withheld, so
       // no part of the key ID is left by any cut.
@@ -404,11 +412,11 @@ describe("the grep tool under holdback (VS-34, SF-14)", () => {
       })
       const result = yield* grep(dir, { pattern: "needle" }, context(reviewPermissionRules({})))
       for (const file of ["config/.envrc", "deploy/.netrc", "keys/id_ed25519"])
-        expect([file, result.output.includes(file)]).toEqual([file, false])
-      expect(result.output).toContain("src/a.ts:")
+        expect([file, result.output.replaceAll("\\", "/").includes(file)]).toEqual([file, false])
+      expect(result.output).toContain(`${path.join("src", "a.ts")}:`)
       expect(result.output).toContain(".env.example:")
       expect(result.output).toStartWith("Found 2 matches")
-      expect((yield* grep(dir, { pattern: "needle" }, unset)).output).toContain("deploy/.netrc")
+      expect((yield* grep(dir, { pattern: "needle" }, unset)).output).toContain(path.join("deploy", ".netrc"))
     }),
   )
 
@@ -442,9 +450,14 @@ describe("the glob tool under holdback (VS-34, SF-14)", () => {
       yield* write(dir, { [`pkg/${T.akia}.txt`]: "named after a key\n", "pkg/notes.txt": "plain\n" })
       const result = yield* glob(dir, { pattern: "*.txt", path: "pkg" }, held)
       expect(JSON.stringify(result)).not.toContain(T.akia)
-      expect(result.output.split("\n").toSorted()).toEqual(["pkg/[redacted].txt", "pkg/notes.txt"])
+      expect(result.output.split("\n").toSorted()).toEqual([
+        path.join("pkg", "[redacted].txt"),
+        path.join("pkg", "notes.txt"),
+      ])
       expect(result.metadata.count).toBe(2)
-      expect((yield* glob(dir, { pattern: "*.txt", path: "pkg" }, unset)).output).toContain(`pkg/${T.akia}.txt`)
+      expect((yield* glob(dir, { pattern: "*.txt", path: "pkg" }, unset)).output).toContain(
+        path.join("pkg", `${T.akia}.txt`),
+      )
     }),
   )
 })

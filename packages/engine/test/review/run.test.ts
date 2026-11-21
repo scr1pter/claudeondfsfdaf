@@ -4606,11 +4606,12 @@ describe("VS-34 holdback tools (SF-14)", () => {
                 config: config({ security: "off", maxSteps: 14, ...(holdback ? { holdback } : {}) }),
               }),
             )
-            const bodies = (yield* modelRequests(llm)).map((body) => JSON.stringify(body))
+            const requests = yield* modelRequests(llm)
+            const bodies = requests.map((body) => JSON.stringify(body))
             const rules = yield* sessions
               .get(SessionID.make(outcome.sessions[0]))
               .pipe(Effect.map((session) => session.permission))
-            return { outcome, bodies, rules }
+            return { outcome, bodies, rules, messages: requests.at(-1)?.messages }
           }),
         )
         const [unset, secrets] = runs
@@ -4628,7 +4629,12 @@ describe("VS-34 holdback tools (SF-14)", () => {
         const last = secrets.bodies.at(-1)!
         // The session's rules refuse the credential file, the held files and the renamed file's old path outright.
         for (const file of ["config/prod/.envrc", "deploy/.netrc", "notes.txt", ".envrc"])
-          expect(last).toContain(`A permission rule denies read \\"${file}\\"`)
+          expect(secrets.messages).toContainEqual(
+            expect.objectContaining({
+              role: "tool",
+              content: expect.stringContaining(`A permission rule denies read "${path.normalize(file)}".`),
+            }),
+          )
         expect(last).toContain("process.env.API_URL")
         expect(last).toContain("[redacted]")
         expect(last).toContain("No files found")

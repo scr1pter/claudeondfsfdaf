@@ -1385,10 +1385,18 @@ describe("partial clones", () => {
       const head = yield* commit(dir, "head", { "src/util.ts": UTIL_HEAD })
       return { base, head }
     })
-  const missing = (dir: string, rev: string, ...extra: string[]) =>
+  const missingObjects = (dir: string, rev: string, ...extra: string[]) =>
     git(dir, "rev-list", "--objects", "--no-walk", "--missing=print", ...extra, rev).pipe(
-      Effect.map((text) => text.split("\n").filter((line) => line.startsWith("?")).length),
+      Effect.map((text) =>
+        text
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("?"))
+          .map((line) => line.slice(1))
+          .toSorted(),
+      ),
     )
+  const missing = (dir: string, rev: string, ...extra: string[]) =>
+    missingObjects(dir, rev, ...extra).pipe(Effect.map((objects) => objects.length))
   const clone = (from: string, to: string, ...args: string[]) =>
     Effect.promise(() => $`git clone -q --no-local ${args} ${pathToFileURL(from).href} ${to}`.quiet())
 
@@ -1542,15 +1550,36 @@ describe("partial clones", () => {
       const dir = path.join(root, "..", `${path.basename(root)}-go-sibling`)
       yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
       yield* clone(root, dir, "--filter=blob:none", "--no-checkout")
-      // Checking out the changed file alone fetches its head blob; its siblings stay missing.
+      // A path checkout in a blobless clone does not reliably fetch the path on Git for Windows. Copy only the
+      // head handler's actual blob from the local fixture; it must be the sole change to either missing-object set.
+      const handler = `${head}:proxy/handler.go`
+      const [wanted, sibling, previous] = (yield* git(
+        root,
+        "rev-parse",
+        handler,
+        `${head}:proxy/hosts.go`,
+        `${base}:proxy/handler.go`,
+      )).split(/\r?\n/)
+      const headMissing = yield* missingObjects(dir, head)
+      const baseMissing = yield* missingObjects(dir, base)
+      expect(headMissing).toContain(wanted)
+      expect(headMissing).toContain(sibling)
+      expect(baseMissing).toContain(previous)
+      const bytes = (yield* Effect.promise(() => $`git show --no-textconv ${handler}`.cwd(root).quiet())).stdout
+      const copied = yield* Effect.promise(() => $`git hash-object -w --stdin < ${bytes}`.cwd(dir).quiet().text())
+      expect(copied.trim()).toBe(wanted)
       yield* git(dir, "checkout", head, "--", "proxy/handler.go")
-      const before = yield* missing(dir, head)
+      expect(yield* Effect.promise(() => fs.readdir(path.join(dir, "proxy")))).toEqual(["handler.go"])
+      const before = yield* missingObjects(dir, head)
+      expect(before).toEqual(headMissing.filter((oid) => oid !== wanted))
+      expect(yield* missingObjects(dir, base)).toEqual(baseMissing)
       const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
       expect(slice.tiers?.dropped.targets).toEqual(["missing:proxy/hosts.go"])
       // The changed file's base is tier a's fallback; the sibling, looked up on speculation, is none.
       expect(slice.fallback).toEqual([{ kind: "a:missing", count: 1 }])
       expect(slice.outbound).toEqual([])
-      expect(yield* missing(dir, head)).toBe(before)
+      expect(yield* missingObjects(dir, head)).toEqual(before)
+      expect(yield* missingObjects(dir, base)).toEqual(baseMissing)
       invariants(slice)
     }),
   )
