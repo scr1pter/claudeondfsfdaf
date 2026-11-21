@@ -570,12 +570,46 @@ size_t run_input_guardian_tests() {
     ledger.retire(ticket);
     auto first=std::async(std::launch::async,[&] { return releaser.drain(50,true); });
     entering.wait();
-    check(releaser.drain(50,true)==0 && releaser.drain(50)==0 && releases.load()==1,"guardian.concurrent-drain-returns-at-once-without-a-second-release");
+    // The first drain holds the release lock inside SendInput. Each failed expectation below unblocks it
+    // before throwing, so no future's destructor waits on a release that never returns.
+    const auto unblock_unless=[&](bool ok) { if (!ok) proceed.set_value(); return ok; };
+    const auto asked=std::chrono::steady_clock::now();
+    auto bounded=std::async(std::launch::async,[&] { return releaser.drain(5); });
+    const bool gave_up=bounded.wait_for(std::chrono::seconds(5))==std::future_status::ready;
+    const auto waited_for=std::chrono::steady_clock::now()-asked;
+    // 5 ms budget plus at most one 15.6 ms system tick, with margin for runner scheduling.
+    check(unblock_unless(gave_up && bounded.get()==0 && waited_for<std::chrono::milliseconds(100) && releases.load()==1),
+          "guardian.concurrent-drain-gives-up-at-its-budget");
+    auto waiting=std::async(std::launch::async,[&] { return releaser.drain(300); });
+    const bool blocked=waiting.wait_for(std::chrono::milliseconds(20))==std::future_status::timeout;
     proceed.set_value(); (void)first.get();
+    check(blocked && waiting.get()==0 && releases.load()==1,"guardian.concurrent-drain-waits-for-the-release-lock-without-a-second-release");
     check(releaser.drain(20,true)==0 && releaser.drain(5)==0 && releases.load()==1,"guardian.in-flight-up-is-never-sent-twice");
     check(ledger.observe(event(ticket.release,false)) && !ledger.pending() && releaser.drain(5)==0 && releases.load()==1,
           "guardian.recorded-up-ends-the-release-and-a-reservation-alone-is-never-released");
     check(ledger.observed(unposted,false)==false && ledger.releases().empty(),"guardian.releaser-never-invents-a-receipt");
+  });
+  test([] {
+    // The control thread's Op::drain reports the release thread's in-flight UP once it lands.
+    InputGuardianLedger ledger(own_tag); std::atomic<int> releases{0};
+    std::promise<void> entered,proceed; auto entering=entered.get_future(); auto proceeding=proceed.get_future().share();
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease&) {
+      if (releases.fetch_add(1)==0) { entered.set_value(); proceeding.wait(); }
+      return true;
+    });
+    const auto ticket=reserve(ledger,mouse()); check(ledger.observe(event(ticket.release,true)),"guardian.counted-fixture-down"); ledger.retire(ticket);
+    auto first=std::async(std::launch::async,[&] { return releaser.drain(20,true); });
+    entering.wait();
+    auto control=std::async(std::launch::async,[&] { return releaser.drain(300); });
+    // The first drain is parked inside SendInput holding the release lock, so the control drain must still
+    // be waiting for that lock here. A drain that gives up when the lock is taken has already returned 0.
+    const bool blocked=control.wait_for(std::chrono::milliseconds(20))==std::future_status::timeout;
+    proceed.set_value(); (void)first.get();
+    // The control drain takes the release lock once the first drain's 20 ms budget ends; the UP lands
+    // well inside the control drain's own 300 ms budget.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    check(ledger.observe(event(ticket.release,false)),"guardian.counted-fixture-up"); releaser.notify();
+    check(blocked && control.get()==1 && releases.load()==1 && !ledger.pending(),"guardian.concurrent-drain-counts-the-in-flight-up");
   });
   test([] {
     InputGuardianLedger ledger(own_tag); std::atomic<int> releases{0};

@@ -44,7 +44,7 @@ JsonObject decode_object(std::span<const uint8_t> bytes) {
 }
 }
 
-// Fixed/injected codec and thread tests only. No real pipe, desktop, grant, input or parent process.
+// Fixed/injected codec and thread tests only. One in-process anonymous pipe with its read end closed; no desktop, grant, input or parent process.
 int run_protocol_tests() {
   int groups = 0;
   const auto test = [&](const auto& body) { body(); ++groups; };
@@ -284,6 +284,29 @@ int run_protocol_tests() {
       if (value.HasKey(L"imageBytes")) { require_protocol(index + 1U < all.size() && all[index + 1U] == image, "protocol.atomic-pair-concurrency"); ++pairs; ++index; }
     }
     require_protocol(!failed.load() && all.size() == 12U && pairs == 4U, "protocol.concurrent-frame-count");
+  });
+  test([] {
+    // write() returning false must imply the fatal failure callback has already returned, even when the worker
+    // thread reached notify_failure first and its callback is still running (integration.failed-transport-nonzero-code).
+    const auto caller = GetCurrentThreadId();
+    for (unsigned round = 0; round < 20U; ++round) {
+      HANDLE read = nullptr, write = nullptr;
+      require_protocol(CreatePipe(&read, &write, nullptr, 0) != FALSE, "protocol.failure-pipe-create");
+      winrt::handle output{write};
+      CloseHandle(read);
+      winrt::handle stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+      require_protocol(static_cast<bool>(stop), "protocol.failure-stop-event");
+      std::atomic<unsigned> calls{0}; std::atomic_bool published{false};
+      PipeFrameWriter writer(output.get(), stop.get(), [&] {
+        calls.fetch_add(1);
+        if (GetCurrentThreadId() != caller) Sleep(100);
+        published.store(true);
+      });
+      const bool first = writer.write(response_success(round + 1U));
+      const bool recorded = published.load();
+      require_protocol(!first && recorded && calls.load() == 1U, "protocol.failure-recorded-before-false");
+      require_protocol(!writer.write(event_document(L"stop")) && calls.load() == 1U, "protocol.failure-callback-once");
+    }
   });
   return groups;
 }
