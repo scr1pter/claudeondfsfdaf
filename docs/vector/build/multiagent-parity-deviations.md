@@ -2456,3 +2456,35 @@ record" (added once PR #59, which held that file, had merged).
   `engine (linux, shard n/6)` (`shard: [1, 2, 3, 4, 5, 6]`, `--shard=n/6`) and `engine (windows, shard n/12)`
   (`shard: [1 … 12]`). The spec line now says Linux 6 and Windows 12 and names test.yml as the source. No other §7.2
   text changed.
+
+## 2026-11-21 CI15 - Verify's packet capture counted sudo's own host lookup (fixed by 67ec3a60)
+
+Status: cause shown by the fix commit's reading and the identical failure signature; fixed in main since `67ec3a60`
+(2026-11-16, an ancestor of main). Logs read with get_job_logs; the 30-minute capture artifacts were not downloaded.
+
+What failed (Verify, "Vector Local desktop packet capture (30 minutes)"):
+- Job `127701422434` (run 42159471068, self-evolving `f062bcce`, 2026-11-06; its attempt 2 passed): the workload ran
+  its 60 cycles (6,190 packets, 120 model requests), then the audit gave `"passed": false`, "4 packets used an
+  unexpected address, port or protocol". All four are UDP from 198.18.0.1 to 198.18.0.53:53 with 0 bytes, from two
+  source ports, and the log shows `sudo: unable to resolve host ip-10-0-143-174: Temporary failure in name
+  resolution` just before the result.
+- Job `132636679557` (run 43656695924, `cf2373c4`, 2026-11-15) and job `133146519456` (run 43821856711, `b0752dda`,
+  2026-11-16): the same audit failure, every unexpected entry UDP 198.18.0.1 to 198.18.0.53:53, 0 bytes.
+
+Cause: `sudo -n -u` inside the capture namespace resolves the runner's own host name. Hosted runners do not always list
+it in /etc/hosts, so the lookup falls through to the namespace's DNS sink (198.18.0.53) and the audit counts it as
+unexpected traffic. It is not Vector's traffic.
+
+Fix (`67ec3a60`, "keep sudo's own host lookup off the packet-capture DNS sink"):
+`packages/desktop/scripts/local-mode-capture-linux.sh` binds, inside the already private mount namespace, a hosts file
+that adds only this machine's name (127.0.1.1), as resolv.conf is bound; any other DNS attempt still reaches the sink
+and fails the audit. `docs/vector/local-packet-capture.md` says so.
+
+After the fix: main's Verify runs 44791067357, 44800897569, 44822880272, 44848274927, 44869121325, 44877844011 and
+44885764885 (2026-11-20 to 2026-11-21) all concluded success. Run 44686202767 (branch `windows-engine-timeouts`,
+2026-11-20) failed, but its packet-capture job `136121008104` stopped at "Build this commit's desktop engine", before
+any capture, so it is not a CI15 sample.
+
+For the lead (not edited here): the flake lists still carry "packet-capture DNS to 198.18.0.53:53"
+(`v2-handoff.md:52`, `v2-master-prompt.md:41`, and RULES-v2's known-flake line). With the cause fixed, a recurrence is a
+real failure; the lead decides whether to drop it from those lists.
