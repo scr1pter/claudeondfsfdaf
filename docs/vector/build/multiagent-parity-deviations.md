@@ -2430,3 +2430,22 @@ Remaining:
   on": an unpinned 127.0.0.1 Ollama fake answers /api/version `IDENTIFY_TIMEOUT.loopback + 200` ms late and lists
   `mymodel` with `remote_host`, and `forwards`/`passesOn` are true; with `makeHolds({ timeout: 100 })` they are false.
   Red on the old default (0 pass, 1 fail). probe.test.ts 62 pass and detect.test.ts 6 pass after the change.
+
+## 2026-11-21 CI-ISOLATION-PLACE - merge writes into the parent retry Windows' open-handle refusal
+
+Belongs under ci-harness-repairs.md "2026-11-20: Windows isolated save renamed over an open record"; that file is held
+by open PR #59 (`wal-busy-timeout`), so the note is here until it merges and the lead moves it.
+
+- Gap: the 2026-11-20 change gave record saves (`privateJSON`) and reads (`privateRead`) `cleared()`, the win32-only
+  retry over LockFs's transient window, but `place()` (merges and their rollback, writing into the parent project)
+  still renamed once. An editor, an indexer or an antivirus scan holding the parent file open would fail the merge on
+  Windows with EPERM.
+- Change (`packages/engine/src/task/isolation.ts`): `place()` runs `rename(temp, target)` and the win32 symlink
+  pre-`unlink(target)` through `cleared(...)` (the unlink keeps its `missing` ignore), and the outer catch still removes
+  the temp file. `cleared()`'s comment names the third caller. Off Windows every error is still reported at once.
+- Tests (`packages/engine/test/task/isolation.test.ts`, beside "a merge's link that cannot be made leaves the parent's
+  file in place"): "a merge write over a parent file another handle holds open waits for the handle and then replaces
+  it" and "a merge write held open past the retry window fails on Windows, keeping the parent file and no temp file",
+  mirroring the record-save pair. Every OS runs them; on Linux the rename replaces the open file at once, so both pass
+  before and after locally (4 pass with the place filter). The Windows engine shard holding isolation.test.ts is the
+  red/green proof: before the change the first case fails at once with EPERM instead of waiting.

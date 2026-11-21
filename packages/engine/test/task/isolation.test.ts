@@ -2025,6 +2025,50 @@ test("a merge's link that cannot be made leaves the parent's file in place", asy
   await fs.rm(dir, { recursive: true, force: true })
 })
 
+// A merge writes into the parent project, where an editor, an indexer or an antivirus scan may hold the file open.
+// Windows refuses the rename while that handle is open and retries for its 2 s window, as the record saves above do;
+// elsewhere the rename replaces the open file at once. Every OS runs these.
+test("a merge write over a parent file another handle holds open waits for the handle and then replaces it", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vector-isolation-place-"))
+  const target = path.join(dir, "held.txt")
+  await fs.writeFile(target, "parent\n")
+  const handle = await fs.open(target, "r")
+  try {
+    const placing = TaskIsolation.place(target, { bytes: Buffer.from("merged\n"), mode: 0o644 })
+    await Bun.sleep(100)
+    // While the handle is open Windows keeps the parent's file; nothing can have replaced it.
+    if (process.platform === "win32") expect(await fs.readFile(target, "utf8")).toBe("parent\n")
+    await handle.close()
+    await placing
+    expect(await fs.readFile(target, "utf8")).toBe("merged\n")
+    expect((await fs.readdir(dir)).filter((name) => name.startsWith(".vector-merge-"))).toEqual([])
+  } finally {
+    await handle.close().catch(() => undefined)
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("a merge write held open past the retry window fails on Windows, keeping the parent file and no temp file", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vector-isolation-place-"))
+  const target = path.join(dir, "held.txt")
+  await fs.writeFile(target, "parent\n")
+  const handle = await fs.open(target, "r")
+  try {
+    // The retry window is 2 s; the handle stays open past it.
+    const placed = await TaskIsolation.place(target, { bytes: Buffer.from("merged\n"), mode: 0o644 }).then(
+      () => undefined,
+      (cause: NodeJS.ErrnoException) => cause.code,
+    )
+    expect(placed).toBe(process.platform === "win32" ? "EPERM" : undefined)
+    await handle.close()
+    expect(await fs.readFile(target, "utf8")).toBe(process.platform === "win32" ? "parent\n" : "merged\n")
+    expect((await fs.readdir(dir)).filter((name) => name.startsWith(".vector-merge-"))).toEqual([])
+  } finally {
+    await handle.close().catch(() => undefined)
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
 for (const via of ["settle", "reconcile"] as const)
   it.instance(
     `an isolated start that fails before its checkout exists ends unchanged with its error through ${via}`,
