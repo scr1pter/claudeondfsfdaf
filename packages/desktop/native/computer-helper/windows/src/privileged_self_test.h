@@ -136,7 +136,7 @@ enum class WindowsAffinityStale {
   none, target_lost, target_stale, pid, main_window, excluded_window, point_patch, point_excluded, owner,
   hit_null, hit_main, hit_foreign, affinity_call, affinity_monitor, affinity_none, affinity_other, exception};
 // Pure: the hit-test term from an already-read root window, and the term from an already-read display affinity.
-WindowsAffinityStale windows_privileged_affinity_hit(HWND root, HWND main, HWND excluded) noexcept;
+WindowsAffinityStale windows_privileged_affinity_hit(HWND root, HWND owner, HWND excluded) noexcept;
 WindowsAffinityStale windows_privileged_affinity_value(bool read, DWORD affinity) noexcept;
 // The closed stage for a stale term, at planning or during the display read; empty for none.
 std::wstring_view windows_privileged_affinity_stale_stage(WindowsAffinityStale, bool during_capture) noexcept;

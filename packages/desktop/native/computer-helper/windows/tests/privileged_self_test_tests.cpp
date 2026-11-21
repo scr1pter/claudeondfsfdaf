@@ -223,11 +223,11 @@ size_t run_privileged_self_test_tests() {
   });
   test([] {
     // HF-6: the affinity plan's closed hit-test and affinity-value terms, from already-read facts only.
-    const auto main = reinterpret_cast<HWND>(uintptr_t{100}), excluded = reinterpret_cast<HWND>(uintptr_t{101});
-    require(windows_privileged_affinity_hit(excluded, main, excluded) == WindowsAffinityStale::none &&
-      windows_privileged_affinity_hit(nullptr, main, excluded) == WindowsAffinityStale::hit_null &&
-      windows_privileged_affinity_hit(main, main, excluded) == WindowsAffinityStale::hit_main &&
-      windows_privileged_affinity_hit(reinterpret_cast<HWND>(uintptr_t{102}), main, excluded) == WindowsAffinityStale::hit_foreign,
+    const auto owner = reinterpret_cast<HWND>(uintptr_t{100}), excluded = reinterpret_cast<HWND>(uintptr_t{101});
+    require(windows_privileged_affinity_hit(excluded, owner, excluded) == WindowsAffinityStale::none &&
+      windows_privileged_affinity_hit(nullptr, owner, excluded) == WindowsAffinityStale::hit_null &&
+      windows_privileged_affinity_hit(owner, owner, excluded) == WindowsAffinityStale::hit_main &&
+      windows_privileged_affinity_hit(reinterpret_cast<HWND>(uintptr_t{102}), owner, excluded) == WindowsAffinityStale::hit_foreign,
       "privileged.affinity-hit-terms-are-closed");
     require(windows_privileged_affinity_hit(nullptr, nullptr, nullptr) == WindowsAffinityStale::hit_null, "privileged.affinity-null-hit-never-matches-a-null-plan");
     require(windows_privileged_affinity_value(true, WDA_EXCLUDEFROMCAPTURE) == WindowsAffinityStale::none &&

@@ -667,10 +667,10 @@ std::wstring windows_privileged_settle_stage(bool context_available, const Serve
     return L"input-settle-session";
   return L"input-settle-verdict";
 }
-WindowsAffinityStale windows_privileged_affinity_hit(HWND root, HWND main, HWND excluded) noexcept {
+WindowsAffinityStale windows_privileged_affinity_hit(HWND root, HWND owner, HWND excluded) noexcept {
   if (root && root == excluded) return WindowsAffinityStale::none;
   if (!root) return WindowsAffinityStale::hit_null;
-  return root == main ? WindowsAffinityStale::hit_main : WindowsAffinityStale::hit_foreign;
+  return root == owner ? WindowsAffinityStale::hit_main : WindowsAffinityStale::hit_foreign;
 }
 WindowsAffinityStale windows_privileged_affinity_value(bool read, DWORD affinity) noexcept {
   if (!read) return WindowsAffinityStale::affinity_call;
