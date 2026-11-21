@@ -223,6 +223,28 @@ describe("SessionCodeReview.eligible", () => {
     }
   })
 
+  test("a judge the user stopped holds back only the work it judged", () => {
+    const h = base()
+    h.assistant(h.u1, [
+      judged(1, {
+        status: "error",
+        input: { subagent_type: "judge" },
+        error: "Cancelled",
+        metadata: { interrupted: true },
+        time: { start: 1, end: 2 },
+      }),
+    ])
+    expect(check(h)).toBeUndefined()
+    // A Standard follow-up runs no judge; its own edits are reviewed, never the work the stopped judge was checking.
+    const u2 = h.user("Rename the helper in utils.ts", { codeReview: true })
+    const end = h.assistant(u2, [edit("utils.ts"), text("Renamed it.")])
+    expect(check(h)).toMatchObject({ requestID: `after_${end.info.id}`, files: ["/repo/utils.ts"] })
+    expect(check(h)?.verdict).toBeUndefined()
+    const chat = h.user("Thanks, what does it export now?", { codeReview: true })
+    h.assistant(chat, [text("It exports createRouter.")])
+    expect(check(h, { previous: { reviewedThrough: end.info.id, running: false } })).toBeUndefined()
+  })
+
   test("a steer typed during the final step still brings in the work before it", () => {
     const h = base()
     // Sent while the final step was still streaming.

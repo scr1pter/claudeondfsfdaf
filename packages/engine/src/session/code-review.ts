@@ -101,16 +101,18 @@ export function eligible(input: {
   if (!request || SessionTaskSize.waiting(request)) return
   const last = request.messages.findLast((message) => message.info.role === "assistant")?.info
   if (last?.role !== "assistant" || last.error || !last.time.completed) return
-  const after = seen.filter((message) => message.info.role === "assistant" && message.info.id > since)
-  const judge = SessionTaskSize.judgeRuns({ messages: after }).at(-1)?.part
-  // A judge still checking, or one the user stopped, holds the review back.
-  if (
-    judge &&
-    (judge.state.status === "pending" ||
-      judge.state.status === "running" ||
-      (judge.state.status === "error" && judge.state.metadata?.interrupted === true))
+  const fenced = seen.filter((message) => message.info.role === "assistant" && message.info.id > since)
+  // A judge the user stopped holds back only the work it judged: what Vector does after it is reviewed on its own.
+  const after = fenced.slice(
+    fenced.findLastIndex((message) =>
+      SessionTaskSize.judgeRuns({ messages: [message] }).some(
+        (run) => run.part.state.status === "error" && run.part.state.metadata?.interrupted === true,
+      ),
+    ) + 1,
   )
-    return
+  const judge = SessionTaskSize.judgeRuns({ messages: after }).at(-1)?.part
+  // A judge still checking holds the review back until its last round.
+  if (judge && (judge.state.status === "pending" || judge.state.status === "running")) return
   // Only the build agent's edits count: plan, research and custom agents are not the work being reviewed.
   const files = SessionTaskSize.changedFiles({
     messages: after.filter(
@@ -230,8 +232,9 @@ const layer = Layer.effect(
         const pending = new Set<SessionID>()
         const again = new Map<SessionID, number>()
 
+        // Expected, steady-state refusals (no base commit, an unpriced model, a spent budget) recur on every idle.
         const refuse = (sessionID: SessionID, reason: string) =>
-          Effect.logWarning("no code review after this task", { sessionID, reason })
+          Effect.logDebug("no code review after this task", { sessionID, reason })
 
         // The newest automatic review of the conversation, recovered from its durable local reviews.
         const latest = (
@@ -313,7 +316,11 @@ const layer = Layer.effect(
             .start(sessionID, { requestID: next.requestID, target, maxCost: Math.min(MAX_COST_USD, remaining) })
             .pipe(
               Effect.provide(environment),
-              Effect.catch((error) => refuse(sessionID, error.message).pipe(Effect.as(undefined))),
+              Effect.catch((error) =>
+                Effect.logWarning("the after-task review did not start", { sessionID, reason: error.message }).pipe(
+                  Effect.as(undefined),
+                ),
+              ),
             )
           // An exact retry joins the run it started before; that run's own waiter writes its note.
           if (!run || run.startedAt < admittedAt || noted.has(run.runID)) return
@@ -331,29 +338,37 @@ const layer = Layer.effect(
         ) {
           // The review keeps its own time limit; disposing the instance interrupts only this wait.
           yield* jobs.wait({ id: run.runID })
-          const info = yield* reviews.get(sessionID, run.runID)
-          const decoded = yield* Effect.promise(() =>
-            decodeLocalRun(info, { parentID: sessionID, request: run.request, runID: run.runID }),
+          yield* Effect.gen(function* () {
+            const info = yield* reviews.get(sessionID, run.runID)
+            const decoded = yield* Effect.promise(() =>
+              decodeLocalRun(info, { parentID: sessionID, request: run.request, runID: run.runID }),
+            )
+            noted.add(run.runID)
+            yield* notify.enqueue({
+              parentID: sessionID,
+              note: {
+                kind: "review",
+                runID: run.runID,
+                launchID: MessageID.make(admitted.reviewedThrough),
+                state: info.status,
+                text: notification({ run: info, decoded, judge: admitted.verdict }),
+                wake: false,
+                quiet: true,
+              },
+              ops,
+              // The conversation's own agent, so the note never switches it.
+              agent: (yield* sessions.get(sessionID)).agent ?? admitted.agent,
+            })
+          }).pipe(
+            // Work Vector finished while the review ran is reviewed now, even when its note could not be written; a run
+            // with no new changes is refused.
+            Effect.ensuring(
+              Effect.gen(function* () {
+                if ((yield* status.get(sessionID)).type === "idle" && candidates.has(sessionID))
+                  yield* admit(sessionID, Date.now())
+              }),
+            ),
           )
-          noted.add(run.runID)
-          yield* notify.enqueue({
-            parentID: sessionID,
-            note: {
-              kind: "review",
-              runID: run.runID,
-              launchID: MessageID.make(admitted.reviewedThrough),
-              state: info.status,
-              text: notification({ run: info, decoded, judge: admitted.verdict }),
-              wake: false,
-              quiet: true,
-            },
-            ops,
-            // The conversation's own agent, so the note never switches it.
-            agent: (yield* sessions.get(sessionID)).agent ?? admitted.agent,
-          })
-          // Work Vector finished while the review ran is reviewed now; a run with no new changes is refused.
-          if ((yield* status.get(sessionID)).type === "idle" && candidates.has(sessionID))
-            yield* admit(sessionID, Date.now())
         })
 
         const admit = (sessionID: SessionID, idleAt: number): Effect.Effect<void> =>
