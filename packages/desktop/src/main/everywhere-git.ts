@@ -55,6 +55,8 @@ const execute: GitExec = (input) => new Promise((resolve, reject) => {
     // repository content, so neither is carried. git's own stderr is, at most 2 KB of it: the authorization reaches git
     // only through the variable --config-env names, git prints header values only under GIT_TRACE_CURL or
     // GIT_CURL_VERBOSE, which runnerGitEnvironment never passes, and the runner keeps these errors on this computer.
+    // On a fetch or push the detail can carry the remote's own "remote:" lines, so it is untrusted text: it must never
+    // reach a settle summary, the relay, or a GitHub or Slack post.
     if (!error) return resolve(stdout)
     const detail = stderr.slice(0, 2048).trim()
     reject(new Error(detail ? `The Everywhere git operation failed: ${detail}` : "The Everywhere git operation failed"))
