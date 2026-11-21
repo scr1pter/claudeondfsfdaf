@@ -546,6 +546,26 @@ test("the test workflow runs the engine suite only in shards, on Linux and Windo
   }
 })
 
+// turbo has no test task for packages/client or packages/sdk/js, so the unit job runs both suites itself, on both systems.
+test("the test workflow runs the client and SDK suites on both unit lanes", async () => {
+  const workflow = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
+    jobs: { unit: { steps: Array<{ name?: string; if?: string; run?: string }> } }
+  }
+  const turbo = (await Bun.file(`${root}/turbo.json`).json()) as { tasks: Record<string, unknown> }
+  expect(Object.keys(turbo.tasks).filter((task) => /(^|#)test$/.test(task) && /client|sdk|^test$/.test(task))).toEqual(
+    [],
+  )
+  const step = workflow.jobs.unit.steps.find((item) => item.name === "Run client and SDK tests")
+  expect(step?.if).toBe("${{ !cancelled() }}")
+  expect(step?.run).toContain(
+    "(cd packages/client && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1",
+  )
+  expect(step?.run).toContain(
+    "(cd packages/sdk/js && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1",
+  )
+  expect(step?.run).toContain("exit $status")
+})
+
 // Chocolatey's community feed answered 504 and 503 with nothing installed and exit 0 (jobs 133556510297 and
 // 133557296076). Windows jobs install ripgrep through one action that downloads a pinned, checksum-verified release
 // from GitHub with retries. This reads only the repository's own files.
@@ -928,13 +948,15 @@ describe("Codium CI lane", () => {
     const tests = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
       jobs: { unit: { steps: Array<{ name?: string; if?: string; "working-directory"?: string; run?: string }> } }
     }
-    expect(tests.jobs.unit.steps.find((item) => item.name === "Run the Codium dispatch-input compliance case")).toEqual({
-      name: "Run the Codium dispatch-input compliance case",
-      if: "${{ !cancelled() && runner.os == 'Windows' }}",
-      "timeout-minutes": 5,
-      "working-directory": "packages/cloud",
-      run: 'GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "only as step environment" src/workflow-compliance.test.ts',
-    })
+    expect(tests.jobs.unit.steps.find((item) => item.name === "Run the Codium dispatch-input compliance case")).toEqual(
+      {
+        name: "Run the Codium dispatch-input compliance case",
+        if: "${{ !cancelled() && runner.os == 'Windows' }}",
+        "timeout-minutes": 5,
+        "working-directory": "packages/cloud",
+        run: 'GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "only as step environment" src/workflow-compliance.test.ts',
+      },
+    )
     const PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
     const system = Object.fromEntries(
       Object.entries(process.env).filter(

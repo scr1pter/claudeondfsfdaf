@@ -662,6 +662,17 @@ jobs:
         working-directory: packages/client
         run: bun run check:generated
 
+      # turbo has no test task for packages/client or packages/sdk/js, so their suites (import boundaries, contract
+      # identity, server startup, wire compatibility) ran nowhere. Both run here on both systems, and both report.
+      - name: Run client and SDK tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          status=0
+          (cd packages/client && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1
+          (cd packages/sdk/js && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1
+          exit $status
+
       - name: Run HttpApi exerciser gates
         if: runner.os == 'Linux'
         working-directory: packages/engine
