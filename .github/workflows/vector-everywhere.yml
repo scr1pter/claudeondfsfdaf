@@ -26,9 +26,11 @@ on:
       - packages/core/src/v1/config/everywhere.ts
       - packages/desktop/src/main/everywhere-*
       - packages/app/src/components/settings-v2/everywhere*
-      - packages/web/src/pages/everywhere*
-      - packages/web/src/pages/everywhere/**
-      - packages/web/src/pages/docs/everywhere.astro
+      # The vectordev.ai pages and docs page are unreleased drafts until 2.0.0 (EV-23, EV-24). When the owner moves
+      # these drafts to src/pages at 2.0.0, everywhere-lane.test.ts fails until these three entries move with them.
+      - packages/web/src/drafts/everywhere*
+      - packages/web/src/drafts/everywhere/**
+      - packages/web/src/drafts/docs/everywhere.astro
       - packages/web/src/components/everywhere/**
       - packages/web/src/components/marketing/everywhere/**
       - integrations/slack/**
@@ -50,9 +52,66 @@ on:
       - api/_lib/codium-switches.ts
       - api/_lib/codium-keys.ts
       - api/_lib/codium-tombstone.ts
+      - api/_lib/codium-limits.ts
+      - api/_lib/codium-snapshot.ts
+      - api/_lib/remote-config.ts
+      - api/_lib/remote-relay.ts
+      - packages/schema/src/codium-copy.ts
+      - api/_lib/cloud-agents-run-token.ts
       - integrations/linear/**
       - packages/desktop/src/main/github-auth.ts
       - packages/desktop/src/main/github-api.ts
+      # The @vector agent phase that reads an Actions job's request by reference (R-A4), and its test fixture.
+      - packages/engine/src/cli/cmd/github.agent.ts
+      - packages/engine/src/cli/cmd/github.cloud.ts
+      - packages/engine/src/cli/cmd/github.run-helpers.ts
+      - packages/engine/src/cli/cmd/github.policy.ts
+      - packages/engine/test/cli/github.agent-fixture.ts
+      # The @vector modules the Actions fallback adapter reads (VE-30a), the run sources it gates on, and the App
+      # fixture its test drives the real attachmentRepository through.
+      - api/_lib/cloud-agents-binding.ts
+      - api/_lib/cloud-agents-start.ts
+      - api/_lib/github-app.ts
+      - packages/schema/src/codium-run-trigger.ts
+      - packages/web/test/github-app-fixture.ts
+      # The @vector run hooks the Actions listeners register on (VE-30b), the service gate the cron's run read checks
+      # (a lazy import), and the two routes that import the registration, which a scan of everywhere code cannot see.
+      - api/_lib/cloud-agents-runs.ts
+      - api/_lib/model-plan-config.ts
+      - api/cloud-agents/mint.ts
+      - api/cloud-agents/settle.ts
+      # The OIDC verifier the GitHub handoff uses (VE-31, R-A5), with its GitHub helpers and @vector's workflow constants.
+      - api/_lib/github-oidc.ts
+      - api/_lib/github-http.ts
+      - packages/core/src/github-agents.ts
+      # The sweep cron (EV-04, R-C11); Codium's perk, plan and switch vocabulary the lane extends (EV-07, EV-08;
+      # codium-copy.ts and codium-run-trigger.ts are listed above); and the relay Worker that answers presence and
+      # forwards job offers (EV-05, EV-06), which the remote adapter test and the journeys run in process.
+      - vercel.json
+      - api/_lib/codium-perks.ts
+      - packages/schema/src/codium-entitlements.ts
+      - packages/schema/src/codium-owner.ts
+      - packages/relay/src/**
+      # The desktop's Remote link and its registration, the shared keep-awake, and the sign-in claims that pick which
+      # account's offers are checked (EV-11, EV-17, EV-18). Desktop everywhere tests run only in this lane.
+      - packages/desktop/src/main/remote-link.ts
+      - packages/desktop/src/main/remote-runtime.ts
+      - packages/desktop/src/main/keep-awake.ts
+      - packages/desktop/src/main/vector-account.ts
+      # The engine's unattended worktree, outward audience and offline shell (EV-12 to EV-16). The shell's bubblewrap
+      # cases run only in this lane.
+      - packages/engine/src/worktree/index.ts
+      - packages/engine/src/session/prompt.ts
+      - packages/engine/src/session/unattended-shell.ts
+      - packages/engine/src/tool/shell.ts
+      - packages/engine/src/tool/shell/sandbox.ts
+      # Vector Local's everywhere source (EV-15, R-M1), and the settings registry and dialog that the settings page
+      # joins (EV-21).
+      - packages/core/src/local-mode/sources.ts
+      - packages/app/src/components/settings-v2/settings-registry.ts*
+      - packages/app/src/components/settings-v2/dialog-settings-v2.ts*
+      # The account client the vectordev.ai account components sign in with (EV-22).
+      - packages/web/src/lib/account-client.ts
   workflow_dispatch:
 
 concurrency:
@@ -202,6 +261,19 @@ jobs:
           fi
           rg --version
 
+      # The offline-only session tests (packages/engine/test/everywhere/offline-shell.test.ts) run their commands in
+      # bubblewrap. Ubuntu 24.04 limits the unprivileged user namespaces bubblewrap needs, so this runner lifts that
+      # limit, as verify.yml's air-gap job does, and the check after it proves bubblewrap works.
+      - name: Install bubblewrap
+        if: hashFiles('packages/engine/test/everywhere/**') != ''
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-net --ro-bind / / true
+
       # The engine, core and app tests import their dependencies' builds, as turbo's ^build does for their suites.
       - name: Build test dependencies
         if: hashFiles('packages/engine/test/everywhere/**', 'packages/core/test/everywhere/**', 'packages/app/src/**/everywhere*.test.ts', 'packages/app/src/**/everywhere*.test.tsx') != ''
@@ -225,6 +297,8 @@ jobs:
         env:
           VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
+          # offline-shell.test.ts fails rather than skips its bubblewrap cases if bubblewrap does not work here.
+          VECTOR_TEST_REQUIRE_BWRAP: "1"
         run: |
           # The tests run as on a developer's computer: engine code reads GITHUB_ACTIONS to act as Vector's GitHub agent.
           export GITHUB_ACTIONS=false

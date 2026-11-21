@@ -1,5 +1,6 @@
 import {
   DEVICE_ID_PATTERN,
+  READINESS_QUERY,
   decodeClaim,
   decodeDecline,
   decodeReport,
@@ -65,16 +66,8 @@ import { productionJobEvents } from "./runtime.js"
 /** The header that names the computer on report, settle and pending (Report and Settle have no device field). */
 export const DEVICE_HEADER = "x-vector-device"
 
-/** The query names of the readiness booleans on `pending` (3.1 `status`). */
-export const READINESS_QUERY: Readonly<Record<keyof Readiness, string>> = {
-  takesJobs: "jobs",
-  remote: "remote",
-  localMode: "local",
-  sandbox: "sandbox",
-  waitForComputer: "wait",
-  capsRoom: "room",
-  projects: "projects",
-}
+/** The query names of the readiness booleans on `pending` (3.1 `status`), shared with the desktop (EV-17). */
+export { READINESS_QUERY } from "../../../packages/schema/src/everywhere.js"
 
 /** What VE-06 hangs on job changes: progress, results and fixed replies through the platform adapters. */
 export type JobEvents = {

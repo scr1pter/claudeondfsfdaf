@@ -3,7 +3,7 @@ import { exportJWK, generateKeyPair, SignJWT, type JWK } from "jose"
 import { claimJob, createJob, offerJob, readJob, reportJob } from "../../../../api/_lib/everywhere/jobs"
 import { installationAuthority, issueLinkCode, readInstallSnapshot, readLinkSnapshot, recordInstall, redeemLinkCode } from "../../../../api/_lib/everywhere/identity"
 import { everywhereKeys } from "../../../../api/_lib/everywhere/keys"
-import { setValue } from "../../../../api/_lib/everywhere/store"
+import { setValue, type Store } from "../../../../api/_lib/everywhere/store"
 import { createJiraAdapter } from "../../../../api/_lib/everywhere/jira/adapter"
 import { createJiraRoutes } from "../../../../api/_lib/everywhere/jira/a2a"
 import { FIT_ISSUER, FIT_JWKS, type ForgeInvocation } from "../../../../api/_lib/everywhere/jira/fit"
@@ -86,9 +86,10 @@ export class NativeJira {
   }
 }
 
-export async function jiraFixture(native: NativeJira, options: { installed?: boolean; linked?: boolean } = {}) {
+/** `store` replaces the FakeStore, as routerFixture's option does (a real Redis, EV-20). */
+export async function jiraFixture(native: NativeJira, options: { installed?: boolean; linked?: boolean; readonly store?: Store } = {}) {
   native.reset()
-  const f = routerFixture()
+  const f = routerFixture({ store: options.store })
   native.now = f.fake.clock.now
   const config = { ...f.config, offer: f.context().offer, jira: { forgeAppId: native.app } }
   const installation = `jira:${native.cloud}`

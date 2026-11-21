@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test"
 import { RedisClient } from "bun"
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto"
 import { createServer } from "node:http"
@@ -9,12 +9,25 @@ import { bindingFor, createBindCode, redeemAndBind } from "../../../api/_lib/clo
 import { bindBrainUpload, commitBrainUpload, prepareBrainUpload } from "../../../api/_lib/cloud-agents-brain"
 import { createDesktopCloudAgentApi } from "../../../api/_lib/cloud-agents-desktop"
 import type { CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitlement"
-import { liveKey, liveRun } from "../../../api/_lib/cloud-agents-ledger"
+import { liveKey, liveRun, runRecordKey } from "../../../api/_lib/cloud-agents-ledger"
 import { readRunToken } from "../../../api/_lib/cloud-agents-run-token"
-import { eraseCloudAgentsAccount, listCloudRuns, recordRunBrainContext } from "../../../api/_lib/cloud-agents-runs"
-import { peekRunTicket, prepareCloudRun, startCloudRun } from "../../../api/_lib/cloud-agents-start"
+import {
+  eraseCloudAgentsAccount,
+  listCloudRuns,
+  recordRunBrainContext,
+  registerRunSettleListener,
+  registerRunStartListener,
+  type RunEnd,
+} from "../../../api/_lib/cloud-agents-runs"
+import {
+  peekRunTicket,
+  prepareCloudRun,
+  startCloudRun,
+  type CloudRunTrigger,
+} from "../../../api/_lib/cloud-agents-start"
 import type { RunTrigger } from "../../../api/_lib/cloud-agents-entitlement"
 import { persistentStore } from "../../../api/_lib/persistent-store"
+import { createJobId } from "../../../packages/schema/src/everywhere"
 import { githubAppFixture } from "./github-app-fixture"
 
 integrationTests()
@@ -1125,6 +1138,511 @@ function integrationTests() {
       await f.close()
     }
   })
+
+  // EV-25 (R-A1 to R-A3): the ticket's job id and the run start and settle listeners. vector-at-mention runs every
+  // cloud-agents file in one process and the listener registry is process-wide, so every case removes its listeners.
+
+  /** Records every start and settle the listeners hear; `remove` takes both listeners away again. */
+  function hear() {
+    const starts: Array<{ ticketHash: string; rid: string; jobId?: string }> = []
+    const settles: Array<{ rid: string; end: RunEnd }> = []
+    const removers = [
+      registerRunStartListener(async (ticketHash, rid, jobId) => void starts.push({ ticketHash, rid, jobId })),
+      registerRunSettleListener(async (rid, end) => void settles.push({ rid, end })),
+    ]
+    return { starts, settles, remove: () => removers.forEach((remove) => remove()) }
+  }
+
+  async function jobTicket(f: Awaited<ReturnType<typeof fixture>>, jobId?: string) {
+    const prepared = await prepareCloudRun(jobId === undefined ? f.trigger : { ...f.trigger, jobId }, f.deps)
+    if (!prepared.ok) throw new Error("Fixture could not prepare")
+    expect(await prepared.dispatch()).toEqual({ ok: true, dispatchedAt: f.policy.now })
+    return prepared.ticketHash
+  }
+
+  test("R-A1: a ticket keeps a job id that only its pattern admits; it never reaches GitHub, and RESERVE admits it", async () => {
+    const f = await fixture()
+    const heard = hear()
+    try {
+      const jobId = createJobId(f.policy.now)
+      const prepared = await prepareCloudRun({ ...f.trigger, jobId }, f.deps)
+      if (!prepared.ok) throw new Error("Fixture could not prepare")
+      const key = `vector:cloud-agents:ticket:${prepared.ticketHash}`
+      const six = {
+        repositoryId: f.github.repositoryId,
+        account: f.account,
+        generation: f.binding.generation,
+        source: "ops" as const,
+        purpose: "incident" as const,
+        exp: f.policy.now + 900_000,
+      }
+      expect(JSON.parse(String(await persistentStore(["GET", key])))).toEqual({ ...six, jobId })
+      expect(await prepared.dispatch()).toEqual({ ok: true, dispatchedAt: f.policy.now })
+      expect(f.github.state.dispatches).toEqual([
+        { ref: "refs/heads/main", inputs: { mode: "task", prompt: f.trigger.prompt, ticket: f.ticket() } },
+      ])
+      expect(JSON.stringify([f.github.state.dispatches, f.github.state.requests])).not.toContain(jobId)
+      expect(prepared.ticketHash).toBe(createHash("sha256").update(f.ticket()).digest("hex"))
+      expect(await peekRunTicket(f.ticket(), await f.botIdentity(), f.binding, f.deps)).toEqual({
+        ...six,
+        jobId,
+        key,
+        ticketHash: prepared.ticketHash,
+      })
+      const minted = await f.mint({ ticket: f.ticket() })
+      expect(minted.status).toBe(200)
+      expect((await liveRun(f.account, minted.body.runId))?.ticketHash).toBe(prepared.ticketHash)
+      expect(await persistentStore(["EXISTS", key])).toBe(0)
+      expect(heard.starts).toEqual([{ ticketHash: prepared.ticketHash, rid: minted.body.runId, jobId }])
+
+      const tickets = async () => ((await redis.send("KEYS", ["vector:cloud-agents:ticket:*"])) as string[]).sort()
+      const before = await tickets()
+      const seen = { commands: 0, entitlements: 0 }
+      f.policy.onStore = async () => void seen.commands++
+      f.policy.beforeCall = async () => void seen.entitlements++
+      for (const bad of [
+        "vej_",
+        jobId.slice(0, -1),
+        `${jobId}0`,
+        jobId.toUpperCase(),
+        `vej_i${jobId.slice(5)}`,
+        `${jobId}\n`,
+        ` ${jobId}`,
+        42,
+      ])
+        await expect(
+          prepareCloudRun({ ...f.trigger, jobId: bad } as unknown as CloudRunTrigger, f.deps),
+        ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_REQUEST" })
+      expect(seen).toEqual({ commands: 0, entitlements: 0 })
+      expect(await tickets()).toEqual(before)
+      expect(f.github.state.dispatches).toHaveLength(1)
+    } finally {
+      heard.remove()
+      await f.close()
+    }
+  })
+
+  test("R-A1: RESERVE refuses a ticket changed after the peek: another seventh field, an eighth, or a null, malformed or long job id", async () => {
+    for (const change of ["seventh", "eighth", "null", "malformed", "long"] as const) {
+      const f = await fixture()
+      const heard = hear()
+      try {
+        const jobId = createJobId(f.policy.now)
+        const key = `vector:cloud-agents:ticket:${await jobTicket(f, jobId)}`
+        const stored = JSON.parse(String(await persistentStore(["GET", key])))
+        const rewritten =
+          change === "seventh"
+            ? { ...stored, jobId: undefined, note: "1" }
+            : change === "eighth"
+              ? { ...stored, note: "1" }
+              : change === "null"
+                ? { ...stored, jobId: null }
+                : change === "malformed"
+                  ? { ...stored, jobId: jobId.toUpperCase() }
+                  : { ...stored, jobId: `${jobId}0` }
+        f.policy.onStore = async (command) => {
+          if (!reserveCommand(command)) return
+          f.policy.onStore = undefined
+          expect(await persistentStore(["SET", key, JSON.stringify(rewritten), "KEEPTTL"])).toBe("OK")
+        }
+        expect((await f.mint({ ticket: f.ticket() })).status).toBe(503)
+        expect(await persistentStore(["EXISTS", key])).toBe(1)
+        expect(await persistentStore(["HLEN", liveKey(f.account)])).toBe(0)
+        expect(heard.starts).toEqual([])
+      } finally {
+        heard.remove()
+        await f.close()
+      }
+    }
+  })
+
+  test("R-A2: the mint that consumes a ticket tells the start listener once; renewals, later mints and a removed listener tell nobody", async () => {
+    const f = await fixture()
+    const heard = hear()
+    try {
+      const jobId = createJobId(f.policy.now)
+      const first = await jobTicket(f, jobId)
+      const minted = await f.mint({ ticket: f.ticket() })
+      expect(minted.status).toBe(200)
+      expect(heard.starts).toEqual([{ ticketHash: first, rid: minted.body.runId, jobId }])
+      const renewed = await f.mint()
+      expect(renewed.status).toBe(200)
+      expect(renewed.body.runId).toBe(minted.body.runId)
+      expect((await f.send("settle", renewed.body.token, { outcome: "changes" })).status).toBe(200)
+      expect((await f.mint()).status).toBe(403)
+      expect((await f.mint({ ticket: f.ticket() })).status).toBe(403)
+      expect(heard.starts).toHaveLength(1)
+
+      f.job("1002")
+      const second = await jobTicket(f)
+      const plain = await f.mint({ ticket: f.ticket() }, { check_run_id: "1002" })
+      expect(plain.status).toBe(200)
+      expect(heard.starts).toEqual([
+        { ticketHash: first, rid: minted.body.runId, jobId },
+        { ticketHash: second, rid: plain.body.runId, jobId: undefined },
+      ])
+
+      heard.remove()
+      f.job("1003")
+      await jobTicket(f, createJobId(f.policy.now))
+      expect((await f.mint({ ticket: f.ticket() }, { check_run_id: "1003" })).status).toBe(200)
+      expect(heard.starts).toHaveLength(2)
+    } finally {
+      heard.remove()
+      await f.close()
+    }
+  })
+
+  test("R-A2: two check runs that peeked one ticket tell the start listener once, for the winner", async () => {
+    const f = await fixture()
+    const heard = hear()
+    try {
+      const jobId = createJobId(f.policy.now)
+      const ticketHash = await jobTicket(f, jobId)
+      f.job("1002")
+      const held: Array<() => void> = []
+      f.policy.onStore = async (command) => {
+        if (!reserveCommand(command)) return
+        await new Promise<void>((resolve) => {
+          held.push(resolve)
+          if (held.length === 2) held.forEach((release) => release())
+        })
+      }
+      const answers = await Promise.all(
+        ["1001", "1002"].map((check_run_id) => f.mint({ ticket: f.ticket() }, { check_run_id })),
+      )
+      expect(answers.map((answer) => answer.status).sort()).toEqual([200, 403])
+      const winner = answers.find((answer) => answer.status === 200)!
+      expect(heard.starts).toEqual([{ ticketHash, rid: winner.body.runId, jobId }])
+    } finally {
+      heard.remove()
+      await f.close()
+    }
+  })
+
+  test("R-A2: a concurrent mint of the same check run, which RESERVE renews, tells nobody", async () => {
+    const f = await fixture()
+    const heard = hear()
+    try {
+      const ticketHash = await jobTicket(f)
+      const key = `vector:cloud-agents:ticket:${ticketHash}`
+      const peeked = Promise.withResolvers<void>()
+      const answered = Promise.withResolvers<void>()
+      const seen = { peeks: 0, reserves: 0 }
+      // Both mints peek the ticket before either reserves; the second reserves only after the first has answered.
+      f.policy.onStore = async (command) => {
+        if (command[0] === "GET" && command[1] === key && ++seen.peeks === 2) peeked.resolve()
+        if (!reserveCommand(command)) return
+        if (++seen.reserves === 1) return peeked.promise
+        await answered.promise
+      }
+      const answers = await Promise.all(
+        [0, 1].map(() =>
+          f.mint({ ticket: f.ticket() }).then((answer) => {
+            answered.resolve()
+            return answer
+          }),
+        ),
+      )
+      expect(seen).toEqual({ peeks: 2, reserves: 2 })
+      expect(answers.map((answer) => answer.status)).toEqual([200, 200])
+      expect(answers[0]!.body.runId).toBe(answers[1]!.body.runId)
+      expect(heard.starts).toEqual([{ ticketHash, rid: answers[0]!.body.runId, jobId: undefined }])
+    } finally {
+      heard.remove()
+      await f.close()
+    }
+  })
+
+  test("R-A2: a mint that fails after its reservation tells nobody, and its recovery does not either", async () => {
+    for (const failure of ["record", "reply"] as const) {
+      const f = await fixture()
+      const heard = hear()
+      try {
+        await jobTicket(f, createJobId(f.policy.now))
+        f.policy.onStore = async (command) => {
+          if (failure === "record" ? !startCommand(command) : !reserveCommand(command)) return
+          f.policy.onStore = undefined
+          if (failure === "reply") await persistentStore(command)
+          throw new Error("store failure")
+        }
+        expect((await f.mint({ ticket: f.ticket() })).status).toBe(503)
+        if (failure === "reply") expect((await f.mint()).status).toBe(200)
+        expect(heard.starts).toEqual([])
+      } finally {
+        heard.remove()
+        await f.close()
+      }
+    }
+  })
+
+  test("listener failures change no answer or record and log one fixed line each, with no id", async () => {
+    const f = await fixture()
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    const heard = hear()
+    const removers = [
+      registerRunStartListener((ticketHash, rid, jobId) => {
+        throw new Error(`boom ${ticketHash} ${rid} ${jobId}`)
+      }),
+      registerRunStartListener(async (ticketHash, rid, jobId) => {
+        throw new Error(`boom ${ticketHash} ${rid} ${jobId}`)
+      }),
+      registerRunSettleListener(async (rid, end) => {
+        throw new Error(`boom ${rid} ${end.runUrl}`)
+      }),
+    ]
+    try {
+      const jobId = createJobId(f.policy.now)
+      const ticketHash = await jobTicket(f, jobId)
+      const minted = await f.mint({ ticket: f.ticket() })
+      expect(minted.status).toBe(200)
+      expect(Object.keys(minted.body).sort()).toEqual(["deadline", "heartbeatSeconds", "idleSeconds", "runId", "token"])
+      await until(() => warn.mock.calls.length === 2)
+      expect(heard.starts).toEqual([{ ticketHash, rid: minted.body.runId, jobId }])
+      expect((await f.send("heartbeat", minted.body.token, { state: "running" })).status).toBe(200)
+      expect(await liveRun(f.account, minted.body.runId)).toBeDefined()
+      expect((await listCloudRuns(f.account)).map((run) => run.rid)).toEqual([minted.body.runId])
+
+      expect(await f.send("settle", minted.body.token, { outcome: "changes" })).toMatchObject({
+        status: 200,
+        body: { ok: true },
+      })
+      await until(() => heard.settles.length === 1 && warn.mock.calls.length === 3)
+      expect((await listCloudRuns(f.account))[0]?.outcome).toBe("changes")
+      expect(await liveRun(f.account, minted.body.runId)).toBeUndefined()
+      expect((await f.send("settle", minted.body.token, { outcome: "failed" })).status).toBe(200)
+      await Bun.sleep(100)
+      expect(heard.settles).toHaveLength(1)
+      expect(warn.mock.calls).toEqual([
+        ["Vector cloud-agents start listener failed"],
+        ["Vector cloud-agents start listener failed"],
+        ["Vector cloud-agents settle listener failed"],
+      ])
+      const logged = JSON.stringify(warn.mock.calls)
+      for (const value of [ticketHash, minted.body.runId, jobId, f.account, f.github.repositoryId, "boom"])
+        expect(logged).not.toContain(value)
+    } finally {
+      removers.forEach((remove) => remove())
+      heard.remove()
+      warn.mockRestore()
+      await f.close()
+    }
+  })
+
+  test("a hanging listener delays no answer, still runs once, and is cut off after five seconds with a fixed warning", async () => {
+    const f = await fixture()
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    const calls = { start: 0, settle: 0 }
+    const removers = [
+      registerRunStartListener(async () => {
+        calls.start++
+        await new Promise(() => {})
+      }),
+      registerRunSettleListener(async () => {
+        calls.settle++
+        await new Promise(() => {})
+      }),
+    ]
+    try {
+      await jobTicket(f, createJobId(f.policy.now))
+      const begun = performance.now()
+      const minted = await f.mint({ ticket: f.ticket() })
+      expect(minted.status).toBe(200)
+      // The engine gives its whole settle 5 s (github.cloud.ts), so neither answer may wait on a listener.
+      expect(performance.now() - begun).toBeLessThan(4_000)
+      const settling = performance.now()
+      expect((await f.send("settle", minted.body.token, { outcome: "changes" })).status).toBe(200)
+      expect(performance.now() - settling).toBeLessThan(4_000)
+      await until(() => calls.settle === 1)
+      expect(calls).toEqual({ start: 1, settle: 1 })
+      await until(() => warn.mock.calls.length === 2, 15_000)
+      expect(performance.now() - begun).toBeGreaterThanOrEqual(4_900)
+      expect(warn.mock.calls).toEqual([
+        ["Vector cloud-agents start listeners timed out"],
+        ["Vector cloud-agents settle listeners timed out"],
+      ])
+      expect(calls).toEqual({ start: 1, settle: 1 })
+    } finally {
+      removers.forEach((remove) => remove())
+      warn.mockRestore()
+      await f.close()
+    }
+  })
+
+  test("R-A3: only the settle that ends the run tells the settle listener, with its outcome, the run's page and its pull request", async () => {
+    const f = await fixture()
+    const heard = hear()
+    const reads: string[] = []
+    try {
+      await jobTicket(f, createJobId(f.policy.now))
+      const minted = await f.mint({ ticket: f.ticket() })
+      const run = (await listCloudRuns(f.account))[0]!
+      const pulls = { changes: 7, failed: 8, draft: 9 }
+      f.policy.onStore = async (command) => {
+        if (recordRead(command)) reads.push(String(command[3]))
+      }
+      const answers = await Promise.all(
+        (["changes", "failed", "draft"] as const).map((outcome) =>
+          f.send("settle", minted.body.token, {
+            outcome,
+            prUrl: `https://github.com/${run.repository}/pull/${pulls[outcome]}`,
+          }),
+        ),
+      )
+      expect(answers.map((answer) => [answer.status, answer.body])).toEqual([
+        [200, { ok: true }],
+        [200, { ok: true }],
+        [200, { ok: true }],
+      ])
+      await until(() => heard.settles.length === 1)
+      const outcome = (await listCloudRuns(f.account))[0]!.outcome as keyof typeof pulls
+      expect(heard.settles).toEqual([
+        {
+          rid: minted.body.runId,
+          end: { outcome, runUrl: run.runUrl, prUrl: `https://github.com/${run.repository}/pull/${pulls[outcome]}` },
+        },
+      ])
+      expect(reads).toEqual([runRecordKey(minted.body.runId)])
+      expect((await f.send("settle", minted.body.token, { outcome: "cancelled" })).status).toBe(200)
+      expect(reads).toHaveLength(1)
+
+      // A committing settle whose reply is lost tells nobody, and neither does its retry: the event is at most once.
+      f.job("1002")
+      await jobTicket(f, createJobId(f.policy.now))
+      const lost = await f.mint({ ticket: f.ticket() }, { check_run_id: "1002" })
+      expect(lost.status).toBe(200)
+      f.policy.onStore = async (command) => {
+        if (recordRead(command)) reads.push(String(command[3]))
+        if (!settleCommand(command)) return
+        f.policy.onStore = async (next) => {
+          if (recordRead(next)) reads.push(String(next[3]))
+        }
+        await persistentStore(command)
+        throw new Error("lost settle reply")
+      }
+      expect((await f.send("settle", lost.body.token, { outcome: "changes" })).status).toBe(503)
+      expect((await f.send("settle", lost.body.token, { outcome: "changes" })).status).toBe(200)
+      expect((await listCloudRuns(f.account)).find((entry) => entry.rid === lost.body.runId)?.outcome).toBe("changes")
+      await Bun.sleep(100)
+      expect(reads).toHaveLength(1)
+      expect(heard.settles).toHaveLength(1)
+    } finally {
+      heard.remove()
+      await f.close()
+    }
+  })
+
+  test("F-c: the settle listener keeps only a pull request of the run's own repository; any other prUrl is ignored, never refused", async () => {
+    const f = await fixture()
+    const heard = hear()
+    try {
+      await jobTicket(f)
+      const probe = await f.mint({ ticket: f.ticket() })
+      const own = (await listCloudRuns(f.account))[0]!.repository!
+      expect((await f.send("settle", probe.body.token, { outcome: "changes" })).status).toBe(200)
+      await until(() => heard.settles.length === 1)
+      expect(heard.settles[0]!.end).toEqual({ outcome: "changes", runUrl: expect.any(String) })
+      const cases: Array<[unknown, string | undefined]> = [
+        [`https://github.com/${own}/pull/12`, `https://github.com/${own}/pull/12`],
+        [`https://github.com/${own.toUpperCase()}/pull/13`, `https://github.com/${own}/pull/13`],
+        ["https://github.com/fixture-owner/other/pull/12", undefined],
+        [`http://github.com/${own}/pull/12`, undefined],
+        [`https://github.com/${own}/pull/12/files`, undefined],
+        [`https://github.com/${own}/issues/12`, undefined],
+        [`https://github.com.example/${own}/pull/12`, undefined],
+        [`https://github.com/${own}/pull/0`, undefined],
+        [`https://github.com/${own}/pull/12345678901`, undefined],
+        [`https://github.com/${own}/pull/12\n`, undefined],
+        [12, undefined],
+        [null, undefined],
+      ]
+      for (const [index, [prUrl, kept]] of cases.entries()) {
+        const check = String(2001 + index)
+        f.job(check)
+        await jobTicket(f)
+        const minted = await f.mint({ ticket: f.ticket() }, { check_run_id: check })
+        expect(minted.status).toBe(200)
+        expect(await f.send("settle", minted.body.token, { outcome: "draft", prUrl })).toMatchObject({
+          status: 200,
+          body: { ok: true },
+        })
+        await until(() => heard.settles.length === index + 2)
+        const runUrl = (await listCloudRuns(f.account)).find((run) => run.rid === minted.body.runId)?.runUrl
+        expect(heard.settles[index + 1]).toEqual({
+          rid: minted.body.runId,
+          end: { outcome: "draft", runUrl, ...(kept === undefined ? {} : { prUrl: kept }) },
+        })
+      }
+      // Every other field is still refused, before the run token is read.
+      f.job("2100")
+      await jobTicket(f)
+      const refused = await f.mint({ ticket: f.ticket() }, { check_run_id: "2100" })
+      expect(
+        await f.send("settle", refused.body.token, {
+          outcome: "changes",
+          prUrl: `https://github.com/${own}/pull/12`,
+          note: "1",
+        }),
+      ).toMatchObject({ status: 400, body: { error: { code: "INVALID_REQUEST" } } })
+      expect(await liveRun(f.account, refused.body.runId)).toBeDefined()
+      expect(heard.settles).toHaveLength(cases.length + 1)
+    } finally {
+      heard.remove()
+      await f.close()
+    }
+  })
+
+  test("no listener runs while the cloud-agents service is off", async () => {
+    const f = await fixture()
+    const heard = hear()
+    const reads: string[] = []
+    const saved = {
+      VECTOR_GITHUB_BRAIN_ENABLED: process.env.VECTOR_GITHUB_BRAIN_ENABLED,
+      MODEL_PLANS_ENABLED: process.env.MODEL_PLANS_ENABLED,
+    }
+    const switches = [
+      ["VECTOR_GITHUB_BRAIN_ENABLED", "CLOUD_AGENTS_UNAVAILABLE"],
+      ["MODEL_PLANS_ENABLED", "MODEL_PLANS_DISABLED"],
+    ] as const
+    try {
+      await jobTicket(f, createJobId(f.policy.now))
+      const ticket = f.ticket()
+      for (const [name, code] of switches) {
+        process.env[name] = "false"
+        expect(await f.mint({ ticket })).toMatchObject({ status: 503, body: { error: { code } } })
+        process.env[name] = "true"
+      }
+      expect(await peekRunTicket(ticket, await f.botIdentity(), f.binding, f.deps)).toBeDefined()
+      expect(heard.starts).toEqual([])
+      const minted = await f.mint({ ticket })
+      expect(minted.status).toBe(200)
+      expect(heard.starts).toHaveLength(1)
+
+      f.policy.onStore = async (command) => {
+        if (recordRead(command)) reads.push(String(command[3]))
+      }
+      for (const [name, code] of switches) {
+        process.env[name] = "false"
+        expect(await f.send("settle", minted.body.token, { outcome: "changes" })).toMatchObject({
+          status: 503,
+          body: { error: { code } },
+        })
+        process.env[name] = "true"
+      }
+      expect(await liveRun(f.account, minted.body.runId)).toBeDefined()
+      await Bun.sleep(100)
+      expect(reads).toEqual([])
+      expect(heard.settles).toEqual([])
+      expect((await f.send("settle", minted.body.token, { outcome: "changes" })).status).toBe(200)
+      await until(() => heard.settles.length === 1)
+      expect(reads).toEqual([runRecordKey(minted.body.runId)])
+    } finally {
+      for (const [name, value] of Object.entries(saved))
+        value === undefined ? delete process.env[name] : (process.env[name] = value)
+      heard.remove()
+      await f.close()
+    }
+  })
 }
 
 function seal(prepared: { key: string; aad: string }, content: Uint8Array) {
@@ -1147,6 +1665,40 @@ function unseal(value: { key: string; aad: string; nonce: string; ciphertext: st
   decipher.setAAD(Buffer.from(value.aad))
   decipher.setAuthTag(bytes.subarray(-16))
   return Buffer.concat([decipher.update(bytes.subarray(0, -16)), decipher.final()])
+}
+
+/** recordRunStart's START script: seven keys, the run record's first. */
+function startCommand(command: readonly (string | number)[]) {
+  return (
+    command[0] === "EVAL" && String(command[2]) === "7" && String(command[3]).startsWith("vector:cloud-agents:run:")
+  )
+}
+
+/** The ledger's SETTLE_RECORDED script: the live hash first and the run record third. */
+function settleCommand(command: readonly (string | number)[]) {
+  return (
+    command[0] === "EVAL" &&
+    String(command[2]) === "6" &&
+    String(command[3]).startsWith("vector:cloud-agents:live:") &&
+    String(command[5]).startsWith("vector:cloud-agents:run:")
+  )
+}
+
+/** The settle notification's one read of the run record (cloud-agents-runs.ts RECORD). */
+function recordRead(command: readonly (string | number)[]) {
+  return (
+    command[0] === "EVAL" &&
+    command[1] === "return redis.call('HGETALL', KEYS[1])" &&
+    String(command[3]).startsWith("vector:cloud-agents:run:")
+  )
+}
+
+async function until(check: () => boolean, ms = 5_000) {
+  const end = performance.now() + ms
+  while (!check()) {
+    if (performance.now() > end) throw new Error("A run listener was not heard in time")
+    await Bun.sleep(5)
+  }
 }
 
 function reserveCommand(command: readonly (string | number)[]) {

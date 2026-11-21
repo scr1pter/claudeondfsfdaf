@@ -93,6 +93,7 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
+import { UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
 import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
@@ -158,10 +159,21 @@ const HOW_YOU_WORK = new Set<string>([...Brain.HABIT_KINDS, "rule", "term"])
 
 /**
  * Who a session's memory is for (section 6.4a). A role whose output leaves the machine or reaches the web gets the
- * outward digest: how the owner works, and no MEMORY.md, fact or entry learned beside a private document.
+ * outward digest: how the owner works, and no MEMORY.md, fact or entry learned beside a private document. So does a
+ * session nobody watches, which a Vector everywhere job marks `vector.unattended`: it answers on the platform that
+ * asked, so it hears how the owner works, screened, and nothing about them. The mark counts whatever its value, so
+ * adding it can only narrow what a session hears.
  */
-export function audienceOf(session: Pick<Session.Info, "internal" | "parentID">, agent: string): Brain.Audience {
-  if (session.internal?.startsWith(VECTORSCOPE) || OUTWARD_AGENTS.has(agent)) return "outward"
+export function audienceOf(
+  session: Pick<Session.Info, "internal" | "parentID" | "metadata">,
+  agent: string,
+): Brain.Audience {
+  if (
+    session.internal?.startsWith(VECTORSCOPE) ||
+    OUTWARD_AGENTS.has(agent) ||
+    session.metadata?.[UNATTENDED_KEY] !== undefined
+  )
+    return "outward"
   // A research lead the build agent started works from build's request alone and sends queries to the web: it hears
   // how the owner works, screened, and nothing about them. The lead of the user's own Deep research is the owner's.
   return agent === "research" && session.parentID ? "outward" : "owner"
@@ -2836,13 +2848,19 @@ const layer = Layer.effect(
         // train on prompts.
         const guest = yield* guests.marked(sessionID)
         const personal = !pinnedReview && !guest && !freeModelMayTrain(model)
+        // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
+        // found for it is not filled in from the owner's personal memory or private documents.
+        const audience = audienceOf(session, agent.name)
         // Attachments the user marked to remember become documents while this request runs, never at admission. A
         // session a guest is in keeps none.
         if (!guest && !session.parentID && !session.internal)
           msgs = yield* keepAttached({ sessionID, msgs, user: lastUser })
         // Tier 1 recall: once per request message on the main agent, from what the user wrote and attached, within the
         // budget its size allows. It is saved on the message, so later steps send the same bytes and the cache holds.
-        if (!quick && sized && sized.tier !== "chat" && !session.parentID && !session.internal)
+        // An outward role gets none: recall is not screened (its entries and document cards take no audience), and what
+        // it brings is saved on the message. The gate covers every outward role, not only unattended sessions, so a
+        // sized outward root role added later gets no recall either (vector-everywhere-deviations.md, EV-14 (b)).
+        if (!quick && sized && sized.tier !== "chat" && !session.parentID && !session.internal && audience === "owner")
           msgs = yield* recallFor({
             sessionID,
             msgs,
@@ -2858,9 +2876,6 @@ const layer = Layer.effect(
           msgs = yield* briefFor({ session, msgs, personal, agent: agent.name })
         if (!pinnedReview && session.internal?.startsWith(VECTORSCOPE))
           msgs = yield* reviewFor({ session, msgs, personal, agent: agent.name })
-        // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
-        // found for it is not filled in from the owner's personal memory or private documents.
-        const audience = audienceOf(session, agent.name)
         // The session's learned skills (section 5.4): chosen on its first step off the quick lane from what that request
         // asks, kept in brain.db, and only ever fewer after that, so the skills block stays the same from step to step.
         const learned = quick

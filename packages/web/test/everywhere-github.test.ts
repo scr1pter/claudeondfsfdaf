@@ -4,6 +4,7 @@ import { createGithubAdapter, createGithubHandoff, type GithubHandoffBinding, ty
 import type { GithubStatusPort } from "../../../api/_lib/everywhere/github/status"
 import { TRANSITION_SCRIPT, claimJob, createJob, declineJob, finishGithubOffer, offerJob, openReply, readJob, reportJob, settleJob, type JobsContext } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
+import { setValue } from "../../../api/_lib/everywhere/store"
 import { RouteHarness } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { routerFixture } from "./lib/everywhere-router"
@@ -15,9 +16,10 @@ afterAll(() => harness.stop())
 
 function fixture() {
   const f = routerFixture()
-  const identity: GithubHandoffIdentity = { repositoryId: 101, repository: "acme/app", actorId: 42, runId: 1001, runAttempt: 1, eventName: "issue_comment" }
-  const binding: GithubHandoffBinding = { account: f.account, githubId: 42, installationId: 77, laptopFirst: true, codiumMode: true,
-    workflowVersion: "fixture-v1", repository: { id: 101, fullName: "acme/app", shared: false } }
+  const identity: GithubHandoffIdentity = { repositoryId: 101, repository: "acme/app", ownerId: 456, actorId: 42, runId: 1001, runAttempt: 1,
+    eventName: "issue_comment", ref: "refs/heads/main" }
+  const binding: GithubHandoffBinding = { account: f.account, githubId: 42, ownerId: 456, installationId: 77, laptopFirst: true, codiumMode: true,
+    workflowVersion: "fixture-v1", defaultRef: "refs/heads/main", repository: { id: 101, fullName: "acme/app", shared: false } }
   const token = randomBytes(32).toString("hex")
   const body = { kind: "issue", issue: 7, commentId: 99, thread: "acme/app#7", workflowVersion: "fixture-v1" }
   const deps = { config: () => ({ ...f.config, platforms: new Set(["github"] as const) }), context: f.context, ports: f.ports,
@@ -180,4 +182,261 @@ test("a status post whose reference write failed is found by its own marker on r
   expect(status.comments.size).toBe(1)
   expect(status.edits()).toBe(1)
   expect(openReply(f.context(), (await readJob(f.store, job.jid))!)?.statusCommentId).toBe(700)
+})
+
+/** Holds the first call that reaches `wait` until `open`, and resolves `entered` when it arrives. */
+function gate() {
+  const entered = Promise.withResolvers<void>()
+  const open = Promise.withResolvers<void>()
+  const wait = () => {
+    entered.resolve()
+    return open.promise
+  }
+  return { entered: entered.promise, open: () => open.resolve(), wait }
+}
+
+async function runningStatus() {
+  const f = fixture()
+  const job = await started(f)
+  await job.report()
+  const status = statusPort()
+  const view = { jid: job.jid, platform: "github" as const, installation: "github:77", shared: false, reply: {} }
+  const adapter = createGithubAdapter({ context: f.context, status: status.port })
+  const lock = everywhereKeys.jobStatusLock(job.jid)
+  const edited = everywhereKeys.jobStatusEdited(job.jid)
+  const settle = () =>
+    settleJob(f.context(), {
+      account: f.account,
+      device: f.computer,
+      settle: { jid: job.jid, lease: job.lease, outcome: "no-changes", summary: "Done." },
+    })
+  // After holdNextEdit, the next edit waits on the gate, so a test can hold a post inside the lock.
+  const held = gate()
+  const edit = status.port.editComment
+  let holding = false
+  const holdNextEdit = () => {
+    holding = true
+    status.port.editComment = async (...args) => {
+      if (holding) {
+        holding = false
+        await held.wait()
+      }
+      return edit(...args)
+    }
+  }
+  return { f, job, status, view, adapter, lock, edited, settle, held, holdNextEdit }
+}
+
+test("the status lock is released after each post, and progress 31 s after the last post edits", async () => {
+  const s = await runningStatus()
+  await s.adapter.progress(s.view, "laptop")
+  const laptop = s.status.comments.get(700)
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+  expect(s.f.fake.pttl(s.edited)).toBe(30_000)
+  s.f.fake.clock.advance(31_000)
+  await s.adapter.progress(s.view, "editing")
+  expect(s.status.edits()).toBe(1)
+  expect(s.status.comments.get(700)).toContain("Working on your computer")
+  expect(s.status.comments.get(700)).not.toBe(laptop)
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+  expect(s.f.fake.pttl(s.edited)).toBe(30_000)
+})
+
+test("progress within 30 s of the last edit is dropped, and the next one after it edits", async () => {
+  const s = await runningStatus()
+  await s.adapter.progress(s.view, "laptop")
+  s.f.fake.clock.advance(31_000)
+  await s.adapter.progress(s.view, "editing")
+  expect(s.status.edits()).toBe(1)
+  const editing = s.status.comments.get(700)
+  s.f.fake.clock.advance(29_999)
+  await s.adapter.progress(s.view, "testing")
+  expect(s.status.edits()).toBe(1)
+  expect(s.status.comments.get(700)).toBe(editing)
+  s.f.fake.clock.advance(1)
+  await s.adapter.progress(s.view, "testing")
+  expect(s.status.edits()).toBe(2)
+  expect(s.status.comments.get(700)).not.toBe(editing)
+})
+
+test("two concurrent progress posts make one edit and leave the lock released", async () => {
+  const s = await runningStatus()
+  await s.adapter.progress(s.view, "laptop")
+  s.f.fake.clock.advance(31_000)
+  s.holdNextEdit()
+  const first = s.adapter.progress(s.view, "editing")
+  await s.held.entered
+  expect(s.f.fake.read(s.lock)).toBeDefined()
+  await createGithubAdapter({ context: s.f.context, status: s.status.port }).progress(s.view, "testing")
+  expect(s.status.edits()).toBe(0)
+  s.held.open()
+  await first
+  expect(s.status.edits()).toBe(1)
+  const editing = s.status.comments.get(700)
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+  s.f.fake.clock.advance(30_000)
+  await s.adapter.progress(s.view, "testing")
+  expect(s.status.edits()).toBe(2)
+  expect(s.status.comments.get(700)).not.toBe(editing)
+})
+
+test("a post whose lock expired releases only its own token, never the next holder's lock", async () => {
+  const s = await runningStatus()
+  await s.adapter.progress(s.view, "laptop")
+  s.f.fake.clock.advance(31_000)
+  s.holdNextEdit()
+  const first = s.adapter.progress(s.view, "editing")
+  await s.held.entered
+  const expired = s.f.fake.read(s.lock)
+  expect(expired).toEqual({ kind: "string", value: expect.stringMatching(/^[0-9a-f-]{36}$/) })
+  s.f.fake.clock.advance(120_001)
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+  const next = "next-holder-token"
+  expect(await setValue(s.f.store, s.lock, next, { onlyNew: true, ttlMs: 120_000 })).toBe(true)
+  s.held.open()
+  await first
+  expect(s.status.edits()).toBe(1)
+  expect(s.f.fake.read(s.lock)).toEqual({ kind: "string", value: next })
+})
+
+test("a terminal post that met the lock succeeds on retry after release and ignores the edit throttle", async () => {
+  const s = await runningStatus()
+  await s.adapter.progress(s.view, "laptop")
+  s.f.fake.clock.advance(31_000)
+  s.holdNextEdit()
+  const first = s.adapter.progress(s.view, "editing")
+  await s.held.entered
+  await s.settle()
+  const finish = () =>
+    createGithubAdapter({ context: s.f.context, status: s.status.port }).finish(s.view, { text: "Done." })
+  await expect(finish()).rejects.toThrow("still locked")
+  s.held.open()
+  await first
+  expect(s.status.edits()).toBe(1)
+  expect(s.f.fake.pttl(s.edited)).toBe(30_000)
+  await finish()
+  expect(s.status.edits()).toBe(2)
+  expect(s.status.comments.get(700)).toContain("Done.")
+  expect(s.status.comments.get(700)).toContain(`<!-- vector:job ${s.job.jid} -->`)
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+})
+
+test("progress that waited for the lock never overwrites a terminal status", async () => {
+  const s = await runningStatus()
+  await s.adapter.progress(s.view, "laptop")
+  s.f.fake.clock.advance(31_000)
+  // Only the waiting adapter's store holds its lock write; the laptop post and the finish use the plain store.
+  const held = gate()
+  let holding = true
+  const waiting = (): JobsContext => ({
+    ...s.f.context(),
+    store: async (command) => {
+      if (holding && command[0] === "SET" && command[1] === s.lock) {
+        holding = false
+        await held.wait()
+      }
+      return s.f.store(command)
+    },
+  })
+  const late = createGithubAdapter({ context: waiting, status: s.status.port }).progress(s.view, "editing")
+  await held.entered
+  await s.settle()
+  await createGithubAdapter({ context: s.f.context, status: s.status.port }).finish(s.view, { text: "Done." })
+  expect(s.status.edits()).toBe(1)
+  held.open()
+  await late
+  expect(s.status.edits()).toBe(1)
+  expect(s.status.comments.get(700)).toContain("Done.")
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+})
+
+test("a failed progress edit releases the lock and sets no edit throttle", async () => {
+  const s = await runningStatus()
+  await s.adapter.progress(s.view, "laptop")
+  s.f.fake.clock.advance(31_000)
+  const edit = s.status.port.editComment
+  let fail = true
+  s.status.port.editComment = async (...args) => {
+    if (fail) {
+      fail = false
+      throw new Error("Fixture edit failed")
+    }
+    return edit(...args)
+  }
+  await expect(s.adapter.progress(s.view, "editing")).rejects.toThrow("Fixture edit failed")
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+  expect(s.f.fake.read(s.edited)).toBeUndefined()
+  await s.adapter.progress(s.view, "editing")
+  expect(s.status.edits()).toBe(1)
+  expect(s.f.fake.pttl(s.edited)).toBe(30_000)
+})
+
+test("a post whose reference write failed still spaces the next progress edit by 30 s", async () => {
+  const s = await runningStatus()
+  let fail = false
+  const comment = s.status.port.comment
+  s.status.port.comment = async (...args) => {
+    const value = await comment(...args)
+    fail = true
+    return value
+  }
+  const context = (): JobsContext => ({
+    ...s.f.context(),
+    store: async (command) => {
+      if (fail && command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(TRANSITION_SCRIPT)) {
+        fail = false
+        throw new Error("Fixture lost reference write")
+      }
+      return s.f.store(command)
+    },
+  })
+  const adapter = createGithubAdapter({ context, status: s.status.port })
+  await expect(adapter.progress(s.view, "laptop")).rejects.toThrow("Fixture lost reference write")
+  expect(s.status.comments.size).toBe(1)
+  expect(s.f.fake.read(s.lock)).toBeUndefined()
+  expect(s.f.fake.pttl(s.edited)).toBe(30_000)
+  s.f.fake.clock.advance(29_999)
+  await adapter.progress(s.view, "editing")
+  expect(s.status.edits()).toBe(0)
+  s.f.fake.clock.advance(1)
+  await adapter.progress(s.view, "editing")
+  expect(s.status.edits()).toBe(1)
+  expect(openReply(s.f.context(), (await readJob(s.f.store, s.job.jid))!)?.statusCommentId).toBe(700)
+})
+
+test("an issues handoff without bodySha256 gets 400 and keeps nothing, and with it is offered", async () => {
+  const f = fixture()
+  f.identity.eventName = "issues"
+  let offers = 0
+  f.ports.offer = async () => {
+    offers++
+    const jid = f.fake.sorted(everywhereKeys.jobs(f.account))[0]!
+    const claim = await claimJob(f.context(), { account: f.account, jid, device: f.computer })
+    if (!claim.ok) throw new Error("Fixture claim failed")
+    await reportJob(f.context(), {
+      account: f.account,
+      device: f.computer,
+      report: { jid, lease: claim.job.lease.id, seq: 0, milestone: "started" },
+    })
+    return "sent"
+  }
+  harness.mount({ "/handoff": createGithubHandoff(f.deps) })
+  const body = { kind: "issue", issue: 7, thread: "acme/app#7", workflowVersion: "fixture-v1" }
+  const refused = await harness.call("POST", "/handoff", { body, token: f.token })
+  expect(refused.status).toBe(400)
+  expect(refused.body).toEqual({ error: { code: "HANDOFF_INVALID" } })
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toHaveLength(0)
+  expect(f.fake.read(everywhereKeys.handoff(101, 1001))).toBeUndefined()
+  expect(offers).toBe(0)
+  const bodySha256 = "a".repeat(64)
+  const accepted = await harness.call("POST", "/handoff", { body: { ...body, bodySha256 }, token: f.token })
+  expect(accepted.body).toMatchObject({ handled: true })
+  expect((await readJob(f.store, accepted.body.jid))?.github).toEqual({
+    kind: "issue",
+    number: 7,
+    actorId: 42,
+    event: "issues",
+    bodySha256,
+  })
+  expect(offers).toBe(1)
 })

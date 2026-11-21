@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { listedPerks, type PerkServices } from "../../../api/_lib/codium-perks"
+import { generateKeyPairSync, randomBytes } from "node:crypto"
+import { listedPerks, perkServices, type PerkServices } from "../../../api/_lib/codium-perks"
 import { publicCodiumTiers } from "../../../api/_lib/codium-public"
 import { codiumKey } from "../../../api/_lib/codium-keys"
-import { ENTITLEMENTS, PERK_IDS } from "@vectordevai/schema/codium-entitlements"
+import { ENV_NAMES, readConfig } from "../../../api/_lib/everywhere/config"
+import { ENTITLEMENTS, PERK_IDS, publicEntitlements } from "@vectordevai/schema/codium-entitlements"
 import { CodiumPlan } from "@vectordevai/schema/codium-plan"
 import type { ModelPlanModel } from "../../../api/_lib/model-plan-config"
 import { CODIUM_TIER_MODELS } from "../../../api/_lib/codium-catalog"
@@ -10,9 +12,23 @@ import { reviewPanelServed, secondOpinionServed } from "../../../api/_lib/model-
 import { codiumFakes, codiumTestEnvironment } from "./fixture/codium-fakes"
 
 const all: PerkServices = Object.fromEntries(PERK_IDS.map((perk) => [perk, () => true]))
+// Everything the everywhere perk's readiness reads (EV-08), saved and restored around each case.
+const EVERYWHERE_ENV = [
+  ENV_NAMES.enabled,
+  ENV_NAMES.dataKey,
+  ENV_NAMES.offerSigningKey,
+  ENV_NAMES.offerKeyId,
+  ENV_NAMES.platforms,
+  ENV_NAMES.cronSecret,
+  ENV_NAMES.slackAppId,
+  ENV_NAMES.slackClientId,
+  ENV_NAMES.slackClientSecret,
+  ENV_NAMES.slackSigningSecret,
+]
 let restore = () => {}
 beforeEach(() => {
   restore = codiumTestEnvironment({
+    ...Object.fromEntries(EVERYWHERE_ENV.map((name) => [name, undefined])),
     CODIUM_LISTED_PERKS: undefined,
     CODIUM_TRACK_B_LIVE: undefined,
     MODEL_PLAN_GLOBAL_INFLIGHT: undefined,
@@ -111,6 +127,70 @@ describe("A27 public perk listing", () => {
         },
       }),
     ).toEqual(new Set())
+  })
+
+  test("EV-08: everywhere lists only when ready, with Remote listed and the everywhere switch on", async () => {
+    const ready: PerkServices = { remote: () => true, everywhere: () => true }
+    const listed = (fakes = codiumFakes(), services = ready) => listedPerks(fakes.fetcher, { services })
+    // The owner's listing comes first: unset, nothing is listed even when every service is ready.
+    expect(await listed()).toEqual(new Set())
+    process.env.CODIUM_LISTED_PERKS = "remote,everywhere"
+    expect(await listed()).toEqual(new Set(["remote", "everywhere"]))
+
+    // The real readiness is false today, even with every variable it reads set: the route is not wired.
+    const pem = generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" }).toString()
+    Object.assign(process.env, {
+      [ENV_NAMES.enabled]: "true",
+      [ENV_NAMES.dataKey]: randomBytes(32).toString("base64"),
+      [ENV_NAMES.offerSigningKey]: pem,
+      [ENV_NAMES.offerKeyId]: "offer-2026-11",
+      [ENV_NAMES.platforms]: "slack",
+      [ENV_NAMES.cronSecret]: randomBytes(24).toString("hex"),
+      [ENV_NAMES.slackAppId]: "A0123456789",
+      [ENV_NAMES.slackClientId]: "1234567890.0987654321",
+      [ENV_NAMES.slackClientSecret]: randomBytes(24).toString("hex"),
+      [ENV_NAMES.slackSigningSecret]: randomBytes(24).toString("hex"),
+    })
+    expect(readConfig().platforms).toEqual(new Set(["slack"]))
+    expect(readConfig().offer).toBeDefined()
+    expect(perkServices.everywhere?.(codiumFakes().fetcher)).toBe(false)
+    expect(await listed(codiumFakes(), { ...ready, everywhere: perkServices.everywhere! })).toEqual(new Set(["remote"]))
+    expect(await listed(codiumFakes(), { ...ready, everywhere: () => false })).toEqual(new Set(["remote"]))
+
+    // Remote is required: unlisted, or switched off, it takes everywhere with it.
+    process.env.CODIUM_LISTED_PERKS = "everywhere"
+    expect(await listed()).toEqual(new Set())
+    process.env.CODIUM_LISTED_PERKS = "remote,everywhere"
+    const remoteOff = codiumFakes()
+    remoteOff.store.set(codiumKey("switch", "remote"), "off")
+    expect(await listed(remoteOff)).toEqual(new Set())
+
+    // `no-new` and `stop` hide the perk. `off` is not an everywhere value, so it and garbage fail closed: nothing
+    // at all is listed while everywhere is a candidate.
+    for (const [value, expected] of [
+      ["no-new", ["remote"]],
+      ["stop", ["remote"]],
+      ["off", []],
+      ["garbage", []],
+    ] as const) {
+      const fakes = codiumFakes()
+      fakes.store.set(codiumKey("switch", "everywhere"), value)
+      expect([value, await listed(fakes)]).toEqual([value, new Set(expected)])
+    }
+    const killed = codiumFakes()
+    await killed.fetcher(process.env.KV_REST_API_URL!, {
+      method: "POST",
+      body: JSON.stringify(["SADD", codiumKey("perks-off"), "everywhere"]),
+    })
+    expect(await listed(killed)).toEqual(new Set(["remote"]))
+
+    // Listed, it adds no field to any plan's public caps.
+    const tiers = await publicCodiumTiers(codiumFakes().fetcher, { perks: { services: ready } })
+    expect(tiers.listed).toEqual(["remote", "everywhere"])
+    for (const plan of tiers.plans)
+      expect(plan.caps).toEqual(publicEntitlements(plan.id as CodiumPlan.PlanId, new Set(["remote"])))
+    process.env.MODEL_PLANS_ENABLED = "false"
+    expect(await listed()).toEqual(new Set())
   })
 })
 

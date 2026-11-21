@@ -79,6 +79,16 @@ test("an edited review comment is accepted only by its exact digest through the 
   await expect(readEverywhereGithubThread(f.access, job)).rejects.toThrow("trigger changed")
 })
 
+test("a comment trigger with unedited timestamps is accepted even with a mismatched hash (spec 4.1)", async () => {
+  await using f = fixture()
+  // EV-02 keeps spec 4.1 for comments: unedited timestamps, or a matching hash. A later package may make a present
+  // hash authoritative; this case then turns red and records the change.
+  const job: EverywhereJob = { ...f.job, github: { ...f.job.github!, bodySha256: "0".repeat(64) } }
+  expect((await readEverywhereGithubThread(f.access, job)).thread?.task).toBe(f.trigger.body)
+  f.trigger.updated_at = "2026-11-12T01:01:00Z"
+  await expect(readEverywhereGithubThread(f.access, job)).rejects.toThrow("trigger changed")
+})
+
 test("thread context is bounded and a large trigger cannot silently lose its constraints", async () => {
   await using f = fixture()
   f.comments.splice(0, f.comments.length, ...Array.from({ length: 50 }, (_, index) => ({ ...f.trigger, id: 1000 + index, body: "context ".repeat(1000) })))
@@ -88,4 +98,24 @@ test("thread context is bounded and a large trigger cannot silently lose its con
   expect(frame.thread!.context.reduce((total, item) => total + item.text.length, 0)).toBeLessThanOrEqual(24000)
   f.trigger.body = "x".repeat(8001)
   await expect(readEverywhereGithubThread(f.access, f.job)).rejects.toThrow("trigger changed")
+})
+
+test("an issue trigger is proved by its body hash alone, never by its timestamps (C8)", async () => {
+  await using f = fixture()
+  f.issue.user = f.trigger.user
+  f.issue.body = "@vector Fix retry handling in the issue body."
+  // Labelled after the run started: the issue's updated_at moved and its body did not.
+  f.issue.updated_at = "2026-11-12T01:05:00Z"
+  const issue = { kind: "issue" as const, number: 7, actorId: 42, event: "issues" as const }
+  const bodySha256 = createHash("sha256").update(f.issue.body).digest("hex")
+  const job: EverywhereJob = { ...f.job, github: { ...issue, bodySha256 } }
+  const frame = await readEverywhereGithubThread(f.access, job)
+  expect(frame.thread?.task).toBe(f.issue.body)
+  expect(frame.thread?.context).toContainEqual({ from: "writer", text: "Writer's context." })
+  expect(f.paths.some((path) => path.endsWith("/comments/99"))).toBe(false)
+  f.issue.body += " Edited after the run started."
+  await expect(readEverywhereGithubThread(f.access, job)).rejects.toThrow("trigger changed")
+  f.issue.updated_at = f.issue.created_at
+  await expect(readEverywhereGithubThread(f.access, job)).rejects.toThrow("trigger changed")
+  await expect(readEverywhereGithubThread(f.access, { ...job, github: issue })).rejects.toThrow("cannot be verified")
 })

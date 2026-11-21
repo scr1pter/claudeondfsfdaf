@@ -299,6 +299,16 @@ describe("cloud command HTTP boundary", () => {
       stop: true,
     })
   })
+  test("settle sends a pull request only when it is given; without one the body is the outcome alone", async () => {
+    await using f = await fixture(() => Response.json({ ok: true }))
+    const pull = "https://github.com/fixture/repository/pull/3"
+    expect(await settle({ token: TOKEN, outcome: "changes", services: f.services })).toBe(true)
+    expect(await settle({ token: TOKEN, outcome: "draft", prUrl: pull, services: f.services })).toBe(true)
+    expect(f.requests.map((request) => [request.path, request.body])).toEqual([
+      [GithubAgents.ENDPOINT.settle, { outcome: "changes" }],
+      [GithubAgents.ENDPOINT.settle, { outcome: "draft", prUrl: pull }],
+    ])
+  })
 })
 
 async function authorized() {

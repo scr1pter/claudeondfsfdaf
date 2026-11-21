@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { hmacSha256Hex } from "../../../../api/_lib/everywhere/signature"
 import { OAUTH, readInstall, recordInstall } from "../../../../api/_lib/everywhere/identity"
 import { PLATFORM_HOSTS } from "../../../../api/_lib/everywhere/fetch"
+import type { Store } from "../../../../api/_lib/everywhere/store"
 import { routerFixture } from "./everywhere-router"
 
 /** Generated-token loopback Web API. Calls retain only test data and are never sent to a real workspace. */
@@ -40,8 +41,8 @@ export class FakeSlack {
   }) as typeof fetch
 }
 
-export async function slackFixture() {
-  const f = routerFixture()
+export async function slackFixture(options: { readonly store?: Store } = {}) {
+  const f = routerFixture(options)
   const token = `xoxb-${randomBytes(24).toString("hex")}`
   const installation = "slack:T0123ABCD"
   await recordInstall(f.context(), { account: f.account, event: "install", grant: { installation, token, scopes: OAUTH.slack.scopes.install,

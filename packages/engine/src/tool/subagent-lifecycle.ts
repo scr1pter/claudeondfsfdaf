@@ -23,6 +23,7 @@ import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { BackgroundJob } from "@/background/job"
 import { SessionMemory } from "@/session/memory"
 import { SessionTaskSize } from "@/session/task-size"
+import { UnattendedShell } from "@/session/unattended-shell"
 import { WorkflowMarkers } from "@/orchestration/constants"
 
 /*
@@ -398,7 +399,7 @@ export function write(
   }).pipe(locked(metadataLock))
 }
 
-/** Public metadata replacement cannot forge, remove or race lifecycle-owned subagent fields. */
+/** Public metadata replacement cannot forge, remove or race lifecycle-owned subagent fields or the unattended marks. */
 export function setPublicMetadata(
   sessions: Session.Interface,
   sessionID: SessionID,
@@ -406,10 +407,13 @@ export function setPublicMetadata(
 ) {
   return Effect.gen(function* () {
     const current = yield* sessions.get(sessionID)
-    const next = { ...metadata }
-    delete next[METADATA_KEY]
-    if (current.metadata && Object.hasOwn(current.metadata, METADATA_KEY))
-      next[METADATA_KEY] = current.metadata[METADATA_KEY]
+    const owned: readonly string[] = [METADATA_KEY, ...UnattendedShell.MARKS]
+    const next = Object.fromEntries([
+      ...Object.entries(metadata).filter(([key]) => !owned.includes(key)),
+      ...owned.flatMap((key) =>
+        current.metadata && Object.hasOwn(current.metadata, key) ? [[key, current.metadata[key]] as const] : [],
+      ),
+    ])
     yield* sessions.setMetadata({ sessionID, metadata: next })
   }).pipe(locked(metadataLock))
 }

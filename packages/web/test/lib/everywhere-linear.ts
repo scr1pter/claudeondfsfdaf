@@ -4,7 +4,7 @@ import { installationAuthority, linkBySignIn, OAUTH, readInstallSnapshot, readLi
 import { claimJob, createJob, offerJob, readJob, reportJob } from "../../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../../api/_lib/everywhere/keys"
 import { hmacSha256Hex } from "../../../../api/_lib/everywhere/signature"
-import { setValue } from "../../../../api/_lib/everywhere/store"
+import { setValue, type Store } from "../../../../api/_lib/everywhere/store"
 import { createLinearAdapter } from "../../../../api/_lib/everywhere/linear/adapter"
 import { parseLinear } from "../../../../api/_lib/everywhere/linear/parse"
 import type { JobView } from "../../../../api/_lib/everywhere/platform"
@@ -105,9 +105,10 @@ export class FakeLinear {
   }
 }
 
-export async function linearFixture(native: FakeLinear) {
+/** `store` replaces the FakeStore, as routerFixture's option does (a real Redis, EV-20). */
+export async function linearFixture(native: FakeLinear, options: { readonly store?: Store } = {}) {
   native.reset()
-  const f = routerFixture()
+  const f = routerFixture(options)
   const config = { ...f.config, offer: f.context().offer }
   const installation = `linear:${native.organization}`
   const pair = { v: 1 as const, access: native.token, refresh: native.refresh, expiresAt: f.fake.clock.now + 86_400_000, refreshUntil: f.fake.clock.now + 30 * 86_400_000 }

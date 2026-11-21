@@ -6,16 +6,18 @@
 // the runtime (setWebSocketAutoResponse) without waking it, the alarm runs only while a viewer is attached, a computer
 // that streams with no viewer is closed, and the time meters are written at most once a minute while viewers stay.
 
-import { base64url, fromBase64url } from "./bytes"
+import { base64url, fromBase64url, utf8 } from "./bytes"
 import { INTERNAL_NONCE_KEEP_MS } from "./internal"
 import { RELAY_LIMITS, VIEWER_HOURS, type PlanRank } from "./limits"
 import {
   CLOSE,
   CLOSE_REASON,
+  DEVICE_BYTES,
   FRAME,
   FRAME_HEADER_BYTES,
   HEARTBEAT,
   RELAY_SUBPROTOCOL,
+  encodeFrame,
   isDeviceId,
   type CloseCode,
   type DeviceRole,
@@ -42,7 +44,16 @@ export const KILL_KEY = "kill"
 /** Meters of a period are kept this long past its end (as the API's meters are). */
 export const METER_KEEP_MS = 40 * 24 * 60 * 60_000
 
-export const INTERNAL_ACTIONS = ["kill", "suspend", "presence", "devices", "revoke-device", "erase", "flags"] as const
+export const INTERNAL_ACTIONS = [
+  "kill",
+  "suspend",
+  "presence",
+  "devices",
+  "revoke-device",
+  "erase",
+  "flags",
+  "job-offer",
+] as const
 export type InternalAction = (typeof INTERNAL_ACTIONS)[number]
 
 type Attachment = { v: 1; role: DeviceRole; dev: string; iat: number; exp: number; at: number; active: number }
@@ -70,6 +81,8 @@ const SCHEMA = [
 ]
 const SUSPEND_REASONS: readonly SuspendReason[] = ["paused", "frozen", "owner"]
 const NONCE = /^[A-Za-z0-9_-]{22,64}$/
+/** A job offer as the API signs it (R-C1): `vef1.` and visible ASCII. The computer verifies its signature (E9). */
+const OFFER = /^vef1\.[\x21-\x7e]+$/
 
 export class AccountRelay {
   private readonly ctx: DurableObjectState
@@ -360,7 +373,7 @@ export class AccountRelay {
         peers: this.peers(opposite(attachment.role)),
         viewers: this.live("phone").length,
       })
-    // §4.17 reserves job.offer for the server; a client may not send it.
+    // Only the relay sends job offers (jobOffer, for the API's signed call); a client may not.
     if (fields.t === "job.offer") return this.notice(socket, "reserved", now)
     return this.notice(socket, "unknown", now)
   }
@@ -666,13 +679,15 @@ export class AccountRelay {
         case "suspend":
           return this.suspend(body)
         case "presence":
-          return answer(this.presence())
+          return answer(await this.presence())
         case "devices":
           return answer(this.deviceList(now))
         case "revoke-device":
           return this.revokeDevice(body, now)
         case "flags":
           return await this.flags(body)
+        case "job-offer":
+          return await this.jobOffer(body, now)
         default:
           return failure(404, "RELAY_NOT_FOUND")
       }
@@ -726,14 +741,53 @@ export class AccountRelay {
     return answer({ applied: true, suspended: true, closed: sockets.length })
   }
 
-  /** The presence query behind `isComputerOnline(account)` (§4.17). */
-  private presence() {
+  /**
+   * The presence query behind `isComputerOnline(account)` (§4.17). No computer counts as online while the kill flag is
+   * set (a flag that cannot be read counts as set) or the account is suspended (R-C4): an idle computer with no viewer
+   * stays connected while the object hibernates and meets the flag only at its next refresh, so an open socket alone
+   * does not mean Remote is on. The flag is read first, as connect and refresh read it; `reason` says which, and a
+   * normal answer has none.
+   */
+  private async presence() {
+    const viewers = this.live("phone").length
+    const reason = (await this.killed()) ? "killed" : this.meta<Suspension>("suspended") ? "suspended" : undefined
+    if (reason) return { online: false, computers: [], viewers, reason }
     const computers = this.peers("computer")
     return {
       online: computers.length > 0,
       computers: computers.map((peer) => ({ device: peer.device, ...(peer.name ? { name: peer.name } : {}) })),
-      viewers: this.live("phone").length,
+      viewers,
     }
+  }
+
+  /**
+   * R-C1: the API's signed job offer, sent as one frame (0x02, sixteen zero device bytes, the offer's bytes) to every
+   * live computer of the account and never to a phone. The relay checks only the offer's form; the computer verifies
+   * its signature (E9). Nothing is sent while the kill flag is set or cannot be read, or the account is suspended:
+   * presence closes no socket, so an idle computer may still be connected then (EV-05). At most `offersPerHour` offers
+   * are accepted in a sliding hour, kept as their times in meta `offers` (never the offer itself), so the cap survives
+   * hibernation; a refused offer takes no place, nor does one to an object that knows no account. An offer books awake
+   * time like any call (fetch's touch) but never counts toward NO_VIEWER (orphan) or viewer time, and a computer whose
+   * ticket lapsed while idle still receives it.
+   */
+  private async jobOffer(body: Record<string, unknown>, now: number) {
+    const offer = body.offer
+    if (typeof offer !== "string" || offer.length > RELAY_LIMITS.internalBodyBytes || !OFFER.test(offer))
+      return failure(400, "INTERNAL_BAD_REQUEST")
+    if (await this.killed()) return answer({ delivered: 0, reason: "killed" })
+    if (this.meta<Suspension>("suspended")) return answer({ delivered: 0, reason: "suspended" })
+    // No account here (it never connected, or was erased, P5): no computer can be live, so nothing is written.
+    if (this.meta<string>("account") === undefined) return answer({ delivered: 0 })
+    const stored = this.meta<unknown>("offers")
+    const recent = (Array.isArray(stored) ? stored : []).filter(
+      (at): at is number => typeof at === "number" && now - at < RELAY_LIMITS.offerWindowMs,
+    )
+    if (recent.length >= RELAY_LIMITS.offersPerHour) return failure(429, "RELAY_OFFER_LIMIT")
+    this.setMeta("offers", [...recent, now])
+    const frame = encodeFrame(FRAME.JOB_OFFER, new Uint8Array(DEVICE_BYTES), utf8(offer))
+    const computers = this.live("computer")
+    for (const socket of computers) this.send(socket, frame)
+    return answer({ delivered: computers.length })
   }
 
   private deviceList(now: number) {

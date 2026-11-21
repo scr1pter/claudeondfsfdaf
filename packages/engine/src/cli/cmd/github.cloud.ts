@@ -3,6 +3,7 @@ import path from "node:path"
 import { getIDToken, setSecret } from "@actions/core"
 import { z } from "zod"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { decodeActionsJobBody, isJobId, type ActionsJobBody } from "@vectordevai/schema/everywhere"
 import { githubFetch } from "./github.shared"
 import { GithubSecrets } from "./github.secrets"
 
@@ -168,20 +169,35 @@ async function post(
   client: Services,
   options: { signal?: AbortSignal; timeout?: number; maximum?: number } = {},
 ) {
+  return send(endpoint, credential, client, { ...options, body: JSON.stringify(data) })
+}
+
+/**
+ * One request to vectordev.ai with `credential` as its bearer: a POST of the JSON text `options.body`, or a GET when
+ * there is none. It follows no redirect, sends no cookie, skips every cache and gives up after `options.timeout`
+ * (20 s by default) or on the signal. It answers the response and its JSON body, read up to `options.maximum` bytes,
+ * or undefined when the request failed.
+ */
+async function send(
+  endpoint: string,
+  credential: string,
+  client: Services,
+  options: { body?: string; signal?: AbortSignal; timeout?: number; maximum?: number } = {},
+) {
   const timeout = AbortSignal.timeout(options.timeout ?? 20_000)
   const until = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout
   return bounded(async () => {
     const response = await client.request(SITE + endpoint, {
-      method: "POST",
+      method: options.body === undefined ? "GET" : "POST",
       redirect: "error",
       credentials: "omit",
       cache: "no-store",
       headers: {
         Authorization: `Bearer ${credential}`,
-        "Content-Type": "application/json",
+        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
         Accept: "application/json",
       },
-      body: JSON.stringify(data),
+      ...(options.body === undefined ? {} : { body: options.body }),
       signal: until,
     })
     if (until.aborted) {
@@ -428,6 +444,12 @@ export async function heartbeat(input: {
 export async function settle(input: {
   token?: string
   outcome: GithubAgents.Outcome
+  /**
+   * The pull request this run opened, as https://github.com/<owner>/<repo>/pull/<n>. Optional: vectordev.ai passes it to
+   * its settle listener only for this run's own repository and ignores anything else (R-A3). No phase sets it yet: the
+   * agent phase settles before the publish job opens the pull request.
+   */
+  prUrl?: string
   services?: Services
   signal?: AbortSignal
 }) {
@@ -435,7 +457,7 @@ export async function settle(input: {
   const answer = await post(
     GithubAgents.ENDPOINT.settle,
     input.token,
-    { outcome: input.outcome },
+    { outcome: input.outcome, ...(input.prUrl === undefined ? {} : { prUrl: input.prUrl }) },
     input.services ?? services,
     { signal: input.signal, timeout: 5000 },
   )
@@ -516,6 +538,67 @@ export async function brainDownload(
   client.mask(download.data.key)
   if (download.data.artifactKey) client.mask(download.data.artifactKey.key)
   return { status: "ok", download: download.data } as const
+}
+
+/** How many times in all, and how far apart, an Actions run reads its Vector everywhere job's body (R-A4). */
+export const EVERYWHERE_BODY_ATTEMPTS = 7
+export const EVERYWHERE_BODY_RETRY_MS = 1000
+// The largest answer the body route can give is about 193 KB: 32,000 characters of task and context, each at most six
+// bytes once JSON escapes it, and the field names. 256 KiB holds it, and nothing larger is read.
+const EVERYWHERE_BODY_RESPONSE = 256 * 1024
+
+type EverywhereBody =
+  | { readonly status: "absent" | "unavailable" }
+  | { readonly status: "ok"; readonly body: ActionsJobBody }
+
+/**
+ * The request of the Vector everywhere job this Actions run serves, read by reference (R-A4, spec 3.6): GET
+ * /api/everywhere/jobs/<jid>/body with the run token. Only an authorized Codium run token asks, and only for a
+ * well-formed job id; own key holds no run token (INV-K1). Only a 200 that is exactly the body is "ok"
+ * (decodeActionsJobBody). The route's own 404 NOT_FOUND, its answer to a run it has not linked, is read again
+ * EVERYWHERE_BODY_RETRY_MS later, up to EVERYWHERE_BODY_ATTEMPTS reads in all: that read is unspent, and the start
+ * listener that links the run runs after the mint's answer. Any other answer, an outage, a redirect, an answer over
+ * the cap or the signal is "unavailable" at once, with no second read of a body that may already be spent. It never
+ * throws, prints, masks or logs the answer.
+ */
+export async function everywhereJobBody(input: {
+  jid: string
+  holder?: Pick<typeof GithubSecrets.credentials, "runToken">
+  services?: Services
+  signal?: AbortSignal
+}) {
+  const token = (input.holder ?? GithubSecrets.credentials).runToken()
+  if (!token || !GithubSecrets.validRunToken(token) || !isJobId(input.jid)) return { status: "absent" } as const
+  const client = input.services ?? services
+  const read = async (attempt: number): Promise<EverywhereBody> => {
+    const answer = await send(`/api/everywhere/jobs/${input.jid}/body`, token, client, {
+      signal: input.signal,
+      maximum: EVERYWHERE_BODY_RESPONSE,
+    })
+    if (!answer) return { status: "unavailable" }
+    if (answer.response.status === 200) {
+      const body = decodeActionsJobBody(answer.body)
+      return body.ok ? { status: "ok", body: body.value } : { status: "unavailable" }
+    }
+    const error = ErrorBody.safeParse(answer.body)
+    if (
+      attempt >= EVERYWHERE_BODY_ATTEMPTS ||
+      answer.response.status !== 404 ||
+      !error.success ||
+      error.data.error.code !== "NOT_FOUND"
+    )
+      return { status: "unavailable" }
+    const pause = AbortSignal.timeout(EVERYWHERE_BODY_RETRY_MS + 1000)
+    const waited = await bounded(
+      () => client.wait(EVERYWHERE_BODY_RETRY_MS),
+      input.signal ? AbortSignal.any([input.signal, pause]) : pause,
+    ).then(
+      () => true,
+      () => false,
+    )
+    return waited ? read(attempt + 1) : { status: "unavailable" }
+  }
+  return read(1)
 }
 
 /** A refusal is one of the route's own codes at its own status; anything else, and every message, stays unread. */

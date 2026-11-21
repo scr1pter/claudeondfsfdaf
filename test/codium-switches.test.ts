@@ -13,6 +13,8 @@ import {
   writeDisabledItem,
   switchKey,
   switchAuditKey,
+  SWITCH_NAMES,
+  SWITCH_VALUES,
 } from "../api/_lib/codium-switches"
 import { ApiError } from "../api/_lib/http"
 import {
@@ -160,6 +162,42 @@ describe("A11 audited runtime switches", () => {
     })
     expect(fakes.stripe.calls).toEqual([])
     expect(fakes.openRouter.calls).toEqual([])
+  })
+  test("R-C6: everywhere takes on, no-new and stop, refuses off, and no other switch changes", async () => {
+    expect(SWITCH_NAMES).toContain("everywhere")
+    expect(Object.keys(SWITCH_VALUES).sort()).toEqual([...SWITCH_NAMES].sort())
+    expect(SWITCH_VALUES.everywhere).toEqual(["on", "no-new", "stop"])
+    expect(SWITCH_VALUES.hosted).toEqual(["on", "no-new", "stop"])
+    const others = SWITCH_NAMES.filter((name) => name !== "hosted" && name !== "everywhere")
+    expect(Object.fromEntries(others.map((name) => [name, SWITCH_VALUES[name]]))).toEqual(
+      Object.fromEntries(others.map((name) => [name, ["on", "off"]])),
+    )
+
+    const fakes = seed()
+    expect(await readSwitchState("everywhere", fakes.fetcher, { now })).toMatchObject({
+      value: "on",
+      generation: "default",
+    })
+    for (const [index, value] of (["no-new", "stop", "on"] as const).entries()) {
+      expect(await writeSwitch("everywhere", value, "owner:fixture", fakes.fetcher, now + index)).toMatchObject({
+        value,
+        changed: true,
+      })
+      expect(await readSwitch("everywhere", fakes.fetcher, { fresh: true })).toBe(value)
+    }
+    await expect(writeSwitch("everywhere", "off", "owner:fixture", fakes.fetcher, now + 3)).rejects.toMatchObject({
+      code: "CODIUM_SWITCH_INVALID",
+    })
+    const audit = [...fakes.store.zset(switchAuditKey()).keys()].map((entry) => JSON.parse(entry))
+    expect(audit.map((entry) => [entry.name, `${entry.previous}>${entry.value}`])).toEqual([
+      ["everywhere", "on>no-new"],
+      ["everywhere", "no-new>stop"],
+      ["everywhere", "stop>on"],
+    ])
+    fakes.store.set(switchKey("everywhere"), "off")
+    await expect(readSwitch("everywhere", fakes.fetcher, { fresh: true })).rejects.toMatchObject({
+      code: "CODIUM_SWITCH_UNAVAILABLE",
+    })
   })
 })
 
@@ -373,6 +411,21 @@ describe.skipIf(!valkeyURL)("A11 switch Lua on Valkey", () => {
       ),
     )
     expect(await readDisabledSet("models-off", fetcher, { fresh: true, now })).toEqual(new Set(["vendor/model"]))
+    expect(await client!.send("ZCARD", [switchAuditKey()])).toBe(1)
+  })
+  test("parallel everywhere stops keep one generation and one audit; off is refused (R-C6)", async () => {
+    const values = await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        writeSwitch("everywhere", "stop", "owner:fixture", fetcher, now + index),
+      ),
+    )
+    expect(new Set(values.map((value) => value.generation)).size).toBe(1)
+    expect(values.filter((value) => value.changed)).toHaveLength(1)
+    expect(await client!.send("ZCARD", [switchAuditKey()])).toBe(1)
+    expect(await readSwitch("everywhere", fetcher, { fresh: true })).toBe("stop")
+    await expect(writeSwitch("everywhere", "off", "owner:fixture", fetcher, now + 20)).rejects.toMatchObject({
+      code: "CODIUM_SWITCH_INVALID",
+    })
     expect(await client!.send("ZCARD", [switchAuditKey()])).toBe(1)
   })
 })

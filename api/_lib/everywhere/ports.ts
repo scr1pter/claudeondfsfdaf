@@ -28,7 +28,12 @@ export type Ports = {
   } | undefined>
   readonly visibility?: (repositoryId: number) => Promise<"public" | "private" | "internal" | undefined>
   readonly repository?: (fullName: string) => Promise<Repository | undefined>
-  /** Absent until the run body goes by reference and the binding records its workflow mode. */
+  /**
+   * Whether this platform's jobs may run in Actions: it is an enabled run source (R-C8/R-A8). Absent, none may. Routing
+   * reads no binding or visibility for a platform that may not.
+   */
+  readonly cloudSource?: (platform: PlatformId) => boolean
+  /** Absent until a platform is an enabled run source (R-C8/R-A8) and the workflow mode is read live (EV-30). */
   readonly prepareCloud?: (input: {
     readonly jid: string
     readonly source: Exclude<PlatformId, "github">
@@ -52,7 +57,13 @@ export type Ports = {
   readonly switch: (name: "everywhere" | "remote") => Promise<SwitchState>
 }
 
-/** Every missing integration is unavailable; an account allowlist grants only the Everywhere pilot perk. */
+/**
+ * Every missing integration is unavailable; an account allowlist grants only the Everywhere pilot perk, and under these
+ * ports it is the only grant. productionPorts (runtime.ts) replaces presence, offer and perk with the relay adapter
+ * (adapters/remote.ts, EV-09) once the flag and the offer key are set; its read-only plan check joins the allowlist for
+ * `everywhere` only once the laptop route is wired and the owner lists the perk. With the flag on it also replaces
+ * binding and visibility with @vector's, and adds cloudSource (adapters/cloud-agents.ts, EV-29).
+ */
 export function safePorts(config: EverywhereConfig = readConfig()): Ports {
   return {
     accountAuthority: missingAccountAuthority,

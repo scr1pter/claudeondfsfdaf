@@ -12,7 +12,7 @@ import { ComputerApi } from "./groups/computer"
 import { ControlApi } from "./groups/control"
 import { ControlPlaneApi } from "./groups/control-plane"
 import { EventApi } from "./groups/event"
-import { ExperimentalApi } from "./groups/experimental"
+import { ExperimentalApi, UnattendedShellApi, UnattendedWorktreeApi } from "./groups/experimental"
 import { FileApi } from "./groups/file"
 import { InstanceApi } from "./groups/instance"
 import { LocalApi } from "./groups/local"
@@ -70,6 +70,8 @@ export const InstanceHttpApi = HttpApi.make("vector-instance")
   .addHttpApi(ComputerApi)
   .addHttpApi(ConfigApi)
   .addHttpApi(ExperimentalApi)
+  .addHttpApi(UnattendedWorktreeApi)
+  .addHttpApi(UnattendedShellApi)
   .addHttpApi(FileApi)
   .addHttpApi(InstanceApi)
   .addHttpApi(LocalApi)

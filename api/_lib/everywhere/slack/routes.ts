@@ -15,7 +15,7 @@ import { slackObject, verifySlack } from "./verify.js"
 
 export function createSlackRoutes(deps: SlackDeps) {
   const adapter = createSlackAdapter(deps)
-  const intake = () => createIntake(adapter, { config: deps.config(), store: deps.context().store, ports: deps.ports, now: () => deps.context().now })
+  const intake = () => createIntake(adapter, { config: deps.config(), store: deps.context().store, ports: deps.ports, now: () => deps.context().now, sleep: deps.sleep })
   const route = (interactivity: boolean) => async (request: ApiRequest, response: ApiResponse) => {
     try {
       requireMethod(request, "POST")

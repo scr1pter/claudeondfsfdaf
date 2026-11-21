@@ -38,7 +38,7 @@ export const HistoryPoint = Schema.Struct({
 }).annotate({ identifier: "CodiumOwner.HistoryPoint" })
 export interface HistoryPoint extends Schema.Schema.Type<typeof HistoryPoint> {}
 export const RuntimeSwitch = Schema.Struct({
-  name: Schema.Literals(["sales", "codium", "cloudAgents", "hosted", "ops", "remote", "vault", "push"]),
+  name: Schema.Literals(["sales", "codium", "cloudAgents", "hosted", "ops", "remote", "vault", "push", "everywhere"]),
   value: Schema.Literals(["on", "off", "no-new", "stop"]),
   changedAt: Time,
   offSince: optional(Time),

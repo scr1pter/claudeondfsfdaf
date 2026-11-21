@@ -1,5 +1,7 @@
 import { readConfig, type EverywhereConfig } from "./config.js"
 import { codiumAccountAuthority } from "./adapters/account.js"
+import { createCloudPorts, createHandoffBinding, createHandoffVerifier } from "./adapters/cloud-agents.js"
+import { createRemotePorts } from "./adapters/remote.js"
 import { createJobEvents } from "./events.js"
 import type { JobsContext } from "./jobs.js"
 import type { Platforms } from "./platform.js"
@@ -12,13 +14,34 @@ import { createJiraAdapter } from "./jira/adapter.js"
 import { createJiraRoutes } from "./jira/a2a.js"
 import { everywhereStore } from "./store.js"
 
-/** Unwired services remain unavailable; account guards use the actual deletion key. */
-export function productionPorts(config: EverywhereConfig = readConfig()) {
-  return { ...safePorts(config), accountAuthority: codiumAccountAuthority }
+/**
+ * Unwired services remain unavailable; account guards use the actual deletion key. With the feature off this is
+ * safePorts exactly, with no new read. With it on, binding, visibility and cloudSource are @vector's (VE-30a,
+ * adapters/cloud-agents.ts), but there is still no prepareCloud, so routing reads neither: it needs an enabled platform
+ * source (R-C8/R-A8, the owner's) and EV-30's live mode read. The laptop route's presence, offer and plan check (VE-20,
+ * adapters/remote.ts) join only once offers can be signed too. Every port is a closure, so building them does no I/O.
+ */
+export function productionPorts(config: EverywhereConfig = readConfig(), fetcher?: typeof fetch) {
+  const ports = { ...safePorts(config), accountAuthority: codiumAccountAuthority }
+  if (!config.enabled) return ports
+  const cloud = { ...ports, ...createCloudPorts() }
+  if (!config.offer) return cloud
+  return { ...cloud, ...createRemotePorts({ config, fetcher }) }
 }
 
 export function productionPlatformDeps() {
   return { config: readConfig, context: productionContext, ports: productionPorts() }
+}
+
+/**
+ * VE-31: the GitHub handoff's verifier (R-A5's `handoff` audience, loaded on first use), @vector's binding and the
+ * ports an offer needs (the route's safePorts default never offers). None while the flag is off, so the route answers
+ * 501 before any read (VE-10). The binding says laptopFirst false until Q13/R-A6, so every production handoff answers
+ * handled:false. Building them does no I/O.
+ */
+export function productionHandoffDeps(config: EverywhereConfig = readConfig()) {
+  if (!config.enabled) return {}
+  return { verify: createHandoffVerifier(), binding: createHandoffBinding(), ports: productionPorts(config) }
 }
 
 export function configuredPlatforms(deps: SlackDeps & Partial<Pick<LinearDeps, "privateResult" | "sleep">>): Platforms {
