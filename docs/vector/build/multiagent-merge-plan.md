@@ -274,7 +274,7 @@ In more detail:
   - before going back to an older Vector, merge or discard every kept worktree;
   - Settings → Agents counts background commands only in the 20 most recent conversations;
   - saving settings stops running background commands.
-- **A failure that happens only on a Mac.** `isolation-terminal.test.ts` has one existing case that fails on a Mac because of the `/var` and `/private/var` paths. Linux CI covers that case. This build did not cause it.
+- **A failure that happens only on a Mac.** `isolation-terminal.test.ts` has one existing case that fails on a Mac because of the `/var` and `/private/var` paths. Linux CI covers that case. This build did not cause it. (21 Nov 2026: fixed on branch `engine-core-fixes`. The case now compares the checkout with `fs.realpath(workPath)`, since the isolation code reports the real path and macOS reaches the temp folder through the `/var` link. Reproduced on Linux with `TMPDIR` set to a symlinked folder (`/tmp/vector-v2/mac-var/link` → `real`): before, the case failed with `…/link/…` expected and `…/real/…` received; after, `isolation-terminal.test.ts` passes 2 of 2 with and without the link, and `isolation.test.ts` (97 pass) and `isolation-base.test.ts` (6 pass) pass under the link with no other path mismatch.)
 - **A leftover in the sync checkout (5 November, on the earlier build Mac; not checked since).** The push checkout, `~/.cache/vector-sync-evolve`, has one uncommitted line in `bun.lock` from an install: the desktop version. It was left alone.
 
 ## Historical merge method and rollback considerations
