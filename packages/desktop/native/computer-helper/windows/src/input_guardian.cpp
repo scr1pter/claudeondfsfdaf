@@ -948,6 +948,9 @@ int run_input_guardian(const InputGuardianCommand& command,HANDLE input,HANDLE o
       } while (GetTickCount64()<deadline);
     }
     hook_state=nullptr; if (keyboard) UnhookWindowsHookEx(keyboard); if (mouse) UnhookWindowsHookEx(mouse);
+    // Once state exists, detached release, fuse, parent-watch, EOF and startup threads may be alive. They must
+    // never meet CRT teardown, so the process ends here with the same exit code the return below gives.
+    if (state) (void)TerminateProcess(GetCurrentProcess(),1);
     return 1;
   }
 }

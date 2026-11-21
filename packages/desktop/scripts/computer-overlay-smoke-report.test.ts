@@ -901,6 +901,17 @@ test("the Windows guardian child sends UPs only from its hookless release thread
   expect(caught).toContain("const bool inline_release=!state->releaser.started();")
   expect(caught).toContain("if (inline_release) try { (void)state->releaser.drain(2); } catch (...) {}")
   expect(caught).toContain("const auto deadline=GetTickCount64()+300;")
+  // Once state exists the function's own catch block ends the process after the 300 ms pump and the unhooks,
+  // so no detached release or fuse thread meets CRT teardown; `return 1;` stays as the unreachable fallback.
+  const teardown = runner.slice(runner.indexOf("if (state) state->stop();"))
+  expect(runner.match(/if \(state\) state->stop\(\);/g)).toHaveLength(1)
+  expect(teardown).toContain("const bool inline_release=!state->releaser.started();")
+  const terminate = teardown.indexOf("if (state) (void)TerminateProcess(GetCurrentProcess(),1);")
+  expect(terminate).toBeGreaterThan(teardown.indexOf("} while (GetTickCount64()<deadline);"))
+  expect(terminate).toBeGreaterThan(teardown.indexOf("if (mouse) UnhookWindowsHookEx(mouse);"))
+  expect(terminate).toBeLessThan(teardown.indexOf("return 1;"))
+  expect(teardown.match(/TerminateProcess\(/g)).toHaveLength(1)
+  expect(guardian.match(/\(void\)TerminateProcess\(/g)).toHaveLength(3)
   expect(guardian).toContain("ledger.retire(ticket,request->down); releaser.notify(); reply.ok=true;")
   expect(guardian).toContain("try { (void)(stopping.load() ? drain(5) : drain(1,true)); } catch (...) {}")
   expect(guardian).toContain("try { wait(seen,2); } catch (...) { Sleep(2); }")
