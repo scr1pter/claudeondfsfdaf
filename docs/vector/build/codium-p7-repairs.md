@@ -293,6 +293,10 @@ searched for vault, backup and restore lines:
   name in `PRIVATE_RUNTIME_ENVIRONMENT`, in core's shared child-environment file. The critique's alternative, deleting
   the variable inside `vault restore`, does not help: agents' shells inherit from the long-running `vector` process,
   not from `vault restore`.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`): `VECTOR_VAULT_RECOVERY_CODE` is in
+    `PRIVATE_RUNTIME_ENVIRONMENT` (`packages/core/src/child-environment.ts`), so `untrustedChildEnvironment` drops it
+    in any letter case. `packages/core/test/child-environment.test.ts`'s first case now passes it upper and lower case
+    and expects both gone; without the one-name fix it fails (11 pass, 1 fail, the two names left in the output).
 - **R45-19. Confirmed: the shell sandbox does not hide the CLI's vault key file.** `credentialStorePaths`
   (`packages/engine/src/tool/shell/sandbox.ts:496-514`, with `CREDENTIAL_FILES` at `:83`) lists `auth.json`,
   `mcp-auth.json`, `cli-auth.json`, `plugin-oauth-approvals.json` and the databases, not `<data>/vault/vault.json`
