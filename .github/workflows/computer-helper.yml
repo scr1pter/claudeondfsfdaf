@@ -763,7 +763,7 @@ jobs:
           import { readFileSync } from "node:fs"
           // Logging only, after the version check above matched this manifest's digest and arch.
           const manifest = JSON.parse(readFileSync("native/out/win32/x64/computer-helper.json", "utf8"))
-          process.stdout.write(`vector-helper-identity platform=win32 arch=x64 version=${manifest.helperVersion} sourceDigest=${manifest.sourceDigest} toolchain=${manifest.toolchain}\n`)
+          process.stdout.write(`vector-helper-identity platform=win32 arch=x64 version=${manifest.helperVersion} sourceDigest=${manifest.sourceDigest} toolchain=${JSON.stringify(manifest.toolchain)}\n`)
           NODE
       - name: Run required Windows protocol and lifecycle checks
         if: ${{ needs.plan.outputs.windows-protocol == 'true' }}
@@ -1017,7 +1017,7 @@ jobs:
           import { readFileSync } from "node:fs"
           // Logging only, after the version check above matched this manifest's digest and arch.
           const manifest = JSON.parse(readFileSync("native/out/win32/arm64/computer-helper.json", "utf8"))
-          process.stdout.write(`vector-helper-identity platform=win32 arch=arm64 version=${manifest.helperVersion} sourceDigest=${manifest.sourceDigest} toolchain=${manifest.toolchain}\n`)
+          process.stdout.write(`vector-helper-identity platform=win32 arch=arm64 version=${manifest.helperVersion} sourceDigest=${manifest.sourceDigest} toolchain=${JSON.stringify(manifest.toolchain)}\n`)
           NODE
       - name: Run required ARM64 protocol and lifecycle checks
         if: ${{ needs.plan.outputs.windows-protocol == 'true' }}

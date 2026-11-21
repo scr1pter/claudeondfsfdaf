@@ -1746,16 +1746,23 @@ test("each Windows architecture prints its helper identity right after its versi
       {
         readFileSync(file: string) {
           read.push(file)
-          return JSON.stringify({ helperVersion: "1.0.15", sourceDigest: "fixture-digest", toolchain: "fixture-msvc" })
+          // The real Windows toolchain is multi-line (cmake, msvc, vc-tools, windows-sdk).
+          return JSON.stringify({
+            helperVersion: "1.0.15",
+            sourceDigest: "fixture-digest",
+            toolchain: "cmake version 3.31.6\nmsvc:19.44\nvc-tools:14.44\nwindows-sdk:10.0.26100.0",
+          })
         },
         process: { stdout: { write: (text: string) => written.push(text) } },
       },
       { timeout: 1000 },
     )
     expect(read).toEqual([`native/out/win32/${arch}/computer-helper.json`])
+    // One log line: the multi-line toolchain stays JSON-quoted on it.
     expect(written).toEqual([
-      `vector-helper-identity platform=win32 arch=${arch} version=1.0.15 sourceDigest=fixture-digest toolchain=fixture-msvc\n`,
+      `vector-helper-identity platform=win32 arch=${arch} version=1.0.15 sourceDigest=fixture-digest toolchain="cmake version 3.31.6\\nmsvc:19.44\\nvc-tools:14.44\\nwindows-sdk:10.0.26100.0"\n`,
     ])
+    expect(written.join("").split("\n")).toHaveLength(2)
   }
 })
 
