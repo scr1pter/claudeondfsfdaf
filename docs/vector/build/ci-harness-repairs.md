@@ -975,8 +975,10 @@ so `c2f7f537` warms a fresh instance before those waits and `5b6b6380` runs the 
 `offline-v1` wait. Both are ancestors of main (through PR #56). Evidence read through GitHub MCP: engine (windows,
 shard 8/12) job 136722206395 in run 44863454630 (`everywhere-finish` `b6d6b30c`), success. Main's first post-#56
 test.yml run, 44885765033 at `153f9a22`, was still in progress when this was written; its shard 8/12 job is still to
-be recorded. There is no `unattended-session-windows-budget` branch on origin. `review/impact.test.ts` stays with the
-VectorScope lane.
+be recorded. Later the same day: that run completed, and its engine (windows, shard 8/12) job 136791583163
+concluded success (job list read through GitHub MCP). The run itself concluded failure only in computer-helper
+mac-test (macos-15-intel), which does not run this file. There is no `unattended-session-windows-budget` branch on
+origin. `review/impact.test.ts` stays with the VectorScope lane.
 
 Local times are Linux, per test, from `bun test --timeout 30000 --reporter=junit`, one file at a time through the
 Bun lock.
@@ -1024,6 +1026,25 @@ Mutations (each red, then restored and checked against its recorded sha256):
 23-30 s; the refusal test in the 11-17 s range of its one-child sibling; each guest test near 8.7-12 s (30-40%); the
 Plan mode approval test about 6-9 s. This branch has not run on Windows CI yet. A real cut to the guest tests needs a
 product change: rev-parse lookups are repeated many times in each isolation.
+
+Measured on Windows CI (21 Nov 2026, v2-closeout-ci; supersedes "has not run on Windows CI yet"). test.yml run
+44848275007 on main `f3d7ac74`, attempt 1, job logs read through GitHub MCP. Every VM was normal: setup-node took 5.6 s
+(shard 2/12), 5.8 s (6/12) and 5.9 s (12/12), against the 17-35 s slow band.
+
+| Test                                               | Job (engine windows shard) | Measured | Share of 30 s | Predicted | Held |
+| -------------------------------------------------- | -------------------------- | -------- | ------------- | --------- | ---- |
+| import owner-only                                  | 136673698585 (6/12)        | 19.6 s   | 65%           | 15-18 s   | no   |
+| task-isolation guest, session claim (with the 403) | 136673698585 (6/12)        | 11.2 s   | 37%           | 8.7-12 s  | yes  |
+| task-isolation guest, workspace directory          | 136673698585 (6/12)        | 9.4 s    | 31%           | 8.7-12 s  | yes  |
+| task-manage ancestor/other-session refusal         | 136673698481 (12/12)       | 10.2 s   | 34%           | 11-17 s   | yes  |
+| task-size Plan mode approval                       | 136673698494 (2/12)        | 10.5 s   | 35%           | 6-9 s     | no   |
+
+The refusal test's two siblings in the same job took 13.5 s (discard) and 15.4 s (merge after the diff), so it now
+sits below its one-child siblings. The task-isolation and task-manage predictions held. The import owner-only test
+came in above its prediction and is the residual risk: at 65% on a normal VM, a 2-4x slow-first-touch VM can still
+push it past 30 s. The fix for that is a further structural cut, never a longer timeout; no test changes here. The
+Plan mode approval test is over its prediction but at 35% of its budget. Rev-parse caching (the product change named
+above) is deferred: it is a product change to isolation, not part of this docs record, and no branch carries it.
 
 Follow-up on this branch's first CI run (test.yml run 44829529636): `unit (windows)` job 136610691971 failed in
 `packages/core/test/config/plugin.test.ts` "ConfigExternalPlugin > imports the approved plugin bytes from a private
