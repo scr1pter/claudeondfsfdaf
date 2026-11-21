@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { OAUTH_CODE_PATTERN } from "../src/components/marketing/everywhere/everywhere-model"
 import { randomBytes } from "node:crypto"
 import { seal } from "../../../api/_lib/everywhere/crypto"
 import { eraseInstallation } from "../../../api/_lib/everywhere/erase"
-import { createState, findLink, finishOAuth, installToken, OAUTH, readInstallSnapshot, recordInstall } from "../../../api/_lib/everywhere/identity"
+import { createState, findLink, finishOAuth, installToken, OAUTH, OAUTH_CODE, readInstallSnapshot, recordInstall } from "../../../api/_lib/everywhere/identity"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { platformExchanges } from "../../../api/_lib/everywhere/oauth-exchanges"
 import { setJson } from "../../../api/_lib/everywhere/store"
@@ -215,4 +216,20 @@ test("callback has a fixed fragment destination and cannot exchange a code as an
   expect(response.headers.get("location")).toBe("/everywhere#platform=linear&code=generated&state=generated-state-123456789")
   expect(response.headers.get("referrer-policy")).toBe("no-referrer")
   expect(native.calls).toHaveLength(0)
+})
+
+test("callback takes the OAuth code the landing page and finishOAuth take: 1 to 1,024 printable ASCII", async () => {
+  const f = await linearFixture(native)
+  harness.mount({ "/oauth": linearOAuthCallback(() => f.config) })
+  const status = async (code: string) => {
+    const url = new URL(`${harness.origin}/oauth`)
+    url.searchParams.set("code", code)
+    url.searchParams.set("state", "generated-state-123456789")
+    return (await fetch(url, { redirect: "manual" })).status
+  }
+  expect(await status("a".repeat(1024))).toBe(303)
+  for (const code of ["a".repeat(1025), "a b", "caf\u00e9", "a\tb"]) expect({ code, status: await status(code) }).toEqual({ code, status: 400 })
+  expect(native.calls).toHaveLength(0)
+  expect(OAUTH_CODE.source).toBe(OAUTH_CODE_PATTERN.source)
+  expect(OAUTH_CODE.flags).toBe(OAUTH_CODE_PATTERN.flags)
 })

@@ -1422,7 +1422,8 @@ export type OAuthFinish =
       readonly already: boolean
     }
 
-const OAUTH_CODE = /^[\x21-\x7e]{1,1024}$/
+/** A platform's OAuth code: 1 to 1,024 printable ASCII characters. The callbacks and the landing page use it too. */
+export const OAUTH_CODE = /^[\x21-\x7e]{1,1024}$/
 
 /**
  * Finishes an install or a sign-in link with `{code, state}` that the vectordev.ai landing page posted with the

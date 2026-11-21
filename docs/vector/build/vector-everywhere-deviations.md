@@ -4764,3 +4764,15 @@ No flag, env var, route, dependency, lockfile or generated file changes. The onl
   `EVERYWHERE_ACCOUNT_UNVERIFIED`. On the old source the jobs case answered 503 where it expects 200; reverting only
   the account-api default fails the pages case. Both whole files pass (23 pass; 66 pass, 1 skip). No flag, route or
   generated file changes; the feature stays off by default.
+
+## 2026-11-21, v2-closeout-ci: the OAuth callbacks take the same code shape as finishOAuth and the landing page
+
+- **What was wrong.** `identity.ts` `finishOAuth` and the landing page (`OAUTH_CODE_PATTERN`) accept 1 to 1,024
+  printable ASCII characters, but the Slack callback accepted any code up to 2,048 characters and the Linear callback
+  any up to 1,024, spaces and non-ASCII included, so a code the page would drop was still redirected to it.
+- **Change.** `identity.ts` exports `OAUTH_CODE`; `slack/install.ts` and `linear/install.ts` answer 400 unless
+  `OAUTH_CODE.test(code)`. No route, flag or exchange changes.
+- **Tests.** A new case in `everywhere-slack-oauth.test.ts` and in `everywhere-linear-oauth.test.ts`: a 1,024-character
+  code gets 303; 1,025 characters, a space, a non-ASCII letter and a tab get 400; no platform call; and `OAUTH_CODE`
+  equals the web `OAUTH_CODE_PATTERN` (source and flags). Mutation: restoring either callback's old length check fails
+  its case. Both whole files pass (5 and 16 pass).
