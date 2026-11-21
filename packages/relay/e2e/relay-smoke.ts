@@ -1,7 +1,9 @@
 // CI only (WP A39): runs the relay on Cloudflare's local runtime under `wrangler dev --local` and checks, over real
-// WebSockets, that ciphertext passes byte for byte, that heartbeats are answered by the runtime, and that revoking a
-// device, killing the account, setting the kill flag and erasing close the right sockets. It generates throwaway keys
-// and passes them as local variables; nothing here is a real secret and nothing is deployed.
+// WebSockets, that ciphertext passes byte for byte, that heartbeats are answered by the runtime, that a signed job
+// offer reaches only the account's computers (R-C1), that the kill flag stops presence and offers while an idle
+// computer stays connected (R-C4), and that revoking a device, killing the account, setting the kill flag and erasing
+// close the right sockets. It generates throwaway keys and passes them as local variables; nothing here is a real
+// secret and nothing is deployed.
 //
 //   bun run smoke        (from packages/relay; needs Node for wrangler)
 
@@ -38,6 +40,11 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const device = () => base64url(crypto.getRandomValues(new Uint8Array(16)))
+/** An offer in the API's shape; the relay checks only its form, and nothing here verifies its signature. */
+const offerText = () => {
+  const random = (bytes: number) => base64url(crypto.getRandomValues(new Uint8Array(bytes)))
+  return `vef1.${random(48)}.${random(64)}`
+}
 
 function ticket(overrides: Partial<TicketClaims>) {
   const iat = Math.floor(Date.now() / 1000)
@@ -221,6 +228,22 @@ try {
     assert(presence.status === 200 && presence.body.online === true, JSON.stringify(presence))
   })
 
+  await check("a signed job offer reaches the computer, never the phone", async () => {
+    const offer = offerText()
+    const result = await internal("job-offer", { account: ACCOUNT, offer })
+    assert(result.status === 200 && result.body.delivered === 1, JSON.stringify(result))
+    await computer.next((client) => client.frames.length === 2)
+    const received = decodeFrame(computer.frames[1]!)!
+    assert(received.kind === FRAME.JOB_OFFER, `kind ${received.kind}`)
+    assert(
+      received.device.every((byte) => byte === 0),
+      "the offer frame names a device",
+    )
+    assert(new TextDecoder().decode(received.ciphertext) === offer, "the offer changed on the way")
+    await Bun.sleep(250)
+    assert(phone.frames.length === 1, "the phone received an offer")
+  })
+
   await check("revoking the phone closes its socket", async () => {
     const result = await internal("revoke-device", { account: ACCOUNT, device: phoneId })
     assert(result.status === 200, JSON.stringify(result))
@@ -239,6 +262,30 @@ try {
     const fresh = await open(await ticket({ role: "computer", dev: computerId }))
     assert((await closedWith(fresh, 1500)) === -1, "a ticket from after the kill was refused")
     fresh.socket.close()
+  })
+
+  await check("the kill flag stops presence and offers while an idle computer stays connected", async () => {
+    const idle = await open(await ticket({ role: "computer", dev: device() }))
+    await idle.next((client) => client.texts.some((text) => text.includes('"hello"')))
+    assert((await internal("flags", { kill: true })).status === 200, "the flag was not set")
+    try {
+      const presence = await internal("presence", { account: ACCOUNT })
+      assert(
+        presence.status === 200 && presence.body.online === false && presence.body.reason === "killed",
+        JSON.stringify(presence),
+      )
+      const result = await internal("job-offer", { account: ACCOUNT, offer: offerText() })
+      assert(
+        result.status === 200 && result.body.delivered === 0 && result.body.reason === "killed",
+        JSON.stringify(result),
+      )
+      await Bun.sleep(250)
+      assert(idle.frames.length === 0, "an offer reached a computer while the relay was off")
+      assert(idle.socket.readyState === WebSocket.OPEN, "the idle computer was closed")
+    } finally {
+      await internal("flags", { kill: false })
+      idle.socket.close()
+    }
   })
 
   await check("the kill flag turns the relay off and back on", async () => {
@@ -262,11 +309,6 @@ try {
     assert((await closedWith(stale)) === CLOSE.REMOTE_REVOKED, "a ticket from before the erase was admitted")
     const devices = await internal("devices", { account: ACCOUNT })
     assert(Array.isArray(devices.body.devices) && devices.body.devices.length === 0, JSON.stringify(devices.body))
-  })
-
-  await check("job.offer is reserved", async () => {
-    const result = await internal("job-offer", { account: ACCOUNT })
-    assert(result.status === 501, JSON.stringify(result))
   })
 } catch (error) {
   failures.push(error instanceof Error ? error.message : String(error))

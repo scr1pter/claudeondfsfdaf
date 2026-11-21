@@ -115,6 +115,7 @@ describe("LocalSources registry", () => {
     expect(blocked("model-catalog")).toBe(true)
     expect(blocked("usage-checkin")).toBe(true)
     expect(blocked("chatgpt-signin")).toBe(true)
+    expect(blocked("everywhere")).toBe(true)
     expect(blocked("embedding-model")).toBe(false)
     expect(blocked("webfetch")).toBe(false)
     expect(blocked("cloud-inference")).toBe(false)
@@ -265,5 +266,25 @@ describe("LocalSources registry", () => {
     })
     expect(policy.endpoints).toEqual([])
     expect(policy.warnings).toHaveLength(LocalSources.CLOUD_INFERENCE_HOSTS.length)
+  })
+
+  test("declares the desktop's laptop-job requests as an account source that Vector Local blocks like Vector Remote", () => {
+    expect(LocalSources.get("everywhere")).toMatchObject({
+      purpose: "account",
+      hosts: ["vectordev.ai"],
+      local: "blocked",
+      where: ["desktop"],
+      callSites: ["packages/desktop/src/main/everywhere-runner.ts"],
+    })
+    expect(LocalSources.get("everywhere")?.local).toBe(LocalSources.get("remote")!.local)
+    // The job's git fetch and push are git-remote, decided before git starts.
+    expect(LocalSources.get("git-remote")?.callSites).toContain("packages/desktop/src/main/everywhere-git.ts")
+    const claim = {
+      purpose: "account" as const,
+      url: "https://vectordev.ai/api/everywhere/jobs/claim",
+      source: "everywhere",
+    }
+    expect(LocalPolicy.decide(on, claim)).toMatchObject({ decision: "block", rule: "vector-service", allowable: true })
+    expect(LocalPolicy.decide(LocalPolicy.OFF, claim).decision).toBe("allow")
   })
 })

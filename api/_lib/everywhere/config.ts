@@ -45,7 +45,11 @@ export type EverywhereConfig = {
   readonly enabled: boolean
   /** Platforms listed in VECTOR_EVERYWHERE_PLATFORMS whose own settings are present; empty while the feature is off. */
   readonly platforms: ReadonlySet<PlatformId>
-  /** Vector accounts allowed before the `everywhere` perk exists; empty means nobody. Lowercase. */
+  /**
+   * Vector accounts the router admits as sponsors (3.4 step 3); empty means nobody. Lowercase. The only sponsor check
+   * until the plan joins it: the relay adapter's plan check (adapters/remote.ts, EV-09) grants `everywhere` beside this
+   * list only once the laptop route is wired and the owner lists the perk.
+   */
   readonly allowAccounts: ReadonlySet<string>
   /** The data key ring, current key first; empty while the feature is off. */
   readonly dataKeys: readonly DataKey[]
@@ -223,7 +227,41 @@ export function platformOn(config: EverywhereConfig, platform: PlatformId): bool
   return config.enabled && config.platforms.has(platform)
 }
 
-/** Whether a sponsor is listed in VECTOR_EVERYWHERE_ALLOW_ACCOUNTS (before the `everywhere` perk exists, 3.4 step 3). */
+/**
+ * Whether a sponsor is listed in VECTOR_EVERYWHERE_ALLOW_ACCOUNTS: the router's only sponsor check (3.4 step 3) until
+ * the relay adapter's plan check joins it (adapters/remote.ts, EV-09), once the laptop route is wired and the owner
+ * lists Codium's `everywhere` perk.
+ */
 export function sponsorListed(config: EverywhereConfig, account: string): boolean {
   return ACCOUNT_ID_PATTERN.test(account) && config.allowAccounts.has(account.toLowerCase())
+}
+
+/**
+ * Whether production can run a paying customer's job. VE-20 and the plan check are built (EV-09): with the flag and the
+ * offer key set, productionPorts (runtime.ts) uses the relay adapter (adapters/remote.ts), whose plan check joins the
+ * allowlist only while this is true. 2026-11-16 (EV-17): the desktop now decodes and verifies offers (VE-21), but it
+ * stays false while no customer job can finish on a laptop: `OFFER_KEYS` (desktop everywhere-offer.ts) is empty until
+ * the owner's key handoff, so every offer is refused. *2026-11-21:* EV-18's safe worktree adapter has landed
+ * (`cf9195d0`), so a claimed job is no longer held for want of a worktree; what still keeps this false is the empty
+ * `OFFER_KEYS`, and that a macOS or Windows shell runs no checks for an unattended job (EV-16). The package that pins
+ * the key sets it true. It lives here, not in runtime.ts, because Codium's listing imports this module and runtime.ts
+ * builds the platform routes when it loads.
+ */
+export const LAPTOP_ROUTE_WIRED: boolean = false
+
+/**
+ * Codium's listing readiness for the `everywhere` perk (codium-perks.ts; EV-08). Display only: the intake gates above
+ * are unchanged. Ready once a customer could start a job and see it end: the route is wired, offers can be signed, the
+ * sweep can run, and Slack, Linear or Jira is open. GitHub alone does not count, because its handoff answers
+ * handled:false until @vector's laptop-first option exists (Q13, R-A6). `wired` is checked before the configuration is
+ * read, so a listing read with `everywhere` as a candidate parses no environment (or offer key) while it is false.
+ */
+export function everywhereReady(config?: EverywhereConfig, wired = LAPTOP_ROUTE_WIRED) {
+  if (!wired) return false
+  const settings = config ?? readConfig()
+  return (
+    settings.offer !== undefined &&
+    settings.cronSecret !== undefined &&
+    (["slack", "linear", "jira"] as const).some((platform) => platformOn(settings, platform))
+  )
 }

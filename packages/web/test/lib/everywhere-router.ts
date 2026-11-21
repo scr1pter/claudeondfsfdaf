@@ -10,10 +10,15 @@ import { seedJobAuthority } from "./everywhere-job-authority"
 import { everywhereEnv } from "./everywhere-account"
 import { FakeStore, testAccountAuthority, withTestAccountAuthority } from "./everywhere-store"
 
-export function routerFixture() {
+/**
+ * `store` replaces the FakeStore (a real Redis, EV-19), and `fake` is then only the clock. `env` is what `config` was
+ * read from, for routes that read their own configuration (the jobs routes).
+ */
+export function routerFixture(options: { readonly store?: Store } = {}) {
   const fake = new FakeStore()
-  const store: Store = withTestAccountAuthority(async (command) => fake.send(command))
-  const config = readConfig(everywhereEnv())
+  const store: Store = options.store ?? withTestAccountAuthority(async (command) => fake.send(command))
+  const env = everywhereEnv()
+  const config = readConfig(env)
   const account = randomUUID()
   const computer = randomBytes(16).toString("base64url")
   const offer = { kid: "test-offer-key", key: generateKeyPairSync("ed25519").privateKey }
@@ -63,5 +68,5 @@ export function routerFixture() {
     if (!created.ok) throw new Error("Fixture job was refused")
     return created.job
   }
-  return { fake, store, config, context, account, computer, trigger, parsed, calls, adapter, ports, routing, facts, create }
+  return { fake, store, env, config, context, account, computer, trigger, parsed, calls, adapter, ports, routing, facts, create }
 }

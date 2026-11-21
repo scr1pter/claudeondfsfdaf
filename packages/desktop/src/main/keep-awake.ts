@@ -385,6 +385,8 @@ export function startKeepAwake(input: {
  * Work the desktop runs itself never reaches the engine's stream: an external agent's CLI (Codex, Claude Code, Cursor)
  * and a workspace's checks run in this process, with the engine idle. Each piece of that work holds a blocker of its
  * own for as long as it runs. None of it waits on the user, and an external agent's run has its own time limit.
+ * One holder has no time limit (holdDesktopWork): Vector everywhere's "stay awake to take jobs" option, held only while
+ * the user opted in, the computer takes jobs and it is on AC power, and released by its caller (everywhere-awake.ts).
  */
 const desktopWork = new Set<symbol>()
 let desktopBlocker: PowerBlocker | undefined
@@ -460,6 +462,20 @@ export function whileDesktopWorks<T>(work: () => Promise<T>) {
       desktopWork.delete(token)
       syncDesktopWork()
     })
+}
+
+/**
+ * Keeps the computer awake until the returned release is called; calling it again does nothing. For desktop work whose
+ * end the caller decides (Vector everywhere's stay-awake option). It shares whileDesktopWorks' one blocker.
+ */
+export function holdDesktopWork() {
+  const token = Symbol()
+  desktopWork.add(token)
+  syncDesktopWork()
+  return () => {
+    desktopWork.delete(token)
+    syncDesktopWork()
+  }
 }
 
 function syncDesktopWork() {

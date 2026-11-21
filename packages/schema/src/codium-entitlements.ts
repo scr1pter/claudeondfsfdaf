@@ -36,6 +36,7 @@ export const PERK_IDS = [
   "auto-learns",
   "brain-cloud",
   "playbooks",
+  "everywhere",
 ] as const
 export type PerkId = (typeof PERK_IDS)[number]
 

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { randomBytes } from "node:crypto"
-import { switchKey } from "../../../api/_lib/codium-switches"
+import { SWITCH_NAMES, SWITCH_VALUES, switchKey } from "../../../api/_lib/codium-switches"
 import { ENV_NAMES, readConfig } from "../../../api/_lib/everywhere/config"
 import {
   admits,
@@ -43,7 +43,7 @@ describe("the everywhere switch", () => {
     ).toBe("stop")
   })
 
-  test("with the env on and no Codium switch yet (before R-C6) it is on", async () => {
+  test("with the env on and no Codium value it is on", async () => {
     expect(await readEverywhereSwitch(on, codium({}))).toBe("on")
   })
 
@@ -109,11 +109,53 @@ describe("the seam over Codium's readSwitch", () => {
     else process.env.CODIUM_STRIPE_MODE = previousMode
   })
 
-  test("a switch Codium does not have yet is absent, and nothing is read", async () => {
+  // Codium caches each read for 30 s per fetcher, so every read below uses a fresh FakeStore.
+  test("Codium lists everywhere with on, no-new and stop (R-C6)", () => {
+    expect(SWITCH_NAMES).toContain("everywhere")
+    expect(SWITCH_VALUES.everywhere).toEqual(["on", "no-new", "stop"])
+  })
+
+  test("an absent record reads on with the env on, from one read of Codium's own key", async () => {
     const fake = new FakeStore()
-    expect(await codiumSwitches(fake.fetch)("everywhere")).toBeUndefined()
     expect(await readEverywhereSwitch(on, codiumSwitches(fake.fetch))).toBe("on")
-    expect(fake.commands).toEqual([])
+    expect(fake.commands).toEqual([["GET", switchKey("everywhere")]])
+    expect(switchKey("everywhere")).toBe("vector:codium:test:switch:everywhere")
+  })
+
+  test("no-new and stop stored by Codium reach readEverywhereSwitch", async () => {
+    for (const value of ["on", "no-new", "stop"] as const)
+      for (const raw of [JSON.stringify({ value, changedAt: 1, generation: "g1" }), value]) {
+        const store = new FakeStore()
+        store.send(["SET", switchKey("everywhere"), raw])
+        expect(await readEverywhereSwitch(on, codiumSwitches(store.fetch))).toBe(value)
+      }
+  })
+
+  test("Codium's off, an unknown value or a corrupt record is unreadable and reads stop", async () => {
+    for (const raw of [
+      "off",
+      JSON.stringify({ value: "off", changedAt: 1, generation: "g1", offSince: 1 }),
+      "maybe",
+      "{broken",
+    ]) {
+      const store = new FakeStore()
+      store.send(["SET", switchKey("everywhere"), raw])
+      await expect(codiumSwitches(store.fetch)("everywhere")).rejects.toMatchObject({
+        code: "CODIUM_SWITCH_UNAVAILABLE",
+      })
+      expect(await readEverywhereSwitch(on, codiumSwitches(store.fetch))).toBe("stop")
+    }
+  })
+
+  test("with the env off it reads stop whatever Codium says, before any read", async () => {
+    for (const config of [off, readConfig({ [ENV_NAMES.enabled]: "true" })])
+      for (const value of [undefined, "on", "no-new", "stop"]) {
+        const store = new FakeStore()
+        if (value) store.send(["SET", switchKey("everywhere"), value])
+        const sent = store.commands.length
+        expect(await readEverywhereSwitch(config, codiumSwitches(store.fetch))).toBe("stop")
+        expect(store.commands).toHaveLength(sent)
+      }
   })
 
   test("the remote switch is read from Codium's own record", async () => {
@@ -130,5 +172,6 @@ describe("the seam over Codium's readSwitch", () => {
     const fake = new FakeStore()
     fake.down = true
     expect(await readRemoteSwitch(codiumSwitches(fake.fetch))).toBe("stop")
+    expect(await readEverywhereSwitch(on, codiumSwitches(fake.fetch))).toBe("stop")
   })
 })

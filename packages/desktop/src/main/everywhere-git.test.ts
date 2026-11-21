@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process"
 import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { createJobId } from "@vectordevai/schema/everywhere"
 import { createEverywhereGit, GIT_HARDENING, runnerGitEnvironment, safeRepositoryConfig } from "./everywhere-git"
 
@@ -17,7 +19,8 @@ test("unknown executable config and secret-bearing inherited environment fail cl
   expect(env.GITHUB_TOKEN).toBeUndefined()
   expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
   expect(env.GIT_CONFIG_COUNT).toBeUndefined()
-  expect(env.GIT_CONFIG_GLOBAL).toBe(os.devNull)
+  // Not os.devNull: Git for Windows refuses \\.\nul as a config file, and reads "/dev/null" as the device.
+  expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null")
 })
 
 test("stock Windows, gh, VS Code and partial-clone settings are inert and stay allowed", () => {
@@ -96,6 +99,22 @@ test("the actual local remote must match the declared allowed project before wor
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
 
+test("a failing git command names git's own reason, at most 2 KB of it, and never its arguments", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "everywhere-failure-"))
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: directory, env: runnerGitEnvironment(), stdio: "pipe" })
+    // An out-of-range repository format version: git exits 128 reading it, with about 3 KB of stderr.
+    await writeFile(path.join(directory, ".git", "config"), `[core]\n\trepositoryformatversion = ${"9".repeat(3000)}\n`)
+    const runner = createEverywhereGit({ directory, repository: "acme/app", identity: { name: "Fixture", email: "fixture@example.invalid" } })
+    const prefix = "The Everywhere git operation failed: "
+    const message = await runner.run(["rev-parse", "--git-common-dir"]).then(() => "resolved", (error: Error) => error.message)
+    expect(message).toStartWith(`${prefix}fatal: bad numeric config value`)
+    expect(message.length).toBeLessThanOrEqual(prefix.length + 2048)
+    // The hardening flags are arguments: a child-process error message would quote them.
+    expect(message).not.toContain("core.hooksPath")
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
 test("network git uses a canonical URL and job-specific ref rather than shared FETCH_HEAD", async () => {
   const calls: readonly string[][] = []
   const mutable = calls as string[][]
@@ -113,6 +132,78 @@ test("network git uses a canonical URL and job-specific ref rather than shared F
   expect(pushed).not.toContain("origin")
   expect(pushed).not.toContain("--force")
   expect(mutable.find((args) => args.includes("fetch"))).toContain(`refs/heads/main:refs/vector-everywhere/${jid}`)
+})
+
+test("Vector Local decides each fetch and push as git-remote on github.com before git or its credentials start", async () => {
+  const calls: string[][] = []
+  const directory = await realpath(os.tmpdir())
+  const jid = createJobId(Date.now())
+  // What each git call the fetch and push make answers, by the argument that names it, in this order.
+  const answer = (args: readonly string[]) => {
+    // The snapshot check reads the repository config: one GitHub remote and nothing executable.
+    if (args.includes("config")) return "remote.origin.url\nhttps://github.com/acme/app.git\0"
+    // A config.worktree that does not exist, so only the local config is read.
+    if (args.includes("--git-path")) return path.join(directory, `vector-fixture-${jid}-config.worktree`)
+    if (args.some((arg) => ["--show-toplevel", "--absolute-git-dir", "--git-common-dir"].includes(arg)))
+      return directory
+    // The fetched ref's commit, which the fetch reads back after git fetch.
+    if (args.includes("rev-parse")) return "a".repeat(40)
+    return ""
+  }
+  const runner = createEverywhereGit({
+    directory: os.tmpdir(),
+    repository: "acme/app",
+    identity: { name: "Fixture", email: "fixture@example.invalid" },
+    authenticate: async () => {
+      calls.push(["authenticate"])
+      return undefined
+    },
+    execute: async ({ args }) => {
+      calls.push([...args])
+      return answer(args)
+    },
+  })
+  const snapshot = {
+    directory,
+    gitDirectory: directory,
+    commonDirectory: directory,
+    config: [],
+    pushUrl: "https://github.com/acme/app.git",
+    baseSha: "a".repeat(40),
+  }
+  const words = ["authenticate", "fetch", "push"]
+  const network = () => calls.flatMap((args) => args.find((word) => words.includes(word)) ?? [])
+  // The fetch is logged as GET and the push, which carries the commits, as POST.
+  const lines = (decision: string, rule: string) =>
+    ["GET", "POST"].map((method) =>
+      expect.objectContaining({
+        source: "git-remote",
+        purpose: "git-remote",
+        origin: "https://github.com",
+        method,
+        decision,
+        rule,
+      }),
+    )
+  try {
+    Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+    await expect(runner.fetch(snapshot, "main", jid)).rejects.toThrow("Vector Local blocks the Everywhere git fetch")
+    // A refused push never started, so it answers false (the runner then settles held), never an ambiguous failure.
+    expect(await runner.push(snapshot, os.tmpdir(), "vector/ve-abcdefghijkl")).toBe(false)
+    expect(network()).toEqual([])
+    expect(Egress.events().slice(-2)).toEqual(lines("block", "not-listed"))
+    Egress.configure(
+      LocalPolicy.resolve({
+        global: { enabled: true, allow: [{ source: "git-remote", reason: "Fixture", added_at: 1, added_by: "app" }] },
+      }),
+    )
+    await runner.fetch(snapshot, "main", jid)
+    expect(await runner.push(snapshot, os.tmpdir(), "vector/ve-abcdefghijkl")).toBe(true)
+    expect(network()).toEqual(["authenticate", "fetch", "authenticate", "push"])
+    expect(Egress.events().slice(-2)).toEqual(lines("allow", "allowed-source"))
+  } finally {
+    Egress.configure(LocalPolicy.OFF)
+  }
 })
 
 test("core.worktree cannot redirect snapshot or publication outside the allowed canonical directory", async () => {

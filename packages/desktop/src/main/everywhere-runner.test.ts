@@ -1,12 +1,25 @@
 import { installFetchGuard } from "../../../web/test/lib/everywhere-fetch-guard"
-import { expect, test } from "bun:test"
-import { COMPUTER_CAPS, TIMING, createJobId, randomId, type EverywhereJob, type Settle } from "@vectordevai/schema/everywhere"
+import { afterEach, expect, test } from "bun:test"
+import { branchFor } from "@vectordevai/core/everywhere/publish"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { EgressGuard } from "@vectordevai/core/local-mode/guard"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { COMPUTER_CAPS, READINESS_FIELDS, READINESS_QUERY, TIMING, createJobId, randomId, type EverywhereJob, type Readiness, type Settle } from "@vectordevai/schema/everywhere"
 import { renderResult } from "@vectordevai/schema/everywhere-policy"
+import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { createLedger, type RunnerLedger } from "./everywhere-ledger"
-import { createEverywhereJobsClient, createEverywhereRunner, type RunnerDeps, type RunnerSettings } from "./everywhere-runner"
+import { createEverywhereJobsClient, createEverywhereRunner, localAllows, WorktreeUnavailable, type RunnerDeps } from "./everywhere-runner"
+import type { RunnerSettings } from "./everywhere-settings"
 import type { RunnerEngine } from "./everywhere-engine"
 import { unattendedRules } from "./everywhere-engine"
 import type { RunnerGit } from "./everywhere-git"
+
+// Vector Local on with nothing allowed (its default), and on with allow entries for the named registry sources.
+const LOCAL_ON = LocalPolicy.resolve({ global: { enabled: true } })
+const JOB_SOURCES = ["everywhere", "git-remote", "github"]
+const entries = (sources: readonly string[]) => sources.map((source) => ({ source, reason: "Fixture", added_at: 1, added_by: "app" as const }))
+const allowing = (sources: readonly string[], web?: LocalMode.Web) =>
+  LocalPolicy.resolve({ global: { enabled: true, ...(web ? { web } : {}), allow: entries(sources) } })
 
 function deferred() {
   let resolve!: () => void
@@ -25,7 +38,7 @@ function fixture() {
     limits: { maxUsd: 50, minutes: 120, deadline: time + 120 * 60_000 }, reply: { format: "slack", maxChars: 1500 },
     lease: { id: randomId(), expiresAt: time + 5 * 60_000 },
   }
-  let settings: RunnerSettings = { enabled: true, localMode: false, modelAllowed: true, maxUsd: 1, minutes: 5, atOnce: 1, perDay: 20, push: true,
+  let settings: RunnerSettings = { enabled: true, modelAllowed: true, maxUsd: 1, minutes: 5, atOnce: 1, perDay: 20, push: true,
     projects: [{ directory: "/fixture/project", repository: "acme/app", base: "main" }] }
   const ledger = createLedger({ read: async () => stored, write: async (state) => { stored = state }, now: () => time })
   const prompted = deferred()
@@ -59,6 +72,7 @@ function fixture() {
     push: async (_, __, branch) => { calls.push({ kind: "push", value: branch }); return true },
   }
   let tick: (() => Promise<void>) | undefined
+  let local = LocalPolicy.OFF
   const deps: RunnerDeps = {
     settings: async () => settings, verify: async () => ({ jid: job.jid }), ledger,
     jobs: {
@@ -71,15 +85,19 @@ function fixture() {
     git: () => git, engine: () => engine, privateRepository: async () => true,
     openPr: async () => { calls.push({ kind: "open-pr" }); return "https://github.com/acme/app/pull/4" }, now: () => time,
     every: (_, work) => { tick = work; return () => { tick = undefined } },
+    localPolicy: () => local,
   }
   return { job, ledger, calls, results, deps, engine, git, prompted,
     settings: (value: Partial<RunnerSettings>) => { settings = { ...settings, ...value } },
+    local: (value: LocalMode.Policy) => { local = value },
     hold: () => { held = true }, ask: () => { ask = true }, askQuestion: () => { question = true },
     tick: async (ms: number) => { time += ms; await tick?.() },
   }
 }
 
 installFetchGuard()
+// The jobs client test below sets this process's Vector Local policy, through the module's own API.
+afterEach(() => { Egress.configure(LocalPolicy.OFF) })
 
 test("an editing job uses the lower computer cap and a runner-owned skipped-CI publication", async () => {
   const f = fixture()
@@ -205,14 +223,186 @@ test("unattended rules deny shell, terminals, connect and unknown tools even wit
   expect(unattendedRules([{ permission: "*", pattern: "*", action: "deny" }]).findLast((rule) => rule.permission === "read")?.action).toBe("deny")
 })
 
-test("local mode and disallowed training models decline without claiming or starting the engine", async () => {
-  for (const value of [{ localMode: true }, { modelAllowed: false }]) {
+test("Vector Local and disallowed training models decline with their reason before any claim or engine start", async () => {
+  for (const reason of ["local-mode", "model-not-allowed"] as const) {
     const f = fixture()
-    f.settings(value)
+    if (reason === "local-mode") f.local(LOCAL_ON)
+    if (reason === "model-not-allowed") f.settings({ modelAllowed: false })
     expect(await createEverywhereRunner(f.deps).offer("fixture-offer")).toBe(false)
-    expect(f.calls.some((call) => call.kind === "claim")).toBe(false)
-    expect(f.calls.some((call) => call.kind === "create")).toBe(false)
+    expect(f.calls.filter((call) => call.kind === "decline").map((call) => call.value)).toEqual([{ reason, lease: undefined }])
+    expect(f.calls.some((call) => ["claim", "create"].includes(call.kind))).toBe(false)
   }
+})
+
+test("Vector Local declines laptop jobs before any claim, whatever it allows, until the GitHub calls are labelled", async () => {
+  const refusing = [
+    LOCAL_ON,
+    LocalPolicy.PENDING,
+    allowing(["everywhere"]),
+    allowing(["everywhere", "git-remote"]),
+    allowing(["everywhere", "github"]),
+    allowing(JOB_SOURCES, "none"),
+    // Web access "your network" keeps git off the internet.
+    allowing(JOB_SOURCES, "network"),
+    // A company lock that leaves `allow` to nobody drops the user's entries.
+    LocalPolicy.resolve({ managed: { enabled: true, lock: true }, global: { allow: entries(JOB_SOURCES) } }),
+    // All three allowed, by the user and by the company: desktop github-api.ts is unlabelled, so the github need
+    // refuses whenever Vector Local is on until EV-21 labels it, and the job is never claimed only to be held.
+    allowing(JOB_SOURCES),
+    LocalPolicy.resolve({ managed: { enabled: true, allow: entries(JOB_SOURCES) } }),
+  ]
+  for (const [index, policy] of refusing.entries()) {
+    const f = fixture()
+    f.local(policy)
+    expect({ index, allows: localAllows(policy) }).toEqual({ index, allows: false })
+    expect({ index, offered: await createEverywhereRunner(f.deps).offer("fixture-offer") }).toEqual({ index, offered: false })
+    expect(f.calls.filter((call) => call.kind === "decline").map((call) => call.value)).toEqual([{ reason: "local-mode", lease: undefined }])
+    expect(f.calls.some((call) => ["claim", "create", "prompt", "push"].includes(call.kind))).toBe(false)
+  }
+  // With Vector Local off the same runner claims, runs and publishes.
+  expect(localAllows(LocalPolicy.OFF)).toBe(true)
+  const f = fixture()
+  expect(await createEverywhereRunner(f.deps).offer("fixture-offer")).toBe(true)
+  expect(f.results[0]?.outcome).toBe("changes")
+  expect(f.calls.filter((call) => call.kind === "push")).toHaveLength(1)
+})
+
+test("Vector Local turned on after the commit keeps the branch local, with no pushing report or publication receipt", async () => {
+  const f = fixture()
+  const commit = f.git.commit
+  f.git.commit = async (snapshot, directory, message) => {
+    const head = await commit(snapshot, directory, message)
+    f.local(LOCAL_ON)
+    return head
+  }
+  await createEverywhereRunner(f.deps).offer("fixture-offer")
+  expect(f.results).toEqual([expect.objectContaining({ outcome: "held", branch: branchFor(f.job.jid), checks: "skipped" })])
+  expect(f.calls.filter((call) => call.kind === "commit")).toHaveLength(1)
+  expect(f.calls.some((call) => ["push", "open-pr"].includes(call.kind))).toBe(false)
+  expect(f.calls.filter((call) => call.kind === "report").map((call) => call.value)).toEqual([{ seq: 0, milestone: "started" }])
+  expect((await f.ledger.inspect()).pending).toEqual([])
+})
+
+test("the jobs client labels its requests everywhere, so Vector Local refuses them before anything is sent", async () => {
+  const sent: { url: string; method?: string; authorization: string | null; device: string | null; body: unknown }[] = []
+  const client = createEverywhereJobsClient({
+    device: "fixture-device",
+    token: async () => "fixture-desktop-token",
+    fetcher: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        sent.push({
+          url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+          method: init?.method,
+          authorization: headers.get("authorization"),
+          device: headers.get("x-vector-device"),
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+        })
+        return Response.json({ recorded: true })
+      },
+      { preconnect: () => undefined },
+    ),
+  })
+  const jid = createJobId(Date.now())
+  Egress.configure(LOCAL_ON)
+  await expect(client.decline(jid, "local-mode")).rejects.toBeInstanceOf(EgressGuard.EgressBlocked)
+  expect(sent).toEqual([])
+  expect(Egress.events().at(-1)).toMatchObject({
+    source: "everywhere",
+    purpose: "account",
+    origin: "https://vectordev.ai",
+    method: "POST",
+    decision: "block",
+    rule: "vector-service",
+  })
+  // A runner on the real client and this process's own policy (no localPolicy) sends nothing for an offer either: its
+  // local-mode decline is refused the same way, so the offer rejects before any claim.
+  const f = fixture()
+  const runner = createEverywhereRunner({ ...f.deps, localPolicy: undefined, jobs: { ...f.deps.jobs, claim: client.claim, decline: client.decline } })
+  await expect(runner.offer("fixture-offer")).rejects.toBeInstanceOf(EgressGuard.EgressBlocked)
+  expect(sent).toEqual([])
+  expect(f.calls.some((call) => ["claim", "create"].includes(call.kind))).toBe(false)
+  // With Vector Local off the same decline reaches the fetcher.
+  Egress.configure(LocalPolicy.OFF)
+  await client.decline(jid, "local-mode")
+  expect(sent).toEqual([{
+    url: "https://vectordev.ai/api/everywhere/jobs/decline",
+    method: "POST",
+    authorization: "Bearer fixture-desktop-token",
+    device: "fixture-device",
+    body: { jid, device: "fixture-device", reason: "local-mode" },
+  }])
+})
+
+/** A loopback stand-in for the pending route: the actual jobs client, every request recorded. */
+function pendingServer(answer: () => Response, url?: string) {
+  const sent: { url: URL; method?: string; headers: Headers; body: unknown }[] = []
+  const client = createEverywhereJobsClient({
+    url,
+    device: "fixture-device",
+    token: async () => "fixture-desktop-token",
+    fetcher: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push({ url: new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url), method: init?.method, headers: new Headers(init?.headers), body: init?.body })
+        return answer()
+      },
+      { preconnect: () => undefined },
+    ),
+  })
+  return { client, sent }
+}
+
+const NOT_READY: Readiness = { takesJobs: false, remote: false, localMode: false, sandbox: false, waitForComputer: false, capsRoom: false, projects: false }
+
+test("pending asks with the readiness flags and maps the service's off answers to no jobs", async () => {
+  const offer = (fill: string) => `vef1.${Buffer.from(fill).toString("base64url")}.${"s".repeat(86)}`
+  const valid = offer("first")
+  const other = offer("second")
+  let reply = () => Response.json({ offers: [], waiting: 0 })
+  const server = pendingServer(() => reply(), "http://127.0.0.1")
+  // The server's own names, now shared from the schema (jobs-api.ts re-exports them).
+  expect(Object.keys(READINESS_QUERY).sort()).toEqual([...READINESS_FIELDS].sort())
+  for (const field of READINESS_FIELDS) {
+    await server.client.pending({ ...NOT_READY, [field]: true })
+    const query = Object.fromEntries(server.sent.at(-1)!.url.searchParams)
+    expect(query).toEqual(Object.fromEntries(READINESS_FIELDS.map((name) => [READINESS_QUERY[name], name === field ? "1" : "0"])))
+  }
+  const asked = server.sent.at(-1)!
+  expect({ path: asked.url.pathname, method: asked.method, body: asked.body, device: asked.headers.get("x-vector-device"), authorization: asked.headers.get("authorization") })
+    .toEqual({ path: "/api/everywhere/jobs/pending", method: "GET", body: undefined, device: "fixture-device", authorization: "Bearer fixture-desktop-token" })
+  reply = () => Response.json({ offers: [valid, "x", 5, other], waiting: 2 })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [valid, other], waiting: 2 })
+  reply = () => Response.json({ offers: Array.from({ length: 40 }, (_, index) => offer(`job-${index}`)), waiting: 40 })
+  expect((await server.client.pending(NOT_READY)).offers).toHaveLength(32)
+  // The route's answer while the feature or its switch is off.
+  reply = () => Response.json({ offers: [valid], waiting: 1, action: "stop" })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [], waiting: 0 })
+  // A platform route's EVERYWHERE_OFF, and a deployment without the route.
+  reply = () => Response.json({ error: { code: "EVERYWHERE_OFF", message: "Vector everywhere is off." } }, { status: 404 })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [], waiting: 0 })
+  reply = () => new Response("<html>Not found</html>", { status: 404, headers: { "content-type": "text/html" } })
+  expect(await server.client.pending(NOT_READY)).toEqual({ offers: [], waiting: 0 })
+  reply = () => Response.json({ error: { code: "UNAVAILABLE" } }, { status: 503 })
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Everywhere service unavailable")
+  reply = () => Response.json({ error: { code: "CLI_TOKEN_INVALID" } }, { status: 401 })
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Everywhere service unavailable")
+  for (const body of [{ offers: [valid], waiting: -1 }, { offers: "x", waiting: 0 }, { offers: [], waiting: 1.5 }, [valid]]) {
+    reply = () => Response.json(body)
+    await expect(server.client.pending(NOT_READY)).rejects.toThrow("Invalid Everywhere pending answer")
+  }
+  reply = () => new Response("not json")
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Invalid Everywhere pending answer")
+  // A body past the bound is refused, not parsed.
+  reply = () => Response.json({ offers: [valid], waiting: 1, padding: "p".repeat(128 * 1024) })
+  await expect(server.client.pending(NOT_READY)).rejects.toThrow("Invalid Everywhere pending answer")
+})
+
+test("pending is labelled everywhere, so Vector Local refuses it before anything is sent", async () => {
+  const server = pendingServer(() => Response.json({ offers: [], waiting: 0 }))
+  Egress.configure(LOCAL_ON)
+  await expect(server.client.pending(NOT_READY)).rejects.toBeInstanceOf(EgressGuard.EgressBlocked)
+  expect(server.sent).toEqual([])
+  expect(Egress.events().at(-1)).toMatchObject({ source: "everywhere", purpose: "account", origin: "https://vectordev.ai", method: "GET", decision: "block" })
 })
 
 test("an unmapped repository declines under its exact lease", async () => {
@@ -259,12 +449,50 @@ test("Github thread proof precedes the first accepted started report", async () 
   expect(f.results[0]?.outcome).toBe("changes")
 })
 
+test("a GitHub job whose pull request could not be opened settles changes naming its pushed branch (VE-31)", async () => {
+  const f = fixture()
+  Object.assign(f.job, { platform: "github", task: "", context: [], reply: { format: "markdown", maxChars: 1500 },
+    github: { kind: "issue", number: 7, commentId: 99, actorId: 789, event: "issue_comment" } })
+  // The thread was read; openEverywherePr then answers no URL (the repository is no longer private, or no PR opened).
+  await createEverywhereRunner({ ...f.deps, githubThread: async () => ({ thread: { task: "Fix retry handling", context: [] } }),
+    openPr: async () => { f.calls.push({ kind: "open-pr" }); return undefined } }).offer("fixture-offer")
+  const branch = branchFor(f.job.jid)
+  expect(f.calls.filter((call) => call.kind === "push").map((call) => call.value)).toEqual([branch])
+  expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(1)
+  expect(f.results).toEqual([{ jid: f.job.jid, lease: f.job.lease.id, outcome: "changes", summary: "Fixed retry handling.", branch,
+    headSha: "c".repeat(40), files: 1, checks: "skipped" }])
+})
+
 test("absence of the safe worktree capability never calls an unsafe engine endpoint", async () => {
   const f = fixture()
   await createEverywhereRunner({ ...f.deps, safeWorktree: undefined }).offer("fixture-offer")
   expect(f.results[0]?.outcome).toBe("held")
   expect(f.calls.some((call) => call.kind === "create")).toBe(false)
   expect(f.calls.some((call) => call.kind === "push")).toBe(false)
+})
+
+test("a project the engine will not give a worktree here is held with fixed text, before any session (EV-18)", async () => {
+  const f = fixture()
+  const refused = { count: 0 }
+  await createEverywhereRunner({ ...f.deps, safeWorktree: { policy: "unattended-v1", create: async () => { refused.count += 1; throw new WorktreeUnavailable() } } }).offer("fixture-offer")
+  expect(refused.count).toBe(1)
+  expect(f.results).toEqual([{ jid: f.job.jid, lease: f.job.lease.id, outcome: "held", summary: "This computer could not take the job: its repository must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed." }])
+  expect(f.calls.some((call) => ["create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
+  // Any other worktree failure is a failed job, as before.
+  const g = fixture()
+  await createEverywhereRunner({ ...g.deps, safeWorktree: { policy: "unattended-v1", create: async () => { throw new Error("fixture") } } }).offer("fixture-offer")
+  expect(g.results.map((result) => result.outcome)).toEqual(["failed"])
+  expect(g.calls.some((call) => call.kind === "create")).toBe(false)
+})
+
+test("the session's ruleset allows the shell only when the settings carry the engine's offline-v1 (EV-18)", async () => {
+  const user = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "bash", pattern: "rm *", action: "deny" as const }]
+  for (const shell of [undefined, "none", "offline-v1"] as const) {
+    const f = fixture()
+    f.settings({ rules: user, ...(shell ? { shell } : {}) })
+    await createEverywhereRunner(f.deps).offer("fixture-offer")
+    expect(f.calls.find((call) => call.kind === "create")?.value).toEqual(unattendedRules(user, shell ?? "none"))
+  }
 })
 
 test("a public or newly public repository keeps its committed branch local", async () => {
@@ -485,16 +713,19 @@ test("a successful heartbeat acknowledgement keeps a live job running past the o
   expect((await f.ledger.inspect()).jobs).toHaveLength(0)
 })
 
-test("turning the toggle off, Stop and the job deadline abort without pushing", async () => {
-  for (const cause of ["toggle", "stop", "deadline"] as const) {
+test("turning the toggle off, Vector Local on, Stop and the job deadline abort without pushing", async () => {
+  for (const cause of ["toggle", "local", "stop", "deadline"] as const) {
     const f = fixture()
     f.hold()
     const runner = createEverywhereRunner(f.deps)
     const running = runner.offer("fixture-offer")
     await f.prompted.promise
     if (cause === "toggle") { f.settings({ enabled: false }); await f.tick(1_000) }
+    if (cause === "local") { f.local(LOCAL_ON); await f.tick(1_000) }
     if (cause === "stop") runner.stop()
     if (cause === "deadline") await f.tick(5 * 60_000)
+    // A timer-driven abort has happened by the time its tick returns, so a missed one fails here, not by the timeout.
+    if (cause !== "stop") expect({ cause, aborted: f.calls.some((call) => call.kind === "abort") }).toEqual({ cause, aborted: true })
     await running
     expect(f.calls.some((call) => call.kind === "abort")).toBe(true)
     expect(f.calls.some((call) => call.kind === "push")).toBe(false)
@@ -510,3 +741,307 @@ test("recovery settles stored leases interrupted and never resumes provider work
   expect(f.results[0]?.outcome).toBe("interrupted")
   expect(f.calls.some((call) => call.kind === "prompt")).toBe(false)
 })
+
+/** A loopback stand-in for the jobs routes: the actual jobs client, with each answer chosen by route and milestone. */
+function jobsServer(answer: (route: string, milestone: unknown) => { status: number; body: unknown }) {
+  const requests: { route: string; status: number; body: Record<string, unknown> }[] = []
+  const client = createEverywhereJobsClient({
+    url: "http://127.0.0.1",
+    device: "fixture-device",
+    token: async () => "fixture-desktop-token",
+    fetcher: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+        if (typeof init?.body !== "string") throw new Error("Missing actual jobs request body")
+        const body: Record<string, unknown> = JSON.parse(init.body)
+        const route = url.pathname.split("/").at(-1) ?? ""
+        const answered = answer(route, body.milestone)
+        requests.push({ route, status: answered.status, body })
+        return Response.json(answered.body, { status: answered.status })
+      },
+      { preconnect: () => undefined },
+    ),
+  })
+  return { client, requests }
+}
+
+test("a lost acknowledgement of a held result replays that exact result with its local branch", async () => {
+  const f = fixture()
+  const attempts: Settle[] = []
+  await createEverywhereRunner({
+    ...f.deps,
+    privateRepository: async () => false,
+    jobs: {
+      ...f.deps.jobs,
+      settle: async (result) => {
+        attempts.push(structuredClone(result))
+        if (attempts.length === 1) throw new Error("Fixture acknowledgement lost")
+      },
+    },
+  }).offer("fixture-offer")
+  const held = {
+    jid: f.job.jid,
+    lease: f.job.lease.id,
+    outcome: "held",
+    summary: "Fixed retry handling.",
+    branch: branchFor(f.job.jid),
+    checks: "skipped",
+  } satisfies Settle
+  expect(attempts).toEqual([held, held])
+  expect(f.calls.some((call) => ["push", "open-pr"].includes(call.kind))).toBe(false)
+  expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+})
+
+for (const action of ["stop", "lost"] as const) {
+  test(`a server ${action} answered to pushing keeps the committed branch on the computer and settles held`, async () => {
+    const f = fixture()
+    await createEverywhereRunner({
+      ...f.deps,
+      ledger: {
+        ...f.ledger,
+        remember: async (result) => {
+          f.calls.push({ kind: "remember" })
+          await f.ledger.remember(result)
+        },
+      },
+      privateRepository: async () => {
+        f.calls.push({ kind: "visibility" })
+        return true
+      },
+      jobs: {
+        ...f.deps.jobs,
+        report: async (job, seq, milestone, files) => {
+          await f.deps.jobs.report(job, seq, milestone, files)
+          return milestone === "pushing" ? action : "continue"
+        },
+      },
+    }).offer("fixture-offer")
+    expect(f.calls.filter((call) => call.kind === "report").map((call) => call.value)).toEqual([
+      { seq: 0, milestone: "started" },
+      { seq: 1, milestone: "pushing" },
+    ])
+    expect(f.calls.filter((call) => call.kind === "commit")).toHaveLength(1)
+    // The pushing report precedes the uncertainty receipt and the visibility read.
+    expect(f.calls.some((call) => ["remember", "visibility", "push", "open-pr"].includes(call.kind))).toBe(false)
+    expect(f.calls.some((call) => call.kind === "abort")).toBe(true)
+    expect(f.results).toEqual([
+      {
+        jid: f.job.jid,
+        lease: f.job.lease.id,
+        outcome: "held",
+        summary: "Fixed retry handling.",
+        branch: branchFor(f.job.jid),
+        checks: "skipped",
+      },
+    ])
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
+
+for (const status of [404, 409] as const) {
+  test(`an actual jobs-client HTTP ${status} on pushing pushes nothing and leaves no settle the server accepts`, async () => {
+    const f = fixture()
+    const logged: string[] = []
+    // settleJob checks the same sponsor (404) and lease holder (409) as reportJob, so the server refuses every settle.
+    const server = jobsServer((route, milestone) =>
+      route === "report" && milestone !== "pushing"
+        ? { status: 200, body: { action: "continue" } }
+        : { status, body: { error: "The fixture lease is no longer current" } },
+    )
+    await createEverywhereRunner({
+      ...f.deps,
+      jobs: { ...f.deps.jobs, report: server.client.report, settle: server.client.settle },
+      log: (message) => logged.push(message),
+    }).offer("fixture-offer")
+    expect(
+      server.requests
+        .filter((request) => request.route === "report")
+        .map((request) => [request.body.milestone, request.status]),
+    ).toEqual([
+      ["started", 200],
+      ["pushing", status],
+    ])
+    // Every bounded attempt replays the same held result; none carries a head or a pull request.
+    const held = {
+      jid: f.job.jid,
+      lease: f.job.lease.id,
+      outcome: "held",
+      summary: "Fixed retry handling.",
+      branch: branchFor(f.job.jid),
+      checks: "skipped",
+    }
+    expect(server.requests.filter((request) => request.route === "settle")).toEqual(
+      Array.from({ length: 3 }, () => ({ route: "settle", status, body: held })),
+    )
+    expect(f.results).toEqual([])
+    expect(f.calls.filter((call) => call.kind === "commit")).toHaveLength(1)
+    expect(f.calls.some((call) => ["push", "open-pr"].includes(call.kind))).toBe(false)
+    expect(logged).toEqual(["Vector everywhere could not acknowledge a job result."])
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
+
+test("a stop heard on a heartbeat after pushing was accepted, before the push is admitted, keeps the branch local", async () => {
+  const f = fixture()
+  await createEverywhereRunner({
+    ...f.deps,
+    privateRepository: async () => {
+      await f.tick(TIMING.heartbeatMs)
+      return true
+    },
+    jobs: {
+      ...f.deps.jobs,
+      report: async (job, seq, milestone, files) => {
+        await f.deps.jobs.report(job, seq, milestone, files)
+        return milestone === "heartbeat" ? "stop" : "continue"
+      },
+    },
+  }).offer("fixture-offer")
+  expect(f.calls.filter((call) => call.kind === "report").map((call) => call.value)).toEqual([
+    { seq: 0, milestone: "started" },
+    { seq: 1, milestone: "pushing" },
+    { seq: 2, milestone: "heartbeat" },
+  ])
+  expect(f.calls.some((call) => ["push", "open-pr"].includes(call.kind))).toBe(false)
+  expect(f.results).toEqual([
+    {
+      jid: f.job.jid,
+      lease: f.job.lease.id,
+      outcome: "held",
+      summary: "Fixed retry handling.",
+      branch: branchFor(f.job.jid),
+      checks: "skipped",
+    },
+  ])
+  expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+})
+
+for (const push of ["confirmed", "ambiguous"] as const) {
+  test(`a switch stop heard on a heartbeat during an admitted ${push} push delivers only the publication result, once`, async () => {
+    const f = fixture()
+    let stopped = false
+    let abortedDuringPush = false
+    // Under the stop switch, jobs-api answers every report, heartbeat and settle 200 {action: "stop"}.
+    const server = jobsServer(() => ({ status: 200, body: { action: stopped ? "stop" : "continue" } }))
+    f.git.push = async (_, __, branch) => {
+      f.calls.push({ kind: "push", value: branch })
+      stopped = true
+      await f.tick(TIMING.heartbeatMs)
+      // Recorded, not asserted here: the runner's catch would swallow a failed expect thrown from the push.
+      abortedDuringPush = f.calls.some((call) => call.kind === "abort")
+      if (push === "ambiguous") throw new Error("Fixture remote accepted then disconnected")
+      return true
+    }
+    const deps = { ...f.deps, jobs: { ...f.deps.jobs, report: server.client.report, settle: server.client.settle } }
+    await createEverywhereRunner(deps).offer("fixture-offer")
+    expect(abortedDuringPush).toBe(true)
+    expect(server.requests.map((request) => [request.route, request.body.milestone ?? request.body.outcome])).toEqual([
+      ["report", "started"],
+      ["report", "pushing"],
+      ["report", "heartbeat"],
+      ["settle", push === "confirmed" ? "changes" : "failed"],
+    ])
+    const published = {
+      jid: f.job.jid,
+      lease: f.job.lease.id,
+      branch: branchFor(f.job.jid),
+      headSha: "c".repeat(40),
+      files: 1,
+      checks: "skipped",
+    }
+    expect(server.requests.at(-1)?.body).toEqual(
+      push === "confirmed"
+        ? {
+            ...published,
+            outcome: "changes",
+            summary: "Fixed retry handling.",
+            prUrl: "https://github.com/acme/app/pull/4",
+          }
+        : {
+            ...published,
+            outcome: "failed",
+            summary: "Publication was not confirmed. Check the remote branch before retrying this task.",
+          },
+    )
+    // Pinned current behaviour, an open question for the lead: the draft PR still opens after the stop.
+    expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(push === "confirmed" ? 1 : 0)
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+    await createEverywhereRunner(deps).recover()
+    expect(server.requests).toHaveLength(4)
+    expect(f.calls.filter((call) => call.kind === "push")).toHaveLength(1)
+  })
+}
+
+for (const answer of ["stop", "lost", 404, 409] as const) {
+  for (const push of ["confirmed", "ambiguous"] as const) {
+    test(`a heartbeat answered ${answer} during an admitted ${push} push keeps its publication receipt when the settle is refused`, async () => {
+      const f = fixture()
+      const logged: string[] = []
+      let pushed = false
+      let abortedDuringPush = false
+      // A cancelled or lost job answers its settle 409 JOB_ENDED; a job the account no longer sponsors answers 404.
+      const refused = answer === 404 ? 404 : 409
+      const server = jobsServer((route, milestone) => {
+        if (route === "settle") return { status: refused, body: { error: "The fixture job has ended" } }
+        if (!pushed || milestone !== "heartbeat") return { status: 200, body: { action: "continue" } }
+        return typeof answer === "number"
+          ? { status: answer, body: { error: "The fixture lease is no longer current" } }
+          : { status: 200, body: { action: answer } }
+      })
+      f.git.push = async (_, __, branch) => {
+        f.calls.push({ kind: "push", value: branch })
+        pushed = true
+        await f.tick(TIMING.heartbeatMs)
+        // Recorded, not asserted here: the runner's catch would swallow a failed expect thrown from the push.
+        abortedDuringPush = f.calls.some((call) => call.kind === "abort")
+        if (push === "ambiguous") throw new Error("Fixture remote accepted then disconnected")
+        return true
+      }
+      const deps = {
+        ...f.deps,
+        jobs: { ...f.deps.jobs, report: server.client.report, settle: server.client.settle },
+        log: (message: string) => logged.push(message),
+      }
+      await createEverywhereRunner(deps).offer("fixture-offer")
+      expect(abortedDuringPush).toBe(true)
+      const published = {
+        jid: f.job.jid,
+        lease: f.job.lease.id,
+        branch: branchFor(f.job.jid),
+        headSha: "c".repeat(40),
+        files: 1,
+        checks: "skipped",
+      }
+      const receipt =
+        push === "confirmed"
+          ? {
+              ...published,
+              outcome: "changes",
+              summary: "Fixed retry handling.",
+              prUrl: "https://github.com/acme/app/pull/4",
+            }
+          : {
+              ...published,
+              outcome: "failed",
+              summary: "Publication was not confirmed. Check the remote branch before retrying this task.",
+            }
+      const settles = Array.from({ length: 3 }, () => ({ route: "settle", status: refused, body: receipt }))
+      expect(server.requests.map((request) => [request.route, request.body.milestone, request.status])).toEqual([
+        ["report", "started", 200],
+        ["report", "pushing", 200],
+        ["report", "heartbeat", typeof answer === "number" ? answer : 200],
+        ...settles.map(() => ["settle", undefined, refused]),
+      ])
+      expect(server.requests.slice(3)).toEqual(settles)
+      expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(push === "confirmed" ? 1 : 0)
+      expect(logged).toEqual(["Vector everywhere could not acknowledge a job result."])
+      // The slot is free, but the refused receipt stays pending: it is never replaced by "nothing published".
+      expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [receipt] })
+      await createEverywhereRunner(deps).recover()
+      expect(server.requests.slice(6)).toEqual(settles)
+      expect(f.calls.filter((call) => call.kind === "push")).toHaveLength(1)
+      expect(f.calls.filter((call) => call.kind === "create")).toHaveLength(1)
+      expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [receipt] })
+    })
+  }
+}

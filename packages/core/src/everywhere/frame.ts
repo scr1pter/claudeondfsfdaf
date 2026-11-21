@@ -18,7 +18,8 @@ import { PLATFORM_NAMES, titleWords } from "@vectordevai/schema/everywhere-polic
 /*
  * How a Vector everywhere job reaches the model (contract 3.5.1): the system text that says the run is unattended and
  * that platform text is data, and the one block that carries the request. Pure and runtime-neutral, so the desktop
- * runner and, later, @vector's agent phase write exactly the same text.
+ * runner and @vector's agent phase (R-A4) write the same block; the Actions run's has no `Thread:` line, since the
+ * body route answers no thread link (vector-everywhere-deviations.md, "2026-11-20, EV-28" (e)).
  *
  * Only the requester's own words are the task. Every other piece of platform text (issue titles, descriptions,
  * comments, other people's follow-ups, thread messages) is context, written as JSON strings under the untrusted label.
@@ -29,6 +30,10 @@ import { PLATFORM_NAMES, titleWords } from "@vectordevai/schema/everywhere-polic
 export const OUTSIDE_KEY = "vector.outside"
 /** The session metadata key that marks a session nobody watches (3.5 step 5). */
 export const UNATTENDED_KEY = "vector.unattended"
+/** The session metadata key that keeps every command of a session nobody watches in the offline sandbox (R-M2). */
+export const UNATTENDED_SHELL_KEY = "vector.unattended.shell"
+/** The one value UNATTENDED_SHELL_KEY takes: no network, writes only in the job's checkout. */
+export const UNATTENDED_SHELL_OFFLINE = "offline"
 
 export const EVERYWHERE_WORK_POLICY =
   "You are working unattended on {repository} because of a request on {Platform}. Nobody can answer questions or approve actions during this run; if you need either, stop and say what you needed. Do only this repository's software work, inside this working directory. Never push, publish, open pull requests, post messages or contact other services; Vector does that after you finish."
@@ -51,7 +56,11 @@ export function untrustedJson(value: string) {
   )
 }
 
-type FrameJob = Pick<EverywhereJob, "platform" | "kind" | "repository" | "task" | "context"> & {
+/** The repository a frame names: its owner/name only, so @vector's Actions run frames with GITHUB_REPOSITORY alone. */
+type FrameRepository = Pick<EverywhereJob["repository"], "fullName">
+
+type FrameJob = Pick<EverywhereJob, "platform" | "kind" | "task" | "context"> & {
+  readonly repository: FrameRepository
   readonly github?: EverywhereJob["github"]
 }
 
@@ -64,7 +73,9 @@ function platformOf(job: { readonly platform: unknown }): PlatformId {
  * The system text of an unattended run: the work policy and the untrusted-data rule. The repository is checked
  * against the `owner/name` form first, so a name can never carry a newline or more instructions into the system layer.
  */
-export function everywhereSystemInstructions(job: Pick<EverywhereJob, "platform" | "repository">) {
+export function everywhereSystemInstructions(
+  job: Pick<EverywhereJob, "platform"> & { readonly repository: FrameRepository },
+) {
   const platform = PLATFORM_NAMES[platformOf(job)]
   const repository = job.repository?.fullName
   if (!isRepositoryName(repository)) throw new RangeError("Vector everywhere runs need the exact owner/name.")

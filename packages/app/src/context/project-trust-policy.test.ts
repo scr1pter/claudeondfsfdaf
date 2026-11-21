@@ -46,8 +46,10 @@ describe("trust wording", () => {
 
 describe("who may trust a repository", () => {
   // A clone can come from any pasted link, so its vector.json and .vector settings are a stranger's code. Only the
-  // user's own answer approves trust: the trust dialog and Settings, Repository trust. Nothing approves on the
-  // user's behalf after a clone, an open or any other flow, so every clone asks like any other repository.
+  // user's own answer approves trust: the trust dialog and Settings, both Repository trust and the Trust this repository
+  // button Vector everywhere shows for a listed folder that is open in Vector, which goes through the same approval and
+  // offers it only where projectTrustSummary does. Nothing approves on the user's behalf after a clone, an open or any
+  // other flow, so every clone asks like any other repository.
   test("only the trust dialog and Settings approve trust, never a clone or any other flow", async () => {
     const root = path.join(import.meta.dir, "..")
     // The glob gives Windows separators on Windows; the paths below are written with forward slashes.
@@ -66,6 +68,7 @@ describe("who may trust a repository", () => {
         .toSorted(),
     ).toEqual([
       "components/project-trust-prompt.tsx",
+      "components/settings-v2/everywhere.tsx",
       "components/settings-v2/project-trust.tsx",
       "context/project-trust.tsx",
     ])

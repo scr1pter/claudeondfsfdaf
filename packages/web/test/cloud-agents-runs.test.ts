@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test"
 import { RedisClient } from "bun"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer } from "node:http"
@@ -17,10 +17,16 @@ import { liveKey, reserveRun, settleRun, usedKey } from "../../../api/_lib/cloud
 import {
   eraseCloudAgentsAccount,
   listCloudRuns,
+  notifyRunSettle,
+  notifyRunStart,
   ownerCloudRun,
   recordRunEnd,
   recordRunStart,
+  registerRunSettleListener,
+  registerRunStartListener,
+  type RunEnd,
   type RunStart,
+  type RunStartListener,
 } from "../../../api/_lib/cloud-agents-runs"
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { persistentStore } from "../../../api/_lib/persistent-store"
@@ -29,9 +35,135 @@ import "../../../api/_lib/cloud-agents-run-registration"
 import { cloudRunReader } from "../../../api/_lib/cloud-run-reader"
 import { publicCloudRun, type RemoteCloudRun } from "../../../api/_lib/remote-ticket"
 import { runFacts } from "../../../api/_lib/ship-desk"
+import { createJobId } from "../../../packages/schema/src/everywhere"
 import { githubAppFixture } from "./github-app-fixture"
 
 integrationTests()
+
+// EV-25 (R-A2, R-A3): the listener registry itself, with no store. The routes that call it are covered in
+// cloud-agents-start.test.ts.
+test("run listeners: each registration hears each notify once, a remover removes only its own, and failures log no id", async () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {})
+  const heard: unknown[][] = []
+  // Each listener also gets its budget's signal, still running when it is called.
+  const live: boolean[] = []
+  const recorder: RunStartListener = async (ticketHash, rid, jobId, signal) => {
+    heard.push([ticketHash, rid, jobId])
+    live.push(signal instanceof AbortSignal && !signal.aborted)
+  }
+  const ticketHash = "a".repeat(64)
+  const rid = "gh-301-401-1-601"
+  const jobId = createJobId()
+  const removers = [
+    registerRunStartListener(recorder),
+    registerRunStartListener(() => {
+      throw new Error(`boom ${ticketHash} ${rid} ${jobId}`)
+    }),
+    registerRunStartListener(async () => {
+      throw new Error(`boom ${ticketHash} ${rid} ${jobId}`)
+    }),
+  ]
+  const ends: RunEnd[] = []
+  const settles = [
+    registerRunSettleListener(async (_rid, end, signal) => {
+      ends.push(end)
+      live.push(signal instanceof AbortSignal && !signal.aborted)
+    }),
+    registerRunSettleListener(async (_rid, end) => void ends.push(end)),
+  ]
+  try {
+    expect(await notifyRunStart(ticketHash, rid, jobId)).toBeUndefined()
+    expect(heard).toEqual([[ticketHash, rid, jobId]])
+    expect(warn.mock.calls).toEqual([
+      ["Vector cloud-agents start listener failed"],
+      ["Vector cloud-agents start listener failed"],
+    ])
+    removers.slice(1).forEach((remove) => remove())
+    // One function registered twice is two entries, and each remover takes away only its own.
+    const again = registerRunStartListener(recorder)
+    await notifyRunStart(ticketHash, rid)
+    expect(heard).toEqual([
+      [ticketHash, rid, jobId],
+      [ticketHash, rid, undefined],
+      [ticketHash, rid, undefined],
+    ])
+    again()
+    again()
+    await notifyRunStart(ticketHash, rid)
+    expect(heard).toHaveLength(4)
+    removers[0]!()
+    await notifyRunStart(ticketHash, rid)
+    expect(heard).toHaveLength(4)
+    expect(warn).toHaveBeenCalledTimes(2)
+
+    // An unreadable run record leaves the outcome alone: no run page, and a pull request that cannot be checked is dropped.
+    await notifyRunSettle(
+      rid,
+      { outcome: "changes", prUrl: "https://github.com/fixture-owner/project/pull/1" },
+      async () => {
+        throw new Error(`store down ${rid}`)
+      },
+    )
+    expect(ends).toEqual([{ outcome: "changes" }, { outcome: "changes" }])
+    expect(ends[0]).not.toBe(ends[1])
+    settles.forEach((remove) => remove())
+    await notifyRunSettle(rid, { outcome: "failed" }, async () => {
+      throw new Error("a store read with no listener")
+    })
+    expect(ends).toHaveLength(2)
+    expect(live).toEqual([true, true, true, true, true])
+    expect(warn).toHaveBeenCalledTimes(2)
+    const logged = JSON.stringify(warn.mock.calls)
+    for (const value of [ticketHash, rid, jobId, "boom"]) expect(logged).not.toContain(value)
+  } finally {
+    removers.forEach((remove) => remove())
+    settles.forEach((remove) => remove())
+    warn.mockRestore()
+  }
+})
+
+// One LISTENER_MS budget per notify: a settle's record read spends it too, and a listener's signal aborts with it.
+test("one five-second budget covers a settle's record read and its listeners: no listener starts once it is spent, and a running listener's signal aborts", async () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {})
+  const rid = "gh-301-401-1-601"
+  const aborted: boolean[] = []
+  const ends: RunEnd[] = []
+  const read = { done: false }
+  const removers = [
+    registerRunStartListener(async (_ticketHash, _rid, _jobId, signal) => {
+      aborted.push(signal.aborted)
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }))
+      aborted.push(signal.aborted)
+    }),
+    registerRunSettleListener(async (_rid, end) => void ends.push(end)),
+  ]
+  try {
+    const began = performance.now()
+    await Promise.all([
+      notifyRunStart("b".repeat(64), rid),
+      // A record read slower than the whole budget: the settle listener's turn comes after the budget is spent.
+      notifyRunSettle(rid, { outcome: "changes" }, async () => {
+        await Bun.sleep(6_000)
+        read.done = true
+        return []
+      }),
+    ])
+    expect(performance.now() - began).toBeGreaterThanOrEqual(4_900)
+    expect(read.done).toBe(false)
+    expect(aborted).toEqual([false, true])
+    expect(warn.mock.calls.map((call) => String(call[0])).toSorted()).toEqual([
+      "Vector cloud-agents settle listeners timed out",
+      "Vector cloud-agents start listeners timed out",
+    ])
+    while (!read.done) await Bun.sleep(25)
+    await Bun.sleep(50)
+    expect(ends).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(2)
+  } finally {
+    removers.forEach((remove) => remove())
+    warn.mockRestore()
+  }
+})
 
 function integrationTests() {
   const configured = process.env.VECTOR_TEST_REDIS_URL
@@ -190,6 +322,21 @@ function integrationTests() {
     const raw = (await redis.send("EVAL", ["return redis.call('HGETALL', KEYS[1])", "1", key])) as string[]
     return Object.fromEntries(raw.flatMap((value, index) => (index % 2 ? [] : [[value, raw[index + 1]]])))
   }
+
+  test("recordRunEnd ends a record without telling any settle listener: only the settle route tells it (R-A3)", async () => {
+    const f = await fixture()
+    const ends: unknown[] = []
+    const remove = registerRunSettleListener(async (rid, end) => void ends.push([rid, end]))
+    try {
+      const run = await f.start()
+      await f.settle(run)
+      await Bun.sleep(100)
+      expect(ends).toEqual([])
+      expect((await listCloudRuns(f.account))[0]).toMatchObject({ rid: run.rid, outcome: "changes" })
+    } finally {
+      remove()
+    }
+  })
 
   test("run and actor storage matches the published inventory, and the API never returns internal account/token fields", async () => {
     const before = new Set((await redis.send("KEYS", [`${prefix}*`])) as string[])

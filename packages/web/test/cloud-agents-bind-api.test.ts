@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import { RedisClient } from "bun"
 import { createServer } from "node:http"
+import { GithubAgents } from "@vectordevai/core/github-agents"
+import { buildAgentsWorkflow } from "@vectordevai/core/review/workflow"
 import { createCloudAgentsApi } from "../../../api/_lib/cloud-agents-api"
 import { bindingFor, createBindCode, suspendBinding, touchBinding } from "../../../api/_lib/cloud-agents-binding"
 import type { CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitlement"
@@ -333,6 +335,144 @@ function integrationTests() {
     const rebound = await bindingFor(f.github.repositoryId)
     expect(rebound?.generation).toBe((binding?.generation ?? 0) + 1)
     expect(rebound?.installationId).toBeUndefined()
+  })
+
+  // R-A9 (EV-26): the workflows the real generator writes, so the App's reader and the generator cannot drift apart.
+  function workflows(handle: string) {
+    const version = GithubAgents.MIN_AGENTS_CLI
+    return {
+      codium: buildAgentsWorkflow({
+        mode: "codium",
+        provider: "vector",
+        model: "vector-plan",
+        keys: [],
+        autoReview: false,
+        version,
+        handle,
+      }),
+      ownKey: buildAgentsWorkflow({
+        mode: "own-key",
+        provider: "anthropic",
+        model: "claude-x",
+        keys: ["ANTHROPIC_API_KEY"],
+        autoReview: false,
+        version,
+      }),
+    }
+  }
+  const contents = "/repos/fixture-owner/project/contents/.github/workflows/vector.yml"
+
+  test("R-A9: only the App's read at the verified SHA records the mode; a client's is refused; no App clears it", async () => {
+    await using f = await fixture()
+    const files = workflows(f.github.config.slug)
+    f.github.state.workflowContent = files.ownKey
+    expect((await f.code({ body: { workflowMode: "codium" } })).status).toBe(400)
+    const code = await f.code()
+    const claimed = await f.send("bind", {
+      token: await f.github.makeToken("bind", { event_name: "workflow_dispatch" }),
+      body: { code: code.body.code, workflowVersion: "3", workflowMode: "codium" },
+    })
+    expect(claimed.status).toBe(400)
+    expect(claimed.body.error.code).toBe("INVALID_REQUEST")
+    expect(await bindingFor(f.github.repositoryId)).toBeUndefined()
+    expect(f.github.state.workflowReads).toEqual([])
+    const bound = await f.bind(code.body.code)
+    expect(bound.status).toBe(200)
+    expect(Object.keys(bound.body).sort()).toEqual([
+      "bound",
+      "generation",
+      "repository",
+      "repositoryId",
+      "workflowUpdate",
+    ])
+    // One read, at the bind token's workflow SHA, never the default branch's name.
+    expect(f.github.state.workflowReads).toEqual(["a".repeat(40)])
+    expect(await bindingFor(f.github.repositoryId)).toMatchObject({
+      workflowMode: "own-key",
+      workflowVersion: "3",
+      installationId: "600",
+    })
+    expect(
+      (await persistentStore(["HKEYS", `vector:cloud-agents:binding:${f.github.repositoryId}`])) as string[],
+    ).toContain("workflowMode")
+    const listing = JSON.stringify((await f.send("bindings")).body)
+    expect(listing).not.toContain("workflowMode")
+    expect(listing).not.toContain("own-key")
+    f.github.state.workflowContent = files.codium
+    expect((await f.bind((await f.code()).body.code)).status).toBe(200)
+    expect((await bindingFor(f.github.repositoryId))?.workflowMode).toBe("codium")
+    f.github.state.enabled = false
+    expect((await f.bind((await f.code()).body.code)).status).toBe(200)
+    const rebound = await bindingFor(f.github.repositoryId)
+    expect(rebound?.installationId).toBeUndefined()
+    expect(rebound !== undefined && "workflowMode" in rebound).toBe(false)
+    expect(f.github.state.workflowReads).toHaveLength(2)
+    expect(f.github.tokens.size).toBe(0)
+  })
+
+  test("R-A9: each rebind records the mode beside its workflow version, so a workflow change updates both", async () => {
+    await using f = await fixture()
+    const files = workflows(f.github.config.slug)
+    const route = '            const mode = "codium"'
+    const steps: { name: string; content: string; version: string; mode?: "codium" | "own-key" }[] = [
+      { name: "codium", content: files.codium, version: "3", mode: "codium" },
+      { name: "own-key", content: files.ownKey, version: "4", mode: "own-key" },
+      { name: "no header line", content: files.codium.split("\n").slice(1).join("\n"), version: "3" },
+      {
+        name: "a codium header over an own-key route",
+        content: files.codium.replace(route, route.replace("codium", "own-key")),
+        version: "3",
+      },
+      { name: "a workflow older than the v3 generator", content: files.codium, version: "2" },
+      { name: "a hand-written workflow", content: "name: vector\non: workflow_dispatch\njobs: {}\n", version: "3" },
+    ]
+    for (const step of steps) {
+      f.github.state.workflowContent = step.content
+      const answer = await f.bind((await f.code()).body.code, { version: step.version })
+      expect({ name: step.name, status: answer.status }).toEqual({ name: step.name, status: 200 })
+      const binding = await bindingFor(f.github.repositoryId)
+      expect({ name: step.name, mode: binding?.workflowMode, version: binding?.workflowVersion }).toEqual({
+        name: step.name,
+        mode: step.mode,
+        version: step.version,
+      })
+    }
+  })
+
+  test("R-A9: a failed, missing or oversized workflow read records no mode, and the bind still succeeds", async () => {
+    await using f = await fixture()
+    const codium = workflows(f.github.config.slug).codium
+    // The read is best effort, so an @vector bind never fails because of everywhere: it binds with no mode (no Actions
+    // route), and a rebind once GitHub answers records the mode.
+    const steps: { name: string; fail?: number; content?: string; mode?: "codium" }[] = [
+      { name: "a failed read", fail: 503 },
+      { name: "GitHub answers again", mode: "codium" },
+      { name: "a missing file", fail: 404 },
+      { name: "an answer over the shared response cap", content: `${codium}#${"x".repeat(800_000)}\n` },
+    ]
+    for (const [index, step] of steps.entries()) {
+      f.github.state.failPath = step.fail === undefined ? "" : contents
+      f.github.state.failStatus = step.fail ?? 503
+      f.github.state.workflowContent = step.content ?? codium
+      const answer = await f.bind((await f.code()).body.code)
+      const binding = await bindingFor(f.github.repositoryId)
+      expect({
+        name: step.name,
+        status: answer.status,
+        generation: binding?.generation,
+        installationId: binding?.installationId,
+        mode: binding?.workflowMode,
+        keyed: binding !== undefined && "workflowMode" in binding,
+      }).toEqual({
+        name: step.name,
+        status: 200,
+        generation: index + 1,
+        installationId: "600",
+        mode: step.mode,
+        keyed: step.mode !== undefined,
+      })
+      expect(f.github.tokens.size).toBe(0)
+    }
   })
 
   test("unmarked desktop credentials and revoked accounts cannot create or redeem bind codes", async () => {

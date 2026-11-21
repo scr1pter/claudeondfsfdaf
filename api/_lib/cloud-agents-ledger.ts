@@ -336,14 +336,18 @@ export async function settleRun(
   return { settled: true, seconds: charged }
 }
 
-/** HTTP settlement commits the first outcome and the charge together; retries keep that exact outcome. */
+/**
+ * HTTP settlement commits the first outcome and the charge together; retries keep that exact outcome. `committed` is
+ * true only for the call that ended the run: the script decides it from the run record's own endedAt, so a retry or a
+ * concurrent settle of the same run answers the stored outcome with `committed` false (R-A3's settle listener).
+ */
 export async function settleRecordedRun(
   account: string,
   rid: string,
   token: { jti: string; epoch: string; repo: string; gen: number },
   input: { outcome: GithubAgents.Outcome; now: number },
   store = persistentStore,
-): Promise<{ outcome: GithubAgents.Outcome }> {
+): Promise<{ outcome: GithubAgents.Outcome; committed: boolean }> {
   if (
     !Schema.is(Uuid)(account) ||
     !Schema.is(RunId)(rid) ||
@@ -375,9 +379,15 @@ export async function settleRecordedRun(
     input.outcome === "changes" ? "pass" : input.outcome === "draft" || input.outcome === "failed" ? "fail" : "none",
   ])
   if (reply === "stale") throw new ApiError(401, "MODEL_PLAN_RUN_EXPIRED", "This run is no longer authorized.")
-  if (typeof reply !== "string" || !GithubAgents.OUTCOME.includes(reply as GithubAgents.Outcome))
+  const committed = Array.isArray(reply) && reply.length === 2 && reply[0] === "committed"
+  const outcome: unknown = committed ? reply[1] : reply
+  if (
+    typeof outcome !== "string" ||
+    !GithubAgents.OUTCOME.includes(outcome as GithubAgents.Outcome) ||
+    (committed && outcome !== input.outcome)
+  )
     throw storeUnavailable()
-  return { outcome: reply as GithubAgents.Outcome }
+  return { outcome: outcome as GithubAgents.Outcome, committed }
 }
 
 /**
@@ -667,7 +677,10 @@ if ticket and ARGV[16] == '1' then
       or type(proof.account) ~= 'string' or type(proof.repositoryId) ~= 'string'
       or not triggerSources[proof.source] or not triggerPurposes[proof.purpose] then return 'corrupt' end
     local fields = 0; for _ in pairs(proof) do fields = fields + 1 end
-    if fields ~= 6 then return 'corrupt' end
+    -- Vector everywhere's job id (R-A1) is the only optional field; any other extra field, or a null, is corrupt.
+    if proof.jobId ~= nil and (type(proof.jobId) ~= 'string' or #proof.jobId ~= 26
+      or not string.match(proof.jobId, '^vej_[0-9a-hjkmnp-tv-z]+$')) then return 'corrupt' end
+    if fields ~= (proof.jobId == nil and 6 or 7) then return 'corrupt' end
     validTicket = proof.account == ARGV[15] and proof.repositoryId == ARGV[4] and proof.generation == generation
       and proof.source == ARGV[17] and proof.purpose == ARGV[18] and now < proof.exp
   end
@@ -827,7 +840,7 @@ redis.call('HDEL', KEYS[1], ARGV[1])
 if returned > 0 then redis.call('DECRBY', KEYS[2], int(returned)) end
 redis.call('HSET', KEYS[3], 'endedAt', ARGV[6], 'outcome', ARGV[7], 'verdict', ARGV[8])
 redis.call('EXPIRE', KEYS[3], ${90 * 86_400})
-return ARGV[7]
+return {'committed', ARGV[7]}
 `
 
 // KEYS: live, used(epoch), the scheduled count of the start's UTC day. ARGV: rid, jti, epoch, startedAt.

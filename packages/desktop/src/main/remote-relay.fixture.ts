@@ -1,4 +1,4 @@
-import { CLOSE, FRAME, HEARTBEAT, decodeFrame, encodeFrame, type Peer } from "@vectordevai/relay/protocol"
+import { CLOSE, DEVICE_BYTES, FRAME, HEARTBEAT, decodeFrame, encodeFrame, type Peer } from "@vectordevai/relay/protocol"
 import { deviceBytes, toBase64url } from "./remote-crypto"
 
 // Test fixture (WP A42): an in-memory Remote relay that the real desktop link (remote-link.ts) and the real phone
@@ -6,7 +6,7 @@ import { deviceBytes, toBase64url } from "./remote-crypto"
 // handshake's `hello` with the other side's online devices and the viewer count, `peers` when they change (with
 // `refresh` when a phone arrives), `ping`/`pong`, and data frames passed on byte for byte with the target's id swapped
 // for the sender's. A ticket here is `vt1.<role>.<device>`, minted by the tests' fake API. Everything any side sent is
-// kept, so a test can check the relay never saw plaintext.
+// kept, so a test can check the relay never saw plaintext. `offer` sends a job offer frame (R-C1) to every computer.
 
 export type RelaySocket = {
   readyState: number
@@ -144,6 +144,15 @@ export function createMemoryRelay() {
     drop(device: string, code: number) {
       const connection = connections.get(device)
       if (connection) leave(connection, code)
+    },
+    /** The API's signed job-offer call (R-C1): a 0x02 frame, sixteen zero device bytes, to each computer only. */
+    offer(text: string) {
+      const computers = [...connections.values()].filter((item) => item.role === "computer")
+      for (const connection of computers) {
+        const frame = encodeFrame(FRAME.JOB_OFFER, new Uint8Array(DEVICE_BYTES), new TextEncoder().encode(text))
+        queueMicrotask(() => connection.socket.onmessage?.({ data: frame.buffer }))
+      }
+      return computers.length
     },
     online: (device: string) => connections.has(device),
     viewers,

@@ -5263,6 +5263,161 @@
         ]
       }
     },
+    "/experimental/worktree/unattended": {
+      "get": {
+        "tags": ["worktree-unattended"],
+        "operationId": "worktree.unattended.policy",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Unattended worktree policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeUnattendedPolicy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Report the unattended worktree policy this engine supports. Owner only.",
+        "summary": "Get the unattended worktree policy",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.worktree.unattended.policy({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "tags": ["worktree-unattended"],
+        "operationId": "worktree.unattended.create",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Unattended worktree created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeUnattended"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorktreeError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorktreeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Create a job's worktree at an exact fetched commit in an allowed, trusted project that is already open, with git hardened and no startup scripts. Owner only.",
+        "summary": "Create an unattended worktree",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorktreeUnattendedInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.worktree.unattended.create({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/shell/unattended": {
+      "get": {
+        "tags": ["shell-unattended"],
+        "operationId": "shell.unattended.policy",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Unattended shell policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellUnattendedPolicy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Report whether this engine runs an unattended session's commands in its offline sandbox: offline-v1 on Linux with a bubblewrap that starts, none elsewhere. Owner only.",
+        "summary": "Get the unattended shell policy",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.shell.unattended.policy({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/find": {
       "get": {
         "tags": ["file"],
@@ -37136,6 +37291,73 @@
         "additionalProperties": false,
         "description": "Server configuration for vector serve and web commands"
       },
+      "EverywhereProject": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string",
+            "description": "An absolute folder path, at most 4096 characters, with no `.` or `..` and no trailing separator",
+            "maxLength": 4096,
+            "pattern": "^(?:(?:\\/(?:[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.\\.[^\\\\/\\0\\r\\n]+))+|[A-Za-z]:(?:\\\\(?:[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.\\.[^\\\\/\\0\\r\\n]+))+|[A-Za-z]:(?:\\/(?:[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.\\.[^\\\\/\\0\\r\\n]+))+|\\\\\\\\(?:[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.\\.[^\\\\/\\0\\r\\n]+)(?:\\\\(?:[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.[^.\\\\/\\0\\r\\n][^\\\\/\\0\\r\\n]*|\\.\\.[^\\\\/\\0\\r\\n]+))+)$"
+          },
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}\\/[A-Za-z0-9_.-]{1,100}$",
+            "description": "The folder's GitHub repository as owner/name"
+          }
+        },
+        "required": ["directory", "repository"],
+        "additionalProperties": false
+      },
+      "EverywhereConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_usd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 50
+          },
+          "minutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 120
+          },
+          "at_once": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 3
+          },
+          "per_day": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^[^/\\r\\n]+\\/[^\\r\\n]+$"
+          },
+          "wait_for_computer": {
+            "type": "boolean"
+          },
+          "push": {
+            "type": "boolean"
+          },
+          "stay_awake": {
+            "type": "boolean"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EverywhereProject"
+            },
+            "maxItems": 64
+          }
+        },
+        "additionalProperties": false
+      },
       "PermissionActionConfig": {
         "type": "string",
         "enum": ["ask", "allow", "deny"]
@@ -38229,6 +38451,9 @@
             },
             "additionalProperties": false
           },
+          "everywhere": {
+            "$ref": "#/components/schemas/EverywhereConfig"
+          },
           "snapshot": {
             "type": "boolean"
           },
@@ -38866,6 +39091,9 @@
               }
             },
             "additionalProperties": false
+          },
+          "everywhere": {
+            "$ref": "#/components/schemas/EverywhereConfig"
           },
           "snapshot": {
             "type": "boolean"
@@ -40616,6 +40844,66 @@
           }
         },
         "required": ["name", "uri", "client"],
+        "additionalProperties": false
+      },
+      "WorktreeUnattendedPolicy": {
+        "type": "object",
+        "properties": {
+          "policy": {
+            "type": "string",
+            "enum": ["unattended-v1"]
+          }
+        },
+        "required": ["policy"],
+        "additionalProperties": false
+      },
+      "WorktreeUnattendedInput": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$"
+          },
+          "branch": {
+            "type": "string",
+            "pattern": "^vector\\/ve-(?:[0-9a-z]{12}|[A-Za-z][A-Za-z0-9_]{0,9}-[0-9]{1,7}-[0-9a-z]{8})$"
+          },
+          "jid": {
+            "type": "string",
+            "pattern": "^vej_[0-9a-hjkmnp-tv-z]{22}$"
+          }
+        },
+        "required": ["directory", "base", "branch", "jid"],
+        "additionalProperties": false
+      },
+      "WorktreeUnattended": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          }
+        },
+        "required": ["directory", "branch", "base"],
+        "additionalProperties": false
+      },
+      "ShellUnattendedPolicy": {
+        "type": "object",
+        "properties": {
+          "shell": {
+            "type": "string",
+            "enum": ["offline-v1", "none"]
+          }
+        },
+        "required": ["shell"],
         "additionalProperties": false
       },
       "Symbol": {
@@ -67910,6 +68198,14 @@
     {
       "name": "experimental",
       "description": "Experimental HttpApi read-only routes."
+    },
+    {
+      "name": "worktree-unattended",
+      "description": "Owner-only unattended worktree routes."
+    },
+    {
+      "name": "shell-unattended",
+      "description": "Owner-only unattended shell probe."
     },
     {
       "name": "file",

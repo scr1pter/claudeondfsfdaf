@@ -34,5 +34,9 @@ export function createSimpleContext<T, Props extends Record<string, any>>(
       if (!value) throw new Error(`${input.name} context must be used within a context provider`)
       return value
     },
+    /** The value, or undefined outside a provider, for code that can also be mounted without one. */
+    useOptional() {
+      return useContext(ctx)
+    },
   }
 }
