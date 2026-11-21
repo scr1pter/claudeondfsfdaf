@@ -34,6 +34,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
+import type { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
 import { ReviewMcp } from "@/review/mcp"
 import { McpComputerPolicy } from "./computer-policy"
 import { McpEvent } from "@vectordevai/schema/mcp-event"
@@ -255,6 +256,8 @@ export interface Interface {
   readonly status: () => Effect.Effect<Record<string, Status>>
   /** Optional nonstarting inventory capability; legacy services may expose only the active status operation. */
   readonly snapshot?: () => Effect.Effect<Record<string, SnapshotStatus>>
+  /** Nonstarting generation check for a fixed, already authorized resource snapshot. Carries no client or credentials. */
+  readonly reviewSnapshotGeneration?: (server: string) => Effect.Effect<ReviewMcpSnapshot.Generation | undefined>
   readonly clients: () => Effect.Effect<Record<string, MCPClient>>
   readonly instructions: () => Effect.Effect<ServerInstructions[]>
   readonly tools: () => Effect.Effect<Record<string, Tool>>
@@ -604,6 +607,14 @@ const layer = Layer.effect(
       Effect.catch(() => Effect.succeed([] as number[])),
     )
 
+    const generations = new WeakMap<
+      MCPClient,
+      {
+        defs: State["defs"][string] | undefined
+        config: ConfigMCPV1.Info | undefined
+        token: ReviewMcpSnapshot.Generation
+      }
+    >()
     function watch(
       sdk: typeof import("./sdk"),
       s: State,
@@ -630,8 +641,19 @@ const layer = Layer.effect(
         bridge.promise(serverLog(name, notification.params)),
       )
 
-      if (!client.getServerCapabilities()?.tools) return
+      const capabilities = client.getServerCapabilities()
+      // Drop owner-bound readers as soon as the inventory changes. No discovery is initiated by these handlers.
+      if (capabilities?.resources?.listChanged)
+        client.setNotificationHandler(sdk.ResourceListChangedNotificationSchema, async () => {
+          generations.delete(client)
+        })
+      if (capabilities?.prompts?.listChanged)
+        client.setNotificationHandler(sdk.PromptListChangedNotificationSchema, async () => {
+          generations.delete(client)
+        })
+      if (!capabilities?.tools) return
       client.setNotificationHandler(sdk.ToolListChangedNotificationSchema, async () => {
+        generations.delete(client)
         if (s.clients[name] !== client || s.status[name]?.status !== "connected") return
 
         const listed = await bridge.promise(McpCatalog.defs(client, timeout))
@@ -834,6 +856,20 @@ const layer = Layer.effect(
       }
 
       return result
+    })
+
+    const reviewSnapshotGeneration = Effect.fn("MCP.reviewSnapshotGeneration")(function* (server: string) {
+      if ((yield* ReviewMcp.blocked) || !(yield* InstanceState.has(state))) return
+      const cached = Option.getOrUndefined(yield* ScopedCache.getSuccess(state.cache, yield* InstanceState.directory))
+      if (!cached || cached.status[server]?.status !== "connected" || !Object.hasOwn(cached.clients, server)) return
+      const client = cached.clients[server]
+      const defs = cached.defs[server]
+      const config = cached.config[server]
+      const known = generations.get(client)
+      if (known && known.defs === defs && known.config === config) return known.token
+      const token = Object.freeze({ id: Symbol() })
+      generations.set(client, { defs, config, token })
+      return token
     })
 
     const snapshot = Effect.fn("MCP.snapshot")(function* () {
@@ -1405,6 +1441,7 @@ const layer = Layer.effect(
     return Service.of({
       status,
       snapshot,
+      reviewSnapshotGeneration,
       clients,
       instructions,
       tools,

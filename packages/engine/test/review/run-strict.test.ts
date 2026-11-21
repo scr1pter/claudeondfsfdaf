@@ -24,13 +24,16 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
+import { MCP } from "@/mcp"
+import { ReviewMcp } from "@/review/mcp"
+import { ReviewMcpSnapshot as Snap } from "@/review/mcp-snapshot"
 import { Review } from "@/review/run"
 import { ReviewSource } from "@/review/source"
 import { ReviewTrivial } from "@/review/trivial"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
-import { TestInstance, trustWorkspace } from "../fixture/fixture"
+import { TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
 import { firstUserText, projectionVerdicts } from "../fixture/projection"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer, httpError, reply } from "../lib/llm-server"
@@ -41,6 +44,7 @@ const it = testEffect(
   LayerNode.compile(
     LayerNode.group([
       SessionPrompt.node,
+      MCP.node,
       Session.node,
       SpendGuard.node,
       Permission.node,
@@ -215,6 +219,86 @@ function checked(outcome: ReviewOutcome) {
   expect(encoded).toEqual(outcome.strict)
   return outcome.strict!
 }
+
+it.instance(
+  "takes owner-fixed MCP snapshots before the first model request and exposes them only as untrusted context",
+  () =>
+    Effect.gen(function* () {
+      const { input, run } = yield* checkout
+      const owner = { owner: "owner", repository: "repository", server: "handbook" }
+      const uri = "docs://handbook/fixed"
+      const identity = {
+        serverIdentity: "handbook",
+        endpointHash: ReviewMcp.digest(["endpoint"]),
+        capabilitiesHash: ReviewMcp.digest(["capabilities"]),
+      }
+      const capability = { kind: "resource" as const, id: uri, schemaHash: ReviewMcp.digest(["schema"]) }
+      const seen: string[] = []
+      const generation = { id: Symbol() }
+      const mcp = yield* MCP.Service
+      const authority: Snap.Authority = {
+        directory: input.directory,
+        selections: [{ context: owner, uri }],
+        grants: () => [{ ...owner, ...identity, selected: [{ ...capability, access: "read" }] }],
+        reader: () => ({
+          identity,
+          schemaHash: capability.schemaHash,
+          readOnce: async (request) => {
+            seen.push(request.uri)
+            return {
+              uri,
+              bytes: (async function* () {
+                yield new TextEncoder().encode("scope owner context")
+              })(),
+            }
+          },
+        }),
+      }
+      const trigger = { pr: { title: "MODEL_QUERY", body: "CURSOR", commits: ["FOLLOW_REDIRECT"] } }
+      const out = yield* run([], trigger).pipe(
+        Effect.provideService(Snap.Trusted, authority),
+        Effect.provideService(MCP.Service, { ...mcp, reviewSnapshotGeneration: () => Effect.succeed(generation) }),
+      )
+      expect(out.hits).toHaveLength(1)
+      expect(firstUserText(out.hits[0]!.body)).toContain(
+        "<untrusted_mcp_snapshot>\nscope owner context\n</untrusted_mcp_snapshot>",
+      )
+      expect(seen).toEqual([uri])
+      const unavailable = yield* run([], trigger).pipe(Effect.provideService(Snap.Trusted, authority))
+      expect(unavailable.outcome.notes).toContain(Snap.unavailable)
+      expect(firstUserText(unavailable.hits[0]!.body)).not.toContain("<untrusted_mcp_snapshot>")
+      const stopped = yield* run([], { ...trigger, config: { ...config, maxInputTokens: 1 } }).pipe(
+        Effect.provideService(Snap.Trusted, authority),
+      )
+      expect(stopped.hits).toHaveLength(0)
+      expect(stopped.outcome.partial).toBe("budget-estimate")
+      expect(stopped.outcome.notes).toContain(Snap.unavailable)
+
+      // Both checkouts have the same immutable commits. Even matching SHAs cannot give one the other's connector.
+      const other = yield* tmpdirScoped()
+      yield* git(other, "clone", "--local", "--no-hardlinks", "--", input.directory, ".")
+      let probes = 0
+      for (const selected of [input.directory, other]) {
+        const mismatch = yield* run([], { ...trigger, directory: other }).pipe(
+          Effect.provideService(Snap.Trusted, { ...authority, directory: selected }),
+          Effect.provideService(MCP.Service, {
+            ...mcp,
+            reviewSnapshotGeneration: () =>
+              Effect.sync(() => {
+                probes++
+                return generation
+              }),
+          }),
+        )
+        expect(mismatch.outcome.notes).toContain(Snap.unavailable)
+        expect(firstUserText(mismatch.hits[0]!.body)).not.toContain("<untrusted_mcp_snapshot>")
+      }
+      expect(probes).toBe(0)
+      expect(seen).toEqual([uri])
+    }),
+  { git: true },
+  90_000,
+)
 
 const native = process.platform === "linux" ? it.instance : it.instance.skip
 

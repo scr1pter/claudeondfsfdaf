@@ -81,6 +81,7 @@ export interface PromptInput {
   notInlined?: { path: string; additions: number; deletions: number }[]
   focus?: FocusHunk[]
   headFiles?: HeadFile[]
+  mcpSnapshots?: readonly string[] // owner-selected fixed pre-exposure resources, always untrusted
   related?: RelatedCode[]
   impact?: ImpactPrompt // immutable Git context from the engine's impact: "graph" review
   ruleCheck?: "off" | "strict"
@@ -574,6 +575,7 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
     )
   const out = [target.join("\n")]
 
+  for (const value of input.mcpSnapshots ?? []) out.push(wrapUntrusted("mcp_snapshot", value))
   if (input.pr) {
     out.push(wrapUntrusted("pr_title", input.pr.title))
     if (input.pr.body.trim()) out.push(wrapUntrusted("pr_body", input.pr.body))

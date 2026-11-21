@@ -81,6 +81,7 @@ import type {
 import { unfinishedCauses } from "@vectordevai/core/review/verdict"
 import { Git } from "@/git"
 import { ReviewGit } from "@/review/git"
+import { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
 import { concurrentBatchRecord, lockBatchFile, localBatchStore, uncertainBatchMonth, unknownOwnSpend } from "@/review/batch-local"
 import { ReviewTrivial } from "@/review/trivial"
 import { Brain } from "@vectordevai/core/brain/brain"
@@ -370,9 +371,13 @@ export function executeLocalReview<RunR, ModelR>(
     const branchFingerprint = (bytes: string | Buffer) =>
       createHash("sha256").update(cachePolicy).update("\0").update(bytes).digest("hex")
     // A saved branch review can carry evidence only if the trusted adapter verified its read authority.
+    // A grant can change without changing either commit. An invocation with selected MCP resources must not
+    // consume or create an ordinary review result or a resumable batch checkpoint.
+    const snapshot = ReviewMcpSnapshot.freezeSelection(yield* ReviewMcpSnapshot.Trusted)
     const requiresFreshCoverage =
-      options.context &&
-      (config.guardrail === "strict" || (!branchCache && (!!options.context.admittedReads || !!readDenies?.length)))
+      !!snapshot ||
+      (options.context &&
+        (config.guardrail === "strict" || (!branchCache && (!!options.context.admittedReads || !!readDenies?.length))))
     const cardProvider = config.cards === "brain" && !options.context ? deps.cards : undefined
     // A pull ref cannot collide with a Git branch (colon is forbidden in refnames).
     const stateName = options.pr === undefined ? branch : batchKey ? `pr:${options.pr}` : undefined
@@ -929,7 +934,7 @@ export function executeLocalReview<RunR, ModelR>(
       const action = (config.maxInputTokens ?? 0) > 0 ? "Checking the review budget for" : "Reviewing"
       say(`${action} ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
     }
-    const result = yield* deps.runReview({
+    const request = deps.runReview({
       directory: root,
       ...(options.context?.parentID ? { parentID: options.context.parentID } : {}),
       ...(options.context?.stopSignal ? { stopSignal: options.context.stopSignal } : {}),
@@ -990,6 +995,7 @@ export function executeLocalReview<RunR, ModelR>(
       rulesSource: options.context || trust !== "trusted" ? "base branch" : "working tree",
       ...(ignoredPaths ? { ignored: ignoredPaths } : {}),
     })
+    const result = yield* Effect.provideService(request, ReviewMcpSnapshot.Trusted, snapshot)
     const visible = withheld.length
       ? {
           ...result,

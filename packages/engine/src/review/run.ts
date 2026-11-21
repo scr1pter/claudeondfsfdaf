@@ -163,6 +163,8 @@ import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { Truncate } from "@/tool/truncate"
 import { EffectBridge } from "@/effect/bridge"
+import { MCP } from "@/mcp"
+import { ReviewMcpSnapshot } from "./mcp-snapshot"
 import { InstanceState } from "@/effect/instance-state"
 import { readAuthority, type ReadAuthority } from "./read-authority"
 import type { ResolvedModel } from "./model"
@@ -1469,12 +1471,19 @@ export const run: (
       (!uncommitted &&
         [input.base, input.head].every((id) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) &&
         new Set(files.map((file) => file.path)).size === files.length)
+    const snapshotAuthority = ReviewMcpSnapshot.freezeSelection(yield* ReviewMcpSnapshot.Trusted)
+    const snapshotBatch = needsBatch && !!snapshotAuthority
     const cardBatch = needsBatch && (!!input.selectedCards || (config.cards === "brain" && !input.batchStore))
-    let impact = graph && !uncommitted && !cardBatch && (!needsBatch || plannable) ? yield* collectImpact : undefined
-    if (needsBatch && (!plannable || cardBatch)) {
-      batchRefusal = cardBatch
-        ? "Not reviewed. Resumable batches cannot reuse a review that uses Brain cards."
-        : "Not reviewed. Resumable batches require a committed change and a trusted review-state store."
+    let impact =
+      graph && !uncommitted && !cardBatch && !snapshotBatch && (!needsBatch || plannable)
+        ? yield* collectImpact
+        : undefined
+    if (needsBatch && (!plannable || cardBatch || snapshotBatch)) {
+      batchRefusal = snapshotBatch
+        ? "Not reviewed. Resumable batches cannot reuse a review that uses owner-selected MCP context."
+        : cardBatch
+          ? "Not reviewed. Resumable batches cannot reuse a review that uses Brain cards."
+          : "Not reviewed. Resumable batches require a committed change and a trusted review-state store."
       unavailable = [...new Set(input.files.map((file) => file.path))]
       nothingToSend = true
     } else if (needsBatch) {
@@ -1612,7 +1621,30 @@ export const run: (
         : {}),
       ...(ruleStrict ? { ruleCheck: "strict" as const } : {}),
     }
+    const snapshots =
+      snapshotAuthority?.selections.length && !nothingToSend && !refusedUpFront && !input.stopSignal?.aborted
+        ? yield* Effect.gen(function* () {
+            const manager = yield* Effect.serviceOption(MCP.Service)
+            const current = Option.getOrUndefined(manager)?.reviewSnapshotGeneration
+            const bridge = yield* EffectBridge.make()
+            const managerDirectory = (yield* InstanceState.context).directory
+            const selectedDirectory = snapshotAuthority.directory
+            const invocation = ReviewMcpSnapshot.invocation(snapshotAuthority, selectedDirectory, async (server) => {
+              if (
+                !current ||
+                !(await ReviewMcpSnapshot.sameCheckout(selectedDirectory, input.directory, managerDirectory))
+              )
+                return
+              return bridge.promise(current(server))
+            })
+            return yield* Effect.promise((signal) =>
+              invocation.capture(input.stopSignal ? AbortSignal.any([signal, input.stopSignal]) : signal),
+            ).pipe(Effect.ensuring(Effect.sync(invocation.close)))
+          })
+        : undefined
+    const snapshotNotes = snapshots?.incomplete ? [ReviewMcpSnapshot.unavailable] : []
     const promptInput: PromptInput = {
+      ...(snapshots?.blocks.length ? { mcpSnapshots: snapshots.blocks } : {}),
       mode: input.mode,
       trust: input.trust,
       base: input.base,
@@ -2050,6 +2082,7 @@ export const run: (
             result.decision === "unknown" ? BUDGET_ESTIMATE_UNAVAILABLE : noteBudgetEstimate(),
             ...result.notes,
             ...(auto ? ReviewDepth.notes(auto, []) : []),
+            ...snapshotNotes,
             ...holdNotes,
           ],
           ...(hold?.held.length ? { held: hold.held } : {}),
@@ -2701,12 +2734,14 @@ export const run: (
               ...refused,
               attempts: [...tracks.values()].reduce((sum, track) => sum + track.attempts + track.finalizeAttempts, 0),
             }),
+            ...snapshotNotes,
             ...holdNotes,
             ...incomplete,
           ]
         : [
             ...(noRequestSent ? [BUDGET_REQUEST_CHANGED] : []),
             ...picked.notes,
+            ...snapshotNotes,
             ...(strict?.preExistingUnchecked
               ? [
                   `The merge-base evidence was unavailable for ${strict.preExistingUnchecked} retained ${strict.preExistingUnchecked === 1 ? "finding" : "findings"}. The introduced-by-change check could not rule out a pre-existing defect.`,

@@ -21,6 +21,7 @@ import { batchCoverage, batchCursorDigest, restoreBatchCursor, type BatchCursor 
 import { finishReviewBatch, type ReviewBatchStore } from "@/review/batch"
 import type { ReviewBatchPlan } from "@vectordevai/core/review/plan"
 import { Review } from "@/review/run"
+import { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
@@ -304,6 +305,61 @@ it.instance(
     }),
   { git: true },
   90000,
+)
+
+it.instance(
+  "owner-selected MCP context refuses an oversized resumable batch before consulting its store",
+  () =>
+    Effect.gen(function* () {
+      const { input, execute, store } = yield* fixture
+      const calls: string[] = []
+      const tracked: ReviewBatchStore = {
+        resume: (plan) => {
+          calls.push("resume")
+          return store.resume(plan)
+        },
+        spent: () => {
+          calls.push("spent")
+          return 0
+        },
+        begin: () =>
+          Effect.sync(() => {
+            calls.push("begin")
+          }),
+        record: () => {
+          calls.push("record")
+        },
+      }
+      const authority: ReviewMcpSnapshot.Authority = {
+        directory: input.directory,
+        selections: [{ context: { owner: "owner", repository: "repo", server: "docs" }, uri: "docs://manual/fixed" }],
+        grants: () => {
+          calls.push("grant")
+          return []
+        },
+        reader: () => {
+          calls.push("reader")
+          return undefined
+        },
+      }
+      const opt = { config: { ...input.config, largeChanges: "batch" as const }, batchStore: tracked }
+      const refused = yield* execute(opt).pipe(Effect.provideService(ReviewMcpSnapshot.Trusted, authority))
+      expect(refused.result.notes.join(" ")).toContain(
+        "Resumable batches cannot reuse a review that uses owner-selected MCP context.",
+      )
+      expect(refused.result.unreviewed).toEqual(input.files.map((file) => file.path))
+      expect(refused.result.sessions).toEqual([])
+      expect(refused.requests).toEqual([])
+      expect(calls).toEqual([])
+      const ordinary = yield* execute(opt).pipe(
+        Effect.provideService(ReviewMcpSnapshot.Trusted, { ...authority, selections: [] }),
+      )
+      expect(ordinary.requests.length).toBeGreaterThan(0)
+      expect(calls).toContain("resume")
+      expect(calls).toContain("record")
+    }),
+  { git: true },
+  90_000,
 )
 
 const linkedCheckout = (directory: string) =>

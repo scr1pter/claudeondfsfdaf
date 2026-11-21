@@ -19,6 +19,7 @@ import { Git } from "@/git"
 import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
 import { Review } from "@/review/run"
+import { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
 import { SessionPrompt } from "@/session/prompt"
 import { Session } from "@/session/session"
 import { TestInstance, trustWorkspace } from "../fixture/fixture"
@@ -210,6 +211,56 @@ function fixed(input: Review.RunInput): ReviewOutcome {
     },
   }
 }
+
+it.instance(
+  "owner-selected MCP context never reuses or replaces another review checkpoint",
+  () =>
+    Effect.gen(function* () {
+      const { directory, cache, invoke } = yield* setup
+      const chosen: ReviewMcpSnapshot.Authority = {
+        directory,
+        selections: [
+          { context: { owner: "owner", repository: "project", server: "docs" }, uri: "docs://manual/fixed" },
+        ],
+        grants: () => [],
+        reader: () => undefined,
+      }
+      const calls: string[] = []
+      const review = (name: string) => (input: Review.RunInput) =>
+        Effect.sync(() => {
+          calls.push(name)
+          const result = fixed(input)
+          result.report.summary = name
+          return result
+        })
+      const selected = (name: string) =>
+        invoke(review(name), {}, "off").pipe(Effect.provideService(ReviewMcpSnapshot.Trusted, chosen))
+      expect(JSON.parse((yield* selected("snapshot-only")).text).outcome.report.summary).toBe("snapshot-only")
+      expect(
+        yield* Effect.promise(() =>
+          fs.access(cache).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      ).toBe(false)
+      yield* invoke(review("ordinary"), {}, "off")
+      const ordinary = yield* Effect.promise(() => fs.readFile(cache, "utf8"))
+      expect(JSON.parse((yield* selected("snapshot-updated")).text).outcome.report.summary).toBe("snapshot-updated")
+      expect(JSON.parse((yield* selected("snapshot-unavailable")).text).outcome.report.summary).toBe(
+        "snapshot-unavailable",
+      )
+      expect(yield* Effect.promise(() => fs.readFile(cache, "utf8"))).toBe(ordinary)
+      const revoked = yield* invoke(review("unused"), {}, "off").pipe(
+        Effect.provideService(ReviewMcpSnapshot.Trusted, { ...chosen, selections: [] }),
+      )
+      expect(JSON.parse(revoked.text).cached).toBe(true)
+      expect(JSON.parse(revoked.text).outcome.report.summary).toBe("ordinary")
+      expect(calls).toEqual(["snapshot-only", "ordinary", "snapshot-updated", "snapshot-unavailable"])
+    }),
+  { git: true },
+  90_000,
+)
 
 it.instance(
   "strict cache binds mode, head, merge-base and policy; invalid records retain history and spend through a full retry",
