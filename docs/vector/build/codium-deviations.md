@@ -3157,6 +3157,12 @@ under two minutes), but the run is not green under the lane rule, because of the
      reaches `Provider.use.defaultModel()` (`:155`). Run locally here it picked `amazon-bedrock`, not `openai` (the file
      11 pass, 1 fail); it passed in CI (12/0, engine (linux, shard 4/4) job 132574289024). It should clear the other
      provider variables or run with an isolated `Env`. The file is outside this lane; this package does not fix it.
+     21 Nov 2026: closed on branch `engine-core-fixes`. Both GitHub-token cases now run with
+     `{ trusted: true, config: { enabled_providers: ["openai", "github-copilot"] } }`, the provider allow-list
+     provider.test.ts uses, so Bedrock, Vertex and other host-derived providers cannot take the default while
+     github-copilot stays allowed; the assertions are unchanged. With `AWS_WEB_IDENTITY_TOKEN_FILE` and
+     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` set the file gave 11 pass, 1 fail (`amazon-bedrock`) before and 12 pass
+     after; 12 pass without them too. The CI job is recorded when the branch's PR runs.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 - 15 Nov 2026, post-push CI and For the lead item 1. Vector Codium run 43665227929 (codium-finish 7c479924): Codium
   tests job 132662998717 stopped at "Codium: 119/120" on `packages/web/test/model-plan-gateway-hooks.test.ts` with the
@@ -6405,6 +6411,7 @@ These are pointers only; nothing is fixed here.
     21 Nov 2026: closed. `dbfca832` is an ancestor of main (through #33), and this lane merged main before PR #36
     merged as `b5cbad1c`, so no conflict is left;
   - item 7: the non-hermetic `upstream-free.test.ts:148`, which reads host provider variables.
+    21 Nov 2026: closed on branch `engine-core-fixes` (the provider allow-list; see item 7 above).
 - F6 ("Codium finish: F6 cost kind on read", For the lead): the desktop task-bridge store's closed literals
   (`packages/engine/src/task/desktop.ts:24-33`), and `packages/core/src/review/local-result.ts:26`'s own closed
   cost-kind literal. 21 Nov 2026: the task-bridge cost kinds are closed on branch `engine-core-fixes` (see "Codium
