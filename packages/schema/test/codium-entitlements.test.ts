@@ -259,6 +259,8 @@ describe("publicEntitlements", () => {
       ["on-call", ["ops"]],
       ["release-guard", ["ops"]],
       ["ship-desk", ["ops"]],
+      // EV-08: Vector everywhere has no number of its own; Remote's computers are Remote's field.
+      ["everywhere", []],
     ]
     for (const id of ids)
       for (const [perk, names] of fields) {
@@ -305,6 +307,15 @@ describe("publicEntitlements", () => {
     expect(ENTITLEMENTS["vector-200"].reports.perHour).toBe(30)
     for (const id of ids) expect(keys(publicEntitlements(id, all)).filter((key) => banned.test(key))).toEqual([])
     expect(publicEntitlements("vector-20" as PlanId, all)).toEqual({})
+  })
+
+  test("EV-08: everywhere is one listing id that adds no public field or number to any plan", () => {
+    expect(PERK_IDS.filter((perk) => perk === "everywhere")).toEqual(["everywhere"])
+    const rest = new Set<PerkId>(PERK_IDS.filter((perk) => perk !== "everywhere"))
+    for (const id of ids) {
+      expect(Object.keys(publicEntitlements(id, new Set<PerkId>(["everywhere"]))).sort()).toEqual([...always].sort())
+      expect(publicEntitlements(id, all)).toEqual(publicEntitlements(id, rest))
+    }
   })
 })
 

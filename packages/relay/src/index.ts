@@ -3,10 +3,11 @@
 //   GET  /v1/connect          WebSocket upgrade. The ticket comes in Sec-WebSocket-Protocol next to `vector.v1`; the
 //                             Worker checks it, reads its kill flag, and hands the connection to the account's object.
 //   POST /internal/v1/<name>  The API's signed calls (internal.ts): kill, suspend, presence, devices, revoke-device,
-//                             erase, flags. job-offer is reserved (§4.17) and answers 501.
+//                             erase, flags, job-offer (a signed offer to the account's computers, R-C1).
 //   GET  /health              {ok:true}
 //
-// The relay forwards only ciphertext and never logs a ticket, an account or a frame.
+// The relay forwards only ciphertext and the API's signed job offers, and never logs a ticket, an account, an offer
+// or a frame.
 
 import { AccountRelay, INTERNAL_ACTIONS, KILL_KEY, NONCE_HEADER, TICKET_HEADER, answer, failure } from "./account-relay"
 import { internalSecret, verifyInternalSignature } from "./internal"
@@ -74,8 +75,7 @@ async function connect(request: Request, env: Env, runtime: Runtime): Promise<Re
 async function internal(request: Request, env: Env, runtime: Runtime, url: URL): Promise<Response> {
   if (request.method !== "POST") return failure(405, "RELAY_METHOD")
   const action = url.pathname.slice(INTERNAL_PREFIX.length)
-  if (action !== "job-offer" && !(INTERNAL_ACTIONS as readonly string[]).includes(action))
-    return failure(404, "RELAY_NOT_FOUND")
+  if (!(INTERNAL_ACTIONS as readonly string[]).includes(action)) return failure(404, "RELAY_NOT_FOUND")
   const secret = internalSecret(env.INTERNAL_SECRET)
   if (!secret) return failure(503, "INTERNAL_UNAVAILABLE")
   const declared = Number(request.headers.get("content-length") ?? "0")
@@ -88,8 +88,6 @@ async function internal(request: Request, env: Env, runtime: Runtime, url: URL):
     runtime.now(),
   )
   if (!check.ok) return failure(401, "INTERNAL_SIGNATURE_INVALID")
-  // §4.17: the envelope kind exists so a later release can offer a job to an online computer. Nothing sends it yet.
-  if (action === "job-offer") return failure(501, "RELAY_JOB_OFFER_RESERVED")
   let parsed: unknown
   try {
     parsed = JSON.parse(new TextDecoder().decode(body))

@@ -32,6 +32,7 @@ import {
 } from "./github.evidence"
 import { extractResponseText, formatPromptTooLargeError } from "./github.shared"
 import type { FileDiff } from "@vectordevai/schema/file-diff"
+import type { PlatformId } from "@vectordevai/schema/everywhere"
 import { GITHUB_ACTIONS_BOT, type GithubAuth } from "./github.auth"
 import { downloadGithubAttachment } from "./github.attachment"
 import { TASK_MENTIONS } from "./github.route"
@@ -573,6 +574,12 @@ export type ChatContext = {
   reportError?: (label: "Agent error:" | "Summary agent error:", error: unknown) => void
   /** True once the run was stopped: chat then sends no further turn, the summary turn included. */
   halted?: () => boolean
+  /**
+   * The task turns' outside marker (their text part's BrainSchema.OUTSIDE): "github" by default, and the platform of
+   * the Vector everywhere job a run serves (R-A4). The title turn shares the context, so it carries the same marker.
+   * Only a platform, so no caller can stamp one of memory's trusted markers ("file", BrainSchema.PASTE) on a task turn.
+   */
+  outside?: PlatformId
 }
 
 type SessionContext = {
@@ -583,11 +590,12 @@ type SessionContext = {
 
 /**
  * The task as the GitHub agent sends it: the trigger comment with the issue or pull request text and its comments,
- * written by whoever opened or commented on it. None of it is the user's own words, so it vouches for no memory, and
- * memory the agent writes in this session waits for review.
+ * written by whoever opened or commented on it, or a Vector everywhere job's request from `outside`, its platform
+ * (R-A4). None of it is the user's own words, so it vouches for no memory, and memory the agent writes in this session
+ * waits for review.
  */
-export function taskPart(text: string) {
-  return { id: PartID.ascending(), type: "text" as const, text, metadata: { [BrainSchema.OUTSIDE]: "github" } }
+export function taskPart(text: string, outside: PlatformId = "github") {
+  return { id: PartID.ascending(), type: "text" as const, text, metadata: { [BrainSchema.OUTSIDE]: outside } }
 }
 
 /**
@@ -610,7 +618,7 @@ export async function chat(ctx: ChatContext, message: string, files: PromptFiles
         model: ctx.model,
         // agent is omitted - server will use default_agent from config or fall back to "build"
         parts: [
-          taskPart(message),
+          taskPart(message, ctx.outside),
           ...files.flatMap((f) => [
             {
               id: PartID.ascending(),

@@ -294,7 +294,11 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   })
 }
 
-export const { use: useServerSDK, provider: ServerSDKProvider } = createSimpleContext({
+export const {
+  use: useServerSDK,
+  useOptional: useOptionalServerSDK,
+  provider: ServerSDKProvider,
+} = createSimpleContext({
   name: "ServerSDK",
   // Returns an accessor so the resolved server can change reactively (e.g. a
   // /new-session draft retargeting its server) without re-instantiating the subtree.

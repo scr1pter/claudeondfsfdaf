@@ -4,9 +4,19 @@ import { codiumKey } from "./codium-keys.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
-export const SWITCH_NAMES = ["sales", "codium", "cloudAgents", "hosted", "ops", "remote", "vault", "push"] as const
+export const SWITCH_NAMES = [
+  "sales",
+  "codium",
+  "cloudAgents",
+  "hosted",
+  "ops",
+  "remote",
+  "vault",
+  "push",
+  "everywhere",
+] as const
 export type SwitchName = (typeof SWITCH_NAMES)[number]
-/** `hosted` alone also takes `no-new` (no new work) and `stop` (running work stops too). */
+/** `hosted` and `everywhere` also take `no-new` (no new work) and `stop` (running work stops too). */
 export type SwitchValue = "on" | "off" | "no-new" | "stop"
 const VALUES: Record<SwitchName, readonly SwitchValue[]> = {
   sales: ["on", "off"],
@@ -17,7 +27,11 @@ const VALUES: Record<SwitchName, readonly SwitchValue[]> = {
   remote: ["on", "off"],
   vault: ["on", "off"],
   push: ["on", "off"],
+  // R-C6: like `hosted`, `stop` also reaches running work. Codium's `off` is not an `everywhere` value.
+  everywhere: ["on", "no-new", "stop"],
 }
+/** Each switch's values, for callers that must accept exactly what writeSwitch accepts (the owner API). */
+export const SWITCH_VALUES: Readonly<Record<SwitchName, readonly SwitchValue[]>> = VALUES
 export const switchKey = (name: SwitchName) => codiumKey("switch", name)
 export const switchAuditKey = () => codiumKey("switch", "audit")
 export const disabledSetKey = (name: "models-off" | "perks-off") => codiumKey(name)

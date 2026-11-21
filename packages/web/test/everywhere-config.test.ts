@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto"
 import {
   ENV_NAMES,
+  everywhereReady,
   parseDataKey,
   platformOn,
   readConfig,
@@ -270,5 +271,55 @@ describe("allowed accounts and the cron secret", () => {
     expect(readConfig({ [ENV_NAMES.cronSecret]: "short" }).cronSecret).toBeUndefined()
     const value = secret()
     expect(readConfig({ [ENV_NAMES.cronSecret]: value }).cronSecret).toBe(value)
+  })
+})
+
+describe("the Codium perk's readiness (EV-08)", () => {
+  // Everything everywhereReady reads, with Slack as the open platform.
+  const ready = (extra: Env = {}): Env =>
+    on({
+      [ENV_NAMES.offerSigningKey]: ed25519Pem(),
+      [ENV_NAMES.offerKeyId]: "offer-2026-11",
+      [ENV_NAMES.platforms]: "slack",
+      [ENV_NAMES.cronSecret]: secret(),
+      ...slackEnv(),
+      ...extra,
+    })
+  const without = (name: string, env = ready()) =>
+    Object.fromEntries(Object.entries(env).filter(([key]) => key !== name))
+
+  test("false today, even fully configured: the laptop route and the plan check are not wired", () => {
+    expect(everywhereReady(readConfig(ready()))).toBe(false)
+    expect(everywhereReady(readConfig({}))).toBe(false)
+    expect(everywhereReady()).toBe(false)
+  })
+
+  test("once wired: the flag and its data key, signed offers, the cron secret and Slack, Linear or Jira open", () => {
+    expect(everywhereReady(readConfig(ready()), true)).toBe(true)
+    expect(everywhereReady(readConfig(ready({ [ENV_NAMES.platforms]: "linear", ...linearEnv() })), true)).toBe(true)
+    const jira = ready({ [ENV_NAMES.platforms]: "jira", [ENV_NAMES.jiraForgeAppId]: "ari-app" })
+    expect(everywhereReady(readConfig(jira), true)).toBe(true)
+    expect(everywhereReady(readConfig(ready({ [ENV_NAMES.platforms]: "github,slack" })), true)).toBe(true)
+    expect(everywhereReady(readConfig({}), true)).toBe(false)
+    for (const name of [
+      ENV_NAMES.enabled,
+      ENV_NAMES.dataKey,
+      ENV_NAMES.offerSigningKey,
+      ENV_NAMES.offerKeyId,
+      ENV_NAMES.platforms,
+      ENV_NAMES.cronSecret,
+      ENV_NAMES.slackSigningSecret,
+    ])
+      expect([name, everywhereReady(readConfig(without(name)), true)]).toEqual([name, false])
+  })
+
+  test("GitHub alone, a flag that is not exactly true and a short cron secret are not ready", () => {
+    expect(everywhereReady(readConfig(ready({ [ENV_NAMES.platforms]: "github" })), true)).toBe(false)
+    // Slack listed beside GitHub but without its settings leaves only GitHub open.
+    const unconfigured = without(ENV_NAMES.slackClientSecret, ready({ [ENV_NAMES.platforms]: "github,slack" }))
+    expect(readConfig(unconfigured).platforms).toEqual(new Set(["github"]))
+    expect(everywhereReady(readConfig(unconfigured), true)).toBe(false)
+    expect(everywhereReady(readConfig(ready({ [ENV_NAMES.enabled]: "TRUE" })), true)).toBe(false)
+    expect(everywhereReady(readConfig(ready({ [ENV_NAMES.cronSecret]: "short" })), true)).toBe(false)
   })
 })

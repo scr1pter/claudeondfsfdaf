@@ -127,8 +127,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {
       const global = { ...Redaction.redactConfig(yield* config.getGlobal()), locked: Config.lockedKeys() }
       // Vector Local's block is the owner's: their model servers' addresses, identities and the services they allowed.
-      // A guest loads the app from this route but cannot change it, so it gets the rest.
-      if (!(yield* RequestOwner.owner)) return omit(global, ["local"])
+      // So is Vector everywhere's: this computer's project folders and limits. A guest loads the app from this route
+      // but cannot change it, so it gets the rest.
+      if (!(yield* RequestOwner.owner)) return omit(global, ["local", "everywhere"])
       return global
     })
 

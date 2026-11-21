@@ -631,6 +631,158 @@ function integrationTests() {
     })
   })
 
+  // R-A9 (EV-26): the mode verifyBind read at the bind token's SHA, written in REDEEM beside the bind's workflowVersion.
+  describe("workflow mode (R-A9)", () => {
+    test("redeem records the verified workflow mode with its version, and every reader returns it", async () => {
+      for (const workflowMode of ["codium", "own-key"] as const) {
+        const account = randomUUID()
+        const who = repository()
+        const code = await issue(account, who, T)
+        commands.length = 0
+        const binding = await redeemAndBind({
+          code,
+          account,
+          identity: who,
+          workflowVersion: "3",
+          installationId: "600",
+          workflowMode,
+          takeover: NO_TAKEOVER,
+          now: T + 5,
+        })
+        expect(commands).toHaveLength(1)
+        expect(commands[0][0]).toBe("EVAL")
+        expect(binding).toStrictEqual({
+          repositoryId: who.repositoryId,
+          ownerId: who.ownerId,
+          repository: who.repository,
+          account,
+          visibility: "private",
+          defaultRef: "refs/heads/main",
+          generation: 1,
+          binder: { githubId: "583231", login: "octocat" },
+          workflowVersion: "3",
+          boundAt: T + 5,
+          installationId: "600",
+          workflowMode,
+        } satisfies RepoBinding)
+        expect(await stored(who.repositoryId)).toStrictEqual({
+          repositoryId: who.repositoryId,
+          ownerId: who.ownerId,
+          repository: who.repository,
+          account,
+          visibility: "private",
+          defaultRef: "refs/heads/main",
+          generation: "1",
+          binderGithubId: "583231",
+          binderLogin: "octocat",
+          workflowVersion: "3",
+          boundAt: String(T + 5),
+          installationId: "600",
+          workflowMode,
+        })
+        expect(await bindingFor(who.repositoryId)).toStrictEqual(binding)
+        expect(await bindingsForAccount(account)).toStrictEqual([binding])
+      }
+    })
+
+    test("a rebind or takeover replaces the mode with its own, or leaves none", async () => {
+      const account = randomUUID()
+      const other = randomUUID()
+      const who = repository()
+      const admin = { adminVerified: true, allowanceInactive: false }
+      const steps: {
+        account: string
+        input: Partial<RedeemInput>
+        mode?: RepoBinding["workflowMode"]
+        version: string
+      }[] = [
+        { account, input: { workflowMode: "codium" }, mode: "codium", version: "3" },
+        { account, input: { workflowMode: "own-key", workflowVersion: "4" }, mode: "own-key", version: "4" },
+        { account, input: {}, version: "3" },
+        { account: other, input: { workflowMode: "codium", takeover: admin }, mode: "codium", version: "3" },
+        { account, input: { takeover: admin }, version: "3" },
+      ]
+      for (const [index, step] of steps.entries()) {
+        const bound = await bind(step.account, who, T + index, step.input)
+        const read = await bindingFor(who.repositoryId)
+        expect(read).toStrictEqual(bound)
+        expect({ index, account: read?.account, mode: read?.workflowMode, version: read?.workflowVersion }).toEqual({
+          index,
+          account: step.account,
+          mode: step.mode,
+          version: step.version,
+        })
+        expect(read !== undefined && "workflowMode" in read).toBe(step.mode !== undefined)
+        expect(await redis.send("HEXISTS", [bindingKey(who.repositoryId), "workflowMode"])).toBe(step.mode ? 1 : 0)
+      }
+    })
+
+    test("a legacy binding without a mode decodes with none, and touch, rename and suspend keep what is stored", async () => {
+      const account = randomUUID()
+      const legacy = repository()
+      // Exactly the fields a binding written before EV-26 holds.
+      await write("HSET", bindingKey(legacy.repositoryId), [
+        ...["repositoryId", legacy.repositoryId, "ownerId", legacy.ownerId, "repository", legacy.repository],
+        ...["account", account, "visibility", "private", "defaultRef", "refs/heads/main", "generation", "1"],
+        ...["binderGithubId", "583231", "binderLogin", "octocat", "workflowVersion", "3", "boundAt", String(T)],
+        ...["installationId", "600"],
+      ])
+      await write("SET", generationKey(legacy.repositoryId), ["1"])
+      await write("SADD", `${PREFIX}bindings:${account}`, [legacy.repositoryId])
+      const read = {
+        repositoryId: legacy.repositoryId,
+        ownerId: legacy.ownerId,
+        repository: legacy.repository,
+        account,
+        visibility: "private",
+        defaultRef: "refs/heads/main",
+        generation: 1,
+        binder: { githubId: "583231", login: "octocat" },
+        workflowVersion: "3",
+        boundAt: T,
+        installationId: "600",
+      } satisfies RepoBinding
+      expect(await bindingFor(legacy.repositoryId)).toStrictEqual(read)
+      expect(await bindingsForAccount(account)).toStrictEqual([read])
+      const who = repository()
+      const bound = await bind(account, who, T + 1, { workflowMode: "codium" })
+      await touchBinding(who.repositoryId, T + 10)
+      await renameBinding(who.repositoryId, "octo-renamed/app")
+      await suspendBinding(bound, "deleted")
+      expect(await bindingFor(who.repositoryId)).toStrictEqual({
+        ...bound,
+        repository: "octo-renamed/app",
+        lastUsedAt: T + 10,
+        suspended: "deleted",
+        generation: bound.generation + 1,
+      })
+      expect((await stored(who.repositoryId)).workflowMode).toBe("codium")
+      expect(await revokeBinding(who.repositoryId, account, bound.generation + 1)).toBe(true)
+      expect(await redis.send("EXISTS", [bindingKey(who.repositoryId)])).toBe(0)
+    })
+
+    test("recordRepoBinding refuses a mode it does not know before any store command", async () => {
+      const account = randomUUID()
+      const who = repository()
+      const code = await issue(account, who, T)
+      commands.length = 0
+      for (const workflowMode of ["byok", "", "Codium", "own_key", 1, null])
+        await expect(
+          recordRepoBinding({
+            code,
+            account,
+            identity: who,
+            workflowVersion: "3",
+            workflowMode: workflowMode as unknown as RedeemInput["workflowMode"],
+            takeover: NO_TAKEOVER,
+            now: T,
+          }),
+        ).rejects.toMatchObject(INVALID_REQUEST)
+      expect(commands).toEqual([])
+      expect(await peekBindCode(code, who, T)).toStrictEqual({ account })
+    })
+  })
+
   describe("generations", () => {
     test("bind, rebind, unbind, takeover and the first suspension each move it by one, and it never resets", async () => {
       const binder = randomUUID()
@@ -1211,6 +1363,9 @@ function integrationTests() {
         ["an owner id in exponent form", (fields) => ({ ...fields, ownerId: "1e5" })],
         ["a negative bind time", (fields) => ({ ...fields, boundAt: "-1" })],
         ["a tag for a default ref", (fields) => ({ ...fields, defaultRef: "refs/tags/v1" })],
+        ["an unknown workflow mode", (fields) => ({ ...fields, workflowMode: "byok" })],
+        ["an empty workflow mode", (fields) => ({ ...fields, workflowMode: "" })],
+        ["a workflow mode in another case", (fields) => ({ ...fields, workflowMode: "Codium" })],
       ]
       for (const [name, corrupt] of corruptions) {
         const who = repository()
@@ -1427,8 +1582,9 @@ function integrationTests() {
     })
   })
 
-  // 2.5's binding shape, and the verified identity V10 passes in. V08 adds repositoryVisibility to GithubIdentity and
-  // must keep it assignable. bun test does not check types; packages/web's typecheck checks this file.
+  // 2.5's binding shape plus R-A9's workflowMode, and the verified identity V10 passes in. V08 adds
+  // repositoryVisibility to GithubIdentity and must keep it assignable. bun test does not check types; packages/web's
+  // typecheck checks this file.
   test("the binding has 2.5's shape, and a verified identity is a bind identity", () => {
     type Equal<A, B> = (<X>() => X extends A ? 1 : 2) extends <X>() => X extends B ? 1 : 2 ? true : false
     type Section25 = {
@@ -1445,6 +1601,7 @@ function integrationTests() {
       lastUsedAt?: number
       suspended?: "transferred" | "deleted" | "binder-left"
       installationId?: string
+      workflowMode?: "codium" | "own-key"
     }
     const shape: Equal<RepoBinding, Section25> = true
     const identity: GithubIdentity extends BindIdentity ? true : false = true

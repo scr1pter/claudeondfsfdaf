@@ -2,6 +2,7 @@ import { ComputerPrivacy } from "@vectordevai/server/computer-privacy"
 import { Workspace } from "@/control-plane/workspace"
 import * as InstanceState from "@/effect/instance-state"
 import { Session } from "@/session/session"
+import { UnattendedShell } from "@/session/unattended-shell"
 import { Database } from "@vectordevai/core/database/database"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { EventV2 } from "@vectordevai/core/event"
@@ -54,6 +55,12 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
         { db },
       )
       const source = payload[0].aggregateID
+      // A replayed creation is a creation and a replayed update replaces the metadata, so neither may set or change the
+      // unattended marks against the rules the session routes keep.
+      const marks = yield* UnattendedShell.replayRefusal(session, payload, owner).pipe(
+        Effect.catchTag("UnattendedShell.LineageError", (error) => Effect.succeed(error.message)),
+      )
+      if (marks) return yield* new ForbiddenError({ message: marks })
       if (owner) {
         // Imports may only tighten privacy. Install all relation and isolation hints before publishing any aggregate.
         for (const event of payload) {

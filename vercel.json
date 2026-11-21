@@ -557,6 +557,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/everywhere/sweep",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/hosted/drift",
       "schedule": "*/10 * * * *"
     },

@@ -494,13 +494,18 @@ describe.skipIf(!valkeyURL)("A17 actual admission/settlement Lua on Valkey", () 
         dailyShare: 0.25,
         cloudAgents: { ...f.input.snapshot.caps.cloudAgents, runCeilingShare: 0.1 },
       })
-      const run = { id: `run-${randomUUID()}`, deadline: f.now + 3_600_000, ceilingShare: 1 }
-      await f.admit({ requiredMicro: 100_000, run })
-      await expect(f.admit({ run }, f.now + 660_001)).rejects.toMatchObject({ code: "MODEL_PLAN_RUN_LIMIT" })
-      await expect(f.admit({ requiredMicro: 160_000 }, f.now + 660_001)).rejects.toMatchObject({
+      // The day reservation counts only on its own UTC day, so the crash and the requests 660 s later must share one.
+      // Within 660 s of midnight the case starts at the next day's first instant: forward, never back, because the
+      // Lua sets absolute expiries from this clock on a Valkey that keeps real time.
+      const dayEnd = Math.floor(f.now / 86_400_000) * 86_400_000 + 86_400_000
+      const at = f.now + 660_001 < dayEnd ? f.now : dayEnd
+      const run = { id: `run-${randomUUID()}`, deadline: at + 3_600_000, ceilingShare: 1 }
+      await f.admit({ requiredMicro: 100_000, run }, at)
+      await expect(f.admit({ run }, at + 660_001)).rejects.toMatchObject({ code: "MODEL_PLAN_RUN_LIMIT" })
+      await expect(f.admit({ requiredMicro: 160_000 }, at + 660_001)).rejects.toMatchObject({
         code: "MODEL_PLAN_DAILY_LIMIT",
       })
-      await expect(f.admit({ requiredMicro: 910_000 }, f.now + 660_001)).rejects.toMatchObject({
+      await expect(f.admit({ requiredMicro: 910_000 }, at + 660_001)).rejects.toMatchObject({
         code: "MODEL_PLAN_EXHAUSTED",
       })
     }))

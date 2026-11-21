@@ -34,6 +34,10 @@ const SWITCHES = {
   remote: ["Remote", "Controls the remote connection service."],
   vault: ["Vault", "Controls the hosted backup service."],
   push: ["Push notifications", "Controls push delivery."],
+  everywhere: [
+    "Everywhere",
+    "Applies only while the Everywhere flag is set. No new refuses new jobs; Stop also ends running and waiting ones.",
+  ],
 } as const
 
 const money = (value: number | null | undefined) =>
@@ -887,7 +891,11 @@ function SwitchRow(props: {
         disabled={props.disabled}
         onChange={(event) => setValue(event.target.value)}
       >
-        {(props.entry.name === "hosted" ? ["on", "no-new", "stop"] : ["on", "off"]).map((choice) => (
+        {/* Mirrors SWITCH_VALUES in api/_lib/codium-switches.ts; CodiumOwner.test.ts pins every switch to it. */}
+        {(props.entry.name === "hosted" || props.entry.name === "everywhere"
+          ? ["on", "no-new", "stop"]
+          : ["on", "off"]
+        ).map((choice) => (
           <option key={choice} value={choice}>
             {choice === "no-new" ? "No new" : choice === "on" ? "On" : choice === "stop" ? "Stop" : "Off"}
           </option>

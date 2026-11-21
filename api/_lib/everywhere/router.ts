@@ -31,8 +31,10 @@ export async function routeFacts(input: {
     input.ports.presence(input.sponsor).catch(() => ({ online: false, computers: 0, reason: "unreachable" as const })),
     readComputer(input.ctx.store, input.sponsor),
   ])
-  const binding = input.repository && input.ports.prepareCloud
-    ? await input.ports.binding(input.repository.id) : undefined
+  // A platform that is not an enabled run source has no Actions route, so nothing is read for it (R-C8/R-A8).
+  const sourceEnabled = input.trigger.platform !== "github" && input.ports.cloudSource?.(input.trigger.platform) === true
+  const binding = input.repository && input.ports.prepareCloud && sourceEnabled
+    ? await input.ports.binding(input.repository.id).catch(() => undefined) : undefined
   const visibility = binding && input.repository && input.ports.visibility
     ? await input.ports.visibility(input.repository.id).catch(() => undefined) : undefined
   return {
@@ -53,7 +55,7 @@ export async function routeFacts(input: {
     },
     computers: Number.isSafeInteger(presence.computers) ? Math.max(0, presence.computers) : 0,
     actions: input.ports.prepareCloud ? {
-      sourceEnabled: input.trigger.platform !== "github", bodyByReference: true, modeRecorded: true,
+      sourceEnabled, bodyByReference: true, modeRecorded: true,
       binding, visibility,
     } : undefined,
     receivedAt: input.receivedAt,
@@ -61,9 +63,15 @@ export async function routeFacts(input: {
   }
 }
 
-/** A dispatch reserves the state before its external side effect, so a late laptop claim cannot race an Actions run. */
+/**
+ * A dispatch reserves the state before its external side effect, so a late laptop claim cannot race an Actions run.
+ * The router checks the run source itself, so a Ports set whose prepareCloud skips that check still routes nothing
+ * from a platform that is not an enabled source (R-C8/R-A8). A failed binding read abandons, as a failed visibility
+ * read does.
+ */
 async function actions(deps: Routing, job: JobRecord): Promise<boolean> {
   if (!deps.ports.prepareCloud || job.platform === "github") return false
+  if (deps.ports.cloudSource?.(job.platform) !== true) return false
   const prepared = await deps.ports.prepareCloud({
     jid: job.jid, source: job.platform, sponsor: job.sponsor,
     requestedBy: { platform: job.platform, userId: job.requester.userId },
@@ -74,7 +82,7 @@ async function actions(deps: Routing, job: JobRecord): Promise<boolean> {
   const abandon = async () => { await prepared.cancel?.().catch(() => undefined); return false }
   if (await deps.ports.switch("everywhere") === "stop") return abandon()
   if (!deps.ports.visibility || await deps.ports.visibility(job.repository.id).catch(() => undefined) !== "private") return abandon()
-  const binding = await deps.ports.binding(job.repository.id)
+  const binding = await deps.ports.binding(job.repository.id).catch(() => undefined)
   if (!binding || binding.account.toLowerCase() !== job.sponsor.toLowerCase() || !binding.appInstalled || binding.codiumMode !== true) return abandon()
   const moved = await dispatchJob(deps.context(), job.jid, { ticketHash: prepared.ticketHash })
   if (!moved.ok) return abandon()

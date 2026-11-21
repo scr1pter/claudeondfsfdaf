@@ -22,7 +22,8 @@ import {
 } from "../../../api/_lib/model-plan-status"
 import { codiumBillingConfigProblems, type ModelPlanModel } from "../../../api/_lib/model-plan-config"
 import { historyDays } from "../../../api/_lib/codium-usage-history"
-import { publicEntitlements } from "../../../packages/schema/src/codium-entitlements"
+import { ENTITLEMENTS, publicEntitlements } from "../../../packages/schema/src/codium-entitlements"
+import { PERK_COPY } from "../../../packages/schema/src/codium-copy"
 import type { CodiumPlan } from "../../../packages/schema/src/codium-plan"
 import { handlePublicCodiumConfig } from "../../../api/model-plans/config"
 import { readModelPlanStatus } from "../src/lib/model-plans"
@@ -66,6 +67,7 @@ beforeEach(() => {
     SUPABASE_URL: "https://auth.fixture.invalid",
     SUPABASE_PUBLISHABLE_KEY: "fixture-publishable",
   })
+  current.fetcher = fetch
   current.options = served
 })
 afterEach(() => {
@@ -601,6 +603,41 @@ describe("the 30-second cache", () => {
     setSystemTime(new Date(until))
     ramped.fakes.clock.now = until
     expect((await read(ramped.token)).body.plan.ramp).toBeUndefined()
+  })
+})
+
+// EV-08 (R-C7): `everywhere` is a listing, not an entitlement field. Listing is global, so an account with no plan sees
+// it listed but has no plan whose caps could include it; a paid plan includes it and its public caps gain nothing.
+describe("the everywhere perk (EV-08)", () => {
+  const services = { remote: () => true, everywhere: () => true }
+
+  test("an account with no plan sees it listed, with no plan or entitlements to include it", async () => {
+    process.env.CODIUM_LISTED_PERKS = "remote,everywhere"
+    current.fetcher = codiumFakes().fetcher
+    current.options = { ...served, perks: { services } }
+    const user = { id: "22222222-2222-4222-8222-222222222222", email: "fixture@example.test" }
+    const answer = await read(mintCliToken(user).token)
+    expect(answer.status).toBe(200)
+    expect(answer.body).toEqual({
+      enabled: true,
+      active: false,
+      access: false,
+      listed: ["remote", "everywhere"],
+      purchased: { bought: false },
+      empty: true,
+      low: false,
+    })
+  })
+
+  test("a paid plan includes it, and its public caps gain no field", async () => {
+    const { token } = await seed("active-paid")
+    process.env.CODIUM_LISTED_PERKS = "remote,everywhere"
+    current.options = { ...served, perks: { services } }
+    const body = (await read(token)).body
+    const plan = body.plan.id as CodiumPlan.PlanId
+    expect(body.listed).toEqual(["remote", "everywhere"])
+    expect(body.entitlements).toEqual(publicEntitlements(plan, new Set(["remote"])))
+    expect(PERK_COPY.everywhere.applies(ENTITLEMENTS[plan])).toBe(true)
   })
 })
 

@@ -19,6 +19,8 @@
  */
 import { Effect } from "effect"
 import { OpenApi } from "effect/unstable/httpapi"
+import { branchFor } from "@vectordevai/core/everywhere/publish"
+import { createJobId } from "@vectordevai/schema/everywhere"
 import { TestLLMServer } from "../../lib/llm-server"
 import path from "path"
 import { array, boolean, check, isRecord, message, object, stable } from "./assertions"
@@ -1415,6 +1417,53 @@ const scenarios: Scenario[] = [
         yield* ctx.worktreeRemove(ctx.state.directory)
       }),
     ),
+  http.protected
+    .get("/experimental/worktree/unattended", "worktree.unattended.policy")
+    .global()
+    .json(200, (body) => {
+      object(body)
+      check(body.policy === "unattended-v1", "the unattended worktree probe should report unattended-v1")
+    }),
+  // The exerciser's global config has no `everywhere` block, so the user's allowlist refuses before anything else.
+  http.protected
+    .post("/experimental/worktree/unattended", "worktree.unattended.create")
+    .at((ctx) => {
+      const jid = createJobId(Date.now())
+      return {
+        path: "/experimental/worktree/unattended",
+        body: { directory: ctx.directory, base: "0".repeat(40), branch: branchFor(jid), jid },
+      }
+    })
+    .json(
+      403,
+      (body) => {
+        object(body)
+        check(body._tag === "ForbiddenError", "an unattended worktree outside the allowlist should be forbidden")
+      },
+      "status",
+    ),
+  http.protected
+    .post("/experimental/worktree/unattended", "worktree.unattended.create.invalid")
+    .global()
+    .at(() => ({ path: "/experimental/worktree/unattended", body: { directory: 1 } }))
+    .status(400),
+  // The answer depends on this computer (Linux with a bubblewrap that starts), so either value is right here.
+  http.protected
+    .get("/experimental/shell/unattended", "shell.unattended.policy")
+    .global()
+    .json(200, (body) => {
+      object(body)
+      check(body.shell === "offline-v1" || body.shell === "none", "the unattended shell probe should report its policy")
+    }),
+  // A session whose commands run only in the offline sandbox takes one value, which the owner's request must give.
+  http.protected
+    .post("/session", "session.create.unattended-shell.invalid")
+    .at((ctx) => ({
+      path: "/session",
+      headers: ctx.headers(),
+      body: { metadata: { "vector.unattended": { by: "everywhere" }, "vector.unattended.shell": "online" } },
+    }))
+    .status(400),
   http.protected
     .get("/experimental/session", "experimental.session.list")
     .at((ctx) => ({ path: "/experimental/session?roots=false&archived=false", headers: ctx.headers() }))

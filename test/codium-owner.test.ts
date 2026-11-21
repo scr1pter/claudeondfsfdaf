@@ -7,7 +7,7 @@ import { handleCodiumOwner, ownerAuditKey, type CodiumOwnerAction } from "../api
 import { codiumKey } from "../api/_lib/codium-keys"
 import { ACCOUNT_RECONCILE_SCRIPT, drainOutbox, saveAccountAndReconcile } from "../api/_lib/codium-provision"
 import { readSnapshot } from "../api/_lib/codium-snapshot"
-import { readDisabledSet } from "../api/_lib/codium-switches"
+import { readDisabledSet, readSwitch, SWITCH_NAMES, switchAuditKey, switchKey } from "../api/_lib/codium-switches"
 import type { ApiRequest, ApiResponse } from "../api/_lib/http"
 import {
   listSubscriptions,
@@ -178,6 +178,31 @@ describe("A12 Google owner boundary and audit", () => {
     expect(raw).not.toContain("@")
     expect(raw).toContain("completed")
   })
+  test("the everywhere switch takes no-new and stop from the owner and refuses off", async () => {
+    const fakes = seed()
+    for (const value of ["no-new", "stop"] as const) {
+      const answer = await call(fakes, "switch", { name: "everywhere", value })
+      expect([answer.status, answer.body]).toEqual([200, { accepted: true }])
+      expect(await readSwitch("everywhere", fakes.fetcher, { fresh: true })).toBe(value)
+    }
+    // Two accepted calls leave a requested and a completed owner audit row each; a refused call must add none.
+    expect(fakes.store.zset(ownerAuditKey()).size).toBe(4)
+    expect(await call(fakes, "switch", { name: "everywhere", value: "off" })).toMatchObject({
+      status: 400,
+      body: { error: { code: "CODIUM_OWNER_REQUEST" } },
+    })
+    expect(await readSwitch("everywhere", fakes.fetcher, { fresh: true })).toBe("stop")
+    for (const refused of [
+      { name: "hosted", value: "off" },
+      { name: "remote", value: "no-new" },
+    ])
+      expect(await call(fakes, "switch", refused)).toMatchObject({
+        status: 400,
+        body: { error: { code: "CODIUM_OWNER_REQUEST" } },
+      })
+    expect(fakes.store.zset(switchAuditKey()).size).toBe(2)
+    expect(fakes.store.zset(ownerAuditKey()).size).toBe(4)
+  })
   test("cross-origin writes and incomplete refund confirmations are rejected before effects", async () => {
     const fakes = seed()
     expect(
@@ -222,6 +247,19 @@ describe("A12 private dashboard", () => {
     expect(answer.raw).not.toContain((await readModelPlanAccount(id, fakes.fetcher))!.key!.encrypted)
     expect(answer.body.accounts).toMatchObject([{ account: id, refundCents: 1000, refundCharge: "ch_active" }])
     expect(answer.headers["x-robots-tag"]).toContain("noindex")
+  })
+  test("the dashboard lists every Codium switch, everywhere included", async () => {
+    const fakes = seed()
+    funded(fakes)
+    fakes.store.set(switchKey("everywhere"), JSON.stringify({ value: "stop", changedAt: now, generation: "g" }))
+    const answer = await call(fakes, "dashboard")
+    expect(answer.status).toBe(200)
+    const dashboard = Schema.decodeUnknownSync(CodiumOwner.Dashboard)(answer.body)
+    expect(dashboard.switches.map((entry) => entry.name)).toEqual([...SWITCH_NAMES])
+    expect(dashboard.switches.find((entry) => entry.name === "everywhere")).toMatchObject({
+      value: "stop",
+      changedAt: now,
+    })
   })
   test("sales readiness uses the canonical configuration guard when provider management is missing", async () => {
     const fakes = seed()

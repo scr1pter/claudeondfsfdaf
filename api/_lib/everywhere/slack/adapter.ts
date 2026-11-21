@@ -22,6 +22,8 @@ export type SlackDeps = {
   readonly context: () => JobsContext
   readonly ports: Ports
   readonly fetcher?: typeof fetch
+  /** The intake's offer poll (router.ts), as LinearDeps and JiraDeps take it; production leaves createIntake's timer. */
+  readonly sleep?: (ms: number) => Promise<void>
 }
 
 function reference(reply: ReplyReference) {

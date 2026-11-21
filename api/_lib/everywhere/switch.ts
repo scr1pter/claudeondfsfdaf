@@ -8,9 +8,10 @@ import type { EverywhereConfig } from "./config.js"
  * jobs expired, Actions dispatch refused).
  *
  * The `everywhere` switch is the environment first: anything but VECTOR_EVERYWHERE_ENABLED=true with a usable data key
- * reads `stop`. Codium's switch can only make it stricter. Codium has no `everywhere` switch until R-C6; the seam reads
- * it as soon as Codium's SWITCH_NAMES lists it, with no change here. Codium's `off` reads `stop`, and a switch that
- * cannot be read reads `stop`: the switches fail closed.
+ * reads `stop`. Codium's switch can only make it stricter. Codium lists `everywhere` (`on`, `no-new`, `stop`) since
+ * EV-07 (R-C6), so the seam reads Codium's own record, and an absent record reads `on`. Codium's `off` reads `stop`,
+ * and a switch that cannot be read reads `stop`: the switches fail closed. While the flag is off the sweep cron
+ * (sweep.ts) answers `{enabled: false}` before reading this, so the cron expires no waiting job then (EV-04).
  *
  * Relay presence ignores Codium's `remote` switch, so the router reads it here too (E10).
  */
@@ -18,7 +19,7 @@ import type { EverywhereConfig } from "./config.js"
 export type { SwitchState }
 export type EverywhereSwitch = "everywhere" | "remote"
 
-/** Codium's raw value of a switch, or undefined while Codium has no switch by that name. Throws when unreadable. */
+/** Codium's raw value of a switch, or undefined for a name Codium's SWITCH_NAMES omits. Throws when unreadable. */
 export type CodiumSwitches = (name: EverywhereSwitch) => Promise<string | undefined>
 
 /** The seam over Codium's `readSwitch` (api/_lib/codium-switches.ts), which this branch only calls. */
@@ -50,7 +51,7 @@ async function codiumValue(codium: CodiumSwitches, name: EverywhereSwitch): Prom
   }
 }
 
-/** The `everywhere` switch: the environment, made stricter by Codium's switch once it exists. */
+/** The `everywhere` switch: the environment, made stricter by Codium's `everywhere` switch. */
 export async function readEverywhereSwitch(
   config: EverywhereConfig,
   codium: CodiumSwitches = codiumSwitches(),
@@ -59,7 +60,10 @@ export async function readEverywhereSwitch(
   return strictest("on", (await codiumValue(codium, "everywhere")) ?? "on")
 }
 
-/** Codium's `remote` switch (`on` or `off`), read as `on` or `stop`. Unreadable or absent reads `stop`. */
+/**
+ * Codium's `remote` switch (`on` or `off`), read as `on` or `stop`. An absent record reads `on` (Codium's default); an
+ * unreadable switch, or a name Codium does not list, reads `stop`.
+ */
 export async function readRemoteSwitch(codium: CodiumSwitches = codiumSwitches()): Promise<SwitchState> {
   return (await codiumValue(codium, "remote")) ?? "stop"
 }
