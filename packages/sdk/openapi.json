@@ -38575,6 +38575,7 @@
         "properties": {
           "privacy": {},
           "holdback": {},
+          "ruleCheck": {},
           "zdrAttested": {}
         },
         "additionalProperties": false
