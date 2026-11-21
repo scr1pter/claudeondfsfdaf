@@ -679,7 +679,9 @@ test("direct queued prompt panel renders pending prompt actions", async () => {
 })
 
 // OpenTUI currently crashes Bun in the full `test/cli/run` directory run here.
-// Re-enable after the upstream OpenTUI fix lands in this repo.
+// Still skipped (21 Nov 2026): run alone it fails every time (10 of 10 local runs) with "TypeError: undefined is not
+// an object (evaluating 'boxPath(root, \"TextareaRenderable\").at')" in footerComposerFrame, so after a panel
+// transition the composer frame has no textarea for it to find. Root-cause that before re-enabling.
 test.skip("direct footer recreates the frame across command panel transitions", async () => {
   const app = await renderFooter()
 
@@ -704,7 +706,7 @@ test.skip("direct footer recreates the frame across command panel transitions", 
   }
 })
 
-test.skip("direct footer dispatches leader variant binding only when leader is registered", async () => {
+test("direct footer dispatches leader variant binding only when leader is registered", async () => {
   const calls: string[] = []
   const app = await renderFooter({
     tuiConfig: createTuiResolvedConfig({ keybinds: { leader: "ctrl+x", variant_cycle: "<leader>t" } }),
@@ -833,8 +835,7 @@ test("direct footer slash autocomplete keeps a real skills command", async () =>
 })
 
 // OpenTUI currently segfaults Bun while tearing down this composer-to-skill-panel transition.
-// Re-enable after the upstream renderer teardown fix lands.
-test.skip("direct footer skill picker inserts an editable bound skill command", async () => {
+test("direct footer skill picker inserts an editable bound skill command", async () => {
   const submits: RunPrompt[] = []
   const app = await renderFooter({
     commands: [command({ name: "new", description: "Skill named new", source: "skill" })],
@@ -871,8 +872,7 @@ test.skip("direct footer skill picker inserts an editable bound skill command", 
 })
 
 // OpenTUI currently segfaults Bun while tearing down this skill-panel close transition.
-// Re-enable after the upstream renderer teardown fix lands.
-test.skip("direct footer clears the synthetic skills draft when the panel closes", async () => {
+test("direct footer clears the synthetic skills draft when the panel closes", async () => {
   const submits: RunPrompt[] = []
   const app = await renderFooter({
     commands: [command({ name: "formatter", description: "Apply formatter fixes", source: "skill" })],
@@ -1176,8 +1176,7 @@ test("direct question body separates single-select checkmark from label", async 
 })
 
 // OpenTUI currently segfaults while tearing down this textarea-backed keymap renderer.
-// Re-enable after the runtime fix.
-test.skip("direct custom answer submits through keymap return binding", async () => {
+test("direct custom answer submits through keymap return binding", async () => {
   const question = {
     id: "question-1",
     sessionID: "session-1",

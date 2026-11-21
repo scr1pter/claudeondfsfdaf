@@ -1091,3 +1091,23 @@ Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 
 `brain/database.test.ts`, `background-job-store.test.ts` and `engine/test/storage/storage.test.ts` passed (the last
 does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
 change has not run on Windows CI yet.
+
+## 2026-11-21: four footer view tests re-enabled; one stays skipped with its exact reason
+
+Branch `engine-core-fixes`, last commit (revert only this commit if a Linux engine shard panics on it).
+`packages/engine/test/cli/run/footer.view.test.tsx` had five `test.skip` cases with "Re-enable after the upstream …
+fix" comments. Locally (Linux, Bun 1.3.14, through the serial lock, the file alone, 10 runs each):
+
+- Re-enabled, 10 of 10 green with no crash: "direct footer dispatches leader variant binding only when leader is
+  registered", "direct footer skill picker inserts an editable bound skill command", "direct footer clears the
+  synthetic skills draft when the panel closes" and "direct custom answer submits through keymap return binding"
+  (26 pass, 1 skip, 0 fail each run).
+- Still skipped: "direct footer recreates the frame across command panel transitions". With all five enabled it failed
+  10 of 10 runs, deterministically and without a panic: `TypeError: undefined is not an object (evaluating
+  'boxPath(root, "TextareaRenderable").at')` in `footerComposerFrame`, so after a panel transition the composer frame
+  has no textarea. Its comment now gives that reason; the earlier comment that OpenTUI crashes Bun in the full
+  `test/cli/run` directory run is kept. Root-causing it (the footer's composer after a command-panel close) is for the
+  morning list.
+- Open check: the six Linux engine shards and the Windows engine shards of this branch's PR. If one panics, record the
+  bun.report string, the Features worker counts and the last passing test here, as the scrollback entry above does,
+  and revert this commit.
