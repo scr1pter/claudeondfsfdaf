@@ -4776,3 +4776,18 @@ No flag, env var, route, dependency, lockfile or generated file changes. The onl
   code gets 303; 1,025 characters, a space, a non-ASCII letter and a tab get 400; no platform call; and `OAUTH_CODE`
   equals the web `OAUTH_CODE_PATTERN` (source and flags). Mutation: restoring either callback's old length check fails
   its case. Both whole files pass (5 and 16 pass).
+
+## 2026-11-21, v2-closeout-ci: Settings → Remote explains a jobs-only link (EV-11)
+
+- **What was wrong.** With Vector everywhere jobs on and no phone paired, the desktop keeps the Remote link online,
+  and Settings → Remote said "Connected. Your paired phones can reach this computer." with no phone listed. Only the
+  everywhere page's `jobsLine` had the jobs-only text.
+- **Change.** `remote-model.ts` exports `JOBS_ONLY_LINE` ("Connected for jobs. No phone is paired, and none is needed
+  for jobs.") and `stateLine` returns it when the link is online with no phone and the pairing is `idle` or `failed`.
+  A `waiting` or `confirm` pairing also keeps the link online, so it keeps the old text. `everywhere-model.ts`
+  `jobsLine` no longer builds the text itself: it passes `stateLine`'s answer on when that is the jobs-only line, so
+  the text has one source. With phones [] and a pairing open, `jobsLine` now says "Jobs can reach this computer."
+- **Tests.** `remote-model.test.ts`: online with no phone and pairing idle or failed gives the jobs-only line; pairing
+  waiting does not; one phone gives the paired-phones text; the viewers case now lists a phone. The
+  `everywhere-model.test.ts` jobs-only expectation passes unchanged. Removing the new `stateLine` branch fails one case
+  in each file (6 and 32 pass with it).

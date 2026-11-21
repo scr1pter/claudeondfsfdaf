@@ -41,6 +41,9 @@ export function pairedCountLine(status: ModelPlanStatus.Status | undefined) {
 }
 
 /** The connection's state in words. */
+/** Online with no phone paired and no pairing open: the link is up only for Vector everywhere jobs. */
+export const JOBS_ONLY_LINE = "Connected for jobs. No phone is paired, and none is needed for jobs."
+
 export function stateLine(status: RemoteStatus): { text: string; problem: boolean } {
   const say = (text: string, problem = false) => ({ text: status.message ?? text, problem })
   switch (status.state) {
@@ -51,6 +54,9 @@ export function stateLine(status: RemoteStatus): { text: string; problem: boolea
     case "connecting":
       return { text: "Connecting…", problem: false }
     case "online":
+      // The link also stays online while a pairing is open, which is not a jobs-only link.
+      if (status.phones.length === 0 && (status.pairing.state === "idle" || status.pairing.state === "failed"))
+        return { text: JOBS_ONLY_LINE, problem: false }
       return {
         text:
           status.viewers > 0
