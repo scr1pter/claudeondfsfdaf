@@ -6376,6 +6376,12 @@ These are pointers only; nothing is fixed here.
     alone: deleting branches is not this lane's call;
   - confirm the Windows run of the "dispatch's inputs reach the picker only as step environment" compliance case in the
     end-of-lane test.yml.
+    21 Nov 2026 (v2-closeout-ci): corrected premise. No Windows job ran this case: `packages/cloud` has no turbo test
+    task, so the unit job never ran `workflow-compliance.test.ts`, and the comment that said it did was wrong. test.yml's
+    unit job now has a Windows-only step, "Run the Codium dispatch-input compliance case" (5 minutes, `packages/cloud`,
+    `--test-name-pattern "only as step environment"`), and the case asserts that the step exists. Locally the pattern
+    selects that one case (1 pass); with the step removed the case fails. The Windows job ID is to be recorded after the
+    first PR run; a failure there is fixed in the pass-through list, never skipped.
 - TB ("Codium finish: Track B receipts and P4 closings", For the lead):
   - item 1 is closed on this branch by `31ddb43b`, but the same change is still needed on `release-finish`;
     16 Nov 2026: superseded. Main's `9be63d68` (`api/_lib/cloud-agents-epoch.ts`) is the one copy; `bc8cad48` drops

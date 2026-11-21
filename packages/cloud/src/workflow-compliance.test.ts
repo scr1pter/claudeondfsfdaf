@@ -922,8 +922,19 @@ describe("Codium CI lane", () => {
     // needs no fetched main. The environment is explicit: the Codium tests step exports its own CODIUM_CI_BASE.
     const select = step(lane.jobs.browser, "Select the Codium browser specs")?.run
     expect(select).toBeDefined()
-    // test.yml's unit job also runs this file on Windows, where PATH entries are separated by ';' and Bun and git may
-    // need Windows' own system and temp folders. Those few pass through by name, never a CODIUM_CI_* variable.
+    // test.yml's unit (windows) job runs this case alone ("Run the Codium dispatch-input compliance case"), where PATH
+    // entries are separated by ';' and Bun and git may need Windows' own system and temp folders. Those few pass through
+    // by name, never a CODIUM_CI_* variable.
+    const tests = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
+      jobs: { unit: { steps: Array<{ name?: string; if?: string; "working-directory"?: string; run?: string }> } }
+    }
+    expect(tests.jobs.unit.steps.find((item) => item.name === "Run the Codium dispatch-input compliance case")).toEqual({
+      name: "Run the Codium dispatch-input compliance case",
+      if: "${{ !cancelled() && runner.os == 'Windows' }}",
+      "timeout-minutes": 5,
+      "working-directory": "packages/cloud",
+      run: 'GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "only as step environment" src/workflow-compliance.test.ts',
+    })
     const PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
     const system = Object.fromEntries(
       Object.entries(process.env).filter(
