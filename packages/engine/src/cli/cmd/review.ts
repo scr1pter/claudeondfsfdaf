@@ -171,6 +171,8 @@ export interface LocalReviewDeps<RunR = never, ModelR = never> {
   pullInfo?: (pr: number, directory: string) => Promise<PullInfo | undefined>
   stdout: (text: string) => Promise<void> // the review or the JSON
   stderr: (text: string) => void // progress and warnings
+  // Trusted adapters can reuse only the exact state bytes their previous invocation published.
+  branchCache?: { fingerprint?: string; written: (fingerprint: string) => void }
   now?: () => number
   color?: boolean
   github?: GitHubAccess // for --post; the GitHub CLI's token and the real API by default
@@ -359,11 +361,19 @@ export function executeLocalReview<RunR, ModelR>(
     const ignored = (file: string) => denied(file) || classifyPath(file, { config, attributes }) !== undefined
 
     // 3. What changed. Only a branch keeps "since last review" state, in the repository's git directory.
-    // A saved branch review can contain evidence outside a service's admitted read authority.
-    const requiresFreshCoverage =
-      options.context && (config.guardrail === "strict" || !!options.context.admittedReads || !!readDenies?.length)
-    const cardProvider = config.cards === "brain" && !options.context ? deps.cards : undefined
     const batchKey = config.largeChanges === "batch"
+    const branchCache =
+      options.context && !options.context.stateless && !batchKey && config.guardrail !== "strict"
+        ? deps.branchCache
+        : undefined
+    const cachePolicy = branchCache ? JSON.stringify([REVIEW_PIPELINE_SOURCES, config, rulesText, attributesText]) : ""
+    const branchFingerprint = (bytes: string | Buffer) =>
+      createHash("sha256").update(cachePolicy).update("\0").update(bytes).digest("hex")
+    // A saved branch review can carry evidence only if the trusted adapter verified its read authority.
+    const requiresFreshCoverage =
+      options.context &&
+      (config.guardrail === "strict" || (!branchCache && (!!options.context.admittedReads || !!readDenies?.length)))
+    const cardProvider = config.cards === "brain" && !options.context ? deps.cards : undefined
     // A pull ref cannot collide with a Git branch (colon is forbidden in refnames).
     const stateName = options.pr === undefined ? branch : batchKey ? `pr:${options.pr}` : undefined
     const localPath =
@@ -462,9 +472,16 @@ export function executeLocalReview<RunR, ModelR>(
     }
     // A strict cache can be reused before resolving a model. The batch plan below also binds its resolved routes.
     const strictPolicy = config.guardrail === "strict" ? contextPolicy : undefined
-    const stored = statePath
-      ? yield* readLocalState(statePath, !options.full || !!strictPolicy, config.verifyEvidence, locked)
-      : undefined
+    const stored =
+      statePath && (!branchCache || branchCache.fingerprint)
+        ? yield* readLocalState(
+            statePath,
+            !options.full || !!strictPolicy,
+            config.verifyEvidence,
+            locked,
+            branchCache ? (bytes) => branchFingerprint(bytes) === branchCache.fingerprint : undefined,
+          )
+        : undefined
     const retryFull = stored?.state.retryFullAfterBudget === true
     // A strict result certifies one immutable pair and one policy. Even an unchanged patch on a new
     // commit must get its own strict result. Preserve the previous findings and spend when requesting that full run.
@@ -1151,6 +1168,7 @@ export function executeLocalReview<RunR, ModelR>(
       config.ruleCheck === "strict",
       locked,
       batchState?.metadata,
+      branchCache ? (bytes) => branchCache.written(branchFingerprint(bytes)) : undefined,
     )
 
     if (options.json)
@@ -1801,9 +1819,12 @@ function readLocalState(
   includeOutcome: boolean,
   evidence?: ReviewConfig["verifyEvidence"],
   locked?: { text?: string },
+  validate?: (bytes: Buffer) => boolean,
 ) {
   return Effect.promise(async (): Promise<LocalReviewRecord | undefined> => {
-    const text = locked ? locked.text : await fsp.readFile(file, "utf8").catch(() => undefined)
+    const bytes = locked ? undefined : await fsp.readFile(file).catch(() => undefined)
+    if (validate && (!bytes || !validate(bytes))) return undefined
+    const text = locked ? locked.text : bytes?.toString("utf8")
     if (!text) return undefined
     const data = parseJson(text)
     if (!data || data.version !== 1 || typeof data.state !== "string") return undefined
@@ -1910,14 +1931,17 @@ function writeLocalState(
   checkedRules = false,
   locked?: Awaited<ReturnType<typeof lockBatchFile>>,
   batch?: ReturnType<typeof localBatchStore>["metadata"],
+  written?: (bytes: string) => void,
 ) {
   if (!file) return Effect.void
-  const publish = async (record: object) => {
-    if (locked) return locked.replace(JSON.stringify(record) + "\n")
+  const publish = async (record: object, notify = false) => {
+    const text = JSON.stringify(record) + "\n"
+    if (locked) return locked.replace(text)
     const temporary = `${file}.${crypto.randomUUID()}.tmp`
     try {
-      await fsp.writeFile(temporary, JSON.stringify(record) + "\n", { mode: 0o600, flag: "wx" })
+      await fsp.writeFile(temporary, text, { mode: 0o600, flag: "wx" })
       await fsp.rename(temporary, file)
+      if (notify) written?.(text)
     } finally {
       await fsp.rm(temporary, { force: true })
     }
@@ -1989,7 +2013,7 @@ function writeLocalState(
             ...(checkedRules ? { checkedRules: true } : {}),
           }
         : { ...JSON.parse(unchangedRecord), state: encoded }
-    return publish(record)
+    return publish(record, unchangedRecord === undefined)
   }
   if (locked)
     return Effect.tryPromise({
