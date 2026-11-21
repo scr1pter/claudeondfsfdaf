@@ -134,7 +134,7 @@ const INVENTORY = {
   },
   "packages/core/src/pty/process.ts": {
     stance: "fixed-helper",
-    why: "foreground() reads a terminal's foreground group with `ps -o tpgid= -p <pid>` for the PTY's own pid, resolved through PATH with the engine's environment.",
+    why: "foreground() reads a terminal's foreground group with /bin/ps -o tpgid= -p <pid> for the PTY's own pid, with the untrusted-child environment; no caller input reaches its argv.",
   },
   "packages/core/src/shell.ts": {
     stance: "fixed-helper",

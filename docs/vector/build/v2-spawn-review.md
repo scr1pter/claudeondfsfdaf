@@ -635,3 +635,16 @@ by this addendum.
 - Follow-ups, not changed here: `packages/sdk/js/src/process.ts:8` (the SDK copy cannot import core; after the
   regeneration PR, inline the absolute path and a minimal environment), `packages/desktop/src/main/github-clone.ts:560`
   (`execFileSync("taskkill", …)`) and `packages/desktop/src/main/external-agents.ts:1033` (`"taskkill"`).
+
+## Addendum, 21 November 2026: F8 (the PTY foreground read used a `ps` from PATH) closed
+
+- `packages/core/src/pty/process.ts` `foreground()` runs `/bin/ps -o tpgid= -p <pid>` (fixed path, as
+  `owned-process.ts`'s group check already assumes for macOS and usrmerged Linux) with `untrustedChildEnvironment()`,
+  `killSignal: "SIGKILL"` and `maxBuffer: 4096`; the existing catch still answers the program's own pid when `/bin/ps`
+  is missing. The inventory row in `packages/engine/test/spawn-inventory.test.ts` says so; the stance stays
+  fixed-helper.
+- Test: new `packages/core/test/pty/pty-process.test.ts` (skipped on Windows, as foreground() is). A child Bun process
+  started with a fake `ps` first on PATH (Bun resolves a bare name from the PATH it started with, so the parent's
+  PATH change would not reach it; a probe under `/tmp/vector-v2/engine-core-fixes/probe/` showed Node does honour it)
+  calls foreground(its own pid): the answer is a positive integer and the fake's marker is absent. On the old
+  `execFileSync("ps", …)` the marker appears (1 pass, 1 fail). Pids -1 and 0 come back unchanged.
