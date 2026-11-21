@@ -32,6 +32,8 @@ const sentPrompts: Array<{
     executionMode?: "normal" | "fast"
     agent?: string
     size?: string
+    judge?: string
+    codeReview?: boolean
     parts?: Array<{ type: string; text?: string; metadata?: Record<string, unknown> }>
   }
 }> = []
@@ -43,6 +45,8 @@ const statusSets: Array<{ sessionID: string; type: string }> = []
 const stops: Array<{ route: string; input: Record<string, unknown> }> = []
 let promptError: Error | undefined
 let commands: Array<{ name: string }> = []
+// Every custom command the composer sent, in order.
+const sentCommands: Array<Record<string, unknown>> = []
 
 let params: { id?: string } = {}
 let search: { draftId?: string } = {}
@@ -139,7 +143,10 @@ const clientFor = (directory: string) => {
         sentPrompts.push({ directory, input })
         return { data: undefined }
       },
-      command: async () => ({ data: undefined }),
+      command: async (input: Record<string, unknown>) => {
+        sentCommands.push(input)
+        return { data: undefined }
+      },
       abort: async (input: { sessionID: string }) => {
         stops.push({ route: "session.abort", input })
         return { data: true }
@@ -387,6 +394,7 @@ beforeEach(() => {
   capabilities = async () => ({ data: capable })
   capabilityCalls.length = 0
   commands = []
+  sentCommands.length = 0
   beforeCreate = undefined
   promptValue = defaultPrompt
   statusSets.length = 0
@@ -777,6 +785,7 @@ describe("follow-up optimistic echo", () => {
     budget?: unknown
     judge?: unknown
     secondOpinion?: unknown
+    codeReview?: unknown
     agent?: string
     size?: unknown
   }
@@ -822,6 +831,7 @@ describe("follow-up optimistic echo", () => {
             budget?: unknown
             judge?: unknown
             secondOpinion?: unknown
+            codeReview?: unknown
             agent?: string
             size?: unknown
           }) => {
@@ -831,6 +841,7 @@ describe("follow-up optimistic echo", () => {
               budget: input.budget,
               judge: input.judge,
               secondOpinion: input.secondOpinion,
+              codeReview: input.codeReview,
               agent: input.agent,
               size: input.size,
             })
@@ -1080,6 +1091,19 @@ describe("follow-up optimistic echo", () => {
     expect((await send({ judge: "thorough" })).at(-1)?.secondOpinion).toBeUndefined()
   })
 
+  test("sends code review only while it is on, with the judge on or off", async () => {
+    expect((await send({ judge: "changes", codeReview: true })).at(-1)).toMatchObject({
+      judge: "changes",
+      codeReview: true,
+    })
+    const alone = (await send({ codeReview: true })).at(-1)
+    expect(alone?.codeReview).toBe(true)
+    expect(alone?.judge).toBeUndefined()
+    expect((await send({ judge: "changes" })).at(-1)?.codeReview).toBeUndefined()
+    expect((await send({ codeReview: false })).at(-1)?.codeReview).toBeUndefined()
+    expect((await send()).at(-1)?.codeReview).toBeUndefined()
+  })
+
   test("keeps the echoed ids when the judge is on and the desktop adds task context", async () => {
     expectOneEchoBeforeRequest(await withDesktopContext(() => send({ judge: "thorough" })), 2)
   })
@@ -1256,6 +1280,93 @@ describe("follow-up optimistic echo", () => {
       delete (window as { api?: unknown }).api
       clearSpendPolicyCache()
     }
+  })
+})
+
+describe("code review after each task", () => {
+  const composer = (input: { codeReview: boolean; judge: boolean }) =>
+    createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      llmJudge: () => input.judge,
+      judgeScope: () => "changes",
+      codeReview: () => input.codeReview,
+      onSubmit: () => undefined,
+    })
+  const event = { preventDefault: () => undefined } as unknown as Event
+
+  test("the composer sends it with a prompt only while it is on, beside the judge or alone", async () => {
+    params = { id: "session-1" }
+    promptValue = typed("implement the parser change in parser.ts")
+    for (const judge of [true, false]) {
+      await composer({ codeReview: true, judge }).handleSubmit(event)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(sentPrompts.at(-1)?.input.codeReview).toBe(true)
+      expect(sentPrompts.at(-1)?.input.judge).toBe(judge ? "changes" : undefined)
+      await composer({ codeReview: false, judge }).handleSubmit(event)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(sentPrompts.at(-1)?.input).not.toHaveProperty("codeReview")
+    }
+    expect(sentPrompts).toHaveLength(4)
+  })
+
+  test("the composer sends it with a custom command only while it is on", async () => {
+    params = { id: "session-1" }
+    commands = [{ name: "review" }]
+    promptValue = typed("/review src")
+    await composer({ codeReview: true, judge: false }).handleSubmit(event)
+    await composer({ codeReview: false, judge: false }).handleSubmit(event)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sentCommands.map((input) => [input.command, input.codeReview])).toEqual([
+      ["review", true],
+      ["review", undefined],
+    ])
+    expect(sentCommands[1]).not.toHaveProperty("codeReview")
+  })
+
+  test("a queued draft keeps the choice it was queued with, on the command path too", async () => {
+    type SendInput = Parameters<typeof import("./submit").sendFollowupDraft>[0]
+    const { sendFollowupDraft } = await import("./submit")
+    const sent: Record<string, unknown>[] = []
+    const queued = (codeReview?: boolean) =>
+      sendFollowupDraft({
+        client: {
+          session: {
+            command: async (input: Record<string, unknown>) => {
+              sent.push(input)
+              return { data: undefined }
+            },
+          },
+        } as unknown as SendInput["client"],
+        computer: undefined,
+        serverSync: { session: { set: () => undefined } } as unknown as SendInput["serverSync"],
+        sync: { data: { command: [{ name: "review" }], message: {}, config: {} } } as unknown as SendInput["sync"],
+        draft: {
+          sessionID: "session-1",
+          sessionDirectory: "/repo/main",
+          prompt: typed("/review src"),
+          context: [],
+          agent: "build",
+          model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+          ...(codeReview === undefined ? {} : { codeReview }),
+        },
+      })
+    await queued(true)
+    await queued(false)
+    await queued()
+    expect(sent.map((input) => input.codeReview)).toEqual([true, undefined, undefined])
   })
 })
 
@@ -2773,6 +2884,7 @@ describe("the abort scope", () => {
     vectorscopeSettings: false,
     vectorscopeRuns: false,
     vectorscopeReviewMemoryControls: false,
+    codeReviewAfterTask: false,
     connections: false,
   })
   const stopper = (input: {
