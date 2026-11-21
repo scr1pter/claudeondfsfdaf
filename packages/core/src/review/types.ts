@@ -495,13 +495,11 @@ export interface ReviewConfig {
   // (risk.ts riskOf) and plan its passes by band (plan.ts planDepth): low runs the review, and security only on a
   // sensitive path; medium adds security; high adds security and, with `lenses: "high"`, four single-class lenses.
   // "fixed" runs today's passes. Absent means "fixed" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it
-  // out, so every config and its digest stay as they were. Parsed, and read by no runner until VS-28 wiring
-  // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "auto" is not applied.
+  // out. Automatic depth and the high-band lens sessions run in the engine.
   depth?: "fixed" | "auto"
   // VS-28's lens opt-in. Under "high", the high band of an automatic depth adds the lenses (REVIEW_LENSES). It is
   // effective only with `depth: "auto"`; set without it, it is ignored with a parser note. Absent means "off"
-  // (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out. Parsed, and read by no runner until VS-28
-  // wiring (UNAPPLIED_REVIEW_KEYS), so the parser warns that "high" is not applied.
+  // (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out.
   lenses?: "off" | "high"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
@@ -625,7 +623,6 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
-  "lenses",
   "runtime",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 

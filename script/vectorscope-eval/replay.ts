@@ -211,10 +211,11 @@ export const VARIANTS = {
     desktop: { pending: "VS-28's desktop half, after VS-10" },
   },
   // Lenses run only on the high band under depth "auto", so this variant sets both, and its ablation baseline is
-  // engine:depth-auto. VS-28 may revise it before it flips.
+  // engine:depth-auto.
   "lenses-high": {
     planned: 'depth: "auto" and lenses: "high"',
-    engine: { pending: "VS-28 wiring" },
+    keys: { depth: "auto", lenses: "high" },
+    engine: { from: "VS-28" },
     desktop: { pending: "VS-28's desktop half, after VS-10" },
   },
   // No key: the existing triageModel/model pair, which the eval config supplies (VS-29a: the entry point's
@@ -878,8 +879,8 @@ export function projectedRun(record: ProjectionRecord): ProjectedRun {
 
 // VS-21e: a projection record's passes by token kind, under projectedRun's variant, model, case and repetition: each
 // pass's two estimateCostUsd bands split as the report shows them (projectionSplit), at the price snapshot of the
-// pass's own model. A pass with no first request or no price has no estimate and is left out. Lens passes have no lens
-// in the record, so they share the name "lens". Read only a record projectionProblems passes. A pass pricedPass leaves
+// pass's own model. A pass with no first request or no price has no estimate and is left out. Older unlabelled lens passes
+// retain the name "lens". Read only a record projectionProblems passes. A pass pricedPass leaves
 // out is left out too, rather than read as $NaN (I-8).
 export function projectedPassCosts(record: ProjectionRecord): PassCost[] {
   const variant = replayVariant("engine", record.variant)
@@ -892,7 +893,7 @@ export function projectedPassCosts(record: ProjectionRecord): PassCost[] {
         model: record.models.review.id,
         case: record.label,
         repetition: record.repetition,
-        pass: pass.pass,
+        pass: pass.lens ? `lens:${pass.lens}` : pass.pass,
         basis: "projected" as const,
         ...projectionSplit({ promptTokens: priced.promptTokens, maxSteps: pass.maxSteps, price: priced.price }),
       },
@@ -950,7 +951,7 @@ export function tieredPasses(
         model: record.models.review.id,
         case: record.label,
         repetition: record.repetition,
-        pass: pass.pass,
+        pass: pass.lens ? `lens:${pass.lens}` : pass.pass,
         base,
         tiered: estimate.tiered ?? base,
       },

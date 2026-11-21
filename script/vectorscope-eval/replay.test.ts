@@ -504,6 +504,7 @@ describe("the variant registry", () => {
       "engine:impact-graph",
       "engine:guardrail-strict",
       "engine:depth-auto",
+      "engine:lenses-high",
       "engine:cross-family",
       "engine:holdback-secrets",
       "desktop:holdback-secrets",
@@ -539,7 +540,6 @@ describe("the variant registry", () => {
       ),
     ).toEqual({
       "engine:cards-brain": "VS-26",
-      "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
       "engine:team-guarded": "VS-35 wiring",
       "engine:explore-slice": "VS-49 wiring",
@@ -560,6 +560,10 @@ describe("the variant registry", () => {
     expect(variantRecord("engine:depth-auto")).toMatchObject({
       record: { name: "engine:depth-auto", keys: { depth: "auto" } },
     })
+    expect(variantRecord("engine:lenses-high")).toMatchObject({
+      record: { name: "engine:lenses-high", keys: { depth: "auto", lenses: "high" } },
+    })
+    expect(resolveVariant("desktop:lenses-high")).toMatchObject({ ok: false, reason: "pending" })
     expect(resolveVariant("desktop:depth-auto")).toMatchObject({ ok: false, reason: "pending" })
     expect(variantRecord("engine:scope-introduced")).toMatchObject({
       record: { name: "engine:scope-introduced", keys: { guardrail: "strict", scopeGate: "introduced" } },

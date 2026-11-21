@@ -470,7 +470,7 @@ describe("scope", () => {
     expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("162314cd774bdba0")
     expect(lenses).toBe("dd09332295a99649")
     expect(lensesGraph).toBe("31c1a0612c0f9541")
-    expect(lensesStrict).toBe("1d42617b9e9fe246")
+    expect(lensesStrict).toBe("d59056aebc5ae9b6")
   })
 
   // VS-30c: the runtime instruction and its <untrusted_runtime_evidence> block render only under `runtime: "ask"`,
@@ -544,7 +544,7 @@ describe("scope", () => {
     )
     expect(promptsDigest({ depth: "auto", lenses: "high" })).toBe("dd09332295a99649")
     expect(promptsDigest({ impact: "graph", depth: "auto", lenses: "high" })).toBe("31c1a0612c0f9541")
-    expect(promptsDigest({ guardrail: "strict", depth: "auto", lenses: "high" })).toBe("1d42617b9e9fe246")
+    expect(promptsDigest({ guardrail: "strict", depth: "auto", lenses: "high" })).toBe("d59056aebc5ae9b6")
     expect(runtime).toBe("7d9147298f5cdbaf")
     expect(runtimeGraph).toBe("3bf0c1afc17e08d9")
     expect(runtimeStrict).toBe("25d3e23719ca7204")
@@ -739,23 +739,42 @@ describe("scope", () => {
     const base = policyDigest(DEFAULT_REVIEW_CONFIG)
     const auto = policyDigest({ ...DEFAULT_REVIEW_CONFIG, depth: "auto" })
     expect(auto).not.toBe(base)
-    expect(EVIDENCE_POLICY_KEYS).toContain("depth")
-    expect(EVIDENCE_POLICY_KEYS).toContain("lenses")
-    expect(UNAPPLIED_REVIEW_KEYS).not.toContain("depth")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("lenses")
+    const active = { depth: "auto", lenses: "high" } as const
+    const high = policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...active })
+    expect(high).not.toBe(auto)
+    expect(promptsDigest(active)).not.toBe(SCOPE.prompts)
+    for (const key of ["depth", "lenses"] as const) {
+      expect(EVIDENCE_POLICY_KEYS).toContain(key)
+      expect(UNAPPLIED_REVIEW_KEYS).not.toContain(key)
+    }
     for (const depth of ["auto", "fixed", undefined] as const) {
       for (const lenses of ["high", "off", undefined] as const) {
         const config = { ...DEFAULT_REVIEW_CONFIG, depth, lenses }
-        expect(policyDigest(config)).toBe(depth === "auto" ? auto : base)
+        const planned = depth === "auto" && lenses === "high"
+        const policy = planned ? high : depth === "auto" ? auto : base
+        expect(policyDigest(config)).toBe(policy)
         expect(evidenceScope({ adapter: "engine", config })).toEqual({
           ...SCOPE,
-          policy: depth === "auto" ? auto : base,
+          policy,
+          prompts: planned ? promptsDigest(active) : SCOPE.prompts,
         })
-        expect(
-          evidenceScope({ adapter: "desktop", config: { ...config, impact: "graph", guardrail: "strict" } }),
-        ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
+        expect(evidenceScope({ adapter: "desktop", config })).toEqual(
+          evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+        )
       }
     }
+    const strict = {
+      guardrail: "strict",
+      ruleCheck: "strict",
+      scopeGate: "introduced",
+      verifyEvidence: "certificate",
+    } as const
+    const combined = { ...DEFAULT_REVIEW_CONFIG, ...active, ...strict }
+    expect(evidenceScope({ adapter: "engine", config: combined }).prompts).toBe(promptsDigest({ ...strict, ...active }))
+    expect(promptsDigest({ ...strict, ...active })).not.toBe(promptsDigest(strict))
+    expect(evidenceScope({ adapter: "desktop", config: combined })).toEqual(
+      evidenceScope({ adapter: "desktop", config: { ...DEFAULT_REVIEW_CONFIG, ...strict } }),
+    )
     expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, depth: "auto", nits: true })).not.toBe(auto)
   })
 

@@ -62,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "99acc00953b1df0e"
+export const REVIEW_PIPELINE_SOURCES = "79985b2e2f5f83f4"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -474,14 +474,12 @@ export function canonicalPrompts(
     keys.guardrail === "strict" && keys.verifyEvidence === "certificate"
       ? { verifyEvidence: "certificate" as const }
       : {}
-  const reviewers = (input: PromptInput) => {
-    const effective: PromptInput = {
-      ...input,
-      ...(keys.guardrail === "strict" ? { guardrail: "strict", ...gate } : {}),
-      ...(keys.ruleCheck === "strict" ? { ruleCheck: "strict" } : {}),
-    }
-    return [buildReviewPrompt(effective), buildSecurityPrompt(effective)]
-  }
+  const effective = (input: PromptInput): PromptInput => ({
+    ...input,
+    ...(keys.guardrail === "strict" ? { guardrail: "strict", ...gate } : {}),
+    ...(keys.ruleCheck === "strict" ? { ruleCheck: "strict" } : {}),
+  })
+  const reviewers = (input: PromptInput) => [buildReviewPrompt(effective(input)), buildSecurityPrompt(effective(input))]
   const impact =
     keys.impact === "graph"
       ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS].flatMap((slice) =>
@@ -495,11 +493,11 @@ export function canonicalPrompts(
     keys.depth === "auto" && keys.lenses === "high"
       ? REVIEW_LENSES.flatMap((lens) => [
           ...(["trusted", "untrusted"] as const).flatMap((trust) =>
-            canonicalInputs(trust).map((input) => buildLensPrompt(input, lens)),
+            canonicalInputs(trust).map((input) => buildLensPrompt(effective(input), lens)),
           ),
           ...(keys.impact === "graph" ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS] : []).flatMap((slice) =>
             (["trusted", "untrusted"] as const).map((trust) =>
-              buildLensPrompt({ ...POPULATED_INPUT, trust, impact: slice }, lens),
+              buildLensPrompt(effective({ ...POPULATED_INPUT, trust, impact: slice }), lens),
             ),
           ),
         ])
@@ -691,10 +689,7 @@ export function evidenceScope(input: {
         ? { verifyEvidence: "certificate" as const }
         : {}),
       // VS-28's lens prompts, only once a runner applies both keys.
-      ...(input.adapter === "engine" &&
-      input.config.depth === "auto" &&
-      input.config.lenses === "high" &&
-      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "lenses")
+      ...(input.adapter === "engine" && input.config.depth === "auto" && input.config.lenses === "high"
         ? { depth: "auto" as const, lenses: "high" as const }
         : {}),
       // VS-30's runtime block, only once the executor applies the key. Whether the scope then counts "ask" or the

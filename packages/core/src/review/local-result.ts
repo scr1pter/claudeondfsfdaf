@@ -459,7 +459,7 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
       new Set(outcome.sessions).size !== outcome.sessions.length ||
       outcome.specialists.some(
         (entry) =>
-          (entry.name !== "review" && entry.name !== "security") ||
+          (entry.name !== "review" && entry.name !== "security" && !(entry.name === "lens" && entry.lens)) ||
           entry.status !== "skipped" ||
           entry.steps !== 0 ||
           entry.detail !== "first-request-changed",

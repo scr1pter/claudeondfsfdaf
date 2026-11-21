@@ -751,7 +751,7 @@ export function fromArtifact(
   const variant = replayVariant("engine", artifact.variant)
   const caseKey = replayCaseKey({ variant, models, id: artifact.label, repetition: artifact.repetition })
   const tokens = artifact.attempts.flatMap((attempt) => (attempt.settled?.tokens ? [attempt.settled.tokens] : []))
-  const timed = artifact.passes.flatMap((pass) => (pass.ms === undefined ? [] : [{ pass: pass.pass, ms: pass.ms }]))
+  const timed = artifact.passes.flatMap((pass) => (pass.ms === undefined ? [] : [{ pass: pass.lens ? `lens:${pass.lens}` : pass.pass, ms: pass.ms }]))
   const written = artifact.posted
     .flatMap((write) =>
       write.write === "createReview"
@@ -815,13 +815,16 @@ export function fromArtifact(
 // VS-21e: a paid replay's passes by token kind, from what each pass's sessions reported (ReviewOutcome.passes) and the
 // artifact's record of each pass's cache writes and reasoning tokens. Input is the pass's prompt tokens less its cache
 // reads and writes, and output keeps its reasoning. Each kind is priced at the price snapshot of the pass's model, cache
-// reads and writes at the input rate where the snapshot lists none, beside the cost the pass reported. A lens pass takes
-// the artifact's cache writes and reasoning only when it is the only lens pass, since neither record names its lens:
-// otherwise its cache writes stay inside its input. An artifact with no passes gives none.
+// reads and writes at the input rate where the snapshot lists none, beside the cost the pass reported. A labelled lens is matched by class. Older
+// unlabelled lens usage is attributable only when both records have exactly one lens pass.
 function settledCosts(artifact: ReplayArtifact, run: EvalRun): PassCost[] {
-  return (artifact.outcome?.passes ?? []).map((pass) => {
+  const passes = artifact.outcome?.passes ?? []
+  const lensCount = passes.filter((pass) => pass.name === "lens").length
+  return passes.map((pass) => {
     const recorded = artifact.passes.filter((entry) => entry.pass === pass.name)
-    const own = recorded.length === 1 ? recorded[0] : undefined
+    const exact = recorded.filter((entry) => entry.lens === pass.lens && (pass.name !== "lens" || !!pass.lens))
+    const singleLegacyLens = pass.name === "lens" && lensCount === 1 && recorded.length === 1 && !recorded[0]?.lens
+    const own = exact.length === 1 ? exact[0] : singleLegacyLens ? recorded[0] : undefined
     const cacheWrite = own?.cacheWrite ?? 0
     const tokens = {
       input: Math.max(0, pass.input - pass.cacheRead - cacheWrite),

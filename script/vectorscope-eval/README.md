@@ -780,7 +780,7 @@ word, so only the registry keeps model ids out.
 | `cards-brain`      | `cards: "brain"`, local-only eval                                                       | pending VS-26               | pending, after VS-10                                                          |
 | `guardrail-strict` | `guardrail: "strict"`                                                                   | built (SF-19)               | pending: desktop lacks immutable base and head file reads                     |
 | `depth-auto`       | `depth: "auto"`                                                                         | built, VS-28                | pending, desktop uses fixed review depth                                      |
-| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | pending VS-28 wiring        | pending, after VS-10                                                          |
+| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | built, VS-28                | pending, desktop uses fixed review depth                                      |
 | `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)            | built (VS-29a)              | pending, after VS-10                                                          |
 | `precise`          | `mode: "precise"`                                                                       | pending VS-31               | pending VS-31                                                                 |
 | `holdback-secrets` | `holdback: "secrets"`, in the prompt and the reviewer's read and grep results           | built (VS-34)               | built (VS-34, desktop half)                                                   |
@@ -814,7 +814,7 @@ word, so only the registry keeps model ids out.
   nothing about the runner changes.
 - `lenses-high` sets `depth: "auto"` too, because lenses run only on the high
   band under depth `auto`; its ablation baseline is `engine:depth-auto`.
-  VS-28 may revise this before it flips. `scope-introduced` and `verify-cert`
+  `scope-introduced` and `verify-cert`
   set `guardrail: "strict"` for the same reason (their keys act only inside
   the strict guardrail); VS-42 and VS-44 wiring may revise them before they
   flip.

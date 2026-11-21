@@ -98,6 +98,7 @@ import {
   type Finding,
   type ReviewConfig,
   type ReviewOutcome,
+  type ReviewLens,
   type SkippedFile,
   type Trigger,
   type Trust,
@@ -284,6 +285,7 @@ export interface ReplayArtifact {
   // of the same name's. A pass planned and skipped, or refused before its session, has none of the four.
   passes: {
     pass: Pass
+    lens?: ReviewLens
     model: string
     digest: string
     chars: number
@@ -303,7 +305,13 @@ export interface ReplayArtifact {
   // replay.ts utilisationProblems checks it against the rest of the artifact.
   utilisation?: SliceUtilisation
   attempts: AttemptRecord[]
-  tools: { pass?: Pass; tool: string; status: string; input: Record<string, string | number | boolean> }[]
+  tools: {
+    pass?: Pass
+    lens?: ReviewLens
+    tool: string
+    status: string
+    input: Record<string, string | number | boolean>
+  }[]
   outcome?: ReviewOutcome // absent when nothing was left to review and no model was asked
   // The actual inputs to strict selection after verification, before its drops. The replay redacts model text.
   // Older artifacts and reviews that did not reach strict selection omit this record.
@@ -376,6 +384,7 @@ export interface ProjectedRequest {
 // One planned pass: its prompt, every request its sessions sent, and what estimateCostUsd makes of its first one.
 export interface ProjectedPass {
   pass: Pass
+  lens?: ReviewLens
   model: string
   maxSteps: number
   status?: ReviewOutcome["specialists"][number]["status"]
@@ -1037,11 +1046,13 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // settlement, and the tool calls each session made, with this checkout's paths made relative. Each session's
   // messages are read once.
   const attempts = foldAttempts(observed)
-  const passOf = new Map(attempts.flatMap((attempt) => (attempt.sessionID ? [[attempt.sessionID, attempt.pass]] : [])))
+  const passOf = new Map(
+    attempts.flatMap((attempt) => (attempt.sessionID ? [[attempt.sessionID, attempt] as const] : [])),
+  )
   const recorded = yield* Effect.forEach(outcome.sessions, (id) =>
     sessions.messages({ sessionID: SessionID.make(id) }).pipe(
-      Effect.map((messages) => ({ pass: passOf.get(SessionID.make(id)), messages })),
-      Effect.catch(() => Effect.succeed({ pass: passOf.get(SessionID.make(id)), messages: [] })),
+      Effect.map((messages) => ({ owner: passOf.get(SessionID.make(id)), messages })),
+      Effect.catch(() => Effect.succeed({ owner: passOf.get(SessionID.make(id)), messages: [] })),
     ),
   )
   const tools = recorded.flatMap((session) =>
@@ -1051,7 +1062,8 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
         part.type === "tool"
           ? [
               {
-                ...(session.pass ? { pass: session.pass } : {}),
+                ...(session.owner ? { pass: session.owner.pass } : {}),
+                ...(session.owner?.lens ? { lens: session.owner.lens } : {}),
                 tool: part.tool,
                 status: part.state.status,
                 input: relativeInput(part.state.input, directory),
@@ -1108,7 +1120,10 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   const quoted =
     !notReviewed &&
     ((!graph && !initial) ||
-      attempts.some((attempt) => attempt.admitted && (attempt.pass === "review" || attempt.pass === "security")))
+      attempts.some(
+        (attempt) =>
+          attempt.admitted && (attempt.pass === "review" || attempt.pass === "security" || attempt.pass === "lens"),
+      ))
   const relatedLocations = quoted
     ? quotedLocations(
         config.holdback === "secrets"
@@ -1176,18 +1191,20 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       headFiles: headFiles?.length ?? 0,
       locations: impact && quoted ? [...new Set([...relatedLocations, ...impact.locations])] : relatedLocations,
     },
-    // Every session of a pass counts toward it. One pass event per pass name today; VS-28's lenses add several "lens"
-    // passes and must match them by lens too.
+    // Match every contributing session to its own pass and lens.
     passes: observed.flatMap((event) =>
       event.type === "pass"
         ? [
             {
               pass: event.pass,
+              ...(event.lens ? { lens: event.lens } : {}),
               model: event.model,
               digest: digest(event.text),
               chars: event.text.length,
               ...passUsage(
-                recorded.flatMap((session) => (session.pass === event.pass ? session.messages : [])),
+                recorded.flatMap((session) =>
+                  session.owner?.pass === event.pass && session.owner.lens === event.lens ? session.messages : [],
+                ),
                 start,
               ),
             },
@@ -1239,11 +1256,13 @@ function projectionOf(input: {
   const lifted = new Set(input.over.flatMap((decision) => (decision.attempt === undefined ? [] : [decision.attempt])))
   const named = new Set<string>(artifact.attempts.flatMap((attempt) => (attempt.sessionID ? [attempt.sessionID] : [])))
   const events = input.observed.flatMap((event) => (event.type === "pass" ? [event] : []))
-  // One pass event per pass name today; VS-28's lenses add several "lens" passes and must match them by lens too.
-  const planned = events.filter((event, index) => events.findIndex((other) => other.pass === event.pass) === index)
+  // Each single-class lens owns its sessions and its measured usage.
+  const planned = events.filter(
+    (event, index) => events.findIndex((other) => other.pass === event.pass && other.lens === event.lens) === index,
+  )
   const passes = planned.map((event): ProjectedPass => {
     const price = [artifact.models.review, artifact.models.triage].find((model) => model?.id === event.model)?.price
-    const tried = artifact.attempts.filter((attempt) => attempt.pass === event.pass)
+    const tried = artifact.attempts.filter((attempt) => attempt.pass === event.pass && attempt.lens === event.lens)
     const sessions = [...new Set(tried.flatMap((attempt) => (attempt.sessionID ? [attempt.sessionID] : [])))]
     const paired = sessions.map((sessionID) => {
       const admitted = tried.filter((attempt) => attempt.admitted && attempt.sessionID === sessionID)
@@ -1270,10 +1289,13 @@ function projectionOf(input: {
     })
     const requests = paired.flatMap((entry) => entry.requests).toSorted((a, b) => a.seq - b.seq)
     const first = requests[0]
-    const status = artifact.outcome?.specialists.find((entry) => entry.name === event.pass)?.status
-    const decision = input.over.find((entry) => entry.pass === event.pass)
+    const status = artifact.outcome?.specialists.find(
+      (entry) => entry.name === event.pass && entry.lens === event.lens,
+    )?.status
+    const decision = input.over.find((entry) => entry.pass === event.pass && entry.lens === event.lens)
     return {
       pass: event.pass,
+      ...(event.lens ? { lens: event.lens } : {}),
       model: event.model,
       maxSteps: event.maxSteps,
       ...(status ? { status } : {}),
@@ -1379,7 +1401,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  lenses: "VS-28 wiring",
   runtime: "the VS-30 executor",
 }
 
@@ -1451,6 +1472,18 @@ function variantProblem(input: ReplayInput) {
     (variant.name !== "engine:impact-graph" || variant.keys.impact !== "graph" || keys.length !== 1 || variant.models)
   )
     return 'The engine:impact-graph variant sets only impact: "graph".'
+  if (variant.name === "engine:lenses-high" || Object.hasOwn(variant.keys, "lenses")) {
+    if (
+      variant.name !== "engine:lenses-high" ||
+      variant.keys.depth !== "auto" ||
+      variant.keys.lenses !== "high" ||
+      keys.length !== 2 ||
+      keys.some(([key]) => key !== "depth" && key !== "lenses") ||
+      variant.models !== undefined
+    )
+      return 'The engine:lenses-high variant sets only depth: "auto" and lenses: "high".'
+    return undefined
+  }
   if (variant.name === "engine:depth-auto" || Object.hasOwn(variant.keys, "depth")) {
     if (variant.name !== "engine:depth-auto" || variant.keys.depth !== "auto" || keys.length !== 1 || variant.models)
       return 'The engine:depth-auto variant sets only depth: "auto".'
@@ -1538,7 +1571,12 @@ function foldAttempts(observed: Observation[]): AttemptRecord[] {
     }
     if (event.type !== "settle") continue
     const open = attempts.findLast(
-      (attempt) => attempt.pass === event.pass && attempt.phase === event.phase && attempt.admitted && !attempt.settled,
+      (attempt) =>
+        attempt.pass === event.pass &&
+        attempt.lens === event.lens &&
+        attempt.phase === event.phase &&
+        attempt.admitted &&
+        !attempt.settled,
     )
     if (open)
       open.settled = {

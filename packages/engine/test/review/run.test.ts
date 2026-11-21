@@ -44,6 +44,7 @@ import { decideSkip } from "@vectordevai/core/review/skip"
 import { nextState } from "@vectordevai/core/review/state"
 import {
   DEFAULT_REVIEW_CONFIG,
+  REVIEW_LENSES,
   type ModelFinding,
   type ReviewConfig,
   type ReviewCost,
@@ -74,6 +75,7 @@ import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPosting } from "../../src/session/posting"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionStatus } from "../../src/session/status"
@@ -5699,7 +5701,9 @@ describe("VS-28 automatic depth (SF-24)", () => {
         const stopped = yield* run(medium, { depth: "auto", maxInputTokens: 1 })
         expect(stopped.sent).toEqual([])
         expect(stopped.outcome.partial).toBe("budget-estimate")
-        expect(stopped.outcome.notes.join(" ")).toContain("Automatic depth did not finish these planned passes: review, security.")
+        expect(stopped.outcome.notes.join(" ")).toContain(
+          "Automatic depth did not finish these planned passes: review, security.",
+        )
         const tests = medium.map((file) => ({ ...file, path: "src/list.test.ts" }))
         const onlyTests = yield* run(tests, { depth: "auto" })
         expect(onlyTests.sent).toEqual(["review"])
@@ -5902,5 +5906,298 @@ describe("SF-22 trusted rule citations", () => {
         ).toBe(true)
       }),
     TIMEOUT,
+  )
+})
+
+describe("VS-28 single-class lens sessions (SF-25)", () => {
+  const files = parseUnifiedDiff(
+    [
+      "diff --git a/src/list.ts b/src/list.ts",
+      "--- a/src/list.ts",
+      "+++ b/src/list.ts",
+      "@@ -1 +1,640 @@",
+      "-const previous = 0",
+      ...Array.from({ length: 640 }, (_, index) => `+const num${index} = ${index}`),
+    ].join("\n"),
+  )
+  const settings = { depth: "auto", lenses: "high", maxCostUsd: 0, verify: "off" } as const
+  const ids = (text: string) => [...text.matchAll(/<untrusted_candidate id="([^"]+)"/g)].map((match) => match[1])
+
+  it.instance(
+    "caps simultaneous lens sessions, bounds their candidates, verifies the deduplicated union and covers every contributor's lineage",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const fs = yield* FSUtil.Service
+        const local = testProviderConfig(llm.url)
+        const base = local.provider.lmstudio.models["test-model"]
+        const laboratory = (id: string, lab: string) => ({
+          ...ref,
+          modelID: ModelV2.ID.make(id),
+          context: 100000,
+          costKind: "local" as const,
+          lab,
+        })
+        const model = laboratory("gpt-4.1", "OpenAI")
+        const triage = laboratory("claude-sonnet-4-5", "Anthropic")
+        const judge = laboratory("gemini-2.5-pro", "Google")
+        yield* fs.writeWithDirs(
+          path.join(directory, "vector.json"),
+          JSON.stringify({
+            ...local,
+            provider: {
+              lmstudio: {
+                ...local.provider.lmstudio,
+                models: Object.fromEntries([model, triage, judge].map((m) => [m.modelID, { ...base, id: m.modelID }])),
+              },
+            },
+          }),
+        )
+        yield* Effect.promise(() => trustWorkspace(directory))
+        yield* reloadInstance({ directory })
+        const catalog = yield* Provider.Service
+        for (const chosen of [model, triage, judge])
+          expect((yield* catalog.getModel(chosen.providerID, chosen.modelID)).id).toBe(chosen.modelID)
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "review owner" }, "owner")
+        const events: Review.Observation[] = []
+        const seen = new Set<string>()
+        const active = new Set<string>()
+        let peak = 0
+        const release = Promise.withResolvers<void>()
+        const firstThree = Promise.withResolvers<void>()
+        const repeated = finding({ title: "Shared candidate", line: 3 })
+        const proposed = [
+          "Expired connection",
+          "Lost increment",
+          "Partial write",
+          "Leak on cancellation",
+          "Fifth ignored",
+        ].map((title, index) => finding({ title, line: 20 + index * 9 }))
+        yield* llm.respond((hit) => {
+          const text = lastUserText(hit.body)
+          if (REVIEW(hit) || SECURITY(hit)) return reply().tool("StructuredOutput", report([]))
+          const lens = REVIEW_LENSES.find((label) => text.includes(`You are Vector's ${label} reviewer`))
+          if (lens) {
+            seen.add(lens)
+            if (seen.size === 3) firstThree.resolve()
+            const answer = lens === "resource" ? proposed : [repeated]
+            return reply()
+              .tool("StructuredOutput", report(answer))
+              .usage({ input: 200, output: 40 })
+              .wait(release.promise)
+          }
+          if (VERIFY(hit) || text.includes("You are the judge on a review panel"))
+            return reply().tool("StructuredOutput", {
+              results: ids(text).map((id, index) => ({
+                id,
+                verdict: index === 1 ? "rejected" : "confirmed",
+                reason: "Read the changed line.",
+              })),
+            })
+        })
+        const job = yield* Review.run(
+          input(directory, {
+            parentID: parent.id,
+            model,
+            triage,
+            judge,
+            files,
+            anchors: files,
+            config: config({ ...settings, panel: true }),
+            observe: (e) => {
+              events.push(e)
+              if (e.type === "attempt" && e.lens && e.admitted) {
+                active.add(e.lens)
+                peak = Math.max(peak, active.size)
+              }
+              if (e.type === "settle" && e.lens) active.delete(e.lens)
+            },
+          }),
+        ).pipe(Effect.forkChild)
+        yield* Effect.promise(() => firstThree.promise).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.ensuring(Effect.sync(() => release.resolve())),
+        )
+        const outcome = yield* Fiber.join(job)
+        expect(peak).toBe(3)
+        expect(active.size).toBe(0)
+        expect([...seen].sort()).toEqual([...REVIEW_LENSES].sort())
+        const obs = events.filter((event) => event.type === "pass")
+        expect(obs.filter((event) => event.lens).map((event) => [event.lens, event.maxSteps])).toEqual(
+          REVIEW_LENSES.map((lens) => [lens, 5]),
+        )
+        const verifier = obs.find((event) => event.pass === "verify")!
+        expect(ids(verifier.text)).toHaveLength(5)
+        expect(new Set(ids(verifier.text)).size).toBe(5)
+        expect(verifier.text).not.toContain("Fifth ignored")
+        const kept = outcome.report.findings as ReviewOutcome["selection"]["overflow"]
+        expect(kept).toHaveLength(4)
+        expect(kept.every((finding) => finding.verified)).toBe(true)
+        expect(outcome.sessions.length).toBe(8)
+        expect(obs.filter((event) => event.lens).every((event) => event.model === "lmstudio/gpt-4.1")).toBe(true)
+        expect(obs.find((event) => event.pass === "review")?.model).toBe("lmstudio/claude-sonnet-4-5")
+        expect(obs.find((event) => event.pass === "judge")?.model).toBe("lmstudio/gemini-2.5-pro")
+        const contributing = yield* Effect.forEach(outcome.sessions, (id) => sessions.get(SessionID.make(id)))
+        expect(contributing.every((s) => s.parentID === parent.id)).toBe(true)
+        expect(
+          contributing
+            .filter((s) => s.internal?.startsWith("vectorscope.lens."))
+            .map((s) => s.internal)
+            .sort(),
+        ).toEqual(REVIEW_LENSES.map((lens) => `vectorscope.lens.${lens}`).sort())
+        expect(outcome.specialists.filter((s) => s.name === "lens").map((s) => s.lens)).toEqual([...REVIEW_LENSES])
+        expect(
+          outcome.passes
+            ?.filter((s) => s.name === "lens")
+            .map((s) => s.lens)
+            .sort(),
+        ).toEqual([...REVIEW_LENSES].sort())
+        expect(
+          events
+            .filter((e) => e.type === "attempt" && e.pass === "lens" && e.admitted)
+            .map((e) => (e.type === "attempt" ? e.lens : undefined))
+            .sort(),
+        ).toEqual([...REVIEW_LENSES].sort())
+        const lensId = contributing.find((s) => s.internal === "vectorscope.lens.resource")!.id
+        const checked = yield* SessionPosting.lineage(outcome.sessions, (id) =>
+          Effect.succeed(
+            id === lensId ? Array.from({ length: 201 }, (_, i) => ({ id: SessionID.make(`ses_lens_${i}`) })) : [],
+          ),
+        ).pipe(Effect.result)
+        expect(Result.isFailure(checked)).toBe(true)
+      }),
+    { git: true },
+    90000,
+  )
+
+  it.instance(
+    "drops all lens requests before any other budget shrink and retains byte-identical defaults",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const provider = yield* Provider.Service
+        yield* provider.getModel(ref.providerID, ref.modelID)
+        const run = (opts: Partial<ReviewConfig>, source = files) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.respond((hit) =>
+              REVIEW(hit) || SECURITY(hit) ? reply().tool("StructuredOutput", report([])) : undefined,
+            )
+            const events: Review.Observation[] = []
+            const out = yield* Review.run(
+              input(directory, {
+                files: source,
+                anchors: source,
+                model: { ...ref, context: 100000, costKind: "local" },
+                config: config(opts),
+                observe: (e) => events.push(e),
+              }),
+            )
+            const hits = yield* modelRequests(llm)
+            const sessions = yield* Session.Service
+            const { durationMs, sessions: contributed, ...decision } = out
+            const permissions = yield* Effect.forEach(contributed, (id) =>
+              sessions.get(SessionID.make(id)).pipe(Effect.map((s) => s.permission)),
+            )
+            return {
+              out,
+              wire: hits.map((hit) => JSON.stringify(hit)).sort(),
+              events: events.filter((e) => e.type === "dispatch"),
+              permissions,
+              decision,
+            }
+          })
+        const stop = yield* run({ ...settings, maxInputTokens: 1 })
+        expect(stop.out.partial).toBe("budget-estimate")
+        expect(stop.wire).toEqual([])
+        expect(stop.events[1]?.step).toBe("lenses")
+        expect(stop.events[0]!.estimate.passes.map((p) => p.pass)).toEqual([
+          "review",
+          "security",
+          ...REVIEW_LENSES,
+          "verify",
+        ])
+        const after = stop.events[1]!.estimate
+        expect(after.passes.map((p) => p.pass)).toEqual(["review", "security"])
+        const admitted = yield* run({ ...settings, maxInputTokens: after.firstTurnTokens })
+        expect(admitted.events.map((e) => e.step)).toEqual([undefined, "lenses"])
+        expect(admitted.out.specialists.map((s) => s.name)).toEqual(["review", "security"])
+        expect(admitted.wire.length).toBe(2)
+        for (const [left, right, source] of [
+          [{ depth: "auto" }, { depth: "auto", lenses: "off" }, files],
+          [{}, { lenses: "high" }, files],
+          [{ depth: "auto" }, { depth: "auto", lenses: "high" }, LIST],
+        ] as const) {
+          const unset = yield* run(left, source)
+          const keyed = yield* run(right, source)
+          expect(keyed.wire).toEqual(unset.wire)
+          expect(keyed.permissions).toEqual(unset.permissions)
+          expect(keyed.decision).toEqual(unset.decision)
+        }
+      }),
+    { git: true },
+    90000,
+  )
+  it.instance(
+    "lens retries and finalizers share five admitted steps and unreadable confirmations remain incomplete",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const execute = (maxSteps: number, strict = false) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            const candidate = finding({
+              failure: {
+                class: "crash",
+                mechanism: "logic",
+                trigger: "A caller reads the value.",
+                impact: "It throws on access.",
+              },
+              quotes: [{ path: "src/list.ts", line: 3, side: "RIGHT", code: "const num2 = 2" }],
+            })
+            yield* llm.respond((hit) => {
+              const text = lastUserText(hit.body)
+              if (REVIEW(hit)) return reply().tool("StructuredOutput", report(maxSteps > 1 ? [candidate] : []))
+              // The same defect gets a different fingerprint under the security reviewer's category.
+              if (SECURITY(hit))
+                return reply().tool("StructuredOutput", report(maxSteps > 1 ? [{ ...candidate, category: "security" }] : []))
+              if (VERIFY(hit)) return reply().tool("StructuredOutput", { results: [] })
+              if (text.includes("You are Vector's resource reviewer") && maxSteps === 1)
+                return reply().tool("read", { filePath: path.join(directory, "src/list.ts") })
+              if (text.includes("You are Vector's resource reviewer"))
+                return reply().tool("StructuredOutput", report([candidate]))
+              if (REVIEW_LENSES.some((lens) => text.includes(`You are Vector's ${lens} reviewer`)))
+                return reply().tool("StructuredOutput", report([]))
+              return reply().tool("StructuredOutput", report([]))
+            })
+            const events: Review.Observation[] = []
+            const out = yield* Review.run(
+              input(directory, {
+                files,
+                anchors: files,
+                config: config({ ...settings, maxSteps, ...(strict ? { guardrail: "strict" as const } : {}) }),
+                observe: (e) => events.push(e),
+              }),
+            )
+            return { out, events }
+          })
+        const stop = yield* execute(1)
+        const attempts = stop.events.filter((e) => e.type === "attempt" && e.lens === "resource")
+        expect(attempts.filter((e) => e.type === "attempt" && e.admitted)).toHaveLength(1)
+        expect(attempts.filter((e) => e.type === "attempt" && e.admitted && e.phase === "finalize")).toEqual([])
+        expect(stop.out.partial).toBe("steps")
+        const plain = yield* execute(5)
+        expect(plain.out.partial).toBe("model-error")
+        expect(plain.out.report.findings).toEqual([])
+        expect(plain.out.selection.inline).toEqual([])
+        const unread = yield* execute(5, true)
+        expect(unread.out.strict).toMatchObject({ complete: false, findings: [] })
+        expect(unread.out.strict?.incomplete).toContain("verdict-unreadable")
+        expect(unread.out.unreviewed).toContain("src/list.ts")
+        expect(unread.out.report.findings).toEqual([])
+      }),
+    { git: true },
+    90000,
   )
 })

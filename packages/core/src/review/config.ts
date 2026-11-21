@@ -247,11 +247,6 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  // Only under "auto": without it the key is ignored (settle's note), so it is never also "not applied".
-  lenses: {
-    applies: (config) => config.lenses === "high" && config.depth === "auto",
-    warning: '"lenses": "high" is not applied yet: no lens passes run.',
-  },
   // A sourced key (TRUSTED_ONLY): settle never sees it, so mergeReviewConfig gives this warning.
   runtime: {
     applies: (config) => config.runtime === "ask",

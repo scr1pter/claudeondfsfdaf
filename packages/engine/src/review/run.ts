@@ -96,6 +96,7 @@ import {
 } from "@vectordevai/core/review/plan"
 import {
   buildFinalizePrompt,
+  buildLensPrompt,
   buildJudgePrompt,
   buildReviewPrompt,
   buildSecurityPrompt,
@@ -123,11 +124,13 @@ import type { RulePart } from "@vectordevai/core/review/config"
 import {
   checkedRuleFindings,
   ruleCheckNotes,
+  sameFinding,
   selectFindings,
   wantsNits,
   type RuleCounts,
 } from "@vectordevai/core/review/select"
 import type { RouteRefusal } from "@vectordevai/core/review/privacy"
+import { LENS_LIMITS, type ReviewLens } from "@vectordevai/core/review/types"
 import type {
   CostKind,
   Finding,
@@ -254,11 +257,21 @@ type Name = ReviewOutcome["specialists"][number]["name"]
 type Stop = "budget" | "steps" | "timeout" | "privacy"
 type Phase = "turn" | "finalize"
 
+interface PassIdentity {
+  name: Name
+  lens?: ReviewLens
+}
+
+// Labels identify model roles to callers. Each concurrent lens still owns its own reservation and first-turn lease.
+const passKey = (pass: PassIdentity) => pass.lens ?? pass.name
+const lensField = (pass: { lens?: ReviewLens }) => (pass.lens ? { lens: pass.lens } : {})
+
 // A decision the review's dollar cap would refuse, and where it was made: before a pass's session ("pass"), at a
 // provider attempt ("attempt"), at the finalizer's reservation ("finalizer"), or at verify's pre-check ("verify").
 // `sessionID` is the pass's session, at an attempt and at the finalizer's reservation.
 export interface OverCap {
   pass: Name
+  lens?: ReviewLens
   phase: Phase
   site: "pass" | "attempt" | "finalizer" | "verify"
   // The whole amount that went over the cap, which a lifted decision admits: at "pass" and at a turn's "attempt", the
@@ -283,11 +296,12 @@ export type Observation =
   | { type: "dispatch"; estimate: DispatchEstimate; step?: Shrink }
   // A pass is about to run with this prompt and step cap, or was planned and skipped (verify with no budget or time
   // left).
-  | { type: "pass"; pass: Name; model: string; text: string; maxSteps: number }
+  | { type: "pass"; pass: Name; lens?: ReviewLens; model: string; text: string; maxSteps: number }
   // One provider attempt the review's admission was asked for, retries included. A refused one was never sent.
   | {
       type: "attempt"
       pass: Name
+      lens?: ReviewLens
       phase: Phase
       admitted: boolean
       stop?: Stop
@@ -299,6 +313,7 @@ export type Observation =
   | {
       type: "settle"
       pass: Name
+      lens?: ReviewLens
       phase: Phase
       costUsd: number
       complete: boolean
@@ -306,8 +321,7 @@ export type Observation =
     }
 type Progress = Parameters<NonNullable<RunInput["onProgress"]>>[0]
 
-interface Track {
-  name: Name
+interface Track extends PassIdentity {
   sessionID: SessionID
   price?: ReviewPrice // set when this session's model is priced and the review has a dollar cap
   cost?: Provider.Model["cost"] // actual invocation rates, including its long-context tiers
@@ -323,8 +337,7 @@ interface Track {
   denied: boolean
 }
 
-interface Spec<T> {
-  name: Name
+interface Spec<T> extends PassIdentity {
   model: ResolvedModel
   cap: number
   text: string
@@ -338,13 +351,15 @@ interface Spec<T> {
 // their head files. Measuring just their fixed instructions does not provide that bound.
 export type ReviewRequestAccounting = Pick<SessionPrompt.Interface, "reviewFirstRequest">
 
-type PlannedRequest = Pick<Spec<unknown>, "name" | "model" | "cap" | "text" | "schema">
+type PlannedRequest = Pick<Spec<unknown>, "name" | "lens" | "model" | "cap" | "text" | "schema">
 
 // Only the initial measurement and changes that actually reduce a binding limit are recorded. A cap
 // changes admission's step count, never the first request: it needs no second pass through preparation.
 function dispatchPlan(input: {
   requests: PlannedRequest[]
   dependents: boolean
+  lenses: boolean
+  dropLenses: () => PlannedRequest[]
   shrink: (lever: "diff" | "dependents") => Iterable<{ requests: PlannedRequest[]; accept: () => void }>
   measure: (requests: PlannedRequest[]) => Effect.Effect<PassPlan[] | undefined>
   limits: { maxInputTokens: number; remainingUsd?: number }
@@ -360,6 +375,7 @@ function dispatchPlan(input: {
     input.observe({ type: "dispatch", estimate: structuredClone(estimate) })
     const available = new Set<Shrink>(["diff"])
     if (input.dependents) available.add("dependents")
+    if (input.lenses) available.add("lenses")
     for (const plan of plans) {
       if (plan.pass === "review" || plan.pass === "security" || plan.pass === "verify")
         available.add(`steps:${plan.pass}`)
@@ -376,7 +392,13 @@ function dispatchPlan(input: {
       if ("stop" in decision) return { decision: "stop" as const, estimate, notes }
       const lever = decision.shrink
       available.delete(lever)
-      if (lever === "dependents" || lever === "diff") {
+      if (lever === "lenses") {
+        // Removing the lenses also changes whether verification is needed and its future candidate bound.
+        const next = yield* input.measure(input.dropLenses())
+        if (!next) return { decision: "unknown" as const, notes }
+        plans = next
+        notes.push("The single-class lens passes were removed to fit the review budget.")
+      } else if (lever === "dependents" || lever === "diff") {
         // Try progressively smaller context without changing what any specialist sees until a measured
         // proposal actually lowers a binding limit. Preserve the step caps admitted in preceding rounds.
         const caps = new Map(plans.map((plan) => [plan.pass, plan.maxSteps]))
@@ -421,8 +443,7 @@ function dispatchPlan(input: {
   })
 }
 
-interface Asked<T> {
-  name: Name
+interface Asked<T> extends PassIdentity {
   sessionID?: SessionID
   value?: T
   status: ReviewOutcome["specialists"][number]["status"]
@@ -613,9 +634,9 @@ export const run: (
     ...(input.instructionsFromContext ? { instructions: "provided" as const } : {}),
     ...(input.admittedReads?.patterns.length || input.readDenies?.length ? { restrictedReads: true as const } : {}),
   }
-  const firstRequestLimits = new Map<Name, number>()
+  const firstRequestLimits = new Map<string, number>()
   const tracks = new Map<string, Track>()
-  const reservations = new Map<Name, { turn: number; finalize: number }>()
+  const reservations = new Map<string, { turn: number; finalize: number }>()
   const sessionIDs: SessionID[] = []
   const state = {
     spent: 0,
@@ -671,18 +692,23 @@ export const run: (
 
   // Reservations are estimates, not billed spend. Replace this specialist's old reservation in one synchronous
   // operation: parallel specialists must not each spend the same remainder, including a pending finalization.
-  const reserve = (name: Name, turn: number, finalize: number, at: Pick<OverCap, "phase" | "site" | "sessionID">) => {
+  const reserve = (
+    pass: PassIdentity,
+    turn: number,
+    finalize: number,
+    at: Pick<OverCap, "phase" | "site" | "sessionID">,
+  ) => {
     if (!capped) return true
     const others = [...reservations].reduce(
-      (total, [owner, amount]) => total + (owner === name ? 0 : amount.turn + amount.finalize),
+      (total, [owner, amount]) => total + (owner === passKey(pass) ? 0 : amount.turn + amount.finalize),
       0,
     )
     if (
       state.spent + state.uncertain + others + turn + finalize > config.maxCostUsd &&
-      !lift({ pass: name, estimateUsd: turn + finalize, ...at })
+      !lift({ pass: pass.name, ...lensField(pass), estimateUsd: turn + finalize, ...at })
     )
       return false
-    reservations.set(name, { turn, finalize })
+    reservations.set(passKey(pass), { turn, finalize })
     return true
   }
   const nextCost = (track: Pick<Track, "context" | "cached" | "price" | "cost">) => {
@@ -814,6 +840,7 @@ export const run: (
             return [
               {
                 name: track.name,
+                ...lensField(track),
                 model: used,
                 costKind,
                 ...(!cost.codium && (costKind === "priced" || (costKind === "unknown" && cost.costUsd > 0))
@@ -865,9 +892,9 @@ export const run: (
     yield* Effect.tryPromise(() => save(spent)).pipe(Effect.ignore)
   })
 
-  const passSession = (name: Name) => ({
-    title: `Vectorscope review · ${input.head.slice(0, 7)} · ${name}`,
-    internal: `${input.instructionsFromContext ? PINNED_SESSION_PREFIX : "vectorscope."}${name}`,
+  const passSession = (pass: PassIdentity) => ({
+    title: `Vectorscope review · ${input.head.slice(0, 7)} · ${passKey(pass)}`,
+    internal: `${input.instructionsFromContext ? PINNED_SESSION_PREFIX : "vectorscope."}${pass.lens ? `lens.${pass.lens}` : pass.name}`,
     parentID: input.parentID,
     permission: rules,
   })
@@ -882,39 +909,72 @@ export const run: (
   // One session: the prompt, and when it was stopped or returned nothing usable, a finalize prompt in the same
   // session with every tool but StructuredOutput denied.
   function ask<T>(spec: Spec<T>): Effect.Effect<Asked<T>> {
+    const identity = { name: spec.name, ...lensField(spec) }
+    const observedPass = { pass: spec.name, ...lensField(spec) }
     return Effect.gen(function* () {
       if (input.stopSignal?.aborted || previewTimedOut)
-        return { name: spec.name, status: "stopped", stop: "timeout", detail: "timeout", steps: 0 } satisfies Asked<T>
+        return {
+          ...identity,
+          status: "stopped",
+          stop: "timeout",
+          detail: "timeout",
+          steps: 0,
+        } satisfies Asked<T>
       // Include the structured-output schema and a fixed context allowance. The first turn has no reported usage
       // yet, so this is only an admission estimate; provider usage replaces it as soon as it arrives.
       const context = Math.ceil((spec.text.length + JSON.stringify(spec.schema).length) / 3.5)
       const price = priceOf(spec.model)
       const firstCost = nextCost({ context, cached: 0, price })
-      observe({ type: "pass", pass: spec.name, model: nameOf(spec.model), text: spec.text, maxSteps: spec.cap })
+      observe({
+        type: "pass",
+        ...observedPass,
+        model: nameOf(spec.model),
+        text: spec.text,
+        maxSteps: spec.cap,
+      })
       // VS-23b: before the session, the pass's model is decided again, and once any model or attempt of the review was
       // refused no pass starts.
       const decided = zdr && !state.refused ? yield* ReviewRoutes.decide(provider, spec.model, route) : undefined
       if (decided && !decided.decision.allowed)
         state.refused = { model: nameOf(spec.model), refusal: decided.decision.refusal }
       if (state.refused) {
-        observe({ type: "attempt", pass: spec.name, phase: "turn", admitted: false, stop: "privacy", estimateUsd: 0 })
-        return { name: spec.name, status: "stopped", stop: "privacy", detail: "privacy", steps: 0 } satisfies Asked<T>
-      }
-      if (!reserve(spec.name, firstCost, firstCost, { phase: "turn", site: "pass" })) {
         observe({
           type: "attempt",
-          pass: spec.name,
+          ...observedPass,
+          phase: "turn",
+          admitted: false,
+          stop: "privacy",
+          estimateUsd: 0,
+        })
+        return {
+          ...identity,
+          status: "stopped",
+          stop: "privacy",
+          detail: "privacy",
+          steps: 0,
+        } satisfies Asked<T>
+      }
+      if (!reserve(spec, firstCost, firstCost, { phase: "turn", site: "pass" })) {
+        observe({
+          type: "attempt",
+          ...observedPass,
           phase: "turn",
           admitted: false,
           stop: "budget",
           estimateUsd: firstCost,
         })
-        return { name: spec.name, status: "stopped", stop: "budget", detail: "budget", steps: 0 } satisfies Asked<T>
+        return {
+          ...identity,
+          status: "stopped",
+          stop: "budget",
+          detail: "budget",
+          steps: 0,
+        } satisfies Asked<T>
       }
       // A helper session: it stays out of session lists, and the review reports what it spent.
-      const session = yield* sessions.create(passSession(spec.name))
+      const session = yield* sessions.create(passSession(spec))
       const track: Track = {
-        name: spec.name,
+        ...identity,
         sessionID: session.id,
         ...(price ? { price } : {}),
         cap: spec.cap,
@@ -940,7 +1000,7 @@ export const run: (
       // (provider.ts) hold each attempt to. Under "zdr" the session runtime (llm.ts) sends only that agent's turns of
       // the session, so no helper request of it goes out. Released when the review ends.
       ReviewRoutes.register(session.id, { policy: route, agent, ...decided })
-      yield* progress({ type: "specialist", name: spec.name, status: "running" })
+      yield* progress({ type: "specialist", name: passKey(spec), status: "running" })
 
       // One policy survives every processor instance, retry and prompt for this fresh owned session. It is never
       // rebuilt at a continuation boundary, and the finalizer gets exactly one separately reserved invocation.
@@ -951,7 +1011,12 @@ export const run: (
         admit: (request) => {
           if (firstBudgetRefused) return
           const phase: Phase = track.finalizing ? "finalize" : "turn"
-          const attempt = { type: "attempt", pass: track.name, phase, sessionID: session.id } as const
+          const attempt = {
+            type: "attempt",
+            ...observedPass,
+            phase,
+            sessionID: session.id,
+          } as const
           // VS-23b, before the step and budget logic (never inside reserve(), which admits every uncapped attempt): the
           // attempt's model must be the one its pass was decided for, and no model or attempt of the review refused.
           // This holds every retry, continuation, finalizer and switch of model. A refused attempt is never sent.
@@ -966,7 +1031,9 @@ export const run: (
           const stop = input.stopSignal?.aborted
             ? "timeout"
             : track.finalizing
-              ? track.finalizeAttempts >= 1 || !request.tools.includes("StructuredOutput")
+              ? track.finalizeAttempts >= 1 ||
+                (track.lens && track.attempts >= track.cap) ||
+                !request.tools.includes("StructuredOutput")
                 ? "steps"
                 : undefined
               : track.attempts >= track.cap
@@ -983,7 +1050,7 @@ export const run: (
           track.cost = request.model.cost
           const estimate = nextCost(track)
           if (
-            !reserve(track.name, estimate, track.finalizing ? 0 : estimate, {
+            !reserve(track, estimate, track.finalizing ? 0 : estimate, {
               phase,
               site: "attempt",
               sessionID: session.id,
@@ -998,7 +1065,9 @@ export const run: (
           // to its reserved share, and publish admission only once the transport checks its actual prepared input.
           firstMessageID ??= request.messageID
           const limit =
-            !track.finalizing && request.messageID === firstMessageID ? firstRequestLimits.get(spec.name) : undefined
+            !track.finalizing && request.messageID === firstMessageID
+              ? firstRequestLimits.get(passKey(spec))
+              : undefined
           let admitted = false
           const accept = () => {
             if (admitted) return
@@ -1033,14 +1102,14 @@ export const run: (
                       firstBudgetRefused = true
                       track.stop = "budget"
                       track.denied = true
-                      reservations.delete(track.name)
+                      reservations.delete(passKey(track))
                       observe({ ...attempt, admitted: false, stop: "budget", estimateUsd: 0 })
                     },
                   },
                 }),
             ...(track.finalizing ? { tools: ["StructuredOutput"] } : {}),
             observe: (cost) => {
-              const reservation = reservations.get(track.name)
+              const reservation = reservations.get(passKey(track))
               if (reservation) reservation.turn = Math.max(reservation.turn, cost)
             },
             settle: (result) => {
@@ -1049,7 +1118,7 @@ export const run: (
               if (!admitted) accept()
               observe({
                 type: "settle",
-                pass: track.name,
+                ...observedPass,
                 phase,
                 costUsd: result.cost,
                 complete: result.complete,
@@ -1062,13 +1131,14 @@ export const run: (
                 // No usage, partial usage, and unpriced usage cannot turn an accepted attempt into free capacity.
                 state.uncertain += Math.max(
                   0,
-                  Math.max(estimate, reservations.get(track.name)?.turn ?? 0) - result.cost,
+                  Math.max(estimate, reservations.get(passKey(track))?.turn ?? 0) - result.cost,
                 )
                 state.incomplete = true
               }
               track.context = result.complete ? result.context : Math.max(track.context, result.context)
               track.cached = result.complete ? result.cached : 0
-              if (capped) reservations.set(track.name, { turn: 0, finalize: track.finalizing ? 0 : nextCost(track) })
+              if (capped)
+                reservations.set(passKey(track), { turn: 0, finalize: track.finalizing ? 0 : nextCost(track) })
             },
           }
         },
@@ -1098,7 +1168,7 @@ export const run: (
             )
         }).pipe(Effect.ensuring(prompts.cancel(session.id)))
       const done = (value: T | undefined, status: Asked<T>["status"], stop?: Stop, detail?: string): Asked<T> => ({
-        name: spec.name,
+        ...identity,
         sessionID: session.id,
         ...(value !== undefined ? { value } : {}),
         status,
@@ -1126,10 +1196,12 @@ export const run: (
 
       // The first prompt is now idle. Unknown exposure stays in the review's ledger; only unused future work is
       // released. The finalizer must still fit beside every other specialist's admitted work.
-      if (!reserve(track.name, nextCost(track), 0, { phase: "finalize", site: "finalizer", sessionID: session.id })) {
+      if (track.lens && track.attempts >= track.cap)
+        return done(undefined, "stopped", track.stop ?? "steps", track.stop ?? "steps")
+      if (!reserve(track, nextCost(track), 0, { phase: "finalize", site: "finalizer", sessionID: session.id })) {
         observe({
           type: "attempt",
-          pass: spec.name,
+          ...observedPass,
           phase: "finalize",
           admitted: false,
           stop: "budget",
@@ -1152,18 +1224,18 @@ export const run: (
       const status = track.stop === "timeout" ? "timeout" : track.stop ? "stopped" : "ok"
       return done(finalValue, status, track.stop, track.stop)
     }).pipe(
-      Effect.ensuring(Effect.sync(() => reservations.delete(spec.name))),
+      Effect.ensuring(Effect.sync(() => reservations.delete(passKey(spec)))),
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause),
         (cause) =>
           Effect.succeed<Asked<T>>({
-            name: spec.name,
+            ...identity,
             status: "failed",
             steps: 0,
             detail: Cause.prettyErrors(cause)[0]?.message ?? "the session failed",
           }),
       ),
-      Effect.tap((done) => progress({ type: "specialist", name: done.name, status: done.status })),
+      Effect.tap((done) => progress({ type: "specialist", name: passKey(done), status: done.status })),
       Effect.tap(() => checkpoint()),
     )
   }
@@ -1365,21 +1437,46 @@ export const run: (
                 ...(dependents !== undefined ? { dependents } : {}),
               }),
             )
-            // The lens sessions are wired separately. At this stage auto depth changes only the core specialists.
-            const plan = planDepth({ depth: "auto", files: input.files, risk, config: { security: config.security } })
+            const plan = planDepth({
+              depth: "auto",
+              files: input.files,
+              risk,
+              config: { security: config.security, lenses: config.lenses },
+            })
             return { risk, plan, partialReach: dependents !== undefined && incompleteReach }
           })
         : undefined
     const names = nothingToSend ? [] : (auto?.plan.specialists ?? planSpecialists(input.files, config))
-    const primaryRequests = (payload: PromptInput) =>
-      names.map((name) => ({
+    let lenses = auto?.plan.lenses ?? []
+    const decodePrimary = strictMode || ruleStrict ? (value: unknown) => decodeReport(value, strictKeys) : decodeReport
+    const primaryRequests = (payload: PromptInput, activeLenses = lenses): Spec<ModelReport>[] => [
+      ...names.map((name) => ({
         name,
         model: triage,
         cap: name === "security" ? Math.ceil((config.maxSteps * 2) / 3) : config.maxSteps,
         text: name === "security" ? buildSecurityPrompt(payload) : buildReviewPrompt(payload),
         schema: reportSchema,
-        decode: strictMode || ruleStrict ? (value: unknown) => decodeReport(value, strictKeys) : decodeReport,
-      }))
+        decode: decodePrimary,
+      })),
+      ...activeLenses.map(
+        (lens): Spec<ModelReport> => ({
+          name: "lens",
+          lens,
+          model,
+          cap: Math.min(config.maxSteps, LENS_LIMITS.steps),
+          text: buildLensPrompt(payload, lens),
+          schema: reportSchema,
+          decode: (value) => {
+            const report = decodeReport(value, strictKeys)
+            // A single-class session proposes at most four candidates. It cannot close a prior finding,
+            // add free-form file notes, or set the primary review's risk.
+            return report
+              ? { summary: "", risk: "low", files: [], findings: report.findings.slice(0, LENS_LIMITS.findings) }
+              : undefined
+          },
+        }),
+      ),
+    ]
     let requests = primaryRequests(promptInput)
     let checkHeadFiles = checkFiles
     let verifySteps = VERIFY_STEPS
@@ -1466,7 +1563,7 @@ export const run: (
           return price
         })
       const fullPlan = (initial: PlannedRequest[], versions: typeof headFiles): PlannedRequest[] => {
-        if (!triaged && config.verify === "off") return initial
+        if (!triaged && config.verify === "off" && !initial.some((pass) => pass.lens)) return initial
         // These are the actual fixed blocks and the full set of eligible head files. Only the runtime's
         // conditional bound can account for future candidates, fixed claims and the judge's verdicts.
         const check = {
@@ -1492,19 +1589,19 @@ export const run: (
             : []),
         ]
       }
-      const candidateLimit = Math.max(4, 2 * config.maxComments)
+      const candidateLimit = () => Math.max(4, 2 * config.maxComments) + lenses.length * LENS_LIMITS.findings
       // Future claims have no bytes yet. Reserve one ordinary model-output allowance per candidate
       // in addition to all concrete prompt text. Enforce both this serialized character budget and the
       // whole measured request before sending any materialized verifier or judge request.
       const checkerTextLimit = (text: string) =>
-        JSON.stringify(text).length + Math.ceil(candidateLimit * OUTPUT_PER_STEP * 3.5)
+        JSON.stringify(text).length + Math.ceil(candidateLimit() * OUTPUT_PER_STEP * 3.5)
       const firstTurn = (draft: PlannedRequest, conditional?: "verify" | "judge") =>
         prepare
           ? withinDeadline(
               Effect.suspend(() => {
                 const prompt = passPrompt(draft, draft.text)
                 return prepare({
-                  session: passSession(draft.name),
+                  session: passSession(draft),
                   prompt,
                   route: {
                     policy: route,
@@ -1515,7 +1612,7 @@ export const run: (
                     ? {
                         conditional: {
                           pass: conditional,
-                          candidateLimit,
+                          candidateLimit: candidateLimit(),
                           maxSerializedTextChars: checkerTextLimit(draft.text),
                         },
                       }
@@ -1547,7 +1644,7 @@ export const run: (
             const price = draft.model.costKind === "priced" ? yield* dispatchPrice(draft.model) : undefined
             if (previewTimedOut) return undefined
             plans.push({
-              pass: draft.name,
+              pass: passKey(draft),
               model: nameOf(draft.model),
               maxSteps: draft.cap,
               promptTokens: accounting.promptTokens,
@@ -1555,7 +1652,7 @@ export const run: (
               ...(certificateSchema && draft.name === "verify"
                 ? {
                     extraOutputTokens: Math.ceil(
-                      (candidateLimit * (MAX_TRACE_QUOTES + MAX_FINDING_QUOTES) * MAX_QUOTE_CHARS) / 3.5,
+                      (candidateLimit() * (MAX_TRACE_QUOTES + MAX_FINDING_QUOTES) * MAX_QUOTE_CHARS) / 3.5,
                     ),
                   }
                 : {}),
@@ -1610,6 +1707,12 @@ export const run: (
       const result = yield* dispatchPlan({
         requests: prepare ? fullPlan(requests, checkHeadFiles) : [],
         dependents: !!activeImpact?.dependents.length,
+        lenses: lenses.length > 0,
+        dropLenses: () => {
+          lenses = []
+          requests = primaryRequests(activePayload)
+          return fullPlan(requests, checkHeadFiles)
+        },
         shrink,
         measure,
         observe,
@@ -1684,8 +1787,7 @@ export const run: (
       }
       if (result.decision === "go") {
         for (const plan of result.plans) {
-          if (plan.pass === "review" || plan.pass === "security" || plan.pass === "verify" || plan.pass === "judge")
-            firstRequestLimits.set(plan.pass, plan.promptTokens)
+          firstRequestLimits.set(plan.pass, plan.promptTokens)
         }
         dispatchNotes.push(...result.notes)
         const conditionalLimits = new Map(
@@ -1694,7 +1796,7 @@ export const run: (
             .map((draft) => [draft.name, checkerTextLimit(draft.text)]),
         )
         const caps = new Map(result.plans.map((plan) => [plan.pass, plan.maxSteps]))
-        requests = requests.map((spec) => ({ ...spec, cap: caps.get(spec.name) ?? spec.cap }))
+        requests = requests.map((spec) => ({ ...spec, cap: caps.get(passKey(spec)) ?? spec.cap }))
         verifySteps = caps.get("verify") ?? VERIFY_STEPS
         checkerStop = (pass, target, text, rows) =>
           Effect.gen(function* () {
@@ -1702,7 +1804,8 @@ export const run: (
             // cannot be accounted for within its reserved share; ordinary verification bookkeeping still
             // records which findings were left unchecked.
             const reserved = result.plans.find((plan) => plan.pass === pass)
-            const fitsText = rows <= candidateLimit && JSON.stringify(text).length <= (conditionalLimits.get(pass) ?? 0)
+            const fitsText =
+              rows <= candidateLimit() && JSON.stringify(text).length <= (conditionalLimits.get(pass) ?? 0)
             const actual = fitsText
               ? yield* firstTurn({
                   name: pass,
@@ -1735,7 +1838,9 @@ export const run: (
     const ruleCounts: RuleCounts[] = []
     recordImpact(!input.stopSignal?.aborted && !previewTimedOut)
     // 1–5. The specialists fan out only after the opted-in plan fits.
-    const asked = yield* Effect.forEach(requests, (spec) => ask(spec), { concurrency: 2 })
+    const asked = yield* Effect.forEach(requests, (spec) => ask(spec), {
+      concurrency: lenses.length ? LENS_LIMITS.parallel : 2,
+    })
 
     // 6. Normalize.
     const reports = asked.flatMap((entry) => {
@@ -1746,11 +1851,12 @@ export const run: (
         ruleCounts.push(checked)
         report = { ...report, findings: checked.findings }
       }
-      return [{ source: entry.name === "security" ? ("security" as const) : ("review" as const), report }]
+      return [{ source: entry.name === "security" ? ("security" as const) : ("review" as const), report, ...lensField(entry) }]
     })
     const report = mergeReports(reports.map((entry) => entry.report))
     const hidden = new Set<string>()
-    const normalized = reports.flatMap(({ report, source }) => {
+    const lensCandidates = new Set<Finding>()
+    const allFindings = reports.flatMap(({ report, source, lens }) => {
       const findings = normalizeFindings(report.findings, source, input.anchors)
       if (strictMode)
         for (const [i, finding] of findings.entries()) {
@@ -1766,8 +1872,28 @@ export const run: (
           )
             hidden.add(finding.id)
         }
+      if (lens) for (const finding of findings) lensCandidates.add(finding)
       return findings
     })
+    const code = (finding: Finding) => {
+      const anchor = resolveAnchor(index, finding)
+      return anchor.ok ? normalizeCode(anchorText(index, anchor.anchor)) : ""
+    }
+    const normalized = lensCandidates.size
+      ? allFindings.reduce<Finding[]>((kept, finding) => {
+          if (lensCandidates.has(finding)) {
+            const matches = (other: Finding) => other.id === finding.id || sameFinding(other, finding, code)
+            const representative = kept.find(matches)
+            if (representative) {
+              // Keep one checked copy even when earlier specialists fingerprinted the same defect differently.
+              lensCandidates.add(representative)
+              return kept.filter((other) => other === representative || !matches(other))
+            }
+          }
+          kept.push(finding)
+          return kept
+        }, [])
+      : allFindings
 
     // A fingerprint shared with an inaccessible candidate cannot authorize exposing its competing evidence.
     const eligible = strictMode ? normalized.filter((finding) => !hidden.has(finding.id)) : normalized
@@ -1784,6 +1910,13 @@ export const run: (
       },
       "engine",
     )
+    const lensChecks = eligible.filter((finding) => lensCandidates.has(finding) && sendable(finding))
+    const requestedIds = new Set(candidates.map((finding) => finding.id))
+    for (const finding of lensChecks) {
+      if (requestedIds.has(finding.id)) continue
+      requestedIds.add(finding.id)
+      candidates.push(finding)
+    }
     // After a triage pass the cheaper model's word that an earlier finding is fixed goes to the double-check too, so
     // only the review model closes a finding and resolves its thread. A claim about a finding the first pass reported
     // again contradicts itself and is dropped.
@@ -1853,7 +1986,7 @@ export const run: (
     // A verifier can introduce secret-shaped text into its reason. Exclude such a row before a panel can
     // relay it; the ordinary strict unanswered bookkeeping keeps the claim open for another review.
     const candidateIds = new Set(candidates.map((finding) => finding.id))
-    const verifyDecoder = strictMode
+    const verifyDecoder = strictMode || lensChecks.length > 0
       ? (value: unknown) => decodeStrictVerify(value)?.filter((row) => !hold || !containsHeldValue(row))
       : decodeVerify
     const verify: Asked<CertificateAnswer[]> | undefined = !verifyText
@@ -1948,17 +2081,24 @@ export const run: (
     // The judge's verdict stands where it gave one; the check's stands for the rest, and for earlier fixed claims.
     const finalCall = judged?.status === "ok" ? (judged.value ?? []).filter((entry) => candidateIds.has(entry.id)) : []
     const verdicts = new Map([...(verify?.value ?? []), ...finalCall].map((entry) => [entry.id, entry.verdict]))
-    if (strictMode) {
+    if (strictMode || lensChecks.length) {
       // A stopped finalizer or a judge cannot supply a missing first check. Only a single readable verdict
       // from each required pass counts, and a model cannot confirm a finding it was never asked about.
       const readable = new Set(verify?.status === "ok" ? verify.value?.map((row) => row.id) : [])
       const judgedIds = new Set(finalCall.map((row) => row.id))
+      const mustVerify = new Set(lensChecks.map((finding) => finding.id))
       for (const id of verdicts.keys())
-        if (!readable.has(id) || (judgeModel && candidateIds.has(id) && !judgedIds.has(id))) verdicts.delete(id)
+        if (
+          (strictMode || mustVerify.has(id)) &&
+          (!readable.has(id) || (judgeModel && candidateIds.has(id) && !judgedIds.has(id)))
+        )
+          verdicts.delete(id)
     }
     // After a triage pass only what the review model confirmed is reported: a candidate it rejected, gave no verdict
     // for, or never saw because the double-check was skipped or failed is left out.
     const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triaged).map((finding) => finding.id))
+    for (const finding of normalized)
+      if (lensCandidates.has(finding) && verdicts.get(finding.id) !== "confirmed") unchecked.add(finding.id)
     // Under the shared policy the review says how many candidates it posts without a verdict, whether or not the pass
     // finished; after a triage pass, how many it left out for want of one.
     const unanswered = shared && verify ? verifyUnanswered(candidates, verdicts, triaged).length : 0
@@ -1977,6 +2117,8 @@ export const run: (
     const conditionalUnreviewed = new Set(
       (lateVerify ? [...candidates, ...claims] : lateJudge ? candidates : []).map((finding) => finding.path),
     )
+    const unreadLens = lensChecks.filter((finding) => !verdicts.has(finding.id))
+    for (const finding of unreadLens) conditionalUnreviewed.add(finding.path)
     for (const entry of prior) if (conditionalUnreviewed.has(entry.path)) unshown.add(entry.id)
     const checked: ModelReport =
       triaged || strictMode
@@ -2003,11 +2145,15 @@ export const run: (
       asked.length > 0 &&
       asked.every((entry) => entry.status === "skipped" && entry.detail === "first-request-changed") &&
       [...tracks.values()].every((track) => !track.attempts && !track.finalizeAttempts)
+    const lensStop = unreadLens.length
+      ? (verify?.stop ??
+        (verify?.detail === "budget" ? "budget" : verify?.detail === "time" ? "timeout" : "model-error"))
+      : undefined
     const primaryStop = refused
       ? ("privacy" as const)
       : (asked.find((entry) => entry.stop)?.stop ??
         (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined))
-    const partial = noRequestSent ? ("budget-estimate" as const) : (primaryStop ?? lateVerify ?? lateJudge)
+    const partial = noRequestSent ? ("budget-estimate" as const) : (primaryStop ?? lateVerify ?? lateJudge ?? lensStop)
     const missed = nothingToSend
       ? []
       : refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
@@ -2024,6 +2170,7 @@ export const run: (
       : input.skipped
     const specialists = [...asked, ...(verify ? [verify] : []), ...(judged ? [judged] : [])].map((entry) => ({
       name: entry.name,
+      ...lensField(entry),
       status: entry.status,
       steps: entry.steps,
       ...(entry.detail ? { detail: entry.detail } : {}),
@@ -2225,7 +2372,9 @@ export const run: (
                   }
                 : {}),
             }
-          : checked,
+          : lensCandidates.size
+            ? { ...checked, findings }
+            : checked,
       selection: {
         ...selection,
         ...(overBudget.size && !refused ? { diffIncomplete: true as const } : {}),
@@ -2285,6 +2434,7 @@ export const run: (
               : []),
             ...dispatchNotes,
             ...(auto ? ReviewDepth.notes(auto, specialists) : []),
+            ...(lenses.length ? [`Single-class lens passes: ${lenses.join(", ")}.`] : []),
             ...holdNotes,
             ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
             ...(strictMode ? [] : verifyNotes),

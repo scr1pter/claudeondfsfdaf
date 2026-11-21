@@ -95,6 +95,7 @@ import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
+import { REVIEW_LENSES } from "@vectordevai/core/review/types"
 import { ReviewRoutes } from "@/review/route"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
@@ -4651,9 +4652,14 @@ const layer = Layer.effect(
         const format = prompt.format
         const rules = session.permission
         const name = prompt.agent
+        const lensSession = REVIEW_LENSES.some(
+          (lens) =>
+            session.internal === `vectorscope.lens.${lens}` ||
+            session.internal === `${PINNED_SESSION_PREFIX}lens.${lens}`,
+        )
         if (
           !session.internal ||
-          !/^vectorscope\.(?:bound\.)?(?:review|security|verify|judge)$/.test(session.internal) ||
+          (!lensSession && !/^vectorscope\.(?:bound\.)?(?:review|security|verify|judge)$/.test(session.internal)) ||
           !name ||
           !["review", "security", "vectorscope"].includes(name) ||
           route.agent !== name ||

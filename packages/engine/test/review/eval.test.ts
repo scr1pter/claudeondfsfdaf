@@ -13,6 +13,7 @@ import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
+import { MAX_FINDING_QUOTES, MAX_QUOTE_CHARS, MAX_TRACE_QUOTES } from "@vectordevai/core/review/schema"
 import { buildFinalizePrompt, buildReviewPrompt } from "@vectordevai/core/review/prompt"
 import { estimateCostUsd, nextStepCostUsd } from "@vectordevai/core/review/plan"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
@@ -20,6 +21,8 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import {
   DEFAULT_REVIEW_CONFIG,
+  LENS_LIMITS,
+  REVIEW_LENSES,
   type ModelFinding,
   type ReviewConfig,
   type ReviewOutcome,
@@ -1678,14 +1681,118 @@ describe("ReviewEval.replay", () => {
   )
 
   it.instance(
-    "replays automatic depth from the base settings and leaves disabled lens behavior and evidence unchanged",
+    "replays engine:lenses-high with all four real high-band sessions and the base's strict certificate policy",
     () =>
       Effect.gen(function* () {
-        const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
+        const keys = { depth: "auto", lenses: "high" } as const
+        const strict = {
+          guardrail: "strict",
+          ruleCheck: "strict",
+          verifyEvidence: "certificate",
+          scopeGate: "introduced",
+        } as const
+        const price = { input: 0.001, output: 0.001 }
+        const baseRule = "Keep the last element accessible."
+        const headOnlyRule = "Require every list to contain an empty slot."
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify(strict), "AGENTS.md": baseRule },
+          head: {
+            "AGENTS.md": baseRule + "\n" + headOnlyRule,
+            "src/list.ts": LIST_HEAD + Array.from({ length: 640 }, (_, i) => `export const row${i} = ${i}\n`).join(""),
+          },
+          price,
+        })
+        const candidate = {
+          ...listBug,
+          scope: "introduced" as const,
+          failure: {
+            class: "crash" as const,
+            mechanism: "logic" as const,
+            trigger: "Call last with a nonempty array.",
+            impact: "The returned value is undefined.",
+          },
+          quotes: [{ path: listBug.path, side: "RIGHT" as const, line: 3, code: "  return items[index]" }],
+          suggestion: "  return items[index - 1]",
+        }
+        const headOnly = {
+          ...candidate,
+          title: "Head-only rule",
+          category: "maintainability",
+          rule: { source: "repository_instructions", quote: headOnlyRule },
+        }
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const id = Review.normalizeFindings([candidate], "review", anchors)[0]!.id
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report()))
+        for (const lens of REVIEW_LENSES)
+          yield* llm.pushMatch(
+            answering(`You are Vector's ${lens} reviewer`),
+            reply().tool("StructuredOutput", {
+              ...report(),
+              findings: lens === "data-integrity" ? [candidate, headOnly] : [],
+            }),
+          )
+        yield* llm.pushMatch(
+          VERIFY,
+          reply().tool("StructuredOutput", { results: [{ id, verdict: "unsure", reason: "No confirmed trace." }] }),
+        )
+        // The replay CLI resolves the model from the local provider catalog before estimating the first request.
+        const provider = yield* Provider.Service
+        yield* provider.getModel(MODEL.providerID, MODEL.modelID)
+        const variant = { name: "engine:lenses-high", keys }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: { ...MODEL, price },
+          variant,
+          config: { maxCostUsd: 2, maxInputTokens: 10_000_000, maxComments: 1, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        const verifierBudget = artifact.dispatch?.passes.find((pass) => pass.pass === "verify")?.extraOutputTokens
+        // Four ordinary candidates plus each high-band lens's bounded findings get certificate output capacity.
+        const candidates = 4 + REVIEW_LENSES.length * LENS_LIMITS.findings
+        expect(verifierBudget).toBe(
+          Math.ceil((candidates * (MAX_TRACE_QUOTES + MAX_FINDING_QUOTES) * MAX_QUOTE_CHARS) / 3.5),
+        )
+        expect(artifact.shrink).toEqual([])
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value).toMatchObject({ ...strict, ...keys })
+        expect(artifact.scope.prompts).toBe(promptsDigest({ ...strict, ...keys }))
+        expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, lenses: "off" }))
+        expect(
+          artifact.outcome?.specialists.filter((row) => row.name === "lens").map((row) => [row.lens, row.status]),
+        ).toEqual(REVIEW_LENSES.map((lens) => [lens, "ok"]))
+        expect(
+          artifact.passes
+            .filter((row) => row.pass === "lens")
+            .map((row) => row.lens)
+            .sort(),
+        ).toEqual([...REVIEW_LENSES].sort())
+        const hits = yield* llm.hits
+        for (const lens of REVIEW_LENSES)
+          expect(hits.filter(answering(`You are Vector's ${lens} reviewer`))).toHaveLength(1)
+        const verify = hits.filter(VERIFY)
+        expect(verify).toHaveLength(1)
+        expect(lastUserText(verify[0]!.body)).toContain(candidate.failure.trigger)
+        expect(lastUserText(verify[0]!.body)).not.toContain(candidate.body)
+        expect(artifact.outcome?.strict?.dropped).toContainEqual({ reason: "verdict-unsure", count: 1 })
+        expect(artifact.outcome?.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+        expect(artifact.outcome?.report.findings.some((row) => row.title === headOnly.title)).toBe(false)
+        expect(artifact.outcome?.selection.inline).toEqual([])
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "replays base lens settings with accurate policy and prompt scope when the low band schedules no lens",
+    () =>
+      Effect.gen(function* () {
         const IGNORED =
           '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
         for (const [settings, warnings] of [
-          [{ depth: "auto", lenses: "high" }, [LENSES]],
+          [{ depth: "auto", lenses: "high" }, []],
           [{ lenses: "high" }, [IGNORED]],
         ] as const) {
           const { directory, llm, base, head } = yield* checkout({
@@ -1702,11 +1809,10 @@ describe("ReviewEval.replay", () => {
             check: recordingCheck().check,
           })
           expect(artifact.config.value.depth).toBe("depth" in settings ? "auto" : undefined)
-          expect(Object.hasOwn(artifact.config.value, "lenses")).toBe(false)
+          expect(artifact.config.value.lenses).toBe("high")
           expect(artifact.config.warnings).toEqual([...warnings])
           expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest())
-          expect(artifact.scope.prompts).not.toBe(promptsDigest({ depth: "auto", lenses: "high" }))
+          expect(artifact.scope.prompts).toBe(promptsDigest(settings))
           expect(artifact.outcome?.specialists.map((entry) => [entry.name, entry.status])).toEqual([["review", "ok"]])
           for (const body of yield* llm.inputs)
             for (const lens of ["concurrency", "resource", "access", "data-integrity", "security"])
@@ -2066,15 +2172,33 @@ describe("ReviewEval.replay", () => {
           { name: "engine:depth-auto", keys: { depth: "auto" }, models: "triage-pair" },
         ] as const)
           expect(yield * refused({ variant })).toContain("The engine:depth-auto variant sets only")
-        // Raw depth settings must be carried by the named pipeline variant. Lenses are still unapplied.
-        expect(yield* refused({ config: { depth: "auto" } })).toContain(
+        const lenses = { depth: "auto", lenses: "high" } as const
+        for (const variant of [
+          { name: "engine:depth-auto", keys: lenses },
+          // A replay applies only own settings to its configuration.
+          {
+            name: "engine:lenses-high",
+            keys: Object.assign(Object.create({ depth: "auto" }), { lenses: "high", verifyPolicy: "shared" }),
+          },
+          { name: "engine:counterfeit", keys: lenses },
+          { name: "engine:lenses-high", keys: { depth: "auto" } },
+          { name: "engine:lenses-high", keys: { lenses: "high" } },
+          { name: "engine:lenses-high", keys: { depth: "fixed", lenses: "high" } },
+          { name: "engine:lenses-high", keys: { ...lenses, guardrail: "strict" } },
+          { name: "engine:lenses-high", keys: lenses, models: "triage-pair" },
+        ] as const)
+          expect(yield * refused({ variant })).toContain("The engine:lenses-high variant sets only")
+        expect(yield * refused({ config: { depth: "auto" } })).toContain(
           "config sets depth, a pipeline variant's setting",
         )
-        expect(yield* refused({ config: { depth: "fixed", lenses: "high" } })).toContain(
-          "config sets depth, a pipeline variant's setting",
+        expect(yield * refused({ config: { lenses: "off" } })).toContain(
+          "config sets lenses, a pipeline variant's setting",
         )
-        expect(yield* refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
-          "config sets guardrail, a pipeline variant's setting",
+        expect(yield * refused({ config: { depth: "fixed", lenses: "high" } })).toContain(
+          "config sets depth, lenses, a pipeline variant's setting",
+        )
+        expect(yield * refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
+          "config sets lenses, guardrail, a pipeline variant's setting",
         )
         // Nor VS-30's runtime (VS-30c), which is trusted-only and which the VS-30 executor applies: it gets the message
         // that names what applies it, not the route-setting one, and a route setting beside it keeps its own message.

@@ -1281,7 +1281,6 @@ describe("VS-44's verifyEvidence key", () => {
 
 // SF-24 applies automatic depth on the engine. SF-25 wires the lens sessions.
 describe("VS-28's depth and lenses keys", () => {
-  const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
   const IGNORED =
     '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
   const OFF = '"depth": "auto" keeps "security": "off": no band adds the security pass.'
@@ -1294,7 +1293,7 @@ describe("VS-28's depth and lenses keys", () => {
     for (const key of ["depth", "lenses"] as const) {
       expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
       expect(Object.hasOwn(config, key)).toBe(false)
-      expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes(key)).toBe(key === "lenses")
+      expect(UNAPPLIED_REVIEW_KEYS).not.toContain(key)
       expect(SOURCED_REVIEW_KEYS).not.toContain(key)
     }
     expect(warnings).toEqual([])
@@ -1302,11 +1301,11 @@ describe("VS-28's depth and lenses keys", () => {
     expect(OPTIONAL_REVIEW_DEFAULTS.lenses).toBe("off")
   })
 
-  test("automatic depth is active while unfitted lens settings retain the appropriate warning", () => {
+  test("high lenses are active under automatic depth and explain their prerequisite under fixed depth", () => {
     expect(json({ depth: "auto" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto" }, warnings: [] })
     expect(json({ depth: "auto", lenses: "high" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
-      warnings: [LENSES],
+      warnings: [],
     })
     for (const value of [{ lenses: "high" }, { depth: "fixed", lenses: "high" }] as const)
       expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
@@ -1321,7 +1320,7 @@ describe("VS-28's depth and lenses keys", () => {
   test("REVIEW_DEPTH and REVIEW_LENSES override review.json, read without case or surrounding space", () => {
     expect(json({ lenses: "high" }, { REVIEW_DEPTH: " Auto " })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
-      warnings: [LENSES],
+      warnings: [],
     })
     expect(json({ depth: "auto", lenses: "high" }, { REVIEW_DEPTH: "fixed" }).warnings).toEqual([IGNORED])
     expect(json({ depth: "auto" }, { REVIEW_LENSES: "HIGH" }).config.lenses).toBe("high")
@@ -1333,7 +1332,7 @@ describe("VS-28's depth and lenses keys", () => {
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", security: "off" },
       warnings: [OFF],
     })
-    expect(json({ depth: "auto", lenses: "high", security: "off" }).warnings).toEqual([OFF_LENSES, LENSES])
+    expect(json({ depth: "auto", lenses: "high", security: "off" }).warnings).toEqual([OFF_LENSES])
     expect(json({ depth: "auto" }, { REVIEW_SECURITY: "off" }).warnings).toEqual([OFF])
     // Without auto, or with security on, there is nothing to say.
     for (const value of [
