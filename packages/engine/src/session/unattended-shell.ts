@@ -127,6 +127,12 @@ export const marked = Effect.fn("UnattendedShell.marked")(function* (
 /** What a lineage reads of a session. */
 type Node = { readonly metadata?: Readonly<Record<string, unknown>>; readonly parentID?: SessionID }
 
+/**
+ * Whether this one session carries the shell mark, whatever its value. The shell tool applies it to each session of the
+ * ancestry its permission check already reads, so a command reads its ancestry once.
+ */
+export const carries = (node: Node | undefined) => node?.metadata?.[UNATTENDED_SHELL_KEY] !== undefined
+
 const find = (sessions: Session.Interface, id: SessionID) =>
   sessions.get(id).pipe(
     Effect.map((session): Node | undefined => session),
@@ -148,7 +154,7 @@ function lineage(
   node: Node,
   seen: readonly SessionID[],
 ): Effect.Effect<boolean, LineageError> {
-  if (node.metadata?.[UNATTENDED_SHELL_KEY] !== undefined) return Effect.succeed(true)
+  if (carries(node)) return Effect.succeed(true)
   const parentID = node.parentID
   if (parentID === undefined) return Effect.succeed(false)
   const path = [...seen, id]

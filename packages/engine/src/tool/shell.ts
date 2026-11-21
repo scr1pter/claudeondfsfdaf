@@ -1777,8 +1777,35 @@ export const ShellPermission = Effect.gen(function* () {
     return scan
   })
 
+  // The command's conversation ancestry, read once per command: its root, whose history and computer the gate checks,
+  // and whether it or a session above it carries the unattended shell mark (UnattendedShell.marked over the same
+  // reads). A session that is not stored is judged by the tool context's parent. A failed read is refused with
+  // UnattendedShell.LINEAGE, never taken as unmarked.
+  const lineage = Effect.fn("ShellPermission.lineage")(function* (ctx: Tool.Context) {
+    const unreadable = () => Effect.die(new Error(UnattendedShell.LINEAGE))
+    const session = yield* sessions.get(ctx.sessionID).pipe(
+      Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
+      Effect.catchDefect(unreadable),
+    )
+    let rootID = ctx.sessionID
+    let parentID = session ? session.parentID : ctx.parentID
+    let unattended = UnattendedShell.carries(session)
+    const seen = new Set([rootID])
+    while (parentID) {
+      if (seen.has(parentID) || seen.size >= 64)
+        return yield* Effect.die(new Error("The shell's conversation ancestry could not be verified."))
+      seen.add(parentID)
+      const parent = yield* sessions.get(parentID).pipe(Effect.catchDefect(unreadable), Effect.orDie)
+      unattended ||= UnattendedShell.carries(parent)
+      rootID = parent.id
+      parentID = parent.parentID
+    }
+    return { rootID, unattended }
+  })
+
   return {
     resolvePath,
+    lineage,
     ask: Effect.fn("ShellPermission.ask")(function* (
       ctx: Tool.Context,
       input: {
@@ -1794,6 +1821,8 @@ export const ShellPermission = Effect.gen(function* () {
         // The caller's own ask, made after every refusal (the guest guards above and the ownership check) and before
         // the shell's asks, so a refused line asks nothing: the terminal's ask to run outside the shell sandbox.
         readonly first?: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">
+        // The ancestry the caller already read with lineage for this command, so it is not read again.
+        readonly lineage?: { readonly rootID: Tool.Context["sessionID"] }
       },
     ) {
       const instance = yield* InstanceState.context
@@ -1803,20 +1832,7 @@ export const ShellPermission = Effect.gen(function* () {
           const tree = yield* Effect.acquireRelease(parse(input.command, ps), (tree) =>
             Effect.sync(() => tree.delete()),
           )
-          const session = yield* sessions
-            .get(ctx.sessionID)
-            .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)))
-          let rootID = ctx.sessionID
-          let parentID = session ? session.parentID : ctx.parentID
-          const seen = new Set([rootID])
-          while (parentID) {
-            if (seen.has(parentID) || seen.size >= 64)
-              return yield* Effect.die(new Error("The shell's conversation ancestry could not be verified."))
-            seen.add(parentID)
-            const parent = yield* sessions.get(parentID).pipe(Effect.orDie)
-            rootID = parent.id
-            parentID = parent.parentID
-          }
+          const rootID = (input.lineage ?? (yield* lineage(ctx))).rootID
           const history = () =>
             rootID === ctx.sessionID
               ? ctx.history
@@ -1902,7 +1918,6 @@ export const ShellTool = Tool.define(
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
     const permission = yield* ShellPermission
-    const sessions = yield* Session.Service
     // Background commands (5.H). A build that leaves them out refuses them.
     const jobs = yield* Effect.serviceOption(ShellJobs.Service)
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
@@ -2235,17 +2250,17 @@ export const ShellTool = Tool.define(
               // Refused before anything is asked: with Web access None a command runs only in the sandbox, and this
               // computer has none to run it in. An unattended session's commands run only in the offline sandbox,
               // whatever Vector Local and VECTOR_SHELL_SANDBOX say, and nowhere it cannot be applied (R-M2).
-              // A conversation ancestry that cannot be read is refused with its own message, never run as unmarked.
-              const unattended = yield* UnattendedShell.marked(sessions, ctx.sessionID, ctx.parentID).pipe(
-                Effect.catchTag("UnattendedShell.LineageError", (error) => Effect.die(new Error(error.message))),
-              )
+              // A conversation ancestry that cannot be read is refused with its own message, never run as unmarked. The
+              // permission check below uses the same reads, so the ancestry is read once.
+              const lineage = yield* permission.lineage(ctx)
+              const unattended = lineage.unattended
               const refused = unattended
                 ? yield* UnattendedShell.refusal(spawner)
                 : webNone()
                   ? Sandbox.offlineRefusal()
                   : undefined
               if (refused) return yield* Effect.die(new Error(refused))
-              const scan = yield* permission.ask(ctx, { command: params.command, cwd, shell })
+              const scan = yield* permission.ask(ctx, { command: params.command, cwd, shell, lineage })
               // Reserve resolved targets only after every permission, before any process starts.
               yield* permission.admit(ctx, [scan])
               const beforeSpawn = permission.beforeRun([scan])
