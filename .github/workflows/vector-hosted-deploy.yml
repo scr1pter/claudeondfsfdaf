@@ -5,7 +5,7 @@ name: Vector hosted deploy
 #
 # - The preflight job holds no secret. It requires the hosted-production environment to have a required reviewer and to
 #   take protected branches only, main to be a protected branch, and the commit to be on main; it then hands that
-#   exact commit to the deploy jobs.
+#   exact commit to the deploy jobs. The optional `commit` input rolls back to an earlier commit on main instead.
 # - Each deploy job runs in hosted-production, so it waits for the owner's approval, and is the only place
 #   CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are read. It checks out that commit again, installs from the lockfile
 #   with no shared cache, checks the committed wrangler.jsonc (the real kill-flag namespace id, no secret in vars), runs
@@ -21,6 +21,11 @@ on:
         default: relay
         type: choice
         options: [relay, ops, all]
+      commit:
+        description: An earlier commit on main to deploy (rollback); empty deploys the dispatched head
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: vector-hosted-deploy
@@ -83,13 +88,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # A rollback names an earlier commit on main. The input reaches this step only as environment, never as shell text,
+      # and must be a full SHA that main contains; the dispatched head is still checked as before.
       - name: Require a commit on protected main
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
+          VECTOR_DEPLOY_COMMIT: ${{ inputs.commit }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "No commit to deploy."; exit 1; }
+          want=${VECTOR_DEPLOY_COMMIT:-$GITHUB_SHA}
+          [[ "$want" =~ ^[a-f0-9]{40}$ ]] || { echo "Name the commit to deploy by its full 40-character SHA."; exit 1; }
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "The checkout is not the dispatched commit."; exit 1; }
           protected=$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected') || {
             echo "Could not read main's protection."
@@ -101,7 +111,11 @@ jobs:
             echo "Deploy only a commit on protected main."
             exit 1
           }
-          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          git merge-base --is-ancestor "$want" origin/main || {
+            echo "Roll back only to a commit on protected main."
+            exit 1
+          }
+          echo "sha=$want" >> "$GITHUB_OUTPUT"
 
   relay:
     name: Deploy the Remote relay

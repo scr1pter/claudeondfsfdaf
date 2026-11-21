@@ -272,7 +272,6 @@ describe("the lane's shape", () => {
       "packages/web/src/drafts/everywhere.astro",
       "packages/web/src/drafts/everywhere/link.astro",
       "packages/web/src/drafts/docs/everywhere.astro",
-      "packages/web/src/components/everywhere/Installs.tsx",
       "packages/web/src/components/marketing/everywhere/SignIn.tsx",
       "integrations/slack/manifest.json",
       "integrations/jira-forge/manifest.yml",
@@ -379,16 +378,16 @@ describe("the lane's shape", () => {
     expect(unrelated.filter(matches)).toEqual([])
   })
 
-  test("every path names a tracked file, but for the Solid zone spec 6.6 keeps free", () => {
+  test("every path names a tracked file", () => {
     // A path that names nothing starts the lane for nothing and hides a move (FIT-4). The owner's move of the drafts to
-    // src/pages at 2.0.0 fails here until their three entries move with them. The Solid zone is empty because the
-    // vectordev.ai account components are React, under components/marketing/everywhere/**.
+    // src/pages at 2.0.0 fails here until their three entries move with them. The empty Solid zone of spec 6.6 is gone
+    // from the list: the vectordev.ai account components are React, under components/marketing/everywhere/**.
     const tracked = git(root, "ls-files", "-z").split("\0").filter(Boolean)
     const empty = paths.filter((pattern) => {
       const glob = new Bun.Glob(pattern)
       return !tracked.some((file) => glob.match(file))
     })
-    expect(empty).toEqual(["packages/web/src/components/everywhere/**"])
+    expect(empty).toEqual([])
   })
 })
 

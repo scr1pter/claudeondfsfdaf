@@ -7,7 +7,7 @@ import { isJobId, isPlatform, type PlatformId } from "@vectordevai/schema/everyw
 import { EVERYWHERE_PAGE, PLATFORM_NAMES } from "@vectordevai/schema/everywhere-policy"
 import type { RemoteStatus } from "@/context/platform"
 import { pathKey } from "@/utils/path-key"
-import { remoteOffered, stateLine } from "./remote-model"
+import { JOBS_ONLY_LINE, remoteOffered, stateLine } from "./remote-model"
 import { projectTrustSummary } from "./project-trust-model"
 
 /*
@@ -224,8 +224,7 @@ export function jobsLine(input: { view: EverywhereView; remote?: RemoteState; lo
   if (!input.remote?.enabled) return { text: "Jobs need Vector Remote, which is off on this computer.", problem: true }
   const remote = stateLine(input.remote)
   if (remote.problem) return remote
-  if (input.remote.state === "online" && input.remote.phones.length === 0)
-    return { text: "Connected for jobs. No phone is paired, and none is needed for jobs.", problem: false }
+  if (remote.text === JOBS_ONLY_LINE) return remote
   if (input.remote.state === "online") return { text: "Jobs can reach this computer.", problem: false }
   return { text: "Jobs reach this computer once Vector Remote is connected.", problem: false }
 }

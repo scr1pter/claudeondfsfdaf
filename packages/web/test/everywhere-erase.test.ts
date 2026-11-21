@@ -36,9 +36,10 @@ import { FakeStore, useKv, testEverywhereStore, testAccountAuthority } from "./l
 installFetchGuard()
 
 /*
- * VE-04 and E13: erasing. Uninstall, revoked tokens, Linear's revocation and a disconnect remove an installation, its
- * token, its links, its mappings and its live jobs; account deletion removes everything Vector everywhere keeps for an
- * account, and nothing of anyone else's.
+ * VE-04 and E13: erasing. Uninstall, revoked tokens and a disconnect remove an installation, its token, its links, its
+ * mappings and its live jobs; account deletion removes everything Vector everywhere keeps for an account, and nothing
+ * of anyone else's. The "revoked" reason is what Jira's uninstall and a future qualified Linear erase use; Linear's
+ * revocation webhook holds the installation instead (everywhere-linear-webhook.test.ts).
  */
 
 let restore: () => void

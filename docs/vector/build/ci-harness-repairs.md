@@ -203,6 +203,22 @@ fix revision: the three Windows install steps print `ripgrep 15.2.0` and the fol
 on a PR that touches test.yml reports extended=true in its summary; and mac-test (macos-15-intel, macos-26) and
 windows-arm64-test run and pass on that PR.
 
+21 Nov 2026 (v2-closeout-ci): those hosted checks passed. Read through GitHub MCP:
+
+- PR #41 test.yml run 43962925555 (head `218d8991`, attempt 1, success, 40 jobs with none failed): the plan job
+  133635268770 logs "Native PR coverage: extended=true (7 changed paths)"; mac-test macos-15-intel 133645474806 and
+  macos-26 133645474767, and windows-arm64-test 133646422230, all success; unit (windows) 133635267552 and all 12
+  engine (windows) shards success, each with its "Install ripgrep" step green. The same PR's Windows background
+  containment `native` job 133634793480 (run 43962925197) passed its "Install native ripgrep" step.
+- Repeated on main `f3d7ac74`, test.yml run 44848275007: unit (windows) 136673698184, plan 136673698648,
+  windows-arm64-test 136678740437 and mac-test 136679548901 (macos-15-intel) and 136679548984 (macos-26), all success,
+  with every Windows ripgrep install step green.
+- The action throws unless the downloaded `rg.exe` reports `ripgrep 15.2.0`, so each green install step implies that
+  version. The action's ARM64 branch is still unexercised: windows-arm64-test does not use it, and no other job runs
+  on Windows ARM64 with it.
+- Dropping "Chocolatey or ripgrep 504" from the known-flake list (no workflow uses Chocolatey any more) is proposed to
+  the lead in the PR body; v2-handoff.md and RULES-v2 are left unchanged until the lead decides.
+
 ## 2026-11-17: Windows review parse child bound and phase marks
 
 Branch `parse-test-windows` from `dabc4821`. Test harness only: `packages/engine/test/review/parse.test.ts`'s
@@ -331,6 +347,15 @@ Open check: the root cause counts as confirmed only once Windows CI on this bran
 shard green and ownership's two deferred cases back near 2 s. That PR does not exist yet (the branch is not pushed);
 record its run ID, the shard jobs' IDs and both cases' durations here when they finish.
 
+Confirmed (2026-11-20, recorded 21 Nov 2026 by v2-closeout-ci): PR #47, test.yml run 44667211660 attempt 1 on head
+`42f7b3d4` (branch `ownership-windows`), conclusion success, so every Windows engine shard was green.
+`ownership.test.ts` ran in engine (windows, shard 6/12), job 136063241252 (success; its "Run Engine shard" step took
+8 min 17 s). Its cases, as read from that job's log by the 21 Nov sweep: the portable cmdlet guard 1.09 ms, "removes
+only owned files after its parent exits" 1841.78 ms (against 34381.02 ms in the failing run 44009054115, job
+133814545422, and 1879-2393 ms in earlier green runs) and "preserves a replaced executable" 1475.81 ms. Merged as
+`56b2862b` (#47), an ancestor of main. This is one green sample: the stall was intermittent, so "confirmed" means the
+run met the bar stated above, not that the stall cannot recur.
+
 ## 2026-11-20: Windows patch-limit listing row and its after-test rejection
 
 Branch `windows-engine-timeouts` from `56b2862b`. Test-only change in `packages/engine/test/cli/github.bundle.test.ts`.
@@ -392,6 +417,14 @@ Open check: confirmed only once Windows CI on this branch's PR shows every Windo
 and "deletions counted" rows near 3-4 s. The branch is not pushed yet; record the run ID, shard job IDs and both rows'
 durations here when they finish.
 
+Confirmed (2026-11-20, recorded 21 Nov 2026 by v2-closeout-ci): PR #48 (`windows-engine-timeouts`, fix commit
+`edcdbc68`, merged as `481973c9`, both ancestors of main), test.yml run 44692602405 attempt 1 at head `506600e1`,
+conclusion success, so all twelve Windows engine shards were green. `github.bundle.test.ts` ran in engine (windows,
+shard 1/12), job 136141768056 (success). Its patch-limit rows, as read from that job's log by the 21 Nov sweep: files
+1,187 ms; counted in the listing 1,209 ms; deletions counted 1,099 ms; fileBytes 477 ms; bytes 854 ms, under the
+predicted 3-4 s and against 8.4-13.2 s and 7.9-9.5 s before. No fail and no unhandled error between tests; the 2 skips
+are the existing platform-selected cases. One green sample, so the headroom rests on one run.
+
 ## 2026-11-20: Windows isolated save renamed over an open record
 
 Failure. PR #46 run 44666752560, engine (windows) shard 4/12, job
@@ -444,6 +477,17 @@ new isolation tests' results here when they finish, re-running the shards a few 
 Windows, look first at its one timing gap: once the poll sees the .tmp file, the save retries for at most 2 s while
 the test does one more `find` and closes the handle, and the test's own deadline does not cover that gap. Do not
 lengthen any deadline for it.
+
+Recorded (21 Nov 2026, v2-closeout-ci): both Windows-only branches have now run green on Windows CI, in engine (windows,
+shard 5/12) of four test.yml runs on main, each read through GitHub MCP: run 44704085046 attempt 2 at `481973c9` (the
+#48 merge), job 136223992080; run 44800897274 at `15f3ba77`, job 136513156116; run 44822880542 at `3670461a`, job
+136588453580; and run 44848275007 at `f3d7ac74`, job 136673698347. All four jobs succeeded, which includes "stopping
+the parent while a foreground isolated child's normal save runs does not wait on Git". In the last of them, as read
+from its log by the 21 Nov sweep, `isolation.test.ts` gave 87 pass, 0 fail, 0 skip, the old record stayed while the
+handle was open (3462 ms) and the EPERM failure came after the 2 s retry window (5578 ms); Linux shard 5/6 of the same
+run, job 136673698352, gave 94 pass, 0 fail, 0 skip. This shows the fix's two Windows branches work. It does not show
+the named cause: the original rename-versus-`find` collision was never reproduced as a failure without the fix, so
+that cause remains an inference. The timing-gap advice above still holds, and no deadline is to be lengthened.
 
 Follow-up, 21 Nov 2026 (branch `engine-core-fixes`, CI-ISOLATION-PLACE): `place()`, which merges and their rollback
 use to write into the parent project, now runs its rename and the win32 symlink pre-unlink through `cleared()` too, so
@@ -543,6 +587,20 @@ on a Linux engine shard stays in the known-flake re-run class (d). After this la
 scrollback.surface or `runtime.test.ts` means the patch missed a path and needs a root cause, not a re-run; record
 the job, its bun.report string and its Features counts here.
 
+Outcome, 21 Nov 2026 (v2-closeout-ci; every ID below read through GitHub MCP). The condition above is met: PR #49 run
+44705365424 concluded success on attempt 2, and attempt 1's failure was shard 1/6's piped-output smoke, fixed by #50
+(next section, which cites that job). Main push runs with all six Linux engine shards green: 44791067930 (`c776fb60`)
+and 44800897274 (`15f3ba77`), both red only on Windows or computer-helper jobs; 44822880542 (`3670461a`), 44848275007
+(`f3d7ac74`), 44869120445 (`3e90df62`) and 44877843970 (`5a5b5619`), all success; and 44885765033 (`153f9a22`), red
+only in computer-helper mac-test (macos-15-intel). Every test.yml run created after 2026-11-20T10:37Z that concluded
+failure was checked (cancelled and still-queued runs were not): the only failed Linux engine shard jobs were
+136713741411 (run 44860782743) and 136722206152 (run 44863454630), each 2 failing cases in a shell ancestry test, and
+136751082548 (run 44871325403), 1 failing code-review case. All three logs end in ordinary `(fail)` lines and a final
+test count, with no "Bun has crashed", panic or segmentation fault. So the panic has not recurred since #49, and from
+now on a Bun panic in scrollback.surface or `runtime.test.ts` needs a root cause, not a re-run. Narrowing the blanket
+"Bun segfault on a Linux shard" flake wording in v2-handoff.md, v2-master-prompt.md and RULES-v2 is left to the lead.
+The upstream report and the residual production path below stay open for the lead or owner.
+
 Not changed, flagged for the lead. `packages/core/src/brain/worker/host.ts:280` terminates a Brain worker on its start
 timeout, possibly while it is still loading, and `packages/engine/src/cli/cmd/tui.ts:227` terminates the TUI worker
 after a shutdown RPC that can time out after 5 s (by then it is online). If the Bun bug is general, the first can hit
@@ -630,6 +688,11 @@ Review follow-up.
   (only when the reader wrote any), as the timeout report already separates its parts.
 - Windows. Only Linux was validated locally. Check the Windows engine shard that runs `piped-output.test.ts` on the
   PR's CI (the `2>` and `>` redirects and the 512 KB size) before merging.
+  21 Nov 2026 (v2-closeout-ci): checked on main. engine (windows, shard 1/12) ran `piped-output.test.ts` green in
+  push runs 44848275007 (`f3d7ac74`, job 136673698394) and 44869120445 (`3e90df62`, job 136739830442), both success.
+  As read from those logs by the 21 Nov sweep, the late-reader case took 3834.70 ms and 4461.09 ms and the
+  exited-reader case 3697.41 ms and 4471.64 ms, so the `2>` and `>` redirects in `vector.pipe` and the 512,000-character
+  config work on Windows. The margin bullet above stands.
 
 ## 2026-11-20: Windows company policy folder test reached the real PowerShell ACL reader
 
@@ -943,6 +1006,17 @@ make tests that start many processes 2-4x slower, so a test at 60-100% of its bu
 `review/impact.test.ts` and `everywhere/unattended-session.test.ts` also hit their budgets today, but the
 `scope-finish` and `everywhere-finish` lanes are rewriting those files, so they are left to those lanes.
 
+21 Nov 2026 (v2-closeout-ci): `everywhere/unattended-session.test.ts` was fixed by the Everywhere lane, with no
+deadline changed: the first prompt in a fresh instance fell inside the file's two 10 s waits on slow-first-touch VMs,
+so `c2f7f537` warms a fresh instance before those waits and `5b6b6380` runs the bubblewrap self-test before the
+`offline-v1` wait. Both are ancestors of main (through PR #56). Evidence read through GitHub MCP: engine (windows,
+shard 8/12) job 136722206395 in run 44863454630 (`everywhere-finish` `b6d6b30c`), success. Main's first post-#56
+test.yml run, 44885765033 at `153f9a22`, was still in progress when this was written; its shard 8/12 job is still to
+be recorded. Later the same day: that run completed, and its engine (windows, shard 8/12) job 136791583163
+concluded success (job list read through GitHub MCP). The run itself concluded failure only in computer-helper
+mac-test (macos-15-intel), which does not run this file. There is no `unattended-session-windows-budget` branch on
+origin. `review/impact.test.ts` stays with the VectorScope lane.
+
 Local times are Linux, per test, from `bun test --timeout 30000 --reporter=junit`, one file at a time through the
 Bun lock.
 
@@ -989,6 +1063,25 @@ Mutations (each red, then restored and checked against its recorded sha256):
 23-30 s; the refusal test in the 11-17 s range of its one-child sibling; each guest test near 8.7-12 s (30-40%); the
 Plan mode approval test about 6-9 s. This branch has not run on Windows CI yet. A real cut to the guest tests needs a
 product change: rev-parse lookups are repeated many times in each isolation.
+
+Measured on Windows CI (21 Nov 2026, v2-closeout-ci; supersedes "has not run on Windows CI yet"). test.yml run
+44848275007 on main `f3d7ac74`, attempt 1, job logs read through GitHub MCP. Every VM was normal: setup-node took 5.6 s
+(shard 2/12), 5.8 s (6/12) and 5.9 s (12/12), against the 17-35 s slow band.
+
+| Test                                               | Job (engine windows shard) | Measured | Share of 30 s | Predicted | Held |
+| -------------------------------------------------- | -------------------------- | -------- | ------------- | --------- | ---- |
+| import owner-only                                  | 136673698585 (6/12)        | 19.6 s   | 65%           | 15-18 s   | no   |
+| task-isolation guest, session claim (with the 403) | 136673698585 (6/12)        | 11.2 s   | 37%           | 8.7-12 s  | yes  |
+| task-isolation guest, workspace directory          | 136673698585 (6/12)        | 9.4 s    | 31%           | 8.7-12 s  | yes  |
+| task-manage ancestor/other-session refusal         | 136673698481 (12/12)       | 10.2 s   | 34%           | 11-17 s   | yes  |
+| task-size Plan mode approval                       | 136673698494 (2/12)        | 10.5 s   | 35%           | 6-9 s     | no   |
+
+The refusal test's two siblings in the same job took 13.5 s (discard) and 15.4 s (merge after the diff), so it now
+sits below its one-child siblings. The task-isolation and task-manage predictions held. The import owner-only test
+came in above its prediction and is the residual risk: at 65% on a normal VM, a 2-4x slow-first-touch VM can still
+push it past 30 s. The fix for that is a further structural cut, never a longer timeout; no test changes here. The
+Plan mode approval test is over its prediction but at 35% of its budget. Rev-parse caching (the product change named
+above) is deferred: it is a product change to isolation, not part of this docs record, and no branch carries it.
 
 Follow-up on this branch's first CI run (test.yml run 44829529636): `unit (windows)` job 136610691971 failed in
 `packages/core/test/config/plugin.test.ts` "ConfigExternalPlugin > imports the approved plugin bytes from a private
@@ -1121,6 +1214,29 @@ fix" comments. Locally (Linux, Bun 1.3.14, through the serial lock, the file alo
   `█` and that a new composer frame is mounted, not the old one, three times in a row. Locally: 5 of 5 runs of the
   file, 27 pass and 0 skip each. Mutation: the composer `Match` without its route check (`active().type ===
   "prompt"` only) makes the case red (the panel never shows); restored from a copy. No `src` changed.
+
+## 2026-11-21: test coverage that CI skipped or never ran (v2-closeout-ci)
+
+Each entry below closes a gap where a suite passed locally but CI never ran it. Job IDs are to be added after the
+branch's first PR run; until then each entry is local evidence only.
+
+- **File watcher suite.** `packages/core/test/filesystem/watcher.test.ts` gated its `describe` on
+  `Watcher.hasNativeBinding() && !process.env.CI`, so every GitHub runner skipped all six cases. The gate is now
+  `Watcher.hasNativeBinding()` alone; no assertion or wait changed (5 s `nextUpdate`, 500 ms `noUpdate`). The suite sets
+  `VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"` through its own config provider, so the Windows unit job's
+  `true` does not reach it. Locally on Linux with `CI=true`: 6 skip before, 6 pass after (twice, and once more with
+  `VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER=true` in the process environment). Still to check: the unit (linux) and
+  unit (windows) logs show every Watcher case ran and passed. A real platform failure gets a root cause; only a proven
+  backend limit may get a platform gate, with the job ID and reason on line 18 and here.
+- **Document OCR cases.** Five of the nine cases in `packages/core/test/brain/document-ocr.test.ts` skip unless
+  `VECTOR_OCR_TESSERACT` and `VECTOR_OCR_PDFTOPPM` are set, and no workflow set them or installed the tools. The Linux
+  unit job now installs `tesseract-ocr tesseract-ocr-eng poppler-utils` (the ripgrep step's apt retry and timeout
+  flags, 5 minutes) and runs that file in its own step with both variables set, so the rest of the brain suite keeps
+  running with OCR unconfigured in the turbo run. The step fails if Bun reports any skip. Locally (tesseract 5.3.4,
+  pdftoppm from poppler-utils): 4 pass 5 skip without the variables, which the step's check turns into exit 1; 9 pass
+  with them, exit 0. `workflow-compliance.test.ts` asserts both steps, their order, the env and the skip check
+  (mutation: replacing the check with `if false` fails the case). Windows and macOS stay uncovered: this step does not
+  install the tools there.
 
 ## 2026-11-21: EV-18 worktree test cleanup hit EBUSY on the job's checkout on Windows
 

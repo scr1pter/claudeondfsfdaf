@@ -546,6 +546,61 @@ test("the test workflow runs the engine suite only in shards, on Linux and Windo
   }
 })
 
+// turbo has no test task for packages/client or packages/sdk/js, so the unit job runs both suites itself, on both systems.
+test("the test workflow runs the client and SDK suites on both unit lanes", async () => {
+  const workflow = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
+    jobs: { unit: { steps: Array<{ name?: string; if?: string; run?: string }> } }
+  }
+  const turbo = (await Bun.file(`${root}/turbo.json`).json()) as { tasks: Record<string, unknown> }
+  expect(Object.keys(turbo.tasks).filter((task) => /(^|#)test$/.test(task) && /client|sdk|^test$/.test(task))).toEqual(
+    [],
+  )
+  const step = workflow.jobs.unit.steps.find((item) => item.name === "Run client and SDK tests")
+  expect(step?.if).toBe("${{ !cancelled() }}")
+  expect(step?.run).toContain(
+    "(cd packages/client && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1",
+  )
+  expect(step?.run).toContain(
+    "(cd packages/sdk/js && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1",
+  )
+  expect(step?.run).toContain("exit $status")
+})
+
+// OCR needs native tools, so the Linux unit lane installs them and runs the OCR cases in their own step, which fails
+// when any case skips.
+test("the Linux unit lane runs the document OCR cases with the tools installed and no skip", async () => {
+  const workflow = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
+    jobs: {
+      unit: {
+        steps: Array<{
+          name?: string
+          if?: string
+          run?: string
+          env?: Record<string, string>
+          "working-directory"?: string
+        }>
+      }
+    }
+  }
+  const steps = workflow.jobs.unit.steps
+  const install = steps.findIndex((item) => item.name === "Install OCR tools")
+  const run = steps.findIndex((item) => item.name === "Run document OCR tests")
+  expect(install).toBeGreaterThanOrEqual(0)
+  expect(run).toBeGreaterThan(install)
+  expect(steps[install]?.if).toBe("runner.os == 'Linux'")
+  expect(steps[install]?.run).toContain(
+    "install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-eng poppler-utils",
+  )
+  expect(steps[run]?.["working-directory"]).toBe("packages/core")
+  expect(steps[run]?.env).toEqual({
+    VECTOR_OCR_TESSERACT: "/usr/bin/tesseract",
+    VECTOR_OCR_PDFTOPPM: "/usr/bin/pdftoppm",
+  })
+  expect(steps[run]?.run).toContain("bun test --timeout 30000 test/brain/document-ocr.test.ts")
+  expect(steps[run]?.run).toContain("if grep -Eq '^ *[0-9]+ skip'")
+  expect(steps.find((item) => item.name === "Run unit tests")?.env).not.toHaveProperty("VECTOR_OCR_TESSERACT")
+})
+
 // Chocolatey's community feed answered 504 and 503 with nothing installed and exit 0 (jobs 133556510297 and
 // 133557296076). Windows jobs install ripgrep through one action that downloads a pinned, checksum-verified release
 // from GitHub with retries. This reads only the repository's own files.
@@ -922,8 +977,41 @@ describe("Codium CI lane", () => {
     // needs no fetched main. The environment is explicit: the Codium tests step exports its own CODIUM_CI_BASE.
     const select = step(lane.jobs.browser, "Select the Codium browser specs")?.run
     expect(select).toBeDefined()
-    // test.yml's unit job also runs this file on Windows, where PATH entries are separated by ';' and Bun and git may
-    // need Windows' own system and temp folders. Those few pass through by name, never a CODIUM_CI_* variable.
+    // test.yml's unit (windows) job runs this case alone ("Run the Codium dispatch-input compliance case"), where PATH
+    // entries are separated by ';' and Bun and git may need Windows' own system and temp folders. Those few pass through
+    // by name, never a CODIUM_CI_* variable.
+    const tests = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
+      jobs: {
+        unit: {
+          steps: Array<{
+            name?: string
+            if?: string
+            "timeout-minutes"?: number
+            "working-directory"?: string
+            run?: string
+          }>
+        }
+      }
+    }
+    expect(tests.jobs.unit.steps.find((item) => item.name === "Run the Codium dispatch-input compliance case")).toEqual(
+      {
+        name: "Run the Codium dispatch-input compliance case",
+        if: "${{ !cancelled() && runner.os == 'Windows' }}",
+        "timeout-minutes": 5,
+        "working-directory": "packages/cloud",
+        run: 'GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "reach the picker only as step environment" src/workflow-compliance.test.ts',
+      },
+    )
+    // That step picks this case by name, so its pattern must not match any other title in this file.
+    const pattern = tests.jobs.unit.steps
+      .find((item) => item.name === "Run the Codium dispatch-input compliance case")
+      ?.run?.match(/--test-name-pattern "([^"]+)"/)?.[1]
+    expect(pattern).toBeDefined()
+    expect(
+      [...(await read("packages/cloud/src/workflow-compliance.test.ts")).matchAll(/\btest\("([^"]*)"/g)]
+        .map((match) => match[1])
+        .filter((title) => new RegExp(pattern ?? "").test(title)),
+    ).toEqual(["a dispatch's inputs reach the picker only as step environment, and pushes leave them empty"])
     const PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
     const system = Object.fromEntries(
       Object.entries(process.env).filter(
@@ -1263,7 +1351,7 @@ describe("Hosted deploy workflows", () => {
     }
   }
 
-  // A scratch repository with a bare origin: main holds one commit, a side branch one more that main does not.
+  // A scratch repository with a bare origin: main holds two commits, a side branch one more that main does not.
   const scratchRepository = async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "vector-hosted-git-"))
     const env = {
@@ -1286,6 +1374,8 @@ describe("Hosted deploy workflows", () => {
     git(directory, "init", "--quiet", "--bare", "--initial-branch=main", origin)
     git(directory, "init", "--quiet", "--initial-branch=main", work)
     git(work, "remote", "add", "origin", origin)
+    git(work, "commit", "--quiet", "--allow-empty", "-m", "earlier on main")
+    const olderMain = git(work, "rev-parse", "HEAD")
     git(work, "commit", "--quiet", "--allow-empty", "-m", "on main")
     const onMain = git(work, "rev-parse", "HEAD")
     git(work, "push", "--quiet", "origin", "main")
@@ -1295,6 +1385,7 @@ describe("Hosted deploy workflows", () => {
     return {
       work,
       env,
+      olderMain,
       onMain,
       offMain,
       checkout: (sha: string) => git(work, "checkout", "--quiet", "--detach", sha),
@@ -1715,6 +1806,9 @@ describe("Hosted deploy workflows", () => {
         deploy.on.workflow_dispatch as { inputs: { target: { type: string; options: string[]; required: boolean } } }
       ).inputs.target
       expect(target).toMatchObject({ type: "choice", options: ["relay", "ops", "all"], required: true })
+      const inputs = (deploy.on.workflow_dispatch as { inputs: Record<string, unknown> }).inputs
+      expect(Object.keys(inputs).sort()).toEqual(["commit", "target"])
+      expect(inputs.commit).toMatchObject({ type: "string", required: false, default: "" })
       expect(Object.keys(deploy.jobs).sort()).toEqual(["ops", "preflight", "relay"])
       expect(deploy.jobs.relay?.if).toBe("inputs.target == 'relay' || inputs.target == 'all'")
       expect(deploy.jobs.ops?.if).toBe("inputs.target == 'ops' || inputs.target == 'all'")
@@ -1767,6 +1861,57 @@ describe("Hosted deploy workflows", () => {
         expect(manifest.scripts.deploy).toBe("wrangler deploy")
         expect(manifest.scripts["secret-names"]).toBe("wrangler secret list --format json")
       }
+    })
+
+    test("rolls back only to a full SHA on main, passed to the preflight only as step environment", async () => {
+      const text = await read(".github/workflows/vector-hosted-deploy.yml")
+      expect(text.match(/inputs\.commit/g)).toHaveLength(1)
+      const preflight = (await workflow("vector-hosted-deploy.yml")).jobs.preflight
+      const source = step(preflight, "Require a commit on protected main")
+      expect(source?.env?.VECTOR_DEPLOY_COMMIT).toBe("${{ inputs.commit }}")
+      expect(source?.run).not.toContain("inputs.")
+      await using repository = await scratchRepository()
+      repository.checkout(repository.onMain)
+      const marker = path.join(repository.work, "pwned")
+      const run = (commit: string) =>
+        shell(
+          `gh() {
+            test "$1" = api && test "$2" = repos/fixture/repo/branches/main || return 99
+            printf 'true\\n'
+          }
+          ${source?.run}`,
+          {
+            ...repository.env,
+            GITHUB_REPOSITORY: "fixture/repo",
+            GITHUB_SHA: repository.onMain,
+            VECTOR_DEPLOY_COMMIT: commit,
+          },
+          repository.work,
+        )
+      for (const [commit, sha] of [
+        ["", repository.onMain],
+        [repository.olderMain, repository.olderMain],
+      ] as const) {
+        const passed = await run(commit)
+        expect({ commit, status: passed.status, output: passed.output.trim() }).toEqual({
+          commit,
+          status: 0,
+          output: `sha=${sha}`,
+        })
+      }
+      for (const commit of [
+        repository.olderMain.slice(0, 12),
+        repository.olderMain.toUpperCase(),
+        repository.offMain,
+        "0".repeat(40),
+        `$(touch ${marker})`,
+        `${repository.olderMain}; touch ${marker}`,
+        `${repository.olderMain}\nsha=${repository.offMain}`,
+      ]) {
+        const refused = await run(commit)
+        expect({ commit, status: refused.status, wrote: refused.output }).toEqual({ commit, status: 1, wrote: "" })
+      }
+      expect(existsSync(marker)).toBe(false)
     })
 
     test("never sets, changes or deletes a Worker secret, and reads only CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID", async () => {

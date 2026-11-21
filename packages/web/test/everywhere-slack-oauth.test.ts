@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { OAUTH_CODE_PATTERN } from "../src/components/marketing/everywhere/everywhere-model"
 import { createAccountApi } from "../../../api/_lib/everywhere/account-api"
 import { readConfig } from "../../../api/_lib/everywhere/config"
-import { finishOAuth, createState, installToken, OAUTH, readInstall } from "../../../api/_lib/everywhere/identity"
+import { finishOAuth, createState, installToken, OAUTH, OAUTH_CODE, readInstall } from "../../../api/_lib/everywhere/identity"
 import { platformExchanges } from "../../../api/_lib/everywhere/oauth-exchanges"
 import { slackExchange, slackOAuthCallback } from "../../../api/_lib/everywhere/slack/install"
 import { FakeAccounts, RouteHarness, everywhereEnv, testAccount } from "./lib/everywhere-account"
@@ -85,4 +86,20 @@ test("default account API uses native exchange while mismatched account/state is
   expect(completed.status).toBe(200)
   expect(completed.body).toMatchObject({ purpose: "install", installation: f.installation })
   expect(native.calls.map((call) => call.method)).toEqual(["oauth.v2.access", "users.info"])
+})
+
+test("callback takes the OAuth code the landing page and finishOAuth take: 1 to 1,024 printable ASCII", async () => {
+  const f = await fixture()
+  harness.mount({ "/oauth": slackOAuthCallback(() => f.config) })
+  const status = async (code: string) => {
+    const url = new URL(`${harness.origin}/oauth`)
+    url.searchParams.set("code", code)
+    url.searchParams.set("state", "generated-state-123456789")
+    return (await fetch(url, { redirect: "manual" })).status
+  }
+  expect(await status("a".repeat(1024))).toBe(303)
+  for (const code of ["a".repeat(1025), "a b", "caf\u00e9", "a\tb"]) expect({ code, status: await status(code) }).toEqual({ code, status: 400 })
+  expect(native.calls).toHaveLength(0)
+  expect(OAUTH_CODE.source).toBe(OAUTH_CODE_PATTERN.source)
+  expect(OAUTH_CODE.flags).toBe(OAUTH_CODE_PATTERN.flags)
 })

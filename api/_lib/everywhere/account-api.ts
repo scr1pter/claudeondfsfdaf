@@ -11,6 +11,7 @@ import { sanitizeReply, type Ending } from "../../../packages/schema/src/everywh
 import { requireTrustedJsonRequest } from "../abuse.js"
 import { requireAccountUser } from "../account.js"
 import { ApiError, handleApiError, json, queryValue, readJson, type ApiRequest, type ApiResponse } from "../http.js"
+import { codiumAccountAuthority } from "./adapters/account.js"
 import { readAudit, type AuditEntry } from "./audit.js"
 import { checkAccount } from "./authority.js"
 import { platformOn, readConfig, type Env, type EverywhereConfig } from "./config.js"
@@ -61,7 +62,7 @@ export type AccountApiDeps = {
   readonly accountAuthority?: import("./authority.js").AccountAuthorityPort
   readonly env?: Env
   readonly store?: Store
-  /** For `requireAccountUser`'s call to the account service. */
+  /** For `requireAccountUser`'s call to the account service and, with no `store`, the default store's calls. */
   readonly fetcher?: typeof fetch
   readonly now?: () => number
   /**
@@ -124,7 +125,7 @@ async function begin(request: ApiRequest, deps: AccountApiDeps): Promise<Session
   const config = readConfig(deps.env ?? process.env)
   if (!config.enabled) throw notFound()
   const user = await requireAccountUser(request, deps.fetcher ?? fetch)
-  const store = deps.store ?? everywhereStore()
+  const store = deps.store ?? everywhereStore(deps.fetcher ?? fetch, deps.accountAuthority ?? codiumAccountAuthority)
   const now = (deps.now ?? Date.now)()
   await checkAccount({ store, accountAuthority: deps.accountAuthority }, user.id)
   return {
@@ -173,9 +174,11 @@ function methods(
   throw new ApiError(405, "METHOD_NOT_ALLOWED", `Use ${Object.keys(table).join(" or ")} for this endpoint.`)
 }
 
-function route(work: (request: ApiRequest, response: ApiResponse) => Promise<void>) {
+/** With Vector everywhere off, every route and method answers 404 with no `allow` header, before anything else. */
+function route(deps: AccountApiDeps, work: (request: ApiRequest, response: ApiResponse) => Promise<void>) {
   return async (request: ApiRequest, response: ApiResponse) => {
     try {
+      if (!readConfig(deps.env ?? process.env).enabled) throw notFound()
       await work(request, response)
     } catch (error) {
       handleApiError(response, error)
@@ -193,7 +196,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
    * POST {platform, installation?}: a link code for Slack or Jira (sent to the bot in a private place), or for Linear
    * the start of the sign-in that links (3.8). GitHub needs no link (4.1).
    */
-  const link = route((request, response) =>
+  const link = route(deps, (request, response) =>
     methods(request, response, {
       POST: async () => {
         const session = await begin(request, deps)
@@ -226,7 +229,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
   )
 
   /** GET: the account's links. DELETE {installation, userId}: removes one of the account's own links. */
-  const links = route((request, response) =>
+  const links = route(deps, (request, response) =>
     methods(request, response, {
       GET: async () => {
         const session = await begin(request, deps)
@@ -251,7 +254,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
    * (an OAuth state and the authorize URL). POST {platform: jira, code, cloudId?}: redeems a Jira site connect code.
    * DELETE {installation}: the connector disconnects, which erases the installation (E13).
    */
-  const installs = route((request, response) =>
+  const installs = route(deps, (request, response) =>
     methods(request, response, {
       GET: async () => {
         const session = await begin(request, deps)
@@ -319,7 +322,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
    * GET ?installation=: the mappings of an installation the account connected. PUT {installation, place,
    * repositories, private?}: sets a place's repositories. DELETE {installation, place}: removes one. Connector only.
    */
-  const repos = route((request, response) =>
+  const repos = route(deps, (request, response) =>
     methods(request, response, {
       GET: async () => {
         const session = await begin(request, deps)
@@ -364,7 +367,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
   )
 
   /** POST {code, state}: the OAuth landing page finishes an install or a sign-in link (3.8). */
-  const oauthFinish = route((request, response) =>
+  const oauthFinish = route(deps, (request, response) =>
     methods(request, response, {
       POST: async () => {
         const session = await begin(request, deps)
@@ -386,7 +389,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
    * GET: the account's jobs of the last 30 days, newest first, at most HISTORY_LIMIT (3.12): only jobs it sponsors
    * (E18), each as `accountJob` shows it. `capped` says there were more; `skipped` counts records that did not decode.
    */
-  const history = route((request, response) =>
+  const history = route(deps, (request, response) =>
     methods(request, response, {
       GET: async () => {
         const session = await begin(request, deps)
@@ -417,7 +420,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
    * GET: the account's audit log of the last 90 days, newest first, at most AUDIT_PAGE (E16, 3.13). Entries carry ids
    * and fixed codes; the computer's id and another account's id are left out.
    */
-  const audit = route((request, response) =>
+  const audit = route(deps, (request, response) =>
     methods(request, response, {
       GET: async () => {
         const session = await begin(request, deps)

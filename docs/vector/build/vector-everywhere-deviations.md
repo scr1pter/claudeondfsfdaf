@@ -1787,6 +1787,7 @@ Lane numbering: the older notes (EV-11 to EV-16) say "EV-21" for all of the desk
   - consent and Remote on through `setEnabled(true)`, show `needs-remote`, call `refresh()` after a write while Remote is off, the config-skew decision for writing `everywhere`, and the job-only link that reads `online` (VE-41);
   - when it labels the GitHub calls and removes the `github` guard, decide whether `localAllows` should require `remote` too ((f)). Today `pending` follows the link, which Vector Local's `remote` decision already stops, and a running job does not stop if `remote` is blocked mid-job. Requiring it would add that stop;
   - update index.ts's comment above `startRemote`, which still says Remote "connects only while Remote is on and a phone is paired or pairing". It should add "or this computer takes Vector everywhere jobs (everywhere-wiring.ts)". index.ts is outside EV-17's file list, so this waits for EV-21 or the final docs sweep.
+    *2026-11-21 (v2-closeout-ci):* done: the comment now names Vector everywhere jobs (handoff, "Docs sweep").
 - **For the lead (R-C4, R-C6):** the server's `pending` route checks only the everywhere switch (jobs-api.ts), not Codium's `remote` switch. The desktop's gate ((z)) covers an honest client only. Making the route also honour the `remote` switch belongs with R-C4's presence fix and R-C6's switch.
 - **Not yet built:**
   - an up-front `modelAllowed` check (g);
@@ -1828,6 +1829,7 @@ Twelve findings, all non-blocking; two repeat one another. Eleven are taken or r
 - **W6 pins the owner-gated constant.** Taken, the better option. W6 passes `keys: {}`. A separate, labelled guard case (W6g) asserts the shipped default and says it is meant to go red at the key handoff, and the Owner action line says so too.
 - **"Off means no ledger read or write" is true only while no offer verifies.** Taken: Safe by default is reworded as proposed.
 - **index.ts's comment above `startRemote` is stale.** Recorded: a Left open line for EV-21 or the final docs sweep. index.ts is untouched.
+  *2026-11-21 (v2-closeout-ci):* done: the comment now names Vector everywhere jobs (handoff, "Docs sweep").
 
 ## 2026-11-17, EV-18: the desktop adapters: the safe worktree, the offline shell and the shared keep-awake (VE-21, F6)
 
@@ -2862,6 +2864,7 @@ Spec §8 VE-42; §3.12; §3.7; §3.8; §6.5; §6.6; pre-merge PUB-8. Built at HE
 
 - **(a) PUB-8: the landing is a draft, and it is /everywhere itself.** Both callbacks redirect to `/everywhere#platform=…&code=…&state=…` (api/_lib/everywhere/slack/install.ts:59, linear/install.ts:60), and the callback cannot know whether the state is an install or a link before oauth-finish takes it, so there is no third page: the account page is the landing. It exists as packages/web/src/drafts/everywhere.astro. Moving it, with drafts/everywhere/link.astro, to src/pages and adding the `"everywhere"` keep line is the owner's activation step at 2.0.0 (spec §6.5); until then the callbacks answer 404 while the feature is off, so nothing lands on the missing page.
 - **(b) Two read routes beyond VE-04's list.** No account route read jobs or the audit log, so GET api/everywhere/history and GET api/everywhere/audit are new, in the safe zone (§6.6). Each is GET only, off by default (404 before any sign-in or store read), capped at 100, newest first, and checks the account again after its reads. The history read lives in jobs.ts beside `readJob` (critique taken), not in the route. Off means 404 for GET only: a POST or DELETE answers 405 with `allow: GET`, because `methods()` checks the method before `begin()`, as on every account route, so the answer shows that the route exists; no sign-in or store read happens either way, and the off case pins both (review round one, finding 7). Checking the switch before the method lookup is a change for every account route at once, for the lead; it was not made here.
+  *2026-11-21 note (v2-closeout-ci, EV-23-off-405):* changed for every account route. `account-api.ts` `route()` now reads the switch before `methods()`, so while off every route answers 404 to every method with no `allow` header; `begin()` keeps its own check. The off case in `everywhere-pages.test.ts` now sends GET, POST, PUT, DELETE and PATCH to all seven `EVERYWHERE_ROUTES` and expects 404 with no `allow` header, no account call and no store command (the 405 expectations it replaces pinned the old order; this is the spec's Switches rule, not a loosening). The on-feature 405 assertions are unchanged. Mutation: removing the new check fails the case. `RouteHarness.call` now also returns the response headers.
 - **(c) Summaries follow the brief, not spec §3.12 and §3.7.** The brief says summaries only for private-place jobs; the spec makes the job page the private delivery surface for shared places' summaries. The critique asked to put this to the lead before building; it was built per the brief, the safe default, and is put to the lead here, in the handoff and in the report. What it means in practice: a summary is erased once posted (`clearSummary`), and only a verified Slack DM is a private place, so the page shows a DM's summary only while its post has not gone out (pending or failed). The held Linear, Jira and GitHub summaries (kept because their private delivery answers 503) reach no one under either rule until the private result surface exists: the adapters' `privateResult`, then `privateDelivered` and `clearSummary`; to open it, `privateSummary` and `readJobs` would drop their `shared` conditions. The plan's "no new decryption path" was wrong (critique taken): `openSummary` now runs in an account route. It runs only when all hold: the job is not shared, the signed-in account is `requester.account`, `summaryEnc` is present, and the installation's current record exists and was installed no later than the job was received ((j)). `sharedSummary` says only that this page does not show them, not that they went elsewhere (critique taken). The summary is passed through `sanitizeReply` (with the secret, code and URL rules, at the 1,500-character summary limit) before it is answered, as the post path does through `renderResult` (3.7, E4, E6): a secret-like summary answers WITHHELD.secret, code or a diff WITHHELD.code, a link to another host is removed, and a summary left empty is not answered. The computer cleans the text before settle (everywhere-scan.ts), but the server does not rely on it (review round one, findings 1 and 6). The lead should rule on this item before Linear or Jira goes live; if the spec's rule is chosen, the change is to drop the `shared` conditions in `summaryHeld` and `readJobs` once the adapters' `privateResult` path exists (review round one, finding 4).
 - **(d) Links are the PR link only**, into the job's own repository (checked again in `readJobs`), plus the `?job=vej_…` marker (`focusJob`). The desktop's `jobsPage` links the page without `?job=` today. Platform thread links are not built (Left open).
 - **(e) The link page reuses `startLink`**, one start for both pages (EV-22 (c), confirmed). Its return lands on /everywhere. It says the Linear workspace must be connected first, and a `not-connected` refusal has its own text (critique taken); every other `EVERYWHERE_LINK_REFUSED` reason has one text.
@@ -4743,3 +4746,69 @@ The final review before the lane's PR into main: nine findings, one blocking. Ba
 ### Safe by default
 
 No flag, env var, route, dependency, lockfile or generated file changes. The only user-visible change is that the Vector Local pane no longer names Jobs for this computer while the `everywhere` block is off.
+
+## 2026-11-21, v2-closeout-ci: the jobs and account routes' default store carries Codium's account authority
+
+- **What was wrong.** `jobs-api.ts` `start()` built `everywhereStore(deps.fetcher ?? fetch)` and `account-api.ts`
+  `begin()` built `everywhereStore()`, both with no account authority. With no `deps.store` and no
+  `deps.accountAuthority` (the shape `everywhereAccountApi = createAccountApi()` and a default `createJobsApi` deploy
+  with), `accountGuards` fell back to `missingAccountAuthority`, so every request with the flag on answered 503
+  `EVERYWHERE_ACCOUNT_UNVERIFIED`. `runtime.ts` and the job body route already pass `codiumAccountAuthority`.
+- **Change.** Both now default only the constructed store to
+  `everywhereStore(deps.fetcher ?? fetch, deps.accountAuthority ?? codiumAccountAuthority)`. `ctx.accountAuthority` is
+  not defaulted, so an injected authority (every fixture) still wins. In `account-api.ts` `deps.fetcher` now also
+  carries the default store's REST calls (its comment says so); production injects no fetcher, so both still use
+  `fetch`, and no existing test injects a fetcher without a store.
+- **Tests.** `packages/web/test/everywhere-jobs-api.test.ts` ("the default store carries Codium's account authority")
+  and `everywhere-pages.test.ts` ("the default store") mount the routes with no store and no authority, the flag on
+  through the injected env and the FakeStore REST fetch: 200; with a Codium tombstone seeded at
+  `tombstoneKey(account)`: 409 `EVERYWHERE_AUTHORITY_CHANGED`; with an explicit `missingAccountAuthority`: 503
+  `EVERYWHERE_ACCOUNT_UNVERIFIED`. On the old source the jobs case answered 503 where it expects 200; reverting only
+  the account-api default fails the pages case. Both whole files pass (23 pass; 66 pass, 1 skip). No flag, route or
+  generated file changes; the feature stays off by default.
+
+## 2026-11-21, v2-closeout-ci: the OAuth callbacks take the same code shape as finishOAuth and the landing page
+
+- **What was wrong.** `identity.ts` `finishOAuth` and the landing page (`OAUTH_CODE_PATTERN`) accept 1 to 1,024
+  printable ASCII characters, but the Slack callback accepted any code up to 2,048 characters and the Linear callback
+  any up to 1,024, spaces and non-ASCII included, so a code the page would drop was still redirected to it.
+- **Change.** `identity.ts` exports `OAUTH_CODE`; `slack/install.ts` and `linear/install.ts` answer 400 unless
+  `OAUTH_CODE.test(code)`. No route, flag or exchange changes.
+- **Tests.** A new case in `everywhere-slack-oauth.test.ts` and in `everywhere-linear-oauth.test.ts`: a 1,024-character
+  code gets 303; 1,025 characters, a space, a non-ASCII letter and a tab get 400; no platform call; and `OAUTH_CODE`
+  equals the web `OAUTH_CODE_PATTERN` (source and flags). Mutation: restoring either callback's old length check fails
+  its case. Both whole files pass (5 and 16 pass).
+
+## 2026-11-21, v2-closeout-ci: Settings → Remote explains a jobs-only link (EV-11)
+
+- **What was wrong.** With Vector everywhere jobs on and no phone paired, the desktop keeps the Remote link online,
+  and Settings → Remote said "Connected. Your paired phones can reach this computer." with no phone listed. Only the
+  everywhere page's `jobsLine` had the jobs-only text.
+- **Change.** `remote-model.ts` exports `JOBS_ONLY_LINE` ("Connected for jobs. No phone is paired, and none is needed
+  for jobs.") and `stateLine` returns it when the link is online with no phone and the pairing is `idle` or `failed`.
+  A `waiting` or `confirm` pairing also keeps the link online, so it keeps the old text. `everywhere-model.ts`
+  `jobsLine` no longer builds the text itself: it passes `stateLine`'s answer on when that is the jobs-only line, so
+  the text has one source. With phones [] and a pairing open, `jobsLine` now says "Jobs can reach this computer."
+- **Tests.** `remote-model.test.ts`: online with no phone and pairing idle or failed gives the jobs-only line; pairing
+  waiting does not; one phone gives the paired-phones text; the viewers case now lists a phone. The
+  `everywhere-model.test.ts` jobs-only expectation passes unchanged. Removing the new `stateLine` branch fails one case
+  in each file (6 and 32 pass with it).
+
+## 2026-11-21, v2-closeout-ci: E13 and Linear's revocation hold (EV-24)
+
+- Docs and one test comment only; no code or assertion changes. Spec E13 gains a dated note: Linear's OAuthApp
+  `revoked` and PermissionChange `teamAccessChanged` hold the installation's current generation without erasing it,
+  until a reconnect; Linear erasure comes from a disconnect or account deletion. `everywhere-erase.test.ts`'s header
+  comment no longer lists "Linear's revocation" among the erasing events and says the `revoked` reason is what Jira's
+  uninstall and a future qualified Linear erase use. Closes the E13 wording gap recorded under "2026-11-20, EV-24".
+
+## 2026-11-21, v2-closeout-ci: the @vector contract notes forwarded
+
+Docs only. The items EV-25 to EV-31 left "for the lead to forward" to @vector's own documents are now dated notes in
+vector-at-mention-spec.md: INV-S14 (the R-A4 exception, EVERYWHERE_UNREAD and the seven-read 404 retry, EV-28), §2.5
+(the ticket's optional seventh field `jobId`, `workflowMode` with its 400 refusal and the rollback hazard, EV-25 and
+EV-26), §2.8 (the bind's best-effort contents read, EV-26), §2.10 (the `handoff` audience, EV-31) and §2.16 (the settle
+body's `prUrl`, SETTLE_RECORDED's committed reply, the listeners and the release order, EV-25). The wording follows the
+entries above, and no existing spec text changed meaning. vector-everywhere-spec.md §11 has a dated status line. Not
+forwarded here: `ChatContext.outside`, `taskPart`'s new parameter and the two import paths named in EV-28's list for
+vector-at-mention.yml, which are code facts the @vector lane can read from source.
