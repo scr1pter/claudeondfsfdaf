@@ -67,6 +67,9 @@ const recordAlert: AlertSender = async (account, alert, options) => {
 }
 
 beforeEach(() => {
+  // The routes register the production starter at import (api/_lib/ops-registration.ts, A59); each test starts
+  // without one, whichever file imported a route first.
+  registerOpsRunStarter(undefined)
   world = new OpsWorld(MEDIA)
   deleted = []
   mediaDown = false

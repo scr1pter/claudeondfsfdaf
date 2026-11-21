@@ -489,6 +489,12 @@ run, job 136673698352, gave 94 pass, 0 fail, 0 skip. This shows the fix's two Wi
 the named cause: the original rename-versus-`find` collision was never reproduced as a failure without the fix, so
 that cause remains an inference. The timing-gap advice above still holds, and no deadline is to be lengthened.
 
+Follow-up, 21 Nov 2026 (branch `engine-core-fixes`, CI-ISOLATION-PLACE): `place()`, which merges and their rollback
+use to write into the parent project, now runs its rename and the win32 symlink pre-unlink through `cleared()` too, so
+an editor, indexer or antivirus handle on a parent file waits out the same 2 s window instead of failing with EPERM.
+Two `place()` tests in `test/task/isolation.test.ts` mirror the record-save pair above; their Windows branches run only
+on Windows CI. Details: `multiagent-parity-deviations.md`, "2026-11-21 CI-ISOLATION-PLACE".
+
 ## 2026-11-20: Bun 1.3.14 crash in scrollback.surface (Worker terminated while loading)
 
 Branch `scrollback-bun-crash` from `6a771354`. Changes: `patches/@opentui%2Fcore@0.3.4.patch` (registered in the root
@@ -501,7 +507,8 @@ or 139) inside `test/cli/run/scrollback.surface.test.ts` with no failing test: m
 job 133728559216, PR #45 shard 5/6 job 133732849924, main `56b2862b` run 44676025086 shard 6/6 job 136088455729 (after
 "does not emit blank patch snapshots between edit and task"); about 5 of ~50 six-shard Linux engine jobs. RSS stayed
 below 1.1 GB. The earlier crash at the same address in multiagent-parity-deviations.md (shard 2/4 job 126909620047)
-was not diagnosed and may share this cause.
+was not diagnosed and may share this cause. (21 Nov 2026: it does. Job 126909620047 crashed in this file after the same test,
+and its bun.report frames equal this entry's CI trace; see that entry's CI10 follow-up.)
 
 Mechanism. Every test in the file creates and destroys an opentui test renderer. The writer's `<diff>` and `<code>`
 elements are built as `new CodeRenderable(ctx, { id })`, whose `options.treeSitterClient ?? getTreeSitterClient()`
@@ -1177,6 +1184,36 @@ Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 
 `brain/database.test.ts`, `background-job-store.test.ts` and `engine/test/storage/storage.test.ts` passed (the last
 does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
 change has not run on Windows CI yet.
+
+## 2026-11-21: four footer view tests re-enabled; one stays skipped with its exact reason
+
+Branch `engine-core-fixes`, last commit (revert only this commit if a Linux engine shard panics on it).
+`packages/engine/test/cli/run/footer.view.test.tsx` had five `test.skip` cases with "Re-enable after the upstream …
+fix" comments. Locally (Linux, Bun 1.3.14, through the serial lock, the file alone, 10 runs each):
+
+- Re-enabled, 10 of 10 green with no crash: "direct footer dispatches leader variant binding only when leader is
+  registered", "direct footer skill picker inserts an editable bound skill command", "direct footer clears the
+  synthetic skills draft when the panel closes" and "direct custom answer submits through keymap return binding"
+  (26 pass, 1 skip, 0 fail each run).
+- Still skipped: "direct footer recreates the frame across command panel transitions". With all five enabled it failed
+  10 of 10 runs, deterministically and without a panic: `TypeError: undefined is not an object (evaluating
+  'boxPath(root, "TextareaRenderable").at')` in `footerComposerFrame`, so after a panel transition the composer frame
+  has no textarea. Its comment now gives that reason; the earlier comment that OpenTUI crashes Bun in the full
+  `test/cli/run` directory run is kept. Root-causing it (the footer's composer after a command-panel close) is for the
+  morning list.
+- Open check: the six Linux engine shards and the Windows engine shards of this branch's PR. If one panics, record the
+  bun.report string, the Features worker counts and the last passing test here, as the scrollback entry above does,
+  and revert this commit.
+- 21 Nov 2026, later the same day: the fifth case is re-enabled too, in its own commit (revert that commit alone if a
+  shard panics on it). Root cause: the test, not the footer. The case looked up the composer frame right after Ctrl+P,
+  while the command panel is open. `footer.view.tsx`'s `Switch` mounts the composer (`RunPromptBody`) only when the
+  route is `composer`, so the open panel replaces it; the panel's search field is an `InputRenderable`, and no
+  `TextareaRenderable` is mounted at all (the renderable tree was printed before and after Ctrl+P to check). The old
+  assertion `footerComposerFrame(root) !== composerFrame` therefore threw while the panel was open. It now asserts that
+  no composer textarea is mounted while the panel is open, and, after Ctrl+C, that the panel is gone with no stale `┃` or
+  `█` and that a new composer frame is mounted, not the old one, three times in a row. Locally: 5 of 5 runs of the
+  file, 27 pass and 0 skip each. Mutation: the composer `Match` without its route check (`active().type ===
+  "prompt"` only) makes the case red (the panel never shows); restored from a copy. No `src` changed.
 
 ## 2026-11-21: test coverage that CI skipped or never ran (v2-closeout-ci)
 

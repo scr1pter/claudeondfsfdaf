@@ -122,12 +122,11 @@ of those merge commits is on main's first-parent history. Per lane, now:
 
 1. **Codium:**
    - B08: job dispatch screen, live run reader, Redis/Lua upload hardening, Brain-history encryption.
-   - The A59 joint check with @vector.
+   - The A59 joint check with @vector. The last two registrations (repository binding reader, ops run starter) are built on `codium-api-fixes` (2026-11-21, `api/_lib/ops-registration.ts`); the joint check on main follows its merge.
    - _21 Nov 2026 (v2-closeout-ci):_ B08 is built in source through the brain-transport lane: BT03 `c4ec2c83`
      (upload store against real Redis), BT07a `1d36447e` and BT07b `569d1643`, merged in #43 (`7c7508d2`); its
-     leftovers are in the B08 row of codium-track-b-checkpoint.md. A59 is built except that nothing in production
-     calls `registerRepoBindingReader` (`api/_lib/ops-settings.ts`) or `registerOpsRunStarter`
-     (`api/_lib/ops-incidents.ts`), so no repository is bound and no ops run starts.
+     leftovers are in the B08 row of codium-track-b-checkpoint.md. A59: see the line above; its two missing registrations are now in
+     `api/_lib/ops-registration.ts` on main.
 2. **@vector:** V27 runtime (save and restore, runner attestation, desktop Brain transport, preview and import) and V30 acceptance. V31 comes after A49.
    _21 Nov 2026 (v2-closeout-ci):_ V27 is built (BT05 `8f742520` save and attest, BT06 `a89fe7a0` restore); V30's two halves are BT09
    `aa925ff8` and BT10 `d49acedf`; V31's opt-in Ship Desk capture job is BT12 `1b6c02d9`, with `VECTOR_SHIP_DESK`

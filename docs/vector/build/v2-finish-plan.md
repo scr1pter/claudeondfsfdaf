@@ -131,7 +131,7 @@ v2 ships together with the redesign, so there are two levels:
 |---|---|---|
 | Main / multi-agent | #26 merged. `test.yml` green on main. Branch protection with required checks. The live "Coming in desktop 1.99.113" copy retargeted (`vector-releases.ts:78-90`), with the owner's yes since it is public. | Lock follow-ups decided. Default-behavior boxes accepted (`release-199113.md:240-267` on the `release-coordination` branch; main's copy has only 146 lines). RC-01–12 run on Mac and Windows (`:283-295`, same file). |
 | Release coordination | #27 merged with Verify green, and its docs and policy renamed for v2 | Protected publish workflow approved. Privacy wording approved (`:312-330`). |
-| Codium | #24 merged. B09, B10 and B11 acceptance recorded with run ids. A59 joint check passing on main. Legal drafts pushed. | A60 owner gates (spec §8.2 steps 2–18). Each perk listed only after its gate. |
+| Codium | #24 merged. B09, B10 and B11 acceptance recorded with run ids. A59 joint check passing on main (its last two registrations are built on `codium-api-fixes`, 2026-11-21). Legal drafts pushed. | A60 owner gates (spec §8.2 steps 2–18). Each perk listed only after its gate. |
 | @vector | One branch (`build-integrate`, or #25 redone) merged with full `test` green. V24, V25 and V27 runtime built. V30 journey green in CI. | App registered. Secrets set. Live OIDC and acceptance on a private repo. Native isolation qualified. V31 after A49. Perks listed. |
 | Hands | #22 merged with full CI green, including `windows-build`. W9 checked natively. | Signing (Apple Developer ID, Azure Trusted Signing). Device checklists. Reset on macOS 14, 15, 26 and 27. Legal, name and icon. ARM64 packages verified. |
 | VectorScope | Siblings folded into one branch (`build-scope-joined` is the live attempt). Missing modules built. Wiring done with defaults unchanged. Brain migration order settled against Codium's (§0 item 6). Full CI green. PR merged. | `vectorscope-eval` key and pilot (D5, D7). The D8, D9, D11 and D12 decisions. |
@@ -204,7 +204,7 @@ Under the owner's 11-13 answer, the orchestrator owns every item except Hands. T
 8. B10: native and browser acceptance for Vault skills and insights. [ORCH: after A3]
 9. B11: the performance measurement, with a run id. The PR #24 body cites a receipt without an id. [ORCH: after A3]
 10. B08: dispatch UI, live-run reader, Redis/Lua upload hardening and Brain-history crypto. [ORCH: after A3. Was Codex's GitHub lane.] Whether `build-integrate` already covers part of it: not checked.
-11. A59: the joint check on main after step 4 of §3, then the live @vector runs before listing. [ORCH: after A3, then OWNER for live runs.]
+11. A59: the joint check on main after step 4 of §3, then the live @vector runs before listing. [ORCH: after A3, then OWNER for live runs.] 2026-11-21: the binding reader and ops run starter registrations are built on `codium-api-fixes` (`api/_lib/ops-registration.ts`).
 12. Gateway: accept images on Hands turns (`docs/vector/owner-actions/hands-release.md:51` on `hands`). [ORCH: after A3] Whether it is already built: not checked.
 13. Push `codium-legal` `94a5004ed`. It exists only locally, in `~/.cache/vector-codium-legal`, because the pre-push typecheck blocked it (`codium-a30-legal-notes.md`). [ORCH: free. Push to a new branch from a machine where the hook passes; never `--no-verify`.]
 

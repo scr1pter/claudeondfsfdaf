@@ -626,7 +626,7 @@ How each finding is handled:
 - The WS-05 row and CI paragraph still said pending (two findings): fixed in the tree, not committed (D30).
 - `connected-workspace-spec.md` still names cloud-workspaces as CW-24's owner: the spec rows stay as they are until the Connect lane rewrites them (D31).
 - The `codium-erase.ts`, `.env.example` and `vector-workspaces.yml` conflicts with `review-fixes` (three findings): one merge checklist (D33), and the PR description names the three resolutions.
-- Test (a) sits inside the P5 describe (two findings): D9 stays as recorded and still needs the lead's explicit acceptance; the merge checklist checks that exactly one copy exists.
+- Test (a) sits inside the P5 describe (two findings): D9 stays as recorded and still needs the lead's explicit acceptance; the merge checklist checks that exactly one copy exists. **Closed 21 Nov 2026 (`codium-api-fixes`):** D9 rejected; test (a) moved into the DP-2 describe ("the follow-up pass re-asserts the account revocation before it erases (DP-2)"), after the Valkey describe, its two environment lines dropped (that describe's `beforeEach` sets `WORKSPACES_ENVIRONMENT`), assertions unchanged; one copy.
 - No `test.yml` run had executed the new page-test step or the new deletion tests in its single-process hosted API step: dispatched on `12c80f2c`, where an inherited failure stopped the job before those steps, so the finding stays open (D32).
 - `readCloudWorkspace` copies `parsePublicWorkspace`'s `usage` rule: the two comments above.
 - The CN-19 scope differs from this lane's proxy allowlist invariant: no code change; the lead reconciles it (D34).
@@ -663,7 +663,7 @@ Follow-ups:
 - The commit gate's commit (D30) passes the full typecheck before its push and dispatches `vector-workspaces.yml`, `typecheck.yml` and `test.yml` on it; it cannot list its own runs, so they go in the final report and the PR description (D26). That `test.yml` run is not the one D32 asks for, because this head still lacks `0f6fce89`.
 - Before the PR merges, one `test.yml` run on a head that contains `0f6fce89` (after a `release-finish` or `main` merge, or the draft PR's `pull_request` run); its `unit (linux)` result, and in particular the "Run hosted API tests" and "Run website account and workspace page tests" steps, goes in "Evidence scope" (D32).
   _2026-11-21 (v2-closeout-ci):_ D32 closed by `test.yml` run `43840871674`, job `133261028999` (see "Evidence scope").
-- The lead accepts or rejects D9, reconciles CN-19's scope (D34), and applies D33 at the merge.
+- The lead accepts or rejects D9, reconciles CN-19's scope (D34), and applies D33 at the merge. (D9 closed 21 Nov 2026: rejected, test (a) moved into the DP-2 describe on `codium-api-fixes`.)
 - The Connect lane rewrites the CW-24 rows of `connected-workspace-spec.md` to name CN-15 and CN-19 (D31).
 
 ### workspaces-finish lane: PR #33 head `0f034957` merged in (2026-11-16)
@@ -697,4 +697,4 @@ PR #33 merged into `main` as `b362fdf6`. `origin/main` is merged into `workspace
 
 Local evidence (Bun 1.3.14, through the workload lock): `test/api-module-loading.test.ts` 2 pass, 0 fail (`main` changed it and this lane changed `api/_lib/codium-erase.ts`); full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
 
-Open decisions for the owner or lead: D9 (test (a) inside the P5 describe) and D34 (CN-19's proxy route scope) stay open. D33 has been applied and needs no further action. D32 is met by the pull request's own `test.yml` run on this head, whose `unit (linux)` result goes in "Evidence scope" once it finishes.
+Open decisions for the owner or lead: D9 (test (a) inside the P5 describe; closed 21 Nov 2026, moved into the DP-2 describe on `codium-api-fixes`) and D34 (CN-19's proxy route scope) stay open. D33 has been applied and needs no further action. D32 is met by the pull request's own `test.yml` run on this head, whose `unit (linux)` result goes in "Evidence scope" once it finishes.

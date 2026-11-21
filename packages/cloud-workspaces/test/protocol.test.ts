@@ -52,6 +52,37 @@ test("closed commands reject URL, ref and engine routing/permission substitution
       body: { reply: "once" },
     }),
   ).toMatchObject({ body: { reply: "once" } })
+  // Dot segments: the engine would see the normalized path while service.ts keys the session on the raw one (CW-24).
+  const prompt = {
+    messageID: "msg_0123456789abABCDEFGHIJKLMN",
+    parts: [{ type: "text", text: "Make this change" }],
+  }
+  const engine = (method: "GET" | "POST", path: string, body?: unknown) => ({
+    action: "engine" as const,
+    workspaceId: id,
+    path,
+    method,
+    ...(body === undefined ? {} : { body }),
+  })
+  for (const command of [
+    engine("POST", "/session/ses_A/../ses_B/prompt_async", prompt),
+    engine("POST", "/session/ses_A/../ses_B/message_id", { requestID: id }),
+    engine("POST", "/session/ses_A/./abort"),
+    engine("GET", "/session/./status"),
+    engine("GET", "/session/ses_A/message/.."),
+    engine("GET", "/./session?roots=true"),
+    engine("POST", "/provider/../session"),
+  ])
+    expect(() => parseCommand(command)).toThrow("The workspace request contains unsupported or invalid fields.")
+  for (const command of [
+    engine("POST", "/session/ses_example/prompt_async", prompt),
+    engine("POST", "/session/ses_B/message_id", { requestID: id }),
+    engine("POST", "/session/ses_A/abort"),
+    engine("GET", "/session/status"),
+    engine("GET", "/session?roots=true"),
+    engine("POST", "/session"),
+  ])
+    expect(parseCommand(command)).toEqual(command)
 })
 
 test("a forwarded turn requires a stable message identity, bounded text and the hosted provider", () => {

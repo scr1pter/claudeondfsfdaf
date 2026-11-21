@@ -2180,3 +2180,124 @@ Docs only. PR #38 merged as `7e440a27` on 16 Nov.
   §1.5 says the acknowledgements are still pending (PR #38 has no reviews).
 - **Still open.** D34 and the supervisor's optional `sessionID` (cloud-workspaces.md D34, proposed for the lead to
   confirm); Q1 and Q6 (owner); C11's instance-store part (review-fixes lane).
+
+## 2026-11-21 — CW-24: the supervisor refuses engine paths with dot segments
+
+- Gap (the handoff's raw-versus-normalized engine path note, CN-19): `validateEngineCommand` checked routes against
+  `url.pathname`, the normalized form the supervisor forwards, while `service.ts` keys session identity on the raw
+  `command.path`. `/session/ses_A/../ses_B/prompt_async` was checked as a prompt for `ses_B`'s route shape, keyed as
+  `ses_A`, and reached `ses_B`. Only the `/experimental` branch compared the two.
+- Fix (`packages/cloud-workspaces/src/protocol.ts`): right after `const path = url.pathname`, refuse when
+  `command.path.split("?")[0] !== path`; the `/experimental` branch's own copy of the check is gone. The earlier guards
+  (no `%`, `\`, `#`, control or space character, a single leading `/`) leave `.` and `..` segments as the only way the
+  two forms differ, so no valid route is lost.
+- Test (`packages/cloud-workspaces/test/protocol.test.ts`, "closed commands reject URL, ref and engine
+  routing/permission substitutions"): `/session/ses_A/../ses_B/prompt_async` and `.../message_id` with valid bodies,
+  `/session/ses_A/./abort`, `/session/./status`, `/session/ses_A/message/..`, `/./session?roots=true` and
+  `/provider/../session` throw the invalid-request error; the canonical prompt, message id, abort, status, roots list
+  and session create still pass. Red on the old source (6 pass, 1 fail: "Received function did not throw"). The
+  optional `service.test.ts` case was not added: the refusal is in the parser `service.ts` runs before any runtime call.
+- Pilot activation and `VECTOR_WORKSPACES_ENABLED` are unchanged (off).
+
+## 2026-11-21 — CW-07: a fix child starts no project tooling
+
+- Supersedes the "Left open" bullet of "2026-11-11, review repairs for phase A3 (CW-07 and CW-08)" (the formatter after
+  an edit, and the language servers it touches, could reach the network from a fix child). The docs' option 1 is taken
+  on the tools' side: `edit.ts`, `write.ts` and `apply_patch.ts` skip `format.file` and `lsp.touchFile` when
+  `ctx.agent === ConnectPolicy.FIX_AGENT` (`connect_fix`). Each has a comment saying why. `lsp.diagnostics()` still runs:
+  it reads what already running clients published and starts none, so a fix child sees diagnostics another session's
+  server already holds, and no LSP block otherwise. The edit is written as before.
+- `packages/core/src/connect/policy.ts` is unchanged (it is pinned by VectorScope's model evidence); only its
+  `FIX_AGENT` constant is imported. The docs' option 2, leaving tool configuration and build scripts out of owned
+  paths, is not taken: the list could never be complete, and with no tooling started it no longer guards anything.
+- Test: `packages/engine/test/tool/fix-child-tooling.test.ts`. A trusted temporary project's config formatter (the
+  `formatter-append.js` fixture) appends "formatted" to each `.fmt` file it formats. For `build`, edit, write and
+  apply_patch each leave the file with the change plus "formatted"; for `connect_fix`, with the change alone. Red on
+  the old tools (3 pass, 3 fail: the three `connect_fix` cases). Language servers are not exercised by the test: the
+  guard on `touchFile` sits beside the formatter's in the same tools.
+- Local note: `test/tool/write.test.ts` "throws error when OS denies write access" fails when run as root, as in this
+  container (chmod 0444 does not stop root); unrelated and unchanged.
+
+## 2026-11-21 — C6: a bound key whose receipt is gone answers consumed (part 1 of 2)
+
+- Gap: `owner.ts`'s bound branch answered a key whose original run could not be replayed (its receipt pruned after a
+  done run, CN-09) with `invalid`, so the app kept the marker and the key stayed stuck. A binding means the key already
+  ran a review, so the answer is now `consumed`, with the same message ("…its original owned run is unavailable. No new
+  review was started."). The app (CN-10) already handles a typed 400 consumed by dropping that marker and offering
+  "Start a new review", which mints a new key only when clicked.
+- Test: `packages/engine/test/connect/directory.test.ts` "a consumed key whose receipt was retired cannot create a
+  replacement review" now asserts the code and message, not only a failure; it still checks one job, one anchor and one
+  model call. Red on the old code ("Received: invalid"). `test/connect/owner.test.ts` (7 pass) and
+  `test/server/httpapi-connect.test.ts` (12 pass) are unchanged.
+- Not done (part 2, left for the morning list): returning a bound member-gate refusal as a 200 refused run instead of
+  400 invalid. It needs a fixture that reaches the hub's member gate after the binding, which the current tests do not
+  build.
+- 21 Nov 2026, later the same day: part 2 done, same branch. See "2026-11-21 — C6: a bound key's member-gate refusal
+  answers its refused run (part 2 of 2)" below.
+
+## 2026-11-21 — C6: a bound key's member-gate refusal answers its refused run (part 2 of 2)
+
+- Finding first. Through the real hub a bound key's member-gate refusal already answers 200: the gate runs inside the
+  job the binding gate released, so `hub.run` hands back the queued run and the refusal lands later, and every retry
+  replays that refused run. A new check in the test below pins this (the start answers `queued`, the run ends
+  `refused`/`unavailable`). The 400 `invalid` answer is reached only when the hub returns a run that is already done
+  for a bound key, which its detach path does when the run ended before it reads it back. That start then said
+  `invalid` while every retry of the same key replayed a 200 refused run.
+- Fix: `packages/engine/src/connect/owner.ts` maps a done refused run to 400 `invalid` only when the key is not bound
+  (`reached.bind !== "bound"`). A refusal before the binding gate still answers `invalid`, tombstones the key, and a
+  retry answers `consumed`, as `owner.test.ts` pins. A bound key answers the refused run, which is what its replay
+  answers.
+- Test: `packages/engine/test/connect/directory.test.ts` "a key bound before the member gate refused keeps the refused
+  run, as its replay answers it". The fixture member can now describe itself `unavailable` with a reason. The real hub
+  is wrapped (as the file already wraps the real ledger) so that a test can make `run` answer only once the run ended.
+  It checks the summary "VectorScope is not ready: the fixture member is offline", that an upper-case retry equals the
+  first answer, one job per anchor, no model call and no pending ask. Red on the old owner ("error: VectorScope is not
+  ready…", code `invalid`), green after: directory 24 pass, owner 7 pass, httpapi-connect 12 pass, engine typecheck
+  clean. Mutation: with the guard inverted (`=== "bound"`), this case and owner.test's "the hub refuses before the
+  binding gate tombstones its key" case both go red. No hub, policy or adapter source changed; the review pin is
+  untouched.
+
+## 2026-11-21 — CW-07: an agent cannot resume a connect fix child
+
+- Supersedes CW-07 "Left open" (2) (a stopped `connect_fix` child resumed through `task_manage` asked no new
+  `connect_write`) and the matching line in this file's CN-20 hold list. The check is in `packages/engine/src/task/manager.ts`
+  `resumable`, beside the research-agent refusal, so the protected `tool/task-manage.ts` and `tool/task.ts` are
+  untouched: `record.agent === ConnectPolicy.FIX_AGENT` with origin `agent` fails `invalid`, "A connect fix cannot be
+  resumed; ask connect for a new fix." The owner's resume from the Tasks pane (origin `user`) stays allowed, as the
+  owner's merge asks nothing (§4.3); refusing every origin is the stricter alternative, for the lead. The `resume` offer
+  is unchanged, since the owner may still use it.
+- Test: `packages/engine/test/tool/task-manage.test.ts` "an agent cannot resume a connect fix child, and an ordinary
+  child still resumes (CW-07)": the fix child's resume fails with that code and message, starts no prompt and no job,
+  and an ordinary child in the same conversation resumes and completes. Red on the old manager (the fix child resumed
+  to attempt 2). The file passes 53 of 53.
+
+## 2026-11-21 — CW-21: a non-ready tool-reached member keeps its own reason
+
+- Supersedes the CN-11 review round's "Not taken, by decision" (5) and the "`not-installed` keeps reach `none`"
+  follow-up: when the registry does not offer a tool-reached adapter's tool, `members.ts` `registered()` now keeps the
+  member's own state and reason (reach `none`, since there is nothing to reach) whenever the adapter reported it not
+  ready. Hands' `unavailable` with `ComputerAvailability.message(reason)` therefore says why `computer` is absent, for
+  example on a CLI or TUI client without the bridge variables. Only a ready member whose tool is missing reads
+  `not-installed`, "Not in this build." The "left out without tool ids" branch is unchanged. Flagged for the lead, since
+  it reverses a recorded decision; the fix plan asked for it.
+- Tests: `packages/engine/test/connect/hands.test.ts` "Hands keeps its own reason when the registry does not offer
+  computer (CW-21)" runs every reason in `REASONS` with tools `["read"]` and expects state `unavailable`, Hands' own
+  message and reach `none`, one probe per list; red on the old `registered()` (9 pass, 1 fail). The ready case still
+  reads "Not in this build." `test/connect/hub.test.ts`'s compose case adds a non-ready Hands member without its tool
+  and expects its state and reason kept (52 pass). Spec §6's Hands row says so.
+
+## 2026-11-21 — CW-24: Hands reads unavailable inside a cloud workspace
+
+- With the supervisor's marker (`RuntimeFlags.cloudWorkspace`, `VECTOR_CLOUD_WORKSPACE_WORKER=1`),
+  `packages/engine/src/computer/availability.ts` gives the new reason `cloud-workspace` ("Vector Hands isn't available
+  in a Vector cloud workspace. Open this conversation in the Vector desktop app on your computer to use it.") ahead of
+  the WSL and platform readings, and never builds a bridge endpoint, so no bridge is probed from a container even if
+  the bridge variables leak in. `policy()` still runs first, so company policy, the conversation switch and Vector
+  Local's Web access None keep their own reasons. `capabilities()` keeps answering `no_desktop_bridge`, the string
+  ClientCapabilities consumers already handle, and `actions()` is empty. The Hands adapter (connect/adapters/hands.ts)
+  is unchanged: its cloud-place summary now always comes with this unavailable reason.
+- Tests: `packages/engine/test/computer/availability.test.ts` adds three cases with the marker and valid bridge
+  variables: `cloud-workspace` with no HTTP call and no actions; the same ahead of WSL; `policy` still wins. The fixture
+  takes the runtime flags as a fourth argument (default `{ client: "cli" }`). With the flag check removed (the reason
+  kept), the first two fail. `test/connect/hands.test.ts` lists the new reason in `REASONS` (its typecheck requires
+  every reason), 10 pass; `test/connect/place.test.ts` 9 pass. Hands stays off by default; the pilot stays off.

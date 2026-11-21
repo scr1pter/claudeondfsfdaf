@@ -268,7 +268,9 @@ if (process.platform !== "win32")
           )
           yield* isolation.reserve({ taskID: child.id, parentSessionID: parent.id, title: "Count", agent })
           const started = yield* isolation.start(child.id)
-          expect(started.work.directory).toBe(workPath)
+          // The checkout reports its real path; where the temp folder is reached through a link (macOS's /var), the
+          // data path is not one.
+          expect(started.work.directory).toBe(yield* Effect.promise(() => fs.realpath(workPath)))
 
           // A failing run must not leave a counter running after the test: the deaf one ignores the hangup the terminal
           // service's own teardown sends. Each open is recorded as it returns, and this finalizer, added before the

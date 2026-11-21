@@ -10,6 +10,8 @@ import {
   ticketHash,
   type ShipDeskContext,
 } from "../_lib/ship-desk.js"
+// A59: a capture ticket checks the repository's registered @vector binding.
+import "../_lib/ops-registration.js"
 
 export const maxDuration = 60
 

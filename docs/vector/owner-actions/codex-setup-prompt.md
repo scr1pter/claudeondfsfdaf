@@ -244,7 +244,7 @@ Give me a compact checklist marking each item **done**, **blocked**, **not attem
 - Slack app: registration and Socket Mode result. Tokens, scopes, events and installation pending the bot. No messages sent.
 - Codium OpenRouter account confirmed separate. Logging OFF, own use OFF, paid training OFF, publication OFF, ZDR ON for all groups, no BYOK keys or default plugins, or the exact blocked settings named. No keys, credits or billing changed.
 - Free-model OpenRouter account unchanged.
-- Owner-only, not attempted by Codex: the `codium-test` environment and its secrets; Stripe; Apple Developer ID and signing secrets; npm CLI publishing at 1.99.113 or later.
+- Owner-only, not attempted by Codex: the `codium-test` environment and its secrets; Stripe; Apple Developer ID and signing secrets; npm CLI publishing at 1.99.121 or later.
 - What remains for me, without secrets: the steps in 1.10, any missing entries, and any controls that were unavailable.
 
 ## Owner-only steps (Codex must not do these)
@@ -360,19 +360,19 @@ Steps:
 
    Publishing runs in the `production-release` environment, which has required reviewers.
 
-### D. npm CLI publishing at 1.99.113 or later
+### D. npm CLI publishing at 1.99.121 or later
 
-**Why 1.99.113.**
+**Why 1.99.121.**
 
 - Codium's gateway serves no desktop or CLI older than `MODEL_PLANS_MIN_CLIENT_DEFAULT = "1.99.113"` (`api/_lib/model-plan-config.ts` on `codium`), unless `MODEL_PLANS_MIN_CLIENT` says otherwise.
-- @vector needs a CLI at or above `GithubAgents.MIN_AGENTS_CLI = "1.99.113"` (`packages/core/src/github-agents.ts` on `vector-at-mention`). The lane's deviations call that version provisional.
+- @vector needs a CLI at or above `GithubAgents.MIN_AGENTS_CLI = "1.99.121"` (`packages/core/src/github-agents.ts` on `main`), so a published CLI must be at or above it. The floor is one above the `1.99.120` placeholder in `packages/desktop/package.json` `"version"`: the desktop and its bundled engine pin their own version as the CLI, so GitHub agents setup stays refused until a CLI at or above the floor is on npm. `packages/engine/test/cli/github.workflow.test.ts` fails if the desktop version reaches the floor. The lane's deviations call that version provisional.
 - Today npm and `vectorRequiredCliVersion` are at `1.99.99`. Desktop 1.99.112 shipped with no npm publication.
 
 **Steps** (`docs/vector/RELEASE-WORKFLOW.md` and `packages/engine/script/publish-vector.ts`):
 
 1. **Before you publish:**
    - merge `vector-at-mention` to `main` after its V30 acceptance package, and merge the Codium client work;
-   - choose a version of at least 1.99.113;
+   - choose a version of at least 1.99.121, which also clears Codium's 1.99.113 minimum;
    - if that version differs from `MIN_AGENTS_CLI`, record it there first.
 2. **Publish to npm.** Confirm control of the `@vectordevai` npm scope with two-factor authentication on. Then, from an interactive terminal on a clean checkout of the reviewed `main` commit, in `packages/engine`:
    - run `VECTOR_CLI_VERSION=<version> bun run script/publish-vector.ts --dry-run`, with the reviewed catalog artifact in `VECTOR_RELEASE_CATALOG_PATH` and `VECTOR_RELEASE_CATALOG_SHA256`;

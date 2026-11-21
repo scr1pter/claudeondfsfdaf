@@ -5,12 +5,13 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Database } from "@vectordevai/core/database/database"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { OwnedProcess } from "@vectordevai/core/owned-process"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -122,6 +123,52 @@ const recovering = testEffect(
 const posix = process.platform !== "win32"
 const onPosix = posix ? it.instance : it.instance.skip
 const onWindows = posix ? it.instance.skip : it.instance
+
+// Spawn review S6-2 at the spawner layer: the real CrossSpawnSpawner behind a wrapper that records each spawn, and
+// whether the command it was handed carries OwnedProcess's ownership options.
+const spawns: { owned: boolean }[] = []
+const order: string[] = []
+const recordingSpawner = Layer.effect(
+  ChildProcessSpawner.ChildProcessSpawner,
+  Effect.gen(function* () {
+    const inner = yield* ChildProcessSpawner.ChildProcessSpawner
+    return ChildProcessSpawner.make((command) =>
+      Effect.suspend(() => {
+        order.push("spawn")
+        spawns.push({ owned: command._tag === "StandardCommand" && OwnedProcess.options(command) !== undefined })
+        return inner.spawn(command)
+      }),
+    )
+  }),
+).pipe(Layer.provide(LayerNode.compile(CrossSpawnSpawner.node)))
+const recorded = testEffect(
+  LayerNode.compile(
+    LayerNode.group([
+      ShellJobs.node,
+      Session.node,
+      Database.node,
+      BackgroundJob.node,
+      BackgroundJobStore.node,
+      TaskNotify.node,
+      CrossSpawnSpawner.node,
+      FSUtil.node,
+      Plugin.node,
+      Truncate.node,
+      Config.node,
+      ComputerSession.node,
+      Agent.node,
+      RuntimeFlags.node,
+    ]),
+    [
+      [RuntimeFlags.node, flags],
+      [CrossSpawnSpawner.node, recordingSpawner],
+    ],
+  ),
+)
+afterEach(() => {
+  spawns.length = 0
+  order.length = 0
+})
 
 // A process that does nothing for five minutes, unless it is stopped.
 function sleeper() {
@@ -391,6 +438,33 @@ describe("background shell commands", () => {
       expect((yield* store.forParent(root.id)).map((row) => row.id)).toEqual([shell.id])
       expect(seen).toEqual([0, 1])
     }),
+  )
+
+  // S6-2, POSIX only: ShellJobs reaches the ChildProcessSpawner only off Windows. The Windows holder's order is covered
+  // by "allowed authority rechecks bracket durable admission before the command starts" above (its empty forParent).
+  ;(posix ? recorded.instance : recorded.instance.skip)(
+    "the authority recheck runs right before the spawner starts an owned command",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const shells = yield* ShellJobs.Service
+        const root = yield* sessions.create()
+        const shell = yield* shells.start({
+          sessionID: root.id,
+          command: "owned after the recheck",
+          process: script("console.log('owned')"),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.sync(() => {
+            order.push("recheck")
+          }),
+        })
+        // Once before any durable row, and again immediately before the spawn; nothing is spawned in between.
+        expect(order).toEqual(["recheck", "recheck", "spawn"])
+        expect(spawns).toEqual([{ owned: true }])
+        expect((yield* shells.wait([shell.id], 20_000))[0]).toMatchObject({ status: "completed", exitCode: 0 })
+        expect(order).toEqual(["recheck", "recheck", "spawn"])
+      }),
   )
 
   it.instance("start writes the output file, and the exit note carries the exit code and the output's end", () =>

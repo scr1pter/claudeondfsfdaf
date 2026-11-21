@@ -358,7 +358,7 @@ Each item below is also in the deviations log.
   Deviations log, "2026-11-20, EV-26", Left open.
 - **The body route's loose ends (EV-27, open).**
   - **For the lead:**
-    - add `api/everywhere/jobs/[jid]/body.ts` to test/api-module-loading.test.ts's second test (the fresh Node probe ran in the receipt; that file is outside the brief);
+    - add `api/everywhere/jobs/[jid]/body.ts` to test/api-module-loading.test.ts's second test (the fresh Node probe ran in the receipt; that file is outside the brief); *2026-11-21: done on `codium-api-fixes`, appended as the last `entries` element (13 fresh Node rotations, body.ts first in one); `api-module-loading.test.ts` 4 pass, no TDZ or cycle.*
     - rule on a lost start event (below);
     - decide how EV-30's settle listener finds a job (below);
     - outside scope and not fixed: the production jobs routes (jobs-api.ts:320) and account routes (account-api.ts:494) build `everywhereStore()` with no account authority, so once the flag is on they would answer 503 `EVERYWHERE_ACCOUNT_UNVERIFIED`. The body route defaults to `codiumAccountAuthority`.
