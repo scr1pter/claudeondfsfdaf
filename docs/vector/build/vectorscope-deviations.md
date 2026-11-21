@@ -26444,3 +26444,9 @@ The local Connect cache regressions passed 1 tests, the strict review file passe
 ## 2026-11-21 · Integrate the Codium fixes from main
 
 Merged main at `94823aee817c` after the Connect cache repair. The desktop GitHub pull-request fixture passed 31 tests and the review model evidence fixture passed 36. The evaluation project and 27 workspace packages passed typechecking. The two trailing blank-line warnings in the incoming Codium and GitHub logs matched main’s diff. The review pipeline source digest is `29d724d7ad1daa56` at revision 5.
+
+## 2026-11-21 · VS-14 Bind read grants to owner, repository and server (SF-29)
+
+The broker matches the owner, repository context, endpoint, schema and selected capability. A missing grant or changed identity closes access. Trusted local live reads stay disabled under D11. Audit events carry identifiers and digests. The default grant source is empty. The desktop does not issue MCP review grants. The package adds no named replay variant. The existing default review and pipeline revision 5 are preserved.
+
+The local package files passed 41 tests (`core/test/review/model-evidence.test.ts` 36, `engine/test/review/mcp.test.ts` 4, `engine/test/review/run.test.ts` 1). The core / engine package typechecks, the evaluation project and all 27 workspace typechecks passed. In separate scratch runs, the source mutations for live disposition, scope binding each failed the expected regression. The source pin moved from `29d724d7ad1daa56` to `e241f91b7516b39c`.

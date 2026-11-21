@@ -74,6 +74,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/strict-blobs.ts",
   "packages/engine/src/review/strict.ts",
   "packages/engine/src/review/read-authority.ts",
+  "packages/engine/src/review/mcp.ts",
   "packages/engine/src/review/service.ts",
   "packages/engine/src/review/git.ts",
   "packages/core/src/read-only-git.ts",
