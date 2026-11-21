@@ -39,10 +39,10 @@ export const prerender = true
             your next message, so you can ask it to fix them.
           </p>
           <p>
-            Each review costs extra model calls. On a priced model it stops at $0.50, or at $2 when the run's spend limit
-            has that much left, and it doesn't start with less than $0.10 left. On Vector Codium it counts as plan usage.
-            A finished task is reviewed once. While a review runs, the next finished task waits for it, then gets its
-            own. Greetings, questions, plan mode, subagents, and runs that were stopped, reverted or changed no files are
-            never reviewed, and a review cut off by a restart doesn't report back.
+            Each review costs extra model calls. On a priced model it stops at $0.50 when the run has no spend limit,
+            otherwise at what the limit has left, up to $2, and it doesn't start with less than $0.10 left. A finished
+            task is reviewed once. While a review runs, the next finished task waits for it, then gets its own.
+            Greetings, questions, plan mode before you approve the plan, subagents, and runs that were stopped, reverted
+            or changed no files are never reviewed, and a review cut off by a restart doesn't report back.
           </p>
 </DocsPage>

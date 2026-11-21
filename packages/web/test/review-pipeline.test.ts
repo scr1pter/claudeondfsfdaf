@@ -78,7 +78,7 @@ test("the homepage section sits between Privacy and Trust and is labelled Coming
     '<h2 id="code-review-title" class="story-title" data-reveal>Done, judged, then&nbsp;reviewed.</h2>',
   )
   expect(home).toContain(
-    "Turn on code review in the desktop app's settings, and each task you send there that changes files goes to Vectorscope, Vector's code review agent, once the work is done. With LLM-as-a-judge on, the judge checks the work first.",
+    "Soon, turning on code review in the desktop app's settings will send each task you run there that changes files to Vectorscope, Vector's code review agent, once the work is done. With LLM-as-a-judge on, the judge checks the work first.",
   )
   expect(home).toContain('<ReviewPipeline id="code-review-diagram" tone="landing" />')
   expect(home).toContain(
@@ -117,10 +117,20 @@ test("the copy says both checks are opt-in, off by default and cost extra model 
   expect(diagram).toContain(
     "Both checks are opt-in and off by default, and each one costs extra model calls. Code review needs Vectorscope local reviews turned on and covers all uncommitted changes in the repository, yours included.",
   )
-  expect(diagram).toContain("Greetings, questions, plan mode and tasks that change no files aren't reviewed.")
+  // A build you approve from plan mode is reviewed; only plan mode before that approval is left out.
+  expect(diagram).toContain(
+    "Greetings, questions, plan mode before you approve the plan, and tasks that change no files aren't reviewed.",
+  )
+  expect(docs).toContain("Greetings, questions, plan mode before you approve the plan, subagents,")
   expect(docs).toContain("It is off by default and appears once Vectorscope local reviews are turned on.")
   expect(docs).toContain("It covers all uncommitted changes in the repository, your own included")
   expect(docs).toContain("Each review costs extra model calls.")
+  // The cap is the run's remaining spend limit up to $2, and $0.50 only when the run has no limit.
+  expect(docs).toContain(
+    "On a priced model it stops at $0.50 when the run has no spend limit, otherwise at what the limit has left, up to $2, and it doesn't start with less than $0.10 left.",
+  )
+  // Nothing backs a billing claim for Codium plans yet; the pull request that ships the setting may add one.
+  expect(words(docs)).not.toContain("Codium")
 })
 
 test("the copy keeps to the site's wording rules", () => {
