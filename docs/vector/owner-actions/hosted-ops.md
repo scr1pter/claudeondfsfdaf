@@ -49,6 +49,12 @@ Run these from `packages/ops-worker`, signed in with `wrangler login` to the Clo
 
 Without its two secrets the Worker answers the API's calls with 503 and checks nothing.
 
+## Roll back a Worker
+
+Leave `commit` empty for an ordinary deploy. To roll back, run the same workflow on `main` with `commit` set to the full 40-character SHA of the earlier commit on `main` whose Worker you want back. The preflight refuses anything else (a short or uppercase SHA, a commit not on `main`, any other text) and the input reaches it only as step environment, never as shell text. The deploy job checks out that commit, checks again that `main` contains it, and runs the same checks, dry run and secret-name check before deploying, after your approval in `hosted-production`. The workflow's steps come from the dispatched `main`, but the Worker's code, `wrangler.jsonc` and package scripts come from the earlier commit.
+
+**Check compatibility first.** The API keeps deploying from `main` on every merge, so an older Worker can refuse a field the current API sends in `plan`, `config` or `release` (see step 6): roll back no further than the commit that first accepted every field the deployed API sends, or roll the API back too, and check that the namespace id and the secret names that commit expects still match steps 2 to 4.
+
 ## Turning it off
 
 - **Normally:** the `ops` switch on `/owner/codium`. It stops new settings, release watches, reverts, cards and fix runs in the API (a regression the Worker still reports while its flag spreads is recorded, with Undo left to the person) and copies itself to the Worker's kill flag (`flags`). If the answer says `worker: "failed"`, apply the switch again or set the flag directly as below.

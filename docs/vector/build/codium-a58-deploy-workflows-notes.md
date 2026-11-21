@@ -139,3 +139,16 @@ of these files as shipped stays the owner's (spec 8.2 step 15). The real files i
 owner's vector-hosted-image.yml run. Tests: `packages/cloud` `src/hosted-image.test.ts` and
 `src/workflow-compliance.test.ts`, and `packages/hosted-computer` `test/image.test.ts`, run locally; the Docker job is
 CI. `codium-deviations.md` "Codium finish: H2 image notices (15 Nov 2026)".
+
+**Status, 21 Nov 2026 (v2-closeout-ci).** Closes the missing Worker rollback. `vector-hosted-deploy.yml`'s dispatch
+takes an optional `commit` string (default empty). The preflight's "Require a commit on protected main" step gets it
+only as `VECTOR_DEPLOY_COMMIT` step environment, deploys `$GITHUB_SHA` when it is empty, requires `^[a-f0-9]{40}$` and
+`git merge-base --is-ancestor "$want" origin/main`, keeps the dispatched-ref checks, and emits `sha=$want`; the deploy
+jobs already check out and re-check that output. The environment, reviewer, concurrency and main-only dispatch are
+unchanged. `packages/cloud/src/workflow-compliance.test.ts` now expects exactly `commit` and `target` as inputs,
+`inputs.commit` once in the file and only as that step's env, and runs the step's own shell against the scratch
+repository (which now has two commits on main): empty deploys the head, an older main commit is emitted, and a short
+SHA, an uppercase SHA, a side-branch commit, an unknown SHA and three shell-metacharacter values are refused with no
+output and no side effect. Mutations: emitting `$GITHUB_SHA` instead of `$want`, and dropping the `$want` ancestry
+check, each fail the case. The owner steps are "Roll back a Worker" in `owner-actions/remote.md` and
+`owner-actions/hosted-ops.md`, with the compatibility warning. No real dispatch has run it.

@@ -23,6 +23,9 @@ on:
       - "test/account-delete.test.ts"
       - "test/site-publication.test.ts"
       - "script/prune-vector-site.mjs"
+      - "packages/web/src/lib/account-client*"
+      - "packages/schema/src/codium-*"
+      - "tsconfig.json"
       - "bun.lock"
       - ".github/workflows/vector-workspaces.yml"
   pull_request:
@@ -44,6 +47,9 @@ on:
       - "test/account-delete.test.ts"
       - "test/site-publication.test.ts"
       - "script/prune-vector-site.mjs"
+      - "packages/web/src/lib/account-client*"
+      - "packages/schema/src/codium-*"
+      - "tsconfig.json"
       - "bun.lock"
       - ".github/workflows/vector-workspaces.yml"
 

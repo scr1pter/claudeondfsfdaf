@@ -44,7 +44,8 @@ import { tokenClaims } from "./vector-account"
 //   whenever the engine says its global config changed (`global.disposed`) or its event stream (re)connects. A company
 //   lock on the key, a block that does not decode and an unreadable answer are all off.
 // - "Takes jobs" (`want()`) is on only while the setting is on and Remote is on with an identity. Without an identity
-//   the state is `needs-remote` and nothing is created: the settings page asks for consent and turns Remote on.
+//   the state is `needs-remote` and nothing is created: the person must turn Remote on (the settings page's consent
+//   step comes with the deferred write path; nothing in packages/app reads `needs-remote` yet).
 // - While on, waiting jobs are asked for (`pending`) when the link comes online, after every job the runner ran, after
 //   the last run's leases are recovered, and every five minutes, but only while the link is online or connecting: a
 //   Remote the service paused, revoked or refused takes no job over HTTP either. Off stops every timer.
@@ -488,7 +489,11 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
       evaluate()
       if (edge && before === "on") void requestPending()
     },
-    /** Reads the settings again now (the settings page, after it writes while Remote is off). */
+    /**
+     * Reads the settings, folders and probes again on request. Nothing in the app calls it yet: it is kept for the
+     * settings page's deferred write path (handoff EV-21, "The write path is deferred"), which must call it after
+     * writing while Remote is off.
+     */
     async refresh() {
       state.folders = new Map()
       state.probes = freshProbes()

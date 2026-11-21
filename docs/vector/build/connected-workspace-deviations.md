@@ -2134,6 +2134,7 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   - `test/cli/github.sandbox-build.test.ts`: an in-process `Bun.build` with plugins (`wrapper.plugin`, `sandboxBunEsprima`).
   - `test/compliance/runtime-build-config.test.ts`: a `Bun.Transpiler` with the `import.meta.env.VITE_VECTOR_CHANNEL` define, against the `import.meta.dir` at `hub.test.ts:2077`.
 - **e2e (linux) margin under the 45-minute budget.** In job 133268762928, 388 tests finished in 1,798 s, counted from the first test's start: a 4.63 s mean, or 4.66 s counted from the step's start. At that mean the suite's 477 tests project to about 37 minutes, which leaves 45 minutes about 22% over the projection. The workflow comment's "about 35%" comes from a 4.19 s mean. This lane's specs are not what is slow. Measured from one test's start to the next in the log, the `connected-tools.spec.ts` and `directory-review.spec.ts` tests took 4.5-12.5 s each. `cloud-home-only.spec.ts` took 37.1 s, and twelve tests from other lanes took 9.9-23.5 s. No workflow change was made here. Watch the margin on the next Linux e2e run.
+  *2026-11-21 (v2-closeout-ci, connect-finish lane: e2e (linux) margin follow-up):* watched on two later Linux runs, both read through GitHub MCP. Main `f3d7ac74`, test.yml run 44848275007, e2e (linux) job 136673698208: "Run app e2e tests" took 23:08. PR #55 (`v2-final-docs`, `90bd60e1`), run 44860834473, job 136714018803: 30:46. Both are under 45 minutes, with about 49% and 32% headroom; the slower figure is the one to watch. The 45-minute budget stays and no workflow change is made.
 
 ## 2026-11-16 — connect-finish lane: root cause and fix for the hub.test.ts load error on Linux shard 2
 
@@ -2151,6 +2152,34 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   - `6895687e` fix(engine): report a sandbox timeout before the exit code.
   - `19c48b89` merges main for the Windows overlay Stop diagnostics.
 - PR #38 merged into main as `7e440a27`; all four commits are ancestors of main.
+
+## 2026-11-21 — v2-closeout-ci: the desktop streams `connect.run.updated` to the phone (CW-23c)
+
+- **Closes** the Known limit "Its row goes stale" and the review-round finding "A phone-started review's row never
+  refreshes by itself" in the phone-review entry above. `packages/desktop/src/main/remote-link.ts` now lists
+  `connect.run.updated` in `STREAMED`, so while the phone watches, a Connect run's updates reach it in the same batches
+  as the session events, and `connectRunsChanged` (`packages/app/src/phone/remote/model.ts`) re-reads the runs of the
+  open conversation when one arrives. That function's comment no longer says the computer does not stream it.
+- **Test.** `remote-link.test.ts` "streams the engine's events only while the phone watches, batched" now also pushes a
+  `connect.run.updated` event for `/repo` and expects it in the batches (31 events), and still expects `pty.created`
+  and other folders' events to stay on the computer. Without the `STREAMED` entry the case fails ("condition never
+  held"); with it the file passes (33 pass). No flag, route or protocol change: the event already crosses the same
+  watched-events path, and `VECTOR_EXPERIMENTAL_CONNECT` stays off.
+
+## 2026-11-21 — docs refresh after PR #38 merged (v2-closeout-ci)
+
+Docs only. PR #38 merged as `7e440a27` on 16 Nov.
+
+- **v2-complete-plan §4.1.** Each superseded Status cell now says Fixed (or, for F1, still Partly fixed) with its
+  source, and keeps the old text after "Was:": C1, F4/C2 (platform part), F8, F9, C10, C9 and C7 cite "2026-11-14 —
+  v2 integration safety and visibility repairs" above; C4, F5/C11 (config part only) and F7 cite
+  main-integration-2026-11-14.md by the handoff's reading; C3 cites CN-03 to CN-05, C5 CN-07, C6 CN-08 to CN-10, F10
+  CN-01 and F1's Git half CN-02, with the commits from the handoff's CN table, each an ancestor of main. No version
+  wording changed.
+- **Handoff and release checklist.** A dated line under "For the lead at PR review" gives each lead item's state, and
+  §1.5 says the acknowledgements are still pending (PR #38 has no reviews).
+- **Still open.** D34 and the supervisor's optional `sessionID` (cloud-workspaces.md D34, proposed for the lead to
+  confirm); Q1 and Q6 (owner); C11's instance-store part (review-fixes lane).
 
 ## 2026-11-21 — CW-24: the supervisor refuses engine paths with dot segments
 
