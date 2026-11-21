@@ -510,6 +510,29 @@ test("secret-bearing staged changes are held before any commit or push", async (
   expect(f.calls.some((call) => call.kind === "commit" || call.kind === "push")).toBe(false)
 })
 
+// EV-16-home: $HOME stays readable to the job's commands, so another project's env file can be copied into the
+// checkout. The posting check answers clean; the push gate alone keeps it here.
+for (const [copied, diff] of [
+  ["an env secret in a text file", "diff --git a/notes.txt b/notes.txt\nnew file mode 100644\n--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1,2 @@\n+# copied from another project\n+STRIPE_SECRET_KEY=hunter2hunter2\n"],
+  ["another project's env file", "diff --git a/config/.env.production b/config/.env.production\nnew file mode 100644\n--- /dev/null\n+++ b/config/.env.production\n@@ -0,0 +1 @@\n+FOO=bar\n"],
+] as const) {
+  test(`a staged diff carrying ${copied} stays on the computer and settles held`, async () => {
+    const f = fixture()
+    let checked = 0
+    f.engine.posting = async (parts) => { checked++; return { status: "clean", parts } }
+    f.git.stage = async () => ({ held: [], files: 1, diff })
+    await createEverywhereRunner(f.deps).offer("fixture-offer")
+    expect(f.results).toEqual([
+      { jid: f.job.jid, lease: f.job.lease.id, outcome: "held", summary: "Fixed retry handling.", branch: branchFor(f.job.jid), checks: "skipped" },
+    ])
+    // Only the summary reached the posting check; the diff never did.
+    expect(checked).toBe(1)
+    expect(f.calls.some((call) => ["commit", "push", "open-pr"].includes(call.kind))).toBe(false)
+    expect(f.calls.filter((call) => call.kind === "report").map((call) => (call.value as { milestone: string }).milestone)).toEqual(["started"])
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
+
 test("a posting-check error uses fixed summary text and never opens a dialog", async () => {
   const f = fixture()
   let checked = 0
