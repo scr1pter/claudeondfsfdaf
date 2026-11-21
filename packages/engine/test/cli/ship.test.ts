@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import yargs from "yargs"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { ShipDesk } from "@vectordevai/schema/ship-desk"
@@ -10,6 +11,7 @@ import {
   captureEnvironmentProblem,
   captureShots,
   childEnvironment,
+  ShipCommand,
   ShipError,
   siteOrigin,
   type CaptureApi,
@@ -386,5 +388,116 @@ describe("the ticket", () => {
     expect(seen).toHaveLength(3)
     expect(runTokenFile({ RUNNER_TEMP: "/tmp/r" })).toBe(path.join("/tmp/r", "vector-secrets", "run-token"))
     expect(runTokenFile({})).toBeUndefined()
+  })
+})
+
+describe("INV-P1: refusals in GitHub Actions", () => {
+  // The server's own refusal texts (api/_lib/ship-desk.ts): they name the account's plan and payment state, which a
+  // public repository's Actions log must never show.
+  const PLAN = "Your Vector Codium plan does not include Ship Desk."
+  const HOLD = "Ship Desk is on hold for this account while its payment is reviewed."
+  const NAMES = [
+    "GITHUB_ACTIONS",
+    "GITHUB_OUTPUT",
+    "VECTOR_SITE_URL",
+    "VECTOR_CAPTURE_TICKET",
+    "VECTOR_CLI_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "RUNNER_TEMP",
+    "CHROME_PATH",
+  ]
+
+  /** vectordev.ai on 127.0.0.1, refusing the ticket for the plan and the capture's card for the payment hold. */
+  function refusingSite() {
+    const actions: string[] = []
+    const site = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        expect(new URL(request.url).pathname).toBe("/api/ops/uploads")
+        const body = (await request.json()) as { action?: string }
+        actions.push(String(body.action))
+        if (body.action === "ticket")
+          return Response.json({ error: { code: "CODIUM_PERK_REQUIRED", message: PLAN } }, { status: 403 })
+        return Response.json({ error: { code: "SHIP_DESK_HIDDEN", message: HOLD } }, { status: 403 })
+      },
+    })
+    return { site, actions }
+  }
+
+  /** Runs `vector ship …` through yargs in this process; what it printed (UI prints to stderr), colours removed. */
+  async function ship(args: string[]) {
+    const printed: string[] = []
+    const write = spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+      printed.push(String(chunk))
+      return true
+    }) as typeof process.stderr.write)
+    try {
+      await yargs(["ship", ...args])
+        .command(ShipCommand)
+        .exitProcess(false)
+        .fail((message, error) => {
+          throw error ?? new Error(message)
+        })
+        .parseAsync()
+    } finally {
+      write.mockRestore()
+    }
+    return printed.join("").replace(/\x1b\[[0-9;]*m/g, "")
+  }
+
+  /** Both commands against the refusing site, with GITHUB_ACTIONS as given; the environment and exit code restored. */
+  async function both(actions: "true" | undefined) {
+    const saved = Object.fromEntries(NAMES.map((name) => [name, process.env[name]]))
+    const exitCode = process.exitCode
+    const { site, actions: asked } = refusingSite()
+    try {
+      for (const name of NAMES) delete process.env[name]
+      if (actions) process.env.GITHUB_ACTIONS = actions
+      process.env.VECTOR_SITE_URL = site.url.origin
+      const tokenFile = path.join(work, "run-token")
+      await fs.writeFile(tokenFile, "vrt_payload.signature\n")
+      const ticket = await ship(["ticket", "--token-file", tokenFile])
+      process.env.VECTOR_CAPTURE_TICKET = TICKET
+      const capture = await ship(["capture", "--pr", "12", "--chrome", process.execPath])
+      return { ticket, capture, exitCode: process.exitCode, asked }
+    } finally {
+      process.exitCode = exitCode
+      for (const name of NAMES)
+        if (saved[name] === undefined) delete process.env[name]
+        else process.env[name] = saved[name]
+      site.stop(true)
+    }
+  }
+
+  test("in Actions, both commands print only a fixed line, never the server's plan or payment text", async () => {
+    const out = await both("true")
+    expect(out.ticket).toContain("Ship Desk: no capture ticket.")
+    expect(out.ticket).not.toMatch(/plan|payment|Codium/i)
+    expect(out.capture).not.toMatch(/plan|payment|Codium/i)
+    expect(out.exitCode).toBe(1)
+    // Off Windows the capture reaches vectordev.ai, which refuses its card; on Windows it refuses on this computer first.
+    if (process.platform !== "win32") {
+      expect(out.asked).toEqual(["ticket", "card"])
+      expect(out.capture).toContain("Error: Ship Desk: vectordev.ai refused this capture.")
+    }
+  })
+
+  test("outside Actions, the server's reason follows the fixed line", async () => {
+    const out = await both(undefined)
+    expect(out.ticket).toContain(`Ship Desk: no capture ticket. ${PLAN}`)
+    if (process.platform !== "win32")
+      expect(out.capture).toContain(`Error: Ship Desk: vectordev.ai refused this capture. ${HOLD}`)
+  })
+
+  test("refusalLine keeps the detail out of Actions and out of an empty reason", async () => {
+    const { refusalLine } = await import("../../src/cli/cmd/ship")
+    expect(refusalLine("Fixed.", PLAN, { GITHUB_ACTIONS: "true" })).toBe("Fixed.")
+    expect(refusalLine("Fixed.", PLAN, {})).toBe(`Fixed. ${PLAN}`)
+    expect(refusalLine("Fixed.", PLAN, { GITHUB_ACTIONS: "false" })).toBe(`Fixed. ${PLAN}`)
+    expect(refusalLine("Fixed.", "", {})).toBe("Fixed.")
+    expect(refusalLine("Fixed.", "  ", {})).toBe("Fixed.")
+    expect(refusalLine("Fixed.", undefined, {})).toBe("Fixed.")
   })
 })
