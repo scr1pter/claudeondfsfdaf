@@ -421,8 +421,9 @@ function liveHosted(snapshot: EntitlementSnapshot | undefined) {
  * - paused: running sessions wrap up, snapshot and stop within five minutes;
  * - frozen: every session stopped now; the disks are kept with no deletion date until the dispute closes;
  * - ended, or a plan without a cloud computer: every session stopped; the disks are kept 14 days for download (H1a's
- *   download-only start, whose first run on each computer charges that retention to the final period, shorter when it
- *   cannot cover it), then deleted; after a lost dispute they are kept 30 days at Vector's cost, with no download.
+ *   download-only start, whose first confirmed upload on each computer charges that retention to the final period,
+ *   shorter when it cannot cover it), then deleted; after a lost dispute they are kept 30 days at Vector's cost, with no
+ *   download.
  * A download-only session is left running while the plan still lets it download, and ended otherwise.
  */
 export async function applyHostedTransition(t: Transition, options: SessionOptions = {}) {
@@ -463,9 +464,10 @@ export async function applyHostedTransition(t: Transition, options: SessionOptio
   if (to.state === "frozen" || liveHosted(to)) return
   if (from && !liveHosted(from) && from.state !== "frozen") return
   // The plan no longer keeps the disks: set when they are deleted, once (the first date stands). §4.4 keeps an ended
-  // plan's disks 14 days for download, then deletes them. Nothing is charged here: the first download-only start of
-  // each computer (H1a, hosted-sessions.ts) charges that retention to the final period, once (`chargeRetention`), and
-  // the disks nobody downloads are kept at Vector's cost, for a subscriber who comes back (codium-deviations.md).
+  // plan's disks 14 days for download, then deletes them. Nothing is charged here: the first download-only upload
+  // confirmed for each computer (H1a, PR3, hosted-sessions.ts) charges that retention to the final period, once
+  // (`chargeDownloadRetention`), and the disks nobody downloads are kept at Vector's cost, for a subscriber who comes
+  // back (codium-deviations.md).
   const computers = await accountComputers(t.account, fetcher)
   if (!computers.length) return
   const until =

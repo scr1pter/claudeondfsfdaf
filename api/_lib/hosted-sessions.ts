@@ -71,9 +71,9 @@ import { runTokenRevoked } from "./codium-provisioners.js"
  * download-only sessions, one at a time on each computer whose disk is still kept for download (`hosted:disk-due`,
  * §4.4): `mode: "download"`. Each gets no job, browser, live view, take-over or recording; its heartbeat answers ask
  * only to pack and upload the disk; it lasts one block, held like any block from the plan's final period; its run
- * token is refused at chat and /models (S3). The first start for a computer charges that disk's retention to the final
- * period, once per kept window (`chargeRetention`), and Vector pays at most one archive's worth of each computer's
- * uploads.
+ * token is refused at chat and /models (S3). The first upload confirmed for a computer charges that disk's retention to
+ * the final period, once per kept window (`chargeDownloadRetention`, PR3), so a download that delivers nothing charges
+ * none, and Vector pays at most one archive's worth of each computer's uploads.
  *
  * Image floor (H2a). Each computer keeps the image generation its daemon last reported in a signed heartbeat, for as
  * long as the provider keeps its disk after that beat. With `VECTOR_HOSTED_MIN_GENERATION` set, a job start passes over
@@ -639,18 +639,16 @@ export async function startHostedSession(
 /**
  * The second half of a start, for both kinds of session: the first block's hold (`openBlock`), the record's times, the
  * computer's lease, its run token, creating or resuming the computer and the boot step. A download-only start (H1a)
- * holds its block from the plan's final period and, once the hold is placed and before the provider is asked, charges
- * the computer's kept disk to that period (`chargeRetention`: once per computer and kept window, `due` being the
- * window's deletion date, held and settled from the same pool, `final` saying whether that is the ended plan's final
- * period, checked against the daily share of the snapshot the start decided with, and shortened to what is left after
- * the block's hold). Anything that fails after the hold gives it back (or charges only what the computer ran).
+ * holds its block from the plan's final period (or the current one) and charges nothing else: the kept disk's
+ * retention waits for the session's upload to be confirmed (`chargeDownloadRetention`, PR3). Anything that fails after
+ * the hold gives it back (or charges only what the computer ran).
  */
 async function launchSession(
   record: SessionRecord,
   launch: {
     jobMinutes: number
     diskDays: number
-    download?: { final: boolean; snapshot: EntitlementSnapshot; due: number }
+    download?: true
   },
   options: SessionOptions,
 ): Promise<Hosted.SessionView> {
@@ -693,19 +691,6 @@ async function launchSession(
       }),
       { fetcher, clock },
     )
-    if (launch.download)
-      await chargeRetention(
-        account,
-        {
-          computer: computerName(account, record.computer),
-          gb: HOSTED_DISK_GB_MAX,
-          days: Hosted.ENDED_DISK_DAYS,
-          final: launch.download.final,
-          snapshot: launch.download.snapshot,
-          due: launch.download.due,
-        },
-        { fetcher, clock },
-      )
   } catch (error) {
     // Nothing was asked of the provider yet: the block closes at its own start, so nothing is charged (P8 review).
     await failSession({ ...record, block: block.block }, block.startedAt, options).catch(() => undefined)
@@ -770,8 +755,9 @@ export function parseDownloadStart(input: unknown, source: Hosted.SessionSource)
  * kept, or a live plan without a computer), the disk still inside its kept date with a block and an hour to spare, the
  * computer one the account has, and its lease. The session then starts as any other (`launchSession`) with one block
  * held from that period, no job, no browser and its files already asked for, so the computer's first answers ask it to
- * pack and upload them. The image floor (H2a) does not apply: a kept disk's files stay downloadable whatever image it
- * was made from.
+ * pack and upload them. The start charges only that block: the kept disk's retention is charged once the session's
+ * upload is confirmed (`chargeDownloadRetention`, PR3), so a download that delivers nothing charges none. The image
+ * floor (H2a) does not apply: a kept disk's files stay downloadable whatever image it was made from.
  */
 export async function startHostedDownload(
   account: string,
@@ -844,7 +830,36 @@ export async function startHostedDownload(
     await abandonSession(record, fetcher, clock).catch(() => undefined)
     throw error
   }
-  return launchSession(record, { jobMinutes: BLOCK_MINUTES, diskDays: days, download: { ...plan, due } }, options)
+  return launchSession(record, { jobMinutes: BLOCK_MINUTES, diskDays: days, download: true }, options)
+}
+
+/**
+ * Charges a download-only session's kept disk its retention, once the session's upload is confirmed (PR3, O6; called
+ * from `recordHeartbeat`'s confirmation, which runs once per session). It reads the plan as the start does
+ * (`readEntitlement`) and charges only while the plan may download (`final` or `current`): `chargeRetention`, once per
+ * computer and kept window (`due`, the disk's deletion date; nothing when no date is set), held and settled from the
+ * period the start's block was held from, checked against that snapshot's daily share and shortened to what the period
+ * can still pay. A charge refused there leaves the disk kept at Vector's cost (H1a R3).
+ */
+async function chargeDownloadRetention(record: SessionRecord, due: number | undefined, options: SessionOptions) {
+  if (due === undefined) return
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
+  const snapshot = await readEntitlement(record.account, fetcher, clock())
+  const access = hostedDownloadAccess(snapshot)
+  if (!snapshot || (access !== "final" && access !== "current")) return
+  await chargeRetention(
+    record.account,
+    {
+      computer: computerName(record.account, record.computer),
+      gb: HOSTED_DISK_GB_MAX,
+      days: Hosted.ENDED_DISK_DAYS,
+      final: access === "final",
+      snapshot,
+      due,
+    },
+    { fetcher, clock },
+  )
 }
 
 /** When the account's computers' disks are to be deleted (§4.4), or undefined when no date is set. */
@@ -1604,10 +1619,12 @@ async function signUpload(record: SessionRecord, key: string, bytes: number, now
  * archive's worth per computer until its disk's deletion date. A beat's image generation is also kept for the
  * computer (`hosted:generation:<account>`, H2a), so the image floor can read it after the session ends.
  *
- * The files (WP A54, O1): a beat with no size is asked to pack, one with a size gets an upload link for it, and one that
- * says `uploaded` has the upload checked in the bucket (`checkUpload`). Only a confirmed upload makes the files ready.
+ * The files (WP A54, O1, O4): a beat with no size is asked to pack, one with a size gets an upload link for it, and one
+ * that says `uploaded` has the upload checked in the bucket (`checkUpload`). Only a confirmed upload makes the files
+ * ready, and only then is a download-only session's kept disk charged its retention (`chargeDownloadRetention`, PR3).
  * For a job session a check that cannot tell gets a fresh link, so its hostd keeps the copy, and a rejected upload gets
- * no answer, so hostd drops the copy and its next beat is asked to pack again.
+ * no answer, so hostd drops the copy and its next beat is asked to pack again. For a download-only session a rejected
+ * upload is answered `pack`, so hostd packs the disk again, and a check that cannot tell gets no answer.
  */
 export async function recordHeartbeat(
   claims: HostedRunClaims,
@@ -1734,7 +1751,8 @@ export async function recordHeartbeat(
         ) {
           const uploaded = hostedDownloadUploadedKey(record.account, record.computer)
           const total = Number(await store(["INCRBY", uploaded, next.archiveBytes], fetcher))
-          const due = (await readDiskDue(record.account, fetcher)) ?? now + Hosted.ENDED_DISK_DAYS * DAY_MS
+          const kept = await readDiskDue(record.account, fetcher)
+          const due = kept ?? now + Hosted.ENDED_DISK_DAYS * DAY_MS
           await store(["PEXPIRE", uploaded, Math.max(DAY_MS, due - now)], fetcher)
           const waived = Math.max(0, Math.min(next.archiveBytes, ARCHIVE_MAX_BYTES - (total - next.archiveBytes)))
           if (waived > 0) {
@@ -1742,7 +1760,15 @@ export async function recordHeartbeat(
             await store(["INCRBY", key, waived], fetcher)
             await store(["PEXPIRE", key, 7 * DAY_MS], fetcher)
           }
+          // PR3, O6: the kept disk's retention is charged here, once its files are confirmed, never at the start. A
+          // charge that fails leaves the files ready and the disk kept at Vector's cost.
+          await chargeDownloadRetention(record, kept, { fetcher, clock }).catch(() => undefined)
         }
+      } else if (check === "rejected" && record.mode === "download") {
+        // O4: the bucket holds no such object, or one of another size. H1b's hostd takes `pack` answered to a beat
+        // that said `uploaded` as that, and packs the disk again and uploads anew. A check that could not tell gets no
+        // answer: the next beat, which still reports the upload, checks again.
+        answer.pack = true
       }
     } else if (beat.archiveBytes === undefined) {
       // The person asked for the files and the computer holds no packed copy now (WP A54). This beat's own size

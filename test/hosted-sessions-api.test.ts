@@ -1046,12 +1046,9 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     expect(first.body.recording).toBeUndefined()
     const booted = await beat(w, session.id, { booted: true })
     expect(booted.body.job).toBeUndefined()
-    // The retention of the kept disk is charged to the final period, once (§4.4; WP A51's chargeRetention).
-    expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toMatchObject({
-      kind: "retention",
-      units: Hosted.ENDED_DISK_DAYS,
-      periodStart: P1.start * 1000,
-    })
+    // The retention of the kept disk is charged to the final period, once (§4.4; WP A51's chargeRetention), and only
+    // once the computer's upload is confirmed (PR3): nothing before it.
+    expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toBeUndefined()
     // No live view, no take-over.
     for (const kind of ["viewer", "takeover"] as const) {
       const refused = await action(w, session.id, kind, kind === "viewer" ? { mode: "view" } : {})
@@ -1060,6 +1057,12 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     }
     // Until the files are uploaded the person is told to ask again.
     expect((await action(w, session.id, "download")).body).toEqual({ ready: false })
+    await upload(w, session.id)
+    expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toMatchObject({
+      kind: "retention",
+      units: Hosted.ENDED_DISK_DAYS,
+      periodStart: P1.start * 1000,
+    })
   })
 
   test("after the upload the download link works, never outliving the disk's date; the upload's egress is Vector's", async () => {
@@ -1113,15 +1116,106 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
       code: "HOSTED_BUSY",
       message: "This computer is already getting its files ready.",
     })
+    // Charged at the first confirmed upload (PR3), not at either start.
+    expect((await rows()).filter((row) => row.kind === "retention")).toEqual([])
+    await upload(w, first.id)
     await action(w, first.id, "stop")
     w.advance(DAY)
     // The ended plan as reconcile keeps writing it (the fixture's Stripe objects still describe the paid period).
     w.setSnapshot({})
     const second = await startDownload(w)
     expect(second.status).toBe(201)
+    await upload(w, second.body.session.id)
     const retention = (await rows()).filter((row) => row.kind === "retention")
     expect(retention.map((row) => row.ref)).toEqual([RETENTION(w)])
     expect((await rows()).filter((row) => row.kind === "block").map((row) => row.ref)).toContain(`hb-${first.id}-0`)
+  })
+
+  test("the retention is charged only once an upload is confirmed; a download that delivers nothing charges none (PR3, O6)", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const retention = async () => (await rows()).filter((row) => row.kind === "retention").map((row) => row.ref)
+    const first = (await startDownload(w)).body.session as Hosted.SessionView
+    expect(await retention()).toEqual([])
+    // A computer whose hostd does not sign its beats (a disk made before signed heartbeats, O6) is refused on every
+    // beat, so its session delivers nothing. It ends at its block's end, and no retention is charged for it.
+    const unsigned = await invoke((request, response) => handleHostedHeartbeat(request, response, w.options), {
+      method: "POST",
+      authorization: w.provider.token(NAME())!,
+      body: { archiveBytes: 4096, uploaded: true },
+      query: { id: first.id },
+    })
+    expect(unsigned.status).toBe(403)
+    expect(await retention()).toEqual([])
+    w.advance(16 * MINUTE)
+    w.setSnapshot({})
+    await reapHostedSessions(w.options)
+    expect(await readSessionRecord(first.id, w.fetcher)).toMatchObject({ state: "ended", reason: "deadline" })
+    expect(await retention()).toEqual([])
+    // The next start's upload is confirmed: exactly one line, to the final period.
+    const second = (await startDownload(w)).body.session as Hosted.SessionView
+    expect(await retention()).toEqual([])
+    await upload(w, second.id)
+    expect(await retention()).toEqual([RETENTION(w)])
+    expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toMatchObject({
+      kind: "retention",
+      units: Hosted.ENDED_DISK_DAYS,
+      periodStart: P1.start * 1000,
+    })
+    // A third start and its confirmed upload charge nothing more: once per computer and kept window.
+    await reapHostedSessions(w.options)
+    expect(await readSessionRecord(second.id, w.fetcher)).toMatchObject({ state: "ended", reason: "finished" })
+    const third = await startDownload(w)
+    expect(third.status).toBe(201)
+    await upload(w, third.body.session.id)
+    expect(await retention()).toEqual([RETENTION(w)])
+  })
+
+  test("an upload the bucket does not hold, or holds at another size, is asked for again; a failed check is only retried (O4)", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const session = (await startDownload(w)).body.session as Hosted.SessionView
+    const files = async () => (await readSessionRecord(session.id, w.fetcher))!.download!
+    const retention = async () => (await rows()).filter((row) => row.kind === "retention").map((row) => row.ref)
+    expect((await beat(w, session.id, {})).body.pack).toBe(true)
+    const key = objectKey(await beat(w, session.id, { archiveBytes: 4096 }))
+    // The PUT went through as far as hostd knows, but the bucket holds nothing: it is asked to pack again, which H1b's
+    // hostd takes as a rejection (it packs the disk again and uploads anew).
+    const missing = await beat(w, session.id, { archiveBytes: 4096, uploaded: true })
+    expect(missing.body).toMatchObject({ mode: "download", pack: true })
+    expect(missing.body.upload).toBeUndefined()
+    expect((await files()).readyAt).toBeUndefined()
+    // While it packs, it is asked to; the new size, reported without `uploaded`, gets a link for it.
+    expect((await beat(w, session.id, {})).body.pack).toBe(true)
+    const relinked = await beat(w, session.id, { archiveBytes: 4000 })
+    expect([objectKey(relinked), relinked.body.upload.headers["content-length"]]).toEqual([key, "4000"])
+    // An object of another size is rejected the same way.
+    w.bucket.set(key, 3999)
+    const short = await beat(w, session.id, { archiveBytes: 4000, uploaded: true })
+    expect(short.body.pack).toBe(true)
+    expect(short.body.upload).toBeUndefined()
+    expect((await files()).readyAt).toBeUndefined()
+    // A check that cannot tell (a timeout, another status, no length) asks for nothing: the next beat checks again.
+    w.bucket.set(key, 4000)
+    const heads = failHeads(w, [
+      () => {
+        throw new DOMException("The operation timed out.", "TimeoutError")
+      },
+      () => new Response(null, { status: 500 }),
+      () => new Response(null, { status: 200 }),
+    ])
+    for (let check = 0; check < 3; check++) {
+      const unknown = await beat(w, session.id, { archiveBytes: 4000, uploaded: true })
+      expect([unknown.body.pack, unknown.body.upload]).toEqual([undefined, undefined])
+    }
+    expect(heads.left()).toBe(0)
+    expect((await files()).readyAt).toBeUndefined()
+    expect(await retention()).toEqual([])
+    // The next check confirms it: the files are ready, and only now is the retention charged.
+    const confirmed = await beat(w, session.id, { archiveBytes: 4000, uploaded: true })
+    expect([confirmed.body.pack, confirmed.body.upload]).toEqual([undefined, undefined])
+    expect(await files()).toMatchObject({ readyAt: w.fakes.clock.now, bytes: 4000 })
+    expect(await retention()).toEqual([RETENTION(w)])
   })
 
   test("refused after the window, when frozen, after a lost dispute, refunded, while closing and on a live plan", async () => {
@@ -1215,7 +1309,7 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     expect(w.fakes.store.zset(`vector:codium:test:held:${SEEDED}`).size).toBe(0)
   })
 
-  test("a provider that cannot start the computer charges the retention once and no block time", async () => {
+  test("a provider that cannot start the computer charges no retention and no block time (PR3)", async () => {
     const w = await hostedWorld(ledger)
     await endedWithDisk(w)
     const before = new Set((await rows()).map((row) => row.ref))
@@ -1223,15 +1317,19 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     const answer = await startDownload(w)
     expect(answer.status).toBe(503)
     const added = (await rows()).filter((row) => !before.has(row.ref))
-    expect(added.filter((row) => row.kind === "retention").map((row) => row.ref)).toEqual([RETENTION(w)])
+    // No upload was confirmed, so the kept disk's retention is not charged (it was, before PR3).
+    expect(added.filter((row) => row.kind === "retention")).toEqual([])
     const blocks = added.filter((row) => row.kind === "block")
     expect(blocks).toHaveLength(1)
     expect(blocks[0]!.units).toBe(0)
     expect(w.fakes.store.hash(hostedLeaseKey(ACCOUNT_ID)).size).toBe(0)
-    // Asked again once the provider is back: the retention is not charged a second time.
+    // Asked again once the provider is back: the retention is charged once, at the confirmed upload.
     w.provider.fail.start = false
-    expect((await startDownload(w)).status).toBe(201)
-    expect((await rows()).filter((row) => row.kind === "retention")).toHaveLength(1)
+    const again = await startDownload(w)
+    expect(again.status).toBe(201)
+    expect((await rows()).filter((row) => row.kind === "retention")).toEqual([])
+    await upload(w, again.body.session.id)
+    expect((await rows()).filter((row) => row.kind === "retention").map((row) => row.ref)).toEqual([RETENTION(w)])
   })
 
   test("a start too close to the disk's date is refused; one with a block and an hour to spare goes ahead", async () => {
@@ -1279,16 +1377,19 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     const running = JSON.parse(w.fakes.store.hash(hostedRunningKey(ACCOUNT_ID)).get(session.id)!)
     expect(running).toMatchObject({ block: 0, pool: SEEDED, epoch: to.meterEpoch, periodEnd: to.periodEnd })
     expect(w.fakes.clock.now).toBeLessThan(P1.end * 1000)
+    // The retention is charged to the current period once the upload is confirmed (PR3), not at the start.
+    expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toBeUndefined()
+    const told = await beat(w, session.id, {})
+    expect(told.body).toMatchObject({ mode: "download", browser: false, pack: true })
+    expect(told.body.job).toBeUndefined()
+    expect(told.body.recording).toBeUndefined()
+    await upload(w, session.id)
     expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toMatchObject({
       kind: "retention",
       units: Hosted.ENDED_DISK_DAYS,
       periodStart: P1.start * 1000,
       periodEnd: P1.end * 1000,
     })
-    const told = await beat(w, session.id, {})
-    expect(told.body).toMatchObject({ mode: "download", browser: false, pack: true })
-    expect(told.body.job).toBeUndefined()
-    expect(told.body.recording).toBeUndefined()
   })
 
   test("no link is given or followed while frozen, after a lost dispute or while closing (§4.4), whatever the session", async () => {

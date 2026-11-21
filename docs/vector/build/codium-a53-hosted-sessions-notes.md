@@ -203,3 +203,21 @@ on the server. The build record, with its red and green runs and mutations, is `
   so hostd keeps its copy and the next beat checks again, and a rejected one answers nothing, so hostd drops the copy
   and its next beat is asked to pack. Download-only sessions are unchanged by this line. Signing the PUT, with the
   archives key's SADD first, is one helper (`signUpload`).
+- O4 is closed. For a download-only session a rejected upload (404, or another size) answers `pack`, which H1b's hostd
+  takes as a rejection, packing the disk again and uploading anew. A check that cannot tell answers nothing and the
+  next beat checks again. `readyAt` is set only on a confirmed upload, as before.
+- PR3 and O6 (the 15 Nov "Not done" defect above, and `owner-actions/hosted-computer.md`'s 16 Nov PR3 gate) are closed
+  on the server. `launchSession` no longer charges the retention, and the `launch.download.{final, snapshot, due}`
+  plumbing only it used is gone (the launch keeps `download: true` for the block's hold). The retention is charged by
+  `chargeDownloadRetention` inside the confirmation guard, after the egress waiver: it reads the plan as the start does
+  (`readEntitlement`), charges `chargeRetention` unchanged for access `final` or `current` with the disk's deletion date
+  from `readDiskDue` (none when no date is set), and a charge that fails leaves the confirmation standing. A start that
+  fails, a session that delivers nothing and a disk made before signed heartbeats now charge no retention; the block's
+  minutes are still charged (M8). Lead call, defaulted and accepted: the daily-share check moved from the start to the
+  confirmation, so a refusal there leaves the disk kept at Vector's cost instead of refusing the start. Four cases in
+  `test/hosted-sessions-api.test.ts` that pinned the charge at the start now pin "no line before an upload, exactly one
+  after" on purpose. Comments left with the old wording, outside this branch's files: `test/codium-pool.test.ts`'s
+  reviewed-producer comment still says the retention's daily share is checked "against its start's snapshot" (it is
+  now the confirmation's), `api/_lib/hosted-entitlement.ts` (`hostedDiskPolicy`) and `api/_lib/hosted-ledger.ts`'s
+  header still say the first download-only start charges it, `test/hosted-lifecycle.test.ts:176` says the same, and
+  `MODEL-PLANS.md`'s Provisioner bullet says "once a download-only start runs on them".
