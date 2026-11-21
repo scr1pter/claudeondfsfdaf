@@ -61,6 +61,23 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 
 ## Where things stand (2026-11-14, about 07:30 UTC)
 
+**Status on 21 Nov 2026 (v2-closeout-ci; this section is kept as the 14 Nov record).** Every lane in the table below
+reached `main`. PR #33 (`release-finish`, merge `b362fdf6`) carried the assembly; GitHub shows #21, #25, #29, #30, #31
+and #32 as merged with it because #33 contains their heads. Later work merged in #34 to #54 (v2-integration.md "Merged
+pull requests"), then #55 (`3e90df62`), #57 (`5a5b5619`), the Everywhere PR #56 (`153f9a22`) and #59 (`4fc245b6`); each
+of those merge commits is on main's first-parent history. Per lane, now:
+
+- `v2-hands`: in #33, finished in #40 (`hands-finish`, `2f64aca2`).
+- `v2-complete`: never created as a branch; superseded by the #33 assembly plus the connect (#38, `7e440a27`),
+  brain-transport (#43, `7c7508d2`) and Everywhere (#56) lanes. VectorScope (`scope-finish`) is still open.
+- `cloud-workspaces`: in #33, finished in #34 (`workspaces-finish`, `1b1563dd`).
+- `agent-environment` and `v2-locks`: in #33.
+- `v2-codium-acceptance`: B09 to B11 were done in #36 (`codium-finish`, `b5cbad1c`; codium-deviations.md "Codium
+  finish: B10 acceptance" and the two "Codium finish: B09" entries). B08 and A59 moved to the brain-transport lane
+  (codium-deviations.md "What stays open").
+
+"Other branches still to resolve" below is superseded by v2-integration.md "Branches to delete".
+
 **In `v2` (and going to `main`):**
 - #26 process ownership (supersedes #23, closed).
 - #27 release coordination.

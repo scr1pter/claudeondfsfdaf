@@ -34,6 +34,10 @@ The version becomes **2.0.0**. The 1.99.112 and 1.99.113 strings are retargeted 
 | 10 | `build-native-shell`: @vector native isolation | After step 4. Needs its qualification matrix. |
 | 11 | `agent-environment`: the agent's own terminals and browser | In progress: bug review, finish, update onto v2. |
 
+Closing note, 21 Nov 2026 (v2-closeout-ci): every step above reached `main`, through #33 (`b362fdf6`) and the lane PRs
+in "Merged pull requests" below, except step 7 (VectorScope, `scope-finish`), still open. Step 10's native isolation is
+in main switched off (#35 `native-qualify`, `2034e1da`); its real-machine qualification is still a shipping gate.
+
 ## main
 
 On 2026-11-14 the owner chose to have everything live in `main` with no long-lived integration branch. `main` was fast-forwarded to `v2` at `983fe7025`, and every later merge goes straight into `main`. Each push to `main` deploys vectordev.ai, so new features stay off by default.
@@ -48,7 +52,7 @@ Owner gates such as signing, the legal read, Stripe, platform registrations and 
 
 ## Merged pull requests (16 to 21 November 2026)
 
-Each pull request below merged into `main` with a merge commit. The merge commits were checked against `git log` (each subject ends in its PR number, and each is an ancestor of `main` `f3d7ac74`), and the head branches against the GitHub API. Dates are UTC.
+Each pull request below merged into `main` with a merge commit. The merge commits were checked against `git log` (each subject ends in its PR number, and each is an ancestor of `main` `f3d7ac74`), and the head branches against the GitHub API. Dates are UTC. The last four rows (#55, #57, #56, #59) were added on 21 Nov 2026 by v2-closeout-ci: each merge commit is on main's first-parent history at `4fc245b6`, and each head branch matches its PR's CI runs.
 
 | PR  | Branch                    | Merge commit | Merged |
 | --- | ------------------------- | ------------ | ------ |
@@ -73,6 +77,10 @@ Each pull request below merged into `main` with a merge commit. The merge commit
 | #51 | `policy-acl-timeout`      | `15f3ba77`   | 20 Nov |
 | #53 | `region-compile-budget`   | `3670461a`   | 20 Nov |
 | #54 | `windows-test-budgets`    | `f3d7ac74`   | 21 Nov |
+| #55 | `v2-final-docs`           | `3e90df62`   | 21 Nov |
+| #57 | `review-pipeline-site`    | `5a5b5619`   | 21 Nov |
+| #56 | `everywhere-finish`       | `153f9a22`   | 21 Nov |
+| #59 | `wal-busy-timeout`        | `4fc245b6`   | 21 Nov |
 
 GitHub also shows #25, #29, #30, #31 and #32 as merged at the same time as #33, because #33 contains their heads.
 
