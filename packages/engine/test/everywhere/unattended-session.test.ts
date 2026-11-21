@@ -413,6 +413,10 @@ offlineIf("on offline-v1 a check runs in the offline sandbox, and network or a f
   yield* llm.tool("bash", { command: `out=$(curl -s --noproxy '*' --max-time 5 http://127.0.0.1:${tcp.port}/); echo "exit=$? $out"`, description: "Reach this computer" })
   yield* llm.tool("bash", { command: "cat /etc/hostname", description: "Read outside the checkout" })
   yield* llm.text("done")
+  // Untimed: the policy read runs and caches the bubblewrap self-test, this process's first sandbox spawn, so the
+  // `finished` wait below times the turn and its three commands, not that first touch.
+  const shell = yield* Effect.promise(async () => await (await h.send("/experimental/shell/unattended", "GET")).json())
+  expect(shell).toEqual({ shell: "offline-v1" })
   yield* Effect.promise(() => h.client.prompt(session, job, 1, MODEL))
   const bash = (yield* finished(h, session)).flatMap((row) => row.parts).filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "bash")
   expect(bash.map((part) => part.state.status)).toEqual(["completed", "completed", "error"])
