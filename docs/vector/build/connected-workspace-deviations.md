@@ -2151,3 +2151,16 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   - `6895687e` fix(engine): report a sandbox timeout before the exit code.
   - `19c48b89` merges main for the Windows overlay Stop diagnostics.
 - PR #38 merged into main as `7e440a27`; all four commits are ancestors of main.
+
+## 2026-11-21 — v2-closeout-ci: the desktop streams `connect.run.updated` to the phone (CW-23c)
+
+- **Closes** the Known limit "Its row goes stale" and the review-round finding "A phone-started review's row never
+  refreshes by itself" in the phone-review entry above. `packages/desktop/src/main/remote-link.ts` now lists
+  `connect.run.updated` in `STREAMED`, so while the phone watches, a Connect run's updates reach it in the same batches
+  as the session events, and `connectRunsChanged` (`packages/app/src/phone/remote/model.ts`) re-reads the runs of the
+  open conversation when one arrives. That function's comment no longer says the computer does not stream it.
+- **Test.** `remote-link.test.ts` "streams the engine's events only while the phone watches, batched" now also pushes a
+  `connect.run.updated` event for `/repo` and expects it in the batches (31 events), and still expects `pty.created`
+  and other folders' events to stay on the computer. Without the `STREAMED` entry the case fails ("condition never
+  held"); with it the file passes (33 pass). No flag, route or protocol change: the event already crosses the same
+  watched-events path, and `VECTOR_EXPERIMENTAL_CONNECT` stays off.

@@ -85,6 +85,8 @@ const STREAMED = new Set([
   "question.replied",
   "question.rejected",
   "todo.updated",
+  // A Connect run's progress, so the phone refreshes a review it started, which has no part (model.ts connectRunsChanged).
+  "connect.run.updated",
 ])
 
 export type RemoteSocket = {
