@@ -12,6 +12,13 @@ export type PhoneStatus = {
   listed: ReadonlySet<PerkId>
   entitlements: Readonly<Record<string, unknown>>
   remote?: { computers: number; limit: number }
+  /** The account has had a Codium plan (§4.11). */
+  customer?: true
+  /**
+   * The cloud computer's disks are kept for download after the plan ended or no longer includes the computer (H1c):
+   * read from the hosted status by `readPhoneStatus`, never from the Codium status.
+   */
+  kept?: true
 }
 
 const PERKS = new Set<string>(PERK_IDS)
@@ -28,6 +35,7 @@ export function decodePhoneStatus(body: unknown): PhoneStatus {
   const remote = record(meters?.remote)
   return {
     enabled: value.enabled === true,
+    ...(value.customer === true ? { customer: true as const } : {}),
     ...(plan && typeof plan.id === "string" && typeof plan.name === "string"
       ? {
           plan: {
@@ -100,7 +108,8 @@ export function routeShown(route: PhoneRoute, status: PhoneStatus): boolean {
       // Cloud runs are listed beside Remote's computers (§1.1), from the GitHub agent's run records (A40).
       return listed("remote") && listed("github-agents") && remoteComputers(status) > 0 && entitled("cloudAgents")
     case "computer":
-      return listed("computer") && entitled("hosted")
+      // An ended plan's kept disks show the page too, for their files only (H1c).
+      return listed("computer") && (entitled("hosted") || status.kept === true)
     case "ops":
       return (listed("on-call") || listed("release-guard") || listed("ship-desk")) && entitled("ops")
     case "notifications":
@@ -109,9 +118,16 @@ export function routeShown(route: PhoneRoute, status: PhoneStatus): boolean {
   }
 }
 
-/** The routes this account's phone shows, in order. */
+/**
+ * The routes this account's phone shows, in order. The cloud computer's summary names the kept files when the page
+ * shows only those: the plan's `hosted` is not a record (`computerShown` and `keptCandidate` read it the same way).
+ */
 export function phoneFeatures(status: PhoneStatus): PhoneFeature[] {
-  return PHONE_ROUTES.filter((route) => routeShown(route, status)).map((route) => ({ route, ...FEATURES[route] }))
+  return PHONE_ROUTES.filter((route) => routeShown(route, status)).map((route) =>
+    route === "computer" && status.kept === true && !record(status.entitlements.hosted)
+      ? { route, label: FEATURES.computer.label, summary: "Your cloud computer's files, kept for download." }
+      : { route, ...FEATURES[route] },
+  )
 }
 
 /** The parts of production checks this account shows: only those listed. */

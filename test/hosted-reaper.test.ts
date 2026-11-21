@@ -36,9 +36,11 @@ import {
   HOUR,
   MINUTE,
   daemonBeat,
+  endedWithDisk,
   hostedSessionEnvironment,
   hostedWorld,
   invoke,
+  startDownload,
   type HostedWorld,
 } from "./hosted-sessions-fixture"
 
@@ -146,6 +148,49 @@ describe("blocks, deadlines and wrap-up (M8)", () => {
     expect(wrapping.wrapBy).toBeLessThanOrEqual(wrapping.stopBy)
     await run(w, session.id, 6)
     expect(await record(w, session.id)).toMatchObject({ state: "ended", reason: "hours" })
+  })
+})
+
+describe("download-only sessions (H1a)", () => {
+  test("one block only: no renewal, no new token, stopped at the block's end and charged what it ran", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const answer = await startDownload(w)
+    expect(answer.status).toBe(201)
+    const session = answer.body.session as Hosted.SessionView
+    w.provider.calls.length = 0
+    await run(w, session.id, 14)
+    expect((await record(w, session.id)).state).toBe("running")
+    await run(w, session.id, 2)
+    const ended = await record(w, session.id)
+    expect(ended).toMatchObject({ state: "ended", reason: "deadline", block: 0 })
+    expect(w.provider.calls.filter((call) => call.startsWith("token"))).toEqual([])
+    expect(w.provider.computers.get(NAME())!.status).toBe("stopped")
+    expect(w.fakes.store.hash(hostedRunningKey(ACCOUNT_ID)).size).toBe(0)
+    expect(await readLine(ACCOUNT_ID, `hb-${session.id}-1`, w.options)).toBeUndefined()
+    expect((await readLine(ACCOUNT_ID, `hb-${session.id}-0`, w.options))!.units).toBe(15)
+  })
+
+  test("stopped as soon as its files are uploaded, or when the plan stops allowing it", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const session = (await startDownload(w)).body.session as Hosted.SessionView
+    const packed = await beat(w, session.id, { archiveBytes: 2048 })
+    const key = decodeURIComponent(new URL(packed.body.upload.url).pathname.split("/").slice(2).join("/"))
+    w.bucket.set(key, 2048)
+    await beat(w, session.id, { archiveBytes: 2048, uploaded: true })
+    w.advance(MINUTE)
+    await reap(w)
+    expect(await record(w, session.id)).toMatchObject({ state: "ended", reason: "finished" })
+
+    const held = await hostedWorld(ledger)
+    await endedWithDisk(held)
+    const other = (await startDownload(held)).body.session as Hosted.SessionView
+    await beat(held, other.id)
+    held.setSnapshot({ state: "frozen", reason: "early_fraud_warning" })
+    held.advance(MINUTE)
+    await reap(held)
+    expect(await record(held, other.id)).toMatchObject({ state: "ended", reason: "frozen" })
   })
 })
 

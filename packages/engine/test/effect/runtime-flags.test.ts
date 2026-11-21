@@ -49,6 +49,8 @@ describe("RuntimeFlags", () => {
       expect(flags.experimentalNativeLlm).toBe(false)
       expect(flags.experimentalWebSockets).toBe(false)
       expect(flags.disableWebSockets).toBe(false)
+      // Only the cloud-workspace supervisor's marker sets it, never the umbrella experimental flag.
+      expect(flags.cloudWorkspace).toBe(false)
       expect(flags.client).toBe("desktop")
     }),
   )
@@ -123,6 +125,26 @@ describe("RuntimeFlags", () => {
       const disabled = yield* readFlags.pipe(Effect.provide(fromConfig({ VECTOR_DISABLE_WEBSOCKETS: "true" })))
 
       expect(disabled.disableWebSockets).toBe(true)
+    }),
+  )
+
+  it.effect("experimentalConnect is off when VECTOR_EXPERIMENTAL_CONNECT is unset or false in the environment", () =>
+    Effect.gen(function* () {
+      // The provider the engine's server reads its flags from (server/server.ts).
+      const read = (env: Record<string, string>) =>
+        readFlags.pipe(
+          Effect.provide(
+            RuntimeFlags.Service.layer.pipe(
+              Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+              Layer.orDie,
+            ),
+          ),
+          Effect.map((flags) => flags.experimentalConnect),
+        )
+
+      expect(yield* read({})).toBe(false)
+      expect(yield* read({ VECTOR_EXPERIMENTAL_CONNECT: "false" })).toBe(false)
+      expect(yield* read({ VECTOR_EXPERIMENTAL_CONNECT: "true" })).toBe(true)
     }),
   )
 

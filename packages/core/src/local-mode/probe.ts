@@ -106,7 +106,11 @@ export const SPECS: readonly Spec[] = [
   OpenAIServer,
 ]
 
-/** How long to wait for a server on this computer to answer the first request, and for one elsewhere. */
+/**
+ * How long a server gets to answer the first request. `remote` is the wait for one address the user typed or listed,
+ * on this computer or elsewhere. `loopback` is the short wait for reads of many ports at once on this computer: Detect,
+ * and the model read of a listed server with no pin before a call.
+ */
 export const IDENTIFY_TIMEOUT = { loopback: 400, remote: 3_000 }
 const INSPECT_TIMEOUT = 5_000
 // The most a server's answer to one read may be; a model list is a few hundred kilobytes at most.
@@ -153,8 +157,9 @@ async function examine(input: string, options: Options = {}) {
   const place = locate(input)
   if (!place) return undefined
   const hostname = new URL(place.origin).hostname
-  const timeout =
-    options.timeout ?? (LocalPolicy.loopback(hostname) ? IDENTIFY_TIMEOUT.loopback : IDENTIFY_TIMEOUT.remote)
+  // One address gets the long wait wherever it is: a server on this computer can be slow to answer while it shares a
+  // busy machine, and missing it refuses Add server or fails a Check row. Detect passes its own short wait.
+  const timeout = options.timeout ?? IDENTIFY_TIMEOUT.remote
   const encrypted = place.origin.startsWith("https:")
   const [answers, key] = await Promise.all([
     Promise.all(

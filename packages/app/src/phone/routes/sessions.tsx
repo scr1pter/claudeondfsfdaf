@@ -6,6 +6,8 @@ import {
   applyMessageEvent,
   applySessionEvent,
   computerLine,
+  connectCard,
+  connectionsOn,
   decodeMessages,
   decodeProjects,
   refusalText,
@@ -15,8 +17,8 @@ import {
   type SessionRow,
 } from "../remote/model"
 import { Empty, InstallCard, Notice, Panel, type RouteProps } from "./parts"
-import { ConnectionNotice, useRemoteView } from "./remote-parts"
-import { SessionTasks } from "./session-tasks"
+import { ConnectCard, ConnectionNotice, useRemoteView } from "./remote-parts"
+import { ConnectRuns, SessionTasks, useConnectRuns } from "./session-tasks"
 
 // Remote's sessions (WP A42): the sessions on each paired computer, streamed end-to-end encrypted through the relay
 // while this page is open, and one session to read, steer or stop. What a phone may ask is the computer's allowlist
@@ -202,11 +204,24 @@ function SessionView(props: { remote: PhoneRemote; computer: string; session: Se
       query: { limit: "30" },
     })
     if (answer.status !== 200) throw new Error(refusalText(answer))
-    setMessages(decodeMessages(answer.body))
+    setMessages(decodeMessages(answer.body, props.session.id))
     setStale(false)
     await props.remote.watch(props.computer, true).catch(() => {})
   }
   const [loaded, { refetch }] = createResource(load)
+  // Connected tools (CW-23c): shown only while this computer reports them on, read once as the session opens.
+  const [connections] = createResource(() =>
+    props.remote
+      .request(props.computer, { method: "GET", path: "/experimental/capabilities", directory })
+      .then(connectionsOn, () => false),
+  )
+  const connect = useConnectRuns({
+    remote: props.remote,
+    computer: props.computer,
+    session: props.session.id,
+    directory,
+    on: () => connections() === true,
+  })
   onCleanup(
     props.remote.onEvents((computer, events) => {
       if (computer !== props.computer) return
@@ -292,6 +307,9 @@ function SessionView(props: { remote: PhoneRemote; computer: string; session: Se
                   <For each={message.parts}>
                     {(part) => (
                       <Switch>
+                        <Match when={connectCard(message, part, connect.list(), connections() === true)}>
+                          {(card) => <ConnectCard run={card()} />}
+                        </Match>
                         <Match when={part.kind === "text" && part}>
                           {(item) => <p class="phone-message-text">{(item() as { text: string }).text}</p>}
                         </Match>
@@ -342,6 +360,15 @@ function SessionView(props: { remote: PhoneRemote; computer: string; session: Se
         </button>
       </Show>
       <SessionTasks remote={props.remote} computer={props.computer} session={props.session.id} directory={directory} />
+      <Show when={connections() === true}>
+        <ConnectRuns
+          remote={props.remote}
+          computer={props.computer}
+          session={props.session.id}
+          directory={directory}
+          runs={connect}
+        />
+      </Show>
       <p class="phone-meta">Turns you start here are never approved automatically: their requests wait in Approvals.</p>
       <Notice text={problem()} />
     </section>

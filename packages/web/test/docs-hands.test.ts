@@ -5,14 +5,20 @@ import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { docsNav } from "../src/data/docs-nav"
 import { handsReleasePreview } from "../src/data/vector-releases"
 
-const page = await Bun.file(new URL("../src/pages/docs/vector-hands.astro", import.meta.url)).text()
+// Hands has not shipped, so its page is an unrouted draft: not built, not in the sidebar, pager or search, and not in
+// the sitemap. It keeps the stable id the app links to for when it moves back to src/pages/docs.
+const page = await Bun.file(new URL("../src/drafts/docs/vector-hands.astro", import.meta.url)).text()
 
-test("the feature's stable docs route uses the shared brand and release stage", () => {
-  const links = docsNav.flatMap((group) => group.links).filter((link) => link.id === Hands.DOCS)
-  expect(links).toHaveLength(1)
-  expect(links[0]?.title).toBe(Hands.NAME)
-  expect(links[0]?.blurb).toStartWith(handsReleasePreview.since)
+test("the unreleased feature's page stays out of the published docs until Hands ships", async () => {
+  expect(docsNav.flatMap((group) => group.links).filter((link) => link.id === Hands.DOCS)).toEqual([])
+  expect(await Bun.file(new URL(`../src/pages/docs/${Hands.DOCS}.astro`, import.meta.url)).exists()).toBe(false)
+  expect(handsReleasePreview.availability).toContain("Unreleased")
+})
+
+test("the draft page keeps the stable docs id, the shared brand and the release stage", () => {
+  expect(Hands.DOCS).toBe("vector-hands")
   expect(page).toContain('<DocsPage id="vector-hands">')
+  expect(page).toContain("{handsReleasePreview.since}")
   expect(page).toContain("{Hands.NAME}")
   expect(page).toContain("{Hands.MENTION}")
   expect(page).not.toContain("Computer Use")

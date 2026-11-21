@@ -1,3 +1,4 @@
+import { decodeHostedStatus, keptCandidate } from "@/features/cloud/hosted/hosted-model"
 import type { PhoneSession } from "./auth"
 import { decodePhoneStatus, type PhoneStatus } from "./status"
 
@@ -46,7 +47,22 @@ export async function phoneApi(
   return body && typeof body === "object" && !Array.isArray(body) ? body : {}
 }
 
-/** The account's Codium status, read for the phone: what it lists and what the plan includes. */
-export async function readPhoneStatus(session: PhoneSession, fetcher: Fetch = fetch): Promise<PhoneStatus> {
-  return decodePhoneStatus(await phoneApi("/api/model-plans/status", session, {}, fetcher))
+/**
+ * The account's Codium status, read for the phone: what it lists and what the plan includes. For a customer with
+ * `computer` listed and not in the plan, the hosted status says too whether its disks are kept for download (H1c). That
+ * read never fails the status: when it fails, the last status read's answer (`previous`) stands, so an open page does
+ * not disappear in the middle of a download.
+ */
+export async function readPhoneStatus(
+  session: PhoneSession,
+  fetcher: Fetch = fetch,
+  previous?: PhoneStatus,
+): Promise<PhoneStatus> {
+  const status = decodePhoneStatus(await phoneApi("/api/model-plans/status", session, {}, fetcher))
+  if (!keptCandidate(status)) return status
+  const hosted = await phoneApi("/api/hosted/status", session, {}, fetcher).then(
+    (body) => Boolean(decodeHostedStatus(body)?.kept),
+    () => previous?.kept === true,
+  )
+  return hosted ? { ...status, kept: true } : status
 }

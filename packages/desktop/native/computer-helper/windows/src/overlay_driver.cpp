@@ -209,7 +209,8 @@ bool window_current(const OverlayStopRequest& request, const WindowsOwner& paren
   return true;
 }
 struct StopElement { UiaElement root, element; UiaSecurity security; UiaName name; };
-StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic) {
+StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic,
+                         OverlayDriverLookup lookup, std::optional<OverlayDriverUiaFailure>& failure) {
   stage = OverlayDriverStage::stop_root; UiaElement root;
   try { root = uia.root(window); }
   catch (...) {
@@ -220,8 +221,11 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
       if (uia.available) {
         const auto available = uia.available();
         stage = available ? OverlayDriverStage::stop_root_refused : OverlayDriverStage::stop_root_retired;
-        // A retired worker may still run late; only a positively healthy actor refines this failure.
-        if (available && diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+        // For a retired actor only the immutable deadline snapshot is eligible; never its live worker phase.
+        if (diagnostic) {
+          if (const auto observed = overlay_driver_uia_stage(diagnostic->failure_phase(available))) stage = *observed;
+          failure = OverlayDriverUiaFailure{lookup, OverlayDriverUiaCall::root, available, diagnostic->failure_expiry(available), diagnostic->failure_status(available)};
+        }
       }
     } catch (...) {}
     throw;
@@ -234,7 +238,10 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
       if (uia.available) {
         const auto available = uia.available();
         stage = available ? OverlayDriverStage::stop_hit_refused : OverlayDriverStage::stop_hit_retired;
-        if (available && diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+        if (diagnostic) {
+          if (const auto observed = overlay_driver_uia_stage(diagnostic->failure_phase(available))) stage = *observed;
+          failure = OverlayDriverUiaFailure{lookup, OverlayDriverUiaCall::hit, available, diagnostic->failure_expiry(available), diagnostic->failure_status(available)};
+        }
       }
     } catch (...) {}
     throw;
@@ -252,15 +259,17 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
   }
   invalid(L"stop_target_invalid");
 }
-uint64_t refresh_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, const StopElement& expected, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic) {
-  const auto started = GetTickCount64(); const auto current = observe_stop(uia, window, request, stage, diagnostic);
+uint64_t refresh_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, const StopElement& expected, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic,
+                      std::optional<OverlayDriverUiaFailure>& failure) {
+  const auto started = GetTickCount64(); const auto current = observe_stop(uia, window, request, stage, diagnostic, OverlayDriverLookup::refresh, failure);
   stage = OverlayDriverStage::refresh;
   require(uia.equal(current.root, expected.root) && uia.equal(current.element, expected.element) && current.security.bounds == expected.security.bounds && current.name.text == expected.name.text && GetTickCount64() - started < 50);
   return started;
 }
 // Each store below names the next fallible step for a failed result frame. They are plain enum
 // assignments: no call, allocation or wait is added, including inside the prepared-to-post window.
-OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::shared_ptr<Lifetime>& life, const FixtureFiles& files, HANDLE input, PipeFrameWriter& writer, OverlayDriverStage& stage) {
+OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::shared_ptr<Lifetime>& life, const FixtureFiles& files, HANDLE input, PipeFrameWriter& writer, OverlayDriverStage& stage,
+                               std::optional<OverlayDriverUiaFailure>& uia_failure) {
   using Stage = OverlayDriverStage;
   stage = Stage::observe_parent; require(actual_parent() == options.parent && life->current(), L"parent_invalid"); const auto parent = observe_windows_process(options.parent), self = observe_windows_process(GetCurrentProcessId());
   require(parent.process.creation_time == life->birth && parent.process.creation_time <= self.process.creation_time && equal_path(parent.process.image.path, files.electron.path) && hex(parent.process.image.sha256) == files.electron.sha256 && same_file(self.process.image, files.self.image), L"parent_invalid");
@@ -281,7 +290,7 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
   stage = Stage::window_observe; const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
   require(window.hwnd == request->banner && window.surface == request->banner && window.owner.process.pid == options.parent && window.physical_owner.process.pid == options.parent && same_windows_process(window.owner.process, parent.process) && same_windows_process(window.physical_owner.process, parent.process));
-  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage, uia_diagnostic); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current;
+  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage, uia_diagnostic, OverlayDriverLookup::first, uia_failure); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current;
   if (!valid_overlay_stop_request(observed_request)) { stage = Stage::window_current_request; invalid(); }
   require(window_current(observed_request, parent, window, life, &stage));
   stage = Stage::quiet; if (!backend.quiet()) throw DriverSkip{L"physical_input"};
@@ -302,7 +311,7 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
       // The cloned request checks that exact point; original refresh/DOWN geometry stays intact.
       require(backend.post({InputEventKind::move, *selected, {}, 0, 0, backend.tag}, current) == InputPostResult::accepted, L"input_post_failed");
     }
-    stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element, stage, uia_diagnostic);
+    stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element, stage, uia_diagnostic, uia_failure);
     require(files.current() && windows_owner_current(bootstrap) && window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50); stage = Stage::post;
     const auto outcome = backend.post({InputEventKind::button_down, point(observed_request), release, 0, 0, backend.tag}, [&] {
       if (!files.current() || !windows_owner_current(bootstrap) || !window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50) return false;
@@ -319,7 +328,13 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
       }
     } else invalid(L"input_post_failed");
     if (backend.confirm_down) backend.confirm_down(release);
-    stage = Stage::retire; guardian->retire(*ticket); stage = Stage::observe_up; confirmed_up = guardian->observed(*ticket, false, 300); require(confirmed_up, L"cleanup_failed");
+    stage = Stage::retire; guardian->retire(*ticket); stage = Stage::observe_up; confirmed_up = guardian->observed(*ticket, false, 300);
+    // Diagnostic only, as for the DOWN above: name this caller's own failed UP confirmation phase before
+    // the catch can retire or drain. The reason stays cleanup_failed, which keeps UP apart from DOWN.
+    if (!confirmed_up) {
+      if (const auto observed = overlay_driver_guardian_stage(guardian_diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+    }
+    require(confirmed_up, L"cleanup_failed");
     stage = Stage::cleanup; if (backend.forget_release) backend.forget_release(release);
   } catch (...) { guardian->retire(*ticket, !attempted); (void)guardian->drain(300); throw; }
   require(confirmed_up, L"cleanup_failed"); return {true, false, {}};
@@ -430,6 +445,20 @@ int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<L
   for (;;) { const auto status = WaitForSingleObject(child.get(), 25); if (status == WAIT_OBJECT_0) break; require(status == WAIT_TIMEOUT && life->current() && GetTickCount64() - started < 120'000, L"deadline_exceeded"); }
   DWORD status = 1; require(GetExitCodeProcess(child.get(), &status) != FALSE, L"bootstrap_failed"); return status <= static_cast<DWORD>((std::numeric_limits<int>::max)()) ? static_cast<int>(status) : 1;
 }
+// Every fact must be in range and coherent, or the whole object is dropped: wire() never fabricates one.
+// A healthy actor never expired a ticket, so it cannot carry an expiry side.
+std::optional<JsonObject> uia_failure_wire(const OverlayDriverUiaFailure& value) {
+  const auto lookup = static_cast<size_t>(value.lookup), call = static_cast<size_t>(value.call), expiry = static_cast<size_t>(value.expiry);
+  if (lookup >= overlay_driver_lookups.size() || call >= overlay_driver_uia_calls.size() || expiry >= windows_uia_expiries.size() || (value.available && value.expiry != WindowsUiaExpiry::none)) return {};
+  const auto hresult = value.status ? overlay_driver_hresult_class(static_cast<HRESULT>(*value.status)) : std::wstring_view{L"unobserved"};
+  JsonObject result;
+  result.Insert(L"lookup", JsonValue::CreateStringValue(winrt::hstring(overlay_driver_lookups[lookup])));
+  result.Insert(L"call", JsonValue::CreateStringValue(winrt::hstring(overlay_driver_uia_calls[call])));
+  result.Insert(L"actor", JsonValue::CreateStringValue(winrt::hstring(overlay_driver_uia_actors[value.available ? 0 : 1])));
+  result.Insert(L"expiry", JsonValue::CreateStringValue(winrt::hstring(windows_uia_expiries[expiry])));
+  result.Insert(L"hresult", JsonValue::CreateStringValue(winrt::hstring(hresult)));
+  return result;
+}
 }
 
 std::optional<POINT> overlay_driver_move_probe_point(const WindowsRect& bounds, POINT cursor) noexcept {
@@ -522,6 +551,15 @@ std::optional<OverlayDriverStage> overlay_driver_guardian_stage(InputGuardianPha
     case InputGuardianPhase::reply_negative_own_up_only: return OverlayDriverStage::guardian_observe_reply_negative_own_up_only;
     case InputGuardianPhase::reply_negative_own_tag_unflagged: return OverlayDriverStage::guardian_observe_reply_negative_own_tag_unflagged;
     case InputGuardianPhase::reply_negative_low32_tag_candidate: return OverlayDriverStage::guardian_observe_reply_negative_low32_tag_candidate;
+    case InputGuardianPhase::reply_negative_up_not_released: return OverlayDriverStage::guardian_observe_reply_negative_up_not_released;
+    case InputGuardianPhase::reply_negative_up_release_blocked: return OverlayDriverStage::guardian_observe_reply_negative_up_release_blocked;
+    case InputGuardianPhase::reply_negative_up_release_blocked_callbacks: return OverlayDriverStage::guardian_observe_reply_negative_up_release_blocked_callbacks;
+    case InputGuardianPhase::reply_negative_up_release_refused: return OverlayDriverStage::guardian_observe_reply_negative_up_release_refused;
+    case InputGuardianPhase::reply_negative_up_release_slow: return OverlayDriverStage::guardian_observe_reply_negative_up_release_slow;
+    case InputGuardianPhase::reply_negative_up_release_slow_callbacks: return OverlayDriverStage::guardian_observe_reply_negative_up_release_slow_callbacks;
+    case InputGuardianPhase::reply_negative_up_pump_stalled: return OverlayDriverStage::guardian_observe_reply_negative_up_pump_stalled;
+    case InputGuardianPhase::reply_negative_up_callbacks_without_up: return OverlayDriverStage::guardian_observe_reply_negative_up_callbacks_without_up;
+    case InputGuardianPhase::reply_negative_up_no_callback: return OverlayDriverStage::guardian_observe_reply_negative_up_no_callback;
     default: return {};
   }
 }
@@ -542,11 +580,11 @@ std::wstring_view overlay_driver_hresult_class(HRESULT code) noexcept {
   if (code == static_cast<HRESULT>(UIA_E_ELEMENTNOTAVAILABLE) || code == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) || code == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || code == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND) || code == HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE)) return L"not_found";
   return L"other";
 }
-OverlayDriverResult overlay_driver_caught(OverlayDriverMode mode, OverlayDriverStage stage, std::exception_ptr error) {
+OverlayDriverResult overlay_driver_caught(OverlayDriverMode mode, OverlayDriverStage stage, std::exception_ptr error, std::optional<OverlayDriverUiaFailure> uia) {
   // Only a stop-mode failure has a result frame. The launch bootstrap record keeps its exact keys.
-  const auto diagnosed = [mode, stage](std::wstring reason, std::wstring_view cause) {
+  const auto diagnosed = [mode, stage, &uia](std::wstring reason, std::wstring_view cause) {
     OverlayDriverResult value{false, false, std::move(reason)};
-    if (mode == OverlayDriverMode::stop) { value.stage = overlay_driver_stage_name(stage); value.cause = cause; }
+    if (mode == OverlayDriverMode::stop) { value.stage = overlay_driver_stage_name(stage); value.cause = cause; value.uia = uia; }
     return value;
   };
   auto result = diagnosed(L"native_failure", L"unknown");
@@ -574,11 +612,12 @@ JsonObject OverlayDriverResult::wire() const {
   // driver failure always reported native_failure. Anything else is dropped and nothing else changes.
   if (coherent && !ok && !skipped && overlay_driver_stage(stage) && overlay_driver_cause(cause) && (cause == L"driver_failure" || reason == L"native_failure")) {
     result.Insert(L"stage", JsonValue::CreateStringValue(stage)); result.Insert(L"cause", JsonValue::CreateStringValue(cause));
+    if (uia) if (const auto detail = uia_failure_wire(*uia)) result.Insert(L"uia", *detail);
   }
   return result;
 }
 int run_overlay_driver(const OverlayDriverOptions& options, HANDLE input, HANDLE output) noexcept {
-  std::shared_ptr<Lifetime> life; std::unique_ptr<PipeFrameWriter> writer; OverlayDriverResult result; auto stage = OverlayDriverStage::dpi;
+  std::shared_ptr<Lifetime> life; std::unique_ptr<PipeFrameWriter> writer; OverlayDriverResult result; auto stage = OverlayDriverStage::dpi; std::optional<OverlayDriverUiaFailure> uia_failure;
   try {
     require((options.mode == OverlayDriverMode::stop || options.mode == OverlayDriverMode::launch_electron) && overlay_driver_hex(options.nonce), L"control_invalid");
     require(SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != nullptr, L"native_failure");
@@ -586,10 +625,10 @@ int run_overlay_driver(const OverlayDriverOptions& options, HANDLE input, HANDLE
     if (options.mode == OverlayDriverMode::stop) { require(GetFileType(input) == FILE_TYPE_PIPE && GetFileType(output) == FILE_TYPE_PIPE, L"control_invalid"); writer = std::make_unique<PipeFrameWriter>(output, life->stop.get(), [life] { life->revoked.store(true); }); }
     stage = OverlayDriverStage::files; const auto files = fixture_files();
     if (options.mode == OverlayDriverMode::launch_electron) { const auto status = launch_electron(options, life, files, output); SetEvent(life->stop.get()); return status; }
-    result = click_stop(options, life, files, input, *writer, stage);
+    result = click_stop(options, life, files, input, *writer, stage, uia_failure);
   } catch (...) {
     // Classification builds strings. If that itself throws, keep the former key-less native_failure.
-    try { result = overlay_driver_caught(options.mode, stage, std::current_exception()); } catch (...) { result = {false, false, L"native_failure"}; }
+    try { result = overlay_driver_caught(options.mode, stage, std::current_exception(), uia_failure); } catch (...) { result = {false, false, L"native_failure"}; }
   }
   if (writer) { if (!writer->write(result.wire())) result = {false, false, L"control_invalid"}; writer->cancel(); (void)writer->close(std::chrono::milliseconds(100)); }
   else if (options.mode == OverlayDriverMode::launch_electron) {

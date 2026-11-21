@@ -50,6 +50,11 @@ import { browserPaths, wipeBrowser } from "./wipe"
  *   GET  /v1/status    the session's state as hostd knows it
  *
  * It holds no credential. GitHub tokens for git are fetched per operation from the run-API host (git.ts).
+ *
+ * A download-only session (H1b): its heartbeat answers say `mode: "download"`. The mode comes only from the answers
+ * (boot.sh's arguments stay the two above), and nothing starts before the first one. hostd then starts no agent, no
+ * browser (nor its guard) and no recorder, and writes no viewer state; it packs the agent's disk (packWork) and uploads
+ * it (daemon.ts). The agent's socket stays up with no agent behind it; git steps are refused while no agent works.
  */
 
 export type BootArgs = { runHost: string; session: string }

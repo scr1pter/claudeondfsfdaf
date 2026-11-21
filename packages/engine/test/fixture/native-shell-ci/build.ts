@@ -11,6 +11,7 @@ import { bundleBrainWorker } from "../../../script/brain-worker"
 import { brainWorkerModule } from "../../../script/brain-worker-module"
 import { catalogBody } from "../../../script/release-catalog"
 import { allowed, unguardedBunReferences } from "../../../script/node-bundle-guard"
+import { jsoncESM, relativeRequires } from "./bundle"
 import {
   ACTIONS,
   CONTROL,
@@ -92,7 +93,7 @@ async function retain(entry: string, target: "node" | "bun", relative: string, e
     entrypoints: [entry],
     target,
     format: "esm",
-    plugins: [isolation],
+    plugins: [isolation, jsoncESM],
     external: ["@lydell/node-pty"],
     define,
     files,
@@ -122,6 +123,8 @@ async function retain(entry: string, target: "node" | "bun", relative: string, e
             (target === "bun" && item.path === "node-fetch"),
         ),
       )
+      // Nothing beside the installed program can satisfy a relative require that the scan above does not report.
+      need(relativeRequires(text).length === 0)
       imports.push({ path: path.relative(OUTPUT, destination), imports: scanned })
       if (relative.endsWith("native-shell-engine.js")) {
         for (const support of Object.keys(SUPPORT)) need(text.includes(JSON.stringify(`./${support}`)))

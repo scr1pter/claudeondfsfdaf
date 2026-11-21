@@ -21,17 +21,23 @@ import type { BrowserWindowConstructorOptions } from "electron"
 // - `liveView`: asks vectordev.ai for a live view link (a single-use, five-minute viewer token in the URL fragment) and
 //   opens it in the live view window: a sandboxed window with no preload and its own in-memory session that may only
 //   show the computer's own viewer page (`liveViewWindowOptions`, `liveViewStep`; Electron wiring in hosted-window.ts).
-// - `files`: asks for a session's files and, once they are packed, opens vectordev.ai's 24-hour download link in the
-//   browser.
+// - `files`: asks for a session's files and, once they are packed, opens vectordev.ai's download link in the browser
+//   (24 hours at most, never past the disks' deletion date: its `expiresAt` goes back to the screen).
 // - `open`: a job's pull request (Approve: the person merges it themselves, S9) or one of its recording's signed links,
 //   in the browser, each checked by its shape first.
+//
+// A download-only start for an ended plan's kept disk (H1c) is one of `request`'s shapes (`{kind: "download-start",
+// computer}`), sent with the account token like every request here (never a computer's run token, which vectordev.ai
+// refuses with 401); no IPC, preload or window was added for it.
 //
 // Requests are Vector Local's `cloud-computer` source (blocked under Vector Local), and so is the live view window.
 
 export type HostedResult =
   | { ok: true; body: Record<string, unknown> }
   | { ok: false; status?: number; code?: string; message: string }
-export type HostedActionResult = { ok: true; ready?: boolean } | { ok: false; status?: number; code?: string; message: string }
+export type HostedActionResult =
+  | { ok: true; ready?: boolean; expiresAt?: number }
+  | { ok: false; status?: number; code?: string; message: string }
 
 export type LiveViewTarget = { url: string; origin: string; mode: "view" | "control"; session: string }
 
@@ -132,7 +138,12 @@ export function createHostedClient(deps: Dependencies) {
     if (answer.body.ready !== true || !downloadLinkAllowed(answer.body.url, site))
       return { ok: false, message: "Vector could not open this download." }
     await deps.openExternal(answer.body.url as string)
-    return { ok: true, ready: true }
+    const expiresAt = answer.body.expiresAt
+    return {
+      ok: true,
+      ready: true,
+      ...(typeof expiresAt === "number" && Number.isSafeInteger(expiresAt) && expiresAt > 0 ? { expiresAt } : {}),
+    }
   }
 
   async function open(input: unknown): Promise<HostedActionResult> {

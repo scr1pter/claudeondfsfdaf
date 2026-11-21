@@ -294,7 +294,7 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Task sizing: how much harness, reasoning and verification each request gets." }),
   computer: Schema.optional(ConfigComputerV1.Info).annotate({
     description:
-      "Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must use a compatible Vector build that includes Hands. Company rules restrict access; they do not grant user consent.",
+      "Not available in Vector 1.99.112 or earlier, which rejects this key. Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must use a compatible Vector build that includes Hands. Company rules restrict access; they do not grant user consent.",
   }),
   local: Schema.optional(ConfigLocalV1.Info).annotate({
     description:
@@ -306,7 +306,7 @@ export const Info = Schema.Struct({
   }),
   connect: Schema.optional(ConfigConnectV1.Info).annotate({
     description:
-      "Connected tools preview. Reviews run on the models you choose; GitHub is optional. A repository can only turn automatic reviews down or lower their limits.",
+      "Not available in Vector 1.99.112 or earlier, which rejects this key. Connected tools preview. Reviews run on the models you choose; GitHub is optional. A repository can only turn automatic reviews down or lower their limits.",
   }),
   // VS-23d (SF-15): hidden until owner Q16. The published config.json leaves it out (engine script/schema.ts).
   review: Schema.optional(ConfigReviewV1.Info).annotate({

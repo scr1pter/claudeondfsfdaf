@@ -245,7 +245,9 @@ export async function listCloudRuns(
 /** Private completed-run provenance for explicit desktop data reads; never accepts a caller-selected thread. */
 export async function ownerCloudRun(account: string, rid: string, store = persistentStore) {
   if (!Schema.is(Account)(account) || !RID.test(rid)) throw invalidRequest()
-  const record = Option.getOrUndefined(decodeRecord(fields(await command(["HGETALL", runRecordKey(rid)], store))))
+  const record = Option.getOrUndefined(
+    decodeRecord(fields(await command(["EVAL", RECORD, "1", runRecordKey(rid)], store))),
+  )
   if (
     !record ||
     record.account !== account ||
@@ -443,6 +445,9 @@ function unavailable() {
   return new ApiError(503, "PERSISTENT_STORE_UNAVAILABLE", "Run records are temporarily unavailable.")
 }
 
+// HGETALL inside a script, so the reply is a flat array on every protocol: a RESP3 client answers a bare HGETALL with a
+// map, which `fields` refuses (as `cloud-agents-binding.ts` READ does; deviations, "2026-11-16 BT09").
+const RECORD = `return redis.call('HGETALL', KEYS[1])`
 const TYPES = `
 local function kind(key) return redis.call('TYPE', key).ok end
 local function permits(key, expected) local got = kind(key); return got == 'none' or got == expected end

@@ -1,11 +1,14 @@
 #pragma once
 #include "windows_enum.h"
 #include <array>
+#include <cstdint>
 #include <exception>
+#include <optional>
 #include <string_view>
 
 namespace vector::computer {
 enum class WindowsUiaPhase : uint8_t;
+enum class WindowsUiaExpiry : uint8_t;
 enum class InputGuardianPhase : uint8_t;
 enum class OverlayDriverMode { stop, launch_electron };
 struct OverlayDriverOptions {
@@ -56,9 +59,11 @@ enum class OverlayDriverStage : uint8_t {
   uia_root_pid, uia_hit_setup, uia_hit_loop, uia_hit_cycle, uia_hit_pid, uia_hit_equal, uia_hit_depth, uia_hit_children, uia_hit_enqueue, uia_hit_queue_limit, uia_hit_ambiguous, uia_hit_empty, uia_hit_end, uia_children_limit, uia_children_first, uia_children_loop, uia_children_capacity, uia_children_wrap, uia_children_append, uia_children_next, uia_children_sibling_failed, uia_children_compare, uia_children_cycle, uia_children_end, uia_parent_read, uia_parent_wrap,
   uia_actor_current, uia_actor_current_budget, uia_actor_complete, uia_actor_expired, uia_actor_cancelled,
   uia_actor_revoked, uia_actor_com_uninitialized, uia_actor_com_cancellation_unavailable, uia_actor_com_timer_unavailable, uia_actor_com_expired,
-  probe_mode, probe_move, guardian_observe_reply_negative_low32_tag_candidate
+  probe_mode, probe_move, guardian_observe_reply_negative_low32_tag_candidate,
+  guardian_observe_reply_negative_up_not_released, guardian_observe_reply_negative_up_release_blocked, guardian_observe_reply_negative_up_release_blocked_callbacks, guardian_observe_reply_negative_up_release_refused,
+  guardian_observe_reply_negative_up_release_slow, guardian_observe_reply_negative_up_release_slow_callbacks, guardian_observe_reply_negative_up_pump_stalled, guardian_observe_reply_negative_up_callbacks_without_up, guardian_observe_reply_negative_up_no_callback
 };
-inline constexpr std::array<std::wstring_view, 172> overlay_driver_stages{
+inline constexpr std::array<std::wstring_view, 181> overlay_driver_stages{
   L"dpi", L"parent", L"files", L"observe-parent", L"observe-bootstrap", L"isolation",
   L"token", L"desktop", L"ready-write", L"envelope-read", L"envelope-shape", L"request",
   L"foreground", L"guardian-create", L"backend-create", L"uia-create", L"uia-available", L"window-observe",
@@ -88,17 +93,37 @@ inline constexpr std::array<std::wstring_view, 172> overlay_driver_stages{
   L"uia-root-pid", L"uia-hit-setup", L"uia-hit-loop", L"uia-hit-cycle", L"uia-hit-pid", L"uia-hit-equal", L"uia-hit-depth", L"uia-hit-children", L"uia-hit-enqueue", L"uia-hit-queue-limit", L"uia-hit-ambiguous", L"uia-hit-empty", L"uia-hit-end", L"uia-children-limit", L"uia-children-first", L"uia-children-loop", L"uia-children-capacity", L"uia-children-wrap", L"uia-children-append", L"uia-children-next", L"uia-children-sibling-failed", L"uia-children-compare", L"uia-children-cycle", L"uia-children-end", L"uia-parent-read", L"uia-parent-wrap",
   L"uia-actor-current", L"uia-actor-current-budget", L"uia-actor-complete", L"uia-actor-expired", L"uia-actor-cancelled",
   L"uia-actor-revoked", L"uia-actor-com-uninitialized", L"uia-actor-com-cancellation-unavailable", L"uia-actor-com-timer-unavailable", L"uia-actor-com-expired",
-  L"probe-mode", L"probe-move", L"guardian-observe-reply-negative-low32-tag-candidate"
+  L"probe-mode", L"probe-move", L"guardian-observe-reply-negative-low32-tag-candidate",
+  L"guardian-observe-reply-negative-up-not-released", L"guardian-observe-reply-negative-up-release-blocked", L"guardian-observe-reply-negative-up-release-blocked-callbacks", L"guardian-observe-reply-negative-up-release-refused",
+  L"guardian-observe-reply-negative-up-release-slow", L"guardian-observe-reply-negative-up-release-slow-callbacks", L"guardian-observe-reply-negative-up-pump-stalled", L"guardian-observe-reply-negative-up-callbacks-without-up", L"guardian-observe-reply-negative-up-no-callback"
 };
-static_assert(overlay_driver_stages.size() == static_cast<size_t>(OverlayDriverStage::guardian_observe_reply_negative_low32_tag_candidate) + 1);
+static_assert(overlay_driver_stages.size() == static_cast<size_t>(OverlayDriverStage::guardian_observe_reply_negative_up_no_callback) + 1);
 // HRESULTs are reported only as one of these buckets, never as a value.
 inline constexpr std::array<std::wstring_view, 5> overlay_driver_hresult_classes{L"access_denied", L"rpc", L"not_found", L"timeout", L"other"};
+// Closed facts of a failed Stop UIA lookup, sampled in observe_stop's catch before cleanup: which lookup
+// (the first observation or the refresh before DOWN), which call (root or hit), whether the actor was
+// still healthy, which side first saw a ticket expire, and the root element HRESULT as one of
+// overlay_driver_hresult_classes, or unobserved.
+enum class OverlayDriverLookup : uint8_t { first, refresh };
+inline constexpr std::array<std::wstring_view, 2> overlay_driver_lookups{L"first", L"refresh"};
+enum class OverlayDriverUiaCall : uint8_t { root, hit };
+inline constexpr std::array<std::wstring_view, 2> overlay_driver_uia_calls{L"root", L"hit"};
+inline constexpr std::array<std::wstring_view, 2> overlay_driver_uia_actors{L"healthy", L"retired"};
+struct OverlayDriverUiaFailure {
+  OverlayDriverLookup lookup{};
+  OverlayDriverUiaCall call{};
+  bool available = false;
+  WindowsUiaExpiry expiry{};
+  std::optional<int32_t> status;
+};
 struct OverlayDriverResult {
   bool ok = false, skipped = false;
   std::wstring reason;
   // Closed failure-only stop diagnostics; wire() emits both or neither, only for a coherent unskipped
   // failure. Never text, paths, HRESULT values, titles or ids. They never change ok, skip, reason or exit.
   std::wstring stage, cause;
+  // Emitted only beside stage and cause, and only when every fact is in range and coherent.
+  std::optional<OverlayDriverUiaFailure> uia;
   int exit_code() const noexcept;
   JsonObject wire() const;
 };
@@ -124,7 +149,7 @@ std::optional<OverlayDriverStage> overlay_driver_guardian_stage(InputGuardianPha
 bool overlay_driver_cause(std::wstring_view) noexcept;
 std::wstring_view overlay_driver_hresult_class(HRESULT) noexcept;
 // Keeps the driver's ok/skip/reason mapping exactly; only stop mode gains the closed stage and cause.
-OverlayDriverResult overlay_driver_caught(OverlayDriverMode, OverlayDriverStage, std::exception_ptr);
+OverlayDriverResult overlay_driver_caught(OverlayDriverMode, OverlayDriverStage, std::exception_ptr, std::optional<OverlayDriverUiaFailure> = {});
 int run_overlay_driver(const OverlayDriverOptions&, HANDLE input, HANDLE output) noexcept;
 size_t run_overlay_driver_tests();
 }

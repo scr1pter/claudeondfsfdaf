@@ -192,10 +192,10 @@ function Signed(props: {
     await remote.signOut().catch(() => undefined)
     props.onSignOut()
   }
-  const [status, { refetch }] = createResource(
+  const [status, { refetch }] = createResource<PhoneStatus, PhoneSession>(
     () => props.session,
-    (session) =>
-      readPhoneStatus(session).catch((cause: { status?: number; message?: string }) => {
+    (session, info) =>
+      readPhoneStatus(session, fetch, info.value).catch((cause: { status?: number; message?: string }) => {
         if (cause?.status === 401) props.onExpired()
         throw cause
       }),

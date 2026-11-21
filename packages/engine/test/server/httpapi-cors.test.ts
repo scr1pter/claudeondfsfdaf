@@ -107,9 +107,11 @@ describe("HttpApi CORS", () => {
         (listener) => Effect.promise(() => listener.stop(true)),
       )
 
+      // Server.listen prefers port 4096, so a pooled keep-alive socket from an earlier test's server could swallow a request.
       const response = yield* Effect.promise(() =>
         fetch(new URL(InstancePaths.path, listener.url), {
           method: "OPTIONS",
+          keepalive: false,
           headers: {
             origin: "https://custom.example",
             "access-control-request-method": "GET",
@@ -125,6 +127,7 @@ describe("HttpApi CORS", () => {
       const rejected = yield* Effect.promise(() =>
         fetch(new URL(InstancePaths.path, listener.url), {
           method: "OPTIONS",
+          keepalive: false,
           headers: {
             origin: "https://evil.example",
             "access-control-request-method": "GET",

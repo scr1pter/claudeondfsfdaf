@@ -25,6 +25,7 @@ import { githubApp, type createGithubApp } from "./github-app.js"
 import { githubApiVersion, githubId, githubRecord, githubResponseBytes, githubUnavailable } from "./github-http.js"
 import { consumeGithubOidc, verifyGithubOidc, type GithubIdentity } from "./github-oidc.js"
 import { ApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
+import { cloudAgentsEnabled, modelPlansEnabled } from "./model-plan-config.js"
 import { persistentStore } from "./persistent-store.js"
 import { requireUnrevokedAccount } from "./revocation.js"
 import { cloudRunArtifactKey } from "./cloud-agents-artifact.js"
@@ -490,6 +491,13 @@ export function createCloudAgentsApi(
       windowSeconds: 3600,
       requirePersistent: true,
     })
+    // Brain history (V27): an owner-desktop run is the only run that can obtain Brain context, so it never holds the
+    // ordinary conversation key, whichever key it asks for first (deviations, "2026-11-15 BT03").
+    const live = await liveRun(claims.sub, claims.rid, store)
+    if (!live || live.jti !== claims.jti)
+      throw new ApiError(401, "MODEL_PLAN_RUN_EXPIRED", "This run is no longer authorized.")
+    if (live.triggerSource === "desktop")
+      throw new ApiError(403, "ARTIFACT_KEY_NOT_ALLOWED", "This conversation key is not available to this run.")
     json(response, 200, cloudRunArtifactKey(claims))
   }
 
@@ -605,6 +613,14 @@ function needsDefaultBranch() {
   return new ApiError(409, "BIND_NEEDS_DEFAULT_BRANCH", "Connect this repository from its default branch.")
 }
 
+function codiumOff() {
+  return new ApiError(503, "MODEL_PLANS_DISABLED", "Cloud agents are unavailable.")
+}
+
+function serviceOff() {
+  return new ApiError(503, "CLOUD_AGENTS_UNAVAILABLE", "Cloud agents are unavailable.")
+}
+
 function storeUnavailable() {
   return new ApiError(503, "PERSISTENT_STORE_UNAVAILABLE", "Repository connections are temporarily unavailable.")
 }
@@ -623,7 +639,10 @@ function safe(handler: (request: ApiRequest, response: ApiResponse) => Promise<v
   return async (request: ApiRequest, response: ApiResponse) => {
     response.setHeader("x-content-type-options", "nosniff")
     response.setHeader("referrer-policy", "no-referrer")
-    await handler(request, response).catch((error: unknown) => {
+    // Checked before the handler runs: rate limits, OIDC replay marks and revocation reads all touch the store. Codium
+    // being off keeps its own code, which the CLI shows as the service being off; the GitHub switch alone is generic.
+    const off = !modelPlansEnabled() ? codiumOff() : !cloudAgentsEnabled() ? serviceOff() : undefined
+    await (off ? Promise.reject(off) : handler(request, response)).catch((error: unknown) => {
       if (!request.readableEnded) response.setHeader("connection", "close")
       request.resume()
       const known = error instanceof ApiError ? error : undefined

@@ -16,7 +16,21 @@ on:
       - codium-legal
       - codium-113
       - codium-113/**
+  # A dispatch from a branch cut from an unmerged integration branch names that branch as its base, so the picker
+  # compares with it instead of main, and may name a few more browser specs to run. The values reach the picker only as
+  # step environment and the picker checks them; pushes leave both empty.
   workflow_dispatch:
+    inputs:
+      base:
+        description: "Remote branch the test picker compares with, such as origin/release-finish (empty: origin/main)"
+        required: false
+        default: ""
+        type: string
+      browser_specs:
+        description: "Up to 10 more app browser specs, space-separated (packages/app/e2e/regression/race.spec.ts)"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: vector-codium-${{ github.ref }}
@@ -85,9 +99,15 @@ jobs:
         run: ${{ matrix.command }}
 
   tests:
-    name: Codium tests
+    name: Codium tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # An integration branch selects hundreds of changed test files (667 on release-finish), more than one job runs in
+    # its 40-minute step (Vector Codium run 43631064967 stopped at file 473). Each shard runs every fourth file.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -115,7 +135,8 @@ jobs:
       run:
         shell: bash
     steps:
-      # The whole history, so the test picker can find what the branch changed since it left main.
+      # The whole history, so the test picker can find what the branch changed since it left main or the dispatch's
+      # base.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
@@ -157,23 +178,26 @@ jobs:
         run: bun run build:phone
 
       # The hosted API suite in test/, every test whose path names Codium, and every test file this branch added or
-      # changed since main, one Bun process per file (packages/cloud/src/codium-ci-tests.ts).
+      # changed since main (or since the dispatch's base), one Bun process per file, this shard's share of them
+      # (packages/cloud/src/codium-ci-tests.ts).
       - name: Run the Codium test files
         timeout-minutes: 40
         env:
+          CODIUM_CI_BASE: ${{ inputs.base }}
           VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
           VECTOR_TEST_POSTGRES_URL: postgres://vector_fixture:fixture-only@127.0.0.1:5432/vector_shares_test
           VECTOR_TEST_TEAMS_POSTGRES_URL: postgres://vector_fixture:fixture-only@127.0.0.1:5432/vector_teams_test
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
-        run: GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts
+        run: GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts --shard=${{ matrix.shard }}/4
 
+      # The exerciser and the generated client do not depend on the shard, so the first shard alone runs them.
       - name: Run HttpApi exerciser gates
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         working-directory: packages/engine
         run: bun run test:httpapi
 
       - name: Check generated client
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         working-directory: packages/client
         run: bun run check:generated
 
@@ -210,9 +234,13 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
-      # Specs in packages/app/e2e whose path names Codium, and specs this branch added or changed since main.
+      # Specs in packages/app/e2e whose path names Codium, specs this branch added or changed since main (or since the
+      # dispatch's base), and the specs a dispatch names. The picker refuses a bad input, which fails this step.
       - name: Select the Codium browser specs
         id: select
+        env:
+          CODIUM_CI_BASE: ${{ inputs.base }}
+          CODIUM_CI_BROWSER_SPECS: ${{ inputs.browser_specs }}
         run: |
           set -euo pipefail
           specs=$(bun packages/cloud/src/codium-ci-tests.ts --browser --list)
@@ -251,6 +279,8 @@ jobs:
           CI: true
           # Five browser workers stalled asset loading on hosted runners; keep test deadlines intact.
           PLAYWRIGHT_WORKERS: "1"
+          CODIUM_CI_BASE: ${{ inputs.base }}
+          CODIUM_CI_BROWSER_SPECS: ${{ inputs.browser_specs }}
         run: bun packages/cloud/src/codium-ci-tests.ts --browser
 
       # The app's specs run against fixtures only, so their traces hold no credentials.

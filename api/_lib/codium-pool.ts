@@ -232,16 +232,56 @@ const growTtl = (key: string, ms: string) =>
   `if redis.call('PTTL', ${key}) < tonumber(${ms}) then redis.call('PEXPIRE', ${key}, ${ms}) end `
 
 /**
+ * The reasons a plan ends with its final period paid and kept (H1a): the subscription was canceled, or its renewal was
+ * never collected (failed, needed the person's action, or stayed pending). Only these let a download-only start hold
+ * its one block from that final period. A refund, a lost dispute, a fraud warning or an end by Vector reversed or
+ * closed that period, and an account being deleted spends nothing. The TypeScript classifier (hosted-entitlement.ts)
+ * and HOLD's final fence below read this one list.
+ */
+export const FINAL_PERIOD_REASONS = ["canceled", "payment_failed", "action_required", "payment_pending"] as const
+
+/**
+ * The final fence (H1a): `model_pool_fence`'s record, risk, genesis and pool checks, for the final period of an ended
+ * plan. The snapshot must be that plan, ended (with no reason or one of `FINAL_PERIOD_REASONS`) on the key's own
+ * subscription; a revoked key and a period that has passed are allowed, since an ended plan's key is always both.
+ * ADMIT never reads it: no model request is ever priced against an ended plan.
+ */
+const FINAL_FENCE_LUA = `
+local final_reasons = {${FINAL_PERIOD_REASONS.map((reason) => `${reason}=true`).join(", ")}}
+local function model_final_fence(accountKey, entKey, f, spend)
+  if type(f) ~= 'table' or type(f.accountRecord) ~= 'string' or not integer(f.now) or not integer(f.start) or not integer(f['end']) or not integer(f.totalMicro) or not typed(accountKey, 'string') or not typed(entKey, 'string') then return 'unavailable' end
+  if redis.call('GET', accountKey) ~= f.accountRecord then return 'stale' end
+  local account = object(f.accountRecord)
+  local key = account and account.key
+  if type(key) ~= 'table' then return 'unavailable' end
+  local risk = account.risk
+  if account.closing or account.upgrade or account.keyCreation or account.transition or (account.ownerEnd and not account.ownerEnd.done) or key.provisioning or (risk and (type(risk) ~= 'table' or risk.blocked ~= false or type(risk.openDisputes) ~= 'table' or next(risk.openDisputes) ~= nil or type(risk.efw) ~= 'table' or next(risk.efw) ~= nil)) then return 'stale' end
+  local carry = key.carry
+  local total = plus(integer(key.creditsMicro), carry == nil and 0 or (type(carry) == 'table' and integer(carry.micro) or nil))
+  local proof = key.spendGenesis
+  if type(proof) ~= 'table' or proof.state ~= 'ready' or proof.nonce ~= spend.genesis.creation or key.hash ~= f.pool or key.subscription ~= f.subscription or key.start ~= f.start or key['end'] ~= f['end'] or spend.genesis.subscription ~= f.subscription or spend.genesis.start ~= f.start or spend.genesis['end'] ~= f['end'] or not total or total ~= f.totalMicro then return 'unavailable' end
+  local snapshot = object(redis.call('GET', entKey))
+  if not snapshot then return 'stale' end
+  if snapshot.v ~= 1 or snapshot.account ~= f.account or snapshot.livemode ~= f.livemode then return 'unavailable' end
+  if snapshot.state ~= 'ended' or snapshot.subscription ~= f.subscription or (f.version ~= nil and snapshot.version ~= f.version) or (snapshot.reason ~= nil and not final_reasons[snapshot.reason]) then return 'stale' end
+  return nil, snapshot
+end
+`
+
+/**
  * HOLD. The common hold for hosted blocks and every other pool charge (§4.7 `holdPool`). ARGV[1] is one JSON payload:
  * the member, its amount, deadline and set lifetime, an optional run, the observed provider usage, and the fence (the
  * private account record, key, period and snapshot the caller priced against). In one step it applies the same fence
  * and the same floor as model ADMIT (codium-spend-ledger.ts), so a hold observed before a key replacement, an upgrade
  * intent or a new period can never land after the source balances were read, and a lagging usage figure or an
- * abandoned model reservation can never be spent twice. Answers 'ok', 'monthly', 'stale', 'runexpired' or
- * 'unavailable'; every refusal is decided before the first write.
+ * abandoned model reservation can never be spent twice. A fence marked `final` (H1a: a download-only start's block,
+ * purpose hosted, no run) is checked by the final fence instead, against an ended plan's final period; the floor and
+ * the writes are the same. Answers 'ok', 'monthly', 'stale', 'runexpired' or 'unavailable'; every refusal is decided
+ * before the first write.
  */
 const HOLD =
   MODEL_SPEND_LUA +
+  FINAL_FENCE_LUA +
   `
 local p = object(ARGV[1])
 if not p or type(p.fence) ~= 'table' or not integer(p.now) or p.fence.now ~= p.now or p.fence.pool ~= p.pool or p.fence.account ~= p.account or not integer(p.required) or p.required == 0 or not integer(p.deadline) or p.deadline <= p.now or not integer(p.ttl) or p.ttl == 0 or not integer(p.observedMicro) or type(p.member) ~= 'string' or (p.run ~= nil and type(p.run) ~= 'string') then return 'unavailable' end
@@ -249,7 +289,10 @@ local parsed = member(p.member)
 if not parsed or parsed.micro ~= p.required or parsed.run ~= (p.run or '-') then return 'unavailable' end
 local spend = model_spend_read(KEYS[3], KEYS[4], KEYS[1], KEYS[2], p.now, p.account, p.pool)
 if not spend or spend.records[parsed.ticket] then return 'unavailable' end
-local refusal = model_pool_fence(KEYS[6], KEYS[7], p.fence, spend)
+local final = p.fence.final
+if final ~= nil and (final ~= true or parsed.purpose ~= 'hosted' or p.run ~= nil) then return 'unavailable' end
+local refusal
+if final then refusal = model_final_fence(KEYS[6], KEYS[7], p.fence, spend) else refusal = model_pool_fence(KEYS[6], KEYS[7], p.fence, spend) end
 if refusal then return refusal end
 if p.run and not model_run_pool(KEYS[5], p.pool) then return 'runexpired' end
 local burden = plus(plus(plus(math.max(p.observedMicro, spend.committed), spend.reserved), spend.nonmodelHeld), spend.applied)
@@ -325,7 +368,7 @@ export type PoolFunding = {
 /** What the shared Lua fence compares: the observed private record and pool, at `now` (both scripts, one shape). */
 export function poolFence(
   funding: PoolFunding,
-  at: { account: string; now: number; version?: number },
+  at: { account: string; now: number; version?: number; final?: true },
 ) {
   return {
     account: at.account,
@@ -339,6 +382,7 @@ export function poolFence(
     graceMs: renewalGraceMinutes() * 60_000,
     now: at.now,
     ...(at.version === undefined ? {} : { version: at.version }),
+    ...(at.final ? { final: true } : {}),
   }
 }
 
@@ -359,6 +403,8 @@ export async function placeHold(
     now: number
     /** The snapshot version the caller's decisions used; omitted, the fence checks the live snapshot's state only. */
     version?: number
+    /** Priced against an ended plan's final period (H1a's download-only block): HOLD's final fence decides. */
+    final?: true
   },
   fetcher: typeof fetch = fetch,
 ): Promise<PoolTicket | undefined> {
@@ -402,7 +448,12 @@ export async function placeHold(
         ttl: input.ttlMs,
         observedMicro,
         ...(input.run === undefined ? {} : { run: input.run }),
-        fence: poolFence(input.funding, { account: input.account, now: input.now, version: input.version }),
+        fence: poolFence(input.funding, {
+          account: input.account,
+          now: input.now,
+          version: input.version,
+          ...(input.final ? { final: true } : {}),
+        }),
       }),
     ],
     fetcher,

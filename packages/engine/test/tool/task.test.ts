@@ -6325,6 +6325,46 @@ describe("task isolation saves", () => {
   const HOLD = "Hold until the test releases you."
   const held = (input: SessionPrompt.PromptInput) =>
     input.parts.some((part) => part.type === "text" && part.text.includes(HOLD))
+  // Waits for a run's record to reach a state: settling once its save starts, changed once it is saved. A timeout says
+  // how far the child got: its record, attempt and saved error, its job, its assignment and whether it has a place, so
+  // a stall in the checkout's preparation, the slot admission, the run, the job's completion or a failed save can be
+  // told apart. Engine (windows) job 136057825288 timed out waiting for changed with nothing to show which.
+  const reached = (child: SessionID, state: string, message: string) =>
+    Effect.gen(function* () {
+      const isolation = yield* TaskIsolation.Service
+      const jobs = yield* BackgroundJob.Service
+      const sessions = yield* Session.Service
+      yield* pollWithTimeout(
+        isolation.find(child).pipe(Effect.map((record) => (record?.state === state ? true : undefined))),
+        message,
+        ISOLATED,
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            // A failed lookup must not replace the timeout, so each one falls back to "missing".
+            const record = yield* isolation.find(child).pipe(Effect.orElseSucceed(() => undefined))
+            const job = yield* jobs.get(child).pipe(Effect.orElseSucceed(() => undefined))
+            const session = yield* sessions.get(child).pipe(Effect.orElseSucceed(() => undefined))
+            const assignment = session ? SubagentLifecycle.read(session) : undefined
+            const saved = record
+              ? `${record.state}, attempt ${record.attempt}, settled ${record.settledAttempt ?? "none"}${record.error ? `, error ${JSON.stringify(record.error)}` : ""}`
+              : "missing"
+            const ran = job ? `${job.status}${job.error ? `, error ${JSON.stringify(job.error)}` : ""}` : "missing"
+            const assigned = assignment
+              ? `${assignment.status}, attempt ${assignment.attempt ?? "none"}${assignment.slotReason ? `, ${assignment.slotReason}` : ""}`
+              : session
+                ? "unreadable"
+                : "missing"
+            return yield* Effect.fail(
+              new Error(
+                `${error.message} (record ${saved}; job ${ran}; child ${assigned}; place ${TaskPlace.get(child) ? "set" : "none"})`,
+              ),
+            )
+          }),
+        ),
+      )
+    })
+  const saveStarted = (child: SessionID) => reached(child, "settling", "the isolated save never started")
 
   background.instance(
     "a held save leaves the control lock free and finishes once Git answers",
@@ -6337,7 +6377,6 @@ describe("task isolation saves", () => {
         yield* Effect.addFinalizer(() => Effect.sync(() => (commitGate.current = undefined)))
         const seeded = yield* seed("Held save")
         const sessions = yield* Session.Service
-        const isolation = yield* TaskIsolation.Service
         const definition = yield* (yield* TaskTool).init()
         yield* definition.execute(
           brief,
@@ -6350,19 +6389,11 @@ describe("task isolation saves", () => {
         const child = (yield* sessions.children(seeded.chat.id))[0]
         yield* Effect.addFinalizer(() => cleanup(child.id))
         // The run finished and its save is waiting on the commit.
-        yield* pollWithTimeout(
-          isolation.find(child.id).pipe(Effect.map((record) => (record?.state === "settling" ? true : undefined))),
-          "the isolated save never started",
-          ISOLATED,
-        )
+        yield* saveStarted(child.id)
         // Other task controls are not held behind Git.
         yield* SubagentLifecycle.locked(SubagentLifecycle.controlLock)(Effect.void).pipe(Effect.timeout("2 seconds"))
         yield* Deferred.succeed(gate, undefined)
-        yield* pollWithTimeout(
-          isolation.find(child.id).pipe(Effect.map((record) => (record?.state === "changed" ? true : undefined))),
-          "the isolated save never finished",
-          ISOLATED,
-        )
+        yield* reached(child.id, "changed", "the isolated save never finished")
         expect(SubagentLifecycle.read(yield* sessions.get(child.id))?.isolation).toMatchObject({ state: "changed" })
       }),
     { git: true },
@@ -6416,11 +6447,7 @@ describe("task isolation saves", () => {
         expect((yield* isolation.get(child)).attempt).toBe(1)
         yield* Deferred.succeed(release, undefined)
         expect((yield* jobs.wait({ id: child })).info?.status).toBe("completed")
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "changed" ? true : undefined))),
-          "the joined run's save never finished",
-          ISOLATED,
-        )
+        yield* reached(child, "changed", "the joined run's save never finished")
         expect((yield* isolation.get(child)).attempt).toBe(1)
       }),
     { git: true },
@@ -6471,11 +6498,7 @@ describe("task isolation saves", () => {
           .pipe(Effect.exit)
         expect(Exit.isFailure(resumed) ? Cause.pretty(resumed.cause) : "").toContain("saving its changes")
         yield* Deferred.succeed(gate, undefined)
-        yield* pollWithTimeout(
-          isolation.find(child.id).pipe(Effect.map((record) => (record?.state === "changed" ? true : undefined))),
-          "the forked save never finished",
-          ISOLATED,
-        )
+        yield* reached(child.id, "changed", "the forked save never finished")
       }),
     { git: true },
   )
@@ -6584,11 +6607,7 @@ describe("task isolation saves", () => {
         yield* awaitWithTimeout(Deferred.await(asking), "the message never reached its approval")
         // Meanwhile the run ends and its save starts, held at the commit.
         yield* Deferred.succeed(release, undefined)
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "settling" ? true : undefined))),
-          "the isolated save never started",
-          ISOLATED,
-        )
+        yield* saveStarted(child)
         yield* Deferred.succeed(proceed, undefined)
         const exit = yield* Fiber.join(late).pipe(Effect.timeout("5 seconds"))
         expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("saving its changes")
@@ -6596,11 +6615,7 @@ describe("task isolation saves", () => {
         yield* SubagentLifecycle.locked(SubagentLifecycle.controlLock)(Effect.void).pipe(Effect.timeout("2 seconds"))
         expect(placements).toHaveLength(1)
         yield* Deferred.succeed(gate, undefined)
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "changed" ? true : undefined))),
-          "the isolated save never finished",
-          ISOLATED,
-        )
+        yield* reached(child, "changed", "the isolated save never finished")
         expect((yield* isolation.get(child)).attempt).toBe(1)
       }),
     { git: true },
@@ -6920,11 +6935,7 @@ describe("task isolation saves", () => {
         const child = (yield* sessions.children(seeded.chat.id))[0].id
         yield* Effect.addFinalizer(() => cleanup(child))
         expect((yield* jobs.wait({ id: child })).info?.status).toBe("completed")
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "changed" ? true : undefined))),
-          "the first run's save never finished",
-          ISOLATED,
-        )
+        yield* reached(child, "changed", "the first run's save never finished")
         // The first run's note follows its save after the quiet window. On hosted Windows the resume below starts later
         // than that, so the note comes first there; waiting for it gives every host that order.
         yield* pollWithTimeout(
@@ -7032,7 +7043,6 @@ describe("task isolation saves", () => {
         )
         const seeded = yield* seed("Stopped parent")
         const sessions = yield* Session.Service
-        const isolation = yield* TaskIsolation.Service
         const def = yield* singleTaskDefinition(yield* TaskTool)
         const context = taskContext({
           sessionID: seeded.chat.id,
@@ -7046,19 +7056,11 @@ describe("task isolation saves", () => {
         )
         yield* Effect.addFinalizer(() => cleanup(child))
         // The child's run returned; its save waits on the held commit, and the call waits for the save.
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "settling" ? true : undefined))),
-          "the isolated save never started",
-          ISOLATED,
-        )
+        yield* saveStarted(child)
         // The parent's Stop interrupts the call. Its release stops the child, which had already ended on its own.
         yield* Fiber.interrupt(call).pipe(Effect.timeout("5 seconds"))
         yield* Deferred.succeed(gate, undefined)
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "changed" ? true : undefined))),
-          "the save never finished after the Stop",
-          ISOLATED,
-        )
+        yield* reached(child, "changed", "the save never finished after the Stop")
       }),
     { git: true },
   )

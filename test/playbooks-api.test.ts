@@ -11,6 +11,7 @@ import {
   playbooksKey,
   playbooksReady,
   publishPlan,
+  readPlaybook,
   readPlaybooks,
   type PlaybookRecord,
 } from "../api/_lib/playbooks"
@@ -27,6 +28,7 @@ import { invoke, jsonHeaders } from "./support-reports-fixture"
 // store is the roadmap vote's fake (Upstash REST commands) and the bucket a fake R2 that keeps what is uploaded; no
 // request leaves this process.
 
+const HOUR = 3_600_000
 const DAY = 86_400_000
 const NOW = Date.UTC(2026, 10, 15, 12)
 const R2_ACCOUNT = "0123456789abcdef0123456789abcdef"
@@ -109,7 +111,13 @@ afterEach(() => restore())
 const token = (account: string) =>
   mintCliToken({ id: account, email: `${account}@example.invalid` }, Date.now(), "desktop").token
 
-function seedPlan(account: string, plan: PlanId | null, state: SnapshotFacts["state"] = "active", now = NOW) {
+function seedPlan(
+  account: string,
+  plan: PlanId | null,
+  state: SnapshotFacts["state"] = "active",
+  now = NOW,
+  periodEnd = state === "renewing" ? now - 60_000 : now + 29 * DAY,
+) {
   const reason =
     state === "paused"
       ? ("payment_failed" as const)
@@ -126,7 +134,7 @@ function seedPlan(account: string, plan: PlanId | null, state: SnapshotFacts["st
       plan,
       ...(plan ? { subscription: `sub_${account.slice(-4)}` } : {}),
       periodStart: state === "renewing" ? now - 30 * DAY : now - DAY,
-      periodEnd: state === "renewing" ? now - 60_000 : now + 29 * DAY,
+      periodEnd,
       cancelAtPeriodEnd: false,
       source: "webhook",
     },
@@ -166,6 +174,17 @@ function playbooks(
 
 const link = (name: string, version: string, mode: "test" | "live" = "test") =>
   presignR2("media", { method: "GET", key: playbookObjectKey(name, version, mode), expiresIn: 600, now: NOW }).url
+
+/** A well-formed test-store record for `name` at `version`, as the publish script writes it. */
+const record = (name: string, version: string): PlaybookRecord => ({
+  v: 1,
+  name,
+  version,
+  sha256: "d".repeat(64),
+  bytes: 10,
+  key: playbookObjectKey(name, version, "test"),
+  publishedAt: NOW,
+})
 
 describe("dark until Track B lists Playbooks", () => {
   test("listed, Pro gets the library; every reason it is not listed answers 404 to everyone, before any sign-in", async () => {
@@ -285,19 +304,48 @@ describe("downloads (S1, S3, M4)", () => {
 
   test("the server refuses Plus, no plan, and a paused, frozen or ended plan (S1)", async () => {
     await publishTwo()
-    const cases: [string, PlanId | null, SnapshotFacts["state"], number, string, Record<string, unknown>?][] = [
+    // Each refusal's detail is exactly the contract's (§4.10), so nothing else rides along in the error body.
+    const cases: [string, PlanId | null, SnapshotFacts["state"], number, string, Record<string, unknown>, number?][] = [
       [PLUS, "vector-10", "active", 403, "CODIUM_PERK_REQUIRED", { perk: "playbooks", plan: "vector-50" }],
-      ["2b3c4d5e-0000-4000-8000-000000000011", null, "none", 402, "MODEL_PLAN_REQUIRED"],
-      ["2b3c4d5e-0000-4000-8000-000000000012", "vector-50", "paused", 402, "MODEL_PLAN_PAYMENT_REQUIRED"],
-      ["2b3c4d5e-0000-4000-8000-000000000013", "vector-200", "frozen", 403, "MODEL_PLAN_BLOCKED"],
-      ["2b3c4d5e-0000-4000-8000-000000000014", "vector-100", "ended", 402, "MODEL_PLAN_REQUIRED"],
+      ["2b3c4d5e-0000-4000-8000-000000000011", null, "none", 402, "MODEL_PLAN_REQUIRED", {}],
+      [
+        "2b3c4d5e-0000-4000-8000-000000000012",
+        "vector-50",
+        "paused",
+        402,
+        "MODEL_PLAN_PAYMENT_REQUIRED",
+        { reason: "payment_failed", action: "update-card" },
+      ],
+      [
+        "2b3c4d5e-0000-4000-8000-000000000013",
+        "vector-200",
+        "frozen",
+        403,
+        "MODEL_PLAN_BLOCKED",
+        { reason: "disputed" },
+      ],
+      [
+        "2b3c4d5e-0000-4000-8000-000000000014",
+        "vector-100",
+        "ended",
+        402,
+        "MODEL_PLAN_REQUIRED",
+        { reason: "canceled" },
+      ],
+      // A renewal whose grace (120 minutes by default) ran out before reconcile caught up: the shared 503.
+      ["2b3c4d5e-0000-4000-8000-000000000015", "vector-50", "renewing", 503, "MODEL_PLAN_RENEWING", {}, NOW - 3 * HOUR],
     ]
-    for (const [account, plan, state, status, code, detail] of cases) {
-      seedPlan(account, plan, state)
+    for (const [account, plan, state, status, code, detail, periodEnd] of cases) {
+      seedPlan(account, plan, state, NOW, periodEnd)
       const answer = await playbooks(account)
       expect({ account, status: answer.status, code: answer.body.error.code }).toEqual({ account, status, code })
-      if (detail) expect(answer.body.error).toMatchObject(detail)
+      // The whole body is `{error: {code, message, ...detail}}`: no amount or plan internal leaves the server (P1).
+      expect({ account, body: answer.body }).toEqual({
+        account,
+        body: { error: { code, message: expect.any(String), ...detail } },
+      })
       expect(JSON.stringify(answer.body)).not.toContain("r2.cloudflarestorage.com")
+      expect(JSON.stringify(answer.body)).not.toMatch(/\$|usd|price|credit|cents|micro|cost|charge/i)
     }
   })
 
@@ -305,8 +353,21 @@ describe("downloads (S1, S3, M4)", () => {
     await publishTwo()
     seedPlan(PRO, "vector-50")
     expect((await playbooks(undefined)).status).toBe(401)
-    for (const authorization of ["Bearer vrt_fixture.run", "Bearer vht_fixture.hosted", "Basic abc", "Bearer vct_x"])
-      expect((await playbooks(PRO, { authorization })).status).toBe(401)
+    for (const authorization of [
+      "Bearer vrt_fixture.run",
+      "Bearer vht_fixture.hosted",
+      "Basic abc",
+      "Bearer vct_x",
+      // A website session (a Supabase access token) is not an account token either.
+      "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln",
+    ]) {
+      const answer = await playbooks(PRO, { authorization })
+      expect({ authorization, status: answer.status, code: answer.body.error.code }).toEqual({
+        authorization,
+        status: 401,
+        code: "CLI_TOKEN_INVALID",
+      })
+    }
     w.store.command(["SET", `vector:cli-revoked:${PRO}`, "1"])
     const revoked = await playbooks(PRO)
     expect(revoked.status).toBe(401)
@@ -390,6 +451,78 @@ describe("downloads (S1, S3, M4)", () => {
     seedPlan(PRO, "vector-50")
     expect((await playbooks(PRO)).status).toBe(404)
   })
+
+  test("a record filed under another name is never listed or signed, and withdrawing a name always takes it out", async () => {
+    await publishTwo()
+    // A valid record for vector-docs-drift, filed under a field that is not its name (a hand edit, say).
+    w.store.command([
+      "HSET",
+      playbooksKey("test"),
+      "vector-misfiled",
+      JSON.stringify(record("vector-docs-drift", "9.0.0")),
+    ])
+    seedPlan(PRO, "vector-50")
+    const answer = await playbooks(PRO)
+    expect(answer.status).toBe(200)
+    expect(answer.body.map((item: Playbooks.Link) => `${item.name} ${item.version}`)).toEqual([
+      "vector-docs-drift 1.2.0",
+      "vector-flaky-tests 1.0.0",
+    ])
+    expect(await readPlaybook("vector-misfiled", { mode: "test", fetcher: w.fetcher })).toBeUndefined()
+    await run(["withdraw", "vector-docs-drift", "--mode", "test"])
+    expect((await readPlaybooks({ mode: "test", fetcher: w.fetcher })).map((item) => item.name)).toEqual([
+      "vector-flaky-tests",
+    ])
+    // The stray field can still be removed by its own name; its version is not known, so none is named.
+    expect(await run(["withdraw", "vector-misfiled", "--mode", "test"])).toEqual([
+      "vector-misfiled is withdrawn (test store): no new download links; links already given expire within 10 minutes.",
+    ])
+    expect(w.store.hash(playbooksKey("test")).has("vector-misfiled")).toBe(false)
+    // A store that cannot read the record still takes the pull: the version is only named when it can be read.
+    w.store.fail = (command) => command[0] === "HGET"
+    expect(await run(["withdraw", "vector-flaky-tests", "--mode", "test"])).toEqual([
+      "vector-flaky-tests is withdrawn (test store): no new download links; links already given expire within 10 minutes.",
+    ])
+    expect(w.store.hash(playbooksKey("test")).size).toBe(0)
+  })
+
+  test("a listing names at most 50 playbooks, sorted by name; a 51st name is refused at publish, a new version is not", async () => {
+    // Every name sorts before vector-flaky-tests, so that playbook falls past the first 50 once it is filed.
+    const names = Array.from({ length: 51 }, (_, index) => `vector-a${String(index).padStart(2, "0")}`)
+    for (const name of names.toReversed())
+      w.store.command(["HSET", playbooksKey("test"), name, JSON.stringify(record(name, "1.0.0"))])
+    seedPlan(PRO, "vector-50")
+    const answer = await playbooks(PRO)
+    expect(answer.status).toBe(200)
+    expect(answer.body.map((item: Playbooks.Link) => item.name)).toEqual(names.slice(0, Playbooks.MAX_LISTED))
+    expect(
+      answer.body.every((item: Playbooks.Link) => new URL(item.url).searchParams.get("X-Amz-Expires") === "600"),
+    ).toBe(true)
+    expect(Playbooks.decodeLinks(answer.body)).toHaveLength(Playbooks.MAX_LISTED)
+    const refused = await run([
+      "publish",
+      "playbooks/vector-flaky-tests.json",
+      "--version",
+      "1.0.0",
+      "--mode",
+      "test",
+    ]).catch((error: Error) => error.message)
+    expect(refused).toContain("holds 50 playbooks")
+    expect(w.r2).toEqual([])
+    // Already published, it is in the library although the listing's first 50 leave it out: a new version is taken.
+    w.store.command([
+      "HSET",
+      playbooksKey("test"),
+      "vector-flaky-tests",
+      JSON.stringify(record("vector-flaky-tests", "1.0.0")),
+    ])
+    expect(
+      (await run(["publish", "playbooks/vector-flaky-tests.json", "--version", "1.1.0", "--mode", "test"]))[0],
+    ).toStartWith("vector-flaky-tests 1.1.0 published (test store)")
+    expect(decodePlaybookRecord(w.store.hash(playbooksKey("test")).get("vector-flaky-tests"), "test")!.version).toBe(
+      "1.1.0",
+    )
+  })
 })
 
 describe("publishing (script/playbooks-publish.ts)", () => {
@@ -447,7 +580,7 @@ describe("publishing (script/playbooks-publish.ts)", () => {
     expect(lines.join("\n")).not.toContain("fixture-kv-token")
   })
 
-  test("a version never changes and the library never goes back; a bad playbook is never uploaded", async () => {
+  test("a version never changes, and while published the library never goes back; a bad playbook is never uploaded", async () => {
     await run(["publish", "playbooks/vector-flaky-tests.json", "--version", "1.1.0", "--mode", "test"])
     FILES["playbooks/vector-flaky-tests.json"] = spec("Flaky test hunt", "Run `bun test` five times.")
     try {
@@ -475,9 +608,10 @@ describe("publishing (script/playbooks-publish.ts)", () => {
         "1.10.0",
       )
 
-      // Withdrawn, a version still cannot come back with other content: the bucket keeps its file.
+      // Withdrawn, a version still cannot come back with other content: the bucket keeps its file. The script names
+      // the withdrawn version, because the library no longer holds it to refuse a lower one.
       expect(await run(["withdraw", "vector-flaky-tests", "--mode", "test"])).toEqual([
-        "vector-flaky-tests is withdrawn (test store): no new download links; links already given expire within 10 minutes.",
+        "vector-flaky-tests 1.10.0 is withdrawn (test store): no new download links; links already given expire within 10 minutes. To publish it again, use a version above 1.10.0.",
       ])
       expect(await run(["withdraw", "vector-flaky-tests", "--mode", "test"])).toEqual([
         "vector-flaky-tests was not published (test store).",

@@ -1,23 +1,32 @@
 // Fakes for the agent phase's tests (V18b, V18c): an event file outside the repository, a loopback fake GitHub that
-// records every request, a git origin that demands credentials and counts its hits, a vectordev.ai recorder behind the
-// cloud client's Services seam, channel holders made with createGithubSecrets, and a fake Codium gateway with its
-// catalog and run credential behind the services the provider layer reads. Nothing here assigns process.env, and no
+// records every request and can list and serve a thread's saved conversations (V27) with an in-memory signed storage
+// behind its restore transport, a git origin that demands credentials and counts its hits, a vectordev.ai recorder
+// behind the cloud client's Services seam, channel holders made with createGithubSecrets, a fake Codium gateway with
+// its catalog and run credential behind the services the provider layer reads, and approved Brain uploads as
+// brain-download answers them (B08), sealed by core's own desktop encryption. Nothing here assigns process.env, and no
 // request leaves this computer.
 
 import { $ } from "bun"
+import { createCipheriv, createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Effect, Layer } from "effect"
 import type { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModels } from "@vectordevai/core/free-models"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { ModelPlans } from "@vectordevai/core/model-plans"
-import type { Services } from "../../src/cli/cmd/github.cloud"
+import type { BrainDownload, Services } from "../../src/cli/cmd/github.cloud"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 
 export const OWNER = "octo"
 export const REPO = "widgets"
 export const RUN_ID = "4242"
+/** The repository id GitHub gives the job (GITHUB_REPOSITORY_ID), and the run id mint writes for it (VECTOR_RUN_ID). */
+export const REPOSITORY_ID = "4711"
+export const RID = GithubAgents.runId(REPOSITORY_ID, RUN_ID, "1", "99")
+/** A well-formed ordinary conversation key as artifact-key answers it (V27); not a real one. */
+export const ARTIFACT_KEY = { key: Buffer.alloc(32, 7).toString("base64url"), keyId: "0123456789abcdef" }
 
 // Fixture credentials only; none is a real token.
 export const CHANNEL = {
@@ -37,6 +46,13 @@ export const VALUES = [CHANNEL.githubToken, CHANNEL.cliToken, CHANNEL.runToken, 
 /** A well-formed one-time run ticket (`vtk_` and 43 safe characters); not a real one. */
 export const TICKET_FIXTURE = `vtk_${"fixtureTicket_-".repeat(3).slice(0, 43)}`
 
+/** A well-formed Brain upload id as a dispatch's `brain_upload` input carries it (`vbu_` and 32 base64url characters). */
+export const BRAIN_UPLOAD = `vbu_${"F".repeat(16)}${"x-".repeat(8)}`
+/** The account the desktop's upload is sealed for: its id is in the authenticated data, never in a prompt or a log. */
+export const BRAIN_ACCOUNT = "11111111-1111-4111-8111-111111111111"
+/** A well-formed Brain conversation key as brain-download answers it beside the envelope (B08); not a real one. */
+export const BRAIN_KEY = { key: Buffer.alloc(32, 9).toString("base64url"), keyId: "b".repeat(16) }
+
 /** The one model the fake Codium catalog lists, so `MODEL: vector-plan` picks it. */
 export const CODIUM_MODEL = {
   id: "codium-fixture",
@@ -45,7 +61,25 @@ export const CODIUM_MODEL = {
   maxOutputTokens: 8_000,
 }
 
-export type Recorded = { method: string; path: string; query?: string; authorization?: string }
+export type Recorded = { method: string; path: string; query?: string; search?: string; authorization?: string }
+
+/**
+ * A saved conversation as the artifact list names it (V27). `zip` is the artifact's download, the outer zip that holds
+ * `session.vsa`; without one its download is 404. By default a run of this repository's own head uploaded it; `fork`
+ * names a fork's pull_request run instead. `location` replaces the signed storage address the download redirects to.
+ */
+export type FakeArtifact = {
+  id: number
+  name: string
+  created_at: string
+  expired?: boolean
+  zip?: Uint8Array
+  fork?: true
+  location?: string
+}
+
+/** Where the fake GitHub's artifact downloads redirect: a signed storage address the restore transport answers. */
+export const STORAGE = "https://fixture.blob.core.windows.net"
 
 const scratch: string[] = []
 
@@ -118,14 +152,28 @@ type Thread = { number: number; kind: "issue" | "pr"; data: Record<string, unkno
 
 /**
  * A fake GitHub API: collaborator permissions from `roles` (anyone else is "read"), GraphQL answers for the threads
- * given, and review comments by id. Every request is recorded with its method, path and GraphQL query.
+ * given, and review comments by id. Every request is recorded with its method, path, query string and GraphQL query.
+ * With `artifacts` it lists them for any name, as `{artifacts}` with the run that uploaded each (the restore filters
+ * names itself), or answers the list 503 for "unavailable"; an artifact's download redirects to STORAGE, or with
+ * `direct` answers its zip itself. Without `artifacts` every artifact path is 404, as before. `request` is the restore's
+ * transport: it sends this server's own addresses on to it and answers STORAGE from memory, and records every request
+ * it sends with its method and authorization (`transport`, and the STORAGE ones in `storage`). It refuses any other host.
  */
 export function fakeGithub(input: {
   roles?: Record<string, string>
   threads?: Thread[]
   reviewComments?: Record<number, Record<string, unknown>>
+  artifacts?: FakeArtifact[] | "unavailable"
+  direct?: true
 }) {
   const seen: Recorded[] = []
+  const transport: { url: string; method: string; authorization: string | null }[] = []
+  const artifacts = input.artifacts === "unavailable" ? [] : (input.artifacts ?? [])
+  const run = (artifact: FakeArtifact) => ({
+    id: 900 + artifact.id,
+    repository_id: Number(REPOSITORY_ID),
+    head_repository_id: artifact.fork ? Number(REPOSITORY_ID) + 1 : Number(REPOSITORY_ID),
+  })
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -137,8 +185,35 @@ export function fakeGithub(input: {
         method: request.method,
         path: url.pathname,
         ...(query ? { query } : {}),
+        ...(url.search ? { search: url.search } : {}),
         ...(request.headers.get("authorization") ? { authorization: request.headers.get("authorization")! } : {}),
       })
+      if (
+        request.method === "GET" &&
+        input.artifacts &&
+        /^\/repos\/[^/]+\/[^/]+\/actions\/artifacts$/.test(url.pathname)
+      )
+        return input.artifacts === "unavailable"
+          ? Response.json({ message: "Service Unavailable" }, { status: 503 })
+          : Response.json({
+              total_count: artifacts.length,
+              artifacts: artifacts.map((artifact) => ({
+                id: artifact.id,
+                name: artifact.name,
+                expired: artifact.expired ?? false,
+                created_at: artifact.created_at,
+                workflow_run: run(artifact),
+              })),
+            })
+      const download = /^\/repos\/[^/]+\/[^/]+\/actions\/artifacts\/(\d+)\/zip$/.exec(url.pathname)
+      const artifact = download ? artifacts.find((item) => item.id === Number(download[1])) : undefined
+      if (request.method === "GET" && artifact?.zip)
+        return input.direct
+          ? new Response(Uint8Array.from(artifact.zip))
+          : new Response(null, {
+              status: 302,
+              headers: { location: artifact.location ?? `${STORAGE}/artifacts/${artifact.id}?sig=fixture` },
+            })
       const permission = /^\/repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/.exec(url.pathname)
       if (request.method === "GET" && permission) {
         const role = input.roles?.[decodeURIComponent(permission[1]!)] ?? "read"
@@ -158,7 +233,29 @@ export function fakeGithub(input: {
       return Response.json({ message: "Not Found" }, { status: 404 })
     },
   })
-  return { url: `http://127.0.0.1:${server.port}`, seen, stop: () => server.stop(true) }
+  const origin = `http://127.0.0.1:${server.port}`
+  const request = async (url: string, init: RequestInit) => {
+    transport.push({
+      url,
+      method: (init.method ?? "GET").toUpperCase(),
+      authorization: new Headers(init.headers).get("authorization"),
+    })
+    if (url.startsWith(`${origin}/`)) return fetch(url, init)
+    const stored = /^\/artifacts\/(\d+)$/.exec(url.startsWith(`${STORAGE}/`) ? new URL(url).pathname : "")
+    const artifact = stored ? artifacts.find((item) => item.id === Number(stored[1])) : undefined
+    if (!stored) throw new Error(`The fake GitHub's transport refuses ${new URL(url).host}.`)
+    return artifact?.zip ? new Response(Uint8Array.from(artifact.zip)) : new Response("Not Found", { status: 404 })
+  }
+  return {
+    url: origin,
+    seen,
+    transport,
+    get storage() {
+      return transport.filter((entry) => entry.url.startsWith(`${STORAGE}/`))
+    },
+    request,
+    stop: () => server.stop(true),
+  }
 }
 
 export function comment(id: number, login: string | null, body: string) {
@@ -209,42 +306,136 @@ export function pullData(input: {
   }
 }
 
+/** The authenticated data the desktop seals an upload under (core brain/upload.ts); this repository and upload by default. */
+export function brainAad(input: { repositoryId?: string; generation?: string; uploadId?: string } = {}) {
+  return [
+    "vector-brain-upload-v1",
+    BRAIN_ACCOUNT,
+    input.repositoryId ?? REPOSITORY_ID,
+    input.generation ?? "3",
+    input.uploadId ?? BRAIN_UPLOAD,
+  ].join("|")
+}
+
+/**
+ * What brain-download answers for `bytes` after the desktop's own encryption, core's BrainUpload.upload, through a fake
+ * account transport: prepare answers the upload id, a fresh content key, the authenticated data for `repositoryId`
+ * (this repository by default) and a private repository at approval; commit keeps the sealed envelope. The answer says
+ * `publicRepository`, the visibility at the run's first download (private by default), and carries BRAIN_KEY.
+ */
+export async function brainUploaded(
+  bytes: Uint8Array,
+  options: { repositoryId?: string; uploadId?: string; publicRepository?: boolean } = {},
+): Promise<BrainDownload> {
+  // Core's Brain module graph loads only in the tests that seal an upload, not in every user of this fixture.
+  const { BrainUpload } = await import("@vectordevai/core/brain/upload")
+  const repositoryId = options.repositoryId ?? REPOSITORY_ID
+  const uploadId = options.uploadId ?? BRAIN_UPLOAD
+  const aad = brainAad({ repositoryId, uploadId })
+  const sha256 = createHash("sha256").update(bytes).digest("hex")
+  const approvedAt = Date.now()
+  const key = randomBytes(32).toString("base64url")
+  const sealed = { nonce: "", ciphertext: "" }
+  await BrainUpload.upload({
+    repositoryId,
+    selection: { bytes, sha256 },
+    approvedSha256: sha256,
+    includeBrain: true,
+    transport: async (kind, body) => {
+      if (kind === "prepare") return { uploadId, key, aad, expiresAt: Date.now() + 60_000, publicRepository: false }
+      sealed.nonce = String(body.nonce)
+      sealed.ciphertext = String(body.ciphertext)
+      return { uploadId, sha256, bytes: bytes.byteLength, approvedAt }
+    },
+  })
+  return {
+    uploadId,
+    key,
+    aad,
+    ...sealed,
+    sha256,
+    bytes: bytes.byteLength,
+    approvedAt,
+    publicRepository: options.publicRepository ?? false,
+    artifactKey: BRAIN_KEY,
+  }
+}
+
+/**
+ * An envelope sealed directly under any authenticated data, with no Brain key, so that bytes the desktop would never
+ * encrypt still authenticate and only the run's own framing, validation or decoding can refuse them.
+ */
+export function brainSealed(bytes: Uint8Array, associated = brainAad(), uploadId = BRAIN_UPLOAD): BrainDownload {
+  const key = randomBytes(32)
+  const nonce = randomBytes(12)
+  const cipher = createCipheriv("aes-256-gcm", key, nonce)
+  cipher.setAAD(Buffer.from(associated))
+  return {
+    uploadId,
+    key: key.toString("base64url"),
+    aad: associated,
+    nonce: nonce.toString("base64url"),
+    ciphertext: Buffer.concat([cipher.update(bytes), cipher.final(), cipher.getAuthTag()]).toString("base64url"),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    bytes: bytes.byteLength,
+    approvedAt: Date.now(),
+    publicRepository: false,
+  }
+}
+
 /**
  * The vectordev.ai side of the cloud client, through its Services seam: every request is recorded with its path, body
  * and authorization, and settle is accepted. A heartbeat is answered `{ok: true, stop: false}`, or with what `heartbeat`
- * returns for its body.
+ * returns for its body. An artifact-key request (V27) is answered by `artifactKey` when given, and a brain-download
+ * request (B08) by `brainDownload`, which also gets the request's signal; each is `{ok: true}` otherwise, which its
+ * client reads as unavailable. Both are recorded first, so an answer that throws is an outage. Every other request
+ * keeps its answer whatever they do. Masked values and notices are kept.
  */
-export function cloudRecorder(options: { heartbeat?: (body: unknown) => unknown } = {}) {
+export function cloudRecorder(
+  options: {
+    heartbeat?: (body: unknown) => unknown
+    artifactKey?: (body: unknown) => Response | Promise<Response>
+    brainDownload?: (body: unknown, signal: AbortSignal | undefined) => Response | Promise<Response>
+  } = {},
+) {
   const requests: { path: string; body: unknown; authorization?: string }[] = []
+  const masks: string[] = []
+  const notices: string[] = []
   const services: Services = {
     oidc: async () => {
       throw new Error("The agent phase never asks for an identity token")
     },
-    mask: () => {},
+    mask: (value) => {
+      masks.push(value)
+    },
     now: () => 0,
     monotonic: () => 0,
     wait: async () => {},
-    notice: () => {},
+    notice: (message) => {
+      notices.push(message)
+    },
     request: async (url, init) => {
       const request = new Request(url, init)
       const body: unknown = await request.json().catch(() => undefined)
-      requests.push({
-        path: new URL(request.url).pathname,
-        body,
-        authorization: request.headers.get("authorization") ?? undefined,
-      })
+      const pathname = new URL(request.url).pathname
+      requests.push({ path: pathname, body, authorization: request.headers.get("authorization") ?? undefined })
+      if (pathname === GithubAgents.ENDPOINT.artifactKey && options.artifactKey) return options.artifactKey(body)
+      if (pathname === GithubAgents.ENDPOINT.brainDownload && options.brainDownload)
+        return options.brainDownload(body, init.signal ?? undefined)
       if (!request.url.endsWith("/heartbeat")) return Response.json({ ok: true })
       return Response.json(options.heartbeat?.(body) ?? { ok: true, stop: false })
     },
   }
-  return { services, requests }
+  return { services, requests, masks, notices }
 }
 
 /**
  * A channel holder of its own, loaded from one channel line; process.env is never read or changed. A Codium holder's
- * run token is authorized, as the account gate's starting heartbeat would, unless `authorized` is false.
+ * run token is authorized, as the account gate's starting heartbeat would, unless `authorized` is false. With
+ * `sessionProof` it is loaded as the hosted launcher starts a Codium engine: this build's tool boundary and the FD3
+ * session proof named in its environment (sandboxEnvironment), so `sessionProof()` is true. No isolation is activated.
  */
-export async function holder(mode: "own-key" | "codium", authorized = true) {
+export async function holder(mode: "own-key" | "codium", authorized = true, options: { sessionProof?: boolean } = {}) {
   const secrets = GithubSecrets.createGithubSecrets()
   const line =
     mode === "codium"
@@ -254,6 +445,12 @@ export async function holder(mode: "own-key" | "codium", authorized = true) {
     GITHUB_ACTIONS: "true",
     VECTOR_MODE: mode,
     VECTOR_SECRET_CHANNEL: "stdin",
+    ...(options.sessionProof
+      ? {
+          [GithubAgents.TOOL_PID_NAMESPACE_ENV]: GithubSecrets.toolBoundary(),
+          [GithubAgents.SESSION_PROOF_ENV]: "fd3",
+        }
+      : {}),
   }
   await secrets.load(
     env,
@@ -280,7 +477,8 @@ export type GatewayRequest = { authorization?: string; title: boolean; action: G
  * CODIUM_MODEL only for the fixture run token. A title request is always sent on to the fake model server at `target`,
  * which answers titles itself. Every other request takes the next action from `queue`, or `sticky` once the queue is
  * empty (forward by default). A refusal is the gateway's `{error: {code, message, limit?}}` with `retry-after-ms: 1`,
- * and calls `onRefusal` first; a held request waits until its caller aborts it and resolves `held`.
+ * and calls `onRefusal` first; a held request waits until its caller aborts it and resolves `held`. Every catalog read
+ * (each provider list) calls `onCatalog` first.
  */
 export function codiumFakes() {
   const state = {
@@ -289,16 +487,20 @@ export function codiumFakes() {
     queue: [] as GatewayAction[],
     sticky: { kind: "forward" } as GatewayAction,
     onRefusal: (() => {}) as () => void,
+    onCatalog: (() => {}) as () => void,
     held: Promise.withResolvers<void>(),
     reads: [] as (string | undefined)[],
     requests: [] as GatewayRequest[],
   }
-  const reset = (input: Partial<Pick<typeof state, "codium" | "target" | "queue" | "sticky" | "onRefusal">> = {}) => {
+  const reset = (
+    input: Partial<Pick<typeof state, "codium" | "target" | "queue" | "sticky" | "onRefusal" | "onCatalog">> = {},
+  ) => {
     state.codium = input.codium ?? state.codium
     state.target = input.target ?? state.target
     state.queue = input.queue ?? []
     state.sticky = input.sticky ?? { kind: "forward" }
     state.onRefusal = input.onRefusal ?? (() => {})
+    state.onCatalog = input.onCatalog ?? (() => {})
     state.held = Promise.withResolvers<void>()
     state.reads.splice(0)
     state.requests.splice(0)
@@ -353,6 +555,7 @@ export function codiumFakes() {
           catalog: (token) =>
             Effect.sync(() => {
               state.reads.push(token)
+              state.onCatalog()
               return token === CHANNEL.runToken && state.codium
                 ? { enabled: true, models: [CODIUM_MODEL] }
                 : { enabled: false, models: [] }
@@ -386,6 +589,8 @@ export function stepEnv(input: {
   mentions?: string
   /** VECTOR_RUN_DEADLINE, epoch milliseconds as mint writes it. */
   deadline?: string
+  /** A Codium step's VECTOR_BRAIN_UPLOAD, the dispatch's `brain_upload` input: empty unless given, as on every run. */
+  brainUpload?: string
 }): Record<string, string | undefined> {
   return {
     GITHUB_ACTIONS: "true",
@@ -403,6 +608,8 @@ export function stepEnv(input: {
     MENTIONS: input.mentions ?? "/vector,/vs",
     ...(input.prompt !== undefined ? { VECTOR_PROMPT: input.prompt } : {}),
     ...(input.deadline !== undefined ? { VECTOR_RUN_DEADLINE: input.deadline } : {}),
+    // The generated Codium agent step always passes `${{ inputs.brain_upload }}`; own key has no such name.
+    ...(input.mode === "codium" ? { VECTOR_BRAIN_UPLOAD: input.brainUpload ?? "" } : {}),
   }
 }
 

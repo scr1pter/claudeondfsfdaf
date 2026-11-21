@@ -76,6 +76,21 @@ describe("account cloud workspace gateway", () => {
     expect(await client.list()).toEqual({ enabled: false, workspaces: [] })
   })
 
+  test("passes each workspace's allowance through the list, with or without usage", async () => {
+    const listed = {
+      enabled: true,
+      workspaces: [
+        { ...workspace, usage: { model: 40, time: 35 } },
+        { ...workspace, id: "5f0b8c1e-2d3a-4b6c-9e7f-a1b2c3d4e5f6" },
+      ],
+    }
+    expect(await cloudWorkspacesClient("test-token", async () => Response.json(listed)).list()).toStrictEqual(listed)
+    const invalid = cloudWorkspacesClient("test-token", async () =>
+      Response.json({ enabled: true, workspaces: [{ ...workspace, usage: { model: 101, time: 0 } }] }),
+    )
+    await expect(invalid.list()).rejects.toThrow("Vector could not read a cloud workspace.")
+  })
+
   test("treats an actual accepted 204 as no content and never retries a prompt", async () => {
     let calls = 0
     const client = cloudWorkspacesClient("test-token", async () => {
@@ -247,6 +262,40 @@ describe("cloud workspace projections", () => {
     expect(() => readCloudWorkspace({ ...workspace, state: "success" })).toThrow()
     expect(() => readCloudWorkspace({ ...workspace, revision: undefined })).toThrow()
     expect(() => readCloudWorkspace({ ...workspace, createdAt: "today" })).toThrow()
+  })
+
+  test("reads the pilot allowance as whole percentages, keeps it optional and refuses a malformed one", () => {
+    for (const usage of [
+      { model: 40, time: 35 },
+      { model: 0, time: 0 },
+      { model: 100, time: 100 },
+    ])
+      expect(readCloudWorkspace({ ...workspace, usage })).toStrictEqual({ ...workspace, usage })
+    // toStrictEqual also fails on a `usage: undefined` key, so these pin that no key is added.
+    expect(readCloudWorkspace(workspace)).toStrictEqual(workspace)
+    expect(readCloudWorkspace({ ...workspace, usage: undefined })).toStrictEqual(workspace)
+    const usage = { model: 40, time: 35 }
+    expect(readCloudWorkspace({ ...workspace, usage }).usage).not.toBe(usage)
+    for (const malformed of [
+      null,
+      40,
+      "40%",
+      [],
+      {},
+      { model: 40 },
+      { time: 35 },
+      { model: 40, time: 35, modelCalls: 20 },
+      { model: 101, time: 0 },
+      { model: 0, time: -1 },
+      { model: 40.5, time: 0 },
+      { model: NaN, time: 0 },
+      { model: Infinity, time: 0 },
+      { model: "40", time: 35 },
+      { model: 40, time: null },
+    ])
+      expect(() => readCloudWorkspace({ ...workspace, usage: malformed })).toThrow(
+        "Vector could not read a cloud workspace.",
+      )
   })
 
   test("only offers models that the workspace reports connected", () => {

@@ -13,9 +13,11 @@ import { validCron } from "./schedule"
 
 export { WORKFLOW_FILE } from "../github-agents"
 export const CLI_PACKAGE = "@vectordevai/cli"
-// Written into every job as VECTOR_WORKFLOW_VERSION; the CLI asks for a reinstall when a workflow's differs. It stays
-// "2" while the CLI and the desktop install this v2 workflow; GithubAgents.WORKFLOW_VERSION is the v3 builder's.
-export const GITHUB_WORKFLOW_VERSION = "2"
+// Every job carries a workflow's version as VECTOR_WORKFLOW_VERSION, and the CLI asks for a reinstall when it is
+// missing, not a number, or lower than this (prepareGithubEnvironment). Both installers write the v3 builder's file
+// (V24), so this is its version. The legacy buildWorkflowYaml below still stamps "2": no installer writes its file, the
+// v3 builder restamps the own-key review job it reuses, and its goldens keep it byte-identical.
+export const GITHUB_WORKFLOW_VERSION = GithubAgents.WORKFLOW_VERSION
 
 export interface WorkflowOptions {
   provider: string
@@ -584,6 +586,7 @@ type WorkflowStep = {
   shell?: string
   "working-directory"?: string
   "continue-on-error"?: boolean
+  "timeout-minutes"?: number
   with?: Record<string, string | number | boolean>
   env?: Record<string, string>
 }
@@ -641,6 +644,9 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
       ? {
           MODEL: "${{ vars.VECTOR_MODEL || 'vector-plan' }}",
           VECTOR_DISABLE_PROJECT_CONFIG: "1",
+          // Env only (INV-S15). Any dispatcher can set it; only an owner-started desktop run's token can read the
+          // upload (brain-download checks the live desktop ticket).
+          VECTOR_BRAIN_UPLOAD: "${{ inputs.brain_upload }}",
         }
       : {
           MODEL: `${opts.provider}/${opts.model}`,
@@ -650,11 +656,28 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
           ...Object.fromEntries(opts.keys.map((key) => [key, `\${{ secrets.${key} }}`])),
         }),
   }
+  // Codium's jobs that mint restore no npm cache: no Codium job saves one, so a restore could only hit an entry another
+  // job of the run's cache scope planted, and Ship Desk's capture job runs the pull request's own code (V31).
   const agentSteps: WorkflowStep[] = [
     setup,
-    restore,
+    ...(codium ? [] : [restore]),
     install,
-    ...(codium ? [{ id: "mint", run: "vector github mint --purpose task", env: mintEnv }] : []),
+    ...(codium
+      ? [
+          { id: "mint", run: "vector github mint --purpose task", env: mintEnv },
+          // Ship Desk's capture ticket (A49, V31), asked for with the run token before any repository file is on disk.
+          // It goes to $GITHUB_OUTPUT, and the command's own lines go nowhere: a refusal from vectordev.ai can name the
+          // plan or a billing state, and a public repository's log is public (INV-P1). It never stops the run.
+          {
+            id: "capture",
+            if: "steps.mint.outputs.status == 'ok' && vars.VECTOR_SHIP_DESK == '1'",
+            run: "vector ship ticket >/dev/null 2>&1",
+            shell,
+            "continue-on-error": true,
+            "timeout-minutes": 2,
+          },
+        ]
+      : []),
     checkout(0, codium),
     {
       name: "Install tool process isolation",
@@ -718,7 +741,6 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
         concurrency: { group: "vector-review-${{ needs.route.outputs.pr }}", "cancel-in-progress": false },
         steps: [
           setup,
-          restore,
           install,
           { id: "mint", run: "vector github mint --purpose review", env: mintEnv },
           checkout(1, true),
@@ -768,8 +790,14 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
           workflow_dispatch: {
             inputs: {
               mode: { type: "choice", options: ["task", "review", "bind"], default: "task" },
+              // The App's owner-started desktop dispatch sends brain_upload (api/_lib/github-app.ts), and GitHub
+              // refuses a dispatch carrying an undeclared input with 422. Only Codium, the mode the App dispatches,
+              // declares it.
               ...Object.fromEntries(
-                ["prompt", "pr", "code", "ticket"].map((key) => [key, { type: "string", required: false }]),
+                ["prompt", "pr", "code", "ticket", ...(codium ? ["brain_upload"] : [])].map((key) => [
+                  key,
+                  { type: "string", required: false },
+                ]),
               ),
             },
           },
@@ -810,7 +838,11 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
               "cancel-in-progress": false,
             },
             outputs: codium
-              ? { status: "${{ steps.mint.outputs.status }}", rid: "${{ steps.mint.outputs.rid }}" }
+              ? {
+                  status: "${{ steps.mint.outputs.status }}",
+                  rid: "${{ steps.mint.outputs.rid }}",
+                  capture: "${{ steps.capture.outputs.capture }}",
+                }
               : { status: "ok" },
             steps: agentSteps,
           },
@@ -828,6 +860,8 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
               ...(opts.autoReview ? { actions: "write" } : {}),
               ...(opts.publishAuth === "app" ? { "id-token": "write" } : {}),
             },
+            // The pull request that carries this run's marker, for Ship Desk's capture job (V31).
+            ...(codium ? { outputs: { pr: "${{ steps.publish.outputs.pr }}" } } : {}),
             steps: [
               setup,
               install,
@@ -841,6 +875,7 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
                 },
               },
               {
+                ...(codium ? { id: "publish" } : {}),
                 run: "vector github publish",
                 "working-directory": "${{ runner.temp }}",
                 env: {
@@ -853,6 +888,9 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
                   VECTOR_AGENT_STATUS: codium ? "${{ needs.agent.outputs.status }}" : "ok",
                   VECTOR_RUN_ID: codium ? "${{ needs.agent.outputs.rid }}" : "",
                   VECTOR_GITHUB_AUTH: opts.publishAuth ?? "github",
+                  // The publisher re-derives the route (agentRoute), which refuses a dispatch without its prompt and
+                  // a schedule without its prompts. Env only (INV-S15), the same text the event file carries.
+                  VECTOR_PROMPT: "${{ inputs.prompt }}",
                   VECTOR_SCHEDULE_PROMPTS: schedules,
                   VECTOR_DISABLE_PROJECT_CONFIG: "1",
                   ...(opts.autoReview ? { VECTOR_REVIEW_AUTO: "1" } : {}),
@@ -860,6 +898,42 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
               },
             ],
           },
+          // Ship Desk's screenshots (A49, V31), Codium only. This job runs the pull request's own code (install, build,
+          // start from the base's .vector/ship.json), so it holds only the capture ticket: no id-token, no run token, no
+          // account token and no cache, and `vector ship capture` itself refuses a job that holds any of them.
+          ...(codium
+            ? {
+                capture: {
+                  name: GithubAgents.JOB.capture,
+                  needs: ["route", "agent", "publish"],
+                  if: "!cancelled() && vars.VECTOR_SHIP_DESK == '1' && needs.agent.outputs.capture != '' && needs.publish.outputs.pr != ''",
+                  "runs-on": "ubuntu-latest",
+                  "timeout-minutes": GithubAgents.TIMEOUT_MIN.capture,
+                  env: base,
+                  permissions: { contents: "read" },
+                  steps: [
+                    setup,
+                    install,
+                    {
+                      uses: "actions/checkout@v4",
+                      with: {
+                        ref: "refs/pull/${{ needs.publish.outputs.pr }}/head",
+                        "fetch-depth": 0,
+                        "persist-credentials": false,
+                      },
+                    },
+                    {
+                      run: 'vector ship capture --pr "$VECTOR_CAPTURE_PR"',
+                      env: {
+                        ...base,
+                        VECTOR_CAPTURE_PR: "${{ needs.publish.outputs.pr }}",
+                        VECTOR_CAPTURE_TICKET: "${{ needs.agent.outputs.capture }}",
+                      },
+                    },
+                  ],
+                },
+              }
+            : {}),
           bind: {
             name: GithubAgents.JOB.bind,
             needs: "route",

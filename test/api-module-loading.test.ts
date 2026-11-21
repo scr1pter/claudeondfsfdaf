@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 // Vercel runs each api/ function on Node after compiling the TypeScript files it reaches by relative path. A runtime
 // import by workspace package name resolves to that package's TypeScript source inside node_modules, which Node will not
@@ -51,56 +51,28 @@ test("fresh Node ESM callers, run tokens and readiness initialize in either impo
     "api/_lib/cloud-agents-entitlement.ts",
     "api/_lib/model-plan-models.ts",
     "api/_lib/cloud-agents-readiness.ts",
+    // The production cold-start order: the Codium routes import hosted-run, which reaches the ledger first.
+    "api/_lib/cloud-agents-ledger.ts",
+    "api/_lib/model-plan-gateway-hooks.ts",
+    "api/_lib/hosted-run.ts",
+    "api/model-plans/chat.ts",
+    "api/model-plans/estimate.ts",
+    "api/model-plans/models.ts",
   ]
   const temporary = await mkdtemp(path.join(tmpdir(), "vector-api-import-"))
   try {
-    await writeFile(path.join(temporary, "package.json"), '{"type":"module"}')
-    await symlink(path.join(root, "node_modules"), path.join(temporary, "node_modules"), "dir")
-    const seen = new Set<string>()
-    const queue = entries.map((entry) => path.join(root, entry))
-    // Keep each module separate: a bundle can lower cyclic consts to vars and hide the Node ESM TDZ being tested.
-    while (queue.length) {
-      const file = queue.pop()!
-      if (seen.has(file)) continue
-      seen.add(file)
-      let compiled = transpiler.transformSync(await Bun.file(file).text())
-      for (const item of transpiler.scanImports(compiled)) {
-        if (!item.path.startsWith(".")) continue
-        const resolved = await resolve(file, item.path)
-        queue.push(resolved)
-        const relative = path.relative(path.dirname(file), resolved).replace(/\.ts$/, ".js").split(path.sep).join("/")
-        const specifier = relative.startsWith(".") ? relative : `./${relative}`
-        compiled = compiled
-          .replaceAll(JSON.stringify(item.path), JSON.stringify(specifier))
-          .replaceAll(`'${item.path}'`, JSON.stringify(specifier))
-      }
-      const output = path.join(temporary, path.relative(root, file).replace(/\.ts$/, ".js"))
-      await mkdir(path.dirname(output), { recursive: true })
-      await writeFile(output, compiled)
-    }
-    expect(seen.size).toBeGreaterThan(entries.length)
-    const urls = entries.map((entry) => pathToFileURL(path.join(temporary, entry.replace(/\.ts$/, ".js"))).href)
+    const nodeUrl = await writeNodeTree(temporary, entries)
+    const urls = entries.map(nodeUrl)
     for (const first of urls) {
       const order = [first, ...urls.filter((url) => url !== first)]
-      const result = spawnSync(
-        "node",
-        [
-          "--input-type=module",
-          "--eval",
-          `import assert from 'node:assert/strict';
-           globalThis.fetch = async () => { throw new Error('Import probe forbids network'); };
-           for (const url of ${JSON.stringify(order)}) await import(url);
-           const caller = await import(${JSON.stringify(urls[1])});
-           await assert.rejects(caller.requireModelPlanCaller({headers:{authorization:'Bearer vrt_invalid.signature'}}),
-             error => error?.code === 'MODEL_PLAN_RUN_EXPIRED');
-           assert.throws(() => caller.registerRunVerifier('vrt_', async () => undefined), /exactly one verifier/);`,
-        ],
-        {
-          cwd: temporary,
-          encoding: "utf8",
-          timeout: 15_000,
-          env: { ...process.env, VECTOR_RUN_TOKEN_SECRET: "fixture-isolated-node-run-token-secret" },
-        },
+      const result = nodeProbe(
+        temporary,
+        `for (const url of ${JSON.stringify(order)}) await import(url);
+         const caller = await import(${JSON.stringify(urls[1])});
+         await assert.rejects(caller.requireModelPlanCaller({headers:{authorization:'Bearer vrt_invalid.signature'}}),
+           error => error?.code === 'MODEL_PLAN_RUN_EXPIRED');
+         assert.throws(() => caller.registerRunVerifier('vrt_', async () => undefined), /exactly one verifier/);`,
+        { ...process.env, VECTOR_RUN_TOKEN_SECRET: "fixture-isolated-node-run-token-secret" },
       )
       expect({
         first: path.basename(new URL(first).pathname),
@@ -118,3 +90,121 @@ test("fresh Node ESM callers, run tokens and readiness initialize in either impo
     await rm(temporary, { recursive: true, force: true })
   }
 }, 120_000)
+
+// WP A59 (BT11): Remote's run list (api/remote/cloud-runs.ts), Ship Desk's cards (api/ops/cards.ts) and the webhook's
+// Ship Desk intake (api/github/webhook.ts, through its ops handler) are separate Vercel functions, each bundling only
+// its own import graph, so each must register the one cloud run reader by itself.
+test("each function that reads GitHub runs registers the one run reader by itself in a fresh Node process, with no I/O", async () => {
+  const entries = [
+    "api/ops/cards.ts",
+    "api/remote/cloud-runs.ts",
+    "api/_lib/github-webhook-handlers/ops.ts",
+    "api/github/webhook.ts",
+  ]
+  const temporary = await mkdtemp(path.join(tmpdir(), "vector-api-runs-"))
+  try {
+    const nodeUrl = await writeNodeTree(temporary, [
+      ...entries,
+      "api/_lib/cloud-agents-run-registration.ts",
+      "api/_lib/cloud-run-reader.ts",
+    ])
+    const urls = entries.map(nodeUrl)
+    const leaf = JSON.stringify(nodeUrl("api/_lib/cloud-run-reader.ts"))
+    // Both service switches and every store address are left out, so the registered reader must answer without I/O.
+    const env = Object.fromEntries(
+      Object.entries({ ...process.env, VECTOR_RUN_TOKEN_SECRET: "fixture-isolated-node-run-token-secret" }).filter(
+        ([name]) =>
+          ![
+            "MODEL_PLANS_ENABLED",
+            "VECTOR_GITHUB_BRAIN_ENABLED",
+            "KV_REST_API_URL",
+            "KV_REST_API_TOKEN",
+            "UPSTASH_REDIS_REST_URL",
+            "UPSTASH_REDIS_REST_TOKEN",
+          ].includes(name),
+      ),
+    )
+    const scripts = [
+      ...urls.map((entry) => ({
+        name: path.relative(temporary, fileURLToPath(entry)),
+        script: `const leaf = await import(${leaf});
+         assert.equal(leaf.cloudRunReader(), undefined);
+         await import(${JSON.stringify(entry)});
+         const reader = leaf.cloudRunReader();
+         assert.equal(typeof reader, 'function');
+         assert.throws(() => leaf.registerCloudRunReader(async () => []), /exactly one reader/);
+         assert.deepEqual(await reader('00000000-0000-4000-8000-000000000001', { limit: 1 }), []);
+         for (const url of ${JSON.stringify([entry, ...urls.filter((url) => url !== entry)])}) await import(url);
+         assert.equal(leaf.cloudRunReader(), reader);`,
+      })),
+      {
+        name: "a reader registered first",
+        script: `const leaf = await import(${leaf});
+         const first = async () => [];
+         leaf.registerCloudRunReader(first);
+         await import(${JSON.stringify(nodeUrl("api/_lib/cloud-agents-run-registration.ts"))});
+         for (const url of ${JSON.stringify(urls)}) await import(url);
+         assert.equal(leaf.cloudRunReader(), first);`,
+      },
+    ]
+    for (const probe of scripts) {
+      const result = nodeProbe(temporary, probe.script, env)
+      expect({ name: probe.name, status: result.status, error: result.error?.message, stderr: result.stderr }).toEqual({
+        name: probe.name,
+        status: 0,
+        error: undefined,
+        stderr: "",
+      })
+    }
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
+}, 120_000)
+
+/**
+ * Compiles every module the entries reach into `temporary`, each to its own `.js` file with rewritten relative
+ * specifiers, and returns the file URL of a compiled module by its repository path.
+ */
+async function writeNodeTree(temporary: string, entries: string[]) {
+  await writeFile(path.join(temporary, "package.json"), '{"type":"module"}')
+  await symlink(path.join(root, "node_modules"), path.join(temporary, "node_modules"), "dir")
+  const seen = new Set<string>()
+  const queue = entries.map((entry) => path.join(root, entry))
+  // Keep each module separate: a bundle can lower cyclic consts to vars and hide the Node ESM TDZ being tested.
+  while (queue.length) {
+    const file = queue.pop()!
+    if (seen.has(file)) continue
+    seen.add(file)
+    let compiled = transpiler.transformSync(await Bun.file(file).text())
+    for (const item of transpiler.scanImports(compiled)) {
+      if (!item.path.startsWith(".")) continue
+      const resolved = await resolve(file, item.path)
+      queue.push(resolved)
+      const relative = path.relative(path.dirname(file), resolved).replace(/\.ts$/, ".js").split(path.sep).join("/")
+      const specifier = relative.startsWith(".") ? relative : `./${relative}`
+      compiled = compiled
+        .replaceAll(JSON.stringify(item.path), JSON.stringify(specifier))
+        .replaceAll(`'${item.path}'`, JSON.stringify(specifier))
+    }
+    const output = path.join(temporary, path.relative(root, file).replace(/\.ts$/, ".js"))
+    await mkdir(path.dirname(output), { recursive: true })
+    await writeFile(output, compiled)
+  }
+  expect(seen.size).toBeGreaterThan(entries.length)
+  return (entry: string) => pathToFileURL(path.join(temporary, entry.replace(/\.ts$/, ".js"))).href
+}
+
+/** Runs `script` as a fresh Node ES module in `cwd`, with `assert` imported and every network call refused. */
+function nodeProbe(cwd: string, script: string, env: NodeJS.ProcessEnv) {
+  return spawnSync(
+    "node",
+    [
+      "--input-type=module",
+      "--eval",
+      `import assert from 'node:assert/strict';
+       globalThis.fetch = async () => { throw new Error('Import probe forbids network'); };
+       ${script}`,
+    ],
+    { cwd, encoding: "utf8", timeout: 15_000, env },
+  )
+}

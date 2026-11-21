@@ -652,6 +652,46 @@ it.instance(
 )
 
 it.instance(
+  "when the desktop browser fails to render a script-built page, research_read keeps it as skipped and says why",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ title: "Research", permission: allow })
+      const spa = web.url("spa", "/")
+      const error = "The research browser could not open the page."
+      bridge.answer((call) =>
+        call.body.command === "research.open"
+          ? FakeBridge.research({ ok: false, error })
+          : FakeBridge.research({ url: spa, address: spa }),
+      )
+      const before = researchCalls().length
+      yield* test.llm.tool("research_plan", plan())
+      yield* test.llm.tool("research_read", { url: spa })
+      yield* test.llm.text("Done.")
+      yield* send({ sessionID: session.id, agent: "research", text: `Research heat pump sizing at ${spa}` })
+      const [read] = yield* calls(session.id, "research_read")
+      const reason = `${ResearchReader.NEEDS_RENDER.replace(/\.+$/, "")}. The desktop browser could not render it: ${error}`
+      expect(output(read)).toContain(ResearchReader.NEEDS_RENDER.replace(/\.$/, ""))
+      expect(output(read)).toContain(error)
+      expect(output(read)).not.toContain("..")
+      expect(read?.state.status === "completed" ? read.state.metadata.status : undefined).toBe("needs-render")
+      const commands = researchCalls()
+        .slice(before)
+        .map((call) => call.body.command)
+      expect(commands).toContain("research.open")
+      expect(commands).not.toContain("research.read")
+      const research = yield* ResearchRun.Service
+      const store = yield* ResearchStore.Service
+      const runID = read?.state.status === "completed" ? String(read.state.metadata.runID) : ""
+      const skipped = yield* store.source(yield* research.place(), runID, "S1")
+      expect(skipped?.source).toMatchObject({ id: "S1", url: spa, status: "needs-render", reason })
+      expect(skipped?.chunks).toEqual([])
+    }),
+  90_000,
+)
+
+it.instance(
   "without the desktop browser it says so, and research_read keeps a script-built page as skipped",
   () =>
     Effect.gen(function* () {

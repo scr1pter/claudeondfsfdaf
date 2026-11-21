@@ -50,6 +50,20 @@ describe("LocalSources registry", () => {
     expect(LocalSources.SOURCES.filter((source) => !source.sends.trim() || !source.why.trim())).toEqual([])
   })
 
+  test("Brain Vault says a backup carries memory, learned skills and workflow insights, and Vector Local blocks it", () => {
+    // Since B10 a backup also holds the learned `skills` and `insights` sections (engine brain/vault-memory.ts).
+    const vault = LocalSources.get("brain-vault")
+    expect(vault?.sends).toContain("learned skills and workflow insights")
+    expect(vault?.why).toContain("learned skills and workflow insights")
+    expect(vault?.local).toBe("blocked")
+    expect(vault?.callSites).toEqual(
+      expect.arrayContaining([
+        "packages/desktop/src/main/vault-backup.ts",
+        "packages/desktop/src/main/vault-github.ts",
+      ]),
+    )
+  })
+
   test("decides each source's own hosts the way its Vector Local setting says", () => {
     const rows = LocalSources.SOURCES.flatMap((source) =>
       source.hosts.map((host) => {

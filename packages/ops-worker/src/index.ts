@@ -7,6 +7,7 @@
 // The Worker probes only https URLs on hosts the account verified, never follows a redirect, and reports to the API
 // (POST <API_ORIGIN>/api/ops/worker, signed). It never logs an account, a URL or an answer.
 
+import { readPrefix } from "./bytes"
 import { INTERNAL_ACTIONS, NONCE_HEADER, OpsAccount, SIGNED_AT_HEADER, answer, failure } from "./ops-account"
 import { accountHandle, internalSecret, verifyInternalSignature } from "./internal"
 import { OPS_LIMITS } from "./limits"
@@ -40,17 +41,20 @@ async function internal(request: Request, env: Env, runtime: Runtime, url: URL):
   if (!secret) return failure(503, "INTERNAL_UNAVAILABLE")
   const declared = Number(request.headers.get("content-length") ?? "0")
   if (declared > OPS_LIMITS.internalBodyBytes) return failure(413, "INTERNAL_TOO_LARGE")
-  const body = new Uint8Array(await request.arrayBuffer())
-  if (body.byteLength > OPS_LIMITS.internalBodyBytes) return failure(413, "INTERNAL_TOO_LARGE")
+  // A body sent without a length (or with a false one) is read only to the limit and one byte more, then cancelled, so an
+  // unsigned caller cannot make the Worker hold more than that.
+  const read = await readPrefix(request.body, OPS_LIMITS.internalBodyBytes + 1)
+  if (!read) return failure(400, "INTERNAL_BAD_REQUEST")
+  if (!read.complete) return failure(413, "INTERNAL_TOO_LARGE")
   const check = await verifyInternalSignature(
     secret,
-    { method: request.method, path: `${url.pathname}${url.search}`, headers: request.headers, body },
+    { method: request.method, path: `${url.pathname}${url.search}`, headers: request.headers, body: read.bytes },
     runtime.now(),
   )
   if (!check.ok) return failure(401, "INTERNAL_SIGNATURE_INVALID")
   let parsed: unknown
   try {
-    parsed = JSON.parse(new TextDecoder().decode(body))
+    parsed = JSON.parse(new TextDecoder().decode(read.bytes))
   } catch {
     return failure(400, "INTERNAL_BAD_REQUEST")
   }

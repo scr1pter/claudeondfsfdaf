@@ -3,8 +3,8 @@
 // by its relative .js path, so it has no imports and uses nothing newer than ES2023.
 
 export const WORKFLOW_FILE = ".github/workflows/vector.yml"
-// What the v3 builder writes. review/workflow's GITHUB_WORKFLOW_VERSION, which the CLI compares against, stays "2" while
-// the CLI and the desktop still install the v2 workflow.
+// What the v3 builder writes, and what the CLI compares an installed workflow against: review/workflow's
+// GITHUB_WORKFLOW_VERSION is this value since V24.
 export const WORKFLOW_VERSION = "3"
 // Compare workflow versions as numbers: as strings, "10" sorts below "3".
 export const MIN_CODIUM_WORKFLOW_VERSION = 3
@@ -16,6 +16,9 @@ export const JOB = {
   publish: "Vector publish",
   review: "Vector review",
   bind: "Vector bind",
+  // Codium only, behind vars.VECTOR_SHIP_DESK (V31): Ship Desk's screenshots. It has no id-token, so it never asks for an
+  // identity exchange, and the App's job check accepts no "capture" profile.
+  capture: "Vector capture",
   // The v2 App task job, which installed workflows and the App's job check still name.
   legacyTask: "Vector task",
 } as const
@@ -36,6 +39,8 @@ export const ENDPOINT = {
   settle: "/api/cloud-agents/settle",
   runs: "/api/cloud-agents/runs",
   artifactKey: "/api/cloud-agents/artifact-key",
+  // The run token reads its owner-approved desktop Brain upload (api/cloud-agents/brain-download.ts).
+  brainDownload: "/api/cloud-agents/brain-download",
 } as const
 
 export const COMMAND_MENTIONS = ["/vector", "/vs"] as const
@@ -151,6 +156,10 @@ export const SANDBOX_ENV_ALLOW = [
   "VECTOR_THREAD",
   "VECTOR_PROMPT",
   "VECTOR_SCHEDULE_PROMPTS",
+  // Codium only: the opaque desktop Brain upload id from the dispatch input, empty on every other event. Any
+  // dispatcher can set it, and it is not a credential: reading the upload needs the run token, which stays in the
+  // secret channel, and brain-download also checks the live desktop ticket.
+  "VECTOR_BRAIN_UPLOAD",
   "VECTOR_WORKFLOW_VERSION",
   "VECTOR_DISABLE_USAGE",
   "VECTOR_PURE",
@@ -184,7 +193,15 @@ export const AT_ONCE_WAIT_MS = 600_000
 export const AT_ONCE_POLL_MS = 30_000
 export const BIND_CODE_SECONDS = 600
 export const TICKET_SECONDS = 900
-export const TIMEOUT_MIN = { codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20 } as const
+export const TIMEOUT_MIN = {
+  codiumAgent: 135,
+  ownKeyAgent: 60,
+  publish: 15,
+  bind: 5,
+  route: 3,
+  review: 20,
+  capture: 15,
+} as const
 export const PATCH_LIMITS = {
   bytes: 8_000_000,
   files: 2_000,

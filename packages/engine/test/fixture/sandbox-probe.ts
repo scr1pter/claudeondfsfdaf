@@ -18,6 +18,9 @@ const markers = [
   "vct_probe.signature",
   "vrt_probe.signature",
   "probe-provider-private-44de",
+  // A ticket-shaped value an earlier, unsandboxed step wrote through $GITHUB_OUTPUT, as the Codium agent job's Ship Desk
+  // ticket step writes its capture ticket before the sandbox (V31). The runner's file-command files must not show it.
+  "vcap_probe-capture-ticket-private-5e1c-000000000",
 ]
 const trigger = "/tmp/vector-sandbox-probe-next-step"
 const escaped = "/tmp/vector-sandbox-probe-detached-escaped"
@@ -182,6 +185,8 @@ if (process.argv[2] === "--module-load-check") {
     throw new Error("Unexpected cleanup outcome")
   if (process.env.PROBE_UPLOAD_OUTCOME !== (failure ? "skipped" : "success"))
     throw new Error("The artifact boundary gate did not match cleanup")
+  // The positive control: the runner did record the planted step output the probe must not have found.
+  if (process.env.PROBE_PLANTED !== markers[5]) throw new Error("The planted step output was not recorded")
   if (!report.crash?.hardZero || !report.crash?.noDump || !report.crash?.noNewPrivileges)
     throw new Error("Missing crash isolation evidence")
   // The bubblewrap floor's own fields hold only in a build that has it; every other guard holds in both.
@@ -217,7 +222,7 @@ if (process.argv[2] === "--module-load-check") {
     report.scan.sudo ||
     report.scan.docker
   )
-    throw new Error("The sandbox probe found an isolation failure")
+    throw new Error(`The sandbox probe found an isolation failure: ${JSON.stringify(report.scan.leaks)}`)
   const stage = JSON.parse(
     await fs.readFile(path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", "stage.json"), "utf8"),
   )
@@ -305,6 +310,16 @@ if (process.argv[2] === "--module-load-check") {
         holder.pendingRunToken() === undefined &&
         holder.providerKeys().DEEPSEEK_KEY === markers[4])
   if (!channel) throw new Error("The probe could not receive its private credential channel")
+  // The home is created empty, never from the runner image's /etc/skel and its toolchains, with an agent-owned .config.
+  const config = await fs.lstat(path.join(process.env.HOME!, ".config"))
+  if (
+    (await fs.readdir(process.env.HOME!)).some((name) =>
+      [".rustup", ".cargo", ".nvm", ".dotnet", ".bash_profile", ".bashrc", ".profile"].includes(name),
+    ) ||
+    !config.isDirectory() ||
+    config.uid !== process.getuid?.()
+  )
+    throw new Error("The agent home was not created empty with its own .config")
   const toolProcess = await probeToolProcesses()
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
   const scanner = ProcessIsolation.launch("/bin/bash", [

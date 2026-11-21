@@ -1,5 +1,6 @@
 import type { Connect } from "@vectordevai/schema/connect"
 import type { PermissionRequest } from "@vectordevai/sdk/v2/client"
+import { directoryReviewAnswer, type DirectoryReviewAnswer } from "./client"
 import { connectConsentDetails } from "./consent"
 
 export type DirectoryReviewTarget = { workspaceID: string; directory: string; base: string }
@@ -20,6 +21,8 @@ export type DirectoryReviewState = {
   permission?: PermissionRequest
   error: string
   admissionUncertain?: boolean
+  /** The engine's answer for the saved key. Owner reads clear `error`, so it outlives the refresh after a start. */
+  admissionAnswer?: DirectoryReviewAnswer
 }
 
 /** The directory and base come from the native workspace record, never a chat or event. */
@@ -59,7 +62,7 @@ export function createDirectoryReviewController(input: {
   transport: DirectoryReviewTransport
   subscribe: (invalidate: () => void) => () => void
   changed: (state: DirectoryReviewState) => void
-  admission?: { pending: () => boolean; hold: (retry: boolean) => void; confirm: () => void }
+  admission?: { pending: () => boolean; hold: (retry: boolean) => void; confirm: () => void; discard: () => void }
 }) {
   const abort = new AbortController()
   const answered = new Set<string>()
@@ -76,6 +79,8 @@ export function createDirectoryReviewController(input: {
   let starting = false
   let dirty = false
   let reading: Promise<void> | undefined
+  // The run shown when the engine answered `consumed`; a live or different run supersedes that answer.
+  let consumedRun: string | undefined
   const current = () => !disposed && !retired && input.enabled && input.current()
   const update = (patch: Partial<DirectoryReviewState>) => {
     if (!current()) return
@@ -118,11 +123,18 @@ export function createDirectoryReviewController(input: {
     if (!current() || runID !== id) return
     if (run.id !== id || !directoryRunMatches(run, input.target))
       throw new Error("The engine returned a review for another workspace.")
+    // A consumed start ran nothing, so a live run or one it was not answered beside is another view's and replaces
+    // its message. A refused discard keeps the message for the held guidance.
+    const superseded =
+      state.admissionAnswer?.code === "consumed" &&
+      !state.admissionUncertain &&
+      (run.status !== "done" || run.id !== consumedRun)
     update({
       phase: "ready",
       run,
       permission: pending.find((request) => directoryPermissionMatches(request, run) && !answered.has(request.id)),
       error: "",
+      ...(superseded ? { admissionAnswer: undefined } : {}),
     })
   }
   const refresh = (): Promise<void> => {
@@ -171,7 +183,7 @@ export function createDirectoryReviewController(input: {
         return
       starting = true
       runID = undefined
-      update({ busy: true, permission: undefined, error: "" })
+      update({ busy: true, permission: undefined, error: "", admissionAnswer: undefined })
       // Persist only an unpaid uncertainty marker; a list cannot prove a lost POST will never admit later.
       const held = (() => {
         try {
@@ -204,12 +216,33 @@ export function createDirectoryReviewController(input: {
           update({ run: undefined })
           return true
         })
-        .catch(() => {
-          update({
-            admissionUncertain: true,
-            error:
-              "The review start was not confirmed. Refresh to inspect existing reviews; starting another review remains blocked until this request can be identified.",
-          })
+        .catch((error: unknown) => {
+          if (!current()) return false
+          const answer = directoryReviewAnswer(error)
+          if (answer?.code === "pending") {
+            update({ admissionUncertain: true, admissionAnswer: answer })
+            return false
+          }
+          if (answer?.code !== "consumed") {
+            update({
+              admissionUncertain: true,
+              error:
+                "The review start was not confirmed. Refresh to inspect existing reviews; starting another review remains blocked until this request can be identified.",
+            })
+            return false
+          }
+          // The engine's terminal answer for this exact key: no review ran, so only a later click mints the next key.
+          const discarded = (() => {
+            try {
+              input.admission?.discard()
+              return true
+            } catch {
+              return false
+            }
+          })()
+          // A refused discard (another view replaced the marker) keeps the key held, but the engine's words still show.
+          consumedRun = state.run?.id
+          update({ admissionUncertain: !discarded, admissionAnswer: answer })
           return false
         })
         .finally(() => {

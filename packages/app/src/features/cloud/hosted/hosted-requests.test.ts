@@ -19,6 +19,21 @@ const RECURRING = `jr_${"c".repeat(26)}`
 const TOKEN = "vvt1.eyJhdWQiOiJ2ZWN0b3Itdmlld2VyIn0.c2lnbmF0dXJl"
 
 describe("hostedRoute", () => {
+  test("a download-only start (H1c) names one computer and nothing else", () => {
+    for (const computer of [1, 2, 3])
+      expect(hostedRoute({ kind: "download-start", computer })).toEqual({
+        path: "/api/hosted/sessions",
+        method: "POST",
+        body: { mode: "download", computer },
+      })
+    expect(hostedRoute({ kind: "download-start", computer: 1, size: "large", prompt: "x" })?.body).toEqual({
+      mode: "download",
+      computer: 1,
+    })
+    for (const computer of [0, 4, 1.5, "1", undefined, null, -1])
+      expect(hostedRoute({ kind: "download-start", computer })).toBeUndefined()
+  })
+
   test("maps each request to its route, method and body", () => {
     expect(hostedRoute({ kind: "status" })).toEqual({ path: "/api/hosted/status", method: "GET" })
     expect(hostedRoute({ kind: "sessions" })).toEqual({ path: "/api/hosted/sessions", method: "GET" })

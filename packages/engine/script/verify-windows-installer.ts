@@ -297,7 +297,7 @@ try {
   await checkpoint("unacknowledged update preparation")
   const abandoned = Bun.spawn([executable, "--hold"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
   await using abandonedCleanup = processCleanup(() => abandoned.kill(), abandoned.exited)
-  const abandonedIdentity = await ps(`(Get-Process -Id ${abandoned.pid}).StartTime.ToUniversalTime().Ticks.ToString()`)
+  const abandonedIdentity = await ps(WindowsRemoval.identity(abandoned.pid))
   assert.equal(abandonedIdentity.code, 0, abandonedIdentity.stderr)
   const abandonedOperation = randomBytes(16).toString("hex")
   const abandonedStatus = path.join(installDir, `.vector-update-${abandonedOperation}.json`)
@@ -327,7 +327,7 @@ try {
   await checkpoint("running executable update preparation")
   const holder = Bun.spawn([executable, "--hold"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
   await using holderCleanup = processCleanup(() => holder.kill(), holder.exited)
-  const identity = await ps(`(Get-Process -Id ${holder.pid}).StartTime.ToUniversalTime().Ticks.ToString()`)
+  const identity = await ps(WindowsRemoval.identity(holder.pid))
   assert.equal(identity.code, 0, identity.stderr)
   const operation = randomBytes(16).toString("hex")
   const status = path.join(installDir, `.vector-update-${operation}.json`)
@@ -386,9 +386,7 @@ try {
   await checkpoint("running executable removal preparation")
   const removalHolder = Bun.spawn([executable, "--hold"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
   await using removalHolderCleanup = processCleanup(() => removalHolder.kill(), removalHolder.exited)
-  const removalIdentity = await ps(
-    `(Get-Process -Id ${removalHolder.pid}).StartTime.ToUniversalTime().Ticks.ToString()`,
-  )
+  const removalIdentity = await ps(WindowsRemoval.identity(removalHolder.pid))
   assert.equal(removalIdentity.code, 0, removalIdentity.stderr)
   const removalOperation = randomBytes(16).toString("hex")
   const removalStatus = path.join(installDir, `.vector-update-${removalOperation}.json`)

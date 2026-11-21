@@ -72,7 +72,7 @@ export function createDesktopCloudAgentApi(
         requirePersistent: true,
       }))
   const enabled = () => {
-    if (env.VECTOR_GITHUB_BRAIN_ENABLED !== "true") throw unavailable()
+    if (env.VECTOR_GITHUB_BRAIN_ENABLED !== "true" || env.MODEL_PLANS_ENABLED !== "true") throw unavailable()
   }
   const desktop = async (request: ApiRequest) => {
     enabled()
@@ -200,9 +200,28 @@ export function createDesktopCloudAgentApi(
       throw error
     }
   }
+  // B08 source authority: while either service switch (Brain or model plans) is off, each route answers its fixed 503
+  // before it checks a method, origin, body, credential or limit, or touches a store.
+  const off =
+    (handler: (request: ApiRequest, response: ApiResponse) => Promise<void>, message: string) =>
+    async (request: ApiRequest, response: ApiResponse) => {
+      if (env.VECTOR_GITHUB_BRAIN_ENABLED === "true" && env.MODEL_PLANS_ENABLED === "true")
+        return handler(request, response)
+      response.setHeader("x-content-type-options", "nosniff")
+      response.setHeader("referrer-policy", "no-referrer")
+      if (!request.readableEnded) {
+        response.setHeader("connection", "close")
+        request.resume()
+      }
+      json(response, 503, { error: { code: "BRAIN_UPLOAD_UNAVAILABLE", message } })
+    }
+  const failed = "This Brain attachment request could not be completed."
+  const startFailed = "This repository attachment is unavailable. Update setup and try again from the desktop."
   return {
-    ...attachments,
-    start: async (request: ApiRequest, response: ApiResponse) => {
+    prepare: off(attachments.prepare, failed),
+    commit: off(attachments.commit, failed),
+    download: off(attachments.download, failed),
+    start: off(async (request, response) => {
       response.setHeader("x-content-type-options", "nosniff")
       response.setHeader("referrer-policy", "no-referrer")
       await start(request, response).catch(() => {
@@ -210,14 +229,9 @@ export function createDesktopCloudAgentApi(
           response.setHeader("connection", "close")
           request.resume()
         }
-        json(response, 503, {
-          error: {
-            code: "BRAIN_UPLOAD_UNAVAILABLE",
-            message: "This repository attachment is unavailable. Update setup and try again from the desktop.",
-          },
-        })
+        json(response, 503, { error: { code: "BRAIN_UPLOAD_UNAVAILABLE", message: startFailed } })
       })
-    },
+    }, startFailed),
   }
 }
 

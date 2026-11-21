@@ -30,6 +30,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { NpmTest } from "../fake/npm"
+import { noSweep } from "../fixture/connect-sweep"
 import { disposeAllInstances, trustWorkspace, tmpdirScoped } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
@@ -120,7 +121,7 @@ const live = testEffect(
       [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
       [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true, experimentalEventSystem: true })],
     ],
-  ),
+  ).pipe(Layer.provide(noSweep)),
 )
 const write = (directory: string, file: string, text: string) =>
   Effect.promise(async () => {
@@ -193,6 +194,21 @@ const fixture = (read?: Record<string, "allow" | "deny" | "ask">) =>
       pollWithTimeout(
         permission.list().pipe(Effect.map((rows) => rows.find((row) => row.metadata.runID === id))),
         "The actual review model consent did not arrive",
+      ).pipe(
+        // Say whether the run is still slow or already ended without asking, so the two failures stay distinguishable.
+        Effect.catch((error) =>
+          owner
+            .get(id)
+            .pipe(
+              Effect.flatMap((run) =>
+                Effect.fail(
+                  new Error(
+                    `${error.message} (run ${run.status}${run.result ? `: ${run.result.state}, refusal ${run.result.refusal ?? "none"}, notes ${JSON.stringify(run.result.notes)}` : ""}${run.progress ? `, progress ${JSON.stringify(run.progress.message)}` : ""})`,
+                  ),
+                ),
+              ),
+            ),
+        ),
       )
     const ended = (id: string) =>
       pollWithTimeout(

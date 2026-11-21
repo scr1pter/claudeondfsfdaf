@@ -1310,8 +1310,8 @@ describe("isolated task merge and discard", () => {
   })
 
   // Whichever of these three tests sets up the first isolated child in a run also pays a one-time warm-up of the
-  // isolation code, so the cheapest runs first and the refusals, with two children, run last. A discard asks nothing:
-  // neither TaskManager.discard nor TaskIsolation.discard calls `by.ask`.
+  // isolation code, so the cheapest runs first and the refusals, with six calls against one child, run last. A discard
+  // asks nothing: neither TaskManager.discard nor TaskIsolation.discard calls `by.ask`.
   isolatedIt.instance("an agent merges and discards only its direct children: the direct parent's discard asks nothing, keeps its reason and leaves the parent's files untouched", () => Effect.gen(function* () {
     const home = yield* InstanceState.context
     yield* base(home.directory, ["discarded.txt"])
@@ -1356,7 +1356,7 @@ describe("isolated task merge and discard", () => {
 
   isolatedIt.instance("an agent merges and discards only its direct children: an ancestor or a caller naming another session is refused and nothing is asked", () => Effect.gen(function* () {
     const home = yield* InstanceState.context
-    yield* base(home.directory, ["merged.txt", "discarded.txt"])
+    yield* base(home.directory, ["merged.txt"])
     const sessions = yield* Session.Service
     const manager = yield* TaskManager.Service
     const isolation = yield* TaskIsolation.Service
@@ -1365,21 +1365,20 @@ describe("isolated task merge and discard", () => {
     // Isolation fences the conversation family owner-only before its first child exists.
     yield* isolation.fence(root.id)
     const kept = yield* isolatedChild(lead.id, "merged.txt")
-    const dropped = yield* isolatedChild(lead.id, "discarded.txt")
     const asked: string[][] = []
 
-    // The root sees both tasks among its descendants but is not their parent; a caller naming another session is
-    // refused too, even when the session it names is the parent: only TaskManager refuses that one, as TaskIsolation
-    // checks `by` alone. Nothing is asked, written or discarded.
+    // The root sees the task among its descendants but is not its parent; a caller naming another session is refused
+    // too, even when the session it names is the parent: only TaskManager refuses that one, as TaskIsolation checks
+    // `by` alone. Nothing is asked, written or discarded. Every call names the same settled, changed child: a refused
+    // discard that went through would fail its own `forbidden` check, and the state check below would fail too.
     for (const [sessionID, actor] of [[root.id, root.id], [lead.id, root.id], [root.id, lead.id]] as const) {
       const merge = yield* manager.merge({ sessionID, taskID: kept.id, by: by(asked, actor) }).pipe(Effect.flip)
       expect(merge.code).toBe("forbidden")
-      const discard = yield* manager.discard({ sessionID, taskID: dropped.id, by: by(asked, actor) }).pipe(Effect.flip)
+      const discard = yield* manager.discard({ sessionID, taskID: kept.id, by: by(asked, actor) }).pipe(Effect.flip)
       expect(discard.code).toBe("forbidden")
     }
     expect(asked).toEqual([])
     expect((yield* isolation.get(kept.id)).state).toBe("changed")
-    expect((yield* isolation.get(dropped.id)).state).toBe("changed")
     expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "merged.txt"), "utf8"))).toBe("base\n")
   }), { git: true })
 

@@ -145,6 +145,19 @@ describe("kill flag", () => {
     expect(harness.state.alarm! - harness.clock.now).toBe(OPS_LIMITS.killRecheckMs)
   })
 
+  test("while set, a report past its day is dropped, so an account with nothing else to do stops waking", async () => {
+    const harness = await setup(planFor("vector-200", { validUntil: NOW + 3 * 60_000 }))
+    harness.net.sites.set(HOME, () => new Response("x", { status: 500 }))
+    harness.net.reportStatus = 503
+    await harness.runFor(3 * 60_000)
+    expect(harness.rows("SELECT * FROM outbox")).toHaveLength(1)
+    harness.kv.values.set("kill", "1")
+    // One re-read every 10 minutes until the report is a day old, then none: a day holds at most 145 such wakes.
+    expect(await harness.runFor(2 * DAY)).toBeLessThanOrEqual(DAY / OPS_LIMITS.killRecheckMs + 1)
+    expect(harness.rows("SELECT * FROM outbox")).toEqual([])
+    expect(harness.state.alarm).toBeNull()
+  })
+
   test("no release is watched while the Worker is off", async () => {
     const harness = await setup()
     harness.kv.values.set("kill", "1")

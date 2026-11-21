@@ -97,6 +97,29 @@ codium defect. At `origin/self-evolving` `e0bfa00b`, `RunBudget.CostKind` is sti
 `budgetScopes`. It belongs to the self-evolving lane and owner step 9 (also in `codium-deviations.md`, "P4 review
 decisions (8 Nov 2026)").
 
+**Status, 15 Nov 2026 (Codium finish F6): P4 finding F6 closed.** Self-evolving is part of this tree (`e0bfa00b`,
+`0c1f1b52` and `d36a3607` are ancestors of `codium-finish` `31ddb43b`), so the fix lands here. `SubagentLifecycle.read()`
+(`packages/engine/src/tool/subagent-lifecycle.ts`, the `budgetScopes` field of the returned record) no longer decodes
+the stored array with `Schema.Array(Task.BudgetScope)`: it checks each scope on its own, and a string `costKind` this
+build does not know is read as `"unknown"` before the check, as WP1 reads an interruption cause. A malformed scope, or
+one whose `stopped.reason` is a stop reason this build does not know, drops alone; the others are kept.
+`RunBudget.CostKind`, `RunBudget.StopReason`, `Task.BudgetScope`, the SDK, openapi and the generated client are
+unchanged, and no generator ran. Regressions in `packages/engine/test/tool/subagent-lifecycle-read.test.ts`: "a cost
+kind a newer version added reads as unknown and keeps the other scope", "a malformed budget scope drops alone and
+keeps the others", and the existing "budgetScopes with an unknown kind is ignored and does not erase delegatedScope",
+whose `budgetScopes` assertion moves from undefined to exactly the run scope. Against the old source the file gave
+11 pass, 3 fail (each received `undefined`); now 14 pass, 0 fail. Readings, mutations and the local and CI-only runs
+are in `codium-deviations.md`, "Codium finish: F6 cost kind on read (15 Nov 2026)". Nothing remains of the owner step 9
+hand-off for this tree's reader, since self-evolving and codium are already combined here; engines 1.99.111 and older
+still drop the whole array on a newer kind, which is why the delegated scope stays out of `budgetScopes` (I29). CI ids
+follow in a dated line.
+
+CI, 15 Nov 2026 (recorded by Codium finish DZ): F6's runs at `5f19b0c9`. Vector Codium run 43674652525 is green
+under the lane rule: its Codium tests job 132692043010 failed only at the exerciser, with the four baseline MISS
+lines and `fail=0`, as read in the F44 section's For the lead item 2. typecheck.yml run 43674654638 and
+vector-hosted-ci.yml run 43675036401 concluded success. See `codium-deviations.md` "Lane status (15 Nov 2026,
+codium-finish)".
+
 ## A22 stamping and accounting
 
 **F7. The `SessionV1.Event.Updated` strip list might write back stale Codium counts.** Not confirmed. The handler
@@ -479,6 +502,17 @@ confirmed and handed off.
   status reads whose share left differs (19% then 18% left), and exactly one `sendPhoneAlert` call (one
   `phoneAlerts.send`) is expected. Not repaired here.
 
+**Status, 15 Nov 2026 (Codium finish F28): P4 finding F28 closed.** The check moved to `sendUsageAlert`
+(`packages/app/src/components/codium-usage-alert.ts`), which the component's effect calls. A24's shared key per account,
+plan and renewal is unchanged, including the retry after a failed desktop notification; the phone alert is also recorded
+in a set of its own, so it goes at most once per period for the app lifetime while the desktop notification keeps
+failing (a phone alert that `sendPhoneAlert` held back is still tried at a later read, as before). The threshold is now
+the whole-percentage share the card shows (`usageShare`, H5), which changes nothing for the whole percentages the server
+sends. Regression: `codium-usage-alert.test.ts`, "with both switches on, the phone alert goes once while a failing
+desktop notification is tried again (F28)", through the real `sendPhoneAlert` (one `phoneAlerts.send`); it failed on the
+old body (5 pass, 3 fail with the quiet-hours and H5 cases). Defaults are unchanged (`codium.alert80` false,
+`notifications.events.usage` false). Details: `codium-p6-repairs.md`, "A41 phone usage alert (F28, P6 addendum)".
+
 **F29. The recommender and outcomes might use Codium.** Not confirmed.
 `features/economics/economics-recommender.ts:26,100`, `economics-repository.ts:251`, `session-outcomes.ts:108`,
 `workspace-outcomes.ts:64` and `token-usage.ts:134` leave Codium out; `economics-recommender.test.ts` (39),
@@ -793,6 +827,58 @@ separate task: in `sanitizeLegacy`, after `taskMetadata`, redact the string fiel
 `data("session-metadata", ...)`, with an `export-sanitize.test.ts` case asserting a steer prompt's text is absent.
 P4c's attempt to queue it as a task suggestion timed out without returning a task id, so the hand-off stays open with
 the lead.
+
+**Status, 15 Nov 2026 (Codium finish F44): P4 finding F44 closed.** `sanitizeLegacy`
+(`packages/engine/src/cli/cmd/export.ts:171`) now rebuilds `info.metadata` key by key (`:192-205`). `metadata.subagent`
+still goes through `taskMetadata` first, so F43 is unchanged, and the result is then filtered by an allow-list,
+`LIFECYCLE` (`:301`, walked by `redactLifecycle` at `:392`), which covers every field of `SubagentRecord`
+(`packages/engine/src/agent/subagent-kind.ts:100-189`; the `:50-82` cited above is stale).
+
+- **Kept as they are:** enums, ids, counts, timestamps, budgets and the slot wording, as scalars only. An object or
+  list a crafted archive puts under one of these fields is redacted as `subagent-field`.
+- **Redacted with `redact()`**, each with its own label and each array element alike: `title`, `resultSummary`,
+  `reason`, `error`, `successCriteria[]`, `ownedPaths[]`, `dependsOn[]`, `resultRef`, `batchID`, `notification.text`,
+  `mailbox[].text` and `mailbox[].sender`, `waiting.summary`, the workflow run's `title`, a workflow agent's `stage`,
+  `phase`, `item`, `key` and `node`, `fork.point` and `fork.from`, the isolation `branch`, `merged[]`, `skipped[]`,
+  `conflicts[]` and `error`, and each budget scope's `stopped.message`.
+- **Replaced whole with the `data()` marker:** `workflow.progress` and `structured.schema`.
+- **Keys the allow-list does not name** (a newer version's field, a pre-I19 `isolation.directory`, a crafted archive's
+  key): a string or object is redacted as `subagent-field`, while a number, boolean or null stays.
+- **Every other metadata key:** each string at any depth is redacted as `session-metadata` (`redactStrings`, `:408`).
+  Keys, numbers, booleans and null are kept.
+
+`run()`'s choice of what to print in the local format moved, unchanged, into the exported `localArchive`
+(`export.ts:513-516`), so a test can run the unsanitized branch. Each field keeps its type, so
+`SubagentLifecycle.read` still accepts a sanitized record. Unsanitized exports, import, the help text and the portable
+path are unchanged. `sanitizePublic` receives a `PublicSession.Archive`, which carries no metadata. Regression tests
+are in `packages/engine/test/cli/export-sanitize.test.ts`, in the new describe block "sanitizeLegacy lifecycle text":
+
+- "a lifecycle record's text never reaches a sanitized export, while its status and timestamps remain";
+- "a workflow agent's stage, phase, item, key and node are redacted";
+- "fields the allow-list does not name are redacted, whether a newer version, an older one or a client wrote them";
+- "an object or list under a kept field is redacted, since only a crafted archive holds one there";
+- "a session's own metadata loses its strings and keeps its numbers without a lifecycle record";
+- "an unsanitized export keeps the lifecycle text" (it runs `localArchive`, not the CLI; see the deviations section);
+- "the portable archive carries no session metadata".
+
+The F43 case's `title` and `unrelated.label` now expect redaction markers. Its token assertions are unchanged.
+
+- **Old source:** 11 pass, 8 fail (the four F43 cases on the two markers, and the first four new cases; the T1 leak
+  check listed all 27 private strings).
+- **Now:** 20 pass, 0 fail, after the review fixes. Before the fix for kept fields, the new "an object or list"
+  case failed alone, with all five of its strings leaked.
+
+Readings, mutations, the review fixes and the local and CI-only runs are in `codium-deviations.md`, "Codium finish:
+F44 sanitized lifecycle text (15 Nov 2026)". CI ids follow in a dated line.
+
+CI, 15 Nov 2026 (recorded by Codium finish DZ): F44's runs at `2924d94b`.
+
+- Vector Codium run 43679383178 had 18 jobs: 15 succeeded, 2 were skipped by `services_only`, and Codium tests job
+  132706470083 failed only at the exerciser step. Its visible tail shows "Codium: 122/122 test files passed" and the
+  four baseline MISS lines with `fail=0`, so the run is green under the lane rule.
+- typecheck.yml run 43679385886 and vector-hosted-ci.yml run 43679749016: success.
+
+No per-file count is claimed. See `codium-deviations.md` "Lane status (15 Nov 2026, codium-finish)".
 
 **F45. Token provenance is trusted only from the engine.** Not confirmed.
 
@@ -1174,6 +1260,20 @@ nothing in carry mode (`:382`), and `c` stays dollars; `encodeRaw` writes `k` on
 - Proposed regression for Codex (`packages/engine/test/cli/github.evidence.test.ts`): `measureCost` over one Codium turn
   and one own free turn gives a line without `$0.00`; a mixed priced line contains `on your keys`. No test was added
   here: it would fail until Codex repairs its file.
+- **Status, 15 Nov 2026 (Codium finish TB): closed, no code change here.** The @vector lane's approved correction
+  (`vector-at-mention-deviations.md:537`, item 1 of "V19 evidence provenance and Actions output (2026-11-10)") changed
+  the contract: portable messages keep Codium attribution but not free-model versus OAuth-plan provenance, so mixed
+  evidence says "from other models", omits a zero subtotal and never infers "on your keys", "free" or a plan label.
+  Label plan §3.8's Mixed bullet (`codium-label-plan.md:196`) now reads `... 3.1k out from other models · 4 turns` and
+  "a zero non-Codium subtotal omits the price". `formatCost` (`github.evidence.ts:293-324`) matches it: `ownPrice`
+  (`:299`) is undefined when `codium && costUsd === 0 && unpriced === 0`, and the token part ends ` from other models`
+  (`:316`). Tests in `packages/engine/test/cli/github.evidence.test.ts`: the loop at `:348-373` (the mixed line
+  `**Cost:** $0.12 + Codium · 100 in / 20 out from other models · 2 turns`, no `$0.00`), `:436` (measured other-model
+  totals) and `:483-498` ("mixed evidence never infers a free or OAuth-plan label from a zero own-model amount": the
+  line `**Cost:** Codium · 100 in / 20 out from other models · 2 turns`, and no `$0.00`, `free + Codium` or `on your
+  keys`). CI: test.yml run 43636452606 (PR #33's merge ref), engine (linux, shard 1/4) job 132574289056, whose whole
+  log is visible: `github.evidence.test.ts` 24 pass, 0 fail, the `:483` case among them. F63's own "on your keys"
+  expectation is superseded by the contract change, so it closes as resolved by it. Not run locally by TB.
 
 **F64. Codex's GitHub Actions log for mixed reviews.** Confirmed, hand-off to Codex (not edited).
 
@@ -1182,6 +1282,16 @@ nothing in carry mode (`:382`), and `c` stays dollars; `encodeRaw` writes `k` on
 - Proposal: print `Spent: Codium` when `event.codium` is set and `costUsd` is 0, the same rule as core's PR total
   (`format.ts:891-898`). `run.ts`'s event is not changed, since `github.review.ts` is its only consumer. Proposed
   regression: a review with one own $0 step and one Codium step logs no `$0.0000`.
+- **Status, 15 Nov 2026 (Codium finish TB): closed, no code change here.** `github.review.ts:714-718` now logs
+  `Spent: Codium` when `deps.cloud || event.kind === "codium" || (event.codium && event.costUsd === 0)` (`:716`) and
+  `Spent $X + Codium` otherwise, which is the proposal above. `packages/engine/src/review/run.ts:428` still sends
+  `kind: "unknown"` once an own step is reported, so the `costUsd === 0` branch is what keeps `$0.0000` out. Tests in
+  `packages/engine/test/cli/github.review.test.ts`: `:2076` ("Codium progress, sticky footer and durable review count
+  contain no private figures") and `:2098` ("mixed Codium review progress reports only positive own spend": a free $0
+  step, then a $0.12 step; expects `Spent: Codium` and `Spent $0.1200 + Codium` and no `Spent $0.0000`). CI: test.yml
+  run 43636452606, engine (linux, shard 2/4) job 132574288967, whose whole log is visible: `github.review.test.ts`
+  46 pass, 0 fail, both cases among them (the job failed on other files and its 30-minute step limit, recorded in
+  `codium-deviations.md`, "Codium finish: Track B receipts and P4 closings"). Not run locally by TB.
 
 **F65. P4a's F10: the public share's model-switched notice keeps `vector-plan/<id>`.** Owner decision O9, no change.
 
@@ -1476,6 +1586,24 @@ Open items, each recorded where it is owned:
 
 - F6: an unknown cost kind on self-evolving (hand-off to the self-evolving lane and owner step 9).
 - F28: A41's phone usage alert can repeat while the desktop notification keeps failing (hand-off to the P6 addendum).
+  Closed 15 Nov 2026 (Codium finish F28): repaired in the P6 addendum (dated line under F28).
 - F44: `--sanitize` keeps the lifecycle record's text fields (privacy, the lead's queue).
 - F63 and F64: Codex's evidence cost line and Actions log for mixed reviews (hand-offs to Codex).
 - O1 to O9: public copy and label-surface copy that are the owner's to decide (F65, F71).
+
+**Status, 15 Nov 2026 (Codium finish TB).** F63 and F64 are closed (dated lines under each): by the @vector lane's
+approved V19 evidence correction and the code and tests it describes, with CI receipts from test.yml run 43636452606.
+No code changed. F6, F28, F44 and O1 to O9 are not changed by this package.
+
+**Status, 15 Nov 2026 (Codium finish F6).** P4 finding F6 is closed (dated line under it): this build reads a stored
+cost kind it does not know as `"unknown"` and checks each budget scope on its own, with no schema change. F28, F44 and
+O1 to O9 are not changed by this package.
+
+**Status, 15 Nov 2026 (Codium finish F44).** P4 finding F44 is closed (dated line under it): a sanitized legacy export
+now redacts the lifecycle record's text through an allow-list, and redacts every string in the session's other
+metadata. F43's token stripping is unchanged. F28 and O1 to O9 are not changed by this package.
+
+**Status, 15 Nov 2026 (Codium finish F28).** P4 finding F28 is closed (dated line under it): the phone usage alert goes
+at most once per account, plan and renewal while the desktop notification keeps failing, the desktop keeps A24's retry,
+and the 80% threshold is the share the card shows. Repaired in `codium-p6-repairs.md` ("A41 phone usage alert (F28,
+P6 addendum)"). O1 to O9 are not changed by this package.

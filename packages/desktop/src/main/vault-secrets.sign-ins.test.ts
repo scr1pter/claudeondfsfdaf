@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { VaultCrypto } from "@vectordevai/core/vault/crypto"
+import { VaultRecovery } from "@vectordevai/core/vault/recovery"
 
 const home = mkdtempSync(join(tmpdir(), "vector-vault-sign-ins-"))
 // Every call that can reach the OS credential store. Earlier releases sealed GitLab tokens with the synchronous
@@ -52,6 +54,7 @@ const { getStore } = await import("./store")
 const { getGithubToken } = await import("./github-auth")
 const { getGitlabToken } = await import("./gitlab-auth")
 const { vectorAccount } = await import("./vector-account-runtime")
+const { vaultKeys } = await import("./vault-runtime")
 const sealedBy = (provider: "sync" | "async", text: string) => Buffer.from(`${provider}:${text}`).toString("base64")
 
 afterAll(() => rmSync(home, { recursive: true, force: true }))
@@ -111,6 +114,33 @@ describe("sign-ins in the vault", () => {
 
     expect(getGitlabToken()).toBeUndefined()
     expect(getStore("gitlab-auth").get("token")).toBeUndefined()
+    expect(calls).toEqual({ sync: 0, asyncAvailable: 0, async: 0, seal: 0 })
+  })
+
+  test("a Brain Vault key that no longer opens reads as no key, so its recovery code can restore it", async () => {
+    const vault = VaultCrypto.vaultId()
+    const vaultKey = VaultCrypto.vaultKey()
+    const wrapped = await VaultRecovery.wrap({ vaultKey, vault, code: VaultRecovery.generate(), cost: 2 ** 14 })
+    const record = {
+      v: 1 as const,
+      vault,
+      key: VaultCrypto.toBase64Url(vaultKey),
+      wrapped,
+      backend: { type: "github" as const, repo: "octo/brain-vault" },
+    }
+    await vaultKeys.write(record)
+    expect(String(getStore("vector-vault").get("key"))).toStartWith("vs1.")
+    expect(await vaultKeys.read()).toEqual(record)
+
+    // The vault key changed, as when its file was removed: the record stays for the next write to replace.
+    vaultSecrets.setKey(randomBytes(32))
+    expect(await vaultKeys.read()).toBeUndefined()
+    expect(getStore("vector-vault").get("key")).toBeDefined()
+    getStore("vector-vault").set("key", "vs1.broken")
+    expect(await vaultKeys.read()).toBeUndefined()
+    // A vault record was only ever sealed in-process, so anything else is never handed to the credential store.
+    getStore("vector-vault").set("key", sealedBy("sync", JSON.stringify(record)))
+    expect(await vaultKeys.read()).toBeUndefined()
     expect(calls).toEqual({ sync: 0, asyncAvailable: 0, async: 0, seal: 0 })
   })
 

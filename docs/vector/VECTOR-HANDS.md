@@ -1,6 +1,6 @@
 # Vector Hands engineering guide
 
-Vector Hands is an unreleased attended desktop feature. Its release version will be chosen after validation and owner review. Source checkpoints and actual native evidence are tracked in [hands-progress.md](./build/hands-progress.md); that ledger, rather than source presence, determines what has been validated. The complete contract is [hands-build-spec.md](./build/hands-build-spec.md), with intentional corrections in [hands-deviations.md](./build/hands-deviations.md).
+Vector Hands is an unreleased attended desktop feature. Its release version will be chosen after validation and owner review. Source checkpoints and actual native evidence are tracked in [hands-progress.md](./build/hands-progress.md); that ledger, rather than source presence, determines what has been validated. [hands-current-state.md](./build/hands-current-state.md) summarizes what is done and what remains. The complete contract is [hands-build-spec.md](./build/hands-build-spec.md), with intentional corrections in [hands-deviations.md](./build/hands-deviations.md).
 
 ## Architecture
 

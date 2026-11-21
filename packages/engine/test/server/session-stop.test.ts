@@ -211,6 +211,41 @@ it.live("a guest stops or backgrounds only a session it controls", () =>
   }),
 )
 
+// Track B B09: the phone's Stop reaches this route (packages/desktop/src/main/remote-routes.ts). Whatever else a body
+// names, only the session in the path, and with `helpers` its own helper tree, is stopped. The published body takes no
+// other field (additionalProperties false); the runtime may strip the extras or refuse the request, never act on them.
+it.live("a body naming another session, tasks or every helper still stops only the session in the path", () =>
+  Effect.gen(function* () {
+    for (const helpers of [true, false]) {
+      calls.length = 0
+      const response = yield* stop({
+        helpers,
+        sessionID: "ses_session_stop_other",
+        taskIDs: [stopped.id],
+        all: true,
+        descendants: true,
+      })
+      expect([200, 400]).toContain(response.status)
+      if (response.status === 400) {
+        expect(calls).toEqual([])
+        continue
+      }
+      expect(calls).toEqual([{ sessionID, helpers }])
+      expect(((yield* response.json) as { tasks: Task.Info[] }).tasks).toEqual(helpers ? [stopped] : [])
+    }
+  }),
+)
+
+it.live("a guest that controls only another session, or only the helper, cannot stop this one", () =>
+  Effect.gen(function* () {
+    calls.length = 0
+    for (const claims of ["ses_session_stop_other", stopped.id, `ses_session_stop_other,${stopped.id}`])
+      expect((yield* stop({ helpers: true }, { "x-test-guest": claims })).status).toBe(403)
+    expect((yield* stop({ helpers: false }, { "x-test-guest": stopped.id })).status).toBe(403)
+    expect(calls).toEqual([])
+  }),
+)
+
 it.live("capabilities report the stop route", () =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get("/experimental/capabilities").pipe(HttpClient.execute)

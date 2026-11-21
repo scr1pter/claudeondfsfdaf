@@ -6,6 +6,7 @@ import { ConfigAgentV1 } from "@vectordevai/core/v1/config/agent"
 import { ConfigCommandV1 } from "@vectordevai/core/v1/config/command"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { docsMoved, docsNav } from "../src/data/docs-nav"
+import { publishedDesktopVersion } from "../src/data/vector-releases"
 
 const docs = new URL("../src/pages/docs/", import.meta.url)
 const page = (name: string) => Bun.file(new URL(`${name}.astro`, docs)).text()
@@ -32,25 +33,45 @@ async function section(name: string, id: string) {
 
 const strict = { errors: "all", onExcessProperty: "error" } as const
 
-test("company computer policy samples decode and state their minimum engine version", async () => {
-  const sample = await Bun.file(new URL("../src/data/local/vector.json", import.meta.url)).json()
-  const config = Schema.decodeUnknownSync(ConfigV1.Info)(sample, strict)
-  expect(config.computer).toMatchObject({
-    enabled: true,
-    default_app_access: "ask",
-    native_tools: "off",
-    screenshots: { keep: 3, max_width: 1440, max_height: 900 },
-  })
+// A key the published desktop's engine does not know is described in the published schema as "Not available in Vector
+// <version> or earlier". That engine rejects unknown top-level keys, so a company policy copied from a sample with such
+// a key would stop config loading on every machine that receives it.
+async function unreleasedKeys() {
   const schema = await Bun.file(new URL("../public/config.json", import.meta.url)).json()
+  return Object.entries(schema.$defs.Config.properties).flatMap(([key, property]) => {
+    const version = (property as { description?: string }).description?.match(
+      /^Not available in Vector (\S+) or earlier/,
+    )?.[1]
+    return version && Bun.semver.order(publishedDesktopVersion, version) <= 0 ? [key] : []
+  })
+}
+
+test("the published schema says which top-level keys released Vector does not accept", async () => {
+  const schema = await Bun.file(new URL("../public/config.json", import.meta.url)).json()
+  for (const key of ["computer", "connect"])
+    expect(schema.$defs.Config.properties[key].description).toStartWith(
+      "Not available in Vector 1.99.112 or earlier, which rejects this key.",
+    )
   expect(schema.$defs.Config.properties.computer.description).toContain("Company-policy only")
-  expect(schema.$defs.Config.properties.computer.description).toContain("1.99.112")
-  expect(schema.$defs.ComputerConfig.properties.max_actions.allOf).toContainEqual({ maximum: 5000 })
-  const guide = await page("local")
-  expect(guide).toContain("Vector 1.99.112 or later")
-  expect(guide).toContain("user's consent")
+})
+
+test("the public company-policy samples and docs samples use only keys the published engine accepts", async () => {
+  const unreleased = await unreleasedKeys()
+  const sample = await Bun.file(new URL("../src/data/local/vector.json", import.meta.url)).json()
+  expect(Object.keys(sample).filter((key) => unreleased.includes(key))).toEqual([])
+  Schema.decodeUnknownSync(ConfigV1.Info)(sample, strict)
   const profile = await Bun.file(new URL("../src/data/local/ai.vector.managed.mobileconfig", import.meta.url)).text()
-  expect(profile).toContain("<key>computer</key>")
-  expect(profile).toContain("Vector 1.99.112 or later")
+  expect(unreleased.filter((key) => profile.includes(`<key>${key}</key>`))).toEqual([])
+  expect(profile).not.toContain("1.99.112 or later")
+  const shown = await Promise.all(
+    pages.map(async (name) =>
+      samples(await page(name))
+        .filter((text) => text.trimStart().startsWith("{"))
+        .flatMap((text) => Object.keys(JSON.parse(text)).filter((key) => unreleased.includes(key)))
+        .map((key) => `${name}: ${key}`),
+    ),
+  )
+  expect(shown.flat()).toEqual([])
 })
 
 test("every vector.json sample in the docs is one Vector reads, without a key it does not know", async () => {

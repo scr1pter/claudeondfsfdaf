@@ -7,12 +7,12 @@ name: Vector hosted image
 # - The preflight job holds no secret. It requires the hosted-production environment to have a required reviewer and to
 #   take protected branches only, main to be a protected branch and the commit to be on main, and checks the inputs.
 # - The image job runs in hosted-production, so it waits for the owner's approval. It builds hostd and the viewer
-#   proxy, takes the musl CLI from that published release (checked against its manifest; the release's own source
-#   must be on main too), builds the image for linux/amd64, boots it in Docker and runs the image checks from inside,
-#   and only then signs in to the hosted team's registry, pushes it under its generation (a generation already in the
-#   registry is refused), and runs script/bake-snapshot.ts on the digest it pushed. The bake starts one sandbox with no
-#   network, checks the image there, saves the snapshot and prints VECTOR_HOSTED_BASE_SNAPSHOT=<id>; the owner sets it
-#   in Vercel (owner-actions/hosted-computer.md, "The image").
+#   proxy, takes the musl CLI and its three notice files from that published release (checked against its manifest;
+#   the release's own source must be on main too), builds the image for linux/amd64, boots it in Docker and runs the
+#   image checks from inside, and only then signs in to the hosted team's registry, pushes it under its generation (a
+#   generation already in the registry is refused), and runs script/bake-snapshot.ts on the digest it pushed. The bake
+#   starts one sandbox with no network, checks the image there, saves the snapshot and prints
+#   VECTOR_HOSTED_BASE_SNAPSHOT=<id>; the owner sets it in Vercel (owner-actions/hosted-computer.md, "The image").
 #
 # Settings, all in the hosted-production environment: the secret VECTOR_HOSTED_VERCEL_TOKEN (the hosted team's token,
 # never the main team's); the variables VECTOR_HOSTED_VERCEL_TEAM_ID, VECTOR_HOSTED_VERCEL_PROJECT_ID and
@@ -194,7 +194,7 @@ jobs:
         env:
           VECTOR_CLI_BLOB_ORIGIN: ${{ vars.VECTOR_CLI_BLOB_ORIGIN }}
           VECTOR_HOSTED_CLI_VERSION: ${{ needs.preflight.outputs.cli_version }}
-        run: bun packages/cloud/src/hosted-image.ts cli --output packages/hosted-computer/bin/vector
+        run: bun packages/cloud/src/hosted-image.ts cli --output packages/hosted-computer/bin/vector --notices packages/hosted-computer/notices
 
       - name: Require the CLI's source on protected main
         env:

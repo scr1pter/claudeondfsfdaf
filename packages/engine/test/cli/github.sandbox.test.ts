@@ -7,6 +7,7 @@ import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import {
+  command,
   copyBundleFile,
   engineLaunch,
   namespaceProbeFailure,
@@ -110,6 +111,22 @@ test("the sandbox environment excludes every credential and runner file command 
       expect(Object.values(clean)).not.toContain(value)
     }
   }
+})
+
+// The workflow passes `${{ inputs.brain_upload }}`, which is empty on every comment, issue and schedule run, so the
+// engine must read an empty value as absent.
+test("the Codium launcher keeps the desktop Brain upload id, empty or set", async () => {
+  await using f = await fixture()
+  const locations = {
+    node: path.join(f.directory, "node", "bin", "node"),
+    home: f.directory,
+    temporary: f.directory,
+    event: path.join(f.directory, "event"),
+  }
+  const upload = "vbu_" + "A".repeat(32)
+  expect(sandboxEnvironment({ ...f.env, VECTOR_BRAIN_UPLOAD: upload }, locations).VECTOR_BRAIN_UPLOAD).toBe(upload)
+  expect(sandboxEnvironment({ ...f.env, VECTOR_BRAIN_UPLOAD: "" }, locations).VECTOR_BRAIN_UPLOAD).toBe("")
+  expect(sandboxEnvironment(f.env, locations).VECTOR_BRAIN_UPLOAD).toBeUndefined()
 })
 
 test("tool PID isolation is derived from the trusted launcher, never an inherited environment override", async () => {
@@ -353,6 +370,53 @@ test.skipIf(process.platform === "win32")(
     expect(line).not.toContain(f.env.CUSTOM_CREDENTIAL)
   },
 )
+
+test.skipIf(process.platform === "win32")(
+  "a refused sandbox command says whether it timed out or exited, without argv or output",
+  async () => {
+    const message = (file: string, args: string[], timeout?: number) =>
+      command(file, args, undefined, timeout).then(
+        () => undefined,
+        (error: Error) => error.message,
+      )
+    expect(await message("/bin/sh", ["-c", "echo private-output; exec sleep 5"], 200)).toBe(
+      "Sandbox operation sh timed out; the run is refused.",
+    )
+    // A child that traps SIGTERM exits with its own code after the timeout kill and still reads as a timeout.
+    expect(
+      await message(
+        "/bin/sh",
+        ["-c", "trap 'kill $pid; exit 3' TERM; sleep 5 >/dev/null 2>&1 & pid=$!; echo private-output; wait"],
+        300,
+      ),
+    ).toBe("Sandbox operation sh timed out; the run is refused.")
+    expect(await message("/bin/sh", ["-c", "echo private-output >&2; exit 7"])).toBe(
+      "Sandbox operation sh exited 7; the run is refused.",
+    )
+    expect(await message("/nonexistent/vector-sandbox-tool", ["private-argument"])).toBe(
+      "Sandbox operation vector-sandbox-tool failed; the run is refused.",
+    )
+    expect((await command("/bin/sh", ["-c", "exit 1"], [0, 1])).code).toBe(1)
+  },
+)
+
+test("a fresh agent account never copies /etc/skel and its empty home is created exclusively", async () => {
+  // The hosted copy of /etc/skel (a Rust toolchain on GitHub's images) took the whole 120 s bound in job 133462227639.
+  const source = await Bun.file(path.join(import.meta.dir, "../../src/cli/cmd/github.sandbox.ts")).text()
+  const useradd = source.indexOf('"/usr/sbin/useradd"')
+  const order = [
+    useradd,
+    source.indexOf("state.gid = Number(", useradd),
+    source.indexOf("await writeState(env, state)", useradd),
+    source.indexOf('await sudo(["/usr/bin/mkdir", "-m", "0750", "--", AGENT_HOME])', useradd),
+    source.indexOf('await sudo(["/usr/bin/chown", "-h", `${state.uid}:${state.gid}`, "--", AGENT_HOME])', useradd),
+    source.indexOf("...ProcessIsolation.ENGINE_PRIVATE_DIRECTORIES", useradd),
+  ]
+  expect(order.every((index, position) => index > (order[position - 1] ?? 0))).toBe(true)
+  expect(source.slice(useradd, order[1])).toContain('"--no-create-home"')
+  expect(source).not.toContain('"--create-home"')
+  expect(source).not.toContain('"--skel"')
+})
 
 test("own-key channel captures exactly listed keys without reading any run credential", async () => {
   await using f = await fixture()

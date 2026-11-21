@@ -1,6 +1,6 @@
 # Vector Signature Blend: spec for the whole desktop app
 
-Status: design spec for artboards only. Nothing is built, no repository file is touched, nothing is installed, launched or tested. Every repository fact below was read from the read-only checkout `/Users/aik010/.cache/vector-review-main` (origin/main `0dcbb8e2d`), from `origin/hands`, `origin/codium`, `origin/vectorscope` and `origin/connected-workspace` with `git show`, and from the owner's two screenshots. Revised on 2026-11-11 after a review; what changed and why is in section 11.
+Status: design spec for artboards only. Nothing is built, no repository file is touched, nothing is installed, launched or tested. Every repository fact below was read from the read-only checkout `~/.cache/vector-review-main` (origin/main `0dcbb8e2d`), from `origin/hands`, `origin/codium`, `origin/vectorscope` and `origin/connected-workspace` with `git show`, and from the owner's two screenshots. Revised on 2026-11-11 after a review; what changed and why is in section 11.
 
 Inputs:
 - Signature spec: `scratchpad/vector-glass-concept-spec.md` (called "SIG" below; section numbers like SIG 4.6).

@@ -61,6 +61,14 @@ test("workspace review uses only a settled native checkout and its real base com
   expect(directoryReviewTarget({ ...selected, mergeState: "merged" })).toBeUndefined()
 })
 
+test("workspace review sends a 7-to-40-digit commit id in lowercase", () => {
+  const selected = agent({ status: "complete", isolatedPath: "/fixture/isolated" })
+  expect(directoryReviewTarget({ ...selected, baseCommit: "ABCDEF0" })?.base).toBe("abcdef0")
+  expect(directoryReviewTarget({ ...selected, baseCommit: "A".repeat(40) })?.base).toBe("a".repeat(40))
+  for (const baseCommit of ["abcdef", "a".repeat(41), "a".repeat(64), "main", "g".repeat(7)])
+    expect(directoryReviewTarget({ ...selected, baseCommit })).toBeUndefined()
+})
+
 describe("status predicates", () => {
   test("classifies running, finished, and attention states", () => {
     expect(isRunning("editing")).toBe(true)

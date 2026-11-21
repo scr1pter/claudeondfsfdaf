@@ -2,13 +2,8 @@ name: VectorScope owner review memory UI
 "on":
   push:
     branches:
-      - build-scope-owner
-      - build-scope-joined
-      - v2-scope
-      - build-candidate
-      - release-finish
-      - v2
       - main
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read

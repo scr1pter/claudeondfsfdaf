@@ -141,10 +141,11 @@ describe("SubagentLifecycle.read", () => {
   })
 
   test("budgetScopes with an unknown kind is ignored and does not erase delegatedScope", () => {
+    const run = { kind: "run", id: "ses_root", budget: { usd: 10 }, spentUsd: 1, steps: 1, unpricedSteps: 0 }
     const record = read({
       ...base,
       budgetScopes: [
-        { kind: "run", id: "ses_root", budget: { usd: 10 }, spentUsd: 1, steps: 1, unpricedSteps: 0 },
+        run,
         {
           kind: "delegated",
           id: "delegated:ses_root:msg",
@@ -156,8 +157,70 @@ describe("SubagentLifecycle.read", () => {
       ],
       delegatedScope: fields.delegatedScope,
     })
-    expect(record?.budgetScopes).toBeUndefined()
+    // Only the scope with the unknown kind is ignored; the run scope beside it is kept (P4 finding F6).
+    expect(record?.budgetScopes).toEqual([run] as never)
     expect(record?.delegatedScope).toEqual(fields.delegatedScope as never)
+  })
+
+  // Label plan section 6, "Downgrading the database" (P4 finding F6).
+  test("a cost kind a newer version added reads as unknown and keeps the other scope", () => {
+    const codium = {
+      kind: "run",
+      id: "ses_root",
+      budget: { usd: 10 },
+      spentUsd: 0,
+      steps: 4,
+      unpricedSteps: 0,
+      codiumSteps: 4,
+      costKind: "codium",
+    }
+    const future = {
+      kind: "child",
+      id: "ses_child",
+      budget: { usd: 5, steps: 40 },
+      spentUsd: 1.5,
+      steps: 6,
+      unpricedSteps: 2,
+      costKind: "future-kind",
+      stopped: { reason: "cap", message: "Subagent spend ceiling reached." },
+    }
+    expect(read({ ...base, budgetScopes: [codium, future] })?.budgetScopes).toEqual([
+      codium,
+      { ...future, costKind: "unknown" },
+    ] as never)
+  })
+
+  test("a malformed budget scope drops alone and keeps the others", () => {
+    const good = {
+      kind: "batch",
+      id: "batch:ses_root:msg",
+      budget: { usd: 20 },
+      spentUsd: 2,
+      steps: 3,
+      unpricedSteps: 0,
+    }
+    const child = { kind: "child", id: "ses_child", budget: { usd: 5 }, spentUsd: 1, steps: 1, unpricedSteps: 0 }
+    const scopes = read({
+      ...base,
+      budgetScopes: [
+        { ...child, id: undefined },
+        { ...child, spentUsd: undefined },
+        { ...child, spentUsd: Number.NaN },
+        { ...child, budget: { usd: 0 } },
+        { ...child, costKind: 7 },
+        { ...child, costKind: null },
+        { ...child, stopped: { reason: "drift", message: "x" } },
+        good,
+        "scope",
+        null,
+      ],
+    })?.budgetScopes
+    expect(scopes).toEqual([good] as never)
+    expect(scopes?.[0]).not.toHaveProperty("costKind")
+    // An array whose every entry fails reads as [], not undefined; a non-array reads as undefined.
+    expect(read({ ...base, budgetScopes: [null, { kind: "run" }] })?.budgetScopes).toEqual([])
+    expect(read({ ...base, budgetScopes: [{ kind: "delegated", id: "x" }, null] })?.budgetScopes).toEqual([])
+    expect(read({ ...base, budgetScopes: { kind: "run" } })?.budgetScopes).toBeUndefined()
   })
 
   test("an isolation state a newer version added still reads", () => {

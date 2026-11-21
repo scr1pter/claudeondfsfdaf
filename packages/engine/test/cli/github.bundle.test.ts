@@ -75,12 +75,17 @@ async function scratch() {
 }
 
 // Setup git always runs with hooks and fsmonitor off, so a hostile config a test writes later never runs here.
-async function sh(cwd: string, args: string[], env: Record<string, string> = {}) {
-  const result =
-    await $`git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgsign=false -c user.name=Test -c user.email=test@vector.test ${args}`
-      .cwd(cwd)
-      .env({ ...process.env, ...env })
-      .quiet()
+// `input`, when given, is git's stdin; otherwise git inherits the test's.
+async function sh(cwd: string, args: string[], env: Record<string, string> = {}, input?: string) {
+  const config = [
+    ...["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"],
+    ...["-c", "user.name=Test", "-c", "user.email=test@vector.test"],
+  ]
+  const command = input === undefined ? $`git ${config} ${args}` : $`git ${config} ${args} < ${Buffer.from(input)}`
+  const result = await command
+    .cwd(cwd)
+    .env({ ...process.env, ...env })
+    .quiet()
   return result.stdout.toString()
 }
 
@@ -99,6 +104,23 @@ async function repository(files: Record<string, string | Uint8Array>) {
   await put(dir, files)
   await sh(dir, ["add", "-A"])
   await sh(dir, ["commit", "-q", "--allow-empty", "-m", "base"])
+  return { dir, base: (await sh(dir, ["rev-parse", "HEAD"])).trim() }
+}
+
+// A base of README.md and `count` tracked/<i>.txt paths that all share one blob, staged in a single update-index call
+// and never written to the worktree: a few git objects instead of a thousand files written, added and committed, which
+// on a slow Windows runner took most of a patch-limit row's 30 s (docs/vector/build/ci-harness-repairs.md, 2026-11-20).
+// README.md stays on disk, so only the tracked/ paths count as changed. The update-index list goes through stdin, as
+// a thousand --cacheinfo arguments would pass the Windows command-line limit.
+async function trackedRepository(count: number) {
+  const dir = await scratch()
+  await sh(dir, ["init", "-q", "-b", "main"])
+  await put(dir, { "README.md": "hello\n" })
+  await sh(dir, ["add", "README.md"])
+  const blob = (await sh(dir, ["hash-object", "-w", "--stdin"], {}, "base\n")).trim()
+  const entries = Array.from({ length: count }, (_, index) => `100644 ${blob}\ttracked/${index}.txt\n`)
+  await sh(dir, ["update-index", "--index-info"], {}, entries.join(""))
+  await sh(dir, ["commit", "-q", "-m", "base"])
   return { dir, base: (await sh(dir, ["rev-parse", "HEAD"])).trim() }
 }
 
@@ -655,7 +677,7 @@ describe("writeBundle", () => {
       name: "files",
       refused: "files" as const,
       files: GithubAgents.PATCH_LIMITS.files + 1,
-      base: {},
+      tracked: 0,
       end: undefined,
       make: (dir: string) => put(dir, many("many", GithubAgents.PATCH_LIMITS.files + 1, "new")),
     },
@@ -664,15 +686,24 @@ describe("writeBundle", () => {
       name: "files, counted in the listing",
       refused: "files" as const,
       files: GithubAgents.PATCH_LIMITS.files + 1,
-      base: many("tracked", half + 1, "base"),
+      tracked: half + 1,
       end: undefined,
       make: (dir: string) => put(dir, { ...many("tracked", half + 1, "changed"), ...many("many", half, "new") }),
+    },
+    {
+      name: "files, deletions counted",
+      refused: "files" as const,
+      files: GithubAgents.PATCH_LIMITS.files + 1,
+      tracked: half + 1,
+      end: undefined,
+      // The tracked base was never written to the worktree, so each of its paths is already a deletion.
+      make: (dir: string) => put(dir, many("many", half, "new")),
     },
     {
       name: "fileBytes",
       refused: "fileBytes" as const,
       files: 1,
-      base: {},
+      tracked: 0,
       end: undefined,
       make: (dir: string) => put(dir, { "big.bin": new Uint8Array(GithubAgents.PATCH_LIMITS.fileBytes + 1) }),
     },
@@ -680,15 +711,21 @@ describe("writeBundle", () => {
       name: "bytes",
       refused: "bytes" as const,
       files: 1,
-      base: {},
+      tracked: 0,
       end: GithubBundle.DEADLINE,
       // Incompressible, so its binary patch is over PATCH_LIMITS.bytes while the file is under fileBytes.
       make: (dir: string) => put(dir, { "noise.bin": randomBytes(7_000_000) }),
     },
   ])("patch-limit refusal: $name", async (row) => {
-    const repo = await repository({ "README.md": "hello\n", ...row.base })
+    const started = performance.now()
+    const repo = row.tracked === 0 ? await repository({ "README.md": "hello\n" }) : await trackedRepository(row.tracked)
     await row.make(repo.dir)
-    const result = await bundle(repo.dir, repo.base, { end: row.end })
+    // writeBundle's git is bounded inside the row's 30 s, so on a slow runner its git is stopped and the row fails with
+    // writeBundle's own error, instead of the git outliving the row and rejecting after it.
+    const result = await bundle(repo.dir, repo.base, {
+      end: row.end,
+      timeoutMs: Math.max(1, 25_000 - (performance.now() - started)),
+    })
     const out = await written(repo.dir)
     expect(result.refused).toBe(row.refused)
     expect(result.files).toBe(row.files)
@@ -702,6 +739,10 @@ describe("writeBundle", () => {
       comment: "Done",
     })
     expect(out.summary?.stop).toBe(row.end?.stop)
+    if (row.refused !== "files") return
+    // Refused before the add, so git wrote no object for the new paths.
+    const blob = (await sh(repo.dir, ["hash-object", "many/0.txt"])).trim()
+    expect((await $`git cat-file -e ${blob}`.cwd(repo.dir).nothrow().quiet()).exitCode).not.toBe(0)
   })
 
   test("a repository config setting diff.noprefix or an external diff still yields an applicable patch", async () => {

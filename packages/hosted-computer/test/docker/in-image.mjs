@@ -6,7 +6,7 @@
 // real-microVM check (script/microvm-check.ts) starts it with its sandbox on, as hostd does.
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto"
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, readdirSync } from "node:fs"
+import { existsSync, lstatSync, readFileSync, statSync, writeFileSync, mkdirSync, readdirSync } from "node:fs"
 import net from "node:net"
 
 let failures = 0
@@ -32,8 +32,17 @@ report(
 )
 for (const binary of ["/usr/bin/setpriv", "/usr/bin/xdotool", "/usr/bin/ffmpeg", "/usr/bin/chromium-browser", "/usr/bin/git", "/usr/bin/tar", "/usr/sbin/nft", "/usr/bin/node", "/usr/local/bin/vector"])
   report(`${binary} is installed`, existsSync(binary))
-const writable = sh("find", ["/opt/vector", "/usr/lib/vector", "/etc/chromium", "(", "!", "-user", "root", "-o", "-perm", "/022", ")", "-print"]).stdout.trim()
+const writable = sh("find", ["/opt/vector", "/usr/lib/vector", "/etc/chromium", "/usr/share/vector", "(", "!", "-user", "root", "-o", "-perm", "/022", ")", "-print"]).stdout.trim()
 report("system components are root's and not writable by others", writable === "", writable)
+// The CLI's notices (stand-ins in the CI image job, the release's own in vector-hosted-image.yml's run).
+const notices = ["LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"].map((name) => `/usr/share/vector/${name}`)
+const mode = (info) => (info ? (info.mode & 0o7777).toString(8) : "missing")
+const folder = existsSync("/usr/share/vector") ? lstatSync("/usr/share/vector") : undefined
+report("/usr/share/vector is root's folder, mode 0755", folder?.isDirectory() === true && folder.uid === 0 && (folder.mode & 0o7777) === 0o755, mode(folder))
+for (const file of notices) {
+  const info = existsSync(file) ? lstatSync(file) : undefined
+  report(`${file} is root's file, not empty, mode 0644`, info?.isFile() === true && info.size > 0 && info.uid === 0 && (info.mode & 0o7777) === 0o644, mode(info))
+}
 
 // ── Boot ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const boot = sh("/opt/vector/boot.sh", ["--run-host", "vector-check.invalid", "--session", session], { timeout: 120_000 })
@@ -83,6 +92,8 @@ report("the agent's disk is at most 10 GB", size > 0 && size <= 10_000_000_000, 
 report("/tmp is a memory disk", sh("findmnt", ["-no", "FSTYPE", "/tmp"]).stdout.trim() === "tmpfs")
 report("the agent cannot write to the system disk", probe(10001, `try{require("fs").writeFileSync("/var/lib/vector/x","x");console.log("open")}catch{console.log("closed")}`) === "closed")
 report("the agent cannot read the display cookie", probe(10001, `try{require("fs").readFileSync("/run/vector/x/auth");console.log("open")}catch{console.log("closed")}`) === "closed")
+for (const file of notices)
+  report(`the agent can read ${file}`, probe(10001, `try{require("fs").readFileSync(${JSON.stringify(file)});console.log("open")}catch{console.log("closed")}`) === "open")
 
 // ── Viewer tokens ──────────────────────────────────────────────────────────────────────────────────────────────────
 const { privateKey, publicKey } = generateKeyPairSync("ed25519")

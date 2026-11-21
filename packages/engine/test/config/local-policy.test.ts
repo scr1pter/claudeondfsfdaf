@@ -10,6 +10,7 @@ import { Npm } from "@vectordevai/core/npm"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Global } from "@vectordevai/core/global"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { ConfigManaged } from "@vectordevai/core/config/managed"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
 import { Config } from "@/config/config"
@@ -22,7 +23,7 @@ import { NpmTest } from "../fake/npm"
 import { testEffect } from "../lib/effect"
 import { tmpdir } from "../fixture/fixture"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
-import { useManagedPolicyFixture } from "../fixture/managed-policy"
+import { managedPolicyAcl, useManagedPolicyFixture } from "../fixture/managed-policy"
 
 // Vector Local's policy as the engine resolves it: once, from the user's own config and the company's policy, with
 // the environment and the config overrides only tightening it, and a loosening edit held until the owner confirms.
@@ -73,6 +74,13 @@ const it = testEffect(
 )
 
 afterEach(() => {
+  // A test that leaves company policy in the managed folder without the fixture reads it, on Windows, through the real
+  // PowerShell ACL reader, whose start a busy runner can push past its timeout (job 136322673267).
+  // Only policy files count: an empty managed folder, which another test file in the same process may leave behind, is
+  // never read.
+  const unfixed =
+    managedFixture.restore === undefined &&
+    ["vector.json", "vector.jsonc"].some((name) => existsSync(path.join(managedDirectory, name)))
   managedFixture.restore?.()
   managedFixture.restore = undefined
   ENVIRONMENT.forEach((key) => {
@@ -87,6 +95,7 @@ afterEach(() => {
   Config.confirmLocal()
   expect(Config.localPending()).toBe(undefined)
   expect(guard.outside()).toEqual([])
+  expect(unfixed).toBe(false)
 })
 
 function writeGlobal(local: object | undefined) {
@@ -1249,12 +1258,34 @@ describe("sources Vector cannot read", () => {
   test("a company policy file that is a folder turns Local on with Web access None", () => {
     const file = path.join(managedDirectory, "vector.json")
     mkdirSync(file, { recursive: true })
+    managedFixture.restore ??= useManagedPolicyFixture(managedDirectory)
     const policy = Config.refreshLocal()
     expect(policy).toMatchObject({ enabled: true, web: "none" })
     expect(policy.warnings).toEqual([
       `Vector could not read ${file}.`,
       `Vector Local stays on with Web access None until Vector can read ${file}, which may hold your company's policy.`,
     ])
+  })
+
+  test("the Windows fixture reader trusts a company policy folder named vector.json, so the folder test's warnings come from reading it", () => {
+    const file = path.join(managedDirectory, "vector.json")
+    mkdirSync(file, { recursive: true })
+    managedFixture.restore ??= useManagedPolicyFixture(managedDirectory)
+    // The folder test's warnings must come from reading the folder, never from a failed ACL read of it.
+    expect(ConfigManaged.check(file, { platform: "win32", acl: managedPolicyAcl(managedDirectory), user: true })).toBe(
+      undefined,
+    )
+    // It answers only for its own managed paths that exist: not for vector.jsonc, which is absent here, or other.json.
+    expect(
+      managedPolicyAcl(managedDirectory)([
+        managedDirectory,
+        file,
+        path.join(managedDirectory, "vector.jsonc"),
+        path.join(managedDirectory, "other.json"),
+      ]),
+    ).toEqual({
+      entries: { [managedDirectory]: { owner: "S-1-5-18", rules: [] }, [file]: { owner: "S-1-5-18", rules: [] } },
+    })
   })
 })
 

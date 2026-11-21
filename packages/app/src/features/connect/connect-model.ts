@@ -98,7 +98,11 @@ export function costLabel(result: Pick<Connect.Result, "cost" | "sendsTo">) {
   return `$${result.cost.usd.toFixed(2)}`
 }
 
-export function verdictLabel(result: Connect.Result) {
+export function verdictLabel(
+  result: Pick<Connect.Result, "state" | "verdict"> & {
+    readonly findings: readonly Pick<Connect.Finding, "status" | "severity">[]
+  },
+) {
   if (result.state === "refused") return "Review refused"
   if (result.state === "cancelled") return "Review cancelled"
   if (result.state === "failed") return "Review failed"

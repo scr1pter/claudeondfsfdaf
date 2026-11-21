@@ -113,7 +113,10 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     events: [] as string[],
     requests: [] as string[],
     dispatchStatus: 204,
-    dispatches: [] as Array<{ ref: string; inputs: { mode: string; prompt: string; ticket: string } }>,
+    dispatches: [] as Array<{
+      ref: string
+      inputs: { mode: string; prompt: string; ticket: string; brain_upload?: string }
+    }>,
     minted: [] as Array<{
       token: string
       purpose: string

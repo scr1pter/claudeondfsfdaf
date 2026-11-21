@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { InstallationOwnership } from "../../src/installation/ownership"
 import { Standalone } from "../../src/installation/standalone"
+import { WindowsRemoval } from "../../src/installation/windows-remove"
 
 async function directory(prefix = "vector-ownership-") {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)))
@@ -156,6 +157,45 @@ test("Homebrew and Scoop use recorded manager identities rather than invented re
   ).toEqual({ method: "scoop", package: "fixture-bucket/vector", latest: "1.2.4" })
 })
 
+test("Windows deferred-operation PowerShell runs no cmdlet that needs command discovery", () => {
+  // Windows PowerShell 5.1 resolves a cmdlet or alias through command discovery and module auto-load, which stalled a
+  // deferred-removal worker for 30 s on CI. The worker and identity probe must stay operators and .NET only.
+  const generated = [
+    WindowsRemoval.script({
+      pid: 4242,
+      startTicks: "639304879276547567",
+      executable: "C:\\Vector\\vector.exe",
+      metadata: "C:\\Vector\\.vector-vector.exe",
+      lock: "C:\\Vector\\.vector-vector.exe.lock",
+      statusFile: "C:\\Vector\\.vector-update-0.json",
+      temporaryDirectory: "C:\\Vector\\.vector-uninstall-0",
+      binarySha256: "a".repeat(64),
+      files: ["C:\\Vector\\vector.exe", "C:\\Vector\\.vector-vector.exe\\receipt.tsv"],
+    }),
+    WindowsRemoval.identity(4242),
+  ]
+    .join("\n")
+    // String literals and comments may hold any words; only code can invoke a command.
+    .replace(/'(?:[^']|'')*'|"(?:[^"`]|`.)*"|#[^\n]*/g, (found) => (found.startsWith("#") ? "" : "''"))
+  // Any Verb-Noun word, whatever its case or verb, names a cmdlet or function that discovery would have to find.
+  expect(generated.match(/\b[a-z]\w*-[a-z]\w*/gi) ?? []).toEqual([])
+  // A bare word where PowerShell expects a command must be a language keyword or one of the script's own functions;
+  // anything else, such as an alias like gps or sleep, goes through command discovery.
+  const functions = [...generated.matchAll(/\bfunction\s+(\w+)/gi)].map((found) => found[1].toLowerCase())
+  const allowed = [
+    ...["try", "catch", "finally", "if", "elseif", "else", "while", "do", "until", "for", "foreach", "function"],
+    ...["param", "return", "throw", "exit", "break", "continue", "switch", "trap"],
+    ...functions,
+  ]
+  expect(
+    [...generated.matchAll(/(?<=(?:^|[;{}(|=&]|\breturn|\bthrow)[ \t]*)(?<![\w-])([a-z_][\w-]*)/gim)]
+      .map((found) => found[1])
+      .filter((word) => !allowed.includes(word.toLowerCase())),
+  ).toEqual([])
+  expect(functions).toEqual(["parentticks", "executablehash", "preparing"])
+  expect(generated).toContain("GetProcessById(4242)")
+})
+
 for (const replacement of [false, true]) {
   test.skipIf(process.platform !== "win32")(
     `Windows deferred standalone removal ${replacement ? "preserves a replaced executable" : "removes only owned files after its parent exits"}`,
@@ -176,7 +216,8 @@ for (const replacement of [false, true]) {
       // that exact process to exit; using the test runner's PID would leave it waiting for the suite.
       const diagnostic = path.join(fixture.root, "uninstall-diagnostic.json")
       const script = `
-        const checkpoint = (phase, details = {}) => Bun.write(${JSON.stringify(diagnostic)}, JSON.stringify({ phase, ...details }));
+        const started = Date.now();
+        const checkpoint = (phase, details = {}) => Bun.write(${JSON.stringify(diagnostic)}, JSON.stringify({ phase, at: new Date().toISOString(), elapsedMs: Date.now() - started, ...details }));
         await checkpoint("bun-started");
         const { Standalone } = await import( ${JSON.stringify(new URL("../../src/installation/standalone.ts", import.meta.url).href)});
         await checkpoint("standalone-imported");
@@ -223,6 +264,8 @@ for (const replacement of [false, true]) {
                 exitCode: await child.exited,
                 stderr: await stderr,
                 statuses,
+                // A lock entry tells a stall in the worker's hash step apart from one in its identity step.
+                entries: await readdir(fixture.root),
                 diagnostic: await Bun.file(diagnostic)
                   .text()
                   .catch(() => "not written"),

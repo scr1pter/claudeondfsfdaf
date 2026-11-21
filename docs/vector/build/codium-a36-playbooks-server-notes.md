@@ -141,3 +141,26 @@ Typecheck:
 
 - Every client piece (B07), and the estimate band.
 - bun.lock was not touched. Nothing was pushed or deployed.
+
+**Status on 15 Nov 2026 (Codium finish R36).** A36 now has its review: "A36 Playbooks server (P6 addendum, 15 Nov
+2026)" in `codium-p6-repairs.md`, with contract readings in `codium-deviations.md` ("P6 review addendum (15 Nov
+2026)"). This paragraph rewrites nothing above.
+
+- B01's item is done. `packages/core/src/playbooks/commands.ts` re-exports BrainSkill's allowlist and keeps `allowed`.
+  Loading it now creates Vector's own data, config, state, cache and temporary folders (`global.ts`), so `check` needs
+  no settings or network but is no longer free of side effects.
+- B07's schema item is done:
+  - nested stages name only `vector-*` playbooks (since `1bff87a4`);
+  - models appear only as `codium:floor`, `codium:default` or `codium:ceiling`, or not at all, in `defaults`, each
+    stage and each verifier (R36-2).
+- The publish check and the client's install both refuse any other model.
+- A record filed under a field other than its own name is never listed or signed, so `withdraw <name>` always pulls
+  that name (R36-3).
+- A withdraw removes the version floor (R36-4), and `withdraw` now prints the withdrawn version.
+- The 50-name cap applies only to a new name: a new version of a published name is always taken (R36-15).
+- **Owner step (added):** after a withdraw, publish only versions above the one the script names.
+- Still not done:
+  - the estimate API's `{kind: "playbook"}` band;
+  - publishing any playbook;
+  - listing `playbooks` (the owner's).
+- CI for this review is pending, and its run ids follow in a later dated line.

@@ -242,10 +242,11 @@ jobs:
         working-directory: packages/ops-worker
         run: bun run smoke
 
-  # WP A54: the cloud computer's image, built with a stand-in for the Vector CLI (vector-hosted-image.yml builds it with
-  # a published release), booted in a privileged container and checked from inside: ports, sudo, the VNC bind, viewer
-  # tokens, the credential guard, the profile wipe, and that boot fails closed without the right to load its firewall.
-  # Nothing is pushed anywhere; no secret is used.
+  # WP A54: the cloud computer's image, built with a stand-in for the Vector CLI and stand-ins for its three notice files
+  # under the release's names (vector-hosted-image.yml builds it with a published release's), booted in a privileged
+  # container and checked from inside: ports, sudo, the VNC bind, viewer tokens, the credential guard, the profile wipe,
+  # the notices' place and modes, and that boot fails closed without the right to load its firewall. Nothing is pushed
+  # anywhere; no secret is used.
   hosted-image:
     name: Cloud computer image (Docker)
     runs-on: ubuntu-24.04
@@ -270,8 +271,11 @@ jobs:
         working-directory: packages/hosted-computer
         run: |
           set -euo pipefail
-          mkdir -p bin
+          mkdir -p bin notices
           printf '#!/bin/sh\necho "vector (image check stand-in)"\n' > bin/vector
+          for name in LICENSE THIRD_PARTY_NOTICES.md DEPENDENCY_NOTICES.md; do
+            printf 'Image check stand-in for the Vector CLI release file %s.\n' "$name" > "notices/$name"
+          done
           docker build --platform linux/amd64 --file image/Dockerfile --build-arg VECTOR_IMAGE_GENERATION=1 --tag vector-hosted-computer:ci .
 
       - name: Boot the image and check it from inside

@@ -110,3 +110,32 @@ refuses otherwise.
 `vercelCli`, which since P8's review (`codium-p8-repairs.md`) installs the pinned CLI with npm, install scripts off and
 no secret in npm's environment, instead of `npx --yes`. Images built from now on carry hostd's signed heartbeats, which
 the server requires; a computer from an older image is refused.
+
+**Status, 15 Nov 2026 (Codium finish CI0).** `vector-codium.yml`'s `workflow_dispatch` now takes two optional string
+inputs, `base` (the remote branch the test picker compares with instead of `origin/main`) and `browser_specs` (up to ten
+more app browser specs). They reach `codium-ci-tests.ts` only as step environment (`CODIUM_CI_BASE`,
+`CODIUM_CI_BROWSER_SPECS`), where `diffBase` and `requestedBrowserSpecs` check them before git or Playwright sees them.
+Pushes, `--hosted` and `vector-hosted-ci.yml` are unchanged. The reasons and counts are in `codium-deviations.md`
+("Codium finish: CI0 lane dispatch inputs"); the first dispatch's run is recorded in a later dated line.
+
+**Status, 15 Nov 2026 (Codium finish TB).** The inputs work as dispatched. Vector Codium run 43659654730 (base
+`origin/release-finish`, no specs) and run 43661511343 (the same base and four receipt specs), both on 02c9fc14: each
+Select step's env shows the values, the browser jobs (132645885892 and 132651657817) ran 2 and 6 specs and passed, and
+each Codium tests job (132645886182 and 132651658143) picked 120 files and ran in about two minutes, against 40 minutes
+and a timeout before CI0. Neither run is green: both stop at "Codium: 119/120 test files passed" on
+`packages/web/test/model-plan-gateway-hooks.test.ts`, plus the exerciser's four review-memory MISS lines. The ids,
+steps and the failure's cause are in `codium-deviations.md` (the CI0 section's dated line and "Codium finish: Track B
+receipts and P4 closings").
+
+**Status, 15 Nov 2026 (Codium finish H2b).** Closes the "Not done" bullet on the CLI's notice files. The image now
+carries `LICENSE`, `THIRD_PARTY_NOTICES.md` and `DEPENDENCY_NOTICES.md` in `/usr/share/vector/` (root's, files 0644,
+folder 0755), the folder the Vector CLI container uses, next to `/usr/local/bin/vector`. The image workflow's `cli`
+step (`hosted-image.ts cli --output packages/hosted-computer/bin/vector --notices packages/hosted-computer/notices`)
+copies them unchanged from the same verified release archive as the binary, before the binary. It refuses to run
+when the binary or the notices folder already exists, and each copy refuses to write over anything. The CI image job's stand-in step writes placeholder files under the same names, so CI still
+builds without a release; that image is never pushed. `in-image.mjs` checks the folder, the files' owner and modes, and
+that the agent can read them. No notice text was edited and `DEPENDENCY_NOTICES.md` was not regenerated. The legal read
+of these files as shipped stays the owner's (spec 8.2 step 15). The real files in a real image are checked only by the
+owner's vector-hosted-image.yml run. Tests: `packages/cloud` `src/hosted-image.test.ts` and
+`src/workflow-compliance.test.ts`, and `packages/hosted-computer` `test/image.test.ts`, run locally; the Docker job is
+CI. `codium-deviations.md` "Codium finish: H2 image notices (15 Nov 2026)".

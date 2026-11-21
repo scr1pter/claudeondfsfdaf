@@ -1,5 +1,5 @@
 import type { Connect } from "@vectordevai/schema/connect"
-import type { VectorClient } from "@vectordevai/sdk/v2/client"
+import type { ConnectApiError, VectorClient } from "@vectordevai/sdk/v2/client"
 
 async function decoders() {
   const [{ Schema }, { Connect }] = await Promise.all([import("effect"), import("@vectordevai/schema/connect")])
@@ -43,8 +43,8 @@ export function createConnectClient(client: Pick<VectorClient, "connect">) {
       )
       return (await decoders()).run(result.data)
     },
-    async cancel(runID: string, sessionID?: string) {
-      const result = await client.connect.cancel({ runID, sessionID }, { throwOnError: true })
+    async cancel(runID: string, sessionID?: string, signal?: AbortSignal) {
+      const result = await client.connect.cancel({ runID, sessionID }, { throwOnError: true, signal })
       if (typeof result.data !== "boolean") throw new Error("The engine returned an invalid cancellation response.")
       return result.data
     },
@@ -56,4 +56,22 @@ export function createConnectClient(client: Pick<VectorClient, "connect">) {
       return (await decoders()).run(result.data)
     },
   }
+}
+
+/** The engine's answer for a directory review key it will not start now. */
+export type DirectoryReviewAnswer = { code: Extract<ConnectApiError["code"], "pending" | "consumed">; message: string }
+
+/**
+ * Reads the typed 400 body the SDK keeps under `cause` for a `throwOnError` call. Its `message` falls back to
+ * the request URL when the body has none, so only the body's own message counts. Anything else is unknown.
+ */
+export function directoryReviewAnswer(error: unknown): DirectoryReviewAnswer | undefined {
+  if (!(error instanceof Error)) return undefined
+  const cause = error.cause
+  if (typeof cause !== "object" || cause === null || !("status" in cause) || cause.status !== 400) return undefined
+  if (!("body" in cause) || typeof cause.body !== "object" || cause.body === null) return undefined
+  const body = cause.body
+  if (!("code" in body) || (body.code !== "pending" && body.code !== "consumed")) return undefined
+  if (!("message" in body) || typeof body.message !== "string" || body.message.length === 0) return undefined
+  return { code: body.code, message: body.message }
 }

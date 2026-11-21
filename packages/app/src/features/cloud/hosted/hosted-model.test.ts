@@ -19,10 +19,18 @@ import {
   decodeViewer,
   defaultDeliverBy,
   deliverByFromTime,
+  DOWNLOAD_ACTION,
+  DOWNLOAD_LINE,
   handoffLine,
   hostedErrorText,
   hoursLine,
   jobReasonLine,
+  keptCandidate,
+  keptLabels,
+  keptLine,
+  keptNote,
+  keptView,
+  linkLine,
   minuteChoices,
   minutesLabel,
   overnightShown,
@@ -31,6 +39,7 @@ import {
   reasonLine,
   sessionControls,
   sessionLine,
+  stateLabel,
   takeoverLine,
   USING_LINE,
   verdictLine,
@@ -284,6 +293,211 @@ describe("Done by Morning", () => {
     expect(deliverByFromTime(soon, NOW)! - NOW).toBe(24 * 60 * 60_000)
     expect(deliverByFromTime("25:00", NOW)).toBeUndefined()
     expect(deliverByFromTime("7am", NOW)).toBeUndefined()
+  })
+})
+
+describe("download-only start (H1c)", () => {
+  const DAY = 86_400_000
+  const DOWNLOAD = `hs_${"d".repeat(26)}`
+  const plan = (patch: Record<string, unknown> = {}) => ({
+    signedIn: true,
+    customer: true,
+    listed: ["computer"],
+    entitlements: {},
+    ...patch,
+  })
+  const download = (patch: Record<string, unknown> = {}) =>
+    session({ id: DOWNLOAD, mode: "download", title: undefined, download: { requestedAt: NOW - 60_000 }, ...patch })
+  const hosted = (kept: unknown, patch: Record<string, unknown> = {}) =>
+    decodeHostedStatus({ available: true, access: "stop", sessions: [], kept, ...patch })
+
+  test("asked about only for a customer with the computer listed and not in the plan", () => {
+    expect(keptCandidate(plan())).toBe(true)
+    expect(keptCandidate(plan({ listed: new Set(["computer"]) }))).toBe(true)
+    expect(keptCandidate(plan({ entitlements: { hosted: null } }))).toBe(true)
+    // In the plan: the cloud computer itself shows (computerShown), not the offer.
+    expect(keptCandidate(plan({ entitlements: { hosted: { computers: 1 } } }))).toBe(false)
+    // Not listed, an allowlisted account before listing included (H1): nothing is asked.
+    expect(keptCandidate(plan({ listed: [] }))).toBe(false)
+    expect(keptCandidate(plan({ customer: false }))).toBe(false)
+    expect(keptCandidate(plan({ customer: undefined }))).toBe(false)
+    expect(keptCandidate(plan({ signedIn: false }))).toBe(false)
+    expect(keptCandidate(plan({ error: "offline" }))).toBe(false)
+    expect(keptCandidate(undefined)).toBe(false)
+  })
+
+  test("the status's kept disks are read leniently", () => {
+    const until = NOW + 14 * DAY
+    const two = { state: "open", until, disks: [{ computer: 1 }, { computer: 2, session: download({ computer: 2 }) }] }
+    expect(hosted(two)?.kept).toEqual({
+      state: "open",
+      until,
+      disks: [{ computer: 1 }, { computer: 2, session: decodeSession(download({ computer: 2 }))! }],
+    })
+    for (const bad of [
+      { state: "maybe", until, disks: [{ computer: 1 }] },
+      { state: "open", disks: [{ computer: 1 }] },
+      { state: "open", until: "soon", disks: [{ computer: 1 }] },
+      { state: "open", until, disks: [{ computer: 0 }, { computer: 4 }, { computer: 1.5 }, { computer: "1" }] },
+      { state: "open", until, disks: [] },
+      "open",
+    ])
+      expect(hosted(bad)?.kept).toBeUndefined()
+    const odd = hosted({
+      state: "closed",
+      until,
+      disks: [
+        // A job session without packed files, and another computer's session, are not this computer's offer.
+        { computer: 1, session: session() },
+        { computer: 2, session: download({ computer: 3 }) },
+        { computer: 2, session: download({ computer: 2 }) },
+        { computer: 3, session: session({ computer: 3, download: { requestedAt: NOW - 1, readyAt: NOW } }) },
+      ],
+    })!.kept!
+    expect(odd.disks.map((disk) => [disk.computer, disk.session?.id])).toEqual([
+      [1, undefined],
+      [2, undefined],
+      [3, SESSION],
+    ])
+  })
+
+  test("window open: a start per computer with nothing running, and the days left as a count", () => {
+    const view = keptView(hosted({ state: "open", until: NOW + 12.5 * DAY, disks: [{ computer: 1 }] }), NOW)!
+    expect(view).toEqual({
+      state: "open",
+      onHold: false,
+      until: NOW + 12.5 * DAY,
+      days: 12,
+      computers: [{ computer: 1, busy: false, start: true }],
+    })
+    expect(keptLine(view)).toBe("Kept for download for 12 more days, then deleted.")
+    expect(keptNote(view)).toBeUndefined()
+    expect(keptLine({ days: 1 })).toBe("Kept for download for 1 more day, then deleted.")
+    const left = (ms: number) => keptView(hosted({ state: "open", until: NOW + ms, disks: [{ computer: 1 }] }), NOW)!
+    expect(keptLine(left(27 * 3_600_000))).toBe("Kept for download for 1 more day, then deleted.")
+    expect(keptLine(left(3 * 3_600_000))).toBe("Kept for download for less than a day, then deleted.")
+    expect(keptLabels({ computer: 1 }, false)).toEqual({ start: DOWNLOAD_ACTION, open: "Open the download" })
+    expect(DOWNLOAD_ACTION).toBe("Download your files")
+    expect(keptLabels({ computer: 1, ready: DOWNLOAD }, false).start).toBe("Pack them again")
+    expect(keptLabels({ computer: 2 }, true)).toEqual({
+      start: "Download computer 2's files",
+      open: "Open computer 2's download",
+    })
+    expect(keptLabels({ computer: 2, ready: DOWNLOAD }, true).start).toBe("Pack computer 2's files again")
+  })
+
+  test("window late or closed: no start, packed files still offered; past the date nothing", () => {
+    const ready = download({ state: "ended", reason: "finished", download: { requestedAt: NOW - 1, readyAt: NOW - 1 } })
+    const late = keptView(hosted({ state: "late", until: NOW + 30 * 60_000, disks: [{ computer: 1 }] }), NOW)!
+    expect(late.computers).toEqual([{ computer: 1, busy: false, start: false }])
+    expect(keptNote(late)).toBe("Too little time is left to get them ready before they are deleted.")
+    const closed = keptView(
+      hosted({ state: "closed", until: NOW + DAY, disks: [{ computer: 1, session: ready }] }),
+      NOW,
+    )!
+    expect(closed.computers).toEqual([{ computer: 1, busy: false, ready: DOWNLOAD, start: false }])
+    expect(keptNote(closed)).toBe("Getting them ready again is not available right now.")
+    // Closed with nothing packed has nothing to offer.
+    expect(keptView(hosted({ state: "closed", until: NOW + DAY, disks: [{ computer: 1 }] }), NOW)).toBeUndefined()
+    expect(keptView(hosted({ state: "open", until: NOW, disks: [{ computer: 1 }] }), NOW)).toBeUndefined()
+    const past = { state: "open", until: NOW - 1, disks: [{ computer: 1, session: ready }] }
+    expect(keptView(hosted(past), NOW)).toBeUndefined()
+  })
+
+  test("frozen, on hold or unavailable: no start; packed files only", () => {
+    const ready = download({ state: "ended", reason: "finished", download: { requestedAt: NOW - 1, readyAt: NOW - 1 } })
+    const open = { state: "open", until: NOW + DAY, disks: [{ computer: 1, session: ready }] }
+    const held = keptView(hosted(open, { onHold: true }), NOW)!
+    expect(held).toMatchObject({
+      state: "closed",
+      onHold: true,
+      computers: [{ computer: 1, ready: DOWNLOAD, start: false }],
+    })
+    expect(keptNote(held)).toContain("on hold")
+    const unavailable = keptView(hosted(open, { available: false }), NOW)
+    expect(unavailable?.computers[0]).toMatchObject({ ready: DOWNLOAD, start: false })
+    // Nothing packed and nothing may start: no offer at all.
+    expect(keptView(hosted({ ...open, disks: [{ computer: 1 }] }, { onHold: true }), NOW)).toBeUndefined()
+    expect(keptView(hosted({ ...open, disks: [{ computer: 1 }] }, { available: false }), NOW)).toBeUndefined()
+    // No kept disks in the status (a frozen plan or a lost dispute: the server sends none).
+    expect(keptView(hosted(undefined), NOW)).toBeUndefined()
+    expect(keptView(undefined, NOW)).toBeUndefined()
+  })
+
+  test("refusals show H1a's own words", () => {
+    for (const [status, code, message] of [
+      [402, "MODEL_PLAN_EXHAUSTED", "Your Vector Codium plan cannot cover getting this computer's files ready."],
+      [409, "HOSTED_DOWNLOAD_UNAVAILABLE", "Too little time is left before this computer's disk is deleted."],
+      [429, "HOSTED_BUSY", "This computer is already getting its files ready."],
+      [403, "HOSTED_FROZEN", "The cloud computer is on hold for this account."],
+    ] as const)
+      expect(hostedErrorText({ status, code, message })).toBe(message)
+  })
+
+  test("a download-only session: its mode, line, state, controls and end", () => {
+    expect(decodeSession(download())?.mode).toBe("download")
+    expect(decodeSession(download({ mode: "job" }))?.mode).toBeUndefined()
+    expect(decodeSession(session({ mode: "elsewhere" }))?.mode).toBeUndefined()
+    expect(decodeSession(download({ handoff: { reason: "captcha", since: NOW } }))?.handoff).toBeUndefined()
+    const packing = decodeSession(download())!
+    expect(sessionLine(packing)).toBe(DOWNLOAD_LINE)
+    expect(stateLabel(decodeSession(download({ state: "starting" }))!)).toBe("Starting the computer")
+    expect(stateLabel(packing)).toBe("Packing and uploading the files")
+    const ready = decodeSession(download({ download: { requestedAt: NOW - 60_000, readyAt: NOW } }))!
+    expect(stateLabel(ready)).toBe("Your files are ready")
+    expect(stateLabel(decodeSession(download({ state: "stopping" }))!)).toBe("Stopping")
+    expect(sessionControls(packing)).toEqual({
+      watch: false,
+      takeover: false,
+      control: false,
+      release: false,
+      stop: true,
+      files: false,
+    })
+    expect(sessionControls(ready)).toMatchObject({ watch: false, takeover: false, stop: true, files: true })
+    expect(sessionControls(decodeSession(download({ state: "stopping" }))!).stop).toBe(false)
+    expect(reasonLine({ ...ready, state: "ended", reason: "finished" })).toBe("Your files are ready.")
+    // The reaper also ends one "finished" when the computer said it was done without uploading (hosted-crons.ts).
+    expect(reasonLine({ ...packing, state: "ended", reason: "finished" })).toBe(
+      "The computer stopped before its files were ready.",
+    )
+    expect(reasonLine({ ...packing, state: "ended", reason: "deadline" })).toBe(
+      "The computer could not get the files ready in time.",
+    )
+    expect(reasonLine({ ...packing, state: "ended", reason: "stopped" })).toBe("You stopped it.")
+    // A job session's lines are unchanged.
+    expect(sessionLine(decodeSession(session())!)).toBe(USING_LINE)
+    expect(reasonLine({ state: "ended", reason: "finished" })).toBe("Vector finished the job.")
+  })
+
+  test("progress: busy while its download runs, ready once packed, and why it ended without files", () => {
+    const until = NOW + 5 * DAY
+    const view = (sessionOn1: unknown) =>
+      keptView(hosted({ state: "open", until, disks: [{ computer: 1, session: sessionOn1 }, { computer: 2 }] }), NOW)!
+    expect(view(download()).computers).toEqual([
+      { computer: 1, busy: true, start: false },
+      { computer: 2, busy: false, start: true },
+    ])
+    expect(view(download({ download: { requestedAt: NOW - 1, readyAt: NOW } })).computers[0]).toEqual({
+      computer: 1,
+      busy: true,
+      ready: DOWNLOAD,
+      start: false,
+    })
+    expect(view(download({ state: "ended", reason: "deadline" })).computers[0]).toEqual({
+      computer: 1,
+      busy: false,
+      ended: "The computer could not get the files ready in time.",
+      start: true,
+    })
+    // A job session's packed files count: they are a copy of the same disk (H1a R11).
+    const job = session({ state: "ended", reason: "stopped", download: { requestedAt: NOW - 2, readyAt: NOW - 1 } })
+    expect(view(job).computers[0]).toEqual({ computer: 1, busy: false, ready: SESSION, start: true })
+  })
+
+  test("a download link's end comes from the link", () => {
+    expect(linkLine(NOW, () => "Nov 10, 9:00 PM")).toBe("Its link works until Nov 10, 9:00 PM.")
+    expect(linkLine(undefined, () => "never")).toBeUndefined()
   })
 })
 

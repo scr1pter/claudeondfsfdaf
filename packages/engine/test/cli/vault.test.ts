@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -10,8 +10,9 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { VaultError } from "@vectordevai/core/vault/error"
 import { VaultGitHub } from "@vectordevai/core/vault/github"
 import { VaultBackup } from "@vectordevai/core/vault/vault"
+import { Vault } from "@vectordevai/schema/vault"
 import { Git } from "../../src/git"
-import { gitRunner, send } from "../../src/cli/cmd/vault"
+import { gitRunner, restoredLine, restoreTotals, send } from "../../src/cli/cmd/vault"
 import { tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -98,4 +99,148 @@ describe("vector vault --github", () => {
       expect(heads.stdout.toString()).toBe("")
     }).pipe(Effect.scoped),
   )
+
+  it.live(
+    "learned sections keep their section, repository and worktree through git and ask for reader two; memory alone asks for reader one (B10)",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+        )
+        yield* Effect.promise(() => fs.mkdir(Global.Path.cache, { recursive: true }))
+        const remote = path.join(tmp.path, "remote.git")
+        bare(remote)
+        const git = yield* Git.Service
+        const store = (name: string) =>
+          VaultGitHub.store({
+            repo: "octo/brain-vault",
+            remote,
+            api: "https://api.github.test",
+            dir: path.join(tmp.path, name),
+            git: gitRunner(git),
+            send: async () => new Response(null, { status: 404 }),
+          })
+        const first = store("cache-a")
+        const created = yield* Effect.promise(() => VaultBackup.create(first, { cost: 2 ** 14 }))
+        // The paths and sections VaultMemory.files gives a repository's files.
+        const learned = [
+          {
+            path: "memory/personal.json",
+            section: "memory" as const,
+            bytes: encoder.encode("I prefer tables"),
+            repository: "",
+          },
+          {
+            path: "skills/repository-0123456789abcdef01234567.json",
+            section: "skills" as const,
+            bytes: encoder.encode('{"skills":[]}'),
+            repository: "prj_a",
+            worktree: "/repo",
+          },
+          {
+            path: "insights/repository-0123456789abcdef01234567.json",
+            section: "insights" as const,
+            bytes: encoder.encode('{"rows":[]}'),
+            repository: "prj_a",
+            worktree: "/repo",
+          },
+        ]
+        yield* Effect.promise(() =>
+          VaultBackup.backup({ store: first, opened: created, files: learned, now: 1_763_000_000_000 }),
+        )
+        const other = store("cache-b")
+        const opened = yield* Effect.promise(() => VaultBackup.unlock(other, created.code))
+        const read = yield* Effect.promise(() => VaultBackup.read({ store: other, opened }))
+        expect(read.manifest.minReader).toBe(Vault.LEARNED_READER)
+        expect(
+          read.files.map(({ file, bytes }) => ({
+            path: file.path,
+            section: file.section,
+            repository: file.repository,
+            worktree: file.worktree,
+            text: bytes.toString("utf8"),
+          })),
+        ).toEqual(
+          learned.map((file) => ({
+            path: file.path,
+            section: file.section,
+            repository: file.repository,
+            worktree: file.worktree,
+            text: new TextDecoder().decode(file.bytes),
+          })),
+        )
+        const memoryOnly = yield* Effect.promise(() =>
+          VaultBackup.backup({ store: first, opened: created, files: learned.slice(0, 1), now: 1_763_000_060_000 }),
+        )
+        // A store reads the remote once (core vault/github.ts sync), so the newer version is read through a fresh one.
+        const newest = yield* Effect.promise(() =>
+          VaultBackup.read({ store: store("cache-c"), opened, version: memoryOnly.snapshot.id }),
+        )
+        expect(newest.manifest.minReader).toBe(Vault.MIN_READER)
+        expect(newest.files.map(({ file }) => file.section)).toEqual(["memory"])
+        // Either learned section alone asks for reader two (core vault/vault.ts: skills or insights).
+        for (const [index, files] of [
+          [learned[0]!, learned[1]!],
+          [learned[0]!, learned[2]!],
+        ].entries()) {
+          const saved = yield* Effect.promise(() =>
+            VaultBackup.backup({ store: first, opened: created, files, now: 1_763_000_120_000 + index * 60_000 }),
+          )
+          const back = yield* Effect.promise(() =>
+            VaultBackup.read({ store: store(`cache-learned-${index}`), opened, version: saved.snapshot.id }),
+          )
+          expect([back.manifest.minReader, back.files.map(({ file }) => file.section)]).toEqual([
+            Vault.LEARNED_READER,
+            files.map((file) => file.section),
+          ])
+        }
+      }).pipe(Effect.scoped),
+  )
+})
+
+describe("vector vault restore's lines (B10)", () => {
+  const counts = { restored: 0, active: 0, pinned: 0, waiting: 0, known: 0, refused: 0, batches: 1, documents: 0 }
+
+  test("the tally counts learned skills and workflow insights apart, to review, never as waiting as before", () => {
+    // VaultMemory.restore answers a learned file as waiting: every skill and insight comes back a proposal.
+    const total = restoreTotals([
+      {
+        section: "memory",
+        done: { ...counts, unreadable: false, restored: 3, active: 1, pinned: 1, waiting: 2, known: 1 },
+      },
+      { section: "skills", done: { ...counts, unreadable: false, restored: 2, waiting: 2, refused: 1 } },
+      { section: "insights", done: { ...counts, unreadable: false, restored: 1, waiting: 1 } },
+      { section: "journal", done: { unreadable: true } },
+    ])
+    expect(total).toEqual({
+      restored: 6,
+      active: 1,
+      pinned: 1,
+      waiting: 2,
+      skills: 2,
+      insights: 1,
+      known: 1,
+      refused: 1,
+      unreadable: 1,
+      documents: 0,
+    })
+    const learned = restoreTotals([
+      { section: "skills", done: { ...counts, unreadable: false, restored: 2, waiting: 2 } },
+      { section: "insights", done: { ...counts, unreadable: false, restored: 1, waiting: 1 } },
+    ])
+    expect(learned.waiting).toBe(0)
+    expect(restoredLine(learned)).toBe("2 learned skills to review, 1 workflow insight to review.")
+  })
+
+  test("the line says 'as before' for memory only, and names no memory for a learned-only restore", () => {
+    const none = { active: 0, pinned: 0, waiting: 0, skills: 0, insights: 0 }
+    expect(restoredLine({ ...none, skills: 2, insights: 1 })).toBe(
+      "2 learned skills to review, 1 workflow insight to review.",
+    )
+    expect(restoredLine({ active: 1, pinned: 1, waiting: 2, skills: 1, insights: 0 })).toBe(
+      "1 in use (1 pinned), 2 waiting for your review as before, 1 learned skill to review.",
+    )
+    expect(restoredLine(none)).toBe("0 in use, 0 waiting for your review as before.")
+  })
 })

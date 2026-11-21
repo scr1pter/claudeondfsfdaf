@@ -436,15 +436,18 @@ describe("offered", () => {
     expect(ids).not.toContain("tool:connect")
   })
 
-  it.instance("the build agent asks before a repository-chosen model and before every write, and allows connect", () =>
-    Effect.gen(function* () {
-      const agents = yield* Agent.Service
-      const build = yield* agents.get("build")
-      if (!build) throw new Error("no build agent")
-      expect(Permission.evaluate("connect", ConnectPolicy.REVIEW_PATTERN, build.permission).action).toBe("allow")
-      expect(Permission.evaluate("connect_model", "paid/model", build.permission).action).toBe("ask")
-      expect(Permission.evaluate("connect_write", "src/a.ts", build.permission).action).toBe("ask")
-    }),
+  it.instance(
+    "the build agent asks before a repository-chosen model, every write and every cloud hand-off, and allows connect",
+    () =>
+      Effect.gen(function* () {
+        const agents = yield* Agent.Service
+        const build = yield* agents.get("build")
+        if (!build) throw new Error("no build agent")
+        expect(Permission.evaluate("connect", ConnectPolicy.REVIEW_PATTERN, build.permission).action).toBe("allow")
+        expect(Permission.evaluate("connect_model", "paid/model", build.permission).action).toBe("ask")
+        expect(Permission.evaluate("connect_write", "src/a.ts", build.permission).action).toBe("ask")
+        expect(Permission.evaluate("connect_cloud", "hosted.review", build.permission).action).toBe("ask")
+      }),
   )
 })
 

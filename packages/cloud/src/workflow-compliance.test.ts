@@ -1,18 +1,23 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   browserCommand,
+  diffBase,
   owningDirectory,
+  parseShard,
+  requestedBrowserSpecs,
   retried,
   selectBrowserSpecs,
   selectHostedTests,
+  selectShard,
   selectUnitTests,
   unitCommand,
 } from "./codium-ci-tests"
+import { cliNotices } from "./cli-release-package"
 
 const root = fileURLToPath(new URL("../../..", import.meta.url))
 const read = (path: string) => Bun.file(`${root}/${path}`).text()
@@ -212,13 +217,11 @@ describe("@vector CI lane", () => {
   const steps = (workflow: Workflow) =>
     Object.entries(workflow.jobs).flatMap(([job, entry]) => (entry.steps ?? []).map((step) => ({ job, step })))
 
-  test("the lane runs on every push to its branch with read-only access and no secrets", async () => {
+  test("the lane runs on every push to main with read-only access and no secrets", async () => {
     const workflow = await lane()
     expect(Object.keys(workflow.on).sort()).toEqual(["pull_request", "push", "workflow_dispatch"])
-    // A path filter or an ignore list here would leave a package's commit with no CI at all.
-    expect(workflow.on.push).toEqual({
-      branches: ["main", "vector-at-mention", "build-integrate", "build-github-ui"],
-    })
+    // A path filter or an ignore list here would leave a commit on main with no CI at all.
+    expect(workflow.on.push).toEqual({ branches: ["main"] })
     // No other workflow runs the web GitHub tests, so every hosted API module they load (http, abuse, persistent-store
     // as well as github-*), the lockfile that pins jose and the Bun version in package.json start the lane on a pull
     // request. api/** takes in the contract's four api/ entries.
@@ -431,6 +434,37 @@ test("Vector's workflows pin their Ubuntu runner", async () => {
   expect(floating).toEqual([])
 })
 
+// Build and integration branches are deleted once they merge, and a trigger that still names one is dead
+// configuration that hides where a lane really runs. Permanent lanes run on main, on pull requests and by hand. Only
+// two lanes keep a branch namespace of their own, each pinned by its own test: the native helper's ci/computer-**
+// branches and the Codium lane's branches.
+test("Vector's workflows trigger on main and name no build or integration branch", async () => {
+  const own: Record<string, string[]> = {
+    "computer-helper.yml": ["ci/computer-**"],
+    "vector-codium.yml": ["main", "codium", "codium/**", "codium-legal", "codium-113", "codium-113/**"],
+  }
+  const files = [...new Bun.Glob("*.yml").scanSync(`${root}/.github/workflows`)].sort()
+  expect(files.length).toBeGreaterThan(0)
+  const named = await Promise.all(
+    files.map(async (file) => {
+      const workflow = Bun.YAML.parse(await read(`.github/workflows/${file}`)) as { on?: unknown }
+      const on = typeof workflow.on === "object" && workflow.on !== null ? (workflow.on as Record<string, unknown>) : {}
+      return ["push", "pull_request"].flatMap((event) => {
+        const trigger = on[event]
+        const branches =
+          typeof trigger === "object" && trigger !== null ? (trigger as { branches?: unknown }).branches : undefined
+        if (branches === undefined) return []
+        const allowed = own[file] ?? ["main"]
+        return [branches]
+          .flat()
+          .filter((branch) => typeof branch !== "string" || !allowed.includes(branch))
+          .map((branch) => ({ file, event, branch }))
+      })
+    }),
+  )
+  expect(named.flat()).toEqual([])
+})
+
 // The release's package tests run on the Node the test workflow and Electron 42 use: the desktop guard smoke calls
 // http.setGlobalProxyFromEnv, which the runner image's older Node lacks.
 test("the release's package tests set up Node 24 before they run", async () => {
@@ -512,6 +546,72 @@ test("the test workflow runs the engine suite only in shards, on Linux and Windo
   }
 })
 
+// Chocolatey's community feed answered 504 and 503 with nothing installed and exit 0 (jobs 133556510297 and
+// 133557296076). Windows jobs install ripgrep through one action that downloads a pinned, checksum-verified release
+// from GitHub with retries. This reads only the repository's own files.
+test("Windows jobs install ripgrep from the pinned, verified release, never through Chocolatey", async () => {
+  const files = [...new Bun.Glob("*.yml").scanSync(`${root}/.github/workflows`)]
+  expect(files.length).toBeGreaterThan(0)
+  const choco = (
+    await Promise.all(
+      files.map(async (file) =>
+        (await read(`.github/workflows/${file}`)).includes("choco install ripgrep") ? [file] : [],
+      ),
+    )
+  ).flat()
+  expect(choco).toEqual([])
+
+  for (const [file, job, name, timeout] of [
+    ["test.yml", "unit", "Install ripgrep (Windows)", 10],
+    ["test.yml", "engine-windows", "Install ripgrep", 5],
+    ["windows-containment.yml", "native", "Install native ripgrep", 10],
+  ] as const) {
+    const workflow = Bun.YAML.parse(await read(`.github/workflows/${file}`)) as {
+      jobs: Record<string, { steps: Array<{ name?: string; uses?: string; "timeout-minutes"?: number }> }>
+    }
+    const step = workflow.jobs[job]?.steps.find((current) => current.name === name)
+    expect(step?.uses, `${file} ${job}`).toBe("./.github/actions/install-ripgrep-windows")
+    expect(step?.["timeout-minutes"], `${file} ${job}`).toBe(timeout)
+  }
+  const containment = Bun.YAML.parse(await read(".github/workflows/windows-containment.yml")) as {
+    on: { pull_request: { paths: string[] } }
+  }
+  expect(containment.on.pull_request.paths).toContain(".github/actions/install-ripgrep-windows/**")
+
+  const action = Bun.YAML.parse(await read(".github/actions/install-ripgrep-windows/action.yml")) as {
+    runs: { using: string; steps: Array<{ shell?: string; run?: string }> }
+  }
+  expect(action.runs.using).toBe("composite")
+  expect(action.runs.steps).toHaveLength(1)
+  expect(action.runs.steps[0]?.shell).toBe("pwsh")
+  const script = action.runs.steps[0]?.run ?? ""
+  expect(script).toContain("$ErrorActionPreference = 'Stop'")
+  expect(script).toContain("$version = '15.2.0'")
+  expect(script).toContain("https://github.com/BurntSushi/ripgrep/releases/download/$version/")
+  expect(script).not.toMatch(/choco/i)
+  const hashes = [...script.matchAll(/Sha256 = '([0-9a-f]{64})'/g)].map((match) => match[1])
+  expect(hashes).toEqual([
+    "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+    "e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+  ])
+  const steps = script.split("\n").map((line) => line.trim())
+  const at = (pattern: RegExp) => steps.findIndex((line) => pattern.test(line))
+  const download = at(/^curl\.exe .*--fail .*--retry \d+ .*--output \$zip \$url$/)
+  expect(download).toBeGreaterThanOrEqual(0)
+  expect(steps[download]).not.toContain("--retry-delay")
+  // Each check throws, and only a verified, working rg.exe reaches PATH.
+  const downloaded = at(/^if \(\$LASTEXITCODE -ne 0\) \{ throw "ripgrep \$version could not be downloaded from \$url/)
+  const hashed = at(/^\$actual = \(Get-FileHash -LiteralPath \$zip -Algorithm SHA256\)\.Hash\.ToLowerInvariant\(\)$/)
+  const compared = at(/^if \(\$actual -ne \$release\.Sha256\) \{ throw /)
+  const versioned = at(/^if \(.*-notmatch '\^ripgrep 15\\\.2\\\.0\( \|\$\)'\) \{ throw /)
+  const listed = at(/^\$folder \| Out-File -FilePath \$env:GITHUB_PATH /)
+  const order = [download, downloaded, hashed, compared, versioned, listed]
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(downloaded - download).toBe(1)
+  expect(steps.filter((line) => line.includes("GITHUB_PATH"))).toHaveLength(1)
+})
+
 // The Codium build's CI lane (codium-build-spec WP A00). Work packages run single test files on the owner's Mac, so
 // typechecks, suites with real services and browser specs run in vector-codium.yml, with no secrets. Stripe test mode
 // runs only in vector-codium-e2e.yml, by dispatch, behind the owner-approved codium-test environment.
@@ -525,6 +625,7 @@ describe("Codium CI lane", () => {
     env?: Record<string, string>
     with?: Record<string, unknown>
     "working-directory"?: string
+    "timeout-minutes"?: number
   }
   type Job = {
     environment?: string
@@ -533,7 +634,8 @@ describe("Codium CI lane", () => {
     env?: Record<string, string>
     outputs?: Record<string, string>
     services?: Record<string, { image?: string }>
-    strategy?: { matrix?: { include?: Array<Record<string, string>> } }
+    name?: string
+    strategy?: { "fail-fast"?: boolean; matrix?: { include?: Array<Record<string, string>>; shard?: number[] } }
     steps?: Step[]
   }
   type Workflow = { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> }
@@ -543,20 +645,26 @@ describe("Codium CI lane", () => {
   const checkout = (job: Job | undefined) => job?.steps?.find((entry) => entry.uses?.startsWith("actions/checkout@"))
   const checkoutRoot = fileURLToPath(new URL("../../..", import.meta.url))
   const exists = (relative: string) => existsSync(path.join(checkoutRoot, relative))
-  // Runs a workflow step's own shell; only the inputs and GitHub's output file are substituted.
-  const shell = async (script: string, env: Record<string, string>) => {
+  // Runs a workflow step's own shell; only the inputs and GitHub's output file are substituted. A step that runs a
+  // checkout's files passes its root as cwd.
+  const shell = async (script: string, env: Record<string, string>, cwd?: string) => {
     const directory = await mkdtemp(path.join(tmpdir(), "vector-workflow-"))
     const file = path.join(directory, "output")
     // Actions supplies a regular file. Linux cannot reopen Bun's socket-backed stdout via /dev/stdout.
     await writeFile(file, "")
     try {
       const child = Bun.spawn([bash, "--noprofile", "--norc", "-c", script], {
+        cwd,
         env: { PATH: process.env.PATH ?? "", GITHUB_OUTPUT: file, ...env },
         stdout: "pipe",
-        stderr: "ignore",
+        stderr: "pipe",
       })
-      const [status, output] = await Promise.all([child.exited, new Response(child.stdout).text()])
-      return { status, output: output + (await readFile(file, "utf8")) }
+      const [status, output, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      return { status, stderr, output: output + (await readFile(file, "utf8")) }
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -616,12 +724,24 @@ describe("Codium CI lane", () => {
       expect(image).toMatch(/@sha256:[a-f0-9]{64}$/)
       expect(image).toBe(sharing.jobs.integration?.services?.[name]?.image)
     }
+    // The selection outgrew one job's 40-minute step on an integration branch (Vector Codium runs 43631064967 and
+    // the one with job 132574374820), so it runs in shards that together take every selected file.
+    const shards = tests?.strategy?.matrix?.shard ?? []
+    expect(shards).toEqual(shards.map((_, index) => index + 1))
+    expect(shards.length).toBeGreaterThanOrEqual(4)
+    expect(tests?.strategy?.["fail-fast"]).toBe(false)
+    expect(tests?.name).toBe(`Codium tests (shard \${{ matrix.shard }}/${shards.length})`)
     const run = step(tests, "Run the Codium test files")
-    expect(run?.run).toBe("GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts")
+    expect(run?.run).toBe(
+      `GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts --shard=\${{ matrix.shard }}/${shards.length}`,
+    )
+    expect(run?.["timeout-minutes"]).toBe(40)
     expect(run?.env?.VECTOR_TEST_REDIS_URL).toBe("redis://127.0.0.1:6379")
     expect(run?.env?.VECTOR_TEST_POSTGRES_URL).toStartWith("postgres://vector_fixture:fixture-only@127.0.0.1:5432/")
-    expect(step(tests, "Run HttpApi exerciser gates")).toMatchObject({ run: "bun run test:httpapi" })
-    expect(step(tests, "Check generated client")).toMatchObject({ run: "bun run check:generated" })
+    // The exerciser and the generated client do not depend on the shard: one shard runs each of them once.
+    const once = "${{ !cancelled() && matrix.shard == 1 }}"
+    expect(step(tests, "Run HttpApi exerciser gates")).toMatchObject({ run: "bun run test:httpapi", if: once })
+    expect(step(tests, "Check generated client")).toMatchObject({ run: "bun run check:generated", if: once })
     expect(step(lane.jobs.browser, "Run the Codium browser specs")?.run).toBe(
       "bun packages/cloud/src/codium-ci-tests.ts --browser",
     )
@@ -682,6 +802,183 @@ describe("Codium CI lane", () => {
       "packages/app/e2e/regression/account-settings.spec.ts",
       "packages/app/e2e/regression/codium-image-routing.spec.ts",
     ])
+  })
+
+  test("a dispatch may compare with another remote branch, and nothing else", () => {
+    // Pushes and an empty dispatch compare with main, as before.
+    expect(diffBase(undefined)).toBe("origin/main")
+    expect(diffBase("")).toBe("origin/main")
+    for (const base of ["origin/main", "origin/release-finish", "origin/codium/a36", "origin/codium-113"])
+      expect(diffBase(base)).toBe(base)
+    // git would read each of these as an option, a range, a commit or a revision expression, not a remote branch.
+    for (const base of [
+      "--output=x",
+      "main..x",
+      "origin/main..x",
+      "origin/main...HEAD",
+      "0ee486e3412c29512022d369325a3747b567d090",
+      "0ee486e3",
+      "main",
+      "upstream/main",
+      "refs/heads/main",
+      "origin/",
+      "origin/main/",
+      "origin/main~1",
+      "origin/main^",
+      "origin/main@{1}",
+      " origin/main",
+      "origin/main\n",
+      "origin/main\n--output=x",
+    ])
+      expect(() => diffBase(base)).toThrow("CODIUM_CI_BASE must name a remote branch")
+  })
+
+  test("a dispatch may add up to ten tracked browser specs the lane runs", () => {
+    const race = "packages/app/e2e/regression/race.spec.ts"
+    const phone = "packages/app/e2e/regression/remote-phone.spec.ts"
+    const codium = "packages/app/e2e/regression/codium-image-routing.spec.ts"
+    const missing = "packages/app/e2e/regression/missing.spec.ts"
+    const tracked = [
+      race,
+      phone,
+      codium,
+      "packages/app/e2e/performance/timeline.spec.ts",
+      "packages/app/e2e/regression/public-share-viewer.spec.ts",
+      "packages/app/e2e/fixtures/server.ts",
+      "packages/app/src/components/race.test.ts",
+    ]
+    expect(requestedBrowserSpecs(tracked, undefined)).toEqual([])
+    expect(requestedBrowserSpecs(tracked, " \n ")).toEqual([])
+    const requested = requestedBrowserSpecs(tracked, ` ${race}\t${codium}\n`)
+    expect(requested).toEqual([race, codium])
+    // Requested specs join the selection once each, sorted with it; without any the selection is as before.
+    expect(selectBrowserSpecs(tracked, [phone], requested)).toEqual([codium, race, phone])
+    expect(selectBrowserSpecs(tracked, [race], [race])).toEqual([codium, race])
+    expect(selectBrowserSpecs(tracked, [])).toEqual([codium])
+    for (const value of [
+      missing,
+      "packages/app/e2e/performance/timeline.spec.ts",
+      "packages/app/e2e/regression/public-share-viewer.spec.ts",
+      "packages/app/e2e/fixtures/server.ts",
+      "packages/app/src/components/race.test.ts",
+      "e2e/regression/race.spec.ts",
+      "--grep=x",
+      `${race} ${missing}`,
+    ])
+      expect(() => requestedBrowserSpecs(tracked, value)).toThrow("may name only")
+    expect(() => requestedBrowserSpecs(tracked, `${race} ${missing}`)).toThrow(missing)
+    expect(requestedBrowserSpecs(tracked, Array(10).fill(race).join(" "))).toHaveLength(10)
+    expect(() => requestedBrowserSpecs(tracked, Array(11).fill(race).join(" "))).toThrow("at most 10")
+
+    // Every real performance spec stays refused, as the app's Playwright config ignores them.
+    const listed = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: checkoutRoot, stdout: "pipe", stderr: "ignore" })
+    expect(listed.exitCode).toBe(0)
+    const files = listed.stdout.toString().split("\0").filter(Boolean)
+    const performance = files.filter((file) => /^packages\/app\/e2e\/performance\/.+\.spec\.tsx?$/.test(file))
+    expect(performance.length).toBeGreaterThan(0)
+    for (const file of performance) expect(() => requestedBrowserSpecs(files, file)).toThrow("may name only")
+  })
+
+  test("a dispatch's inputs reach the picker only as step environment, and pushes leave them empty", async () => {
+    const lane = await workflow("vector-codium.yml")
+    const inputs = (lane.on.workflow_dispatch as { inputs?: Record<string, unknown> } | null)?.inputs ?? {}
+    expect(Object.keys(inputs).sort()).toEqual(["base", "browser_specs"])
+    for (const input of Object.values(inputs))
+      expect(input).toMatchObject({ type: "string", required: false, default: "" })
+    expect((lane.on.push as { branches?: string[] }).branches).toEqual([
+      "main",
+      "codium",
+      "codium/**",
+      "codium-legal",
+      "codium-113",
+      "codium-113/**",
+    ])
+    const passed = Object.entries(lane.jobs).flatMap(([job, entry]) =>
+      (entry.steps ?? []).flatMap((item) =>
+        Object.entries(item.env ?? {})
+          .filter(([, value]) => String(value).includes("inputs."))
+          .map(([key, value]) => [job, item.name, key, value]),
+      ),
+    )
+    expect(passed).toEqual([
+      ["tests", "Run the Codium test files", "CODIUM_CI_BASE", "${{ inputs.base }}"],
+      ["browser", "Select the Codium browser specs", "CODIUM_CI_BASE", "${{ inputs.base }}"],
+      ["browser", "Select the Codium browser specs", "CODIUM_CI_BROWSER_SPECS", "${{ inputs.browser_specs }}"],
+      ["browser", "Run the Codium browser specs", "CODIUM_CI_BASE", "${{ inputs.base }}"],
+      ["browser", "Run the Codium browser specs", "CODIUM_CI_BROWSER_SPECS", "${{ inputs.browser_specs }}"],
+    ])
+    // Nowhere else: not in a script, a condition or a called workflow's arguments.
+    expect(JSON.stringify(lane.jobs).match(/inputs\./g)?.length).toBe(passed.length)
+    for (const [job, entry] of Object.entries(lane.jobs))
+      for (const item of entry.steps ?? []) {
+        // The exceptions are fixed matrix values: the typecheck matrix's command and the tests job's shard number.
+        const expressions = (item.run?.match(/\$\{\{[^}]*\}\}/g) ?? []).filter(
+          (value) => value !== "${{ matrix.command }}" && value !== "${{ matrix.shard }}",
+        )
+        expect({ job, step: item.name, expressions }).toEqual({ job, step: item.name, expressions: [] })
+      }
+
+    // The Select step as written refuses a bad input before any history is read or any count is written, so this
+    // needs no fetched main. The environment is explicit: the Codium tests step exports its own CODIUM_CI_BASE.
+    const select = step(lane.jobs.browser, "Select the Codium browser specs")?.run
+    expect(select).toBeDefined()
+    // test.yml's unit job also runs this file on Windows, where PATH entries are separated by ';' and Bun and git may
+    // need Windows' own system and temp folders. Those few pass through by name, never a CODIUM_CI_* variable.
+    const PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
+    const system = Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] =>
+          process.platform === "win32" &&
+          entry[1] !== undefined &&
+          ["SYSTEMROOT", "WINDIR", "TEMP", "USERPROFILE"].includes(entry[0].toUpperCase()),
+      ),
+    )
+    const base = await shell(select!, { ...system, PATH, CODIUM_CI_BASE: "--output=x" }, checkoutRoot)
+    expect({ refused: base.status !== 0, counted: base.output.includes("count=") }).toEqual({
+      refused: true,
+      counted: false,
+    })
+    expect(base.stderr).toContain(
+      'CODIUM_CI_BASE must name a remote branch such as origin/main or origin/release-finish, not "--output=x"',
+    )
+    const specs = await shell(
+      select!,
+      { ...system, PATH, CODIUM_CI_BROWSER_SPECS: "packages/app/e2e/regression/missing.spec.ts" },
+      checkoutRoot,
+    )
+    expect({ refused: specs.status !== 0, counted: specs.output.includes("count=") }).toEqual({
+      refused: true,
+      counted: false,
+    })
+    expect(specs.stderr).toContain("may name only")
+    expect(specs.stderr).toContain("packages/app/e2e/regression/missing.spec.ts")
+  })
+
+  test("the shards split the selection so every file runs once and each shard takes part of the hosted suite", () => {
+    const files = [
+      ...Array.from({ length: 9 }, (_, index) => `packages/engine/test/session/slow-${index}.test.ts`),
+      ...Array.from({ length: 4 }, (_, index) => `packages/web/test/model-plans-${index}.test.ts`),
+      ...Array.from({ length: 6 }, (_, index) => `test/hosted-${index}.test.ts`),
+    ].sort()
+    const shards = [1, 2, 3, 4].map((index) => selectShard(files, { index, count: 4 }))
+    expect(shards.flat().sort()).toEqual(files)
+    expect(new Set(shards.flat()).size).toBe(files.length)
+    expect(shards.map((shard) => shard.length)).toEqual([5, 5, 5, 4])
+    // The hosted test/ files sort last; a split into contiguous runs would leave them all to the final shard.
+    for (const shard of shards) {
+      expect(shard.filter((file) => file.startsWith("test/")).length).toBeGreaterThan(0)
+      expect(shard.filter((file) => file.startsWith("packages/engine/")).length).toBeGreaterThan(1)
+    }
+    expect(shards[1]).toEqual([files[1], files[5], files[9], files[13], files[17]])
+    // Every shard sees the same sorted selection, so the split is the same in each job.
+    expect(selectShard(files, { index: 2, count: 4 })).toEqual(shards[1])
+    expect(selectShard(files, { index: 1, count: 1 })).toEqual(files)
+    expect(selectShard(files.slice(0, 2), { index: 3, count: 4 })).toEqual([])
+
+    expect(parseShard([])).toEqual({ index: 1, count: 1 })
+    expect(parseShard(["--list", "--shard=3/4"])).toEqual({ index: 3, count: 4 })
+    for (const value of ["0/4", "5/4", "1/0", "a/4", "2", "1/4/2", ""])
+      expect(() => parseShard([`--shard=${value}`])).toThrow("--shard takes i/n")
   })
 
   test("each picked file runs from the package that owns it, as that package's test script runs it", async () => {
@@ -765,6 +1062,13 @@ describe("Codium CI lane", () => {
     expect(files.filter((file) => file.split("/").includes("e2e"))).toEqual([])
     for (const file of files)
       expect(owningDirectory(file, exists)).toMatch(/^(?:test|packages\/[^/]+|packages\/sdk\/js)$/)
+    const hosted = files.filter((file) => file.startsWith("test/"))
+    for (const index of [1, 2, 3, 4]) {
+      const shard = selectShard(files, { index, count: 4 })
+      expect(shard.filter((file) => file.startsWith("test/")).length).toBeGreaterThanOrEqual(
+        Math.floor(hosted.length / 4),
+      )
+    }
   })
 
   test("the end-to-end workflow is dispatch-only and only the codium-test environment sees secrets", async () => {
@@ -1134,6 +1438,34 @@ describe("Hosted deploy workflows", () => {
         env: { VECTOR_TEST_HOSTED_IMAGE: "vector-hosted-computer:ci" },
       })
       expect(JSON.stringify(image)).not.toMatch(/docker (?:login|push)/)
+    })
+
+    test("the image job builds with a stand-in CLI and stand-in notices under the release's names, and pushes nothing", async () => {
+      const build = step(
+        (await workflow("vector-hosted-ci.yml")).jobs["hosted-image"],
+        "Build the image with a stand-in CLI",
+      )
+      expect(build?.["working-directory"]).toBe("packages/hosted-computer")
+      expect(build?.run).toBeDefined()
+      const directory = await mkdtemp(path.join(tmpdir(), "vector-hosted-image-ci-"))
+      await using scratch = { directory, [Symbol.asyncDispose]: () => rm(directory, { recursive: true, force: true }) }
+      // The step's own script in a scratch package folder, with docker recording its arguments instead of building.
+      const result = await shell(
+        `docker() { printf '%s\\n' "$*" >> docker.log; }\n${build!.run}`,
+        {},
+        scratch.directory,
+      )
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" })
+      expect((await readdir(path.join(scratch.directory, "notices"))).sort()).toEqual([...cliNotices].sort())
+      for (const name of cliNotices)
+        expect({ name, text: await readFile(path.join(scratch.directory, "notices", name), "utf8") }).toEqual({
+          name,
+          text: `Image check stand-in for the Vector CLI release file ${name}.\n`,
+        })
+      expect(existsSync(path.join(scratch.directory, "bin", "vector"))).toBe(true)
+      const calls = (await readFile(path.join(scratch.directory, "docker.log"), "utf8")).trim().split("\n")
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toStartWith("build --platform linux/amd64 --file image/Dockerfile ")
     })
 
     test("the Codium lane runs the Worker and image jobs through it, and only those", async () => {
@@ -1523,7 +1855,7 @@ describe("Hosted deploy workflows", () => {
       ].map((name) => at(job, name))
       expect(order.every((value, index) => value > 0 && (index === 0 || value > order[index - 1]!))).toBe(true)
       expect(step(job, "Take the Vector CLI from its published release")).toMatchObject({
-        run: "bun packages/cloud/src/hosted-image.ts cli --output packages/hosted-computer/bin/vector",
+        run: "bun packages/cloud/src/hosted-image.ts cli --output packages/hosted-computer/bin/vector --notices packages/hosted-computer/notices",
         env: {
           VECTOR_CLI_BLOB_ORIGIN: "${{ vars.VECTOR_CLI_BLOB_ORIGIN }}",
           VECTOR_HOSTED_CLI_VERSION: "${{ needs.preflight.outputs.cli_version }}",

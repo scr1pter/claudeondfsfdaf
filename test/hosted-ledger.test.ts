@@ -1,18 +1,20 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { RedisClient } from "bun"
-import { ENTITLEMENTS, type EntitlementSnapshot } from "../packages/schema/src/codium-entitlements"
+import { ENTITLEMENTS, PLAN_REASONS, type EntitlementSnapshot } from "../packages/schema/src/codium-entitlements"
 import { Hosted } from "../packages/schema/src/hosted"
 import { codiumKey } from "../api/_lib/codium-keys"
-import { MODEL_HOLD_MS, parseHoldMember, POOL_SCRIPTS, readDebits } from "../api/_lib/codium-pool"
+import { FINAL_PERIOD_REASONS, MODEL_HOLD_MS, parseHoldMember, POOL_SCRIPTS, readDebits } from "../api/_lib/codium-pool"
 import { readSnapshot } from "../api/_lib/codium-snapshot"
 import {
   HOSTED_ENTITLEMENT_SCRIPTS,
   hostedAccess,
   hostedCaps,
   hostedDiskPolicy,
+  hostedDownloadAccess,
   hostedMinutesKey,
   hoursUsedShare,
   readHostedMinutes,
+  requireHostedDownload,
   requireHostedStart,
 } from "../api/_lib/hosted-entitlement"
 import {
@@ -810,26 +812,250 @@ describe("storage, egress and retention", () => {
     })
   })
 
+  /** Ends the plan with its final period kept, and answers the snapshot a download-only start decides with. */
+  async function endPlan(w: World) {
+    Object.assign(w.fakes.stripe.subscription("sub_renewing")!, { status: "canceled", ended_at: P1.end - 3600 })
+    const snapshot = await reconcileModelPlanAccount(id, w.fetcher, w.fakes.clock.now)
+    expect(snapshot.state).toBe("ended")
+    return snapshot
+  }
+  /** The kept window's deletion date (`hosted:disk-due`), which names the window a retention pays for. */
+  const KEPT = P1.end * 1000 + 14 * DAY
+  const retention = (computer: string, snapshot: EntitlementSnapshot) => ({
+    computer,
+    gb: 10,
+    days: 14,
+    final: true,
+    snapshot,
+    due: KEPT,
+  })
+
   test("an ended plan's disk retention is paid once from the final period, and shortened when it cannot cover it", async () => {
     const w = await world()
-    Object.assign(w.fakes.stripe.subscription("sub_renewing")!, { status: "canceled", ended_at: P1.end - 3600 })
-    expect((await reconcileModelPlanAccount(id, w.fetcher, w.fakes.clock.now)).state).toBe("ended")
+    const snapshot = await endPlan(w)
     // Storage after the end is paid by retention, not nightly.
     const day = new Date(w.fakes.clock.now).toISOString().slice(0, 10)
     expect(await chargeNightly(id, { computer: "vh-a-1", day, storageGbDays: 10, egressGb: 0 }, w.options)).toEqual([])
-    const granted = await chargeRetention(id, { computer: "vh-a-1", gb: 10, days: 14 }, w.options)
-    expect(granted).toEqual({ days: 14, until: w.fakes.clock.now + 14 * DAY })
-    expect((await debits(w)).map((debit) => [debit.ref, debit.micro])).toEqual([
-      [`hr-vh-a-1-sub_renewing-${P1.start}`, storageCharge(140).chargedMicro],
+    const granted = await chargeRetention(id, retention("vh-a-1", snapshot), w.options)
+    expect(granted).toEqual({ days: 14 })
+    expect((await debits(w)).map((debit) => [debit.ref, debit.micro, debit.applied])).toEqual([
+      [`hr-vh-a-1-${KEPT}`, storageCharge(140).chargedMicro, true],
     ])
-    expect(await chargeRetention(id, { computer: "vh-a-1", gb: 10, days: 14 }, w.options)).toEqual(granted)
+    // The retention's hold became that debit, which is applied to the key's limit: nothing is left held on the pool.
+    expect(held(w)).toEqual([])
+    expect(await chargeRetention(id, retention("vh-a-1", snapshot), w.options)).toEqual(granted)
 
     const tight = await world(undefined, { usage: 47.9 })
-    Object.assign(tight.fakes.stripe.subscription("sub_renewing")!, { status: "canceled", ended_at: P1.end - 3600 })
-    await reconcileModelPlanAccount(id, tight.fetcher, tight.fakes.clock.now)
+    const ended = await endPlan(tight)
     await ledger.reset()
     // About 0.10 left covers three days of 10 GB.
-    expect((await chargeRetention(id, { computer: "vh-a-1", gb: 10, days: 14 }, tight.options)).days).toBe(3)
+    expect((await chargeRetention(id, retention("vh-a-1", ended), tight.options)).days).toBe(3)
+  })
+
+  test("two computers' retentions charged at the same moment never take more than the final period has (M2)", async () => {
+    // 0.66 left: one 14-day retention of 10 GB (0.44) and part of another. Both starts read the same figure first.
+    const w = await world(undefined, { usage: 47.34 })
+    const snapshot = await endPlan(w)
+    await ledger.reset()
+    const available = 660_000
+    const granted = await Promise.all(
+      ["vh-a-1", "vh-a-2"].map((computer) => chargeRetention(id, retention(computer, snapshot), w.options)),
+    )
+    expect(granted.map((grant) => grant.days).sort((a, b) => a - b)).toEqual([6, 14])
+    const charged = (await debits(w)).filter((debit) => debit.ref.startsWith("hr-"))
+    expect(charged.map((debit) => debit.micro).sort((a, b) => a - b)).toEqual([
+      storageCharge(60).chargedMicro,
+      storageCharge(140).chargedMicro,
+    ])
+    expect(charged.reduce((sum, debit) => sum + debit.micro, 0)).toBeLessThanOrEqual(available)
+    // Each line is what its debit says, filed under the final key's period.
+    const lines = (await rows()).filter((row) => row.kind === "retention")
+    expect(lines.map((row) => row.units).sort((a, b) => a - b)).toEqual([6, 14])
+    expect(lines.every((row) => row.periodStart === P1.start * 1000)).toBe(true)
+  })
+
+  test("a retention whose credential another retention's settle made stale is sized again, not refused (M2)", async () => {
+    // 0.66 left, as above. The second computer reads the pool and its credential and waits at its HOLD. The first
+    // computer's retention is then held and settled, and its settle rewrites the account record HOLD's fence compares.
+    const w = await world(undefined, { usage: 47.34 })
+    const snapshot = await endPlan(w)
+    await ledger.reset()
+    const reached = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<void>()
+    const hold = JSON.stringify(["EVAL", POOL_SCRIPTS.HOLD]).slice(0, -1)
+    let waited = false
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!waited && typeof init?.body === "string" && init.body.startsWith(hold)) {
+        waited = true
+        reached.resolve()
+        await gate.promise
+      }
+      return w.fetcher(input, init)
+    }) as typeof fetch
+    const second = chargeRetention(id, retention("vh-a-2", snapshot), { ...w.options, fetcher })
+    await reached.promise
+    const before = w.fakes.store.get(codiumKey("account", id))
+    expect((await chargeRetention(id, retention("vh-a-1", snapshot), w.options)).days).toBe(14)
+    expect(w.fakes.store.get(codiumKey("account", id))).not.toBe(before)
+    gate.resolve()
+    // What is left after the first (0.22) covers six days.
+    expect((await second).days).toBe(6)
+    const charged = (await debits(w)).filter((debit) => debit.ref.startsWith("hr-"))
+    expect(charged.map((debit) => [debit.ref, debit.micro]).sort()).toEqual([
+      [`hr-vh-a-1-${KEPT}`, storageCharge(140).chargedMicro],
+      [`hr-vh-a-2-${KEPT}`, storageCharge(60).chargedMicro],
+    ])
+    expect(held(w)).toEqual([])
+  })
+
+  test("a retention the day's share cannot fit refuses with nothing charged, as the start's block would (A17)", async () => {
+    // Max's day is 40% of its month: 19.20 of 48. 19 held earlier today leaves less than a 14-day retention (0.44).
+    const w = await world()
+    const snapshot = await endPlan(w)
+    await ledger.reset()
+    const earlier = await holdPool(id, 19, MINUTE, "hosted", { fetcher: w.fetcher, final: true })
+    await expect(chargeRetention(id, retention("vh-a-1", snapshot), w.options)).rejects.toMatchObject({
+      statusCode: 429,
+      code: "MODEL_PLAN_DAILY_LIMIT",
+    })
+    expect((await debits(w)).filter((debit) => debit.ref.startsWith("hr-"))).toEqual([])
+    expect(held(w)).toHaveLength(1)
+    expect((await rows()).filter((row) => row.kind === "retention")).toEqual([])
+    // With that hold given back, the same retention fits the day.
+    await earlier.release()
+    expect((await chargeRetention(id, retention("vh-a-1", snapshot), w.options)).days).toBe(14)
+  })
+
+  test("a kept window is charged once even when a renewal holds the next start from a new period (R3)", async () => {
+    // A live plan without a cloud computer (`current`) downloads from its own period. Its disk's date was set once, at
+    // the move, so a second start after the renewal is in the same kept window and pays nothing more for it.
+    const w = await world()
+    const first = (await readSnapshot(id, w.fetcher))!
+    expect((await chargeRetention(id, { ...retention("vh-a-1", first), final: false }, w.options)).days).toBe(14)
+    const renewed = await renew(w)
+    const current = (await readModelPlanAccount(id, w.fetcher))!.key!
+    expect(current.hash).not.toBe(SEEDED)
+    expect(await chargeRetention(id, { ...retention("vh-a-1", renewed), final: false }, w.options)).toEqual({
+      days: 14,
+    })
+    const charged = [...(await debits(w)), ...(await debits(w, current.hash))].filter((debit) =>
+      debit.ref.startsWith("hr-"),
+    )
+    expect(charged.map((debit) => [debit.ref, debit.micro])).toEqual([
+      [`hr-vh-a-1-${KEPT}`, storageCharge(140).chargedMicro],
+    ])
+    const lines = (await rows()).filter((row) => row.kind === "retention")
+    expect(lines.map((row) => [row.ref, row.periodStart])).toEqual([[`hr-vh-a-1-${KEPT}`, P1.start * 1000]])
+    // A later window (the date set again after the plan had a computer once more) is charged again, once.
+    expect(
+      (await chargeRetention(id, { ...retention("vh-a-1", renewed), final: false, due: KEPT + 40 * DAY }, w.options))
+        .days,
+    ).toBe(14)
+    expect((await rows()).filter((row) => row.kind === "retention")).toHaveLength(2)
+  })
+})
+
+describe("download-only blocks (H1a)", () => {
+  test("which plans may download, and what each other one answers, for every plan state and end reason", () => {
+    const answers = Object.fromEntries(
+      PLAN_REASONS.map((reason) => [reason, hostedDownloadAccess(snapshotOf("ended", "vector-100", { reason }))]),
+    )
+    expect(answers).toEqual({
+      payment_failed: "final",
+      action_required: "final",
+      payment_pending: "final",
+      canceled: "final",
+      refunded: "refused",
+      disputed: "refused",
+      early_fraud_warning: "refused",
+      closing: "closing",
+      owner: "refused",
+    })
+    expect([...FINAL_PERIOD_REASONS].sort()).toEqual([
+      "action_required",
+      "canceled",
+      "payment_failed",
+      "payment_pending",
+    ])
+    expect(hostedDownloadAccess(snapshotOf("ended", "vector-100"))).toBe("final")
+    expect(hostedDownloadAccess(snapshotOf("frozen", "vector-100", { reason: "disputed" }))).toBe("frozen")
+    expect(hostedDownloadAccess(snapshotOf("paused", "vector-100", { reason: "payment_failed" }))).toBe("paused")
+    expect(hostedDownloadAccess(snapshotOf("active", "vector-100"))).toBe("live")
+    expect(hostedDownloadAccess(snapshotOf("renewing", "vector-200"))).toBe("live")
+    expect(hostedDownloadAccess(snapshotOf("active", "vector-50"))).toBe("current")
+    expect(hostedDownloadAccess(snapshotOf("none", "vector-50"))).toBe("refused")
+    expect(hostedDownloadAccess(undefined)).toBe("refused")
+    const ended = snapshotOf("ended", "vector-100", { reason: "canceled" })
+    expect(requireHostedDownload(ended, "on")).toEqual({ snapshot: ended, final: true })
+    expect(requireHostedDownload(snapshotOf("active", "vector-50"), "on").final).toBe(false)
+    for (const service of ["off", "no-new", "stop"] as const)
+      expect(() => requireHostedDownload(ended, service)).toThrow(
+        expect.objectContaining({ code: "HOSTED_UNAVAILABLE" }),
+      )
+  })
+
+  test("an ended plan's block is held from its final period, though reconcile revoked and switched off its key", async () => {
+    const w = await world()
+    Object.assign(w.fakes.stripe.subscription("sub_renewing")!, { status: "canceled", ended_at: P1.end - 3600 })
+    w.fakes.clock.advance(6 * HOUR + MINUTE)
+    const ended = await reconcileModelPlanAccount(id, w.fetcher, w.fakes.clock.now)
+    expect(ended).toMatchObject({ state: "ended", reason: "canceled" })
+    expect((await readModelPlanAccount(id, w.fetcher))?.key).toMatchObject({ hash: SEEDED, revoked: "canceled" })
+    expect(w.fakes.openRouter.keys.get(SEEDED)!.disabled).toBe(true)
+    // A session's block is refused as before; a download's is held from the final period's key.
+    await expect(openBlock(id, { session: "s1", size: "standard" }, w.options)).rejects.toMatchObject({
+      statusCode: 402,
+    })
+    await expect(
+      openBlock(id, { session: "s2", size: "standard", renew: 0, download: true }, w.options),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+    })
+    const started = w.fakes.clock.now
+    const block = await openBlock(id, { session: "s2", size: "standard", download: true }, w.options)
+    expect(block).toMatchObject({
+      block: 0,
+      startedAt: started,
+      endsAt: started + 15 * MINUTE,
+      stopBy: started + 20 * MINUTE,
+    })
+    expect(held(w).map(parseHoldMember)).toEqual([
+      { ticket: expect.any(String), purpose: "hosted", run: undefined, micro: 125_000 },
+    ])
+    expect((await runningBlocks(id, w.fetcher))[0]).toMatchObject({ pool: SEEDED, epoch: E1, periodEnd: P1.end * 1000 })
+    expect(await minutes(w)).toEqual({ used: 0, reserved: 15 })
+    w.fakes.clock.advance(4 * MINUTE)
+    expect(await closeBlock(id, { session: "s2", block: 0 }, w.options)).toBe(true)
+    // Its minutes are charged to that final key as its debit, and the key stays switched off.
+    expect((await debits(w)).map((debit) => [debit.ref, debit.micro])).toEqual([
+      ["hb-s2-0", 4 * chargeMinuteMicro("standard")],
+    ])
+    expect(held(w)).toEqual([])
+    expect(w.fakes.openRouter.keys.get(SEEDED)!.disabled).toBe(true)
+    expect((await rows()).map((row) => [row.ref, row.units, row.periodStart])).toEqual([
+      ["hb-s2-0", 4, P1.start * 1000],
+    ])
+    // The final hold is the cloud computer's only: any other purpose, or a run, is refused before anything is read.
+    for (const [purpose, runId] of [
+      ["brain", undefined],
+      ["hosted", "run-1"],
+    ] as const)
+      await expect(
+        holdPool(id, 0.1, MINUTE, purpose, { fetcher: w.fetcher, final: true, ...(runId ? { runId } : {}) }),
+      ).rejects.toMatchObject({ statusCode: 500, code: "MODEL_PLAN_POOL_INVALID" })
+  })
+
+  test("a final hold is refused once the plan ended for a reason whose period was not kept", async () => {
+    const w = await world()
+    Object.assign(w.fakes.stripe.subscription("sub_renewing")!, { status: "canceled", ended_at: P1.end - 3600 })
+    await reconcileModelPlanAccount(id, w.fetcher, w.fakes.clock.now)
+    const snapshot = (await readSnapshot(id, w.fetcher))!
+    w.fakes.store.set(codiumKey("ent", id), JSON.stringify({ ...snapshot, reason: "refunded" }))
+    await expect(holdPool(id, 0.1, MINUTE, "hosted", { fetcher: w.fetcher, final: true })).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MODEL_PLAN_RENEWING",
+    })
+    expect(held(w)).toEqual([])
   })
 })
 

@@ -423,8 +423,9 @@ export function runFacts(input: unknown): RunFacts | undefined {
 }
 
 /**
- * The account's run with this id in this repository, from Codex's run records. `available: false` while no reader is
- * registered (before A59) or it fails; a record of another repository is no match.
+ * The account's run with this id in this repository, from Codex's run records. `available: false` where no reader is
+ * registered (A59 registers it for the cards route and the webhook) or it fails; a record of another repository is no
+ * match.
  */
 export async function lookupRun(
   account: string,

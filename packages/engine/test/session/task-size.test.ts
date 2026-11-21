@@ -132,10 +132,14 @@ const cached = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID
 // North Mini Code with a small context, so one large step compacts the history.
 const small = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("tiny-context") }
 
+// No test here reads an undo snapshot or a patch part: the judge learns what changed from write and edit inputs. With
+// snapshots on, every model step spent several git processes on them (218 of 259 in the Plan mode approval test), most
+// of a Windows runner's 14-19 s for it. setup approves the project's trust: an untrusted project cannot turn them off.
 function providerConfig(url: string, extra: Partial<ConfigV1.Info> = {}): Partial<ConfigV1.Info> {
   return {
     formatter: false,
     lsp: false,
+    snapshot: false,
     provider: {
       lmstudio: {
         name: "Test",

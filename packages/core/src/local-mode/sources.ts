@@ -399,8 +399,8 @@ export const SOURCES: readonly Source[] = [
     purpose: "account",
     hosts: ["api.github.com", ...VECTOR],
     sends:
-      "Your Brain's memory, encrypted on this computer, to Vector's Brain Vault with your Vector sign-in, or the name of the private GitHub repository you back up to, to check it is private",
-    why: "Brain Vault: backs up and restores your memory when you ask",
+      "Your Brain's memory, learned skills and workflow insights, encrypted on this computer, to Vector's Brain Vault with your Vector sign-in, or the name of the private GitHub repository you back up to, to check it is private",
+    why: "Brain Vault: backs up and restores your memory, learned skills and workflow insights when you ask",
     local: "blocked",
     where: ["engine", "desktop"],
     callSites: [

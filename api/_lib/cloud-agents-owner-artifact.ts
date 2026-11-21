@@ -46,8 +46,10 @@ export function createOwnerArtifactReadApi(
         requirePersistent: true,
       }))
   const read = async (request: ApiRequest, response: ApiResponse) => {
+    // Either service switch off answers before any method, credential, limit or store work.
+    if (env.VECTOR_GITHUB_BRAIN_ENABLED !== "true" || env.MODEL_PLANS_ENABLED !== "true") throw unavailable()
     requireMethod(request, "POST")
-    if (env.VECTOR_GITHUB_BRAIN_ENABLED !== "true" || request.url?.includes("?")) throw unavailable()
+    if (request.url?.includes("?")) throw unavailable()
     requireTrustedJsonRequest(request, 2000)
     const owner = await requireCloudAgentsDesktop(request, fetcher, now())
     await limit(request, response, owner.account)

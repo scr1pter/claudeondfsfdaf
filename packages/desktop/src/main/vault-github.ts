@@ -63,6 +63,8 @@ export function desktopGit(options: {
   readonly remote: string
   readonly cwd: string
   readonly timeoutMs?: number
+  /** The git program; tests only. The app always runs `git` from PATH. */
+  readonly command?: string
 }): VaultGitHub.Git {
   return async (args, more) => {
     if (CONNECTS.has(subcommand(args) ?? "")) {
@@ -88,7 +90,7 @@ export function desktopGit(options: {
         clearTimeout(timer)
         resolve(result)
       }
-      const child = spawn("git", [...args], {
+      const child = spawn(options.command ?? "git", [...args], {
         cwd: options.cwd,
         env,
         windowsHide: true,
@@ -105,9 +107,10 @@ export function desktopGit(options: {
           exitCode: 127,
           stdout: Buffer.alloc(0),
           stderr:
+            // Node's text (an errno and the spawn call) is not copy for the person, and the store shows and keeps stderr.
             error.code === "ENOENT"
               ? "Git isn't installed on this computer. Install Git, then try again."
-              : `git could not start: ${error.message}`,
+              : "Git could not start on this computer. Check that Git works in a terminal, then try again.",
         }),
       )
       child.on("close", (code) =>

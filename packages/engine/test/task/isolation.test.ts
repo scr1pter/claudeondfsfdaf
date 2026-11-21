@@ -30,7 +30,7 @@ import { Npm } from "@vectordevai/core/npm"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 // Bootstrap is independently covered by the real LSP/MCP/snapshot isolation files. These tests use real Git,
 // instances, sessions, agents and jobs, and never invoke a model or a package installation.
@@ -761,6 +761,117 @@ it.instance(
 )
 
 it.instance(
+  "a record replaced by a save is still read, and a second name for it is refused",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* f.reserve()
+      const text = yield* contents(path.dirname(f.recordPath), "record.json")
+      // Every save renames a fresh file over record.json.
+      yield* Effect.promise(async () => {
+        await fs.writeFile(`${f.recordPath}.tmp`, text, { flag: "wx", mode: 0o600 })
+        await fs.rename(`${f.recordPath}.tmp`, f.recordPath)
+      })
+      expect((yield* f.isolation.find(f.child.id))?.taskID).toBe(f.child.id)
+      // A second name for the record, which every OS can create without a privilege, is refused.
+      yield* Effect.promise(() => fs.link(f.recordPath, path.join(path.dirname(f.recordPath), "second-name.json")))
+      yield* failure(f.isolation.find(f.child.id), "registry")
+      // An ordinary file where the record's folder belongs is a forged entry, not a task without one.
+      yield* Effect.promise(async () => {
+        await fs.rm(path.dirname(f.recordPath), { recursive: true, force: true })
+        await fs.writeFile(path.dirname(f.recordPath), text)
+      })
+      yield* failure(f.isolation.find(f.child.id), "registry")
+    }),
+  { git: true },
+)
+
+// Windows neither keeps a replaced file open under no name nor lets a test make a symbolic link without a privilege.
+if (process.platform !== "win32")
+  it.instance(
+    "a record replaced after it was checked is not taken for a hard link, and a link renamed in is refused at the open",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture
+        yield* f.reserve()
+        const text = yield* contents(path.dirname(f.recordPath), "record.json")
+        // Engine shard 4/4 of test.yml run 43859026439 failed when an lstat resolved the old record just before a
+        // save's rename and saw it with no names left. A record open while a save replaces it is in that same state,
+        // which a read now checks on the open file.
+        const replaced = yield* Effect.promise(async () => {
+          const handle = await fs.open(f.recordPath, "r")
+          await fs.writeFile(`${f.recordPath}.tmp`, text, { flag: "wx", mode: 0o600 })
+          await fs.rename(`${f.recordPath}.tmp`, f.recordPath)
+          return handle.stat().finally(() => handle.close())
+        })
+        expect(replaced.nlink).toBe(0)
+        expect(TaskIsolation.linked(replaced)).toBe(false)
+        // A symbolic link renamed over the record between a check of the path and the read is not followed: the
+        // read checks only the folders by path and the open itself refuses a final link.
+        const outside = yield* tmpdirScoped()
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(outside, "record.json"), text)
+          await fs.symlink(path.join(outside, "record.json"), `${f.recordPath}.tmp`)
+          await fs.rename(`${f.recordPath}.tmp`, f.recordPath)
+        })
+        yield* failure(f.isolation.find(f.child.id), "registry")
+      }),
+    { git: true },
+  )
+
+// Windows refuses to rename a save over a record another handle has open, and `find` reads without the per-task lock.
+// Engine (windows) job 136057825288 left a record short of "changed" when a save met the test's own `find` poll. Every
+// OS runs these: elsewhere the rename replaces the open file at once.
+it.instance(
+  "a save over a record another handle holds open waits for the handle and then replaces the record",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* f.start
+      const registry = path.dirname(f.recordPath)
+      const handle = yield* Effect.promise(() => fs.open(f.recordPath, "r"))
+      yield* Effect.addFinalizer(() => Effect.promise(() => handle.close().catch(() => undefined)))
+      const save = yield* f.isolation.markSettling(f.child.id, 1).pipe(Effect.forkScoped({ startImmediately: true }))
+      // The save has written its new file and reached the rename, or (where the rename does not wait) finished.
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          if ((yield* f.isolation.find(f.child.id))?.state === "settling") return true
+          const names = yield* Effect.promise(() => fs.readdir(registry))
+          return names.some((name) => name.endsWith(".tmp")) ? true : undefined
+        }),
+        "the save never reached its rename",
+      )
+      // While the handle is open Windows keeps the old record; nothing can have replaced it.
+      if (process.platform === "win32") expect((yield* f.isolation.find(f.child.id))?.state).toBe("running")
+      yield* Effect.promise(() => handle.close())
+      expect((yield* Fiber.join(save).pipe(Effect.timeout("5 seconds")))?.state).toBe("settling")
+      expect((yield* f.isolation.find(f.child.id))?.state).toBe("settling")
+      expect((yield* Effect.promise(() => fs.readdir(registry))).filter((name) => name.endsWith(".tmp"))).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "a save over a record held open past the retry window fails on Windows, keeping the old record and no temp file",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* f.start
+      const registry = path.dirname(f.recordPath)
+      const handle = yield* Effect.promise(() => fs.open(f.recordPath, "r"))
+      yield* Effect.addFinalizer(() => Effect.promise(() => handle.close().catch(() => undefined)))
+      // The retry window is 2 s; the deadline only bounds it.
+      const save = f.isolation.markSettling(f.child.id, 1).pipe(Effect.timeout("5 seconds"))
+      if (process.platform === "win32") yield* failure(save, "EPERM")
+      if (process.platform !== "win32") expect((yield* save)?.state).toBe("settling")
+      yield* Effect.promise(() => handle.close())
+      expect((yield* f.isolation.find(f.child.id))?.state).toBe(process.platform === "win32" ? "running" : "settling")
+      expect((yield* Effect.promise(() => fs.readdir(registry))).filter((name) => name.endsWith(".tmp"))).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
   "a merge through a symlinked target directory is refused",
   () =>
     Effect.gen(function* () {
@@ -1029,6 +1140,8 @@ it.instance(
       expect((yield* f.isolation.merge({ taskID: f.child.id, by: { kind: "owner" } })).record.state).toBe("merged")
     }),
   { git: true },
+  // Two full isolated lifecycles and two merges: 4.1 s locally, but over 30 s on a slow hosted Windows runner.
+  60_000,
 )
 
 it.instance(
@@ -1057,6 +1170,8 @@ it.instance(
       expect((yield* f.isolation.merge({ taskID: f.child.id, by: { kind: "owner" } })).record.state).toBe("merged")
     }),
   { git: true },
+  // Two isolated lifecycles, a discard and a merge: 4.1 s locally, but 29.8 s on a slow hosted Windows runner.
+  60_000,
 )
 
 it.instance(
@@ -1638,6 +1753,9 @@ for (const gitProject of [true, false])
         expect(yield* contents(f.home.directory, "result.txt")).toBe("result\n")
       }),
     { git: gitProject },
+    // Two isolated lifecycles and a stacked merge: Git took 3.6 s locally, but 25.5 s on a slow hosted Windows runner.
+    // The copy variant took 13.9 s on that runner, so it keeps the default budget.
+    gitProject ? 60_000 : undefined,
   )
 
 it.instance(

@@ -33,8 +33,12 @@ void desktop_ready() {
   if (!read || used <= sizeof(wchar_t) || used > sizeof(name) || std::wstring_view(name) != L"Default")
     throw Failure{L"secure_desktop", L"The interactive desktop is unavailable."};
 }
-void note_uia(const std::shared_ptr<WindowsUiaDiagnostic>& state, WindowsUiaPhase phase) noexcept {
-  if (state) state->phase.store(phase, std::memory_order_relaxed);
+// Only the two expiry phases take a snapshot, and each names the side that observed the deadline.
+void note_uia(const std::shared_ptr<WindowsUiaDiagnostic>& state, WindowsUiaPhase phase, WindowsUiaExpiry expiry = WindowsUiaExpiry::none) noexcept {
+  if (state) {
+    if (phase == WindowsUiaPhase::actor_expired || phase == WindowsUiaPhase::actor_com_expired) state->note_timeout(expiry);
+    state->phase.store(phase, std::memory_order_relaxed);
+  }
 }
 struct UiaActor {
   std::shared_ptr<WindowsUiaDiagnostic> diagnostic;
@@ -59,7 +63,7 @@ void current_call() {
   if (active_ticket->cancelled.load()) { if (active_ticket->actor) note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_cancelled); unavailable(); }
   if (!active_ticket->actor) unavailable();
   if (active_ticket->actor->revoked.load()) { note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_revoked); unavailable(); }
-  if (now_ms() >= active_ticket->deadline) { note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_expired); unavailable(); }
+  if (now_ms() >= active_ticket->deadline) { note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_expired, WindowsUiaExpiry::worker_current); unavailable(); }
 }
 bool mutation_result(HRESULT status) {
   if (FAILED(status)) throw Failure{L"changed", L"The native accessibility action could not be confirmed."}; return true;
@@ -137,7 +141,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
   std::wstring mutation_name_;
   std::function<bool()> mutation_gate_;
 
-  void note(WindowsUiaPhase phase) const noexcept { note_uia(actor_->diagnostic, phase); }
+  void note(WindowsUiaPhase phase, WindowsUiaExpiry expiry = WindowsUiaExpiry::none) const noexcept { note_uia(actor_->diagnostic, phase, expiry); }
   void note_budget_failure(const WindowsComCall& budget) const noexcept {
     if (!actor_->diagnostic) return;
     // Only a failed original current() probe samples this existing closed observation. No success
@@ -146,7 +150,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
       case WindowsComObservation::uninitialized: note(WindowsUiaPhase::actor_com_uninitialized); return;
       case WindowsComObservation::cancellation_unavailable: note(WindowsUiaPhase::actor_com_cancellation_unavailable); return;
       case WindowsComObservation::timer_unavailable: note(WindowsUiaPhase::actor_com_timer_unavailable); return;
-      case WindowsComObservation::expired: note(WindowsUiaPhase::actor_com_expired); return;
+      case WindowsComObservation::expired: note(WindowsUiaPhase::actor_com_expired, WindowsUiaExpiry::worker_budget); return;
       case WindowsComObservation::current: return;
     }
   }
@@ -284,7 +288,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
       }); actor_->condition.notify_one(); }
     const auto deadline = std::chrono::steady_clock::time_point(std::chrono::milliseconds(ticket->deadline));
     if (result.wait_until(deadline) != std::future_status::ready || now_ms() >= ticket->deadline) {
-      note(WindowsUiaPhase::actor_expired); ticket->cancelled.store(true); actor_->revoked.store(true); DWORD thread = 0; std::deque<std::function<void()>> discarded;
+      note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait); ticket->cancelled.store(true); actor_->revoked.store(true); DWORD thread = 0; std::deque<std::function<void()>> discarded;
       { std::lock_guard lock(actor_->mutex); actor_->quarantined = true; discarded.swap(actor_->jobs); thread = actor_->thread; actor_->condition.notify_all(); }
       if (thread) (void)CoCancelCall(thread, 0); unavailable();
     }
@@ -359,7 +363,12 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     if (!eligible_windows_window(window) || GetWindowThreadProcessId(window.surface, &pid) != window.surface_thread_id || pid != window.owner.process.pid ||
         GetAncestor(window.surface, GA_ROOT) != window.hwnd || !windows_owner_current(window.owner) || !windows_owner_current(window.physical_owner)) unavailable();
     winrt::com_ptr<IUIAutomationElement> root;
-    note(WindowsUiaPhase::root_element); current_call(); if (FAILED(automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put()))) unavailable();
+    note(WindowsUiaPhase::root_element); current_call();
+    // Failure path only: keep the first failing status for the driver's closed bucket. The thrown code is unchanged.
+    if (const auto status = automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put()); FAILED(status)) {
+      if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));
+      unavailable();
+    }
     UIA_HWND handle = nullptr;
     note(WindowsUiaPhase::root_handle);
     if (!root || FAILED(root->get_CurrentNativeWindowHandle(&handle)) || reinterpret_cast<HWND>(handle) != window.surface) unavailable();

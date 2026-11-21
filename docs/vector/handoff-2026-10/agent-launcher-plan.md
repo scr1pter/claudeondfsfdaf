@@ -320,7 +320,7 @@ Then derive from the catalog everything that is hard-coded today:
 - https://docs.openhands.dev/openhands/usage/cli/headless
 
 **Code read for the build plan:**
-- `/Users/Krishna/Vectordev.ai/packages/desktop/src/main/external-agents.ts`
-- `/Users/Krishna/Vectordev.ai/packages/app/src/features/agents/external-runtimes.ts`
-- `/Users/Krishna/Vectordev.ai/packages/app/src/pages/layout-new.tsx`
-- `/Users/Krishna/Vectordev.ai/packages/app/src/components/dialog-select-model.tsx`
+- `packages/desktop/src/main/external-agents.ts`
+- `packages/app/src/features/agents/external-runtimes.ts`
+- `packages/app/src/pages/layout-new.tsx`
+- `packages/app/src/components/dialog-select-model.tsx`

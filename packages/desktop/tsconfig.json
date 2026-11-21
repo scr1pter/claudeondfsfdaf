@@ -45,6 +45,7 @@
     "scripts/computer-overlay-smoke-report.ts",
     "scripts/computer-overlay-smoke-stage.ts",
     "scripts/computer-overlay-smoke-artifact.ts",
+    "scripts/computer-overlay-smoke-region-warm.ts",
     "test/computer/bridge-node.ts",
     "test/computer/helper-node.ts",
     "test/computer/fake-desktop.ts",

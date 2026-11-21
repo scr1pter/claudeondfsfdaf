@@ -7,10 +7,14 @@
 // - a host whose every address, looked up over DNS-over-HTTPS just before, is on the public internet: private,
 //   loopback, link-local, carrier-grade NAT, documentation, benchmarking, multicast, reserved, the cloud metadata
 //   addresses, and IPv6 outside 2000::/3 or in its special blocks are refused, and one such address among public ones
-//   refuses the host.
-// Redirects are never followed (check.ts). Cloudflare's own fetch also refuses private and prohibited addresses; the
-// lookup here makes the rule explicit instead of relying on that.
+//   refuses the host; a lookup that failed for either kind, or an answer cut short, leaves the host unknown, so it is
+//   not probed.
+// Redirects are never followed (check.ts). The Worker cannot pin the address it checked: its fetch looks the name up
+// again. Open-source workerd's default network allows public addresses only, and filters what that lookup returns;
+// whether Cloudflare's production fetch does the same is unverified, left to the outside security review (spec 8.2
+// step 16). See the P7 review addendum in codium-deviations.md.
 
+import { fromUtf8, readPrefix } from "./bytes"
 import { OPS_LIMITS } from "./limits"
 import type { Fetcher } from "./runtime"
 
@@ -174,14 +178,14 @@ export async function resolvePublic(
   const [v4, v6] = await Promise.all([lookup(host, "A", fetcher, timeoutMs), lookup(host, "AAAA", fetcher, timeoutMs)])
   const answers = [v4, v6].filter((entry): entry is Extract<Lookup, { kind: "answer" }> => entry.kind === "answer")
   if (answers.some((entry) => entry.addresses.some(blockedAddress))) return { kind: "blocked" }
+  // Every address must be known: a lookup that failed, for either kind, leaves the host unknown.
+  if (v4.kind === "error" || v6.kind === "error") return { kind: "error" }
   const addresses = answers.flatMap((entry) => entry.addresses)
   if (addresses.length) {
     const ttl = Math.min(...answers.filter((entry) => entry.addresses.length).map((entry) => entry.ttl)) * 1000
     return { kind: "public", ttlMs: Math.max(OPS_LIMITS.dnsMinCacheMs, Math.min(OPS_LIMITS.dnsMaxCacheMs, ttl)) }
   }
-  // No address: a name that does not exist (or has no address records) is the site's outage; a lookup that failed, for
-  // either kind of address, leaves it unknown.
-  if (v4.kind === "error" || v6.kind === "error") return { kind: "error" }
+  // No address: a name that does not exist (or has no address records) is the site's outage.
   return { kind: "missing" }
 }
 
@@ -197,9 +201,14 @@ async function lookup(host: string, type: "A" | "AAAA", fetcher: Fetcher, timeou
       await response.body?.cancel().catch(() => {})
       return { kind: "error" }
     }
-    const text = await response.text()
-    if (text.length > 64 * 1024) return { kind: "error" }
-    const answer = JSON.parse(text) as { Status?: unknown; Answer?: unknown }
+    // Counted in bytes as it arrives: an answer longer than 64 KiB, or one that is not UTF-8, is a failed lookup. It is
+    // read to the limit and one byte more, so an answer of exactly 64 KiB is seen to end.
+    const read = await readPrefix(response.body, 64 * 1024 + 1)
+    const text = read?.complete ? fromUtf8(read.bytes) : undefined
+    if (text === undefined) return { kind: "error" }
+    const answer = JSON.parse(text) as { Status?: unknown; TC?: unknown; Answer?: unknown }
+    // TC: the answer was cut short, so it may not list every address.
+    if (answer.TC === true) return { kind: "error" }
     // 3 is NXDOMAIN: the name does not exist. Anything but 0 or 3 (SERVFAIL, REFUSED…) is a failed lookup.
     if (answer.Status === 3) return { kind: "none" }
     if (answer.Status !== 0) return { kind: "error" }
