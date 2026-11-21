@@ -1021,6 +1021,11 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
       path.join(checkout, ".vector", "vector.json"),
       JSON.stringify({ formatter: { "ev18-dot": { command } } }),
     )
+    // The instance's Vcs reads the checkout's branch in the background (Vcs.init forks into the app scope), and
+    // disposing the instance neither waits for nor stops it. On Windows those git processes, whose working folder is the
+    // checkout, keep it from being removed, so wait for them (GET /vcs joins the lookup) before the instance is disposed
+    // and before the test ends.
+    await read(checkout, "/vcs")
     const dispose = await call("/instance/dispose", {
       method: "POST",
       headers: { ...owner, "x-vector-directory": checkout },
@@ -1028,5 +1033,6 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     expect(dispose.status).toBe(200)
     expect(await state()).toEqual(untrusted)
     expect(await present(marker)).toBe(false)
+    await read(checkout, "/vcs")
   }, 30_000)
 })

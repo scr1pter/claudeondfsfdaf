@@ -1084,3 +1084,43 @@ Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 
 `brain/database.test.ts`, `background-job-store.test.ts` and `engine/test/storage/storage.test.ts` passed (the last
 does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
 change has not run on Windows CI yet.
+
+## 2026-11-21: EV-18 worktree test cleanup hit EBUSY on the job's checkout on Windows
+
+Branch `worktree-test-cleanup` from `4fc245b6`. A test-only change. No assertion, deadline or timeout was skipped,
+loosened or lengthened, and no product code changed.
+
+Evidence. PR #58 test.yml run 44889738895, attempt 1, `engine (windows, shard 9/12)` job 136807229583:
+`packages/engine/test/everywhere/worktree.test.ts` "POST /experimental/worktree/unattended (EV-13) > the job's
+checkout is never trusted, so its own config, or one written into it, loads no formatter or server" failed with
+`EBUSY: resource busy or locked, rm '...\share\vector\everywhere-worktree\5742053554...'` at `worktree.test.ts:737:49`,
+the `afterEach` cleanup `rm(item, { recursive: true, force: true })` that runs right after `store.disposeAll()`.
+The shard otherwise passed (748 pass, 23 skip, 1 fail). The test came with #56 and passed on main's `153f9a22` run
+in 2666 ms; here it took 1935 ms. #58 does not touch it.
+
+Cause. This is the only test in the file that loads an engine instance in the job's checkout, and it loads it twice
+(before and after `/instance/dispose`). Every load runs `Vcs.init()`, which forks the Vcs state lookup into the Vcs
+layer's app-wide scope (`src/project/vcs.ts`), and bootstrap does not wait for it. The lookup runs
+`git symbolic-ref`, `git remote`, `git for-each-ref refs/heads` and `git config init.defaultBranch` with the
+checkout as their working folder. `InstanceState`'s disposer only calls `ScopedCache.invalidate`, which closes the
+entry's scope but does not interrupt a lookup still running in the caller's fiber, so neither `/instance/dispose`
+nor `store.disposeAll()` waits for those processes. On Windows a running process holds its working folder open, so
+the cleanup `rm`, which has no retry, failed with EBUSY when it ran before git had exited. `Worktree.remove` already
+tolerates the same leftover handle with its 50 x 100 ms win32 `rm` retry in `cleanDirectory`. File watchers,
+formatters and language servers are not the cause: the checkout watcher is behind `VECTOR_EXPERIMENTAL_FILEWATCHER`
+(off), the git-folder watcher targets the source repository's `.git`, and the untrusted checkout starts no
+formatter or server.
+
+Change. The test now calls `GET /vcs` in the checkout (through its existing `read` helper, which also expects
+status 200) right before `/instance/dispose` and again after its last `state()` check. `GET /vcs` awaits
+`vcs.branch()` and `vcs.defaultBranch()`, which join the in-flight lookup, so both loads' git processes have exited
+before the instance is disposed and before `afterEach` removes the checkout. The cleanup loop is unchanged.
+
+Not fixed here. `Vcs.init` forking its lookup outside the instance's scope means disposal neither waits for nor
+stops git in the instance's folder. That is a product follow-up (await it in bootstrap after measuring the added
+latency, or tie the fork to the instance so disposal interrupts it), separate from this flake.
+
+Validation, one file at a time through the Bun lock: `worktree.test.ts` 5 of 5 runs passed on Linux (20 tests each,
+17.3-24.3 s); `packages/engine` `bun typecheck` passes. Linux does not reproduce the EBUSY (it removes a process's
+working folder), so the local runs show only that the added waits succeed. CI must show the `engine (windows)` shard
+that runs `worktree.test.ts` passing this test, with no EBUSY from the `afterEach` cleanup, across repeated runs.
