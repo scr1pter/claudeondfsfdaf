@@ -463,7 +463,8 @@ or 139) inside `test/cli/run/scrollback.surface.test.ts` with no failing test: m
 job 133728559216, PR #45 shard 5/6 job 133732849924, main `56b2862b` run 44676025086 shard 6/6 job 136088455729 (after
 "does not emit blank patch snapshots between edit and task"); about 5 of ~50 six-shard Linux engine jobs. RSS stayed
 below 1.1 GB. The earlier crash at the same address in multiagent-parity-deviations.md (shard 2/4 job 126909620047)
-was not diagnosed and may share this cause.
+was not diagnosed and may share this cause. (21 Nov 2026: it does. Job 126909620047 crashed in this file after the same test,
+and its bun.report frames equal this entry's CI trace; see that entry's CI10 follow-up.)
 
 Mechanism. Every test in the file creates and destroys an opentui test renderer. The writer's `<diff>` and `<code>`
 elements are built as `new CodeRenderable(ctx, { id })`, whose `options.treeSitterClient ?? getTreeSitterClient()`

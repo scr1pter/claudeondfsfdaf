@@ -1607,6 +1607,17 @@ Also unrecorded until now:
   - Both e2e jobs passed in run [41963481022](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41963481022) (jobs `127035021598` and `127035021606`).
 - `47e97a94` ("fix(multiagent): CI after Phase 8", 14:29, before the Phase 9 review above) raised one test's own deadline from the 30-second default to 60 s: manager-workflow.test.ts's 300-agent stop case. No assertion changed. Its body gives 15-23 s for that case on CI before Phase 8. It is recorded here as fact and not reviewed. Where this entry says no test deadline changed, it means only `62aacab9`, `020c3458` and `d624e760`.
 - Run [41925753700](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41925753700), the baseline below, is on `47e97a94`. Attempt 1's engine (linux, shard 2/4) job `126909620047` crashed ("panic: Segmentation fault at address 0xFFFFFFFFFFFFFFF8", "Bun has crashed", exit code 132). Attempt 2 re-ran only that job, and it passed. The crash was not diagnosed.
+  - 21 Nov 2026 follow-up (branch `engine-core-fixes`, log read with get_job_logs): the crash is the #49
+    scrollback.surface cause in `ci-harness-repairs.md` ("2026-11-20: Bun 1.3.14 crash in scrollback.surface"). Job
+    `126909620047` crashed in `test/cli/run/scrollback.surface.test.ts` right after "does not emit blank patch
+    snapshots between edit and task", with Features `workers_spawned(19) workers_terminated`, and its bun.report
+    string `ngEz7339/D4j+hvE+ypR82oiwC4u41hDiytzhD2szqyD40w/uCm4lnB2svqCA2DR` has frames identical to the CI trace
+    that entry decodes (`D4j+hvE+…qCA2DR`); only the platform prefix differs. The opentui TreeSitterClient patch
+    there is the repair.
+  - Watch list, no code change: Windows engine shard 11/12 job `136673698455` (main run 44848275007) passed
+    `test/tool/registry.test.ts` "tool.registry > preserves Zod arg descriptions from older config-scoped plugin
+    packages" in 4,111.02 ms, against about 1 s for its neighbours. Read as a one-off slow VM, well inside its budget;
+    record it again if it recurs.
 
 1. Windows step deadline (`62aacab9`: `.github/workflows/test.yml` only; the Windows engine step's `timeout-minutes` went from 30 to 45, with a comment).
 
