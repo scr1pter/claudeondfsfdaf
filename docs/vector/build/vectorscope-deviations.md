@@ -26514,3 +26514,7 @@ Storage binds records to physical repository and immutable source authority. Dur
 Refreshed the source inventory and continuation for the local VectorScope build. They record verified source and hosted runs on their own commits, the local PR verdict and outstanding GitHub package approvals. The safety and lifecycle reviews identified the owner-bound batch lock issue and the remaining V2 and restart privacy boundaries. The shared lock and separately owned integration decisions remain open for phase acceptance.
 
 The model-evidence file passed 37 tests. The core typecheck and 27 workspace typechecks passed. The source inventory derived pipeline revision 5 and the source digest `31a9837d871ec207` from the committed tree.
+
+## 2026-11-21 · Integrate the Everywhere push and cancellation fixes from main
+
+Merged main at `23d09a96b4ca`. The merged desktop scanner and runner passed 70 tests, the Everywhere documentation passed 17 tests, and the review evidence file passed 37 tests. All 27 workspace typechecks passed. The review pipeline uses revision 5 and source digest `31a9837d871ec207`.
