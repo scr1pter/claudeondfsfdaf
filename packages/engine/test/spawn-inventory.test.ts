@@ -220,7 +220,10 @@ const INVENTORY = {
 const DEPENDENCY_SPAWNERS = {
   // GoogleAuth runs `gcloud config config-helper` for a missing project id, and a pluggable executable source only
   // with GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1.
-  "google-auth-library": ["packages/core/src/plugin/provider/google-vertex.ts", "packages/engine/src/provider/provider.ts"],
+  "google-auth-library": [
+    "packages/core/src/plugin/provider/google-vertex.ts",
+    "packages/engine/src/provider/provider.ts",
+  ],
   // fromNodeProviderChain runs a profile's credential_process from the person's own AWS config.
   "@aws-sdk/credential-providers": [
     "packages/core/src/plugin/provider/amazon-bedrock.ts",
@@ -574,16 +577,16 @@ describe("direct process spawn inventory (spawn review §4, principle 5)", () =>
   test("no core or engine source starts a bare taskkill", async () => {
     const sources = await scanned
     expect(
-      sources
-        .filter((source) => /(["'`])taskkill(?:\.exe)?[\s"'`]/i.test(source.code))
-        .map((source) => source.file),
+      sources.filter((source) => /(["'`])taskkill(?:\.exe)?[\s"'`]/i.test(source.code)).map((source) => source.file),
     ).toEqual(["packages/core/src/windows-system.ts"])
   })
 
   // F9: Vector Local's hardware read runs vm_stat or nvidia-smi without Vector's own secrets.
   test("the hardware read starts its tool with the untrusted-child environment", async () => {
     const source = (await scanned).find((item) => item.file === "packages/core/src/local-mode/hardware.ts")
-    expect(source?.code).toMatch(/\bexecFile\(executable, command\.slice\(1\), \{[^{}]*\benv: untrustedChildEnvironment\(\)/)
+    expect(source?.code).toMatch(
+      /\bexecFile\(\s*executable,\s*command\.slice\(1\),\s*\{[^{}]*\benv: untrustedChildEnvironment\(\)/,
+    )
   })
 
   test("every file that loads a dependency which spawns inside itself is listed (F10)", async () => {
@@ -593,9 +596,7 @@ describe("direct process spawn inventory (spawn review §4, principle 5)", () =>
         Object.keys(DEPENDENCY_SPAWNERS).map((specifier) => [
           specifier,
           sources
-            .filter((source) =>
-              new RegExp(`(["'\`])${specifier.replace(/[./]/g, "\\$&")}\\1`).test(source.code),
-            )
+            .filter((source) => new RegExp(`(["'\`])${specifier.replace(/[./]/g, "\\$&")}\\1`).test(source.code))
             .map((source) => source.file),
         ]),
       ),

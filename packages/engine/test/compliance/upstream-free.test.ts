@@ -133,30 +133,34 @@ it.instance(
   },
 )
 
-it.instance("a GitHub token alone never loads Copilot models or selects a Copilot default", () =>
-  Effect.gen(function* () {
-    const env = yield* Env.Service
-    yield* env.set("GITHUB_TOKEN", "fixture-github-token")
-    yield* env.remove("OPENAI_API_KEY")
-    const providers = yield* Provider.use.list()
-    expect(Object.keys(providers).some((id) => id.startsWith("github-copilot"))).toBe(false)
-    const selected = yield* Provider.use.defaultModel().pipe(Effect.option)
-    expect(selected._tag === "Some" && selected.value.providerID.startsWith("github-copilot")).toBe(false)
-  }),
+it.instance(
+  "a GitHub token alone never loads Copilot models or selects a Copilot default",
+  () =>
+    Effect.gen(function* () {
+      const env = yield* Env.Service
+      yield* env.set("GITHUB_TOKEN", "fixture-github-token")
+      yield* env.remove("OPENAI_API_KEY")
+      const providers = yield* Provider.use.list()
+      expect(Object.keys(providers).some((id) => id.startsWith("github-copilot"))).toBe(false)
+      const selected = yield* Provider.use.defaultModel().pipe(Effect.option)
+      expect(selected._tag === "Some" && selected.value.providerID.startsWith("github-copilot")).toBe(false)
+    }),
   // The provider allow-list keeps host-derived providers (Bedrock from AWS_* variables, Vertex, Azure) from taking
   // the default; github-copilot stays allowed, so the Copilot checks still mean something.
   { trusted: true, config: { enabled_providers: ["openai", "github-copilot"] } },
 )
 
-it.instance("a GitHub token does not take the default model from an OpenAI key", () =>
-  Effect.gen(function* () {
-    const env = yield* Env.Service
-    yield* env.set("GITHUB_TOKEN", "fixture-github-token")
-    yield* env.set("OPENAI_API_KEY", "fixture-openai-key")
-    const providers = yield* Provider.use.list()
-    expect(Object.keys(providers).some((id) => id.startsWith("github-copilot"))).toBe(false)
-    expect(String((yield* Provider.use.defaultModel()).providerID)).toBe("openai")
-  }),
+it.instance(
+  "a GitHub token does not take the default model from an OpenAI key",
+  () =>
+    Effect.gen(function* () {
+      const env = yield* Env.Service
+      yield* env.set("GITHUB_TOKEN", "fixture-github-token")
+      yield* env.set("OPENAI_API_KEY", "fixture-openai-key")
+      const providers = yield* Provider.use.list()
+      expect(Object.keys(providers).some((id) => id.startsWith("github-copilot"))).toBe(false)
+      expect(String((yield* Provider.use.defaultModel()).providerID)).toBe("openai")
+    }),
   // The provider allow-list keeps host-derived providers (Bedrock from AWS_* variables, Vertex, Azure) from taking
   // the default; github-copilot stays allowed, so the Copilot checks still mean something.
   { trusted: true, config: { enabled_providers: ["openai", "github-copilot"] } },

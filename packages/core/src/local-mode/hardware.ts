@@ -150,8 +150,11 @@ async function run(command: readonly string[]) {
   const executable = command[0] && which(command[0])
   if (!executable) return undefined
   return new Promise<string | undefined>((resolve) =>
-    execFile(executable, command.slice(1), { timeout: 2_000, windowsHide: true, env: untrustedChildEnvironment() }, (error, stdout) =>
-      resolve(error ? undefined : stdout),
+    execFile(
+      executable,
+      command.slice(1),
+      { timeout: 2_000, windowsHide: true, env: untrustedChildEnvironment() },
+      (error, stdout) => resolve(error ? undefined : stdout),
     ),
   )
 }

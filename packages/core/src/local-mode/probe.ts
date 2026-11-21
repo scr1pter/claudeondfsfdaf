@@ -579,9 +579,11 @@ async function ollamaModels(origin: string, options: Options) {
   // would let a slow server that forwards to ollama.com pass as local, and the check is cached, so only the first call
   // waits.
   const answered = { any: false }
-  const identified = await reader(origin, { ...options, timeout: options.timeout ?? IDENTIFY_TIMEOUT.remote }, answered)(
-    OllamaServer.identify,
-  )
+  const identified = await reader(
+    origin,
+    { ...options, timeout: options.timeout ?? IDENTIFY_TIMEOUT.remote },
+    answered,
+  )(OllamaServer.identify)
   if (!answered.any) return undefined
   if (!OllamaServer.matches(identified)) return { models: undefined }
   const inspection = await OllamaServer.inspect(reader(origin, { ...options, timeout: INSPECT_TIMEOUT }), identified)

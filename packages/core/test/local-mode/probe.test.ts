@@ -463,7 +463,10 @@ describe("checking a listed server before its first model call", () => {
       )!
       server.route("GET /api/version", async () => {
         await Bun.sleep(LocalProbe.IDENTIFY_TIMEOUT.loopback + 200)
-        return new Response(version.response.body, { status: version.response.status, headers: version.response.headers })
+        return new Response(version.response.body, {
+          status: version.response.status,
+          headers: version.response.headers,
+        })
       })
       return server
     }

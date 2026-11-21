@@ -898,7 +898,9 @@ describe("sanitized export pass-throughs (F44b)", () => {
     })
     expect(assistantMessage.info.structured).toEqual({ redacted: "structured:msg_failed" })
     const parts = Object.fromEntries(assistantMessage.parts.map((part) => [part.id, part]))
-    expect(parts.prt_tool_error).toMatchObject({ state: { status: "error", error: "[redacted:tool-error:prt_tool_error]" } })
+    expect(parts.prt_tool_error).toMatchObject({
+      state: { status: "error", error: "[redacted:tool-error:prt_tool_error]" },
+    })
     expect(parts.prt_retry).toMatchObject({
       attempt: 1,
       error: {

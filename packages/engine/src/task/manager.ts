@@ -1587,7 +1587,10 @@ const layer = Layer.effect(
       // A connect fix child runs only the findings connect handed it, under connect's own gate (CW-07); an agent's resume
       // would start it again outside that. The owner may still resume it from the Tasks pane.
       if (record.agent === ConnectPolicy.FIX_AGENT && origin === "agent")
-        return yield* new Error({ code: "invalid", message: "A connect fix cannot be resumed; ask connect for a new fix." })
+        return yield* new Error({
+          code: "invalid",
+          message: "A connect fix cannot be resumed; ask connect for a new fix.",
+        })
       // A fork resumes only while forks may start: it sends its whole inherited window again (5.E.3).
       if (record.fork && (yield* config.get()).sizing?.subagents?.fork === false)
         return yield* new Error({ code: "invalid", message: SessionFork.TURNED_OFF })

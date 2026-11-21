@@ -195,10 +195,15 @@ const QUOTED = ["%s\n", "a b", "it's", "$HOME", "`x`"]
 
 test("a hosted shell launch with arguments under the floor quotes each one as a single word", () => {
   const attempt = () =>
-    ProcessIsolation.decide("printf", QUOTED, { cwd: "/tmp", shell: true, env: { PATH: "/usr/bin" } }, {
-      guarded: true,
-      floor: true,
-    })
+    ProcessIsolation.decide(
+      "printf",
+      QUOTED,
+      { cwd: "/tmp", shell: true, env: { PATH: "/usr/bin" } },
+      {
+        guarded: true,
+        floor: true,
+      },
+    )
   if (process.platform !== "linux") {
     expect(attempt).toThrow(ProcessIsolation.REFUSAL)
     return
@@ -240,10 +245,15 @@ const bubblewrap = (() => {
 })()
 
 test.skipIf(!bubblewrap)("the floor's quoted shell wrap round-trips every argument through bwrap exactly", () => {
-  const plan = ProcessIsolation.decide("printf '%s|'", QUOTED.slice(1), { cwd: os.tmpdir(), shell: true, env: { PATH: "/usr/bin:/bin" } }, {
-    guarded: true,
-    floor: true,
-  })
+  const plan = ProcessIsolation.decide(
+    "printf '%s|'",
+    QUOTED.slice(1),
+    { cwd: os.tmpdir(), shell: true, env: { PATH: "/usr/bin:/bin" } },
+    {
+      guarded: true,
+      floor: true,
+    },
+  )
   const result = spawnSync(plan.file, plan.args, { encoding: "utf8", timeout: 10_000 })
   expect(result.status).toBe(0)
   expect(result.stdout).toBe("a b|it's|$HOME|`x`|")

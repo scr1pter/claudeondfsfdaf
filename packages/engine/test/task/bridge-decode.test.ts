@@ -89,7 +89,15 @@ describe("desktop bridge payloads", () => {
             id,
             costKind: "future-kind",
             budgetScopes: [
-              { kind: "run", id: "run-1", budget: {}, spentUsd: 0, steps: 1, unpricedSteps: 0, costKind: "future-kind" },
+              {
+                kind: "run",
+                id: "run-1",
+                budget: {},
+                spentUsd: 0,
+                steps: 1,
+                unpricedSteps: 0,
+                costKind: "future-kind",
+              },
             ],
           },
         ],

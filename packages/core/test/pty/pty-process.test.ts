@@ -21,7 +21,11 @@ describe.skipIf(process.platform === "win32")("PtyProcess.foreground", () => {
           "-e",
           `const { PtyProcess } = await import(${JSON.stringify(path.join(import.meta.dir, "../../src/pty/process.ts"))}); console.log(PtyProcess.foreground(process.pid))`,
         ],
-        { encoding: "utf8", env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` }, timeout: 10_000 },
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` },
+          timeout: 10_000,
+        },
       )
       expect(child.status).toBe(0)
       const group = Number(child.stdout.trim())
