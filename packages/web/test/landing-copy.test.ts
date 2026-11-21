@@ -12,12 +12,14 @@ const read = async (file: string) => (await Bun.file(path.join(web, file)).text(
 const lander = await read("src/components/Lander.astro")
 const index = await read("src/pages/index.astro")
 const footer = await read("src/components/marketing/SiteFooter.astro")
+// The review pipeline diagram is drawn by its own component, so its words are page text too.
+const pipeline = await read("src/components/marketing/ReviewPipeline.astro")
 const shots = await Promise.all(
   (await Array.fromAsync(new Bun.Glob("src/components/marketing/shots/*.astro").scan({ cwd: web }))).map(
     async (file) => ({ file, text: await read(file) }),
   ),
 )
-const page = [lander, index, footer].join("\n")
+const page = [lander, index, footer, pipeline].join("\n")
 // Link targets are left out: a model card's address can name an active size, though no page text does.
 const visible = [page, ...shots.map((shot) => shot.text)].map((text) => text.replace(/href(?:: |=)"[^"]*"/g, ""))
 
@@ -258,7 +260,7 @@ test.skipIf(Bun.semver.order(publishedDesktopVersion, "1.99.109") < 0)(
 )
 
 test("the landing page says repository, never project, for Vector's own idea", () => {
-  expect([lander, index, footer].filter((text) => /\bprojects?\b/i.test(text))).toEqual([])
+  expect([lander, index, footer, pipeline].filter((text) => /\bprojects?\b/i.test(text))).toEqual([])
   // The redrawn sidebar, dashboard and terminal name things the way the copy does.
   const named = shots.flatMap((shot) =>
     [
