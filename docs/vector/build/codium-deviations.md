@@ -3324,6 +3324,16 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
   billing literals would fail the same way, and a failed read returns `invalid` with a reconnect message. VectorScope's
   `packages/core/src/review/local-result.ts:26` decodes a retained result's cost kind with its own closed literal. Both
   are recorded readings, not changed; each is a package of its own if the lead wants downgrade tolerance there.
+  - 21 Nov 2026 (branch `engine-core-fixes`): the desktop task-bridge half is closed. `read()` in
+    `packages/engine/src/task/desktop.ts` maps a string `costKind` that `RunBudget.CostKind` rejects to "unknown" on
+    each stored task and each of its `budgetScopes` before the decode (`knownCostKinds`, below the layer), so a record
+    a newer engine wrote no longer reads as damaged. Strings only: a non-string cost kind, or any other malformed
+    field, still returns `invalid` (tasks are not decoded one at a time; the "damaged record" contract is unchanged).
+    Tests in `packages/engine/test/task/bridge-decode.test.ts` write raw records through `Storage.Service`: the
+    parent's list reads `unknown` for the task and its scope, a child's record read with the parent's descendants
+    does not break the listing, and a numeric cost kind still gives `invalid`. The first is red on the old `read()`
+    ("The desktop task record is damaged"). The other closed literals named here (status, source, billing) and
+    `local-result.ts:26` (VectorScope's) are unchanged.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 
 ## Codium finish: F44 sanitized lifecycle text (15 Nov 2026)
@@ -6397,7 +6407,8 @@ These are pointers only; nothing is fixed here.
   - item 7: the non-hermetic `upstream-free.test.ts:148`, which reads host provider variables.
 - F6 ("Codium finish: F6 cost kind on read", For the lead): the desktop task-bridge store's closed literals
   (`packages/engine/src/task/desktop.ts:24-33`), and `packages/core/src/review/local-result.ts:26`'s own closed
-  cost-kind literal.
+  cost-kind literal. 21 Nov 2026: the task-bridge cost kinds are closed on branch `engine-core-fixes` (see "Codium
+  finish: F6 cost kind on read", For the lead); `local-result.ts` stays open with VectorScope.
 - F44 ("Codium finish: F44 sanitized lifecycle text", For the lead):
   - item 1, F44b's `sanitizeLegacy` pass-throughs (`export.ts:127-131`, `:250` and the parts listed there);
   - item 3, a CLI-level export check. Item 2 is completed above.
