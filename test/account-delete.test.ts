@@ -1618,6 +1618,33 @@ describe("ops after the tombstone (A46)", () => {
     expect(w.fakes.store.zset(opsWorkerAccountsKey()).get(ACCOUNT)).toBe(first)
   })
 
+  test("every call that can leave data at the Worker records its account first, even a refused one; state, erase and flags record none", async () => {
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_ENABLED: "true" })
+    const w = deletionWorld()
+    const at = w.clock()
+    // One account per action, so a missing record names the action that stopped writing it.
+    const holding = { plan: randomUUID(), config: randomUUID(), release: randomUUID(), suspend: randomUUID() }
+    const plan: OpsPlan = { version: 2, domains: 0, onCall: null, releaseGuard: null, validUntil: at }
+    await opsCall("plan", { account: holding.plan, plan }, w.fetcher, at)
+    await opsCall("config", { account: holding.config, domains: [], monitors: [] }, w.fetcher, at)
+    // The Worker refuses this one: it may still have applied part of it, so the record stays.
+    w.services.workerDown = true
+    const release = { account: holding.release, repositoryId: 1, environment: "production", sha: "a".repeat(40), deployment: "1", at, urls: [] }
+    await expect(opsCall("release", release, w.fetcher, at)).rejects.toMatchObject({ statusCode: 503, code: "OPS_UNAVAILABLE" })
+    w.services.workerDown = false
+    await opsCall("suspend", { account: holding.suspend, suspended: true, reason: "guard", at }, w.fetcher, at)
+    const reader = randomUUID()
+    await opsCall("state", { account: reader }, w.fetcher, at)
+    await opsCall("erase", { account: reader }, w.fetcher, at)
+    await opsCall("flags", { kill: false }, w.fetcher, at)
+    expect(w.services.worker).toEqual(
+      ["plan", "config", "release", "suspend", "state", "erase", "flags"].map((action) => `${OPS_INTERNAL_PREFIX}${action}`),
+    )
+    expect([...w.fakes.store.zset(opsWorkerAccountsKey()).keys()].sort()).toEqual(Object.values(holding).sort())
+    expect(w.fakes.store.zset(opsWorkerAccountsKey()).get(holding.release)).toBe(at)
+  })
+
   test("without the Worker's address, an account that never used ops is still deleted", async () => {
     restore()
     restore = deletionEnvironment({ VECTOR_OPS_WORKER_URL: undefined })
