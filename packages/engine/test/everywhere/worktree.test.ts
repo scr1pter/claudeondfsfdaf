@@ -244,7 +244,8 @@ describe("Worktree.createUnattended", () => {
           expect(Object.keys(call.env ?? {}).sort()).toEqual(keys)
           expect(call.env).toMatchObject({
             GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_GLOBAL: os.devNull,
+            // Not os.devNull: Git for Windows refuses \\.\nul as a config file, and reads "/dev/null" as the device.
+            GIT_CONFIG_GLOBAL: "/dev/null",
             GIT_NO_LAZY_FETCH: "1",
           })
         }

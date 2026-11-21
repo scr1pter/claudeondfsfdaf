@@ -19,7 +19,8 @@ test("unknown executable config and secret-bearing inherited environment fail cl
   expect(env.GITHUB_TOKEN).toBeUndefined()
   expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
   expect(env.GIT_CONFIG_COUNT).toBeUndefined()
-  expect(env.GIT_CONFIG_GLOBAL).toBe(os.devNull)
+  // Not os.devNull: Git for Windows refuses \\.\nul as a config file, and reads "/dev/null" as the device.
+  expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null")
 })
 
 test("stock Windows, gh, VS Code and partial-clone settings are inert and stay allowed", () => {

@@ -44,6 +44,8 @@ export function safeRepositoryConfig(text: string) {
 }
 
 export const GIT_HARDENING = [
+  // The null device, never "/dev/null": on Windows that resolves to <drive>:\dev\null\<hook>, a folder any user can
+  // create, so a hook planted there would run.
   "-c",
   `core.hooksPath=${os.devNull}`,
   "-c",
@@ -74,7 +76,9 @@ export function runnerGitEnvironment(source: NodeJS.ProcessEnv = process.env): N
     TEMP: source.TEMP,
     SSH_AUTH_SOCK: source.SSH_AUTH_SOCK,
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: os.devNull,
+    // Git for Windows reads only "/dev/null" or "nul" as the null device. os.devNull there is \\.\nul, which git
+    // refuses as a config file, so every command would exit 128 before doing anything.
+    GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
     GIT_LFS_SKIP_SMUDGE: "1",
     GIT_PAGER: "cat",
