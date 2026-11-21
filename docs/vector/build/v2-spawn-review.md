@@ -640,12 +640,25 @@ by this addendum.
 - Follow-ups, not changed here: `packages/sdk/js/src/process.ts:8` (the SDK copy cannot import core; after the
   regeneration PR, inline the absolute path and a minimal environment), `packages/desktop/src/main/github-clone.ts:560`
   (`execFileSync("taskkill", …)`) and `packages/desktop/src/main/external-agents.ts:1033` (`"taskkill"`).
-- Known limit (review note, 21 November 2026): a Windows installed outside `C:\Windows` (another drive or folder) has
-  no `C:\Windows\System32\taskkill.exe`, so a tree kill there now fails where the old bare name still resolved:
-  killGroup returns a kill PlatformError, `core/shell.ts` killTree resolves through its `error` handler, and
-  `engine/util/process.ts` stop() gets a nothrow failure, so the process tree is left running. `config/managed.ts`
-  makes the same fixed-path choice. A possible follow-up, not taken: when the fixed path is missing, fall back to a
-  SystemRoot validated as an absolute, local, system-owned folder (never PATH).
+- Known limit, now handled (review note, 21 November 2026): a Windows installed outside `C:\Windows` (another drive or
+  folder) has no `C:\Windows\System32\taskkill.exe`, so with the fixed path alone a tree kill there failed where the old
+  bare name still resolved, and the process tree was left running. The three call sites now run
+  `WindowsSystem.taskkill()`, found once on the first Windows kill (never at import, so other platforms never look) by
+  the pure `findTaskkill(env, exists)`: `C:\Windows\System32\taskkill.exe` when it exists; otherwise
+  `<SystemRoot>\System32\taskkill.exe`, only when SystemRoot is an absolute drive path (`path.win32.isAbsolute` plus a
+  drive letter, so no UNC, `\\?\`, `\\.\` or drive-less `\Windows`, and unchanged by `path.win32.normalize`, so no `.`
+  or `..` parts) and that file exists; otherwise the fixed path, with the failure behaviour above (killGroup's kill
+  PlatformError, killTree's `error` handler, stop()'s nothrow failure). Never PATH, the working folder or a shell.
+  SystemRoot is read only when `C:\Windows` has no copy, from the user's own environment (the build sets
+  `autoloadDotenv: false`, so a repository's `.env` cannot set it); its folder's owner is not checked.
+  `config/managed.ts` keeps its fixed paths: company policy must not be read through a tool the user points at, while
+  a tree kill only stops Vector's own children as the user. Tests: `windows-system.test.ts` "findTaskkill" (C:\Windows
+  wins; a `D:\Windows` SystemRoot is used when C:\Windows has none; twelve relative, drive-relative, drive-less, UNC,
+  device, `..`, `.`, forward-slash and garbage values are rejected while every other file exists; nothing found keeps
+  the fixed path). Red on the old source (4 of 5 fail without `findTaskkill`; against a stub that returns the fixed
+  path, the `D:\Windows` case fails), green after; with the drive-letter check removed the rejection case is red
+  (`\Windows`, UNC, `\\?\` and `\\.\` accepted). The spawner's HELPER_CALLS row is now
+  `NodeChildProcess.execFile(taskkill(`, since the scan's call text ends at the first `)`.
 
 ## Addendum, 21 November 2026: F8 (the PTY foreground read used a `ps` from PATH) closed
 

@@ -27,7 +27,7 @@ import launch from "cross-spawn"
 import { untrustedChildEnvironment } from "./child-environment"
 import { OwnedProcess } from "./owned-process"
 import { ProcessIsolation } from "./process-isolation"
-import { TASKKILL, taskkillArgs } from "./windows-system"
+import { taskkill, taskkillArgs } from "./windows-system"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
 
@@ -521,9 +521,9 @@ export const make = Effect.gen(function* () {
   ) => {
     if (globalThis.process.platform === "win32") {
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
-        // The fixed taskkill.exe, never a `taskkill` found on PATH or in the working folder, and no shell (F7).
+        // The system taskkill.exe, never a `taskkill` found on PATH or in the working folder, and no shell (F7).
         NodeChildProcess.execFile(
-          TASKKILL,
+          taskkill(),
           taskkillArgs(proc.pid!),
           { windowsHide: true, env: untrustedChildEnvironment(), shell: false },
           (err) => {

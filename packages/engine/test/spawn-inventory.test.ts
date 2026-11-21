@@ -138,7 +138,7 @@ const INVENTORY = {
   },
   "packages/core/src/shell.ts": {
     stance: "fixed-helper",
-    why: "killTree's Windows-only tree kill: the fixed C:\\Windows\\System32\\taskkill.exe (WindowsSystem.TASKKILL) with taskkillArgs(pid), never found on PATH or in the working directory, with the untrusted-child environment.",
+    why: "killTree's Windows-only tree kill: WindowsSystem.taskkill(), C:\\Windows\\System32\\taskkill.exe or a validated SystemRoot's copy, with taskkillArgs(pid), never found on PATH or in the working directory, with the untrusted-child environment.",
   },
   "packages/core/src/config/managed.ts": {
     stance: "fixed-helper",
@@ -237,8 +237,9 @@ const DEPENDENCY_SPAWNERS = {
 const HELPER_CALLS = [
   {
     file: "packages/core/src/cross-spawn-spawner.ts",
-    call: "NodeChildProcess.execFile(TASKKILL, taskkillArgs(proc.pid",
-    why: "killGroup's Windows tree kill of a process this spawner started: the fixed taskkill.exe (WindowsSystem.TASKKILL), no shell, the untrusted-child environment; Windows refuses every launch while isolation is required.",
+    // The scan's call text stops at the first ")", here the one closing taskkill().
+    call: "NodeChildProcess.execFile(taskkill(",
+    why: "killGroup's Windows tree kill of a process this spawner started: the system taskkill.exe (WindowsSystem.taskkill()), no shell, the untrusted-child environment; Windows refuses every launch while isolation is required.",
   },
 ] as const
 
@@ -572,8 +573,8 @@ describe("direct process spawn inventory (spawn review §4, principle 5)", () =>
     expect(listed("launch")).toContain("packages/engine/src/mcp/stdio.ts")
   })
 
-  // F7: taskkill runs only as the fixed WindowsSystem.TASKKILL, the one file that names it. A bare name resolves through
-  // PATH and, on Windows, the working folder first, where a repository could put its own taskkill.exe.
+  // F7: taskkill runs only as WindowsSystem.taskkill()'s absolute path, from the one file that names it. A bare name
+  // resolves through PATH and, on Windows, the working folder first, where a repository could put its own taskkill.exe.
   test("no core or engine source starts a bare taskkill", async () => {
     const sources = await scanned
     expect(
