@@ -1111,3 +1111,13 @@ fix" comments. Locally (Linux, Bun 1.3.14, through the serial lock, the file alo
 - Open check: the six Linux engine shards and the Windows engine shards of this branch's PR. If one panics, record the
   bun.report string, the Features worker counts and the last passing test here, as the scrollback entry above does,
   and revert this commit.
+- 21 Nov 2026, later the same day: the fifth case is re-enabled too, in its own commit (revert that commit alone if a
+  shard panics on it). Root cause: the test, not the footer. The case looked up the composer frame right after Ctrl+P,
+  while the command panel is open. `footer.view.tsx`'s `Switch` mounts the composer (`RunPromptBody`) only when the
+  route is `composer`, so the open panel replaces it; the panel's search field is an `InputRenderable`, and no
+  `TextareaRenderable` is mounted at all (the renderable tree was printed before and after Ctrl+P to check). The old
+  assertion `footerComposerFrame(root) !== composerFrame` therefore threw while the panel was open. It now asserts that
+  no composer textarea is mounted while the panel is open, and, after Ctrl+C, that the panel is gone with no stale `┃` or
+  `█` and that a new composer frame is mounted, not the old one, three times in a row. Locally: 5 of 5 runs of the
+  file, 27 pass and 0 skip each. Mutation: the composer `Match` without its route check (`active().type ===
+  "prompt"` only) makes the case red (the panel never shows); restored from a copy. No `src` changed.

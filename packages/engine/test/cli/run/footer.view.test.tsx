@@ -678,11 +678,9 @@ test("direct queued prompt panel renders pending prompt actions", async () => {
   }
 })
 
-// OpenTUI currently crashes Bun in the full `test/cli/run` directory run here.
-// Still skipped (21 Nov 2026): run alone it fails every time (10 of 10 local runs) with "TypeError: undefined is not
-// an object (evaluating 'boxPath(root, \"TextareaRenderable\").at')" in footerComposerFrame, so after a panel
-// transition the composer frame has no textarea for it to find. Root-cause that before re-enabling.
-test.skip("direct footer recreates the frame across command panel transitions", async () => {
+// The command panel takes the composer's place: while it is open no composer textarea is mounted (its search field is
+// an input), and closing it mounts a new composer frame rather than reusing the old one, with no stale cursor or border.
+test("direct footer recreates the frame across command panel transitions", async () => {
   const app = await renderFooter()
 
   try {
@@ -694,12 +692,13 @@ test.skip("direct footer recreates the frame across command panel transitions", 
       await app.renderOnce()
 
       expect(app.captureCharFrame()).toContain("Commands")
-      expect(footerComposerFrame(app.renderer.root)).not.toBe(composerFrame)
+      expect(boxPath(app.renderer.root, "TextareaRenderable")).toBeUndefined()
       app.mockInput.pressKey("c", { ctrl: true })
       await app.renderOnce()
       expect(app.captureCharFrame()).not.toContain("Commands")
       expect(app.captureCharFrame()).not.toContain("┃")
       expect(app.captureCharFrame()).not.toContain("█")
+      expect(footerComposerFrame(app.renderer.root)).not.toBe(composerFrame)
     }
   } finally {
     app.cleanup()
