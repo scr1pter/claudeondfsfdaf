@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, expect, setSystemTime, test } from "bun:test"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { exportJWK, generateKeyPair, SignJWT } from "jose"
 import {
@@ -126,21 +126,27 @@ test.each(["pull_request", "pull_request_target", "workflow_run", "repository_di
 
 test("rejects wrong workflow/ref/commit, old/future/expired tokens and excessive lifetime", async () => {
   const now = Math.floor(Date.now() / 1000)
-  for (const change of [
-    { iat: now - 301, nbf: now - 305, exp: now + 100 },
-    { exp: now - 1 },
-    { iat: now + 31 },
-    { nbf: now + 31 },
-    { exp: now + 601 },
-  ])
-    await expect(verifier()(await token(change), "token")).rejects.toMatchObject({ code: "OIDC_INVALID" })
-  for (const change of [
-    { workflow_ref: "fixture-owner/project/.github/workflows/evil.yml@refs/heads/main" },
-    { workflow_sha: "b".repeat(40) },
-    { head_ref: "fork" },
-    { base_ref: "main" },
-  ])
-    await expect(verifier()(await token(change), "token")).rejects.toMatchObject({ code: "WORKFLOW_NOT_TRUSTED" })
+  // Each case sits exactly 1 s past its limit, so claims(), the verifier and jose must read the same second as `now`.
+  setSystemTime(new Date(now * 1000))
+  try {
+    for (const change of [
+      { iat: now - 301, nbf: now - 305, exp: now + 100 },
+      { exp: now - 1 },
+      { iat: now + 31 },
+      { nbf: now + 31 },
+      { exp: now + 601 },
+    ])
+      await expect(verifier()(await token(change), "token")).rejects.toMatchObject({ code: "OIDC_INVALID" })
+    for (const change of [
+      { workflow_ref: "fixture-owner/project/.github/workflows/evil.yml@refs/heads/main" },
+      { workflow_sha: "b".repeat(40) },
+      { head_ref: "fork" },
+      { base_ref: "main" },
+    ])
+      await expect(verifier()(await token(change), "token")).rejects.toMatchObject({ code: "WORKFLOW_NOT_TRUSTED" })
+  } finally {
+    setSystemTime()
+  }
 })
 
 test("rejects algorithm/key/header confusion, wrong signatures and oversized input", async () => {
