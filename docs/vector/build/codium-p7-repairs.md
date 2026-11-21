@@ -298,6 +298,11 @@ searched for vault, backup and restore lines:
   `mcp-auth.json`, `cli-auth.json`, `plugin-oauth-approvals.json` and the databases, not `<data>/vault/vault.json`
   (`cli/cmd/vault.ts:39`). That file holds the vault key in plain base64url when the CLI has no credential key
   (`cli/cmd/vault.ts:88-93`). The repair is one entry in the sandbox's deny list (the native-isolation lane's file).
+  21 Nov 2026 (v2-closeout-ci): fixed. `CREDENTIAL_FILES` in `packages/engine/src/tool/shell/sandbox.ts` now also
+  lists `path.join("vault", "vault.json")`, so `credentialStorePaths` denies `<data>/vault/vault.json` in every data
+  directory it already covers (the CLI's, the earlier product's and each desktop app's `xdg-data/vector`).
+  `sandbox.test.ts`'s `credentialStorePaths` case expects it in each directory; removing the entry fails that case
+  (12 pass, 12 platform skips, 0 fail with it; 1 fail without). R45-20 is unchanged.
 - **R45-20. Confirmed: a sandboxed command can plant git configuration in the CLI's vault copy.** The CLI's bare copy is
   `Global.Path.cache/vault/github/<owner>/<name>.git` (`cli/cmd/vault.ts:168`), and the sandbox keeps `~/.cache`
   writable on purpose (`sandbox.ts:97-98`, `:356`; its comment calls the caches the policy's soft spot). A planted
