@@ -2591,6 +2591,7 @@ stays refused (`packages/core/src/cross-spawn-spawner.ts:405-411`, the throw at 
       sandbox's empty `/proc`.
     - NQ-2's C9 addendum shows that no shipped or CI build reaches it.
     - The lead reconciles the two; that file is not edited here.
+    - Reconciled 21 Nov 2026 (v2-closeout-ci): v2-complete-plan.md §4.5 row SPAWN-2 now reads "not reachable; tracked, no code change" with the re-check triggers (spawn review, NQ-2 addendum).
 
 ### Evidence (local)
 

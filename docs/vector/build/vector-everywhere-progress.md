@@ -4827,3 +4827,24 @@ The phase review's thirteen non-blocking findings. Deviations log: "2026-11-21, 
 - `c2f7f537` hardens engine test/everywhere/unattended-session.test.ts. Windows job 136445766431 (a slow-first-touch VM: setup-node Environment details 23 s) failed "a real read approval…" at its 10 s permission wait (20,184 ms) and "a tightened budget…" at its 10 s completion poll (21,307 ms). Each case boots a fresh instance, and its first prompt fell inside those windows. The harness now runs one untimed owner turn in a separate, explicitly titled session and resets the fake model first. No deadline or assertion changed. Locally the two windows went from 1.6-1.9 s and 2.3-2.5 s to 0.43-0.46 s and 0.71-0.81 s; the file is 7/0 (236; the expect count varies with the number of polls, 278-280 before).
 
 Checks, through vector-serial, one file at a time with `--timeout 30000`: core test/review/model-evidence.test.ts 30/0 (393); engine test/everywhere/unattended-session.test.ts 7/0 (236), three runs; `bun typecheck` in packages/engine exit 0; `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2` exit 0, 27/27 tasks (25 cached). Not pushed.
+
+## PR #56 CI (`36a7d96d`, recorded 2026-11-21 by v2-closeout-ci)
+
+The receipt was retargeted from `741aa2af` to PR #56's final head `36a7d96d`, which is the second parent of the merge
+`153f9a22`. The `741aa2af` and `c49e3544` runs were superseded or cancelled, so nothing is recorded for them. Each run
+below was read through GitHub MCP; none was re-run.
+
+| Workflow              | Run         | Event             | Result  | Jobs | Notes                                                                       |
+| --------------------- | ----------- | ----------------- | ------- | ---- | --------------------------------------------------------------------------- |
+| test.yml              | 44876250386 | pull_request      | success | 41   | the lane-end test.yml receipt                                               |
+| verify.yml            | 44876250176 | pull_request      | success |      |                                                                             |
+| vector-everywhere.yml | 44876250111 | pull_request      | success | 9    | "Vector everywhere tests" job 136764086940: 72/72 test files, Valkey 7.2.14 |
+| vector-everywhere.yml | 44876253697 | workflow_dispatch | success | 9    | "Vector everywhere tests" job 136762907144                                  |
+| vector-at-mention.yml | 44876250171 | pull_request      | success |      |                                                                             |
+| vector-hosted-ci.yml  | 44876250183 | pull_request      | success |      |                                                                             |
+| typecheck.yml         | 44876256700 | workflow_dispatch | success |      | the pull_request run 44876250155 also passed                                |
+| vector-codium.yml     | 44876259648 | workflow_dispatch | success |      | dispatched on the branch                                                    |
+
+Main after the merge: test.yml push run 44885765033 at `153f9a22` concluded failure only in computer-helper mac-test
+(macos-15-intel), job 136798635643, at "Run required grant-free native checks" (`channel-eof:
+supervisor-pgrep-timeout`). That job does not run Everywhere code; it is recorded under B01 as an open item, not here.

@@ -35,9 +35,13 @@ The connect-finish lane has built every package up to the owner's gates (CN-01 t
 
 Hosted CI at `34cf53cd`: typecheck.yml 43829042870 passed; connect-app-validation.yml 43829038152 passed, 25 of 25, including CN-12's two Tasks pane cases and CN-10's consumed-key case; vector-workspaces.yml 43829053018 passed; vector-codium.yml 43829047861 failed in three `packages/web/test` files that also fail on `release-finish` at `0f034957` and that `release-finish` fixed in `9be63d68` and `39865a55`, which reach this branch only through the lead's next merge (release checklist, B6). test.yml and verify.yml have never run on this branch; both can be dispatched, and the lane PR runs them.
 
+21 Nov 2026 (v2-closeout-ci): test.yml and verify.yml did run on the lane PR. At PR #38's head `19c48b89` test.yml 43940516400 passed on attempt 2 (attempt 1: a Chocolatey 503 in unit (windows) and the Hands overlay Stop job), verify.yml 43940515963 and typecheck.yml 43940516191 passed, and vector-codium.yml 44848274957 is green on main; B6 is closed in connected-workspace-release.md.
+
 PR finishing fixes, 2026-11-16 (deviations, "connect-finish lane: PR finishing fixes"): Remote's cancel route now requires `sessionID`, and the node-bundle smoke gives its child a private temporary folder. The lead's rulings for this PR are recorded there: Q1 stays owner-gated with Connect off, CN-02's ConnectGit narrowing is accepted, and Q6 stays open. The PR into `main` from `connect-finish` runs test.yml, typecheck.yml, verify.yml and the lane workflows on its head.
 
 For the lead at PR review: D34 gains a run's cancel (or protocol.ts drops it), and the raw-versus-normalized engine path note goes to the cloud-workspaces owner (both CN-19); the run read's optional `sessionID` on the supervisor (CN-19); the owners' and the lead's acknowledgements in the release checklist §1.5, which since the phase-review fixes also name CN-18's phone refactor, CN-14's two Hands anchors and the two changes that work with Connect off; and v2-complete-plan §4.1's rows for C2, C3, C5, C6 and F10, which the CN packages above supersede.
+
+21 Nov 2026 (v2-closeout-ci): PR #38 merged as `7e440a27` on 16 Nov, and the inherited vector-codium failures were fixed in `9be63d68` and `39865a55`, both on main. State of the lead items above: v2-complete-plan §4.1's rows are refreshed (C2, C3, C5, C6 and F10 among them, citing the CN commits). D34 and the supervisor's optional `sessionID` are still open: cloud-workspaces.md has a 21 Nov D34 note proposing the CN-19 cancel decision for the lead to confirm. The §1.5 acknowledgements are still pending: PR #38 has no reviews and no comments other than bots (read through GitHub MCP), so none was recorded there.
 
 ## Connect-finish checkpoint, 2026-11-14
 

@@ -154,6 +154,13 @@ route-acceptance, Sol, native qualification or raw-account code.
   spawn nested Bun processes, so they were not run locally, and `vector-codium.yml`'s selector
   (`packages/cloud/src/codium-ci-tests.ts`) does not pick them (neither matches its name pattern nor changed on the
   branch); `test.yml` runs only on main and pull requests.
+  21 Nov 2026 (v2-closeout-ci): superseded. turbo has no test task for either package, so neither suite ran in any
+  workflow. test.yml's unit job now has "Run client and SDK tests" on Linux and Windows, which runs the whole
+  `packages/client` and `packages/sdk/js` suites (both report even if one fails), and `workflow-compliance.test.ts`
+  asserts the step. Locally on Linux, one file at a time: client 3+5+1+7 pass (contract-identity, effect,
+  import-boundaries, promise) and SDK 2+4+1+1+1+10 pass (package-stage, server-startup, session-history, v1-schema,
+  v1-transport, wire-compat), no failure. The unit (linux) and unit (windows) job IDs are to be recorded after the
+  first PR run.
 
 ## Merge into self-evolving (owner step 9)
 
