@@ -895,6 +895,7 @@ describe("VS-24's keys", () => {
     }
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS).toEqual({
+      largeChanges: "skip",
       trivial: "review",
       maxInputTokens: 0,
       impact: "grep",
@@ -1670,4 +1671,15 @@ test("SF-26 cards honor ordinary local JSON and environment precedence and keep 
   expect(
     mergeReviewConfig({ surface: "local", trigger: "command", json: { at: "base", text: json } }).config.cards,
   ).toBe("brain")
+})
+
+test("largeChanges defaults to the existing size skip and batch remains visibly unapplied", () => {
+  const standard = parseReviewConfig({})
+  expect(parseReviewConfig({ json: '{"largeChanges":"skip"}' })).toEqual(standard)
+  expect(parseReviewConfig({ json: '{"largeChanges":"batch"}' })).toEqual({
+    config: { ...standard.config, largeChanges: "batch" },
+    warnings: ['"largeChanges": "batch" is not applied yet: reviews still use the existing size limits.'],
+  })
+  expect(UNAPPLIED_REVIEW_KEYS).toContain("largeChanges")
+  expect(parseReviewConfig({ json: '{"largeChanges":"forever"}' }).config).toEqual(standard.config)
 })

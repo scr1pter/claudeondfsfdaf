@@ -197,6 +197,7 @@ const FIELDS: Record<PlainKey, Field> = {
   skipAuthors: strings,
   skipLabels: strings,
   skipBranches: strings,
+  largeChanges: oneOf(["skip", "batch"]),
   maxFiles: number({ min: 1, integer: true }),
   maxChangedLines: number({ min: 1, integer: true }),
   // diffBudgetChars never goes below 8,000 characters, so a lower cap would do nothing.
@@ -250,6 +251,10 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
+  largeChanges: {
+    applies: (config) => config.largeChanges === "batch",
+    warning: '"largeChanges": "batch" is not applied yet: reviews still use the existing size limits.',
+  },
   // A sourced key (TRUSTED_ONLY): settle never sees it, so mergeReviewConfig gives this warning.
   runtime: {
     applies: (config) => config.runtime === "ask",
@@ -266,6 +271,10 @@ function assign(config: ReviewConfig, key: PlainKey, value: unknown, label: stri
     return
   }
   if (parsed.note) warnings.push(`${label}: ${parsed.note}.`)
+  if (key === "largeChanges" && parsed.value === "skip") {
+    delete config.largeChanges
+    return
+  }
   Object.assign(config, { [key]: parsed.value })
 }
 

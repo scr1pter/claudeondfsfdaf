@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
+import { parseUnifiedDiff, renderPatch } from "@vectordevai/core/review/diff"
 import { cacheReadShare } from "@vectordevai/core/review/dispatch"
 import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
 import {
@@ -15,6 +16,7 @@ import {
   OUTPUT_PER_STEP,
   passInputTokens,
   planDepth,
+  planReviewBatches,
   planIsolatedVerify,
   planSpecialists,
   priceAt,
@@ -33,7 +35,7 @@ import {
   type VerifyRule,
 } from "@vectordevai/core/review/plan"
 import { buildVerifyPrompt } from "@vectordevai/core/review/prompt"
-import { RISK_BANDS } from "@vectordevai/core/review/risk"
+import { orderByRiskDensity, RISK_BANDS } from "@vectordevai/core/review/risk"
 import {
   REVIEW_LENSES,
   type FailureClass,
@@ -1171,5 +1173,70 @@ describe("isolated verification planner (VS-44c)", () => {
       expect(call.estimate.low).toBeNaN()
       expect(call.estimate.high).toBeNaN()
     }
+  })
+})
+
+describe("large review batch planner (VS-19)", () => {
+  const one = (path: string, after = "new") =>
+    parseUnifiedDiff(`diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${after}\n`)[0]!
+  const base = "1".repeat(40)
+  const head = "2".repeat(40)
+  const limits = { maxFiles: 2, maxChangedLines: 4, maxDiffChars: 8_000 }
+  test("orders by risk density and preserves fitting impact clusters independently of input and cluster labels", () => {
+    const files = ["b.ts", "c.ts", "z.ts", "src/auth/login.ts"].map((path) => one(path))
+    const clusters = new Map([
+      ["b.ts", "PRIVATE_LABEL"],
+      ["z.ts", "PRIVATE_LABEL"],
+    ])
+    const plan = planReviewBatches({ base, head, files, clusters, limits })
+    expect(plan.batches.map((batch) => batch.paths)).toEqual([["src/auth/login.ts"], ["b.ts", "z.ts"], ["c.ts"]])
+    expect(
+      planReviewBatches({
+        base,
+        head,
+        files: files.toReversed(),
+        clusters: new Map([
+          ["z.ts", "other"],
+          ["b.ts", "other"],
+        ]),
+        limits,
+      }),
+    ).toEqual(plan)
+    expect(JSON.stringify(plan)).not.toContain("PRIVATE_LABEL")
+    expect(new Set(plan.batches.map((batch) => batch.id)).size).toBe(3)
+    expect(plan.omitted).toEqual([])
+    expect(() => planReviewBatches({ base, head, files: [files[0]!, files[0]!], limits })).toThrow("Duplicate")
+    expect(() => planReviewBatches({ base, head: "HEAD", files, limits })).toThrow("commit")
+  })
+  test("risk per line distinguishes concentrated changes from sheer file size", () => {
+    const bulk = { path: "bulk.ts", additions: 1000, deletions: 0 }
+    const small = { path: "z.ts", additions: 2, deletions: 0 }
+    const auth = { ...small, path: "src/auth/login.ts" }
+    expect(orderByRiskDensity([bulk, small, auth])).toEqual([auth, small, bulk])
+  })
+  test("accounts exact diff separators and refuses individual oversized, truncated or binary changes", () => {
+    const files = [one("a.ts"), one("b.ts")]
+    const exact = renderPatch(files).length
+    const withChars = (maxDiffChars: number) =>
+      planReviewBatches({ base, head, files, limits: { ...limits, maxDiffChars } })
+    expect(withChars(exact).batches).toHaveLength(1)
+    expect(withChars(exact).batches[0]!.diffChars).toBe(exact)
+    expect(withChars(exact - 1).batches.map((batch) => batch.paths)).toEqual([["a.ts"], ["b.ts"]])
+    const missing = { ...one("truncated.ts"), additions: 20 }
+    const binary = { ...one("file.bin"), binary: true }
+    const huge = one("huge.ts", "x".repeat(10_000))
+    const plan = planReviewBatches({ base, head, files: [missing, binary, huge, ...files], limits })
+    expect(plan.omitted.toSorted()).toEqual(["file.bin", "huge.ts", "truncated.ts"])
+    expect(plan.batches.flatMap((batch) => batch.paths)).toEqual(["a.ts", "b.ts"])
+    expect(planReviewBatches({ base, head, files, limits: { ...limits, maxChangedLines: 1 } }).batches).toEqual([])
+    expect(planReviewBatches({ base, head, files, limits: { ...limits, maxFiles: 0 } }).omitted).toEqual([
+      "a.ts",
+      "b.ts",
+    ])
+    expect(() => withChars(Number.NaN)).toThrow("limit")
+    expect(withChars(exact).id).not.toBe(withChars(exact - 1).id)
+    expect(planReviewBatches({ base, head, files: [one("a.ts", "different"), files[1]!], limits }).id).not.toBe(
+      planReviewBatches({ base, head, files, limits }).id,
+    )
   })
 })

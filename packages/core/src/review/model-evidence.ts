@@ -62,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "a7c005e8d5b3c624"
+export const REVIEW_PIPELINE_SOURCES = "fd7168de64489979"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -85,6 +85,7 @@ export const MAX_CERTIFICATE_DAYS = 90
 // grep and glob tools show, is counted in promptsDigest under "secrets", not here: this digest stays a digest of the
 // settings.
 export const EVIDENCE_POLICY_KEYS = [
+  "largeChanges",
   "security",
   "verify",
   "verifyPolicy",

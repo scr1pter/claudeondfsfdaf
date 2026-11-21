@@ -2,9 +2,10 @@
 // VS-44c's ablation, which of them it re-checks one call each), how much diff fits a model's context, and the cost
 // estimates behind the budget checks (sections 5.2 and 5.3). Pure and browser-safe.
 
-import type { DiffFile } from "./diff"
+import { renderPatch, type DiffFile } from "./diff"
+import { sha256 } from "../util/sha256"
 import { isSensitivePath } from "./ignore"
-import type { RiskAssessment, RiskBand } from "./risk"
+import { orderByRiskDensity, type RiskAssessment, type RiskBand } from "./risk"
 import {
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
@@ -613,4 +614,132 @@ export function bandCostUsd(input: {
       usd(count * input.outputPerStep, rates.output)
     )
   }, 0)
+}
+
+// VS-19 operates on whole admitted changes. The planner never reads project files or lets
+// PR text describe tasks. Only file identities, sizes and dependency group memberships survive.
+export interface ReviewBatch {
+  readonly id: string
+  readonly paths: readonly string[]
+  readonly changedLines: number
+  readonly diffChars: number
+}
+export interface ReviewBatchPlan {
+  readonly id: string
+  readonly base: string
+  readonly head: string
+  readonly batches: readonly ReviewBatch[]
+  readonly omitted: readonly string[]
+  readonly clusters: readonly (readonly string[])[]
+}
+
+type BatchLimits = Pick<ReviewConfig, "maxFiles" | "maxChangedLines" | "maxDiffChars">
+
+export function planReviewBatches(input: {
+  base: string
+  head: string
+  files: readonly DiffFile[]
+  limits: BatchLimits
+  policy?: string
+  clusters?: ReadonlyMap<string, string>
+  dependents?: ReadonlyMap<string, number>
+}): ReviewBatchPlan {
+  const { base, head, limits } = input
+  const commit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+  if (!commit.test(base) || !commit.test(head)) throw new Error("Batch coverage requires full commit IDs.")
+  const caps = [limits.maxFiles, limits.maxChangedLines, limits.maxDiffChars]
+  if (!caps.every((value) => Number.isSafeInteger(value) && value >= 0)) throw new Error("Invalid batch limit.")
+  if (new Set(input.files.map((file) => file.path)).size !== input.files.length)
+    throw new Error("Duplicate changed path in a review batch plan.")
+  const ordered = orderByRiskDensity(input.files, input.dependents)
+  const groups = new Map<string | DiffFile, DiffFile[]>()
+  for (const file of ordered) {
+    const key = input.clusters?.get(file.path) ?? file
+    const group = groups.get(key)
+    if (group) group.push(file)
+    else groups.set(key, [file])
+  }
+  // Review files in density order, keeping the members of each impact cluster together as far as the caps allow.
+  const omitted: string[] = []
+  const batches: ReviewBatch[] = []
+  const identity: string[] = []
+  let current = { paths: [] as string[], changedLines: 0, diffChars: 0 }
+  const flush = () => {
+    if (!current.paths.length) return
+    batches.push(
+      Object.freeze({
+        ...current,
+        paths: Object.freeze(current.paths),
+        id: sha256(JSON.stringify([base, head, batches.length, current.paths])),
+      }),
+    )
+    current = { paths: [], changedLines: 0, diffChars: 0 }
+  }
+  for (const group of groups.values()) {
+    const members = []
+    for (const file of group) {
+      const patch = renderPatch([file])
+      const lines = file.additions + file.deletions
+      const complete =
+        !file.binary &&
+        [file.additions, file.deletions].every((n) => Number.isSafeInteger(n) && n >= 0) &&
+        file.hunks.reduce((n, h) => n + h.lines.filter((line) => line.kind === "add").length, 0) === file.additions &&
+        file.hunks.reduce((n, h) => n + h.lines.filter((line) => line.kind === "del").length, 0) === file.deletions
+      identity.push(
+        sha256(JSON.stringify([file.path, file.oldPath, file.status, file.additions, file.deletions, sha256(patch)])),
+      )
+      if (!complete || limits.maxFiles === 0 || lines > limits.maxChangedLines || patch.length > limits.maxDiffChars) {
+        omitted.push(file.path)
+        continue
+      }
+      members.push({ path: file.path, lines, chars: patch.length })
+    }
+    const groupLines = members.reduce((sum, member) => sum + member.lines, 0)
+    const groupChars = members.reduce((sum, member) => sum + member.chars, Math.max(0, members.length - 1))
+    if (
+      members.length <= limits.maxFiles &&
+      groupLines <= limits.maxChangedLines &&
+      groupChars <= limits.maxDiffChars &&
+      (current.paths.length + members.length > limits.maxFiles ||
+        current.changedLines + groupLines > limits.maxChangedLines ||
+        current.diffChars + 1 + groupChars > limits.maxDiffChars)
+    )
+      flush()
+    for (const member of members) {
+      if (
+        current.paths.length >= limits.maxFiles ||
+        current.changedLines + member.lines > limits.maxChangedLines ||
+        current.diffChars + Number(current.paths.length > 0) + member.chars > limits.maxDiffChars
+      )
+        flush()
+      current.diffChars += Number(current.paths.length > 0) + member.chars
+      current.changedLines += member.lines
+      current.paths.push(member.path)
+    }
+  }
+  flush()
+  const clusters = [...groups.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => Object.freeze(group.map((file) => file.path)))
+  const id = sha256(
+    JSON.stringify([
+      1,
+      base,
+      head,
+      caps,
+      input.policy ?? "",
+      identity,
+      batches.map((batch) => batch.id),
+      omitted,
+      clusters,
+    ]),
+  )
+  return Object.freeze({
+    id,
+    base,
+    head,
+    batches: Object.freeze(batches),
+    omitted: Object.freeze(omitted),
+    clusters: Object.freeze(clusters),
+  })
 }

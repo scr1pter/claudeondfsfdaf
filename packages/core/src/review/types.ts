@@ -291,8 +291,20 @@ export interface SummaryFinding {
   also?: number[] // the other lines of this file it names as the same defect
 }
 
+// A prefix of one deterministic batch plan. Its identifiers and count reconstruct the exact
+// batches and covered paths without storing an unbounded path list in a GitHub comment.
+export interface BatchCheckpoint {
+  version: 1
+  head: string
+  plan: string
+  completed: number
+  covered: number
+  last?: string
+}
+
 export interface ReviewState {
   v: 1
+  batch?: BatchCheckpoint // present only while coverage is incomplete
   // Full SHAs of the last completed review.
   head?: string
   base?: string
@@ -542,6 +554,7 @@ export interface ReviewConfig {
   skipAuthors: string[]
   skipLabels: string[] // vector:paused is always honoured
   skipBranches: string[]
+  largeChanges?: "skip" | "batch" // absent keeps the ordinary size skip
   maxFiles: number
   maxChangedLines: number // after ignores
   maxDiffChars: number // inlined per review session
@@ -603,6 +616,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
 // What an optional key reads as when a config leaves it out. DEFAULT_REVIEW_CONFIG leaves these out, so configs and
 // their digests made before the key existed stay as they were.
 export const OPTIONAL_REVIEW_DEFAULTS = {
+  largeChanges: "skip",
   trivial: "review",
   maxInputTokens: 0,
   impact: "grep",
@@ -626,6 +640,7 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
+  "largeChanges",
   "runtime",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 

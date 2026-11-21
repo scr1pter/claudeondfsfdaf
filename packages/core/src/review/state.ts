@@ -3,6 +3,8 @@
 
 import { DEFAULT_MENTIONS, parseReviewCommand } from "./command"
 import { Billing } from "@vectordevai/schema/billing"
+import { sha256 } from "../util/sha256"
+import type { ReviewBatchPlan } from "./plan"
 import { mapLine, touched, type DiffFile } from "./diff"
 import type { TeamPattern } from "./prompt"
 import { namedLines } from "./select"
@@ -17,6 +19,7 @@ import {
 import {
   CATEGORIES,
   SEVERITIES,
+  type BatchCheckpoint,
   type Category,
   type Finding,
   type PriorFinding,
@@ -232,7 +235,9 @@ export function priorFromState(state: ReviewState, changes?: DiffFile[]): PriorF
     }
     if (finding.fixedIn) prior.fixedIn = finding.fixedIn
     const also =
-      changes && finding.side === "RIGHT" && finding.also ? followLines(changes, finding.path, finding.also) : finding.also
+      changes && finding.side === "RIGHT" && finding.also
+        ? followLines(changes, finding.path, finding.also)
+        : finding.also
     if (also?.length) prior.also = also
     return prior
   })
@@ -473,6 +478,15 @@ export function nextState(prev: ReviewState | undefined, input: NextStateInput):
     next.failed = true
     if (before.retryFullAfterBudget) next.retryFullAfterBudget = true
   }
+  // A posting retry must not forget pending work or promote that head to fully reviewed.
+  if (before.batch?.head === input.head) {
+    next.batch = before.batch
+    next.unreviewed = [...new Set([...before.unreviewed, ...next.unreviewed])]
+    if (before.head && before.head !== input.head) next.head = before.head
+    else delete next.head
+    if (before.base) next.base = before.base
+    else delete next.base
+  }
   const noted = input.notedHead ?? before.notedHead
   if (noted) next.notedHead = noted
   return pruneState(next)
@@ -574,6 +588,7 @@ interface CompactState {
   m?: [string, number]
   u: number[]
   f?: 1
+  j?: BatchCheckpoint // verified against an authenticated plan before use
   q?: 1 // retry the full diff after a pre-dispatch budget stop
   n?: string
   i: number
@@ -625,6 +640,7 @@ function encodeRaw(state: ReviewState): string {
   if (state.codiumReviews !== undefined) compact.k = count(state.codiumReviews)
   if (state.month) compact.m = [state.month.key, state.month.costUsd]
   if (state.failed) compact.f = 1
+  if (state.batch) compact.j = state.batch
   if (state.retryFullAfterBudget) compact.q = 1
   if (state.notedHead) compact.n = state.notedHead
   if (state.inflight) compact.x = [state.inflight.run, state.inflight.head, state.inflight.at, state.inflight.costUsd]
@@ -664,6 +680,11 @@ export function decodeState(payload: string): ReviewState | undefined {
   if (Array.isArray(raw.m) && typeof raw.m[0] === "string" && /^\d{4}-\d{2}$/.test(raw.m[0]))
     state.month = { key: raw.m[0], costUsd: amount(raw.m[1]) }
   if (raw.f === 1) state.failed = true
+  if (raw.j !== undefined) {
+    const saved = readCheckpoint(raw.j)
+    if (saved) state.batch = saved
+    else state.failed = true // retain other state but never call an unreadable checkpoint clean
+  }
   if (raw.q === 1) state.retryFullAfterBudget = true
   if (isSha(raw.n)) state.notedHead = raw.n
   if (Array.isArray(raw.x) && typeof raw.x[0] === "string" && isSha(raw.x[1]))
@@ -740,4 +761,174 @@ function money(value: number): number {
 
 function short(sha: string): string {
   return sha.slice(0, 7)
+}
+
+// A parsed marker on its own has no authority to advance a review. Only an authenticated
+// sticky comment, an independently retained checksum, or an in-process completion produces this value.
+const trustedBatch = Symbol("trusted review batch cursor")
+export type BatchCursor = Readonly<BatchCheckpoint> & { readonly [trustedBatch]: BatchCheckpoint }
+function trustCheckpoint(checkpoint: BatchCheckpoint): BatchCursor {
+  // An enumerable brand would survive an object spread onto an edited copy.
+  return Object.freeze(Object.defineProperty(checkpoint, trustedBatch, { value: checkpoint })) as BatchCursor
+}
+const HASH = /^[0-9a-f]{64}$/
+
+function readCheckpoint(value: unknown): BatchCheckpoint | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !["version", "head", "plan", "completed", "covered", "last"].includes(key)) ||
+    value.version !== 1 ||
+    typeof value.head !== "string" ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value.head) ||
+    typeof value.plan !== "string" ||
+    !HASH.test(value.plan)
+  )
+    return
+  const { completed, covered, last } = value
+  if (
+    typeof completed !== "number" ||
+    !Number.isSafeInteger(completed) ||
+    completed < 0 ||
+    typeof covered !== "number" ||
+    !Number.isSafeInteger(covered) ||
+    covered < completed ||
+    (completed ? typeof last !== "string" || !HASH.test(last) : last !== undefined || covered !== 0)
+  )
+    return
+  return {
+    version: 1,
+    head: value.head,
+    plan: value.plan,
+    completed,
+    covered,
+    ...(typeof last === "string" ? { last } : {}),
+  }
+}
+
+function authenticateBatch(plan: ReviewBatchPlan, value: unknown): BatchCursor | undefined {
+  const saved = readCheckpoint(value)
+  if (
+    !saved ||
+    saved.plan !== plan.id ||
+    saved.head !== plan.head ||
+    saved.completed > plan.batches.length ||
+    saved.last !== plan.batches[saved.completed - 1]?.id
+  )
+    return
+  const covered = plan.batches.slice(0, saved.completed).reduce((count, batch) => count + batch.paths.length, 0)
+  if (saved.covered !== covered) return
+  return trustCheckpoint(saved)
+}
+
+export function startBatchCursor(plan: ReviewBatchPlan): BatchCursor {
+  return trustCheckpoint({ version: 1, head: plan.head, plan: plan.id, completed: 0, covered: 0 })
+}
+
+// For a local private state store, the trusted digest must come from its own retained
+// record, never from the same untrusted JSON as the cursor. No secret or new ledger is required.
+export function batchCursorDigest(cursor: BatchCheckpoint): string {
+  return sha256(
+    JSON.stringify([cursor.version, cursor.head, cursor.plan, cursor.completed, cursor.covered, cursor.last ?? null]),
+  )
+}
+export function restoreBatchCursor(
+  plan: ReviewBatchPlan,
+  checkpoint: unknown,
+  retainedDigest: string,
+): BatchCursor | undefined {
+  const saved = authenticateBatch(plan, checkpoint)
+  return saved && batchCursorDigest(saved) === retainedDigest ? saved : undefined
+}
+
+// findSticky chooses the oldest bot-authored summary using GitHub-supplied comment metadata.
+export function readStickyBatchCursor(plan: ReviewBatchPlan, comments: readonly IssueCommentLike[], botLogin: string) {
+  const sticky = botLogin && findSticky(comments, botLogin)
+  return sticky && sticky.body ? authenticateBatch(plan, readState(sticky.body)?.batch) : undefined
+}
+
+export function advanceBatchCursor(
+  plan: ReviewBatchPlan,
+  cursor: BatchCursor,
+  receipt: {
+    head: string
+    id: string
+    covered: readonly string[]
+    complete: boolean
+  },
+): BatchCursor | undefined {
+  if (
+    cursor?.[trustedBatch] !== cursor ||
+    !cursor ||
+    cursor.plan !== plan.id ||
+    cursor.head !== plan.head ||
+    receipt.head !== plan.head ||
+    !receipt.complete
+  )
+    return
+  const index = plan.batches.findIndex((batch) => batch.id === receipt.id)
+  if (index < 0 || index > cursor.completed) return
+  const batch = plan.batches[index]!
+  const covered = new Set(receipt.covered)
+  if (
+    covered.size !== receipt.covered.length ||
+    covered.size !== batch.paths.length ||
+    batch.paths.some((path) => !covered.has(path))
+  )
+    return
+  if (index < cursor.completed) return cursor // the same complete acknowledgment is idempotent
+  return trustCheckpoint({ ...cursor, completed: index + 1, covered: cursor.covered + covered.size, last: batch.id })
+}
+
+// Paths are repository data. Render them only as quoted data; cluster labels, diffs,
+// model summaries, findings and instructions never form part of the cross-batch context.
+export function batchCoverage(plan: ReviewBatchPlan, cursor: BatchCursor) {
+  if (cursor?.[trustedBatch] !== cursor || !cursor || cursor.plan !== plan.id || cursor.head !== plan.head) return
+  const next = plan.batches[cursor.completed]
+  const covered = plan.batches.slice(0, cursor.completed).flatMap((batch) => batch.paths)
+  const unreviewed = [...plan.batches.slice(cursor.completed).flatMap((batch) => batch.paths), ...plan.omitted]
+  const nextPaths = new Set(next?.paths)
+  const peers = new Set(plan.clusters.filter((cluster) => cluster.some((path) => nextPaths.has(path))).flat())
+  const related = plan.batches.flatMap((batch, index) =>
+    index === cursor.completed
+      ? []
+      : batch.paths
+          .filter((path) => peers.has(path))
+          .map((path) => ({ path, batch: index + 1, covered: index < cursor.completed })),
+  )
+  return {
+    next,
+    covered,
+    unreviewed,
+    complete: covered.length > 0 && !unreviewed.length,
+    context: {
+      completedBatches: cursor.completed,
+      totalBatches: plan.batches.length,
+      coveredFiles: covered.length,
+      remainingFiles: unreviewed.length,
+      related: related.slice(0, 32),
+      moreRelated: Math.max(0, related.length - 32),
+    },
+  }
+}
+
+// Apply after nextState has accounted for the run's finding lifecycle, costs and tokens.
+export function recordBatchCoverage(
+  state: ReviewState,
+  plan: ReviewBatchPlan,
+  cursor: BatchCursor,
+): ReviewState | undefined {
+  const coverage = batchCoverage(plan, cursor)
+  if (!coverage) return
+  const covered = new Set(coverage.covered)
+  const remaining = [...new Set([...coverage.unreviewed, ...state.unreviewed.filter((path) => !covered.has(path))])]
+  const next = { ...state, unreviewed: remaining }
+  if (coverage.complete && !next.failed && !remaining.length) {
+    delete next.batch
+    next.head = plan.head
+    next.base = plan.base
+  } else {
+    next.batch = cursor
+    if (next.head === plan.head) delete next.head
+  }
+  return next
 }

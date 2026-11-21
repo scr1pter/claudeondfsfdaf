@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { FREE_MODEL_TRAINING_LABEL } from "@vectordevai/core/free-model-choice"
 import { DEFAULT_GATE, gateDigest } from "@vectordevai/core/review/eval-report"
+import { parseReviewConfig } from "@vectordevai/core/review/config"
 import { fnv1a64 } from "@vectordevai/core/review/fingerprint"
 import { INPUT_REDACTION } from "@vectordevai/core/review/prompt"
 import {
@@ -41,9 +42,8 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // runtime evidence contract (VS-30c's runtime.ts), pinned from the day it lands: once the VS-30 executor runs it,
 // runtimeVerdict decides which findings are verified at runtime. So are guarded team memory's rules (VS-35a's team.ts),
 // pinned from the day they land: once wired they decide which findings select.ts demotes and which dismissals become
-// team memory. Their body reader in state.ts (parseDismissalMarker, guardedTeamPatterns) decides which dismissals
-// count as marked, but stays unpinned for now: pinning state.ts would tie this pin to codium's and vector-at-mention's
-// edits there. It joins here when the job first calls guardedTeamPatterns.
+// team memory. The batch planner, size skip and cursor validation now determine when a large change is
+// reviewed and which files can retain coverage. Pin their contracts and the durable ReviewState reader.
 // verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
 // So are the fix executor (engine review/fix.ts) and the CLI's apply step (cli/cmd/review.fix.ts, VS-12c): they run
 // after a review, from its outcome, and decide nothing it finds or posts. So are the owner fix API's adapter (engine
@@ -120,6 +120,9 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/tool/external-directory.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
   "packages/core/src/review/plan.ts",
+  "packages/core/src/review/skip.ts",
+  "packages/core/src/review/state.ts",
+  "packages/core/src/review/types.ts",
   "packages/core/src/review/pack.ts",
   "packages/core/src/review/select.ts",
   "packages/core/src/review/diff.ts",
@@ -687,6 +690,21 @@ describe("scope", () => {
     expect(promptsDigest(cards)).toBe("33640ce9df53572f")
     expect(promptsDigest({ ...cards, ...depth })).toBe("5afccaf054dc13d1")
     expect(promptsDigest({ ...cards, ...graph, ...depth, ...held, ...strict })).toBe("d3b656ce92a51856")
+  })
+
+  test("SF-27 size-skip defaults keep the evidence scope and the pending batch planner has no model scope", () => {
+    const standard = parseReviewConfig({})
+    const skip = parseReviewConfig({ json: '{"largeChanges":"skip"}' })
+    const batch = parseReviewConfig({ json: '{"largeChanges":"batch"}' })
+    expect(skip).toEqual(standard)
+    expect(batch.config.largeChanges).toBe("batch")
+    for (const adapter of ["engine", "desktop"] as const) {
+      const baseline = evidenceScope({ adapter, config: standard.config })
+      expect(evidenceScope({ adapter, config: { ...skip.config, largeChanges: "skip" } })).toEqual(baseline)
+      if (adapter === "desktop" || (UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("largeChanges")) {
+        expect(evidenceScope({ adapter, config: batch.config })).toEqual(baseline)
+      }
+    }
   })
 
   test("the applied input-token budget keeps existing evidence scopes and their policy digest", () => {
