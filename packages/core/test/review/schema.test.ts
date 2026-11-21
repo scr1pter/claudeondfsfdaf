@@ -650,6 +650,15 @@ describe("the strict schemas (VS-27a)", () => {
 })
 
 describe("decodeReport under guardrail: strict (VS-27a)", () => {
+  test("an unreadable candidate list cannot become a completed empty strict report", () => {
+    for (const raw of [{ summary: "done" }, { summary: "done", findings: null }, { summary: "done", findings: [{}] }]) {
+      expect(decodeReport(raw)?.findings).toEqual([])
+      expect(decodeReport(raw, { guardrail: "strict" })).toBeUndefined()
+      expect(decodeReport(JSON.stringify(raw), { guardrail: "strict" })).toBeUndefined()
+    }
+    expect(decodeReport({ findings: [] }, { guardrail: "strict" })?.findings).toEqual([])
+  })
+
   const base = {
     path: "src/a.ts",
     line: 12,

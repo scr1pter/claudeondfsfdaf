@@ -771,7 +771,7 @@ word, so only the registry keeps model ids out.
 | `trivial-skip`     | `trivial: "skip"`                                                                       | VS-24, trusted committed checkout | pending: desktop has no private Git proof                                 |
 | `impact-graph`     | `impact: "graph"`                                                                       | built (VS-25b)              | pending, after VS-10                                                          |
 | `cards-brain`      | `cards: "brain"`, local-only eval                                                       | pending VS-26               | pending, after VS-10                                                          |
-| `guardrail-strict` | `guardrail: "strict"`                                                                   | pending VS-27c              | pending VS-27c                                                                |
+| `guardrail-strict` | `guardrail: "strict"`                                                                   | built (SF-19)               | pending SF-20                                                                |
 | `depth-auto`       | `depth: "auto"`                                                                         | pending VS-28 wiring        | pending, after VS-10                                                          |
 | `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | pending VS-28 wiring        | pending, after VS-10                                                          |
 | `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)            | built (VS-29a)              | pending, after VS-10                                                          |
@@ -1341,7 +1341,11 @@ How it works:
   artifact's `maxComments`; it leaves out S2's class half, S4's quotes and S5,
   and VS-42's S9 (`scopeGate: "introduced"`), since an artifact records no base
   blobs.
-  Only findings the original posted are candidates. Unreadable verdicts are
+  Strict engine replays record the verified and unverified candidates the runner passed
+  into strict selection, their diff anchors and suggestion eligibility, and the IDs
+  whose verdicts it could not read. Re-selection
+  reports how many candidates never reached a recorded post. Only the posted findings
+  can reuse the original judgements. For older artifacts, unreadable verdicts are
   worked out from the recorded verify rule (a finding recorded as verified,
   or as `verified: false`, had its verdict read); after a triage pass,
   unconfirmed findings are missing from the artifact, so the run reads

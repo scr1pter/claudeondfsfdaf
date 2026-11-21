@@ -35,8 +35,7 @@ export interface ModelFinding {
   evidence?: string[] // "path:line" references it read
   rule?: string // the quoted rule sentence
   duplicateOf?: string // id of an open earlier finding this repeats
-  // The strict report schema's fields (VS-27a). Only decodeReport under `guardrail: "strict"` reads them, and no runner
-  // asks for that before VS-27c, so legacy output never has them.
+  // The engine's strict report schema uses these fields. Legacy decoding leaves them out.
   failure?: FailureInfo // asked for on every blocking finding; S2 and S5 enforce that, not the schema
   quotes?: Quote[]
   patch?: string // a unified diff against head
@@ -69,10 +68,8 @@ export interface Finding extends ModelFinding {
   also?: string[]
 }
 
-// VS-27's strict guardrail (contract §1.2). Its types live here, not in guardrail.ts, because ReviewOutcome.strict
-// needs them and this file stays import-free; VS-27b's guardrail.ts adds StrictInput and strictSelect. Nothing produces
-// any of them before VS-27c.
-// The five production-breaking classes. Their definitions wait for VS-27c's prompt (owner questions Q3 and Q4).
+// The five production-breaking classes used by the engine's strict prompt and guardrail. ReviewOutcome.strict
+// shares the result types without importing the guardrail.
 export const FAILURE_CLASSES = ["crash", "data-corruption", "leak", "runaway-loop", "auth-bypass"] as const
 export type FailureClass = (typeof FAILURE_CLASSES)[number]
 export const FAILURE_MECHANISMS = ["logic", "concurrency", "regression", "resource", "access"] as const
@@ -252,7 +249,11 @@ export interface PriorFinding {
   also?: number[]
 }
 
+/** What the posting formatter needs when an adapter forwards the selection alone. */
+export type StrictSummary = Pick<StrictResult, "complete" | "dropped"> & { findingCount: number }
+
 export interface Selection {
+  strict?: StrictSummary
   /** Whole changed files omitted by graph-mode diff packing. Related context never establishes coverage. */
   diffIncomplete?: true
   inline: PlacedFinding[]
@@ -465,11 +466,8 @@ export interface ReviewConfig {
   // The engine builds graph context from the reviewed Git trees under "graph". The default and the separate
   // desktop review use grep. Leaving this key absent preserves existing configuration and evidence digests.
   impact?: "grep" | "graph"
-  // VS-27's opt-in (D3, Q3, Q15). Under "strict", the strict guardrail (VS-27b's strictSelect) will keep only verified,
-  // blocking findings in the five failure classes, each anchored, quoted, with its impact and a fix, and report them as
-  // a StrictResult. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every
-  // config and its digest stay as they were. Parsed, and read by no runner until VS-27c (UNAPPLIED_REVIEW_KEYS), so the
-  // parser warns that "strict" is not applied.
+  // Under "strict" the engine verifies every candidate and reports verified blocking findings in the five
+  // production-breaking classes. The default and desktop use ordinary review selection.
   guardrail?: "off" | "strict"
   // VS-42's opt-in (Q18). Under "introduced", the strict guardrail drops a finding the model labels pre-existing, or
   // whose quoted code is all unchanged since the base (S9, guardrail.ts preExistingSuspect). It acts inside
@@ -621,7 +619,6 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
   "maxInputTokens",
-  "guardrail",
   "scopeGate",
   "verifyEvidence",
   "depth",

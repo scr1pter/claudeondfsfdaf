@@ -9,6 +9,7 @@ import {
   rulePartsForPaths,
   rulesForPaths,
   SOURCED_REVIEW_KEYS,
+  strictReviewConfig,
 } from "@vectordevai/core/review/config"
 import { DEFAULT_REVIEW_CONFIG, OPTIONAL_REVIEW_DEFAULTS, UNAPPLIED_REVIEW_KEYS } from "@vectordevai/core/review/types"
 
@@ -1041,25 +1042,22 @@ describe("VS-25b's impact key", () => {
   })
 })
 
-// VS-27a: `guardrail` is parsed, and no runner reads it before VS-27c. Unset, nothing changes (I-1); "strict" says it is
-// not applied yet. A plain key: every surface reads it from review.json and REVIEW_GUARDRAIL, as parseReviewConfig does.
+// Every surface reads this opt-in from review.json or REVIEW_GUARDRAIL. Only the engine applies the strict settings.
 describe("VS-27's guardrail key", () => {
-  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
-
   test("has no default entry, so the defaults and their digests stay as they were", () => {
     const { config, warnings } = parseReviewConfig()
     expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "guardrail")).toBe(false)
     expect(Object.hasOwn(config, "guardrail")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.guardrail).toBe("off")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("guardrail")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("guardrail")).toBe(false)
     expect(SOURCED_REVIEW_KEYS).not.toContain("guardrail")
   })
 
-  test("review.json and REVIEW_GUARDRAIL set it; strict says it is not applied, off says nothing", () => {
+  test("review.json and REVIEW_GUARDRAIL opt into strict verification on the engine", () => {
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
-      warnings: [STRICT],
+      warnings: [],
     })
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "off" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "off" },
@@ -1067,12 +1065,37 @@ describe("VS-27's guardrail key", () => {
     })
     const env = parseReviewConfig({ json: JSON.stringify({ guardrail: "off" }), env: { REVIEW_GUARDRAIL: " Strict " } })
     expect(env.config.guardrail).toBe("strict")
-    expect(env.warnings).toEqual([STRICT])
+    expect(env.warnings).toEqual([])
     const lowered = parseReviewConfig({
       json: JSON.stringify({ guardrail: "strict" }),
       env: { REVIEW_GUARDRAIL: "off" },
     })
     expect(lowered).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "off" }, warnings: [] })
+  })
+
+  test("only the engine projects strict verification, severity and nit policy; user settings are preserved", () => {
+    const original = {
+      ...DEFAULT_REVIEW_CONFIG,
+      nits: true,
+      minSeverity: "nit",
+      verify: "off",
+      verifyPolicy: "legacy",
+    } as const
+    expect(strictReviewConfig(original)).toBe(original)
+    const off = { ...original, guardrail: "off" } as const
+    expect(strictReviewConfig(off)).toBe(off)
+    const strict = { ...original, guardrail: "strict" } as const
+    expect(strictReviewConfig(strict)).toEqual({
+      ...strict,
+      verifyPolicy: "shared",
+      verify: "all",
+      minSeverity: "blocking",
+      nits: false,
+    })
+    expect(strict.verify).toBe("off")
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_GUARDRAIL: "strict" } }).warnings).toEqual([
+      'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".',
+    ])
   })
 
   test("a bad value warns naming the value in use", () => {
@@ -1085,7 +1108,7 @@ describe("VS-27's guardrail key", () => {
     ])
     expect(
       parseReviewConfig({ json: JSON.stringify({ guardrail: "strict" }), env: { REVIEW_GUARDRAIL: "x" } }).warnings,
-    ).toEqual(['REVIEW_GUARDRAIL must be "off", "strict"; using "strict".', STRICT])
+    ).toEqual(['REVIEW_GUARDRAIL must be "off", "strict"; using "strict".'])
   })
 
   test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
@@ -1104,7 +1127,6 @@ describe("VS-27's guardrail key", () => {
 // is effective only with `guardrail: "strict"`: with it, the value says it is not applied yet; without it, it is ignored
 // with a note, and the two warnings never appear together. A plain key with no environment variable.
 describe("VS-42's scopeGate key", () => {
-  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
   const UNAPPLIED =
     '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
   const IGNORED =
@@ -1124,17 +1146,17 @@ describe("VS-42's scopeGate key", () => {
     const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
     expect(json({ guardrail: "strict", scopeGate: "introduced" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", scopeGate: "introduced" },
-      warnings: [STRICT, UNAPPLIED],
+      warnings: [UNAPPLIED],
     })
     for (const value of [{ scopeGate: "introduced" }, { guardrail: "off", scopeGate: "introduced" }] as const)
       expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
     expect(json({ scopeGate: "off" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, scopeGate: "off" }, warnings: [] })
-    expect(json({ guardrail: "strict", scopeGate: "off" }).warnings).toEqual([STRICT])
+    expect(json({ guardrail: "strict", scopeGate: "off" }).warnings).toEqual([])
     // REVIEW_GUARDRAIL decides which warning a review.json scopeGate gets.
     expect(
       parseReviewConfig({ json: JSON.stringify({ scopeGate: "introduced" }), env: { REVIEW_GUARDRAIL: "strict" } })
         .warnings,
-    ).toEqual([STRICT, UNAPPLIED])
+    ).toEqual([UNAPPLIED])
     expect(
       parseReviewConfig({
         json: JSON.stringify({ guardrail: "strict", scopeGate: "introduced" }),
@@ -1150,7 +1172,7 @@ describe("VS-42's scopeGate key", () => {
     })
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict", scopeGate: "on" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
-      warnings: [`${REVIEW_CONFIG_PATH}: "scopeGate" must be "off", "introduced"; using "off".`, STRICT],
+      warnings: [`${REVIEW_CONFIG_PATH}: "scopeGate" must be "off", "introduced"; using "off".`],
     })
   })
 
@@ -1173,7 +1195,6 @@ describe("VS-42's scopeGate key", () => {
 // strict guardrail (S1's certificate check), so it is effective only with `guardrail: "strict"`: with it, the value says
 // it is not applied yet; without it, it is ignored with a note. A plain key with no environment variable.
 describe("VS-44's verifyEvidence key", () => {
-  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
   const UNAPPLIED =
     '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
   const IGNORED =
@@ -1197,7 +1218,7 @@ describe("VS-44's verifyEvidence key", () => {
     const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
     expect(json({ guardrail: "strict", verifyEvidence: "certificate" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", verifyEvidence: "certificate" },
-      warnings: [STRICT, UNAPPLIED],
+      warnings: [UNAPPLIED],
     })
     for (const value of [
       { verifyEvidence: "certificate" },
@@ -1208,14 +1229,14 @@ describe("VS-44's verifyEvidence key", () => {
       config: { ...DEFAULT_REVIEW_CONFIG, verifyEvidence: "off" },
       warnings: [],
     })
-    expect(json({ guardrail: "strict", verifyEvidence: "off" }).warnings).toEqual([STRICT])
+    expect(json({ guardrail: "strict", verifyEvidence: "off" }).warnings).toEqual([])
     // REVIEW_GUARDRAIL decides which warning a review.json verifyEvidence gets.
     expect(
       parseReviewConfig({
         json: JSON.stringify({ verifyEvidence: "certificate" }),
         env: { REVIEW_GUARDRAIL: "strict" },
       }).warnings,
-    ).toEqual([STRICT, UNAPPLIED])
+    ).toEqual([UNAPPLIED])
     expect(
       parseReviewConfig({
         json: JSON.stringify({ guardrail: "strict", verifyEvidence: "certificate" }),
@@ -1224,7 +1245,6 @@ describe("VS-44's verifyEvidence key", () => {
     ).toEqual([IGNORED])
     // Beside VS-42's key, each gets its own warning, in the keys' order.
     expect(json({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([
-      STRICT,
       GATE_UNAPPLIED,
       UNAPPLIED,
     ])
@@ -1237,7 +1257,7 @@ describe("VS-44's verifyEvidence key", () => {
     ).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict", verifyEvidence: "cert" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
-      warnings: [`${REVIEW_CONFIG_PATH}: "verifyEvidence" must be "off", "certificate"; using "off".`, STRICT],
+      warnings: [`${REVIEW_CONFIG_PATH}: "verifyEvidence" must be "off", "certificate"; using "off".`],
     })
   })
 

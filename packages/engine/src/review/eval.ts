@@ -42,12 +42,14 @@ import {
   REVIEW_RULES_PATHS,
   rulesForPaths,
   SOURCED_REVIEW_KEYS,
+  strictReviewConfig,
   type SourcedReviewKey,
 } from "@vectordevai/core/review/config"
 import {
   buildNoteBody,
   buildReviewBody,
   buildSummaryBody,
+  findingItem,
   inlineLeads,
   noteFailed,
   noteGeneratedHeaders,
@@ -56,6 +58,7 @@ import {
   notePartial,
   noteTrivialSkip,
 } from "@vectordevai/core/review/format"
+import { buildAnchorIndex, resolveAnchor, suggestionAllowed } from "@vectordevai/core/review/diff"
 import { buildCreateReviewPayload, type CreateReviewPayload } from "@vectordevai/core/review/github-payload"
 import {
   classifyFiles,
@@ -90,6 +93,7 @@ import {
   DEFAULT_REVIEW_CONFIG,
   UNAPPLIED_REVIEW_KEYS,
   type CostKind,
+  type Finding,
   type ReviewConfig,
   type ReviewOutcome,
   type SkippedFile,
@@ -152,8 +156,8 @@ export interface ReplayInput {
   // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
   // applies to the prompt since SF-13b and to the reviewer's read and grep tools since SF-14, and so may the
   // engine:holdback-secrets variant (VARIANT_KEYS.engine), which may only raise it to "secrets". Nor a key
-  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's maxInputTokens, VS-27's
-  // guardrail, VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is also
+  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's maxInputTokens,
+  // VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is also
   // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
@@ -292,6 +296,14 @@ export interface ReplayArtifact {
   attempts: AttemptRecord[]
   tools: { pass?: Pass; tool: string; status: string; input: Record<string, string | number | boolean> }[]
   outcome?: ReviewOutcome // absent when nothing was left to review and no model was asked
+  // The actual inputs to strict selection after verification, before its drops. The replay redacts model text.
+  // Older artifacts and reviews that did not reach strict selection omit this record.
+  strictCandidates?: {
+    findings: (Finding & { anchored: boolean; suggestionAllowed: boolean })[]
+    unanswered: string[]
+    // Expected redacted summary rows, so an offline report can match the visible text that survived posting.
+    summaryRows?: { id: string; digest: string }[]
+  }
   placed: PlacedRecord[] // the findings that would go on lines, where they would go
   posted: PostedRecord[] // what the posting adapter was handed, after redaction and the posting check
   refused?: string // the posting check failed, so nothing after it was posted
@@ -638,14 +650,14 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // one is replayed, and recorded, without it. Its "not applied" warning stays in the artifact's warnings.
   const applied: ReviewConfig = { ...parsed.config }
   UNAPPLIED_REVIEW_KEYS.forEach((key) => delete applied[key])
-  const config: ReviewConfig = {
+  const config: ReviewConfig = strictReviewConfig({
     ...applied,
     ...input.config,
     ...variant?.keys,
     maxCostUsd: cap,
     maxSteps: input.config?.maxSteps ?? DEFAULT_REVIEW_CONFIG.maxSteps,
     timeoutMinutes: input.config?.timeoutMinutes ?? DEFAULT_REVIEW_CONFIG.timeoutMinutes,
-  }
+  })
   const rules = parseReviewRules(rulesTexts.find((text) => text !== undefined) ?? "")
   const attributes = attributesText === undefined ? undefined : parseGitAttributes(attributesText)
   const ignored = (file: string) => classifyPath(file, { config, attributes }) !== undefined
@@ -972,6 +984,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       baseRef: item.baseRef ?? "base",
       mode: "full",
       report: outcome.report,
+      ...(outcome.strict ? { strict: outcome.strict } : {}),
       selection,
       files: files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
       // Review.run's, which add its held-back files (VS-34) to the eval's own.
@@ -1068,8 +1081,46 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
           : gathered.related,
       )
     : []
+  // Model answers can contain tokens in any string, including nested quotes or a proposed fix. Redact the
+  // complete serialized strict record, including the same findings repeated in the outcome and placements.
+  const observedStrict = observed.find((event) => event.type === "strict-candidates")
+  let strictCandidates: ReplayArtifact["strictCandidates"]
+  if (config.guardrail === "strict" && outcome.strict && observedStrict) {
+    const index = buildAnchorIndex(plan.files)
+    strictCandidates = {
+      findings: observedStrict.findings.map((finding) => {
+        const anchor = resolveAnchor(index, finding)
+        return {
+          ...finding,
+          // The offline rules admit a recorded diff anchor. The online S3 also requires a changed line.
+          anchored: anchor.ok,
+          suggestionAllowed:
+            anchor.ok &&
+            !!finding.suggestion &&
+            config.suggestions &&
+            suggestionAllowed(index, anchor.anchor, finding.suggestion, {
+              trust: item.trust,
+              verified: finding.verified,
+              range: { line: finding.line, endLine: finding.endLine },
+            }),
+        }
+      }),
+      unanswered: observedStrict.unanswered,
+      // Strict findings anchor to changed lines. Only the remaining PR comment cap sends them to the summary
+      // in a first, full replay. Its invisible state marker can also retain rows the formatter trimmed.
+      ...(selection.overflow.length
+        ? {
+            summaryRows: selection.overflow.map((finding) => ({
+              id: finding.id,
+              digest: digest(clean(findingItem(finding, repo))),
+            })),
+          }
+        : {}),
+    }
+  }
   const artifact: ReplayArtifact = {
     ...common,
+    ...(strictCandidates ? { strictCandidates } : {}),
     ...(impact ? { tier1: impact.record } : {}),
     files: {
       reviewed: quoted ? files.flatMap((file) => (excluded.has(file.path) ? [] : [file.path])) : [],
@@ -1121,6 +1172,13 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     })),
     posted,
     ...(refusal.message !== undefined ? { refused: refusal.message } : {}),
+  }
+  if (outcome.strict) {
+    const evidence = { outcome, placed: artifact.placed, ...(strictCandidates ? { strictCandidates } : {}) }
+    const redacted = JSON.parse(
+      JSON.stringify(evidence, (_key, value) => (typeof value === "string" ? clean(value) : value)),
+    ) as typeof evidence
+    return { artifact: { ...artifact, ...redacted }, observed, over }
   }
   return { artifact, observed, over }
 })
@@ -1279,7 +1337,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
   maxInputTokens: "VS-24 wiring",
-  guardrail: "VS-27c",
   scopeGate: "VS-42 wiring",
   verifyEvidence: "VS-44 wiring",
   depth: "VS-28 wiring",
@@ -1352,6 +1409,14 @@ function variantProblem(input: ReplayInput) {
     (variant.name !== "engine:impact-graph" || variant.keys.impact !== "graph" || keys.length !== 1 || variant.models)
   )
     return 'The engine:impact-graph variant sets only impact: "graph".'
+  if (
+    (variant.name === "engine:guardrail-strict" || variant.keys.guardrail !== undefined) &&
+    (variant.name !== "engine:guardrail-strict" ||
+      variant.keys.guardrail !== "strict" ||
+      keys.length !== 1 ||
+      variant.models)
+  )
+    return 'The engine:guardrail-strict variant sets only guardrail: "strict".'
   if (variant.models === "triage-pair" && !triaged)
     return `${variant.name} is made by its models: it needs a triage model other than the review model.`
   return undefined

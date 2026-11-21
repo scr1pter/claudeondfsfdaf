@@ -33,9 +33,9 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // REVIEW_PIPELINE_SOURCES pins a digest of them. The web-tree-sitter runtime init the parser shares with the shell tool
 // (engine util/tree-sitter.ts) is left out on purpose: it decides nothing a review finds, and pinning it would tie shell
 // changes to the review pin. The slice's shared readers, BrainCode and BrainGraph, and its changed-symbol fallback
-// determine which related code the engine sends under impact: "graph". The strict guardrail (VS-27b's guardrail.ts) is pinned from the day it lands, though no runner calls it before VS-27c: it
-// decides what a strict review posts, and its shared rule pass is the one report.ts's offline re-selection applies, so
-// a change to either moves this pin on purpose. So is the rule citation check (VS-43a's citation.ts), pinned from the
+// determine which related code the engine sends under impact: "graph". The strict runner and private blob reader
+// determine what evidence reaches the guardrail. Its shared rule pass also drives report.ts's offline re-selection.
+// Each contributes to the pin. So does the rule citation check (VS-43a's citation.ts), pinned from the
 // day it lands, as guardrail.ts is: it will decide what a review drops or strips. So is the change-risk band (VS-28c's
 // risk.ts), pinned from the day it lands: once wired it decides which passes run under `depth: "auto"`. So is the
 // runtime evidence contract (VS-30c's runtime.ts), pinned from the day it lands: once the VS-30 executor runs it,
@@ -61,6 +61,9 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/connect/policy.ts",
   "packages/engine/src/review/run.ts",
   "packages/engine/src/review/trivial.ts",
+  "packages/engine/src/review/private-snapshot.ts",
+  "packages/engine/src/review/strict-blobs.ts",
+  "packages/engine/src/review/strict.ts",
   "packages/engine/src/review/read-authority.ts",
   "packages/engine/src/review/service.ts",
   "packages/engine/src/review/git.ts",
@@ -293,8 +296,7 @@ describe("scope", () => {
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
   })
 
-  // VS-27a: the strict report and result schemas render only under `guardrail: "strict"`, which no runner sets before
-  // VS-27c, so they enter the digest only under that key and every other digest holds.
+  // Strict task text and the strict schemas enter the engine evidence digest together under the guardrail.
   test("the prompts digest covers the strict schemas under guardrail: strict only", () => {
     expect(promptsDigest({ guardrail: "off" })).toBe(promptsDigest())
     expect(promptsDigest({ guardrail: undefined })).toBe(promptsDigest())
@@ -307,13 +309,11 @@ describe("scope", () => {
     // The default and graph digests are unchanged by VS-27a.
     expect(promptsDigest()).toBe("5d59e9ee06077c23")
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
-    // The schema-only strict digests. VS-27a printed f04c185c5b415aaf and 9c87880d813f1e69 (built at f7e1f8df); VS-27b
-    // moved them, because the result schema's drop enum follows STRICT_DROPS, which gained severity-unreadable and
-    // checks S2's severity half first (built at 12950f7c). VS-27c moves them on purpose when the strict task text joins
-    // canonicalPrompts under the key. VS-42, VS-43 and VS-44 must each leave them at whatever value is current when
-    // they land, with their own keys off: their fields join the strict schemas only under their keys.
-    expect(strict).toBe("b98afb0e878dfe26")
-    expect(both).toBe("3ba21b5bc883cd70")
+    // The default is stable. The strict task text changes only the strict evidence digests.
+    expect(canonicalPrompts({ guardrail: "strict" }).join("\n")).toContain("five failure classes")
+    expect(canonicalPrompts().join("\n")).not.toContain("five failure classes")
+    expect(strict).toBe("3d07943f9c1aeb14")
+    expect(both).toBe("c0fc3483470e13a6")
   })
 
   // VS-42a: `scopeGate: "introduced"` adds the result schema's pre-existing drop, so it moves the digest only under
@@ -335,10 +335,10 @@ describe("scope", () => {
     expect(new Set([promptsDigest(), promptsDigest({ impact: "graph" }), strict, both, gated, gatedGraph]).size).toBe(6)
     // VS-42a held every earlier digest, and printed these (built at d268025c). VS-42 wiring moves them on purpose when
     // the report schema's `scope` field and the prompt clause join under the key.
-    expect(strict).toBe("b98afb0e878dfe26")
-    expect(both).toBe("3ba21b5bc883cd70")
-    expect(gated).toBe("4aa712221043a3a7")
-    expect(gatedGraph).toBe("8335adf9de513ee5")
+    expect(strict).toBe("3d07943f9c1aeb14")
+    expect(both).toBe("c0fc3483470e13a6")
+    expect(gated).toBe("b8400a4d64a7d8c9")
+    expect(gatedGraph).toBe("8b9f4d4e06329827")
   })
 
   // VS-44a: `verifyEvidence: "certificate"` adds the certificate verify schema (verifyCertJsonSchema) after the strict
@@ -369,12 +369,12 @@ describe("scope", () => {
     // the blind candidate and the certificate prompt join, and the result schema gains VS-44's drops, under the key.
     expect(promptsDigest()).toBe("5d59e9ee06077c23")
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
-    expect(strict).toBe("b98afb0e878dfe26")
-    expect(both).toBe("3ba21b5bc883cd70")
-    expect(gated).toBe("4aa712221043a3a7")
-    expect(cert).toBe("d209592d08bb1e0c")
-    expect(certGraph).toBe("468fcac8cde18fe2")
-    expect(certGated).toBe("0f3ff2dd0f7c1d7d")
+    expect(strict).toBe("3d07943f9c1aeb14")
+    expect(both).toBe("c0fc3483470e13a6")
+    expect(gated).toBe("b8400a4d64a7d8c9")
+    expect(cert).toBe("bfd9c07657fc81b6")
+    expect(certGraph).toBe("20ec52ed6149078c")
+    expect(certGated).toBe("8d3c9ff3789c350b")
   })
 
   // VS-28c: the four lens prompts render only under `depth: "auto"` with `lenses: "high"`, so they move the digest only
@@ -448,12 +448,12 @@ describe("scope", () => {
     // the lens agent prompt joins under the pair.
     expect(promptsDigest()).toBe("5d59e9ee06077c23")
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
-    expect(promptsDigest({ guardrail: "strict" })).toBe("b98afb0e878dfe26")
-    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("4aa712221043a3a7")
-    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("d209592d08bb1e0c")
+    expect(promptsDigest({ guardrail: "strict" })).toBe("3d07943f9c1aeb14")
+    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("b8400a4d64a7d8c9")
+    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("bfd9c07657fc81b6")
     expect(lenses).toBe("dd09332295a99649")
     expect(lensesGraph).toBe("31c1a0612c0f9541")
-    expect(lensesStrict).toBe("0ebaacbe7aca1b58")
+    expect(lensesStrict).toBe("1d42617b9e9fe246")
   })
 
   // VS-30c: the runtime instruction and its <untrusted_runtime_evidence> block render only under `runtime: "ask"`,
@@ -514,23 +514,23 @@ describe("scope", () => {
     // under the key.
     expect(promptsDigest()).toBe("5d59e9ee06077c23")
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
-    expect(promptsDigest({ guardrail: "strict" })).toBe("b98afb0e878dfe26")
-    expect(promptsDigest({ impact: "graph", guardrail: "strict" })).toBe("3ba21b5bc883cd70")
-    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("4aa712221043a3a7")
-    expect(promptsDigest({ impact: "graph", guardrail: "strict", scopeGate: "introduced" })).toBe("8335adf9de513ee5")
-    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("d209592d08bb1e0c")
+    expect(promptsDigest({ guardrail: "strict" })).toBe("3d07943f9c1aeb14")
+    expect(promptsDigest({ impact: "graph", guardrail: "strict" })).toBe("c0fc3483470e13a6")
+    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("b8400a4d64a7d8c9")
+    expect(promptsDigest({ impact: "graph", guardrail: "strict", scopeGate: "introduced" })).toBe("8b9f4d4e06329827")
+    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("bfd9c07657fc81b6")
     expect(promptsDigest({ impact: "graph", guardrail: "strict", verifyEvidence: "certificate" })).toBe(
-      "468fcac8cde18fe2",
+      "20ec52ed6149078c",
     )
     expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" })).toBe(
-      "0f3ff2dd0f7c1d7d",
+      "8d3c9ff3789c350b",
     )
     expect(promptsDigest({ depth: "auto", lenses: "high" })).toBe("dd09332295a99649")
     expect(promptsDigest({ impact: "graph", depth: "auto", lenses: "high" })).toBe("31c1a0612c0f9541")
-    expect(promptsDigest({ guardrail: "strict", depth: "auto", lenses: "high" })).toBe("0ebaacbe7aca1b58")
+    expect(promptsDigest({ guardrail: "strict", depth: "auto", lenses: "high" })).toBe("1d42617b9e9fe246")
     expect(runtime).toBe("7d9147298f5cdbaf")
     expect(runtimeGraph).toBe("3bf0c1afc17e08d9")
-    expect(runtimeStrict).toBe("8c5154b47a05f952")
+    expect(runtimeStrict).toBe("25d3e23719ca7204")
     expect(runtimeLenses).toBe("bcb1c5c5258319f1")
   })
 
@@ -581,15 +581,12 @@ describe("scope", () => {
       // The explicit default for impact is the existing grep context.
       { impact: "grep" as const },
       { guardrail: "off" as const },
-      { guardrail: "strict" as const },
       // Nor VS-42's scopeGate, with or without strict.
       { scopeGate: "off" as const },
       { scopeGate: "introduced" as const },
-      { guardrail: "strict" as const, scopeGate: "introduced" as const },
       // Nor VS-44's verifyEvidence, with or without strict.
       { verifyEvidence: "off" as const },
       { verifyEvidence: "certificate" as const },
-      { guardrail: "strict" as const, verifyEvidence: "certificate" as const },
       // Nor VS-28's depth and lenses, alone or together.
       { depth: "fixed" as const },
       { depth: "auto" as const },
@@ -647,21 +644,29 @@ describe("scope", () => {
     )
   })
 
-  // VS-27a: `guardrail` is a policy key (it selects what is posted) that no runner applies before VS-27c, so neither the
-  // policy digest nor the prompts digest of a scope moves with it yet. Once a runner applies it, only "strict" counts, in
-  // both.
-  test("the scope leaves out VS-27's guardrail until a runner applies it", () => {
+  test("the engine's strict evidence follows its enforced policy and includes the strict task", () => {
     const base = policyDigest(DEFAULT_REVIEW_CONFIG)
-    expect(EVIDENCE_POLICY_KEYS).toContain("guardrail")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("guardrail")
-    for (const guardrail of ["strict", "off", undefined] as const)
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("guardrail")).toBe(false)
+    for (const guardrail of ["off", undefined] as const)
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail })).toBe(base)
     const strict: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" }
-    expect(evidenceScope({ adapter: "engine", config: strict })).toEqual(SCOPE)
+    const scope = evidenceScope({ adapter: "engine", config: strict })
+    expect(scope.prompts).toBe(promptsDigest({ guardrail: "strict" }))
+    expect(scope.policy).not.toBe(base)
+    expect(scope.policy).toBe(
+      policyDigest({
+        ...strict,
+        verifyPolicy: "shared",
+        verify: "all",
+        nits: false,
+        minSeverity: "blocking",
+      }),
+    )
+    expect(policyDigest({ ...strict, nits: true })).toBe(scope.policy)
+    expect(policyDigest({ ...strict, maxComments: 3 })).not.toBe(scope.policy)
     expect(evidenceScope({ adapter: "desktop", config: { ...strict, impact: "graph" } })).toEqual(
       evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
     )
-    expect(policyDigest({ ...strict, nits: true })).not.toBe(policyDigest(strict))
   })
 
   // VS-42a: `scopeGate` is a policy key (S9 drops what would be posted) that no runner applies before VS-42 wiring, so
@@ -669,18 +674,21 @@ describe("scope", () => {
   // guardrail, the prompts digest counts it only as "introduced" under "strict", and the policy digest only under
   // "strict" (dormant now; VS-42 wiring's test shows `guardrail: "off"` with "introduced" equals the default).
   test("the scope leaves out VS-42's scopeGate until a runner applies it", () => {
-    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
     expect(EVIDENCE_POLICY_KEYS).toContain("scopeGate")
     expect(UNAPPLIED_REVIEW_KEYS).toContain("scopeGate")
     for (const scopeGate of ["introduced", "off", undefined] as const)
       for (const guardrail of ["strict", "off", undefined] as const)
-        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail, scopeGate })).toBe(base)
+        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail, scopeGate })).toBe(
+          policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail }),
+        )
     const gated: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", scopeGate: "introduced" }
-    expect(evidenceScope({ adapter: "engine", config: gated })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "engine", config: gated })).toEqual(
+      evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" } }),
+    )
     expect(evidenceScope({ adapter: "desktop", config: { ...gated, impact: "graph" } })).toEqual(
       evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
     )
-    expect(policyDigest({ ...gated, nits: true })).not.toBe(policyDigest(gated))
+    expect(policyDigest({ ...gated, maxComments: 3 })).not.toBe(policyDigest(gated))
   })
 
   // VS-44a: `verifyEvidence` is a policy key (S1's certificate check drops what would be posted) that no runner applies
@@ -689,18 +697,21 @@ describe("scope", () => {
   // digest only under "strict" (dormant now; VS-44 wiring's test shows `guardrail: "off"` with "certificate" equals the
   // default).
   test("the scope leaves out VS-44's verifyEvidence until a runner applies it", () => {
-    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
     expect(EVIDENCE_POLICY_KEYS).toContain("verifyEvidence")
     expect(UNAPPLIED_REVIEW_KEYS).toContain("verifyEvidence")
     for (const verifyEvidence of ["certificate", "off", undefined] as const)
       for (const guardrail of ["strict", "off", undefined] as const)
-        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail, verifyEvidence })).toBe(base)
+        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail, verifyEvidence })).toBe(
+          policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail }),
+        )
     const cert: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", verifyEvidence: "certificate" }
-    expect(evidenceScope({ adapter: "engine", config: cert })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "engine", config: cert })).toEqual(
+      evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" } }),
+    )
     expect(
       evidenceScope({ adapter: "desktop", config: { ...cert, scopeGate: "introduced", impact: "graph" } }),
     ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
-    expect(policyDigest({ ...cert, nits: true })).not.toBe(policyDigest(cert))
+    expect(policyDigest({ ...cert, maxComments: 3 })).not.toBe(policyDigest(cert))
   })
 
   // VS-28c: `depth` and `lenses` are policy keys (they choose which passes look for defects) that no runner applies
@@ -822,7 +833,7 @@ describe("scope", () => {
     // Every earlier digest holds.
     expect(promptsDigest()).toBe("5d59e9ee06077c23")
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
-    expect(promptsDigest({ guardrail: "strict" })).toBe("b98afb0e878dfe26")
+    expect(promptsDigest({ guardrail: "strict" })).toBe("3d07943f9c1aeb14")
     expect(promptsDigest({ runtime: "ask" })).toBe("7d9147298f5cdbaf")
   })
 

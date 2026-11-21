@@ -429,7 +429,10 @@ export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): Model
       : input
   if (!isRecord(value)) return undefined
   const summary = text(value.summary).slice(0, MAX_SUMMARY_CHARS)
-  if (!Array.isArray(value.findings) && !summary) return undefined
+  const strict = keys.guardrail === "strict"
+  if (!Array.isArray(value.findings) && (strict || !summary)) return undefined
+  const candidates = list(value.findings)
+  if (strict && candidates.length > MAX_REPORT_FINDINGS) return undefined
   const report: ModelReport = {
     summary,
     risk: RISKS.find((risk) => risk === lower(value.risk)) ?? "low",
@@ -438,13 +441,15 @@ export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): Model
       const path = cleanPath(text(entry.path))
       return path ? [{ path, note: oneLine(text(entry.note)) }] : []
     }),
-    findings: list(value.findings)
+    findings: candidates
       .flatMap((entry) => {
-        const finding = decodeFinding(entry, keys.guardrail === "strict")
+        const finding = decodeFinding(entry, strict)
         return finding ? [finding] : []
       })
       .slice(0, MAX_REPORT_FINDINGS),
   }
+  // Silently dropping an unreadable candidate could turn a malformed strict response into a clean review.
+  if (strict && report.findings.length !== candidates.length) return undefined
   const priorStatus = list(value.priorStatus).flatMap((entry) => {
     if (!isRecord(entry)) return []
     const id = text(entry.id)

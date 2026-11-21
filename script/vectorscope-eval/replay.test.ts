@@ -502,6 +502,7 @@ describe("the variant registry", () => {
       "engine:privacy-zdr",
       "engine:trivial-skip",
       "engine:impact-graph",
+      "engine:guardrail-strict",
       "engine:cross-family",
       "engine:holdback-secrets",
       "desktop:holdback-secrets",
@@ -518,7 +519,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 8)
+    expect(pending).toHaveLength(2 * entries.length - 9)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -533,7 +534,6 @@ describe("the variant registry", () => {
       ),
     ).toEqual({
       "engine:cards-brain": "VS-26",
-      "engine:guardrail-strict": "VS-27c",
       "engine:depth-auto": "VS-28 wiring",
       "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
@@ -1495,6 +1495,15 @@ describe("the entry point's variants and the pilot's limits", () => {
       ok: true,
       name: "engine:impact-graph",
       record: { name: "engine:impact-graph", keys: { impact: "graph" } },
+    })
+    expect(variantRecord("engine:guardrail-strict")).toEqual({
+      ok: true,
+      name: "engine:guardrail-strict",
+      record: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } },
+    })
+    expect(variantRecord("desktop:guardrail-strict")).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("VS-27c"),
     })
     expect(variantRecord("not a name")).toEqual({ ok: false, detail: expect.stringContaining("is not a variant name") })
     // admitReplay keeps its own wording for a desktop name, and hands out the same record.

@@ -1210,72 +1210,106 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-27a: the same for `guardrail`. A base review.json under "strict" is replayed with the legacy report schema and
-  // decoding, as every runner still reviews: a finding's strict fields are ignored, and the scope claims neither the
-  // policy nor the strict schemas.
   it.instance(
-    "replays a base review.json that sets VS-27's guardrail without it, keeping the parser's warning",
+    "records the strict runner's candidates and unanswered verdicts for offline re-selection",
     () =>
       Effect.gen(function* () {
         const { directory, llm, base, head } = yield* checkout({
-          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ guardrail: "strict" }) },
+          base: { "src/list.ts": LIST_BASE, ".gitignore": "vector.json\n" },
           head: { "src/list.ts": LIST_HEAD },
           price: PRICE,
         })
-        const strict = {
+        // The private Git view accepts the committed ignore policy, not local info/exclude overrides.
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+        const confirmed: ModelFinding = {
           ...listBug,
           failure: {
             class: "crash",
             mechanism: "logic",
-            trigger: "An empty list.",
-            impact: "last() returns undefined.",
+            trigger: "A caller dereferences the final list item.",
+            impact: "The out of bounds lookup returns undefined and the caller throws.",
           },
-          quotes: [{ path: "src/list.ts", line: 3, side: "RIGHT", code: "  return items[items.length]" }],
-          patch: "--- a/src/list.ts\n+++ b/src/list.ts",
+          quotes: [{ path: "src/list.ts", line: 3, side: "RIGHT", code: "  return items[index]" }],
+          suggestion: "  return items[index - 1]",
         }
-        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: [strict] }))
+        const secret = "fixture-secret-never-record"
+        const unanswered = { ...listFalse, body: `Unverified model text ${secret}` }
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const [keepId, absentId] = Review.normalizeFindings([confirmed, unanswered], "review", anchors).map(
+          (item) => item.id,
+        )
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([confirmed, unanswered])))
+        yield* llm.pushMatch(
+          VERIFY,
+          reply().tool("StructuredOutput", {
+            results: [{ id: keepId, verdict: "confirmed", reason: "The added line indexes beyond the array." }],
+          }),
+        )
         const artifact = yield* ReviewEval.replay({
           case: replayCase(directory, base, head),
           model: MODEL,
+          variant: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } },
           config: { maxCostUsd: 2, verify: "off", minConfidence: 0.5 },
           posting: ReviewEval.recordingPosting(),
           check: recordingCheck().check,
+          secrets: [secret],
         })
-        expect(Object.hasOwn(artifact.config.value, "guardrail")).toBe(false)
-        expect(artifact.config.warnings).toEqual([
-          '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
-        ])
-        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, guardrail: "strict" }))
-        expect(artifact.scope.prompts).toBe(promptsDigest())
-        expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict" }))
-        // The request carries the legacy report schema, and the strict fields of the answer are not read.
-        const body = JSON.stringify((yield* llm.hits).find(REVIEW)!.body)
-        expect(body).toContain('"duplicateOf"')
-        for (const field of ['"failure"', '"quotes"', '"patch"']) expect(body).not.toContain(field)
-        const placed = artifact.outcome?.selection.inline ?? []
-        expect(placed.map((finding) => finding.title)).toEqual([listBug.title])
-        for (const field of ["failure", "quotes", "patch", "verifiedBy"])
-          expect(placed.some((finding) => Object.hasOwn(finding, field))).toBe(false)
-        expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+        const saved = path.join(directory, "strict-artifact.json")
+        yield* Effect.promise(() => Bun.write(saved, JSON.stringify(artifact)))
+        expect(artifact.config.value).toMatchObject({
+          guardrail: "strict",
+          verify: "all",
+          verifyPolicy: "shared",
+          minSeverity: "blocking",
+          nits: false,
+        })
+        expect(artifact.scope.prompts).toBe(promptsDigest({ guardrail: "strict" }))
+        const candidates = artifact.strictCandidates
+        expect(candidates?.findings.map((finding) => finding.id).sort()).toEqual([keepId, absentId].sort())
+        expect(candidates?.unanswered).toEqual([absentId])
+        expect(candidates?.findings.find((finding) => finding.id === keepId)?.verified).toBe(true)
+        expect(candidates?.findings.find((finding) => finding.id === absentId)?.body).toContain("[redacted]")
+        expect(JSON.stringify(artifact)).not.toContain(secret)
+        expect(candidates?.findings.find((finding) => finding.id === keepId)).toMatchObject({
+          anchored: true,
+          suggestionAllowed: true,
+        })
+        expect(artifact.outcome?.strict?.complete).toBe(false)
+        expect(artifact.outcome?.strict?.incomplete).toContain("verdict-unreadable")
+        // Execute the offline report in its own package context. Its desktop imports belong to the
+        // report, not to the engine, and its normal CLI must accept the JSON an engine replay wrote.
+        const reportCommand = path.resolve(import.meta.dir, "../../../../script/vectorscope-eval/report.ts")
+        const output = yield* Effect.promise(() =>
+          $`${process.execPath} ${reportCommand} --outputs ${saved} --reselect strict`
+            .cwd(path.dirname(reportCommand))
+            .quiet()
+            .text(),
+        )
+        expect(output).toContain("engine:guardrail-strict+reselect-strict")
+        expect(output).toContain("1 run(s) incomplete")
+        expect(output).toContain("copies carry no spend, tokens or timing")
+        if (process.platform === "linux") {
+          expect(artifact.outcome?.strict?.dropped).toEqual([{ reason: "verdict-unreadable", count: 1 }])
+          expect(artifact.placed.map((finding) => finding.title)).toEqual([confirmed.title])
+          expect(output).toContain("kept 1 of 1 posted finding(s), 1 selected but never posted left out")
+        }
       }),
     GIT,
     TIMEOUT,
   )
 
   // VS-42a: the same for `scopeGate`. A base review.json that sets it, with or without strict, is replayed and recorded
-  // without it (and without the guardrail), keeping the parser's warnings, and the scope claims neither the policy nor
-  // the gated schemas.
+  // without the pending scope check. Strict selection still runs when the base opts in.
   it.instance(
     "replays a base review.json that sets VS-42's scopeGate without it, keeping the parser's warnings",
     () =>
       Effect.gen(function* () {
-        const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
         const UNAPPLIED =
           '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
         const IGNORED =
           '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
         for (const [settings, warnings] of [
-          [{ guardrail: "strict", scopeGate: "introduced" }, [STRICT, UNAPPLIED]],
+          [{ guardrail: "strict", scopeGate: "introduced" }, [UNAPPLIED]],
           [{ scopeGate: "introduced" }, [IGNORED]],
         ] as const) {
           const { directory, llm, base, head } = yield* checkout({
@@ -1284,6 +1318,7 @@ describe("ReviewEval.replay", () => {
             price: PRICE,
           })
           yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: [listBug] }))
+          if ("guardrail" in settings) yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
           const artifact = yield* ReviewEval.replay({
             case: replayCase(directory, base, head),
             model: MODEL,
@@ -1291,13 +1326,17 @@ describe("ReviewEval.replay", () => {
             posting: ReviewEval.recordingPosting(),
             check: recordingCheck().check,
           })
-          for (const key of ["guardrail", "scopeGate"]) expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          const strict = "guardrail" in settings
+          expect(artifact.config.value.guardrail).toBe(strict ? "strict" : undefined)
+          expect(artifact.config.value.scopeGate).toBeUndefined()
           expect(artifact.config.warnings).toEqual([...warnings])
           expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest())
+          expect(artifact.scope.prompts).toBe(promptsDigest(strict ? { guardrail: "strict" } : {}))
           expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", scopeGate: "introduced" }))
-          expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual([listBug.title])
-          expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+          expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual(
+            strict ? [] : [listBug.title],
+          )
+          expect(artifact.outcome?.strict !== undefined).toBe(strict)
         }
       }),
     GIT,
@@ -1305,20 +1344,19 @@ describe("ReviewEval.replay", () => {
   )
 
   // VS-44a: the same for `verifyEvidence`. A base review.json that sets it, with or without strict, is replayed and
-  // recorded without it (and without the guardrail), keeping the parser's warnings. The verify pass is asked with the
+  // recorded without the pending certificate check. The verify pass is asked with the
   // legacy verify schema and its answer read by the legacy decoder, so a certificate sent anyway changes nothing, and the
   // scope claims neither the policy nor the certificate schema.
   it.instance(
     "replays a base review.json that sets VS-44's verifyEvidence without it, verifying as before",
     () =>
       Effect.gen(function* () {
-        const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
         const UNAPPLIED =
           '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
         const IGNORED =
           '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
         for (const [settings, warnings] of [
-          [{ guardrail: "strict", verifyEvidence: "certificate" }, [STRICT, UNAPPLIED]],
+          [{ guardrail: "strict", verifyEvidence: "certificate" }, [UNAPPLIED]],
           [{ verifyEvidence: "certificate" }, [IGNORED]],
         ] as const) {
           const { directory, llm, base, head } = yield* checkout({
@@ -1351,11 +1389,12 @@ describe("ReviewEval.replay", () => {
             posting: ReviewEval.recordingPosting(),
             check: recordingCheck().check,
           })
-          for (const key of ["guardrail", "verifyEvidence"])
-            expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          const strict = "guardrail" in settings
+          expect(artifact.config.value.guardrail).toBe(strict ? "strict" : undefined)
+          expect(artifact.config.value.verifyEvidence).toBeUndefined()
           expect(artifact.config.warnings).toEqual([...warnings])
           expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest())
+          expect(artifact.scope.prompts).toBe(promptsDigest(strict ? { guardrail: "strict" } : {}))
           expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" }))
           // The verify request carries the legacy verify schema, with no certificate field and no unsure verdict. The
           // fake provider is shared across the loop, so this case's request is the last one.
@@ -1364,8 +1403,10 @@ describe("ReviewEval.replay", () => {
           for (const field of ['"trace"', '"guards"', '"noGuards"', '"reach"', '"unsure"'])
             expect(body).not.toContain(field)
           const placed = artifact.outcome?.selection.inline ?? []
-          expect(placed.map((finding) => [finding.title, finding.verified])).toEqual([[listBug.title, true]])
-          expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+          expect(placed.map((finding) => [finding.title, finding.verified])).toEqual(
+            strict ? [] : [[listBug.title, true]],
+          )
+          expect(artifact.outcome?.strict !== undefined).toBe(strict)
         }
       }),
     GIT,
@@ -1733,16 +1774,16 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { maxInputTokens: 5, impact: "grep" } })).toContain(
           "config sets impact, a pipeline variant's setting",
         )
-        // Nor VS-27's guardrail, which VS-27c applies.
+        // Strict selection belongs to a named replay or the committed base.
         expect(yield* refused({ config: { guardrail: "strict" } })).toContain(
-          "config sets guardrail, which no runner applies yet (VS-27c), so the artifact would record a setting the run did not have.",
+          "config sets guardrail, a pipeline variant's setting",
         )
         // Nor VS-42's scopeGate, which VS-42 wiring applies, alone or with the guardrail.
         expect(yield* refused({ config: { scopeGate: "introduced" } })).toContain(
           "config sets scopeGate, which no runner applies yet (VS-42 wiring), so the artifact would record a setting the run did not have.",
         )
         expect(yield* refused({ config: { guardrail: "strict", scopeGate: "off" } })).toContain(
-          "config sets guardrail, scopeGate, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate)",
+          "config sets guardrail, a pipeline variant's setting",
         )
         // Nor VS-44's verifyEvidence, which VS-44 wiring applies, alone or beside the guardrail and VS-42's key.
         expect(yield* refused({ config: { verifyEvidence: "certificate" } })).toContain(
@@ -1750,9 +1791,7 @@ describe("ReviewEval.replay", () => {
         )
         expect(
           yield* refused({ config: { guardrail: "strict", scopeGate: "introduced", verifyEvidence: "off" } }),
-        ).toContain(
-          "config sets guardrail, scopeGate, verifyEvidence, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate; VS-44 wiring for verifyEvidence)",
-        )
+        ).toContain("config sets guardrail, a pipeline variant's setting")
         // Nor VS-28's depth and lenses, which VS-28 wiring applies, alone or together.
         expect(yield* refused({ config: { depth: "auto" } })).toContain(
           "config sets depth, which no runner applies yet (VS-28 wiring), so the artifact would record a setting the run did not have.",
@@ -1761,7 +1800,7 @@ describe("ReviewEval.replay", () => {
           "config sets depth, lenses, which no runner applies yet (VS-28 wiring)",
         )
         expect(yield* refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
-          "config sets guardrail, lenses, which no runner applies yet (VS-27c for guardrail; VS-28 wiring for lenses)",
+          "config sets guardrail, a pipeline variant's setting",
         )
         // Nor VS-30's runtime (VS-30c), which is trusted-only and which the VS-30 executor applies: it gets the message
         // that names what applies it, not the route-setting one, and a route setting beside it keeps its own message.
@@ -1799,6 +1838,13 @@ describe("ReviewEval.replay", () => {
           { name: "engine:impact-graph", keys: { verifyPolicy: "shared" as const } },
         ])
           expect(yield* refused({ variant })).toContain('engine:impact-graph variant sets only impact: "graph"')
+        for (const variant of [
+          { name: "engine:guardrail-strict", keys: { guardrail: "off" as const } },
+          { name: "engine:shared-verify", keys: { guardrail: "strict" as const } },
+          { name: "engine:guardrail-strict", keys: { verifyPolicy: "shared" as const } },
+          { name: "engine:guardrail-strict", keys: { guardrail: "strict" as const, verifyPolicy: "shared" as const } },
+        ])
+          expect(yield* refused({ variant })).toContain('engine:guardrail-strict variant sets only guardrail: "strict"')
         // A variant raises privacy and never lowers it (VS-23c): its keys go over the base's raise-only privacy.
         expect(yield* refused({ variant: { name: "engine:privacy-zdr", keys: { privacy: "standard" } } })).toContain(
           'engine:privacy-zdr sets privacy "standard": a variant may raise privacy to "zdr", never lower it.',

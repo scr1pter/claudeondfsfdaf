@@ -7,6 +7,7 @@ import {
   budgetDiff,
   buildAnchorIndex,
   endLineOf,
+  explicitPatchPaths,
   focusHunks,
   focusOfFiles,
   fromGitHubFiles,
@@ -837,5 +838,51 @@ describe("onChangedLine and endLineOf (S3)", () => {
   test("endLineOf reads only a whole number after the first line", () => {
     expect(endLineOf({ line: 3, endLine: 5 })).toBe(5)
     for (const endLine of [undefined, 3, 2, 4.5, Number.NaN]) expect(endLineOf({ line: 3, endLine })).toBeUndefined()
+  })
+})
+
+describe("explicit targets in proposed fixes", () => {
+  test("keeps every named side, including quoted paths, copies and headers superseded by a rename", () => {
+    expect(
+      explicitPatchPaths(
+        [
+          'diff --git "a/private/caf\\303\\251.txt" b/public/new.txt',
+          "rename from private/from.txt",
+          "rename to public/to.txt",
+          "copy from private/copied.txt",
+          "copy to public/copied.txt",
+          "--- a/private/previous.txt",
+          "+++ b/public/current.txt",
+          "@@ -1 +1 @@",
+          "--- this is removed source, not a file header",
+          "+++ this is added source",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      "private/café.txt",
+      "public/new.txt",
+      "private/from.txt",
+      "public/to.txt",
+      "private/copied.txt",
+      "public/copied.txt",
+      "private/previous.txt",
+      "public/current.txt",
+    ])
+  })
+  test("distinguishes allowed cross-file and bare hunks from malformed explicit headers", () => {
+    expect(explicitPatchPaths("--- a/other.ts\n+++ b/other.ts\n@@ -1 +1 @@\n-before\n+after")).toEqual(["other.ts"])
+    expect(explicitPatchPaths("@@ -1 +1 @@\n-before\n+after")).toEqual([])
+    expect(explicitPatchPaths("--- /dev/null\r\n+++ b/created.ts\t2026-11-02")).toEqual(["created.ts"])
+    expect(explicitPatchPaths("@@ -1 +1 @@\n-old\n+new\n--- a/old.ts\n+++ b/new.ts")).toEqual(["old.ts", "new.ts"])
+    for (const patch of [
+      "+++ orphan.ts",
+      'diff --git "a/file.ts" "b/unterminated.ts',
+      "GIT binary patch",
+      '--- "a/unknown\n+++ b/known',
+      "--- a/unknown\n@@ -1 +1 @@",
+      "diff --git only-one-path",
+      "*** Update File: any.ts",
+    ])
+      expect(explicitPatchPaths(patch)).toBeUndefined()
   })
 })

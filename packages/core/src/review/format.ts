@@ -30,11 +30,27 @@ import type {
   Selection,
   Severity,
   SkippedFile,
+  StrictDrop,
   StrictResult,
+  StrictSummary,
   Trust,
 } from "./types"
 
 export const MAX_BODY_CHARS = 60_000
+const STRICT_DROP_LABELS: Record<StrictDrop, string> = {
+  "pre-existing": "pre-existing",
+  "not-blocking": "non-blocking",
+  unverified: "unverified",
+  "verdict-unreadable": "without a readable verdict",
+  "severity-unreadable": "without a readable severity",
+  "out-of-scope": "outside the five failure classes",
+  anchor: "without a changed-line anchor",
+  "quote-mismatch": "without matching evidence",
+  "no-impact": "without a demonstrated impact",
+  "no-fix": "without a fix",
+  duplicate: "duplicates",
+  cap: "over the comment limit",
+}
 const MAX_FINDING_BODY = 20_000
 const MAX_SUMMARY_TEXT = 1_500
 const MAX_EXCERPT = 300
@@ -784,18 +800,30 @@ function render(input: SummaryInput, limits: Limits): string {
     if (input.form !== "desktop") lines.push(SUMMARY_MARKER)
     return lines.join("\n")
   }
-  const heading = selection?.diffIncomplete
-    ? "## Vectorscope review · Partial review"
-    : selection
-      ? `## Vectorscope review · Risk: ${capital(selection.risk)}`
-      : "## Vectorscope review"
+  const strict = input.strict
+    ? { complete: input.strict.complete, findingCount: input.strict.findings.length, dropped: input.strict.dropped }
+    : selection?.strict
+  const heading =
+    selection?.diffIncomplete || strict?.complete === false
+      ? "## Vectorscope review · Partial review"
+      : selection
+        ? `## Vectorscope review · Risk: ${capital(selection.risk)}`
+        : "## Vectorscope review"
   const lines = [heading, ""]
   if (input.banners?.length) lines.push(quote(input.banners), "")
   const summary = input.report?.summary.trim()
-  if (summary && !selection?.diffIncomplete)
+  if (summary && !selection?.diffIncomplete && !strict)
     lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
   if (selection) {
-    lines.push(countLine(selection, input.strict), "")
+    lines.push(countLine(selection, strict), "")
+    if (strict?.dropped.length) {
+      const omitted = strict.dropped.reduce((sum, entry) => sum + entry.count, 0)
+      const reasons = strict.dropped.map(({ count, reason }) => `${formatCount(count)} ${STRICT_DROP_LABELS[reason]}`)
+      lines.push(
+        `Strict review omitted ${formatCount(omitted)} ${omitted === 1 ? "finding" : "findings"} (${joinWords(reasons)}).`,
+        "",
+      )
+    }
     const since = sinceLine(input, selection)
     if (since) lines.push(since, "")
   }
@@ -820,7 +848,7 @@ function render(input: SummaryInput, limits: Limits): string {
   return lines.join("\n")
 }
 
-function countLine(selection: Selection, strict?: SummaryInput["strict"]): string {
+function countLine(selection: Selection, strict?: StrictSummary): string {
   const onLines = [
     ...selection.inline,
     ...selection.overflow,
@@ -844,9 +872,9 @@ function countLine(selection: Selection, strict?: SummaryInput["strict"]): strin
 // is all that emptied it, and "Review incomplete" otherwise, never a clean result. It reads the strict result alone, so
 // a selection the runner has not composed with it yet cannot make an empty strict result read otherwise. A non-empty
 // one is counted as the selection counts it, or, when the selection has nothing on lines, as its blocking findings.
-function strictCountLine(strict: NonNullable<SummaryInput["strict"]>, parts: string[], below: string): string {
-  if (strict.findings.length)
-    return `**${parts.length ? parts.join(" · ") : `${strict.findings.length} blocking`}** on the changed lines${below}`
+function strictCountLine(strict: StrictSummary, parts: string[], below: string): string {
+  if (strict.findingCount)
+    return `**${parts.length ? parts.join(" · ") : `${strict.findingCount} blocking`}** on the changed lines${below}`
   if (!strict.complete)
     return `**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read${below || "."}`
   const capped = strict.dropped.find((entry) => entry.reason === "cap")?.count ?? 0
@@ -997,7 +1025,7 @@ function section(title: string, total: number, items: string[]): string[] {
   return [`<details><summary>${title} (${total})</summary>`, "", ...items, ...more, "</details>", ""]
 }
 
-function findingItem(finding: Finding, repo: RepoRef | undefined, tail = ""): string {
+export function findingItem(finding: Finding, repo: RepoRef | undefined, tail = ""): string {
   const title = inlineText(finding.title, repo)
   const body = excerpt(finding.body, repo)
   const text = body ? `${sentence(title)} ${body}` : tail ? sentence(title) : title

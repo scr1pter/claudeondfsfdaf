@@ -175,7 +175,7 @@ it.instance(
       const offChecks = Effect.gen(function* () {
         const off = yield* execute()
         const grep = yield* execute({ config: { ...input.config, impact: "grep" } })
-        const staged = yield* execute({ config: { ...input.config, impact: "graph" }, impactWorktree: true })
+        const staged = yield* execute({ config: { ...input.config, impact: "graph" }, uncommittedDiff: true })
         expect(off.parity.rules[0]?.length).toBeGreaterThan(0)
         expect(grep.parity).toEqual(off.parity)
         expect(staged.text).toBe(off.text)
@@ -186,7 +186,7 @@ it.instance(
         expect(staged.outcome.notes).toContain("Impact context is unavailable for staged or uncommitted changes.")
         const capped = yield* execute({
           config: { ...input.config, impact: "graph", maxDiffChars: 1 },
-          impactWorktree: true,
+          uncommittedDiff: true,
         })
         expect(capped.impact).toEqual([])
         expect(capped.outcome.unreviewed).toEqual(input.files.map((file) => file.path))

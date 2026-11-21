@@ -683,7 +683,9 @@ export function executeLocalReview<RunR, ModelR>(
       ...(options.context?.identity ? { identity: options.context.identity } : {}),
       trigger: "local",
       trust,
-      ...(config.impact === "graph" && range.worktree ? { impactWorktree: true as const } : {}),
+      ...((config.impact === "graph" || config.guardrail === "strict") && range.worktree
+        ? { uncommittedDiff: true as const }
+        : {}),
       ...(config.trivial === "skip" && forceFull ? { forceFull: true } : {}),
       ...(trivialProof ? { trivialProof } : {}),
       base: range.mergeBase,

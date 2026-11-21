@@ -74,7 +74,7 @@ export interface VerdictOutcome {
   }[]
   selection: Record<VerdictList, readonly { severity: Severity }[]>
   trivial?: true
-  strict?: { complete: boolean }
+  strict?: { complete: boolean; incomplete?: readonly string[] }
   held?: readonly (Pick<HeldFile, "status"> & { path?: string })[]
 }
 
@@ -157,8 +157,17 @@ export function reviewVerdict(input: VerdictInput): VerdictResult {
   // unfinished, or a pass that ran, means the marker does not describe the outcome, and the verdict reads the outcome
   // instead. What it lists (an earlier finding still open) is read as on any other outcome, so a trivial commit never
   // passes a still-open blocking finding that failOn "blocking" fails on.
+  // The strict result also records the missing reviewer on a proved skip. A missing or different
+  // explanation remains an incomplete review, even when the adapter supplied a trivial marker.
+  const skippedStrict =
+    outcome.strict?.complete === false &&
+    Array.isArray(outcome.strict.incomplete) &&
+    outcome.strict.incomplete.length === 1 &&
+    outcome.strict.incomplete[0] === "no-reviewer"
   const trivial =
-    outcome.trivial === true && !outcome.specialists.length && unfinished.every((cause) => cause === "no-reviewer")
+    outcome.trivial === true &&
+    !outcome.specialists.length &&
+    unfinished.every((cause) => cause === "no-reviewer" || (cause === "strict-incomplete" && skippedStrict))
   if (trivial && !listed.length) return { verdict: "policy-skip", causes: ["trivial"], notes }
   if (unfinished.length && !trivial) return { verdict: "incomplete", causes: unfinished, notes }
   // A severity this module does not name reads as blocking.

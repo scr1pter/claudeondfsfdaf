@@ -246,10 +246,6 @@ const UNAPPLIED: Record<
     applies: (config) => (config.maxInputTokens ?? 0) > 0,
     warning: '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
   },
-  guardrail: {
-    applies: (config) => config.guardrail === "strict",
-    warning: '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
-  },
   // Only under "strict": without it the key is ignored (settle's note), so it is never also "not applied".
   scopeGate: {
     applies: (config) => config.scopeGate === "introduced" && config.guardrail === "strict",
@@ -527,10 +523,22 @@ function settle(
   }
   if (!github && trigger === "desktop" && config.impact === "graph")
     warnings.push('Desktop reviews use grep for related code. The engine review supports "impact": "graph".')
+  if (!github && trigger === "desktop" && config.guardrail === "strict")
+    warnings.push('Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".')
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),
   )
   return config
+}
+
+const STRICT_SETTINGS = { verifyPolicy: "shared", verify: "all", minSeverity: "blocking", nits: false } as const
+type StrictSettings = Pick<ReviewConfig, "guardrail" | keyof typeof STRICT_SETTINGS>
+
+/** The engine applies these settings together, including when a caller supplied the configuration directly. */
+export function strictReviewConfig<T extends StrictSettings>(
+  config: T,
+): Omit<T, keyof typeof STRICT_SETTINGS> & StrictSettings {
+  return config.guardrail === "strict" ? { ...config, ...STRICT_SETTINGS } : config
 }
 
 export interface ReviewRules {

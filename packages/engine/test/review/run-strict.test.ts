@@ -1,0 +1,558 @@
+import { $ } from "bun"
+import { expect } from "bun:test"
+import path from "node:path"
+import { Effect } from "effect"
+import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { FSUtil } from "@vectordevai/core/fs-util"
+import { ModelV2 } from "@vectordevai/core/model"
+import { ProviderV2 } from "@vectordevai/core/provider"
+import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
+import { buildInlineBody, buildSummaryBody } from "@vectordevai/core/review/format"
+import { strictResultJsonSchema } from "@vectordevai/core/review/schema"
+import {
+  DEFAULT_REVIEW_CONFIG,
+  FAILURE_CLASSES,
+  type ModelFinding,
+  type ModelReport,
+  type ReviewOutcome,
+} from "@vectordevai/core/review/types"
+import { reviewVerdict } from "@vectordevai/core/review/verdict"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Git } from "@/git"
+import { Permission } from "@/permission"
+import { Provider } from "@/provider/provider"
+import { Review } from "@/review/run"
+import { ReviewSource } from "@/review/source"
+import { ReviewTrivial } from "@/review/trivial"
+import { SessionPrompt } from "@/session/prompt"
+import { SessionID } from "@/session/schema"
+import { Session } from "@/session/session"
+import { TestInstance, trustWorkspace } from "../fixture/fixture"
+import { firstUserText, projectionVerdicts } from "../fixture/projection"
+import { testEffect } from "../lib/effect"
+import { TestLLMServer, httpError, reply } from "../lib/llm-server"
+import { testProviderConfig } from "../lib/test-provider"
+import { violations } from "../../../core/test/review/fixtures/json-schema"
+
+const it = testEffect(
+  LayerNode.compile(
+    LayerNode.group([
+      SessionPrompt.node,
+      Session.node,
+      SpendGuard.node,
+      Permission.node,
+      Provider.node,
+      EventV2Bridge.node,
+      Git.node,
+      FSUtil.node,
+      CrossSpawnSpawner.node,
+      LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.loopback, deps: [] }),
+    ]),
+  ),
+)
+
+const file = "src/last.ts"
+const original = "  return values[values.length - 1]"
+const changed = "  return values[values.length].toUpperCase()"
+const dirty = '  return "working tree only"'
+const source = (line: string) => `export function last(values: string[]) {\n${line}\n}\n`
+const finding: ModelFinding = {
+  path: file,
+  line: 2,
+  side: "RIGHT",
+  severity: "blocking",
+  category: "bug",
+  title: "Reading past the array throws",
+  body: "A nonempty array has no item at its length. Fix: read the prior element instead.",
+  confidence: 0.98,
+  suggestion: original,
+  failure: {
+    class: "crash",
+    mechanism: "logic",
+    trigger: "Call last with a nonempty array.",
+    impact: "The call throws before returning a string.",
+  },
+  quotes: [
+    { path: file, line: 2, side: "RIGHT", code: changed },
+    { path: file, line: 2, side: "LEFT", code: original },
+  ],
+}
+
+const git = (cwd: string, ...args: string[]) =>
+  Effect.promise(() => $`git ${args}`.cwd(cwd).quiet().text()).pipe(Effect.map((out) => out.trimEnd()))
+const strict = { guardrail: "strict" } as const
+const config = { ...DEFAULT_REVIEW_CONFIG, security: "off", verify: "off", minSeverity: "nit", nits: true } as const
+
+const checkout = Effect.gen(function* () {
+  const { directory } = yield* TestInstance
+  const fs = yield* FSUtil.Service
+  const llm = yield* TestLLMServer
+  yield* fs.writeWithDirs(path.join(directory, "vector.json"), JSON.stringify(testProviderConfig(llm.url)))
+  yield* Effect.promise(() => trustWorkspace(directory))
+  const write = (text: string) => fs.writeWithDirs(path.join(directory, file), source(text))
+  yield* write(original)
+  yield* git(directory, "add", file)
+  yield* git(directory, "commit", "-qm", "base")
+  const base = yield* git(directory, "rev-parse", "HEAD")
+  yield* write(changed)
+  yield* git(directory, "add", file)
+  yield* git(directory, "commit", "-qm", "change last")
+  const head = yield* git(directory, "rev-parse", "HEAD")
+  const files = parseUnifiedDiff(yield* git(directory, "diff", "--no-color", "--no-ext-diff", base, head))
+  yield* git(directory, "checkout", "--detach", base)
+  yield* write(dirty)
+  const input: Review.RunInput = {
+    directory,
+    trigger: "command",
+    trust: "untrusted",
+    base,
+    head,
+    mode: "full",
+    files,
+    anchors: files,
+    skipped: [],
+    context: {},
+    prior: [],
+    rules: "",
+    config,
+    model: {
+      providerID: ProviderV2.ID.make("lmstudio"),
+      modelID: ModelV2.ID.make("test-model"),
+      context: 100_000,
+      costKind: "local",
+    },
+    knownPath: async (candidate) => candidate === file,
+  }
+  const run = (
+    findings: ModelFinding[],
+    overrides: Partial<Review.RunInput> = {},
+    verdicts: ((prompt: string) => unknown[]) | "unavailable" = projectionVerdicts,
+    priorStatus?: ModelReport["priorStatus"],
+  ) =>
+    Effect.gen(function* () {
+      yield* llm.reset
+      yield* llm.respond((hit) => {
+        const prompt = firstUserText(hit.body)
+        if (prompt.includes("You are checking candidate findings")) {
+          if (verdicts === "unavailable") return httpError(400, { error: { message: "Checker unavailable" } })
+          return reply().tool("StructuredOutput", { results: verdicts(prompt) })
+        }
+        if (prompt.includes("You are Vector's code reviewer"))
+          return reply().tool("StructuredOutput", {
+            summary: "Reviews the indexing change.",
+            risk: "high",
+            files: [],
+            findings,
+            ...(priorStatus ? { priorStatus } : {}),
+          })
+      })
+      const outcome = yield* Review.run({ ...input, ...overrides })
+      const hits = (yield* llm.hits).filter((hit) => !hit.text.includes("Generate a title for this conversation"))
+      const { durationMs, sessions: ids, ...stable } = outcome
+      expect(durationMs).toBeGreaterThanOrEqual(0)
+      const sessions = yield* Session.Service
+      const permissions = yield* Effect.forEach(ids, (id) =>
+        sessions.get(SessionID.make(id)).pipe(Effect.map((session) => session.permission)),
+      )
+      const summary = buildSummaryBody({
+        head: outcome.head,
+        baseRef: "main",
+        mode: outcome.mode,
+        report: outcome.report,
+        selection: outcome.selection,
+        strict: outcome.strict,
+        trivial: outcome.trivial,
+        skipped: outcome.skipped,
+        notes: outcome.notes,
+      })
+      return { outcome, hits, summary, parity: { bodies: hits.map((hit) => hit.text), permissions, stable, summary } }
+    })
+  return { input, run }
+})
+
+const listed = (outcome: ReviewOutcome) =>
+  [
+    ...outcome.selection.inline,
+    ...outcome.selection.outsideDiff,
+    ...outcome.selection.elsewhere,
+    ...outcome.selection.nits,
+    ...outcome.selection.overflow,
+  ].map((item) => item.title)
+
+function checked(outcome: ReviewOutcome) {
+  const encoded = JSON.parse(JSON.stringify(outcome)).strict
+  const schema = strictResultJsonSchema(strict)!
+  expect(violations(schema, encoded)).toEqual([])
+  expect(violations(schema, { ...encoded, version: 2 })).toHaveLength(1)
+  expect(violations(schema, { ...encoded, version: "1" })).toHaveLength(1)
+  expect(encoded).toEqual(outcome.strict)
+  return outcome.strict!
+}
+
+const native = process.platform === "linux" ? it.instance : it.instance.skip
+
+native(
+  "strict sends its schema and verify-all policy, then posts only findings supported by immutable head and base quotes",
+  () =>
+    Effect.gen(function* () {
+      const { input, run } = yield* checkout
+      const forged: ModelFinding = {
+        ...finding,
+        title: "Only the dirty worktree has this claim",
+        quotes: [{ path: file, line: 2, side: "RIGHT", code: dirty }],
+      }
+      const concern: ModelFinding = { ...finding, severity: "concern", title: "A concern cannot become blocking" }
+      const nit: ModelFinding = { ...finding, severity: "nit", title: "Suggestion-only nit" }
+      const candidates = [finding, forged, concern, nit]
+      const result = yield* run(candidates, { config: { ...config, ...strict } })
+      expect(result.outcome.specialists.map((item) => [item.name, item.status])).toEqual([
+        ["review", "ok"],
+        ["verify", "ok"],
+      ])
+      expect(result.hits).toHaveLength(2)
+      const review = result.hits[0]!
+      for (const value of FAILURE_CLASSES) expect(firstUserText(review.body)).toContain(value)
+      const schema = (review.body.tools as { function?: { name?: string; parameters?: unknown } }[]).find(
+        (tool) => tool.function?.name === "StructuredOutput",
+      )?.function?.parameters
+      expect(schema).toMatchObject({
+        properties: {
+          findings: {
+            items: {
+              properties: {
+                failure: { properties: { class: { enum: [...FAILURE_CLASSES] } } },
+                quotes: { items: { properties: { side: { enum: ["RIGHT", "LEFT"] } } } },
+                patch: { type: "string" },
+              },
+            },
+          },
+        },
+      })
+      const requested = projectionVerdicts(firstUserText(result.hits[1]!.body)).map((item) => item.id)
+      expect(requested.toSorted()).toEqual(
+        Review.normalizeFindings(candidates, "review", input.anchors)
+          .map((item) => item.id)
+          .toSorted(),
+      )
+      const decision = checked(result.outcome)
+      expect(decision).toMatchObject({
+        version: 1,
+        head: input.head,
+        complete: true,
+        findings: [
+          { title: finding.title, quotes: finding.quotes, verifiedBy: "model", verifier: "lmstudio/test-model" },
+        ],
+      })
+      expect(decision.dropped).toEqual(
+        expect.arrayContaining([
+          { reason: "not-blocking", count: 2 },
+          { reason: "quote-mismatch", count: 1 },
+        ]),
+      )
+      expect(listed(result.outcome)).toEqual([finding.title])
+      for (const title of [forged.title, concern.title, nit.title]) expect(result.summary).not.toContain(title)
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "unanswered or contradictory verify verdicts and an unreadable head fail closed",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* checkout
+      const options = { config: { ...config, ...strict } }
+      for (const verdicts of [
+        () => [],
+        (prompt: string) => projectionVerdicts(prompt).flatMap((yes) => [{ ...yes, verdict: "rejected" }, yes]),
+      ]) {
+        const result = yield* run([finding], options, verdicts)
+        expect(result.hits).toHaveLength(2)
+        expect(checked(result.outcome)).toMatchObject({
+          complete: false,
+          incomplete: expect.arrayContaining(["verdict-unreadable"]),
+          findings: [],
+          dropped: [{ reason: "verdict-unreadable", count: 1 }],
+        })
+        expect(listed(result.outcome)).toEqual([])
+        expect(result.summary).toContain("Review incomplete")
+        expect(result.summary).not.toContain("No verified production-breaking issues")
+        expect(reviewVerdict({ kind: "outcome", outcome: result.outcome }).causes).toContain("strict-incomplete")
+      }
+      const result = yield* run([{ ...finding, quotes: [finding.quotes![0]!] }], { ...options, head: "f".repeat(40) })
+      expect(result.hits).toHaveLength(2)
+      expect(checked(result.outcome)).toMatchObject({
+        complete: false,
+        incomplete: expect.arrayContaining(["blob-unreadable"]),
+        findings: [],
+      })
+      expect(listed(result.outcome)).toEqual([])
+      expect(result.summary).toContain("Review incomplete")
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "a staged diff cannot use matching committed blobs as quote evidence",
+  () =>
+    Effect.gen(function* () {
+      const { run, input } = yield* checkout
+      const fs = yield* FSUtil.Service
+      yield* fs.writeWithDirs(path.join(input.directory, file), source(changed))
+      yield* git(input.directory, "add", file)
+      const staged = parseUnifiedDiff(yield* git(input.directory, "diff", "--cached", "--no-color", "--no-ext-diff"))
+      expect(staged).toEqual(input.files)
+      yield* fs.writeWithDirs(path.join(input.directory, file), source(dirty))
+      const result = yield* run([finding], {
+        config: { ...config, ...strict },
+        uncommittedDiff: true,
+        files: staged,
+        anchors: staged,
+      })
+      expect(result.hits).toHaveLength(2)
+      expect(result.outcome.specialists.at(-1)).toMatchObject({ name: "verify", status: "ok" })
+      expect(checked(result.outcome)).toMatchObject({
+        head: input.head,
+        complete: false,
+        incomplete: expect.arrayContaining(["blob-unreadable"]),
+        findings: [],
+      })
+      expect(listed(result.outcome)).toEqual([])
+      expect(result.summary).toContain("Review incomplete")
+    }),
+  { git: true },
+  90_000,
+)
+
+native(
+  "a proven whitespace-only strict review remains a zero-attempt policy skip",
+  () =>
+    Effect.gen(function* () {
+      const { input, run } = yield* checkout
+      const fs = yield* FSUtil.Service
+      yield* fs.writeWithDirs(path.join(input.directory, file), source(original + "  "))
+      yield* git(input.directory, "add", file)
+      yield* git(input.directory, "commit", "-qm", "whitespace only")
+      const head = yield* git(input.directory, "rev-parse", "HEAD")
+      const files = yield* ReviewSource.prDiff({ directory: input.directory, mergeBase: input.base, head })
+      const settings = { ...config, ...strict, trivial: "skip" } as const
+      const proof = yield* ReviewTrivial.prove({
+        directory: input.directory,
+        base: input.base,
+        head,
+        files,
+        config: settings,
+        instructions: [],
+      })
+      expect(proof).toBeDefined()
+      const events: Review.Observation[] = []
+      const result = yield* run([], {
+        trust: "trusted",
+        trigger: "auto",
+        head,
+        files,
+        anchors: files,
+        config: settings,
+        trivialProof: proof,
+        observe: (event) => events.push(event),
+      })
+      expect(result.outcome).toMatchObject({ trivial: true, sessions: [], specialists: [], unreviewed: [] })
+      expect(checked(result.outcome)).toMatchObject({
+        head,
+        complete: false,
+        findings: [],
+        incomplete: ["no-reviewer"],
+      })
+      expect(result.hits).toEqual([])
+      expect(events.filter((event) => event.type === "attempt")).toEqual([])
+      expect(result.summary).toContain("Not reviewed")
+      expect(result.summary).not.toContain("No verified production-breaking issues")
+    }),
+  { git: true },
+  90_000,
+)
+
+native(
+  "an applying patch must leave the committed file parseable before the review labels it checked",
+  () =>
+    Effect.gen(function* () {
+      const { run, input } = yield* checkout
+      for (const [replacement, kind, label] of [
+        [original, "patch", "Checked patch"],
+        ["  return (]", "unchecked", "Unchecked fix"],
+      ] as const) {
+        const patch = [`--- a/${file}`, `+++ b/${file}`, "@@ -2 +2 @@", "-" + changed, "+" + replacement].join("\n")
+        const result = yield* run([{ ...finding, suggestion: undefined, patch }], { config: { ...config, ...strict } })
+        expect(result.hits).toHaveLength(2)
+        const decision = checked(result.outcome)
+        expect(decision).toMatchObject({
+          complete: true,
+          findings: [{ fix: { kind, text: patch } }],
+          fixUnchecked: kind === "unchecked" ? 1 : 0,
+        })
+        expect(result.outcome.selection.inline).toHaveLength(1)
+        const body = buildInlineBody(result.outcome.selection.inline[0]!, { head: input.head, trust: input.trust })
+        expect(body).toContain(label)
+        expect(body).toContain(patch)
+        expect(body).not.toContain("```suggestion")
+      }
+    }),
+  { git: true },
+  90_000,
+)
+
+native(
+  "a shared fingerprint cannot transfer a verdict to a candidate the verifier never saw",
+  () =>
+    Effect.gen(function* () {
+      const { run, input } = yield* checkout
+      const unseen = { ...finding, body: "UNSEEN_CLAIM" }
+      const sent = {
+        ...finding,
+        body: "CHECKED_CLAIM",
+        quotes: [{ path: file, line: 2, side: "RIGHT" as const, code: dirty }],
+      }
+      const ids = Review.normalizeFindings([unseen, sent], "review", input.anchors).map((candidate) => candidate.id)
+      expect(ids[0]).toBe(ids[1])
+      const result = yield* run([unseen, sent], { config: { ...config, ...strict } })
+      expect(result.hits).toHaveLength(2)
+      const prompt = firstUserText(result.hits[1]!.body)
+      expect(projectionVerdicts(prompt).map((entry) => entry.id)).toEqual([ids[0]!])
+      expect(prompt).toContain(sent.body)
+      expect(prompt).not.toContain(unseen.body)
+      expect(checked(result.outcome)).toMatchObject({
+        complete: true,
+        findings: [],
+        dropped: [
+          { reason: "unverified", count: 1 },
+          { reason: "quote-mismatch", count: 1 },
+        ],
+      })
+      expect(listed(result.outcome)).toEqual([])
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "read-denied priors stay open and a forbidden patch cannot reach a checker, candidate record or review output",
+  () =>
+    Effect.gen(function* () {
+      const { input, run } = yield* checkout
+      const prior = {
+        id: "prior_opaque_fixture",
+        where: "inline",
+        path: "private/archived.ts",
+        line: 2,
+        side: "RIGHT",
+        severity: "blocking",
+        category: "bug",
+        title: "WITHHELD_PRIOR_TITLE",
+        sha: input.base,
+        status: "open",
+      } as const
+      const events: Review.Observation[] = []
+      const blocked = {
+        ...finding,
+        title: "Withheld change to a private file",
+        suggestion: undefined,
+        patch: [
+          "--- a/private/denied.ts",
+          "+++ b/private/denied.ts",
+          "@@ -1 +1 @@",
+          "-PRIVATE_PATCH_SOURCE",
+          "+PRIVATE_PATCH_REPAIR",
+        ].join("\n"),
+      }
+      const result = yield* run(
+        [
+          { ...finding, evidence: [file + ":2"] },
+          blocked,
+          { ...finding, title: "Forbidden evidence-only claim", evidence: ["private/denied.ts:4-8"] },
+        ],
+        {
+          config: { ...config, ...strict },
+          prior: [prior],
+          readDenies: [prior.path, "private/denied.ts"],
+          observe: (event) => events.push(event),
+        },
+        projectionVerdicts,
+        [{ id: prior.id, status: "fixed", reason: "Claimed fixed without seeing it." }],
+      )
+      expect(result.hits).toHaveLength(2)
+      for (const hit of result.hits) {
+        expect(hit.text).not.toContain(prior.path)
+        expect(hit.text).not.toContain(prior.title)
+        expect(hit.text).not.toContain("Forbidden evidence-only claim")
+        expect(hit.text).not.toContain("private/denied.ts")
+        for (const text of [blocked.title, "PRIVATE_PATCH_SOURCE", "PRIVATE_PATCH_REPAIR"])
+          expect(hit.text).not.toContain(text)
+      }
+      const observations = events.filter((event) => event.type === "strict-candidates")
+      expect(observations).toHaveLength(1)
+      expect(observations[0]!.findings.map((entry) => entry.title)).toEqual([finding.title])
+      for (const text of ["PRIVATE_PATCH_SOURCE", "PRIVATE_PATCH_REPAIR"])
+        expect(JSON.stringify([result.outcome, observations])).not.toContain(text)
+      if (process.platform === "linux") expect(listed(result.outcome)).toEqual([finding.title])
+      expect(result.outcome.report.priorStatus ?? []).not.toContainEqual(
+        expect.objectContaining({ id: prior.id, status: "fixed" }),
+      )
+      expect(result.outcome.selection.stillOpen).toContainEqual(prior)
+      expect(result.outcome.selection.fixed).toEqual([])
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "a failed verifier or skipped source file leaves the strict review incomplete",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* checkout
+      const options = { config: { ...config, ...strict } }
+      const failed = yield* run([finding], options, "unavailable")
+      expect(failed.outcome.specialists.find((item) => item.name === "verify")?.status).toBe("failed")
+      expect(checked(failed.outcome)).toMatchObject({
+        complete: false,
+        incomplete: expect.arrayContaining(["specialist", "verdict-unreadable"]),
+        findings: [],
+      })
+      expect(listed(failed.outcome)).toEqual([])
+      expect(failed.summary).toContain("Review incomplete")
+      const partial = yield* run([], { ...options, skipped: [{ path: "src/larger.ts", reason: "size-limit" }] })
+      expect(partial.hits).toHaveLength(1)
+      expect(checked(partial.outcome)).toMatchObject({
+        complete: false,
+        incomplete: expect.arrayContaining(["size-limit"]),
+        findings: [],
+      })
+      expect(partial.summary).toContain("Review incomplete")
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "unset and explicit off preserve complete wire requests, permissions, outcome, and summary",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* checkout
+      const unset = yield* run([finding])
+      const off = yield* run([finding], { config: { ...config, guardrail: "off" } })
+      expect(unset.hits).toHaveLength(1)
+      expect(unset.outcome.strict).toBeUndefined()
+      expect(unset.parity.permissions[0]?.length).toBeGreaterThan(0)
+      expect(listed(unset.outcome)).toEqual([finding.title])
+      expect(off.parity).toEqual(unset.parity)
+      expect(unset.summary).not.toContain("No verified production-breaking issues")
+      expect(unset.hits[0]!.text).not.toContain("Required on every blocking finding")
+      const empty = yield* run([], { config: { ...config, ...strict } })
+      expect(checked(empty.outcome)).toMatchObject({ complete: true, findings: [], dropped: [] })
+      expect(empty.summary).toContain("No verified production-breaking issues")
+    }),
+  { git: true },
+  90_000,
+)

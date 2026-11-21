@@ -516,6 +516,33 @@ describe("the count line under the strict guardrail", () => {
     expect(buildSummaryBody(base)).toContain("**No issues found** on the changed lines.")
   })
 
+  test("the strict summary accounts for every omitted candidate and keeps their reasons distinct", () => {
+    const dropped = [
+      { reason: "pre-existing" as const, count: 2 },
+      { reason: "not-blocking" as const, count: 5 },
+      { reason: "quote-mismatch" as const, count: 3 },
+    ]
+    const selectionOnly = { ...base, selection: selection({ strict: { complete: true, findingCount: 0, dropped } }) }
+    const withoutRawReport = buildSummaryBody(selectionOnly)
+    expect(strict({ ...empty, dropped })).toBe(withoutRawReport)
+    expect(withoutRawReport).toContain(
+      "Strict review omitted 10 findings (2 pre-existing, 5 non-blocking and 3 without matching evidence).",
+    )
+    expect(withoutRawReport).toContain("No verified production-breaking issues")
+    const incomplete = buildSummaryBody({
+      ...base,
+      report: { summary: "No issues found", files: [] },
+      selection: selection({ strict: { complete: false, findingCount: 0, dropped: [] } }),
+    })
+    expect(incomplete).toContain("**Review incomplete**")
+    expect(incomplete).not.toMatch(/No issues found|Risk: Low/)
+    expect(strict({ ...empty, dropped: [{ reason: "cap", count: 1 }] })).toContain(
+      "omitted 1 finding (1 over the comment limit)",
+    )
+    expect(strict(empty)).not.toContain("Strict review omitted")
+    expect(buildSummaryBody(base)).not.toContain("Strict review omitted")
+  })
+
   test("an empty, complete result is no verified production-breaking issue, never 'No issues found'", () => {
     const body = strict(empty)
     expect(body).toContain("**No verified production-breaking issues** on the changed lines.")

@@ -12,6 +12,7 @@
 
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { Billing } from "@vectordevai/schema/billing"
 import { Cause, Duration, Effect, Exit, Option, Scope } from "effect"
 import type { EventV2 } from "@vectordevai/core/event"
@@ -21,10 +22,13 @@ import {
   anchorText,
   budgetDiff,
   buildAnchorIndex,
+  explicitPatchPaths,
   lookupFile,
   resolveAnchor,
   type DiffFile,
 } from "@vectordevai/core/review/diff"
+import { strictSelect } from "@vectordevai/core/review/guardrail"
+import { strictReviewConfig } from "@vectordevai/core/review/config"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
 import { heldReason, holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
 import { IMPACT_LIMITS, impactRecord, orderImpactFiles, type ImpactRecord } from "@vectordevai/core/review/impact"
@@ -53,7 +57,7 @@ import {
   type ModelSubject,
 } from "@vectordevai/core/review/model-evidence"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
-import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
+import { evidencePath, packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
 import {
   combineCostKinds,
   diffBudgetChars,
@@ -81,6 +85,8 @@ import {
 import {
   decodeReport,
   decodeVerify,
+  ESCAPING_PATH,
+  strictReportJsonSchema,
   REVIEW_REPORT_JSON_SCHEMA,
   VERIFY_JSON_SCHEMA,
 } from "@vectordevai/core/review/schema"
@@ -120,6 +126,7 @@ import type { ResolvedModel } from "./model"
 import { ReviewRoutes } from "./route"
 import { ReviewTrivial } from "./trivial"
 import { ReviewImpact } from "./impact"
+import { checkStrict, decodeStrictVerify, containsHeldValue } from "./strict"
 
 export interface RunInput {
   parentID?: SessionID
@@ -134,7 +141,9 @@ export interface RunInput {
   forceFull?: boolean
   /** Issued for the exact committed diff by the private local or replay collector. */
   trivialProof?: ReviewTrivial.Proof
-  /** A staged or working-tree diff has no committed head from which to collect impact context. */
+  /** Staged or working-tree changes have no committed head for graph context or strict evidence. */
+  uncommittedDiff?: true
+  /** Compatibility with the original graph-only flag. */
   impactWorktree?: true
   files: DiffFile[] // the PR diff for the model, classified and filtered
   anchors: DiffFile[] // the diff findings are anchored against
@@ -221,6 +230,7 @@ export interface Projection {
 }
 
 export type Observation =
+  | { type: "strict-candidates"; findings: Finding[]; unanswered: string[] }
   | { type: "impact"; record: ImpactRecord; locations: string[] }
   // A pass is about to run with this prompt and step cap, or was planned and skipped (verify with no budget or time
   // left).
@@ -322,7 +332,9 @@ export const run: (
 
   const started = Date.now()
   const deadline = started + input.config.timeoutMinutes * 60_000
-  const config = input.config
+  const config = strictReviewConfig(input.config)
+  const strictMode = config.guardrail === "strict"
+  const uncommitted = !!(input.uncommittedDiff || input.impactWorktree)
   // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
   // untrusted block the prompts quote (holdback.ts). Only what the model is shown changes: anchors, the plan, stats,
   // findings' suggestions and review state keep the change as it is. Unset, nothing here runs.
@@ -332,6 +344,7 @@ export const run: (
     // or a failed proof keeps the normal review path. The GitHub job has no proof until its posting path handles skips.
     const whole =
       input.trust === "trusted" &&
+      !uncommitted &&
       !input.skipped.length &&
       !input.ignored?.length &&
       !input.admittedReads?.patterns.length &&
@@ -344,21 +357,37 @@ export const run: (
         base: input.base,
         head: input.head,
         files: input.anchors,
-        config,
+        config: input.config, // The collector bound this exact policy, before reviewer-only settings are applied.
       })
       if (kinds?.length && !input.stopSignal?.aborted) {
+        const strict = strictMode
+          ? strictSelect([], {
+              head: input.head,
+              anchors: input.anchors,
+              trust: input.trust,
+              verifier: nameOf(input.model),
+              unanswered: [],
+              coverage: { unreviewed: [], skipped: [], specialists: [] },
+              blobs: { head: new Map(), base: new Map() },
+              config: { guardrail: "strict", maxComments: config.maxComments, suggestions: config.suggestions },
+            })
+          : undefined
         return {
           trivial: true,
           report: { summary: "", risk: "low", files: [], findings: [] },
-          selection: selectFindings({
-            findings: [],
-            anchors: input.anchors,
-            head: input.head,
-            trust: input.trust,
-            mode: input.mode,
-            config,
-            prior: input.prior,
-          }),
+          selection: {
+            ...selectFindings({
+              findings: [],
+              anchors: input.anchors,
+              head: input.head,
+              trust: input.trust,
+              mode: input.mode,
+              config,
+              prior: input.prior,
+            }),
+            ...(strict ? { strict: strictSummary(strict) } : {}),
+          },
+          ...(strict ? { strict } : {}),
           skipped: [],
           base: input.base,
           head: input.head,
@@ -972,7 +1001,6 @@ export const run: (
     const sendable = (finding: { path: string }) => !heldPaths.has(finding.path)
     // The earlier findings the prompts list: under holdback those on a held path left out, titles redacted. One left
     // out gets no status from the model (see `unshown`), and selection still keeps it open from `input.prior`.
-    const prior = hold?.context.prior ?? input.prior
     // Prompts: the diff that fits the model's context, focus files first in incremental mode.
     const focused = new Set((focus ?? []).map((hunk) => hunk.path))
     const context = Math.min(model.context, triage.context)
@@ -985,7 +1013,7 @@ export const run: (
           ? [...ranked.filter((file) => focused.has(file.path)), ...ranked.filter((file) => !focused.has(file.path))]
           : ranked
       const split = budgetDiff(ordered, diffBudgetChars(context, config.maxDiffChars))
-      const overBudget = new Set(graph ? split.notInlined.map((file) => file.path) : [])
+      const overBudget = new Set(graph || strictMode ? split.notInlined.map((file) => file.path) : [])
       // Each changed file once: annotated when its pull request text is at hand, and only its changed lines when an
       // incremental review has nothing new in it.
       const packed = packChanges({
@@ -998,25 +1026,26 @@ export const run: (
       })
       return { split, overBudget, packed }
     }
-    const collectImpact = Effect.gen(function* () {
-      const excluded = new Set([...input.skipped.map((file) => file.path), ...heldPaths])
-      // The private view admits regular Git blobs only. Match their relative and absolute spellings
-      // against the alias rules frozen at admission, without resolving a candidate in the live checkout.
-      const denied = (file: string) =>
-        excluded.has(file) ||
-        classifyPath(file, { config }) !== undefined ||
-        (hold !== undefined && heldReason(file) !== undefined) ||
-        Permission.evaluate("read", file, rules).action !== "allow" ||
-        (!!authority?.patterns.length &&
-          Permission.evaluate("read", path.resolve(input.directory, file).replaceAll("\\", "/"), rules).action !==
-            "allow")
-      // A move keeps the restrictions of both spellings, even when an adapter supplied only one skipped path.
+    const excluded = new Set([...input.skipped.map((file) => file.path), ...heldPaths])
+    // The private view admits regular Git blobs only. Match their relative and absolute spellings
+    // against the alias rules frozen at admission, without resolving a candidate in the live checkout.
+    const denied = (file: string) =>
+      excluded.has(file) ||
+      classifyPath(file, { config }) !== undefined ||
+      (hold !== undefined && heldReason(file) !== undefined) ||
+      Permission.evaluate("read", file, rules).action !== "allow" ||
+      (!!authority?.patterns.length &&
+        Permission.evaluate("read", path.resolve(input.directory, file).replaceAll("\\", "/"), rules).action !==
+          "allow")
+    // A move keeps the restrictions of both spellings, even when an adapter supplied only one skipped path.
+    if (graph || strictMode)
       for (const file of input.anchors) {
         if (file.oldPath && (denied(file.path) || denied(file.oldPath))) {
           excluded.add(file.path)
           excluded.add(file.oldPath)
         }
       }
+    const collectImpact = Effect.gen(function* () {
       const admitted = files.filter((file) => !denied(file.path) && (!file.oldPath || !denied(file.oldPath)))
       const remaining = deadline - Date.now()
       if (!admitted.length || remaining <= 0) return undefined
@@ -1044,8 +1073,30 @@ export const run: (
         ),
       )
     })
-    const impact = graph && !input.impactWorktree ? yield* collectImpact : undefined
+    const impact = graph && !uncommitted ? yield* collectImpact : undefined
     const { split, overBudget, packed } = layout(impact?.changedRanks)
+    const index = buildAnchorIndex(input.anchors)
+    const strictDenied = (file: string) => {
+      if (!ReadOnlyGit.repositoryPath(file) || ESCAPING_PATH.test(file) || denied(file)) return true
+      const changed = lookupFile(index, file)?.file
+      // Ordinary anchoring accepts an absolute checkout prefix by suffix. Strict evidence uses an
+      // exact repository path or a diff's a/ or b/ spelling, so a nonexistent lookalike cannot borrow its blob.
+      if (
+        changed &&
+        ![changed.path, changed.oldPath].some(
+          (name) => name && (file === name || file === `a/${name}` || file === `b/${name}`),
+        )
+      )
+        return true
+      return (
+        !!changed &&
+        (denied(changed.path) || overBudget.has(changed.path) || (!!changed.oldPath && denied(changed.oldPath)))
+      )
+    }
+    const earlier = hold?.context.prior ?? input.prior
+    const prior = strictMode
+      ? earlier.filter((entry) => !strictDenied(entry.path) && (!hold || !containsHeldValue(entry)))
+      : earlier
     const checkFiles = overBudget.size ? headFiles?.filter((file) => !overBudget.has(file.path)) : headFiles
     const promptInput: PromptInput = {
       mode: input.mode,
@@ -1075,6 +1126,7 @@ export const run: (
       prior,
       maxComments: config.maxComments,
       nits: wantsNits(config),
+      ...(strictMode ? { guardrail: "strict" as const, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
     }
     if (impact && !input.stopSignal?.aborted && input.observe)
       observe({
@@ -1085,6 +1137,8 @@ export const run: (
 
     // 1–5. The specialists, in parallel, one session each. When holdback left nothing to send no pass runs: the held
     // files are skipped, nothing is unreviewed, and no reviewer leaves the verdict incomplete.
+    const strictKeys = { guardrail: "strict" } as const
+    const reportSchema = strictMode ? strictReportJsonSchema(strictKeys)! : REVIEW_REPORT_JSON_SCHEMA
     const asked = yield* Effect.forEach(
       nothingToSend ? [] : planSpecialists(input.files, config),
       (name) =>
@@ -1093,8 +1147,8 @@ export const run: (
           model: triage,
           cap: name === "security" ? Math.ceil((config.maxSteps * 2) / 3) : config.maxSteps,
           text: name === "security" ? buildSecurityPrompt(promptInput) : buildReviewPrompt(promptInput),
-          schema: REVIEW_REPORT_JSON_SCHEMA,
-          decode: decodeReport,
+          schema: reportSchema,
+          decode: strictMode ? (value) => decodeReport(value, strictKeys) : decodeReport,
         }),
       { concurrency: 2 },
     )
@@ -1106,13 +1160,32 @@ export const run: (
         : [],
     )
     const report = mergeReports(reports.map((entry) => entry.report))
-    const normalized = reports.flatMap((entry) => normalizeFindings(entry.report.findings, entry.source, input.anchors))
+    const hidden = new Set<string>()
+    const normalized = reports.flatMap(({ report, source }) => {
+      const findings = normalizeFindings(report.findings, source, input.anchors)
+      if (strictMode)
+        for (const [i, finding] of findings.entries()) {
+          const raw = report.findings[i]!
+          const targets = raw.patch ? explicitPatchPaths(raw.patch) : []
+          if (
+            !targets ||
+            targets.some(strictDenied) ||
+            strictDenied(raw.path) ||
+            raw.quotes?.some((quote) => strictDenied(quote.path)) ||
+            raw.evidence?.some((reference) => strictDenied(evidencePath(reference))) ||
+            (hold && containsHeldValue(raw))
+          )
+            hidden.add(finding.id)
+        }
+      return findings
+    })
 
-    // 7. Verify: the candidates the verify policy names (plan.ts). After a cheaper triage pass, everything of concern
-    // or above is confirmed on the review model, whatever `verify` says.
+    // A fingerprint shared with an inaccessible candidate cannot authorize exposing its competing evidence.
+    const eligible = strictMode ? normalized.filter((finding) => !hidden.has(finding.id)) : normalized
+    // 7. Verify the candidates the effective policy names. A cheaper triage pass also requires confirmation.
     const shared = config.verifyPolicy === "shared"
     const candidates = verifyCandidates(
-      normalized.filter(sendable),
+      eligible.filter(sendable),
       {
         verify: config.verify,
         policy: config.verifyPolicy,
@@ -1130,21 +1203,28 @@ export const run: (
     const open = new Map(prior.filter((entry) => entry.status === "open").map((entry) => [entry.id, entry]))
     const shown = new Set(prior.map((entry) => entry.id))
     const unshown = new Set(input.prior.flatMap((entry) => (shown.has(entry.id) ? [] : [entry.id])))
-    for (const entry of prior) if (overBudget.has(entry.path)) unshown.add(entry.id)
-    const claims = triaged
-      ? (report.priorStatus ?? []).flatMap((entry) => {
-          const listed = open.get(entry.id)
-          return entry.status === "fixed" && listed && !unshown.has(listed.id) && !reported.has(listed.id)
-            ? [{ ...listed, reason: entry.reason }]
-            : []
-        })
-      : []
+    for (const entry of prior)
+      if (overBudget.has(entry.path) || (strictMode && strictDenied(entry.path))) unshown.add(entry.id)
+    const claims =
+      triaged || strictMode
+        ? (report.priorStatus ?? []).flatMap((entry) => {
+            const listed = open.get(entry.id)
+            if (strictMode && hold && listed && containsHeldValue(entry.reason)) {
+              hidden.add(listed.id)
+              return []
+            }
+            return entry.status === "fixed" && listed && !unshown.has(listed.id) && !reported.has(listed.id)
+              ? [{ ...listed, reason: entry.reason }]
+              : []
+          })
+        : []
     const verifyText =
       candidates.length || claims.length
         ? buildVerifyPrompt({
             trust: input.trust,
             head: input.head,
             candidates,
+            ...(strictMode ? { ...strictKeys, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
             ...(claims.length ? { fixed: claims } : {}),
             headFiles: verifyHeadFiles(files, checkFiles, [...candidates, ...claims]),
           })
@@ -1176,6 +1256,11 @@ export const run: (
         estimateUsd: estimate,
       })
     }
+    // A verifier can introduce secret-shaped text into its reason. Exclude such a row before a panel can
+    // relay it; the ordinary strict unanswered bookkeeping keeps the claim open for another review.
+    const verifyDecoder = strictMode
+      ? (value: unknown) => decodeStrictVerify(value)?.filter((row) => !hold || !containsHeldValue(row))
+      : decodeVerify
     const verify: Asked<ReturnType<typeof decodeVerify>> | undefined = !verifyText
       ? undefined
       : unaffordable || late
@@ -1186,7 +1271,7 @@ export const run: (
             cap: VERIFY_STEPS,
             text: verifyText,
             schema: VERIFY_JSON_SCHEMA,
-            decode: decodeVerify,
+            decode: verifyDecoder,
           })
     // 7b. The panel's judge (WP A35): a model from a third lab makes the final call on each candidate the check looked
     // at, with the first pass's claim and the check's verdict in front of it. It runs only once the check finished, with
@@ -1197,6 +1282,7 @@ export const run: (
             trust: input.trust,
             head: input.head,
             candidates,
+            ...(strictMode ? { ...strictKeys, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
             checks: verify.value ?? [],
             headFiles: verifyHeadFiles(files, checkFiles, candidates),
           })
@@ -1239,12 +1325,20 @@ export const run: (
               cap: VERIFY_STEPS,
               text: judgeText,
               schema: VERIFY_JSON_SCHEMA,
-              decode: decodeVerify,
+              decode: verifyDecoder,
             })
     const candidateIds = new Set(candidates.map((finding) => finding.id))
     // The judge's verdict stands where it gave one; the check's stands for the rest, and for earlier fixed claims.
     const finalCall = judged?.status === "ok" ? (judged.value ?? []).filter((entry) => candidateIds.has(entry.id)) : []
     const verdicts = new Map([...(verify?.value ?? []), ...finalCall].map((entry) => [entry.id, entry.verdict]))
+    if (strictMode) {
+      // A stopped finalizer or a judge cannot supply a missing first check. Only a single readable verdict
+      // from each required pass counts, and a model cannot confirm a finding it was never asked about.
+      const readable = new Set(verify?.status === "ok" ? verify.value?.map((row) => row.id) : [])
+      const judgedIds = new Set(finalCall.map((row) => row.id))
+      for (const id of verdicts.keys())
+        if (!readable.has(id) || (judgeModel && candidateIds.has(id) && !judgedIds.has(id))) verdicts.delete(id)
+    }
     // After a triage pass only what the review model confirmed is reported: a candidate it rejected, gave no verdict
     // for, or never saw because the double-check was skipped or failed is left out.
     const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triaged).map((finding) => finding.id))
@@ -1261,24 +1355,100 @@ export const run: (
     const fixed = new Set(claims.filter((claim) => verdicts.get(claim.id) === "confirmed").map((claim) => claim.id))
     // A status for an earlier finding the prompts left out (holdback) is dropped, so a held file's earlier finding is
     // never settled fixed on the model's word; unset, `unshown` is empty and the report is as it was.
-    const checked: ModelReport = triaged
-      ? {
-          ...report,
-          priorStatus: (report.priorStatus ?? []).filter(
-            (entry) => !unshown.has(entry.id) && (entry.status !== "fixed" || fixed.has(entry.id)),
-          ),
-        }
-      : unshown.size && report.priorStatus
-        ? { ...report, priorStatus: report.priorStatus.filter((entry) => !unshown.has(entry.id)) }
-        : report
+    const checked: ModelReport =
+      triaged || strictMode
+        ? {
+            ...report,
+            priorStatus: (report.priorStatus ?? []).filter(
+              (entry) => !unshown.has(entry.id) && (entry.status !== "fixed" || fixed.has(entry.id)),
+            ),
+          }
+        : unshown.size && report.priorStatus
+          ? { ...report, priorStatus: report.priorStatus.filter((entry) => !unshown.has(entry.id)) }
+          : report
 
     // 8. Select. Paths outside the diff are checked against the repository first; selection is synchronous. A review
     // the route rules stopped (VS-23b) is not reviewed, so it lists no finding, not even one a pass before the refusal
     // reported: no review that finished stands behind it (I-7). Nor does it assess risk or keep earlier findings'
     // bookkeeping, so its selection is the empty one the CLI gives a model refused before Review.run.
     const refused = state.refused
-    const listed = refused ? [] : findings
-    const index = buildAnchorIndex(input.anchors)
+    // A partial run records the files no finished specialist saw, so the next run reviews them. A run where no
+    // specialist finished, or one the route rules stopped, leaves every file unreviewed.
+    const partial = refused
+      ? ("privacy" as const)
+      : (asked.find((entry) => entry.stop)?.stop ??
+        (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined))
+    const missed = nothingToSend
+      ? []
+      : refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
+        ? files.map((file) => file.path)
+        : partial && partial !== "model-error"
+          ? yield* uncovered(asked.flatMap((entry) => (entry.value && entry.sessionID ? [entry.sessionID] : [])))
+          : []
+    const missedCoverage = overBudget.size ? [...new Set([...missed, ...overBudget])] : missed
+
+    const skippedFiles = hold?.held.length
+      ? [...input.skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))]
+      : input.skipped
+    const specialists = [...asked, ...(verify ? [verify] : []), ...(judged ? [judged] : [])].map((entry) => ({
+      name: entry.name,
+      status: entry.status,
+      steps: entry.steps,
+      ...(entry.detail ? { detail: entry.detail } : {}),
+    }))
+
+    const strict = strictMode
+      ? yield* Effect.gen(function* () {
+          const requested = new Set(candidates)
+          const pool = refused
+            ? []
+            : eligible.map((finding) => {
+                const verdict = requested.has(finding) ? verdicts.get(finding.id) : undefined
+                return verdict ? { ...finding, verified: verdict === "confirmed" } : finding
+              })
+          const unanswered = refused
+            ? []
+            : [
+                ...new Set([
+                  ...hidden,
+                  ...[...candidates, ...claims]
+                    .filter((candidate) => !verdicts.has(candidate.id))
+                    .map((candidate) => candidate.id),
+                ]),
+              ]
+          if (!refused && input.observe)
+            observe({ type: "strict-candidates", findings: structuredClone(pool), unanswered: [...unanswered] })
+          return yield* checkStrict({
+            findings: pool,
+            anchors: input.anchors,
+            directory: input.directory,
+            head: input.head,
+            base: input.base,
+            config: { ...strictKeys, maxComments: config.maxComments, suggestions: config.suggestions },
+            trust: input.trust,
+            verifier: nameOf(model),
+            unanswered,
+            coverage: { partial, unreviewed: missedCoverage, skipped: skippedFiles, specialists, held: hold?.held },
+            changePaths: files.map((file) => file.path),
+            pending: [...normalized, ...prior]
+              .filter((item) => unanswered.includes(item.id))
+              .flatMap((item) => {
+                const path = lookupFile(index, item.path)?.file.path
+                return path ? [path] : []
+              }),
+            uncommitted,
+            denied: strictDenied,
+            deadline,
+            signal: input.stopSignal,
+            ...(hold ? { holdback: "secrets" as const } : {}),
+            ...(judgeModel && finalCall.length
+              ? { judge: { model: nameOf(judgeModel), answered: new Set(finalCall.map((row) => row.id)) } }
+              : {}),
+          })
+        })
+      : undefined
+    const unreviewed = strict?.unreviewed ?? missedCoverage
+    const listed = refused ? [] : strict ? strict.listed : findings
     const outside = [...new Set(listed.map((finding) => finding.path))].filter((file) => !lookupFile(index, file))
     const known = new Map(
       yield* Effect.forEach(outside, (file) =>
@@ -1302,31 +1472,17 @@ export const run: (
       ignored: (file) => skipped.has(file) || classifyPath(file, { config }) !== undefined,
       knownPath: (file) => known.get(file) ?? true,
       teamDismissed: input.context.teamDismissed,
-      dropped: refused
-        ? []
-        : [
-            ...(rejected ? [{ reason: "rejected-by-verify" as const, count: rejected }] : []),
-            ...(unconfirmed ? [{ reason: "unconfirmed" as const, count: unconfirmed }] : []),
-          ],
-      modelRisk: refused ? "low" : report.risk,
+      dropped:
+        refused || strict
+          ? []
+          : [
+              ...(rejected ? [{ reason: "rejected-by-verify" as const, count: rejected }] : []),
+              ...(unconfirmed ? [{ reason: "unconfirmed" as const, count: unconfirmed }] : []),
+            ],
+      modelRisk: refused || strict ? "low" : report.risk,
       sensitiveChanged: !refused && input.files.some((file) => isSensitivePath(file.path)),
       changedLines: refused ? 0 : input.files.reduce((sum, file) => sum + file.additions + file.deletions, 0),
     })
-
-    // A partial run records the files no finished specialist saw, so the next run reviews them. A run where no
-    // specialist finished, or one the route rules stopped, leaves every file unreviewed.
-    const partial = refused
-      ? ("privacy" as const)
-      : (asked.find((entry) => entry.stop)?.stop ??
-        (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined))
-    const missed = nothingToSend
-      ? []
-      : refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
-        ? files.map((file) => file.path)
-        : partial && partial !== "model-error"
-          ? yield* uncovered(asked.flatMap((entry) => (entry.value && entry.sessionID ? [entry.sessionID] : [])))
-          : []
-    const unreviewed = overBudget.size ? [...new Set([...missed, ...overBudget])] : missed
 
     function uncovered(ids: SessionID[]) {
       return Effect.gen(function* () {
@@ -1420,12 +1576,34 @@ export const run: (
         ].filter((note) => note !== undefined)
       : []
     return {
-      report: refused ? { summary: "", risk: "low", files: [], findings: [] } : checked,
-      selection: overBudget.size && !refused ? { ...selection, diffIncomplete: true } : selection,
-      // A held file is skipped, never unreviewed, so a re-trigger on the same head still takes already-reviewed.
-      skipped: hold?.held.length
-        ? [...input.skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))]
-        : input.skipped,
+      report: refused
+        ? { summary: "", risk: "low", files: [], findings: [] }
+        : strict
+          ? {
+              summary: "",
+              risk: selection.risk,
+              files: [],
+              findings: listed,
+              ...(checked.priorStatus
+                ? {
+                    priorStatus: checked.priorStatus.filter(
+                      (entry) => strict.result.complete || entry.status !== "fixed",
+                    ),
+                  }
+                : {}),
+            }
+          : checked,
+      selection: {
+        ...selection,
+        ...(overBudget.size && !refused ? { diffIncomplete: true as const } : {}),
+        ...(strict
+          ? {
+              strict: strictSummary(strict.result),
+            }
+          : {}),
+      },
+      ...(strict ? { strict: strict.result } : {}),
+      skipped: skippedFiles,
       cost: { ...cost, ...(labs ? { labs } : {}) },
       ...(spentByPass.length ? { passes: spentByPass } : {}),
       durationMs: Date.now() - started,
@@ -1435,12 +1613,7 @@ export const run: (
       mode: input.mode,
       ...(partial ? { partial } : {}),
       unreviewed,
-      specialists: [...asked, ...(verify ? [verify] : []), ...(judged ? [judged] : [])].map((entry) => ({
-        name: entry.name,
-        status: entry.status,
-        steps: entry.steps,
-        ...(entry.detail ? { detail: entry.detail } : {}),
-      })),
+      specialists,
       sessions: [...sessionIDs],
       stats: changeStats(input.files),
       // A refusal says what was sent before it, and nothing about passes it stopped.
@@ -1455,7 +1628,7 @@ export const run: (
           ]
         : [
             ...picked.notes,
-            ...(graph && input.impactWorktree
+            ...(graph && uncommitted
               ? ["Impact context is unavailable for staged or uncommitted changes."]
               : graph && !impact && !input.stopSignal?.aborted
                 ? [impactNote(["error"])]
@@ -1472,7 +1645,7 @@ export const run: (
               : []),
             ...holdNotes,
             ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
-            ...verifyNotes,
+            ...(strictMode ? [] : verifyNotes),
             ...incomplete,
             ...evidenceNotes,
           ],
@@ -1583,6 +1756,10 @@ export function normalizeFindings(findings: ModelFinding[], source: Finding["sou
       id: fingerprint(file, finding.category, normalizeTitle(finding.title), normalizeCode(code)),
     }
   })
+}
+
+function strictSummary(strict: NonNullable<ReviewOutcome["strict"]>) {
+  return { complete: strict.complete, findingCount: strict.findings.length, dropped: strict.dropped }
 }
 
 function nameOf(model: Pick<ResolvedModel, "providerID" | "modelID">) {

@@ -120,7 +120,7 @@ export const VARIANT_NAME = /^[a-z]+(:[a-z][a-z0-9]*(-[a-z0-9]+)*)?$/
 // holdback-secrets), which a variant may only raise to "secrets"; the desktop's is SF-15's, the same core functions
 // called from the desktop runner.
 export const VARIANT_KEYS = {
-  engine: ["verifyPolicy", "privacy", "holdback", "trivial", "impact"],
+  engine: ["verifyPolicy", "privacy", "holdback", "trivial", "impact", "guardrail"],
   desktop: ["verifyPolicy", "holdback"],
 } as const satisfies Record<
   string,

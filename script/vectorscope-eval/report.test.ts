@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto"
+import { findingItem } from "../../packages/core/src/review/format"
+import { emptyState, findingMarker, stateMarker, toSummaryFinding } from "../../packages/core/src/review/state"
 import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -1206,6 +1209,101 @@ describe("--reselect strict (VS-27b)", () => {
       run.posted.filter((finding) => finding.title !== "Unrelated concern").map((finding) => finding.key),
     )
     expect(RESELECT_SUFFIX).toBe("+reselect-strict")
+  })
+
+  test("strict artifacts retain the original pool and count only individual comments that survived posting", () => {
+    const first = { ...inline, id: "aa0011223344" }
+    const removed = { ...inline, id: "bb0011223344", line: inline.line + 5, title: "Comment removed by posting check" }
+    const unanswered = {
+      ...inline,
+      id: "cc0011223344",
+      line: inline.line + 9,
+      title: "Unanswered",
+      verified: undefined,
+    }
+    const marker = findingMarker({
+      id: first.id,
+      severity: first.severity,
+      category: first.category,
+      sha: "abcdef1",
+      status: "open",
+      words: [],
+    })
+    const write = base.posted.find((entry) => entry.write === "createReview")!
+    const value = strict(
+      {
+        config: { digest: "s", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, guardrail: "strict" } },
+        posted: [
+          { ...write, payload: { ...write.payload, comments: [{ ...write.payload.comments[0], body: marker }] } },
+        ],
+        strictCandidates: {
+          findings: [first, removed, unanswered].map((finding) => ({ ...finding, anchored: true })),
+          unanswered: [unanswered.id],
+        },
+      },
+      {
+        strict: {
+          version: 1,
+          head: base.source.head,
+          complete: false,
+          incomplete: ["verdict-unreadable"],
+          findings: [],
+          dropped: [],
+          fixUnchecked: 0,
+        },
+        selection: { ...original, inline: [first, removed], elsewhere: [] },
+      },
+    )
+    const run = fromArtifact(value, seed, [])
+    expect(run.status).toBe("partial")
+    expect(run.proposed.map((finding) => finding.title)).toEqual([first.title, removed.title, unanswered.title])
+    expect(run.posted.map((finding) => finding.title)).toEqual([first.title])
+    const result = reselectRun(value, run)
+    expect(result.reselection).toMatchObject({
+      candidates: 1,
+      unposted: 2,
+      complete: false,
+      incomplete: ["verdict-unreadable"],
+    })
+    expect(result.run.posted.map((finding) => finding.key)).toEqual(run.posted.map((finding) => finding.key))
+    const refused = { ...value, posted: [], refused: "check refused the write" }
+    expect(reselect(refused).reselection).toMatchObject({ candidates: 0, unposted: 3, complete: false })
+  })
+
+  test("strict summary scoring requires the visible row after clipping and the posting check", () => {
+    const finding = { ...inline, id: "aa0011223344" }
+    const row = findingItem(finding, undefined)
+    const state = stateMarker({ ...emptyState(), findings: [toSummaryFinding(finding, base.source.head)] })
+    const value = strict(
+      {
+        config: { digest: "s", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, guardrail: "strict" } },
+        strictCandidates: {
+          findings: [{ ...finding, anchored: true }],
+          unanswered: [],
+          summaryRows: [{ id: finding.id, digest: createHash("sha256").update(row).digest("hex") }],
+        },
+      },
+      {
+        strict: { version: 1, head: base.source.head, complete: true, findings: [], dropped: [], fixUnchecked: 0 },
+        selection: { ...original, inline: [], overflow: [finding], elsewhere: [] },
+      },
+    )
+    const checked = (text: string): ReplayArtifact => ({
+      ...value,
+      posted: [
+        {
+          write: "createIssueComment",
+          pr: 0,
+          body: ["<details><summary>More findings (1)</summary>", "", text, "</details>", state].join("\n"),
+        },
+      ],
+    })
+    const visible = checked(row)
+    expect(fromArtifact(visible, seed, []).posted.map((item) => item.title)).toEqual([finding.title])
+    expect(reselect(visible).reselection).toMatchObject({ candidates: 1, unposted: 0 })
+    const clipped = checked("- …and 1 more")
+    expect(fromArtifact(clipped, seed, []).posted).toEqual([])
+    expect(reselect(clipped).reselection).toMatchObject({ candidates: 0, unposted: 1 })
   })
 
   test("only what the replay posted is a candidate, so every re-selected finding was judged", () => {

@@ -96,6 +96,19 @@ describe("retained local review result decoding", () => {
     const stored = result(skipped)
     expect(stored.verdict).toEqual({ verdict: "policy-skip", causes: ["trivial"], notes: [] })
     expect(decodeLocalResult(JSON.parse(JSON.stringify(stored)), target)?.outcome?.trivial).toBe(true)
+    const strict = {
+      version: 1 as const,
+      head,
+      complete: false,
+      incomplete: ["no-reviewer"],
+      findings: [],
+      dropped: [],
+      fixUnchecked: 0,
+    }
+    const read = (value: ReviewOutcome) => decodeLocalResult(JSON.parse(JSON.stringify(result(value))), target)
+    expect(read({ ...skipped, strict })?.verdict).toEqual(stored.verdict)
+    for (const mixed of [{ complete: true }, { incomplete: ["blob-unreadable"] }, { fixUnchecked: 1 }])
+      expect(read({ ...skipped, strict: { ...strict, ...mixed } })).toBeUndefined()
     for (const mixed of [
       { cost: value.cost },
       { sessions: value.sessions },
@@ -138,6 +151,7 @@ describe("retained local review result decoding", () => {
       verifiedBy: "model" as const,
       quotes: [{ path: "src/file.ts", line: 1, side: "RIGHT" as const, code: "throw Error()" }],
     }
+    value.selection.strict = { complete: true, findingCount: 1, dropped: [{ reason: "not-blocking", count: 2 }] }
     value.report.findings.push(finding)
     value.selection.inline.push({
       ...finding,
@@ -165,7 +179,7 @@ describe("retained local review result decoding", () => {
           verifier: "provider/reviewer",
         },
       ],
-      dropped: [],
+      dropped: [{ reason: "not-blocking", count: 2 }],
       fixUnchecked: 1,
     }
     const original = result(value)
@@ -180,6 +194,18 @@ describe("retained local review result decoding", () => {
     expect(decoded?.result?.outcome?.cost).toEqual({ ...cost, tokensOwnOnly: false })
     expect(value.cost?.tokensOwnOnly).toBe(true)
     expect(run.artifact!.json).toContain('"tokensOwnOnly":true')
+    for (const summary of [
+      { ...value.selection.strict, complete: false },
+      { ...value.selection.strict, findingCount: 0 },
+      { ...value.selection.strict, dropped: [] },
+    ]) {
+      expect(
+        decodeLocalResult(result({ ...value, selection: { ...value.selection, strict: summary } }), target),
+      ).toBeUndefined()
+    }
+    const missing = { ...value }
+    delete missing.strict
+    expect(decodeLocalResult(result(missing), target)).toBeUndefined()
   })
 
   test("rejects target/head mismatches, unknown coverage/status fields, malformed selection and contradictory verdicts", async () => {

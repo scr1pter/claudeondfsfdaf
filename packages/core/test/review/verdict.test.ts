@@ -490,6 +490,17 @@ describe("reviewVerdict over outcomes", () => {
     expect(judge({ ...trivial, strict: { complete: false } })).toEqual(
       verdict("incomplete", ["strict-incomplete", "no-reviewer"]),
     )
+    const skippedStrict = { complete: false, incomplete: ["no-reviewer"] }
+    expect(judge({ ...trivial, strict: skippedStrict })).toEqual(verdict("policy-skip", ["trivial"]))
+    expect(judge({ ...trivial, strict: skippedStrict, unreviewed: ["src/a.ts"] })).toEqual(
+      verdict("incomplete", ["unreviewed", "strict-incomplete", "no-reviewer"]),
+    )
+    expect(judge({ ...trivial, strict: { complete: false, incomplete: ["no-reviewer", "blob-unreadable"] } })).toEqual(
+      verdict("incomplete", ["strict-incomplete", "no-reviewer"]),
+    )
+    expect(
+      judge({ ...trivial, strict: skippedStrict, selection: selection({ stillOpen: [prior("blocking")] }) }),
+    ).toEqual(verdict("blocking", ["blocking"]))
     // So is a marker on a run whose passes ran.
     expect(judge({ ...outcome({ selection: selection({ inline: [placed("blocking")] }) }), trivial: true })).toEqual(
       verdict("blocking", ["blocking"]),

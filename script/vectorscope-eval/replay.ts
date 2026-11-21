@@ -200,7 +200,8 @@ export const VARIANTS = {
   },
   "guardrail-strict": {
     planned: 'guardrail: "strict"',
-    engine: { pending: "VS-27c" },
+    keys: { guardrail: "strict" },
+    engine: { from: "VS-27c" },
     desktop: { pending: "VS-27c" },
   },
   "depth-auto": {

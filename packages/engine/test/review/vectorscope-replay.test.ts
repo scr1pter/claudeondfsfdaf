@@ -102,6 +102,9 @@ describe("the flags", () => {
     expect(flags([...base, "--variant", "engine:impact-graph"]).variants).toEqual([
       { name: "engine:impact-graph", record: { name: "engine:impact-graph", keys: { impact: "graph" } } },
     ])
+    expect(flags([...base, "--variant", "engine:guardrail-strict"]).variants).toEqual([
+      { name: "engine:guardrail-strict", record: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } } },
+    ])
     expect(parseReplayArgs([...base, "--variant", "engine:cards-brain"])).toContain("VS-26")
     // VS-23c (SF-12b): privacy-zdr's engine half is built.
     expect(flags([...base, "--variant", "engine:privacy-zdr"]).variants).toEqual([

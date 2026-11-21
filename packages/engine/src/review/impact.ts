@@ -8,11 +8,12 @@
 // VS-25b's original comparison arm in algorithm fixtures. VS-37c: tier b also reads, after those files and inside the same read cap, the other Go
 // files of a changed Go file's folder, for the declarations its added lines use without an import.
 
-import { Effect, Fiber, Option, Stream } from "effect"
+import { Effect, Option, Stream } from "effect"
 import type { Git } from "@/git"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { heldReason, holdbackFiles, holdbackLines, holdbackText } from "@vectordevai/core/review/holdback"
 import { ReviewGit } from "./git"
+import { ReviewSnapshot } from "./private-snapshot"
 import { BrainCode } from "@vectordevai/core/brain/code"
 import type { DiffFile } from "@vectordevai/core/review/diff"
 import { classifyPath, hasGeneratedHeader, parseGitAttributes } from "@vectordevai/core/review/ignore"
@@ -614,97 +615,27 @@ const buildFrom = Effect.fnUntraced(function* (
 // private port. None of the production entry points accept this reader or a cached caller-supplied parse.
 export const algorithm = { build: buildFrom, parseChanged: parseFrom, importLines: importsFrom }
 
-type Placement = { directory: string; head: string; base?: string; signal?: AbortSignal }
-const exactCommit = /^[0-9a-f]{40}$/
-
-function withPrivate<A>(
-  input: Placement,
-  deadline: number,
-  read: (git: Reader, view: ReviewGit.View) => Effect.Effect<A>,
-  unavailable: (reason: ImpactIncomplete) => A,
-): Effect.Effect<A> {
-  return Effect.gen(function* () {
-    if (!exactCommit.test(input.head) || (input.base !== undefined && !exactCommit.test(input.base)))
-      return unavailable("error")
-    const remaining = deadline - performance.now()
-    if (!(remaining > 0) || input.signal?.aborted) return unavailable("time")
-    // Both metadata acquisition and release are masked. Arm the deadline before starting them. Interrupting the
-    // wait aborts their native signal first, then joins the child so no snapshot is left copying after this review.
-    const controller = new AbortController()
-    const abort = () => controller.abort()
-    const timer = setTimeout(abort, Math.min(remaining, 60_000))
-    input.signal?.addEventListener("abort", abort, { once: true })
-    const signal = controller.signal
-    const use = Effect.gen(function* () {
-      const view = yield* ReviewGit.Current
-      if (
-        !view ||
-        view.metadata.directory !== input.directory ||
-        view.repository.directory !== input.directory ||
-        !view.repository.isOpen() ||
-        view.metadata.head !== view.repository.head ||
-        (view.repository.head !== input.head && view.repository.head !== input.base)
-      )
-        return unavailable("error")
-      yield* view.preflight(signal)
-      const result = yield* read(ReviewGit.impactClient(view, input.directory, input.head, input.base), view)
-      yield* view.preflight(signal)
-      return performance.now() < deadline && !signal.aborted ? result : unavailable("time")
-    })
-    const collect = Effect.gen(function* () {
-      const current = yield* ReviewGit.Current
-      const scoped = current
-        ? use
-        : ReviewGit.metadata(input.directory, signal).pipe(
-            Effect.flatMap((metadata) => ReviewGit.within(metadata, metadata.head, use, signal)),
-          )
-      const refused = () => Effect.succeed(unavailable(signal.aborted ? "time" : "error"))
-      return yield* scoped.pipe(
-        Effect.catchTag("ReviewGit.Refused", refused),
-        // Cleanup can surface the private port's own unavailable error as a defect. Unexpected program failures
-        // and fiber interruption must still propagate to the caller.
-        Effect.catchDefect((defect) => (defect instanceof ReadOnlyGit.Unavailable ? refused() : Effect.die(defect))),
-      )
-    })
-    const cancelled = Effect.callback<A>((resume) => {
-      const stopped = () => resume(Effect.succeed(unavailable("time")))
-      if (signal.aborted) {
-        stopped()
-        return
-      }
-      signal.addEventListener("abort", stopped, { once: true })
-      return Effect.sync(() => signal.removeEventListener("abort", stopped))
-    })
-    return yield* Effect.acquireUseRelease(
-      Effect.forkChild(collect),
-      (child) => Effect.raceFirst(Fiber.join(child), cancelled),
-      (child) =>
-        Effect.gen(function* () {
-          clearTimeout(timer)
-          input.signal?.removeEventListener("abort", abort)
-          abort()
-          yield* Fiber.interrupt(child)
-        }),
-    )
-  })
-}
-
 export const parseChanged = Effect.fn("ReviewImpact.parseChanged")(function* (input: ParseInput) {
   const deadline = input.deadline ?? performance.now() + IMPACT_LIMITS.timeBoxMs
-  return yield* withPrivate(
+  return yield* ReviewSnapshot.within(
     input,
     deadline,
-    (git) => parseFrom(git, { ...input, deadline, missing: undefined }),
+    (view) =>
+      parseFrom(ReviewGit.impactClient(view, input.directory, input.head, input.base), {
+        ...input,
+        deadline,
+        missing: undefined,
+      }),
     noFiles,
   )
 })
 
 export const importLines = Effect.fn("ReviewImpact.importLines")(function* (input: ImportInput) {
   const deadline = input.deadline ?? performance.now() + IMPACT_LIMITS.timeBoxMs
-  return yield* withPrivate(
+  return yield* ReviewSnapshot.within(
     input,
     deadline,
-    (git) => importsFrom(git, { ...input, deadline }),
+    (view) => importsFrom(ReviewGit.impactClient(view, input.directory, input.head), { ...input, deadline }),
     () => new Map<string, string>(),
   )
 })
@@ -717,11 +648,12 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
     slice.tokens = impactTokens(slice)
     return { slice, changed: noFiles() }
   }
-  return yield* withPrivate(
+  return yield* ReviewSnapshot.within(
     input,
     deadline,
-    (git, view) =>
+    (view) =>
       Effect.gen(function* () {
+        const git = ReviewGit.impactClient(view, input.directory, input.head, input.base)
         // Private info attributes/excludes, when present, could change what is eligible. They have no committed version.
         if (view.repository.hasInfoRules !== false) return unavailable("error")
         const run = runner(git, input.directory, deadline, new Set())

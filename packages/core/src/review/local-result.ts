@@ -29,6 +29,7 @@ const kind = Schema.Literals(["free", "priced", "plan", "local", "unknown", "cod
 const pass = Schema.Literals(["review", "security", "verify", "judge", "lens", "repro"])
 const many = <S extends Schema.Top>(schema: S) =>
   Schema.mutable(Schema.Array(schema).check(Schema.isMaxLength(100_000)))
+const strictDrops = many(Schema.Struct({ reason: Schema.Literals(STRICT_DROPS), count: NonNegativeInt }))
 const quote = Schema.Struct({ path: text, line: PositiveInt, side, code: text })
 const findingFields = {
   path: text,
@@ -105,6 +106,7 @@ const Outcome = Schema.Struct({
   }),
   selection: Schema.Struct({
     diffIncomplete: optional(Schema.Literal(true)),
+    strict: optional(Schema.Struct({ complete: Schema.Boolean, findingCount: NonNegativeInt, dropped: strictDrops })),
     inline: many(
       Schema.Struct({
         ...finding,
@@ -229,7 +231,7 @@ const Outcome = Schema.Struct({
           verifier: text,
         }),
       ),
-      dropped: many(Schema.Struct({ reason: Schema.Literals(STRICT_DROPS), count: NonNegativeInt })),
+      dropped: strictDrops,
       fixUnchecked: NonNegativeInt,
     }),
   ),
@@ -310,9 +312,25 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
   )
     return undefined
   const outcome = result.outcome
+  const summary = outcome?.selection.strict
+  if (
+    summary &&
+    (!outcome?.strict ||
+      summary.complete !== outcome.strict.complete ||
+      summary.findingCount !== outcome.strict.findings.length ||
+      JSON.stringify(summary.dropped) !== JSON.stringify(outcome.strict.dropped))
+  )
+    return undefined
   if (
     outcome?.trivial &&
     (outcome.cost ||
+      (outcome.strict &&
+        (outcome.strict.complete ||
+          outcome.strict.incomplete?.length !== 1 ||
+          outcome.strict.incomplete[0] !== "no-reviewer" ||
+          outcome.strict.findings.length ||
+          outcome.strict.dropped.length ||
+          outcome.strict.fixUnchecked)) ||
       outcome.sessions.length ||
       outcome.specialists.length ||
       outcome.passes?.length ||
