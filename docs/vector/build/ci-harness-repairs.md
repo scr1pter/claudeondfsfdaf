@@ -331,6 +331,15 @@ Open check: the root cause counts as confirmed only once Windows CI on this bran
 shard green and ownership's two deferred cases back near 2 s. That PR does not exist yet (the branch is not pushed);
 record its run ID, the shard jobs' IDs and both cases' durations here when they finish.
 
+Confirmed (2026-11-20, recorded 21 Nov 2026 by v2-closeout-ci): PR #47, test.yml run 44667211660 attempt 1 on head
+`42f7b3d4` (branch `ownership-windows`), conclusion success, so every Windows engine shard was green.
+`ownership.test.ts` ran in engine (windows, shard 6/12), job 136063241252 (success; its "Run Engine shard" step took
+8 min 17 s). Its cases, as read from that job's log by the 21 Nov sweep: the portable cmdlet guard 1.09 ms, "removes
+only owned files after its parent exits" 1841.78 ms (against 34381.02 ms in the failing run 44009054115, job
+133814545422, and 1879-2393 ms in earlier green runs) and "preserves a replaced executable" 1475.81 ms. Merged as
+`56b2862b` (#47), an ancestor of main. This is one green sample: the stall was intermittent, so "confirmed" means the
+run met the bar stated above, not that the stall cannot recur.
+
 ## 2026-11-20: Windows patch-limit listing row and its after-test rejection
 
 Branch `windows-engine-timeouts` from `56b2862b`. Test-only change in `packages/engine/test/cli/github.bundle.test.ts`.
@@ -391,6 +400,14 @@ fail; `packages/engine` `bun typecheck` exit 0.
 Open check: confirmed only once Windows CI on this branch's PR shows every Windows engine shard green and the listing
 and "deletions counted" rows near 3-4 s. The branch is not pushed yet; record the run ID, shard job IDs and both rows'
 durations here when they finish.
+
+Confirmed (2026-11-20, recorded 21 Nov 2026 by v2-closeout-ci): PR #48 (`windows-engine-timeouts`, fix commit
+`edcdbc68`, merged as `481973c9`, both ancestors of main), test.yml run 44692602405 attempt 1 at head `506600e1`,
+conclusion success, so all twelve Windows engine shards were green. `github.bundle.test.ts` ran in engine (windows,
+shard 1/12), job 136141768056 (success). Its patch-limit rows, as read from that job's log by the 21 Nov sweep: files
+1,187 ms; counted in the listing 1,209 ms; deletions counted 1,099 ms; fileBytes 477 ms; bytes 854 ms, under the
+predicted 3-4 s and against 8.4-13.2 s and 7.9-9.5 s before. No fail and no unhandled error between tests; the 2 skips
+are the existing platform-selected cases. One green sample, so the headroom rests on one run.
 
 ## 2026-11-20: Windows isolated save renamed over an open record
 
@@ -623,6 +640,11 @@ Review follow-up.
   (only when the reader wrote any), as the timeout report already separates its parts.
 - Windows. Only Linux was validated locally. Check the Windows engine shard that runs `piped-output.test.ts` on the
   PR's CI (the `2>` and `>` redirects and the 512 KB size) before merging.
+  21 Nov 2026 (v2-closeout-ci): checked on main. engine (windows, shard 1/12) ran `piped-output.test.ts` green in
+  push runs 44848275007 (`f3d7ac74`, job 136673698394) and 44869120445 (`3e90df62`, job 136739830442), both success.
+  As read from those logs by the 21 Nov sweep, the late-reader case took 3834.70 ms and 4461.09 ms and the
+  exited-reader case 3697.41 ms and 4471.64 ms, so the `2>` and `>` redirects in `vector.pipe` and the 512,000-character
+  config work on Windows. The margin bullet above stands.
 
 ## 2026-11-20: Windows company policy folder test reached the real PowerShell ACL reader
 
