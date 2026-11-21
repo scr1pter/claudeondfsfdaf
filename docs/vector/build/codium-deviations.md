@@ -6382,12 +6382,16 @@ These are pointers only; nothing is fixed here.
     `31ddb43b`. See the Lead ruling under round three;
   - item 2: `prompt.test.ts` on Linux;
   - item 3: the engine (linux) shard step limits;
+    21 Nov 2026: superseded. PR #38 (`7e440a27`) split the Linux engine suite into six shards (`9506de79`), and
+    `test.yml` on main runs `--shard=<n>/6`. The 30-minute step limit is unchanged;
   - item 4: the app `memory-*-model` suites, which no visible log shows;
   - item 5: the review-memory MISS lines, fixed upstream by 0f6fce89 and 225905e2;
     16 Nov 2026: closed. Vector Codium run 43844651835 at `34c20b62` (main `b362fdf6` merged), Codium tests (shard
     1/4) job 133221689218: "Run HttpApi exerciser gates" succeeded with `summary pass=363 fail=0 skip=0 missing=0
     extra=0` and no MISS line;
   - item 6: the shard-matrix merge conflict with `release-finish` dbfca832;
+    21 Nov 2026: closed. `dbfca832` is an ancestor of main (through #33), and this lane merged main before PR #36
+    merged as `b5cbad1c`, so no conflict is left;
   - item 7: the non-hermetic `upstream-free.test.ts:148`, which reads host provider variables.
 - F6 ("Codium finish: F6 cost kind on read", For the lead): the desktop task-bridge store's closed literals
   (`packages/engine/src/task/desktop.ts:24-33`), and `packages/core/src/review/local-result.ts:26`'s own closed
@@ -7222,8 +7226,9 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   `test/server/free-model-guest.test.ts` 15/0, sdk-next `test/embedded.test.ts` 4/0; `bun typecheck` in server,
   engine and sdk-next.
 - **16 Nov 2026, the isolation race test replaced by deterministic steps, and the read check moved onto the open
-  file.** The stress test from the entry above (four `find` loops against 3000 renames) failed 1 time in 43 local
-  runs with a `readRecord` failure whose message was lost. That one failure has no proven mechanism: a Bun probe of
+  file.** The stress test from the entry above (four `find` loops against 3000 renames) failed 1 time in 63 local
+  runs (the 43 review runs plus the 20 full-file loop runs: 28 full-file runs and 35 runs of the test alone) with a
+  `readRecord` failure whose message was lost. That one failure has no proven mechanism: a Bun probe of
   `readRecord`'s exact sequence against the test's write-then-rename loop made 1,550,821 reads with no failure other
   than 6,782 `lstat` calls that saw `nlink` 0, which the guard already accepts. Two things are established. The test
   was a stress test, not a regression test: how many reads ran was up to the scheduler, it could pass without the fix,
@@ -7292,3 +7297,7 @@ Its commit message and the entry it appends to `connected-workspace-deviations.m
   here, about 2134 on connect-finish), and it cites connect-finish jobs and commits (`a320bdbe`, `973895e3`) that are
   not on this branch. When the second of PR #36 and PR #38 merges into main, keep one copy of that entry. The five
   code files of the pick are byte-identical to `origin/connect-finish`.
+- **21 Nov 2026: merged.** The port reached main twice with the same code: first with PR #38 (`7e440a27`, which holds
+  `1d944dd9`), then with PR #36 (`b5cbad1c`, which holds `d93b40b8`). `connected-workspace-deviations.md` on main has
+  one copy of the hub.test.ts entry. This record does not check the Linux 4/4 and Windows 12/12 step durations asked
+  for above; main now runs six Linux shards (`9506de79`), so those shard numbers no longer apply.

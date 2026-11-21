@@ -813,7 +813,8 @@ understate any `/m:2` saving in step 9. If a slow-group step 9 exceeds about 470
 (a measured per-phase `--build` budget or precompiled headers, which need a helperVersion bump and a re-measured macOS
 lock) goes to the lead as its own package, and the cap is not changed silently. Only the Windows source digest changes;
 since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows exe hash changes for that reason alone. PR #51
-needs no code change: once this merges, merge main into `policy-acl-timeout` to re-run it.
+did not wait for this merge: the fix was ported into it as merge commit `a3fe7af1`, and both merged (#52 as
+`c776fb60`, #51 as `15f3ba77`).
 
 ## 2026-11-20: Windows region observer at deadline_compile on a cold PowerShell 7 compiler
 
@@ -991,3 +992,49 @@ marker's content (same 100 × 10 ms bound) and asserts it. Locally 9/9 pass; poi
 instead of the approved snapshot still fails it with `Received: "changed"`. The same run's other two failures were
 infrastructure: Bun 1.3.14 segfaulted in `bun install` before any test ran (`engine (windows, shard 5/12)`, job
 136610692430, re-run class d), and HF-7 at stage `uia-runtime-id` in the Windows overlay Stop (job 136611151009).
+
+## 2026-11-21: re-run classes, Windows runner facts and open items
+
+Final docs sweep. Each point below was checked against git history or the GitHub API in this sweep, except where it
+says otherwise.
+
+Re-run classes. The lead re-runs a failed job once, and only when nothing else in the run failed, in these classes:
+
+- (a) The HF-7 Windows overlay Stop failure (`hands-deviations.md`, HF-7 point 15): stage `uia-root-element` or
+  `uia-runtime-id` with lookup `first`, call `root`, actor `retired` and cause `core_failure:no_ui_tree`. Example:
+  windows-build job 136368889023.
+- (d) A job whose log shows "oh no: Bun has crashed" (a Bun 1.3.14 panic or segmentation fault) and no failing test.
+  Example: `engine (windows, shard 5/12)` job 136610692430, where Bun crashed in `bun install` before any test ran. An
+  upstream Bun report was not filed: filing one is a public action left to the owner. The exception is the
+  scrollback.surface / `runtime.test.ts` panic covered by the #49 entry above, which needs a root cause, not a re-run.
+
+This file does not describe classes (b) and (c).
+
+Hosted Windows runner size, now measured. The processor-count line from #52 prints "logical processors: 4" (PR #52
+test.yml run 44778999824, windows-build job 136437129162). The 4-vCPU count in the #52 entry above is no longer only
+inferred.
+
+Open item: #52 did not meet its own target. Its entry asks for step 9 at or below about 420 s in every windows-build
+job. In the later jobs checked here, step 9 took 537 s (job 136437129162, PR #52), 446.5 s (job 136479415862, main
+`c776fb60`, from its log), 542 s (job 136638058823, PR #54) and 414 s (job 136673869016, main `f3d7ac74`), from the job API's step
+times. Three of the four are above 420 s. How much room each
+`cmake --build` has under that cap is still not measured, because passing logs print no per-command times.
+
+Windows slow-first-touch triage. About 1 in 7 hosted Windows VMs is slow the first time it touches files and programs:
+setup-node's "Environment details" takes 17-35 s instead of 3.5-5.4 s (the #54 entry above). Defender is not the cause
+to work around: on windows-2025 images it is already off (runner-images `Configure-WindowsDefender.ps1`, and the
+maintainers' live check in runner-images issue #14326), so Defender exclusions would do nothing. That reading comes
+from the lead's research on 20 Nov 2026; this sweep could not reach the runner-images repository to recheck it. When a
+Windows timing failure appears:
+
+- check that job's setup-node "Environment details" time to tell a slow VM from a test bug;
+- harden a test that is sensitive to first use (a warm-up, or first use outside the timed window, as #53 does);
+- never lengthen a deadline.
+
+Intermittent: the two Windows timeouts on main `dc89e4ec` (test.yml run 44006980544). `engine (windows, shard 11/12)`
+job 133785924937 timed out in `test/session/prompt.test.ts` ("running task tool preserves metadata after tool-call
+transition"), and `engine (windows, shard 12/12)` job 133785925116 timed out in `test/cli/github.bundle.test.ts`
+("patch-limit refusal: files, counted in the listing"). Neither recurred on the next main run, `4bb9bcb2` (run
+44007029816, success). The `github.bundle.test.ts` timeout did come back later on PR #46 (job 136057825295), and #48
+changed that test (the "Windows patch-limit listing row" entry above). The `prompt.test.ts` timeout is recorded as
+intermittent, with no change.

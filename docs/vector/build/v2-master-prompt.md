@@ -37,7 +37,7 @@ You are taking over a large, half-finished engineering effort from another agent
   - Watch a run with `gh run watch <id> --exit-status`. Read failures with `gh run view <id> --log-failed`.
 - **Known CI flakes.** Re-run once with `gh run rerun <id> --failed`, and only when the failed job matches one of these exactly and nothing else failed:
   - a Bun segfault ("panic: Segmentation fault") on a Linux engine shard;
-  - Windows: `local-fit.test.ts`, `prompt.test.ts` (3 s timeout), `task-size.test.ts` (30 s), effect-flock contention, `local.test.ts` probe 400, `task-manage-abort.test.ts` (2 s);
+  - Windows: `local-fit.test.ts`, `prompt.test.ts` (3 s timeout), `task-size.test.ts` (30 s), effect-flock contention, `task-manage-abort.test.ts` (2 s) (`local.test.ts` probe 400 was dropped on 21 Nov 2026: `e817fe51`, merged with PR #40, gives one-address identity reads the full identify budget, and later Windows shards holding `local.test.ts` are green);
   - packet capture seeing UDP DNS packets to 198.18.0.53:53, or its 55-minute setup timeout;
   - GitHub "Failed to CreateArtifact";
   - Chocolatey or ripgrep download 504s;
