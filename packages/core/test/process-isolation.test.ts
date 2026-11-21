@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -184,7 +185,66 @@ test("a hosted run with the floor wraps every tool in its own namespaces or refu
   }
   expect(attempt()).toEqual({
     file: ProcessIsolation.BINARY,
-    args: ProcessIsolation.argumentsForTool("/bin/sh", ["-c", "echo ordinary"], "/tmp"),
+    args: ProcessIsolation.argumentsForTool("/bin/sh", ["-c", "echo 'ordinary'"], "/tmp"),
     shell: false,
   })
+})
+
+// Spawn review Q4: the floor's shell wrap keeps `file` as the command line and single-quotes each argument after it.
+const QUOTED = ["%s\n", "a b", "it's", "$HOME", "`x`"]
+
+test("a hosted shell launch with arguments under the floor quotes each one as a single word", () => {
+  const attempt = () =>
+    ProcessIsolation.decide("printf", QUOTED, { cwd: "/tmp", shell: true, env: { PATH: "/usr/bin" } }, {
+      guarded: true,
+      floor: true,
+    })
+  if (process.platform !== "linux") {
+    expect(attempt).toThrow(ProcessIsolation.REFUSAL)
+    return
+  }
+  const usable = (() => {
+    try {
+      ProcessIsolation.assertBinary()
+      return true
+    } catch {
+      return false
+    }
+  })()
+  if (!usable) {
+    expect(attempt).toThrow(ProcessIsolation.REFUSAL)
+    return
+  }
+  expect(attempt()).toEqual({
+    file: ProcessIsolation.BINARY,
+    args: ProcessIsolation.argumentsForTool("/bin/sh", ["-c", "printf '%s\n' 'a b' 'it'\\''s' '$HOME' '`x`'"], "/tmp"),
+    shell: false,
+  })
+})
+
+// Runs where a usable root-owned bwrap exists, as owned-process.test.ts's legacy-floor cases do; skipped elsewhere
+// (macOS and Windows have no bubblewrap, and some Linux runners refuse its user namespace).
+const bubblewrap = (() => {
+  if (process.platform !== "linux") return false
+  try {
+    ProcessIsolation.assertBinary()
+  } catch {
+    return false
+  }
+  return (
+    spawnSync(ProcessIsolation.BINARY, ProcessIsolation.argumentsForTool("/bin/true", [], os.tmpdir()), {
+      stdio: "ignore",
+      timeout: 10_000,
+    }).status === 0
+  )
+})()
+
+test.skipIf(!bubblewrap)("the floor's quoted shell wrap round-trips every argument through bwrap exactly", () => {
+  const plan = ProcessIsolation.decide("printf '%s|'", QUOTED.slice(1), { cwd: os.tmpdir(), shell: true, env: { PATH: "/usr/bin:/bin" } }, {
+    guarded: true,
+    floor: true,
+  })
+  const result = spawnSync(plan.file, plan.args, { encoding: "utf8", timeout: 10_000 })
+  expect(result.status).toBe(0)
+  expect(result.stdout).toBe("a b|it's|$HOME|`x`|")
 })

@@ -598,3 +598,22 @@ review-fixes lane.
 
 Both native build switches and FLOOR stay false; no production activation is authorized
 by this addendum.
+
+## Addendum, 21 November 2026: Q4 closed (legacy floor shell wrap quotes its arguments)
+
+§6 item 4 noted that the legacy floor's shell wrap joined argv with spaces. It is closed on branch
+`engine-core-fixes`:
+
+- `packages/core/src/process-isolation.ts` `decide()`, floor branch: `file` stays as written (the shell tool's
+  whole command line, with no args) and each element of `args` is POSIX single-quoted (`'` becomes `'\''`) before
+  the join. The unguarded and non-floor branches are unchanged: they pass `shell` through to cross-spawn, as Node
+  documents.
+- Callers checked before the change: `ProcessIsolation.launch` is reached from the spawner (`shell: opts.shell`),
+  `engine/util/process.ts` (`shell: opts.shell`), `pty.ts`, `mcp/stdio.ts`, `untrusted-git.ts`, `brain/document/ocr.ts`
+  and `cli/cmd/github.bundle.ts` (no `shell`). Every engine and core caller that sets `shell` passes `args: []`
+  (`tool/shell.ts:1265`/`:1285`, `tool/shell/sandbox.ts` unwrapped plans), so today's single-word case is unchanged.
+- Tests (`packages/core/test/process-isolation.test.ts`): the floor case now expects `echo 'ordinary'`; a pure case
+  expects `printf '%s\n' 'a b' 'it'\''s' '$HOME' '`x`'` (REFUSAL where bwrap is unusable or off Linux); and, where a
+  root-owned bwrap runs (owned-process.test.ts's skip pattern, kept in this file rather than the native
+  `process-isolation-linux.test.ts`), `printf '%s|'` through the plan prints `a b|it's|$HOME|`x`|`. On the old join
+  all three fail (7 pass, 3 fail; bwrap exit 2). FLOOR stays false; nothing is activated.

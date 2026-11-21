@@ -326,7 +326,9 @@ export function decide(
   if (!boundary.floor) return { file, args: [...args], shell: options.shell }
   assertBinary()
   const executable = typeof options.shell === "string" ? options.shell : options.shell ? "/bin/sh" : file
-  const argv = options.shell ? ["-c", [file, ...args].join(" ")] : args
+  // `file` is the shell tool's whole command line and stays as written; each argument after it is POSIX single-quoted so
+  // the shell reads it as one word, quotes, `$` and backquotes included (spawn review Q4).
+  const argv = options.shell ? ["-c", [file, ...args.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`)].join(" ")] : args
   return { file: BINARY, args: argumentsForTool(executable, argv, options.cwd ?? process.cwd()), shell: false }
 }
 
