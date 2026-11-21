@@ -26502,3 +26502,15 @@ Five local test files passed 239 tests (config 91, verdict 49, state 59, evidenc
 ## 2026-11-21 · Integrate the engine and isolation fixes from main
 
 Merged main at `b87cc462fbb8` after the local PR verdict. The combined task isolation file retains the local fix and diagnostics lifecycle alongside the incoming task placement updates. The separate tooling fixture exercises formatter use by the build agent and the fix child. Focused files passed 51 tests (evidence 37, shell-plans 1, fix-child 6, bridge-decode 4, adapter 3). The evaluation project and the 27 workspace packages passed typechecking. The regenerated SDK, client and editor schemas matched the checked-in output. The pipeline remained at revision 5 with source digest `31a9837d871ec207`.
+
+## 2026-11-21 · VS-11 Registered review-memory controls and remaining acceptance
+
+The 12 November physical-scope entry at its original line 16000 describes the state before the owner routes were registered. The engine now exposes experimental review-memory inspection, prepared actions, confirmation and preview disposal. The SDK includes these owner endpoints. The App mounts the controls when the server advertises `vectorscopeReviewMemoryControls` and the owner has enabled `experimental.vectorscope`. The implementation is recorded in `17f0d4aa1`, `d3364469f` and `3af2416c0`. [HTTP group](../../../packages/engine/src/server/routes/instance/httpapi/groups/review-memory.ts) · [App mount](../../../packages/app/src/pages/layout-new.tsx)
+
+Storage binds records to physical repository and immutable source authority. Durable history fences are recorded in `993c5e15b` and `3bb2b2ba2`. The consumer for approved repository review-memory entries remains inactive. Session-only forget from an older binary while the session row survives still needs compatibility proof. The VS-26 option for source-linked Brain cards has separate provenance and consent rules. The earlier picker receipt remains valid for its named source. Final-head browser and native CI, owner rollout, funded evaluation and publication retain their separate acceptance requirements. [Scope plan](v2-notes/vectorscope-v2-plan.md) · [Qualified historical checkpoints](vectorscope-continuation.md)
+
+## 2026-11-21 · VectorScope finish inventory (SF-42)
+
+Refreshed the source inventory and continuation for the local VectorScope build. They record verified source and hosted runs on their own commits, the local PR verdict and outstanding GitHub package approvals. The safety and lifecycle reviews identified the owner-bound batch lock issue and the remaining V2 and restart privacy boundaries. The shared lock and separately owned integration decisions remain open for phase acceptance.
+
+The model-evidence file passed 37 tests. The core typecheck and 27 workspace typechecks passed. The source inventory derived pipeline revision 5 and the source digest `31a9837d871ec207` from the committed tree.
