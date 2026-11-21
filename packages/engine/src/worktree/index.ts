@@ -454,13 +454,18 @@ const layer: Layer.Layer<
         return { code: result.exitCode, text: result.stdout.toString("utf8"), error }
       },
       // The message of a failure to start or a timeout leads with the whole command line, so the cause's own goes first.
-      Effect.catch((cause) =>
-        Effect.succeed({
-          code: -1,
-          text: "",
-          error: (cause.cause instanceof Error ? cause.cause.message : cause.message).slice(0, UNATTENDED_ERROR_BYTES),
-        }),
-      ),
+      (effect, args) =>
+        effect.pipe(
+          Effect.catch((cause) => {
+            const error = (cause.cause instanceof Error ? cause.cause.message : cause.message).slice(
+              0,
+              UNATTENDED_ERROR_BYTES,
+            )
+            return Effect.logWarning("unattended git failed", { command: args[0], code: -1, error }).pipe(
+              Effect.as({ code: -1, text: "", error }),
+            )
+          }),
+        ),
     )
     const unattendedPrints = (args: string[], cwd: string, value: string) =>
       unattendedGit(args, cwd).pipe(Effect.map((result) => result.code === 0 && result.text.trim() === value))
