@@ -228,7 +228,7 @@ const DEPENDENCY_SPAWNERS = {
   ],
   // Arborist runs lifecycle scripts unless ignoreScripts, which npm.ts always sets.
   "@npmcli/arborist": ["packages/core/src/npm.ts"],
-} as const
+}
 
 // Calls in a launch file that start something other than the planned file, excused one by one.
 const HELPER_CALLS = [
