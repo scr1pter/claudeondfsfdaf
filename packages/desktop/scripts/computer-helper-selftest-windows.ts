@@ -330,6 +330,7 @@ export const WINDOWS_NATIVE_STAGES = [
   "input-health-no-foreground",
   "input-health-foreground-refused",
   "input-health-observe-slow",
+  "input-health-observe-exception",
   "affinity-capture-stale-target-lost",
   "affinity-capture-stale-target-stale",
   "affinity-capture-stale-pid",

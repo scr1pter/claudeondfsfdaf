@@ -271,7 +271,9 @@ size_t run_privileged_self_test_tests() {
     }
     auto slow = clean; slow.observe_slow = true;
     require(windows_privileged_listener_health_stage(slow) == L"input-health-observe-slow", "privileged.listener-slow-observation-is-its-own-stage");
-    for (const auto& facts : {clean, listener, context, unavailable, calibrating, foreground, slow})
+    auto thrown = listener; thrown.observe_exception = true;
+    require(windows_privileged_listener_health_stage(thrown) == L"input-health-observe-exception", "privileged.listener-observe-exception-precedes-every-fact");
+    for (const auto& facts : {clean, listener, context, unavailable, calibrating, foreground, slow, thrown})
       require(std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), windows_privileged_listener_health_stage(facts)) != windows_privileged_stages.end(),
         "privileged.listener-health-stages-are-closed-stages");
   });

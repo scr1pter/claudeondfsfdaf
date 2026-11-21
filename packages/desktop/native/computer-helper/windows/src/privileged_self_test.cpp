@@ -565,7 +565,7 @@ WindowsListenerHealthFacts listener_health_facts(const UserInputService& detecto
       if (process) { const auto token = observe_token(process.get()); facts.surface = windows_surface_state(availability, &token); }
     }
     facts.observe_slow = GetTickCount64() - started > 100;
-  } catch (...) { facts.surface = WindowsSurfaceState::unavailable; }
+  } catch (...) { facts.observe_exception = true; }
   return facts;
 }
 CaptureBitmap decode_png(const std::vector<uint8_t>& bytes) {
@@ -698,7 +698,10 @@ std::wstring_view windows_privileged_affinity_stale_stage(WindowsAffinityStale s
   return index < stages.size() ? stages[index] : std::wstring_view{};
 }
 std::wstring_view windows_privileged_listener_health_stage(const WindowsListenerHealthFacts& facts) noexcept {
-  // A fail_locked ran (unavailable): first the listener's own facts, then a native context rotation.
+  // A throw left the other facts at their defaults, so it must not read as a foreground refusal.
+  if (facts.observe_exception) return L"input-health-observe-exception";
+  // Setup reads unavailable (a fail_locked ran, or the detector is closed, stopped or its listener
+  // unhealthy): first the listener's own facts, then a native context rotation.
   if (facts.setup == UserInputSetupState::unavailable && facts.listener_changed) return L"input-health-unavailable-listener";
   if (facts.setup == UserInputSetupState::unavailable && facts.context_changed) return L"input-health-unavailable-context";
   // None ran: the pulse, challenge or freshness terms are left, which no read-only fact separates.

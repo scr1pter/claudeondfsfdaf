@@ -23,7 +23,7 @@ inline constexpr std::array<std::wstring_view, 17> windows_privileged_checks{
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
   L"capture-isolated-window-worker", L"input-listener-health"};
-inline constexpr std::array<std::wstring_view, 261> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 262> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -98,7 +98,7 @@ inline constexpr std::array<std::wstring_view, 261> windows_privileged_stages{
   L"affinity-plan-current-affinity-monitor", L"affinity-plan-current-affinity-none", L"affinity-plan-current-affinity-other", L"affinity-plan-current-exception",
   L"affinity-plan-current-context", L"input-health-context", L"input-health-target", L"input-health-ready",
   L"input-health-unavailable-listener", L"input-health-unavailable-context", L"input-health-calibrating",
-  L"input-health-no-foreground", L"input-health-foreground-refused", L"input-health-observe-slow",
+  L"input-health-no-foreground", L"input-health-foreground-refused", L"input-health-observe-slow", L"input-health-observe-exception",
   L"affinity-capture-stale-target-lost", L"affinity-capture-stale-target-stale", L"affinity-capture-stale-pid", L"affinity-capture-stale-main-window",
   L"affinity-capture-stale-excluded-window", L"affinity-capture-stale-point-patch", L"affinity-capture-stale-point-excluded", L"affinity-capture-stale-owner",
   L"affinity-capture-stale-hit-null", L"affinity-capture-stale-hit-main", L"affinity-capture-stale-hit-foreign", L"affinity-capture-stale-affinity-call",
@@ -144,7 +144,7 @@ std::wstring_view windows_privileged_affinity_stale_stage(WindowsAffinityStale, 
 // pre-setup diagnostic. The surface covers the helper, the desktop and the foreground owner's token.
 struct WindowsListenerHealthFacts {
   UserInputSetupState setup = UserInputSetupState::unavailable;
-  bool listener_changed = false, context_changed = false, foreground_null = false, observe_slow = false;
+  bool listener_changed = false, context_changed = false, foreground_null = false, observe_slow = false, observe_exception = false;
   WindowsSurfaceState surface = WindowsSurfaceState::unavailable;
 };
 // Pure: the closed input-health-* stage for those facts; input-health-ready when none applies.

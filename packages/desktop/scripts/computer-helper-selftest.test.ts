@@ -506,6 +506,8 @@ test("HF-6 diagnostics name the first stale affinity term and classify a listene
   )
   const stages = [...classifier.matchAll(/return L"([^"]+)";/g)].map((match) => match[1])
   expect(stages).toEqual([
+    // An exception while gathering the facts is its own stage, never a foreground refusal.
+    "input-health-observe-exception",
     "input-health-unavailable-listener",
     "input-health-unavailable-context",
     "input-health-calibrating",
