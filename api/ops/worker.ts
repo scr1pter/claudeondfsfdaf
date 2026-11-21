@@ -1,6 +1,8 @@
 import { requireInternalRequest } from "../_lib/hosted-internal.js"
 import { ApiError, handleApiError, json, type ApiRequest, type ApiResponse } from "../_lib/http.js"
 import { decodeOpsReport, handleOpsReport, INCIDENT_LIMITS, type OpsReportOptions } from "../_lib/ops-incidents.js"
+// A59: a regressed release names its repository through the registered @vector binding reader.
+import "../_lib/ops-registration.js"
 
 // The signature is checked over the raw body, so Vercel must not parse it first.
 export const config = { api: { bodyParser: false } }

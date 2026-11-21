@@ -54,7 +54,7 @@ import { sendServerAlert } from "./web-push.js"
  *
  * The account acts on an incident from its cards: snooze (1 to 24 hours: no alerts and no automatic revert for that URL
  * or that repository and environment), and "Fix it", which starts a run of Vector's GitHub agent in the person's own
- * repository through Codex's `startCloudRun` (registered by the integration commit, A59), only on that tap, within the
+ * repository through Codex's `startCloudRun` (registered by api/_lib/ops-registration.ts, A59), only on that tap, within the
  * plan's fix runs a day. Undo is the revert pull request: the person merges it in GitHub, or in the desktop with their
  * own GitHub sign-in. Vector's server never merges.
  */
@@ -815,10 +815,11 @@ export async function unsnoozeIncident(account: string, id: unknown, fetcher: ty
 
 /**
  * Starts a run of Vector's GitHub agent in the person's own repository: Codex's `startCloudRun(trigger)` (contract
- * §4.18), which the integration commit (A59) registers with `registerOpsRunStarter`. It answers the run's id and, when
- * it has one, a link to follow it.
+ * §4.18), which api/_lib/ops-registration.ts (A59) registers with `registerOpsRunStarter`. It answers the run's id and
+ * a link to follow it when it has them; `startCloudRun` has neither at dispatch, so the registered starter answers
+ * neither. A refusal is thrown as an ApiError, which the fix passes through after releasing its claim.
  */
-export type OpsRunStarter = (trigger: CodiumRunTrigger.RunTrigger) => Promise<{ id: string; url?: string }>
+export type OpsRunStarter = (trigger: CodiumRunTrigger.RunTrigger) => Promise<{ id?: string; url?: string }>
 let runStarter: OpsRunStarter | undefined
 
 export function registerOpsRunStarter(starter: OpsRunStarter | undefined) {
@@ -938,7 +939,7 @@ export async function startIncidentFix(
       detail: { limit: "fix-runs", max: cap },
     })
   const { prompt, criteria } = fixPrompt(incident)
-  let run: { id: string; url?: string }
+  let run: { id?: string; url?: string }
   try {
     run = await starter({
       source: "ops",

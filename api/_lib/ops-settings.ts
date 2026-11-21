@@ -20,9 +20,10 @@ import { persistentStore } from "./persistent-store.js"
  *   due, read by the daily `/api/ops/domains` job.
  *
  * Each repository's owner is decided by its binding, which Codex's @vector build keeps (`bindingFor`, contract §4.18;
- * one account per repository id). This build never imports Codex's files: the integration commit (A59) registers the
- * reader with `registerRepoBindingReader((id) => bindingFor(id))`. Until then no repository is bound, so none can be
- * configured and no deployment or pull request is acted on.
+ * one account per repository id). This file never imports Codex's: api/_lib/ops-registration.ts (A59) registers the
+ * reader with `registerRepoBindingReader`, and each function that reads a binding imports it. The reader reads
+ * `bindingFor(id)` only while the cloud-agents service is on; while it is off (or without a reader) no repository is
+ * bound, so none can be configured and no deployment or pull request is acted on.
  *
  * The ops Worker (A46) holds a copy of the domains and monitors (`config`). After every change the document's Worker
  * part is hashed and, when it differs from the last copy the Worker accepted, sent again (syncOpsConfig).
@@ -633,7 +634,7 @@ export type OpsBindingReader = (repositoryId: string) => Promise<OpsRepoBinding 
 
 let bindingReader: OpsBindingReader | undefined
 
-/** Registers the reader of repository bindings (A59: `registerRepoBindingReader((id) => bindingFor(id))`). */
+/** Registers the reader of repository bindings (A59: api/_lib/ops-registration.ts). */
 export function registerRepoBindingReader(reader: OpsBindingReader | undefined) {
   bindingReader = reader
 }

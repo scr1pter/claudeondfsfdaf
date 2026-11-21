@@ -379,7 +379,8 @@ describe("every request the screens send reaches its route with a body it accept
       world.now + 4 * 3_600_000,
     )
     expect((await send({ kind: "unsnooze", id })).status).toBe(200)
-    // Fix it reaches the route; with no run starter registered yet (A59) the answer is the documented refusal.
+    // Fix it reaches the route; the starter the route registers (A59) gives the documented refusal while the
+    // cloud-agents service is off.
     const fix = await send({ kind: "fix", id })
     expect([fix.status, fix.body.error?.code]).toEqual([503, "OPS_FIX_UNAVAILABLE"])
     expect((await send({ kind: "add-domain", domain: "other.example.com" })).status).toBe(200)
