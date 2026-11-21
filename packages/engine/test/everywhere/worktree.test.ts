@@ -1021,10 +1021,9 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
       path.join(checkout, ".vector", "vector.json"),
       JSON.stringify({ formatter: { "ev18-dot": { command } } }),
     )
-    // The instance's Vcs reads the checkout's branch in the background (Vcs.init forks into the app scope), and
-    // disposing the instance neither waits for nor stops it. On Windows those git processes, whose working folder is the
-    // checkout, keep it from being removed, so wait for them (GET /vcs joins the lookup) before the instance is disposed
-    // and before the test ends.
+    // The instance's Vcs reads the checkout's branch with git whose working folder is the checkout; on Windows a running
+    // git keeps the folder from being removed. Vcs.init now awaits that lookup during the instance's boot, and GET /vcs
+    // joins it as well, so read it before the instance is disposed and before the test ends.
     await read(checkout, "/vcs")
     const dispose = await call("/instance/dispose", {
       method: "POST",
