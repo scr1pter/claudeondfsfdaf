@@ -2997,3 +2997,23 @@ get_job_logs:
   name each file.
 
 This is a per-SHA record on main with both native build switches and `FLOOR` false; it is not a native qualification.
+
+## 21 November 2026: Native Shell runs 18 and 19 (NQ-RUNS-18-19)
+
+"Genuine native Shell seam" (`native-shell.yml`) on `native-qualify`, read with the job listings and get_job_logs.
+Per-SHA records only: not main, no qualification, both native build switches and `FLOOR` false.
+
+- Run 18, [43841399673](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43841399673), at `47db73cd`
+  (2026-11-16 09:37 UTC): all eight cells failed at step 16, "Actual ShellTool and command lifecycle witness before any
+  UID sweep", with steps 1-15 green and step 18 ("Preserve every earlier failure") failing after it. Jobs:
+  node codium engine-death 133210692826, node codium baseline 133210693226, bun codium baseline 133210693299,
+  node own-key baseline 133210693332, bun codium engine-death 133210693350, bun own-key engine-death 133210693369,
+  bun own-key baseline 133210693379, node own-key engine-death 133210693546.
+- Run 19, [43867414546](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43867414546), at `c9a8e489`
+  (2026-11-16 12:31 UTC): the four Node cells passed every step: node own-key engine-death 133299448949, node codium
+  engine-death 133299449031, node own-key baseline 133299449128, node codium baseline 133299449236. The four Bun
+  cells failed at step 16: bun own-key baseline 133299448739, bun own-key engine-death 133299449093, bun codium
+  baseline 133299449146, bun codium engine-death 133299449404. Job 133299448739's host line is
+  `VECTOR_NATIVE_SHELL_FAILURE {"v":1,"host":"host-close",…,"driverExit":134,"probe":"probe-empty-abort-own-zero","probeNode":"probe-node-zero",…}`,
+  and both runtimes' preflight printed `readerSHA256` `33c834a9…a762` for source revision `c9a8e489`.
+- This supersedes `native-isolation-status.md:474` ("No Node cell was dispatched"); a dated note is added there.

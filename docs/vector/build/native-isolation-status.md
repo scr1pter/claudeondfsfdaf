@@ -472,6 +472,10 @@ The scope of this result is narrow:
   that this is what aborted step 16 is still inference. It stays inference until a run
   with the `/proc` decision applied passes.
 - No Node cell was dispatched, so `probe-node-zero` qualifies no Node cell.
+  - Superseded 21 Nov 2026: Node cells were dispatched in runs 18 and 19 (`native-qualify-notes.md`, "Native Shell
+    runs 18 and 19"). In run 19 (`c9a8e489`) the four Node cells passed and the four Bun cells failed at step 16
+    with `driverExit` 134 and `probe-empty-abort-own-zero`. Per-SHA, on `native-qualify`, not main; no
+    qualification, and both native build switches and FLOOR stay false.
 
 The `/proc` decision still belongs to the lead or the native lane, and to the owner where
 it touches the held-off FLOOR.
