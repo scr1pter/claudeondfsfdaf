@@ -1469,6 +1469,31 @@ describe("erasing", () => {
     expect(members(everywhereKeys.jobsDue())).toEqual([bob.jid])
     expect(await state(bob.jid)).toBe("received")
   })
+
+  test("deleting an account clears its installation's ended summaries and leaves none of its jobs in another's ended set", async () => {
+    const bobAt = (installation: string) =>
+      slackJob({ installation, sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB, label: "Bob <@U0BOB0001>" } })
+    // Alice connects SLACK (the first to seed it) and Bob SLACK_OTHER; each also works on the other's installation.
+    const aliceHome = await settledWith(slackJob(), "Alice's fix at home.")
+    const bobAtAlice = await settledWith(bobAt(SLACK), "Bob's fix in Alice's workspace.")
+    const bobHome = await settledWith(bobAt(SLACK_OTHER), "Bob's fix at home.")
+    const aliceAway = await settledWith(slackJob({ installation: SLACK_OTHER }), "Alice's fix in Bob's workspace.")
+    const aliceLive = await created(slackJob({ installation: SLACK_OTHER }))
+    // Both ended at the same instant, so the set orders them by jid.
+    expect(members(everywhereKeys.installationEnded(SLACK_OTHER))).toEqual([bobHome.jid, aliceAway.jid].sort())
+
+    // The production eraser (no data keys, the installation erase's fenced store), as Codium's account deletion runs it.
+    await eraseEverywhereAccount({ store, now: fake.clock.now, jobs: jobEraser(store, () => fake.clock.now) }, ALICE)
+    for (const jid of [aliceHome.jid, aliceAway.jid, aliceLive.jid]) expect(fake.read(everywhereKeys.job(jid))).toBeUndefined()
+    // Alice's installation is erased: Bob's ended job there keeps its record for his job list, without its summary.
+    expect(fake.read(everywhereKeys.installationEnded(SLACK))).toBeUndefined()
+    const kept = await readJob(store, bobAtAlice.jid)
+    expect(kept).toMatchObject({ state: "settled", outcome: "changes" })
+    expect(kept?.summaryEnc).toBeUndefined()
+    // Bob's installation stays, and its ended set names only his own job (Alice's live job was cancelled into it first).
+    expect(members(everywhereKeys.installationEnded(SLACK_OTHER))).toEqual([bobHome.jid])
+    expect(openSummary(ctx(), (await readJob(store, bobHome.jid))!)).toBe("Bob's fix at home.")
+  })
 })
 
 describe("delivery admission", () => {

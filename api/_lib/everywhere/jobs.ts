@@ -1956,7 +1956,8 @@ export async function eraseInstallationJobs(ctx: JobsContext, installation: stri
 
 /**
  * Erases everything the jobs module keeps for an account being deleted: its live jobs are cancelled, then every job
- * record and body of its last 30 days with its Actions links, its history and the readiness its last computer sent.
+ * record and body of its last 30 days with its Actions links and its entry in its installation's ended set (EV-23),
+ * its history and the readiness its last computer sent.
  */
 export async function eraseAccountJobs(ctx: JobsContext, account: string): Promise<void> {
   ctx = { ...ctx, erasing: true }
@@ -1973,6 +1974,9 @@ export async function eraseAccountJobs(ctx: JobsContext, account: string): Promi
   for (const jid of members(await ctx.store(["ZRANGE", history, 0, -1]))) {
     const job = await readJob(ctx.store, jid).catch(() => undefined)
     if (job && job.sponsor !== owner) continue
+    // EV-23: the job's entry in its installation's ended set (the cancel above adds a live job's), which may be another
+    // connector's installation. Removed before the record, which is the only place that names the installation.
+    if (job) await ctx.store(["ZREM", everywhereKeys.installationEnded(job.installation), jid])
     await deleteKeys(ctx.store, everywhereKeys.job(jid), everywhereKeys.jobBody(jid), ...(job ? runLinks(job) : []))
     await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
     await ctx.store(["ZREM", everywhereKeys.jobsPosts(), jid])
