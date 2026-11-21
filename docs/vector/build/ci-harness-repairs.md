@@ -203,6 +203,22 @@ fix revision: the three Windows install steps print `ripgrep 15.2.0` and the fol
 on a PR that touches test.yml reports extended=true in its summary; and mac-test (macos-15-intel, macos-26) and
 windows-arm64-test run and pass on that PR.
 
+21 Nov 2026 (v2-closeout-ci): those hosted checks passed. Read through GitHub MCP:
+
+- PR #41 test.yml run 43962925555 (head `218d8991`, attempt 1, success, 40 jobs with none failed): the plan job
+  133635268770 logs "Native PR coverage: extended=true (7 changed paths)"; mac-test macos-15-intel 133645474806 and
+  macos-26 133645474767, and windows-arm64-test 133646422230, all success; unit (windows) 133635267552 and all 12
+  engine (windows) shards success, each with its "Install ripgrep" step green. The same PR's Windows background
+  containment `native` job 133634793480 (run 43962925197) passed its "Install native ripgrep" step.
+- Repeated on main `f3d7ac74`, test.yml run 44848275007: unit (windows) 136673698184, plan 136673698648,
+  windows-arm64-test 136678740437 and mac-test 136679548901 (macos-15-intel) and 136679548984 (macos-26), all success,
+  with every Windows ripgrep install step green.
+- The action throws unless the downloaded `rg.exe` reports `ripgrep 15.2.0`, so each green install step implies that
+  version. The action's ARM64 branch is still unexercised: windows-arm64-test does not use it, and no other job runs
+  on Windows ARM64 with it.
+- Dropping "Chocolatey or ripgrep 504" from the known-flake list (no workflow uses Chocolatey any more) is proposed to
+  the lead in the PR body; v2-handoff.md and RULES-v2 are left unchanged until the lead decides.
+
 ## 2026-11-17: Windows review parse child bound and phase marks
 
 Branch `parse-test-windows` from `dabc4821`. Test harness only: `packages/engine/test/review/parse.test.ts`'s
