@@ -6452,6 +6452,13 @@ These are pointers only; nothing is fixed here.
     "The image floor").
 - Track B (checkpoint):
   - B01's combined final checks;
+    - 21 Nov 2026 (v2-closeout-ci): still open. Main's first test.yml push run after #56 (every lane but VectorScope),
+      44885765033 at `153f9a22`, concluded failure: 31 of its 32 jobs that ran passed (unit, e2e, the desktop bundle,
+      all six Linux and twelve Windows engine shards, and the other computer-helper jobs), and computer-helper mac-test
+      (macos-15-intel) job 136798635643 failed at "Run required grant-free native checks" with
+      `channel-eof: supervisor-pgrep-timeout` (30 passed, 1 skipped, 1 failed). That signature is not on the
+      known-flake list, so it needs a root cause before B01 can close; the next push run, 44889277281 at `4fc245b6`, was
+      still queued when this was written. Read through GitHub MCP.
   - B02 to B03 and B05, open on the PR #33 CI lanes;
   - B10-3, as recorded;
   - "validate all lanes together", with the lead's end-of-lane test.yml run.
