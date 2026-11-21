@@ -133,6 +133,41 @@ async function claimed(input: NewJob = slackJob(), computer = device()) {
   return { jid: job.jid, device: computer, lease: verdict.job.lease.id, job: verdict.job }
 }
 
+/** A job taken through offer, claim, report and settle with `summary`, as a computer would; answers its record. */
+async function settledWith(input: NewJob, summary: string, context: () => JobsContext = () => ctx()) {
+  await seedJobAuthority(context(), input)
+  const made = await createJob(context(), input)
+  if (!made.ok) throw new Error(`createJob refused: ${made.code}`)
+  const jid = made.job.jid
+  expect((await offerJob(context(), jid)).ok).toBe(true)
+  const computer = device()
+  const claim = await claimJob(context(), { account: input.sponsor, jid, device: computer })
+  if (!claim.ok) throw new Error(`claim refused: ${claim.code}`)
+  const lease = claim.job.lease.id
+  const started = await reportJob(context(), {
+    account: input.sponsor,
+    device: computer,
+    report: { jid, lease, seq: 1, milestone: "started" },
+  })
+  expect(started.ok).toBe(true)
+  const done = await settleJob(context(), {
+    account: input.sponsor,
+    device: computer,
+    settle: {
+      jid,
+      lease,
+      outcome: "changes",
+      summary,
+      branch: expectedBranch(claim.record),
+      prUrl: "https://github.com/acme/app/pull/7",
+      checks: "skipped",
+      files: 1,
+    },
+  })
+  if (!done.ok) throw new Error("settle refused")
+  return done.job
+}
+
 async function state(jid: string) {
   return (await readJob(store, jid))?.state
 }
@@ -1360,6 +1395,49 @@ describe("erasing", () => {
     ).toEqual({ ok: true, action: "stop" })
   })
 
+  test("erasing an installation clears the sealed summary of its ended jobs; another installation's stays", async () => {
+    const here = await settledWith(slackJob(), "Fixed the redirect check.")
+    const other = await settledWith(slackJob({ installation: SLACK_OTHER }), "Fixed the other workspace.")
+    expect(openSummary(ctx(), here)).toBe("Fixed the redirect check.")
+    // Both ended: neither is on its installation's live index any more.
+    expect(members(everywhereKeys.installationJobs(SLACK))).toEqual([])
+    expect(members(everywhereKeys.installationJobs(SLACK_OTHER))).toEqual([])
+
+    expect(await eraseInstallationJobs(ctx(), SLACK)).toBe(0)
+    const erased = await readJob(store, here.jid)
+    // The record stays for the account's job list; only its sealed summary goes.
+    expect(erased).toMatchObject({ state: "settled", outcome: "changes" })
+    expect(erased?.summaryEnc).toBeUndefined()
+    expect(openSummary(ctx(), erased!)).toBeUndefined()
+    expect(fake.read(everywhereKeys.installationEnded(SLACK))).toBeUndefined()
+
+    const kept = await readJob(store, other.jid)
+    expect(openSummary(ctx(), kept!)).toBe("Fixed the other workspace.")
+    expect(members(everywhereKeys.installationEnded(SLACK_OTHER))).toEqual([other.jid])
+  })
+
+  test("an installation's ended jobs are recorded once, for 30 days from their end", async () => {
+    const day = 24 * 60 * 60_000
+    const ended = everywhereKeys.installationEnded(SLACK)
+    const score = (jid: string) => fake.send(["ZSCORE", ended, jid])
+    const first = await settledWith(slackJob(), "First fix.")
+    expect(score(first.jid)).toBe(String(first.endedAt))
+    expect(fake.pttl(ended)).toBe(KEEP_MS.job)
+    // Clearing the summary changes an ended job: it neither records the job again nor keeps the record longer.
+    fake.clock.advance(60_000)
+    expect(await clearSummary(ctx(), first.jid)).toBe(true)
+    expect(score(first.jid)).toBe(String(first.endedAt))
+    expect(fake.pttl(ended)).toBe(KEEP_MS.job - 60_000)
+    // Each job that ends keeps the record 30 days more and drops the jobs that ended more than 30 days before it.
+    fake.clock.advance(20 * day)
+    const second = await settledWith(slackJob(), "Second fix.")
+    expect(members(ended)).toEqual([first.jid, second.jid])
+    expect(fake.pttl(ended)).toBe(KEEP_MS.job)
+    fake.clock.advance(11 * day)
+    const third = await settledWith(slackJob(), "Third fix.")
+    expect(members(ended)).toEqual([second.jid, third.jid])
+  })
+
   test("deleting an account removes every job record and body of its last 30 days", async () => {
     const live = await claimed()
     const done = await created()
@@ -1611,5 +1689,31 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
     const ended = await sweepAccount(later, sponsor)
     expect(ended.map((entry) => entry.job.state)).toEqual(["lost"])
     expect(await readJobBody(realCtx(), jid)).toBeUndefined()
+  })
+
+  test("erasing an installation clears the sealed summary of its ended jobs on Redis; another installation's stays", async () => {
+    const sponsor = randomUUID()
+    const hereInput = isolatedSlackJob(sponsor)
+    const otherInput = isolatedSlackJob(sponsor)
+    const here = await settledWith(hereInput, "Fixed the redirect check.", realCtx)
+    const other = await settledWith(otherInput, "Fixed the other workspace.", realCtx)
+    const real = testEverywhereStore(redis.fetch)
+    const otherEnded = everywhereKeys.installationEnded(otherInput.installation)
+    try {
+      expect(await real(["ZRANGE", otherEnded, 0, -1])).toEqual([other.jid])
+      const ttl = Number(await real(["PTTL", otherEnded]))
+      expect(ttl).toBeGreaterThan(KEEP_MS.job - 60_000)
+      expect(ttl).toBeLessThanOrEqual(KEEP_MS.job)
+
+      expect(await eraseInstallationJobs(realCtx(), hereInput.installation)).toBe(0)
+      const erased = await readJob(real, here.jid)
+      expect(erased).toMatchObject({ state: "settled", outcome: "changes" })
+      expect(erased?.summaryEnc).toBeUndefined()
+      expect(openSummary(realCtx(), erased!)).toBeUndefined()
+      expect(Number(await real(["EXISTS", everywhereKeys.installationEnded(hereInput.installation)]))).toBe(0)
+      expect(openSummary(realCtx(), (await readJob(real, other.jid))!)).toBe("Fixed the other workspace.")
+    } finally {
+      for (const jid of [here.jid, other.jid]) await real(["ZREM", everywhereKeys.jobsPosts(), jid])
+    }
   })
 })
