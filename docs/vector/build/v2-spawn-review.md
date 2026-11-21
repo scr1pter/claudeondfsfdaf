@@ -510,6 +510,7 @@ and the package log and decisions are in
   `docs/vector/build/v2-notes/v2-complete-plan.md` §4.5) still tracks SPAWN-2 as
   "Remains", and says `/bin/ps` fails under the hosted sandbox's empty `/proc`. That
   contradicts the NQ-2 addendum. It is a lead item, and that file is not edited here.
+- Reconciled 21 Nov 2026 (v2-closeout-ci): v2-complete-plan.md §4.5 now lists SPAWN-2 as "not reachable; tracked, no code change", citing `github.sandbox.ts:812`, with the three re-check triggers above.
 
 **§6 Q3:** NQ-2's code-reading answer stands. Background shells are reachable in a hosted
 legacy `@vector` run on Linux:
