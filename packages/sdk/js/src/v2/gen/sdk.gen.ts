@@ -9240,6 +9240,7 @@ export class Session2 extends HeyApiClient {
       size?: TaskSizeChoice
       judge?: TaskJudgeMode
       secondOpinion?: boolean
+      codeReview?: boolean
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -9265,6 +9266,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "size" },
             { in: "body", key: "judge" },
             { in: "body", key: "secondOpinion" },
+            { in: "body", key: "codeReview" },
             { in: "body", key: "parts" },
           ],
         },
@@ -9717,6 +9719,7 @@ export class Session2 extends HeyApiClient {
       size?: TaskSizeChoice
       judge?: TaskJudgeMode
       secondOpinion?: boolean
+      codeReview?: boolean
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -9742,6 +9745,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "size" },
             { in: "body", key: "judge" },
             { in: "body", key: "secondOpinion" },
+            { in: "body", key: "codeReview" },
             { in: "body", key: "parts" },
           ],
         },
@@ -9781,6 +9785,7 @@ export class Session2 extends HeyApiClient {
       size?: TaskSizeChoice
       judge?: TaskJudgeMode
       secondOpinion?: boolean
+      codeReview?: boolean
       parts?: Array<{
         id?: string
         type: "file"
@@ -9812,6 +9817,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "size" },
             { in: "body", key: "judge" },
             { in: "body", key: "secondOpinion" },
+            { in: "body", key: "codeReview" },
             { in: "body", key: "parts" },
           ],
         },

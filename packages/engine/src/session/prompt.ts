@@ -1720,6 +1720,7 @@ const layer = Layer.effect(
         ...(input.size ? { size: input.size } : {}),
         ...(input.judge ? { judge: input.judge } : {}),
         ...(input.secondOpinion ? { secondOpinion: true } : {}),
+        ...(input.codeReview ? { codeReview: true } : {}),
       }
 
       if (
@@ -4582,6 +4583,7 @@ const layer = Layer.effect(
                 : { size: commandSize(input.arguments) }),
           ...(input.judge ? { judge: input.judge } : {}),
           ...(input.secondOpinion ? { secondOpinion: true } : {}),
+          ...(input.codeReview ? { codeReview: true } : {}),
         },
         // @file references in an MCP prompt or a skill are not the user's choice; the user's own attachments are.
         { userFile: (url) => attached.has(url) || cmd.source === "command" },
@@ -4965,6 +4967,10 @@ export const PromptInput = Schema.Struct({
     description:
       "Second opinion: when the judge checks work done on a Vector Codium model, it runs on the plan's judge from another lab, unless a judge model is configured. Off unless set.",
   }),
+  codeReview: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Code review after each task: when the run changed files, VectorScope reviews the uncommitted changes once Vector, and LLM-as-a-judge when it runs, are done. Report only. Off unless set.",
+  }),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,
@@ -5032,6 +5038,7 @@ export const CommandInput = Schema.Struct({
   size: Schema.optional(TaskSize.Choice),
   judge: Schema.optional(TaskSize.JudgeMode),
   secondOpinion: Schema.optional(Schema.Boolean),
+  codeReview: Schema.optional(Schema.Boolean),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.
