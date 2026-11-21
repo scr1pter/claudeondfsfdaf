@@ -99,6 +99,22 @@ test("the actual local remote must match the declared allowed project before wor
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
 
+test("a failing git command names git's own reason, at most 2 KB of it, and never its arguments", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "everywhere-failure-"))
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: directory, env: runnerGitEnvironment(), stdio: "pipe" })
+    // An out-of-range repository format version: git exits 128 reading it, with about 3 KB of stderr.
+    await writeFile(path.join(directory, ".git", "config"), `[core]\n\trepositoryformatversion = ${"9".repeat(3000)}\n`)
+    const runner = createEverywhereGit({ directory, repository: "acme/app", identity: { name: "Fixture", email: "fixture@example.invalid" } })
+    const prefix = "The Everywhere git operation failed: "
+    const message = await runner.run(["rev-parse", "--git-common-dir"]).then(() => "resolved", (error: Error) => error.message)
+    expect(message).toStartWith(`${prefix}fatal: bad numeric config value`)
+    expect(message.length).toBeLessThanOrEqual(prefix.length + 2048)
+    // The hardening flags are arguments: a child-process error message would quote them.
+    expect(message).not.toContain("core.hooksPath")
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
 test("network git uses a canonical URL and job-specific ref rather than shared FETCH_HEAD", async () => {
   const calls: readonly string[][] = []
   const mutable = calls as string[][]

@@ -50,10 +50,14 @@ export type GitExec = (input: { readonly directory: string; readonly args: reado
 
 const execute: GitExec = (input) => new Promise((resolve, reject) => {
   execFile("git", [...input.args], { cwd: input.directory, env: input.env, timeout: 60_000,
-    maxBuffer: 8 * 1024 * 1024, signal: input.signal }, (error, stdout) => {
-    // Child-process errors quote their arguments. Never carry authentication or repository output into an error.
-    if (error) return reject(new Error("The Everywhere git operation failed"))
-    resolve(stdout)
+    maxBuffer: 8 * 1024 * 1024, signal: input.signal }, (error, stdout, stderr) => {
+    // Child-process errors quote their arguments (identity, commit message, the --config-env name), and stdout is
+    // repository content, so neither is carried. git's own stderr is, at most 2 KB of it: the authorization reaches git
+    // only through the variable --config-env names, git prints header values only under GIT_TRACE_CURL or
+    // GIT_CURL_VERBOSE, which runnerGitEnvironment never passes, and the runner keeps these errors on this computer.
+    if (!error) return resolve(stdout)
+    const detail = stderr.slice(0, 2048).trim()
+    reject(new Error(detail ? `The Everywhere git operation failed: ${detail}` : "The Everywhere git operation failed"))
   })
 })
 
