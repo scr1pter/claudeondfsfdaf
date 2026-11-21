@@ -2449,3 +2449,10 @@ record" (added once PR #59, which held that file, had merged).
   mirroring the record-save pair. Every OS runs them; on Linux the rename replaces the open file at once, so both pass
   before and after locally (4 pass with the place filter). The Windows engine shard holding isolation.test.ts is the
   red/green proof: before the change the first case fails at once with EPERM instead of waiting.
+
+## 2026-11-21 Spec §7.2 shard counts
+
+- `multiagent-parity-spec.md` §7.2 item 1 said "Linux 4, Windows 6". `.github/workflows/test.yml` runs
+  `engine (linux, shard n/6)` (`shard: [1, 2, 3, 4, 5, 6]`, `--shard=n/6`) and `engine (windows, shard n/12)`
+  (`shard: [1 … 12]`). The spec line now says Linux 6 and Windows 12 and names test.yml as the source. No other §7.2
+  text changed.
