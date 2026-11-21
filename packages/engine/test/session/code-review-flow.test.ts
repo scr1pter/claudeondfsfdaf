@@ -222,6 +222,8 @@ const connected = testEffect(
 const actual = testEffect(AppNodeBuilder.build(nodes, replacements()))
 // VectorScope's private Git verifier runs only on Linux, and only for a user other than root.
 const verifier = process.platform === "linux" && process.getuid?.() !== 0 ? actual.instance : actual.instance.skip
+// VectorScope's private Git admission, which creates its run, needs the pinned-directory adapter Linux has.
+const linux = process.platform === "linux" ? actual.instance : actual.instance.skip
 
 const git = (cwd: string, ...args: string[]) => Effect.promise(() => $`git ${args}`.cwd(cwd).quiet().text())
 
@@ -602,8 +604,8 @@ describe("code review after each task", () => {
     60_000,
   )
 
-  actual.instance(
-    "with VectorScope local reviews off, nothing starts and the conversation carries on",
+  linux(
+    "with VectorScope local reviews off nothing starts and the conversation carries on, and turning them on reviews",
     () =>
       Effect.gen(function* () {
         const f = yield* setup({ review: { security: "off", verify: "off" } })
@@ -621,7 +623,31 @@ describe("code review after each task", () => {
           codeReview: true,
         })
         expect(next.info.role === "assistant" && next.info.error).toBeFalsy()
+        yield* settled(f, chat.id)
+        expect(yield* f.sessions.children(chat.id)).toEqual([])
         expect(yield* f.llm.inputs).toHaveLength(3)
+        // The owner turns local reviews on; the next finished task is reviewed by VectorScope's own run.
+        const config = yield* Config.Service
+        yield* config.updateGlobal({ experimental: { vectorscope: true } })
+        yield* f.llm.push(
+          reply().tool("StructuredOutput", { summary: "Nothing to fix.", risk: "low", files: [], findings: [] }),
+        )
+        yield* task(f, chat.id, { file: "reviewed.ts" })
+        const note = yield* pollWithTimeout(
+          f.sessions.messages({ sessionID: chat.id }).pipe(Effect.map((messages) => notes(messages)[0])),
+          "The review's note never arrived.",
+          "20 seconds",
+        )
+        expect(note.metadata?.taskQuiet).toBe(true)
+        const runs = yield* f.sessions.children(chat.id)
+        expect(runs.map((run) => run.title)).toEqual([expect.stringMatching(/^VectorScope · [0-9a-f]{7}$/)])
+        expect(isRecord(note.metadata?.reviewNotification) && note.metadata.reviewNotification.runID).toBe(runs[0]!.id)
+        yield* Effect.sleep("500 millis")
+        const messages = yield* f.sessions.messages({ sessionID: chat.id })
+        expect(notes(messages)).toHaveLength(1)
+        // The note started no turn.
+        expect(messages.at(-1)?.info.role).toBe("user")
+        expect((yield* f.status.get(chat.id)).type).toBe("idle")
       }),
     { git: true },
     30_000,
