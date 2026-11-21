@@ -3617,8 +3617,8 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
      other string is redacted. Tests: `packages/engine/test/cli/export-sanitize.test.ts` "sanitized export
      pass-throughs (F44b)" seeds one private value per field, checks the source holds all eleven, then that the
      sanitized archive holds none, decodes as `SessionArchive.Legacy`, and carries the exact markers; red on the old
-     `export.ts` (21 pass, 1 fail). `import.test.ts` 6 pass. Not done: the CLI child-lifecycle case in
-     `import.test.ts` (item 3 below stays open).
+     `export.ts` (21 pass, 1 fail). `import.test.ts` 6 pass. The CLI child-lifecycle case in
+     `import.test.ts` followed later the same day (item 3 below).
   2. **F6's CI receipt is missing from the records.** F6's Vector Codium run 43674652525, on `5f19b0c9`, completed with
      conclusion failure (`get_workflow_run`). This package's review fixes read its jobs (`list_workflow_jobs`) and the
      failing job's log tail (`get_job_logs`, 140 lines):
@@ -3636,6 +3636,15 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
   3. **A CLI-level export check.** T5 runs `localArchive`, not the CLI. `packages/engine/test/cli/import.test.ts`
      could assert that a plain `vector export` output contains a child's title and mailbox text, and a `--sanitize`
      output does not. It starts `vector serve`, so it runs only in CI. It is left for the lead or a later package.
+     21 Nov 2026: added on branch `engine-core-fixes`. `import.test.ts` "a sanitized CLI export of a child session
+     redacts its lifecycle title and mailbox text" starts a real `vector serve`, creates a parent and a child whose
+     `metadata.subagent` record holds a title and one mailbox entry, then runs the CLI: a plain `vector export` holds
+     both strings, and `vector export --sanitize` holds neither and carries the `subagent-title` and
+     `subagent-mailbox-text` markers. It runs locally (7 pass, 0 fail, 58 s for the file). Mutation: the LIFECYCLE
+     rule's mailbox `text` set to `true` makes only this case red (the mailbox text leaks); restored from a copy. It
+     uses the file's `PROCESSES` budget, like the other multi-process cases. Seen while writing it: `POST /session`
+     passes a caller's `metadata.subagent` through `Session.create` unfiltered, while `PATCH` keeps it lifecycle-owned
+     (`SubagentLifecycle.setPublicMetadata`). Left as a follow-up for the lead; not changed here.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 
 **F44's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
