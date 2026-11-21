@@ -275,7 +275,7 @@ With `pipeline: replay` the workflow runs the dataset's cases through the
 engine's own review pipeline instead of the fixtures, for each variant named in
 `variants` (registry names built for the engine; empty means `engine` and
 `engine:shared-verify`). `ci.ts` refuses a malformed, unknown, pending,
-desktop or repeated name, quoting what it refuses, and refuses `fixtures` with
+desktop, local-only or repeated name, quoting what it refuses, and refuses `fixtures` with
 it. `max_tokens` applies to the smoke pipeline only.
 
 - **Mirrors.** Both jobs first install ripgrep and run `ci.ts mirrors`, which
@@ -777,7 +777,7 @@ word, so only the registry keeps model ids out.
 | `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run`, at the transport and in the session runtime | built (VS-23c)              | pending, documented difference (VS-23d: the engine server holds the sessions) |
 | `trivial-skip`     | `trivial: "skip"`                                                                       | VS-24, trusted committed checkout | pending: desktop has no private Git proof                                 |
 | `impact-graph`     | `impact: "graph"`                                                                       | built (VS-25b)              | pending, after VS-10                                                          |
-| `cards-brain`      | `cards: "brain"`, local-only eval                                                       | pending VS-26               | pending, after VS-10                                                          |
+| `cards-brain`      | `cards: "brain"`, committed base-scoped context cards | built for trusted local engine replay (SF-26) | unavailable on desktop; reviews identify cards as local-CLI-only |
 | `guardrail-strict` | `guardrail: "strict"`                                                                   | built (SF-19)               | pending: desktop lacks immutable base and head file reads                     |
 | `depth-auto`       | `depth: "auto"`                                                                         | built, VS-28                | pending, desktop uses fixed review depth                                      |
 | `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | built, VS-28                | pending, desktop uses fixed review depth                                      |
@@ -812,6 +812,9 @@ word, so only the registry keeps model ids out.
   a key (`models`, so far `cross-family` alone) flips in the package that
   supplies its models to the replay, since the runner already runs them and
   nothing about the runner changes.
+- `engine:cards-brain` runs only in a trusted local replay with an authenticated repository-only card grant.
+  The synthetic acceptance fixture seeds the Brain from committed base documents. The GitHub Actions eval
+  dispatcher rejects this variant before model work. Ordinary CLI reviews keep cards off by default.
 - `lenses-high` sets `depth: "auto"` too, because lenses run only on the high
   band under depth `auto`; its ablation baseline is `engine:depth-auto`.
   `scope-introduced` and `verify-cert`

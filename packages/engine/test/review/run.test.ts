@@ -72,6 +72,13 @@ import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
+import { ReviewEval } from "../../src/review/eval"
+import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainPosting } from "@vectordevai/core/brain/posting"
+import { SessionArchive } from "@vectordevai/core/share/archive"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { ReviewCardAccess } from "../../src/review/card-access"
+import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
@@ -193,6 +200,9 @@ const root = LayerNode.group([
   SessionRunState.node,
   Database.node,
   BrainDatabase.node,
+  BrainKnowledge.node,
+  Brain.node,
+  SessionArchive.node,
   EventV2Bridge.node,
   Question.node,
   Todo.node,
@@ -6199,5 +6209,377 @@ describe("VS-28 single-class lens sessions (SF-25)", () => {
       }),
     { git: true },
     90000,
+  )
+})
+
+describe("SF-26 local review context", () => {
+  it.instance(
+    "SF-26 personal cards bind the exact held route and skip a mutable no-training catalogue",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const provider = yield* Provider.Service
+        const local = { ...ref, context: 100_000, costKind: "local" as const }
+        const model = yield* provider.getModel(ref.providerID, ref.modelID)
+        const rule = { privacy: "zdr" as const, attested: [] }
+        const allowed = yield* ReviewCardAccess.privateRoutes(provider, [local], config())
+        const original = yield* ReviewRoutes.decide(provider, local, rule)
+        expect(original.decision).toMatchObject({ allowed: true, kind: "loopback" })
+        expect(allowed?.("lmstudio/test-model", rule, original)).toBe(true)
+        expect(allowed?.("lmstudio/test-model", { privacy: "standard", attested: [] }, original)).toBe(false)
+        // Both endpoints are local, but a grant for one must not move to another after a profile edit.
+        const info = yield* provider.getProvider(ref.providerID)
+        const port = new URL(llm.url).port === "5001" ? 5002 : 5001
+        const moved = yield* ReviewRoutes.decide(
+          {
+            ...provider,
+            getProvider: () =>
+              Effect.succeed({ ...info, options: { ...info.options, baseURL: "http://127.0.0.1:" + port } }),
+          },
+          local,
+          rule,
+        )
+        expect(moved.decision).toMatchObject({ allowed: true, kind: "loopback" })
+        expect(allowed?.("lmstudio/test-model", rule, moved)).toBe(false)
+
+        const remote = {
+          ...local,
+          providerID: ProviderV2.ID.make("openrouter"),
+          modelID: ModelV2.ID.make("example/fixture:free"),
+          costKind: "free" as const,
+        }
+        const catalogue: Provider.Interface = {
+          ...provider,
+          getModel: () =>
+            Effect.succeed({
+              ...model,
+              providerID: remote.providerID,
+              id: remote.modelID,
+              api: { ...model.api, url: "https://openrouter.ai/api/v1" },
+              freeModel: { source: "openrouter" as const, dataPolicy: "no-training" as const },
+            }),
+          getProvider: () => Effect.succeed({ ...info, id: remote.providerID, options: {} }),
+        }
+        expect(yield* ReviewCardAccess.privateRoutes(catalogue, [remote], config())).toBeUndefined()
+        let notices = 0
+        const args = input(directory)
+        const place = yield* (yield* Instruction.Service).place()
+        const collect = (shared: boolean) =>
+          ReviewCardAccess.collect(
+            {
+              directory,
+              base: args.base,
+              head: args.head,
+              files: [],
+              models: [remote],
+              config: config(),
+              trust: "trusted",
+              shared,
+              mayUsePrivate: true,
+              denied: () => false,
+              deadline: performance.now() + 2_000,
+              onPrivateUnavailable: () => {
+                notices++
+              },
+            },
+            place,
+            true,
+          ).pipe(Effect.provideService(Provider.Service, catalogue))
+        yield* collect(false)
+        expect(notices).toBe(1)
+        yield* collect(true)
+        expect(notices).toBe(1)
+        expect(yield* modelRequests(llm)).toHaveLength(0)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "SF-26 default parity and a caller-supplied card object cannot inject context",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* useServer(PRICE)
+        const run = (cards?: "off" | "brain") =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+            const args = input(directory, { config: config({ security: "off", ...(cards ? { cards } : {}) }) })
+            const result = yield* Review.run({
+              ...args,
+              selectedCards: {
+                base: args.base,
+                head: args.head,
+                directory,
+                models: [],
+                items: [{ id: "fake", text: "FAKE_CARD_CONTENT", personal: false }],
+              },
+            })
+            const { durationMs, sessions, ...outcome } = result
+            return { outcome, bodies: (yield* modelRequests(llm)).map((row) => JSON.stringify(row)) }
+          })
+        const unset = yield* run()
+        expect(unset.bodies).toHaveLength(1)
+        expect(yield* run("off")).toEqual(unset)
+        expect((yield* run("brain")).bodies.join(" ")).not.toContain("FAKE_CARD_CONTENT")
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "SF-26 posting asks for owner-only contributors and preserves ordinary public and no-session posts",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const open = yield* sessions.create()
+        const privateSession = yield* sessions.create()
+        const audience = SessionAudience.make(yield* Database.Service)
+        yield* audience.fenceIsolation({ sessionID: privateSession.id, actor: "owner" })
+        const text = ["The list changed."]
+        const check = (sessionIDs: string[]) => SessionPosting.check({ sessionIDs, parts: text, typed: false })
+        expect((yield* check([])).status).toBe("clean")
+        expect((yield* check([open.id])).status).toBe("clean")
+        expect((yield* check([open.id, privateSession.id])).status).toBe("ask")
+        const blocked = yield* SessionPosting.headless({
+          sessionIDs: [privateSession.id],
+          parts: text,
+          typed: false,
+          log: () => {},
+        }).pipe(Effect.flip)
+        expect(blocked.message).toContain("owner-only conversation")
+      }),
+    TIMEOUT,
+  )
+  linuxInstance(
+    "SF-26 immutable local evaluation sends seeded base cards and removes them before diff shrink",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* useServer(PRICE)
+        const disk = yield* FSUtil.Service
+        const service = yield* Git.Service
+        const git = (args: string[]) =>
+          service.run(args, { cwd: directory }).pipe(
+            Effect.map((result) => {
+              expect(result.exitCode).toBe(0)
+              return result.text().trimEnd()
+            }),
+          )
+        const docPath = "docs/Upload.md",
+          marker = "The upload service MUST check the payload before admitting it."
+        yield* disk.writeWithDirs(path.join(directory, docPath), "# Upload contracts\n\n" + marker + "\n")
+        yield* disk.writeWithDirs(
+          path.join(directory, ".vector/files.json"),
+          JSON.stringify({ files: [{ path: docPath, description: "Upload rule", scope: "src/**" }] }),
+        )
+        yield* disk.writeWithDirs(path.join(directory, "src/list.ts"), "export const upload = 1\n")
+        yield* git(["add", "."])
+        yield* git(["commit", "-qm", "base local card documents"])
+        const base = yield* git(["rev-parse", "HEAD"])
+        // Adding the card manifest changes the workspace settings snapshot. Approve the complete synthetic
+        // checkout through the same owner action the CLI uses before reading any Brain source.
+        const settings = yield* Config.Service
+        expect((yield* settings.trust()).trusted).toBe(false)
+        yield* settings.approve()
+        yield* reloadInstance({ directory })
+        expect((yield* settings.trust()).trusted).toBe(true)
+        // The real CLI resolves the model before budget preflight; that lookup populates the catalog
+        // that the no-side-effect preview is allowed to inspect.
+        yield* (yield* Provider.Service).getModel(ref.providerID, ref.modelID)
+        const place = yield* (yield* Instruction.Service).place()
+        const knowledge = yield* BrainKnowledge.Service
+        const seeded = yield* knowledge.add(place, {
+          type: "path",
+          path: path.join(directory, docPath),
+          origin: "repository",
+        })
+        if (seeded.type === "refused") throw new Error(seeded.message)
+        yield* knowledge.wait(place, seeded.document.id, "searchable", 20_000)
+        yield* disk.writeWithDirs(path.join(directory, "src/list.ts"), "export const upload = 2\n")
+        yield* git(["add", "src/list.ts"])
+        yield* git(["commit", "-qm", "change payload"])
+        const head = yield* git(["rev-parse", "HEAD"])
+        const files = parseUnifiedDiff(yield* git(["diff", base, head]))
+        const args = { directory, head, base, files }
+        const grant = () =>
+          Effect.gen(function* () {
+            const issued = yield* ReviewCardAccess.collect(
+              {
+                ...args,
+                models: [priced],
+                config: config({ cards: "brain" }),
+                mayUsePrivate: false,
+                shared: true,
+                trust: "trusted",
+                deadline: performance.now() + 15_000,
+                denied: () => false,
+              },
+              place,
+              true,
+            )
+            expect(issued?.items.some((item) => item.text.includes(marker))).toBe(true)
+            expect(issued).toBeDefined()
+            return issued!
+          })
+        const measure = (maxInputTokens: number) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+            const events: Review.Observation[] = []
+            const result = yield* Review.run(
+              input(directory, {
+                ...args,
+                anchors: files,
+                selectedCards: yield* grant(),
+                config: config({ security: "off", cards: "brain", maxInputTokens }),
+                observe: (e) => events.push(e),
+              }),
+            )
+            return { result, events, bodies: (yield* modelRequests(llm)).map((row) => JSON.stringify(row)) }
+          })
+        const full = yield* measure(100_000)
+        if (!full.bodies.length)
+          throw new Error(
+            JSON.stringify({
+              notes: full.result.notes,
+              partial: full.result.partial,
+              specialists: full.result.specialists,
+              admissions: full.events.filter((event) => event.type !== "pass" && event.type !== "strict-candidates"),
+            }),
+          )
+        expect(full.bodies[0]).toContain(marker)
+        const first = full.events.find((row) => row.type === "dispatch")
+        if (first?.type !== "dispatch") throw new Error("Missing first dispatch estimate")
+        const trimmed = yield* measure(first.estimate.firstTurnTokens - 1)
+        expect(trimmed.bodies).toHaveLength(1)
+        expect(trimmed.bodies[0]).not.toContain(marker)
+        expect(trimmed.events.filter((row) => row.type === "dispatch").map((row) => row.step)).toEqual([
+          undefined,
+          "cards",
+        ])
+        expect(trimmed.result.unreviewed).toEqual([])
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: { label: "synthetic local card evaluation", directory, base, head, trust: "trusted" },
+          config: { maxCostUsd: 2, security: "off", verify: "off" },
+          model: priced,
+          localCards: yield* grant(),
+          variant: { name: "engine:cards-brain", keys: { cards: "brain" } },
+          posting: ReviewEval.recordingPosting(),
+          check: (call) => Effect.succeed(call.parts),
+        })
+        expect(artifact.variant).toMatchObject({ name: "engine:cards-brain" })
+        expect(JSON.stringify(yield* modelRequests(llm))).toContain(marker)
+      }),
+    { git: true },
+    90_000,
+  )
+  linuxInstance(
+    "SF-26 personal cards fence every helper before use and survive later sharing controls",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* useServer()
+        const disk = yield* FSUtil.Service
+        const service = yield* Git.Service
+        const git = (args: string[]) =>
+          service.run(args, { cwd: directory }).pipe(
+            Effect.map((result) => {
+              expect(result.exitCode).toBe(0)
+              return result.text().trimEnd()
+            }),
+          )
+        const name = "src/list.ts"
+        const marker = "Uploads MUST verify the MAX_UPLOAD_BYTES ceiling of 91 bytes for each file."
+        yield* disk.writeWithDirs(path.join(directory, name), "export const MAX_UPLOAD_BYTES = 92\n")
+        yield* git(["add", "."])
+        yield* git(["commit", "-qm", "create upload limits"])
+        const base = yield* git(["rev-parse", "HEAD"])
+        const place = yield* (yield* Instruction.Service).place()
+        const knowledge = yield* BrainKnowledge.Service
+        const added = yield* knowledge.add(place, {
+          type: "text",
+          name: "Private upload contract.md",
+          text: marker,
+          origin: "upload",
+        })
+        if (added.type === "refused") throw new Error(added.message)
+        yield* knowledge.wait(place, added.document.id, "searchable", 20_000)
+        yield* disk.writeWithDirs(path.join(directory, name), "export const MAX_UPLOAD_BYTES = 93\n")
+        yield* git(["add", name])
+        yield* git(["commit", "-qm", "change upload limits"])
+        const head = yield* git(["rev-parse", "HEAD"])
+        const files = parseUnifiedDiff(yield* git(["diff", base, head]))
+        const model = { ...ref, context: 100_000, costKind: "local" as const }
+        const policy = config({ security: "off", verify: "blocking", cards: "brain" })
+        const args = { directory, base, head, files }
+        const collect = (shared: boolean, trust: "trusted" | "untrusted") =>
+          ReviewCardAccess.collect(
+            {
+              ...args,
+              models: [model],
+              config: policy,
+              mayUsePrivate: true,
+              shared,
+              trust,
+              denied: () => false,
+              deadline: performance.now() + 15_000,
+            },
+            place,
+            true,
+          )
+        expect((yield* collect(true, "trusted"))?.items.some((card) => card.personal)).toBeFalsy()
+        expect((yield* collect(false, "untrusted"))?.items.some((card) => card.personal)).toBeFalsy()
+        const admitted = yield* collect(false, "trusted")
+        expect(admitted?.items.some((card) => card.personal && card.text.includes("91 bytes"))).toBe(true)
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding({ line: 1, body: marker })])))
+        yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
+        const observed: Review.Observation[] = []
+        const result = yield* Review.run(
+          input(directory, {
+            ...args,
+            model,
+            anchors: files,
+            config: policy,
+            selectedCards: admitted,
+            observe: (event) => observed.push(event),
+          }),
+        )
+        expect(result.sessions).toHaveLength(2)
+        expect(JSON.stringify(yield* modelRequests(llm))).toContain("91 bytes")
+        expect(JSON.stringify(observed)).not.toContain("91 bytes")
+        const archives = yield* SessionArchive.Service
+        const audience = SessionAudience.make(yield* Database.Service)
+        for (const id of result.sessions) {
+          expect(yield* audience.isPrivate(id)).toBe(true)
+          const sessionID = SessionID.make(id)
+          expect((yield* archives.export({ sessionID })).privacy).toBe("owner-only")
+          expect((yield* archives.preview({ sessionID }).pipe(Effect.flip)).code).toBe("INVALID")
+          const checked = yield* BrainPosting.run(place, {
+            sessionIDs: [id],
+            parts: [marker],
+            typed: false,
+            known: () => Effect.succeed(new Set<string>()),
+          })
+          expect(checked.status).toBe("changed")
+          expect(checked.parts.join(" ")).not.toContain("91 bytes")
+        }
+        const revoked = yield* collect(false, "trusted")
+        expect(revoked?.items.some((card) => card.personal)).toBe(true)
+        yield* knowledge.remove(place, added.document.id)
+        const later = { sessionIDs: result.sessions, parts: [marker], typed: false }
+        expect((yield* SessionPosting.check(later)).status).toBe("ask")
+        const refused = yield* SessionPosting.headless({ ...later, log: () => {} }).pipe(Effect.flip)
+        expect(refused.message).toContain("owner-only conversation")
+        expect(refused.message).not.toContain(marker)
+        yield* llm.reset
+        const failed = yield* Review.run(
+          input(directory, { ...args, model, anchors: files, config: policy, selectedCards: revoked }),
+        )
+        expect(yield* modelRequests(llm)).toHaveLength(0)
+        expect(failed.specialists.some((row) => row.detail === "Private review context could not be isolated.")).toBe(
+          true,
+        )
+      }),
+    { git: true },
+    90_000,
   )
 })

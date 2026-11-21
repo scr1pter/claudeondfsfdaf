@@ -11,6 +11,10 @@
 // glob tools redact what they return.
 
 import path from "path"
+import { Brain } from "@vectordevai/core/brain/brain"
+import { Database } from "@vectordevai/core/database/database"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { publicCardGrant, takeCards } from "./card-access"
 import { isDeepStrictEqual } from "node:util"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { Billing } from "@vectordevai/schema/billing"
@@ -197,6 +201,8 @@ export interface RunInput {
   focus?: FocusHunk[]
   skipped: SkippedFile[]
   headFiles?: { path: string; text: string; exact: boolean }[]
+  selectedCards?: import("./context").CardGrant
+  localCardEvaluation?: true
   context: Pick<
     PromptInput,
     "related" | "history" | "requirements" | "instructions" | "teamDismissed" | "humanComments"
@@ -359,8 +365,9 @@ function dispatchPlan(input: {
   requests: PlannedRequest[]
   dependents: boolean
   lenses: boolean
+  cards: boolean
   dropLenses: () => PlannedRequest[]
-  shrink: (lever: "diff" | "dependents") => Iterable<{ requests: PlannedRequest[]; accept: () => void }>
+  shrink: (lever: "cards" | "diff" | "dependents") => Iterable<{ requests: PlannedRequest[]; accept: () => void }>
   measure: (requests: PlannedRequest[]) => Effect.Effect<PassPlan[] | undefined>
   limits: { maxInputTokens: number; remainingUsd?: number }
   observe: (event: Extract<Observation, { type: "dispatch" }>) => void
@@ -376,6 +383,7 @@ function dispatchPlan(input: {
     const available = new Set<Shrink>(["diff"])
     if (input.dependents) available.add("dependents")
     if (input.lenses) available.add("lenses")
+    if (input.cards) available.add("cards")
     for (const plan of plans) {
       if (plan.pass === "review" || plan.pass === "security" || plan.pass === "verify")
         available.add(`steps:${plan.pass}`)
@@ -398,7 +406,7 @@ function dispatchPlan(input: {
         if (!next) return { decision: "unknown" as const, notes }
         plans = next
         notes.push("The single-class lens passes were removed to fit the review budget.")
-      } else if (lever === "dependents" || lever === "diff") {
+      } else if (lever === "cards" || lever === "dependents" || lever === "diff") {
         // Try progressively smaller context without changing what any specialist sees until a measured
         // proposal actually lowers a binding limit. Preserve the step caps admitted in preceding rounds.
         const caps = new Map(plans.map((plan) => [plan.pass, plan.maxSteps]))
@@ -428,7 +436,9 @@ function dispatchPlan(input: {
         notes.push(
           lever === "diff"
             ? "Coverage was reduced to changed hunks. Surrounding file context was trimmed."
-            : "The lowest-ranked dependent context was removed to fit the review budget.",
+            : lever === "cards"
+              ? "Brain context cards were removed to fit the review budget."
+              : "The lowest-ranked dependent context was removed to fit the review budget.",
         )
       } else {
         const pass = lever === "steps:verify" ? "verify" : lever === "steps:security" ? "security" : "review"
@@ -491,7 +501,13 @@ export const run: (
 
   const started = Date.now()
   const deadline = started + input.config.timeoutMinutes * 60_000
-  const config = strictReviewConfig(input.config)
+  const requested = strictReviewConfig(input.config)
+  const config =
+    requested.cards === "brain" &&
+    input.trigger !== "local" &&
+    !(input.localCardEvaluation && publicCardGrant(input.selectedCards, input))
+      ? { ...requested, cards: "off" as const }
+      : requested
   const strictMode = config.guardrail === "strict"
   const uncommitted = !!(input.uncommittedDiff || input.impactWorktree)
   // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
@@ -589,12 +605,45 @@ export const run: (
   const triage = picked.triage ?? model
   const triaged = nameOf(triage) !== nameOf(model)
   const judgeModel = picked.judge
-  const decided =
-    zdr && !early
-      ? yield* Effect.forEach([model, ...(triaged ? [triage] : []), ...(judgeModel ? [judgeModel] : [])], (chosen) =>
-          ReviewRoutes.decide(provider, chosen, route).pipe(Effect.map((result) => ({ chosen, result }))),
-        )
-      : []
+  const granted =
+    config.cards === "brain" &&
+    (input.trigger === "local" || (input.localCardEvaluation && publicCardGrant(input.selectedCards, input)))
+      ? takeCards(input.selectedCards, input)
+      : undefined
+  const privateServices = granted?.items.some((row) => row.personal)
+    ? {
+        brain: Option.getOrUndefined(yield* Effect.serviceOption(Brain.Service)),
+        db: Option.getOrUndefined(yield* Effect.serviceOption(Database.Service)),
+        audience: Option.getOrUndefined(yield* Effect.serviceOption(SessionAudience.Service)),
+      }
+    : undefined
+  const audience = privateServices?.audience ?? (privateServices?.db && SessionAudience.make(privateServices.db))
+  const brain = privateServices?.brain
+  const privateAllowed =
+    !!granted?.eligible &&
+    !!brain &&
+    !!audience &&
+    !input.parentID &&
+    !input.instructionsFromContext &&
+    !input.localCardEvaluation &&
+    input.trust === "trusted" &&
+    [model, triage, ...(judgeModel ? [judgeModel] : [])].every((chosen) => granted.models.includes(nameOf(chosen)))
+  const cards = granted?.items.filter((row) => !row.personal || privateAllowed).slice(0, 3) ?? []
+  let privateCardIds = cards.filter((row) => row.personal).map((row) => row.id)
+  // Each session with personal cards must use the exact route checked when its grant was issued.
+  // Snapshot the policy so a later edit cannot broaden the transport's registration.
+  const privatePolicy: ReviewRoutes.Policy | undefined = privateCardIds.length
+    ? { privacy: "zdr", attested: structuredClone(zdr ? route.attested : []) }
+    : undefined
+  const policyFor = () => (privateCardIds.length && privatePolicy ? privatePolicy : route)
+  const chosenModels = [model, ...(triaged ? [triage] : []), ...(judgeModel ? [judgeModel] : [])]
+  const decided = early
+    ? []
+    : yield* Effect.forEach(
+        policyFor().privacy === "zdr" ? chosenModels : [],
+        (chosen) =>
+          ReviewRoutes.decide(provider, chosen, policyFor()).pipe(Effect.map((result) => ({ chosen, result }))),
+      )
   // The first model or attempt the route rules refused (VS-23b), seeded here. Once set no pass starts another attempt.
   const refusedUpFront: { model: string; refusal: RouteRefusal } | undefined =
     early ??
@@ -674,6 +723,8 @@ export const run: (
   // allowed to refuse or leak an attempt.
   const observe = (event: Observation) => {
     if (!input.observe) return
+    // Private source text and findings derived from it stay within the fenced owner-local conversation.
+    if (privateCardIds.length && (event.type === "pass" || event.type === "strict-candidates")) return
     try {
       input.observe(event)
     } catch {
@@ -934,7 +985,11 @@ export const run: (
       })
       // VS-23b: before the session, the pass's model is decided again, and once any model or attempt of the review was
       // refused no pass starts.
-      const decided = zdr && !state.refused ? yield* ReviewRoutes.decide(provider, spec.model, route) : undefined
+      const passRoute = policyFor()
+      const decided =
+        passRoute.privacy === "zdr" && !state.refused
+          ? yield* ReviewRoutes.decide(provider, spec.model, passRoute)
+          : undefined
       if (decided && !decided.decision.allowed)
         state.refused = { model: nameOf(spec.model), refusal: decided.decision.refusal }
       if (state.refused) {
@@ -973,6 +1028,53 @@ export const run: (
       }
       // A helper session: it stays out of session lists, and the review reports what it spent.
       const session = yield* sessions.create(passSession(spec))
+      if (privateCardIds.length) {
+        const isolated = yield* Effect.gen(function* () {
+          if (
+            !brain ||
+            !audience ||
+            !granted?.eligible ||
+            !granted.allowsRoute?.(nameOf(spec.model), passRoute, decided) ||
+            !(yield * granted.eligible(privateCardIds))
+          )
+            return false
+          if (input.stopSignal?.aborted || Date.now() >= deadline) return false
+          yield* audience.fenceIsolation({ sessionID: session.id, actor: "owner" })
+          yield* brain.used(privateCardIds, {
+            sessionID: session.id,
+            tier: "review",
+            tokens: Math.ceil(
+              cards
+                .filter((row) => row.personal)
+                .map((row) => row.text)
+                .join(" ").length / 3.5,
+            ),
+          })
+          return true
+        }).pipe(
+          Effect.catch(() => Effect.succeed(false)),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            () => Effect.succeed(false),
+          ),
+        )
+        if (!isolated) {
+          // Still an empty, freshly allocated helper. Keep its id in the receipt if cleanup fails.
+          yield* sessions.remove(session.id).pipe(
+            Effect.catch(() =>
+              Effect.sync(() => {
+                sessionIDs.push(session.id)
+              }),
+            ),
+          )
+          return {
+            ...identity,
+            status: "failed",
+            steps: 0,
+            detail: "Private review context could not be isolated.",
+          } satisfies Asked<T>
+        }
+      }
       const track: Track = {
         ...identity,
         sessionID: session.id,
@@ -999,7 +1101,12 @@ export const run: (
       // pass was decided for and what it was decided on, which admission below and VS-23c's transport backstop
       // (provider.ts) hold each attempt to. Under "zdr" the session runtime (llm.ts) sends only that agent's turns of
       // the session, so no helper request of it goes out. Released when the review ends.
-      ReviewRoutes.register(session.id, { policy: route, agent, ...decided })
+      ReviewRoutes.register(session.id, {
+        policy: passRoute,
+        agent,
+        ...decided,
+        ...(privateCardIds.length ? { pinDestinations: true } : {}),
+      })
       yield* progress({ type: "specialist", name: passKey(spec), status: "running" })
 
       // One policy survives every processor instance, retry and prompt for this fresh owned session. It is never
@@ -1020,7 +1127,10 @@ export const run: (
           // VS-23b, before the step and budget logic (never inside reserve(), which admits every uncapped attempt): the
           // attempt's model must be the one its pass was decided for, and no model or attempt of the review refused.
           // This holds every retry, continuation, finalizer and switch of model. A refused attempt is never sent.
-          const refusal = zdr ? (state.refused?.refusal ?? ReviewRoutes.attempt(session.id, request.model)) : undefined
+          const refusal =
+            passRoute.privacy === "zdr"
+              ? (state.refused?.refusal ?? ReviewRoutes.attempt(session.id, request.model))
+              : undefined
           if (refusal) {
             state.refused ??= { model: `${request.model.providerID}/${request.model.id}`, refusal }
             track.stop = "privacy"
@@ -1384,6 +1494,7 @@ export const run: (
       ...(packed.settled.length ? { settled: packed.settled } : {}),
       ...(headFiles ? { headFiles: packed.headFiles } : {}),
       ...input.context,
+      ...(cards.length ? { contextCards: cards.map((row) => row.text) } : {}),
       ...hold?.context,
       ...(impact ? { impact: impact.slice } : {}),
       ...(hold ? { inputsRedacted: true as const } : {}),
@@ -1604,7 +1715,7 @@ export const run: (
                   session: passSession(draft),
                   prompt,
                   route: {
-                    policy: route,
+                    policy: policyFor(),
                     agent: prompt.agent,
                     ...decided.find(({ chosen }) => chosen === draft.model)?.result,
                   },
@@ -1675,7 +1786,18 @@ export const run: (
           },
         }
       }
-      function* shrink(lever: "dependents" | "diff") {
+      function* shrink(lever: "cards" | "dependents" | "diff") {
+        if (lever === "cards") {
+          const change = proposal({ ...activePayload, contextCards: undefined }, checkHeadFiles)
+          yield {
+            ...change,
+            accept: () => {
+              change.accept()
+              privateCardIds = []
+            },
+          }
+          return
+        }
         if (lever === "dependents") {
           let slice = activeImpact
           while (slice && (slice = shrinkImpactDependents(slice)))
@@ -1707,6 +1829,7 @@ export const run: (
       const result = yield* dispatchPlan({
         requests: prepare ? fullPlan(requests, checkHeadFiles) : [],
         dependents: !!activeImpact?.dependents.length,
+        cards: cards.length > 0,
         lenses: lenses.length > 0,
         dropLenses: () => {
           lenses = []

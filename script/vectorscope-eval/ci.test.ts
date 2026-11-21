@@ -403,7 +403,7 @@ describe("the replay pipeline", () => {
     expect(inputs({ ...REPLAY, EVAL_VARIANTS: "engine:guardrail-strict" }).variants).toEqual([
       "engine:guardrail-strict",
     ])
-    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:cards-brain" }).join("\n")).toContain("VS-26")
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:cards-brain" }).join("\n")).toContain("locally seeded Brain")
     // VS-23c (SF-12b): the engine half of privacy-zdr is built.
     expect(inputs({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" }).variants).toEqual(["engine:privacy-zdr"])
     expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" })).toEqual([])

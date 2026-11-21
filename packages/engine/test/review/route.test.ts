@@ -497,6 +497,23 @@ describe("ReviewRoutes.hold", () => {
       }),
   )
 
+  it.effect("SF-26 private card retries hold the original endpoint and final origin", () =>
+    Effect.gen(function* () {
+      const id = session("private-cards")
+      const policy = zdr()
+      const decided = yield* admit(id, local, policy, LOOPBACK_OPTIONS)
+      ReviewRoutes.register(id, { policy, ...decided, pinDestinations: true })
+      const url = "http://127.0.0.1:1234/v1/chat/completions"
+      expect(hold(id, local, LOOPBACK_OPTIONS, [url])).toEqual({ kind: "loopback" })
+      expect(hold(id, local, LOOPBACK_OPTIONS, [url.replace(":1234", ":1235")])).toEqual({
+        refusal: "unknown-destination",
+      })
+      expect(hold(id, local, { ...LOOPBACK_OPTIONS, baseURL: "http://127.0.0.1:1234/other" }, [url])).toEqual({
+        refusal: "unknown-destination",
+      })
+    }),
+  )
+
   it.effect(
     "decide keeps what it decided on, and an attested provider holds only with admission's defaultOrigins",
     () =>

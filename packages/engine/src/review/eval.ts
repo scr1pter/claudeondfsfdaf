@@ -111,6 +111,7 @@ import { Git } from "@/git"
 import { Provider } from "@/provider/provider"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
+import { publicCardGrant } from "./card-access"
 import { ReviewContext } from "./context"
 import { ReviewGit } from "./git"
 import type { ResolvedModel } from "./model"
@@ -146,6 +147,9 @@ export type PostingCheck = (input: {
 }) => Effect.Effect<readonly string[], unknown>
 
 export interface ReplayInput {
+  // A local synthetic evaluation supplies a single-use grant from its own seeded store. JSON
+  // artifacts, CI datasets and the operator's personal Brain cannot supply these contents.
+  localCards?: ReviewContext.CardGrant
   case: ReplayCase
   model: ResolvedModel
   triage?: ResolvedModel
@@ -874,7 +878,20 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
           denied: ignored,
         })
       : undefined
+  if (
+    config.cards === "brain" &&
+    (projecting ||
+      Flag.VECTOR_PURE ||
+      item.trust !== "trusted" ||
+      !publicCardGrant(input.localCards, { directory, base: plan.mergeBase, head: item.head, files }))
+  ) {
+    return yield* new ReviewEvalError({
+      message:
+        "A Brain cards evaluation requires a local repository-only card grant for the exact synthetic base and head.",
+    })
+  }
   const outcome = yield* Review.run({
+    ...(config.cards === "brain" ? { selectedCards: input.localCards, localCardEvaluation: true as const } : {}),
     ...(trivialProof ? { trivialProof } : {}),
     directory,
     trigger,
@@ -1518,6 +1535,16 @@ function variantProblem(input: ReplayInput) {
       variant.models
     )
       return 'The engine:scope-introduced variant sets only guardrail: "strict" and scopeGate: "introduced".'
+    return undefined
+  }
+  if (variant.name === "engine:cards-brain" || Object.hasOwn(variant.keys, "cards")) {
+    if (
+      variant.name !== "engine:cards-brain" ||
+      Reflect.get(variant.keys, "cards") !== "brain" ||
+      keys.length !== 1 ||
+      variant.models
+    )
+      return 'The engine:cards-brain variant sets only cards: "brain".'
     return undefined
   }
   if (

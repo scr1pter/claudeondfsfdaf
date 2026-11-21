@@ -17,6 +17,7 @@ import {
 } from "./types"
 
 // The desktop accepts a diff and checkout files, without immutable base and head blob reads for strict verification.
+export const DESKTOP_CARDS_NOTICE = "Brain context cards are available in local CLI reviews. Desktop reviews omit them."
 export const DESKTOP_STRICT_NOTICE =
   'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".'
 
@@ -184,6 +185,7 @@ const FIELDS: Record<PlainKey, Field> = {
   modelEvidence: oneOf(["off", "warn"]),
   trivial: oneOf(["review", "skip"]),
   impact: oneOf(["grep", "graph"]),
+  cards: oneOf(["off", "brain"]),
   guardrail: oneOf(["off", "strict"]),
   scopeGate: oneOf(["off", "introduced"]),
   verifyEvidence: oneOf(["off", "certificate"]),
@@ -221,6 +223,7 @@ const RETIRED: Record<string, string> = {
 }
 
 const ENV: { name: string; key: PlainKey; kind: "number" | "text" }[] = [
+  { name: "REVIEW_CARDS", key: "cards", kind: "text" },
   { name: "REVIEW_MIN_SEVERITY", key: "minSeverity", kind: "text" },
   { name: "REVIEW_MIN_CONFIDENCE", key: "minConfidence", kind: "number" },
   { name: "REVIEW_MAX_COMMENTS", key: "maxComments", kind: "number" },
@@ -514,6 +517,11 @@ function settle(
   if (github && config.trivial === "skip") {
     delete config.trivial
     warnings.push('GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.')
+  }
+  if (github || trigger === "desktop") {
+    if (config.cards === "brain")
+      warnings.push(github ? "Brain context cards are available in local CLI reviews. GitHub reviews omit them." : DESKTOP_CARDS_NOTICE)
+    delete config.cards
   }
   if (!github && trigger === "desktop" && config.impact === "graph")
     warnings.push('Desktop reviews use grep for related code. The engine review supports "impact": "graph".')

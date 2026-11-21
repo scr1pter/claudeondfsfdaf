@@ -123,6 +123,7 @@ export const VARIANT_KEYS = {
   engine: [
     "depth",
     "lenses",
+    "cards",
     "verifyPolicy",
     "privacy",
     "holdback",

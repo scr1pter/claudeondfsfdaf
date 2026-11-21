@@ -398,6 +398,18 @@ describe("runReview", () => {
   const desktopStrictNotice =
     'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".'
 
+  test("SF-26 desktop labels requested Brain cards on a fresh and reused ordinary review", async () => {
+    const open = (cards: "off" | "brain") =>
+      fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify({ verify: "off", cards }) } })
+    const plain = (await run(open("off").client))!
+    const notice = "Brain context cards are available in local CLI reviews. Desktop reviews omit them."
+    const active = (await run(open("brain").client))!
+    expect(active.notes).toContain(notice)
+    expect(active.report).toEqual(plain.report)
+    expect((await run(open("brain").client, { previous: plain }))?.notes).toContain(notice)
+    expect((await run(open("off").client, { previous: active }))?.notes).not.toContain(notice)
+  })
+
   test("desktop strict requests use ordinary review and label fresh, restored and reused results", async () => {
     const config = (guardrail?: string) => JSON.stringify({ verify: "off", ...(guardrail ? { guardrail } : {}) })
     const execute = (guardrail?: string) =>

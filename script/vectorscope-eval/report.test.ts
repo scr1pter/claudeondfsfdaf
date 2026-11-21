@@ -762,7 +762,7 @@ describe("report.ts", () => {
     )
     writeFileSync(
       join(dir, "pending.json"),
-      JSON.stringify(artifact({ label: "pending", variant: { name: "engine:cards-brain", keys: {} } })),
+      JSON.stringify(artifact({ label: "pending", variant: { name: "engine:receipt-json", keys: {} } })),
     )
     writeFileSync(
       join(dir, "mismatched.json"),
@@ -791,7 +791,7 @@ describe("report.ts", () => {
     expect(problems[1]).toStartWith(join(dir, "mismatched.json"))
     expect(problems[1]).toContain("not the registry's")
     expect(problems[2]).toStartWith(join(dir, "pending.json"))
-    expect(problems[2]).toContain("registered for VS-26, which has not landed")
+    expect(problems[2]).toContain("registered for VS-47 runner wiring, which has not landed")
     expect(problems[3]).toBe(`${join(dir, "primitive.json")}: its variant record is not an object`)
     // The record that is not an object names the frozen pipeline, as VS-06's reader took it.
     expect(loaded.runs.find((run) => run.case === "primitive")?.variant).toBe("engine")
@@ -814,7 +814,7 @@ describe("report.ts", () => {
     // A pending, unknown or malformed variant cannot be the candidate or the baseline, a mistyped runner included;
     // only single-prompt and the empty control pass as given.
     for (const [flag, value, detail] of [
-      ["--candidate", "engine:cards-brain=vendor/reviewer-large", "registered for VS-26"],
+      ["--candidate", "engine:receipt-json=vendor/reviewer-large", "registered for VS-47 runner wiring"],
       ["--candidate", "engine:verify-isolated=vendor/reviewer-large", "registered for VS-44c wiring (R3)"],
       ["--baseline", "engine:verify=vendor/reviewer-large", "not a registered variant"],
       ["--candidate", "engine:Shared=vendor/reviewer-large", "is not a variant name"],

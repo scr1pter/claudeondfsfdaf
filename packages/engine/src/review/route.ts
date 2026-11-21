@@ -87,6 +87,8 @@ export interface Decided {
 // agent, and the HTTP adoption (adopt, SF-15) the agent the desktop's prompt names.
 export interface Registered {
   readonly policy: Policy
+  /** Private Brain context was approved only for the original provider endpoint and origins. */
+  readonly pinDestinations?: true
   readonly agent?: string
   readonly key?: string
   readonly decision?: RouteDecision
@@ -389,11 +391,27 @@ export function hold(input: {
     options: input.options,
   })
   const decidedOn = entry.decidedOn
+  const destinations = input.destinations()
+  if (entry.pinDestinations) {
+    const original = decidedOn?.destinations
+    // The SDK can make a request on a later turn after a provider profile changes. Recheck
+    // its configured endpoints and every final origin, even when both origins are loopback.
+    const origins = new Set(original?.map((url) => (typeof url === "string" ? LocalPolicy.origin(url) : undefined)))
+    if (
+      !original?.length ||
+      origins.has(undefined) ||
+      !destinations.length ||
+      original.length !== seen.destinations.length ||
+      original.some((url, index) => url !== seen.destinations[index]) ||
+      destinations.some((url) => !origins.has(LocalPolicy.origin(url)))
+    )
+      return { refusal: "unknown-destination" }
+  }
   const decision = verified(
     decideRoute(
       {
         ...seen,
-        destinations: [...(decidedOn?.destinations ?? []), ...seen.destinations, ...input.destinations()],
+        destinations: [...(decidedOn?.destinations ?? []), ...seen.destinations, ...destinations],
         // Where an attestation of the provider ID applies is what admission read from the catalog, which the
         // transport cannot see; without it, nowhere.
         defaultOrigins: decidedOn?.defaultOrigins ?? [UNKNOWN_ORIGIN],

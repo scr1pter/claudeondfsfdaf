@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { evidenceScope } from "@vectordevai/core/review/model-evidence"
 import {
   MAX_RULES_BYTES,
   mergeReviewConfig,
@@ -903,6 +904,7 @@ describe("VS-24's keys", () => {
       verifyEvidence: "off",
       depth: "fixed",
       lenses: "off",
+      cards: "off",
       runtime: "off",
       holdback: "off",
     })
@@ -1642,4 +1644,30 @@ describe("VS-34's holdback key", () => {
       warnings: [GITHUB_TRIVIAL_WARNING],
     })
   })
+})
+
+test("SF-26 cards honor ordinary local JSON and environment precedence and keep other surfaces unapplied", () => {
+  const json = JSON.stringify({ cards: "brain" })
+  expect(DEFAULT_REVIEW_CONFIG.cards).toBeUndefined()
+  expect(OPTIONAL_REVIEW_DEFAULTS.cards).toBe("off")
+  const scope = (adapter: "desktop" | "engine", cards?: "off" | "brain") =>
+    evidenceScope({ adapter, config: { ...DEFAULT_REVIEW_CONFIG, ...(cards ? { cards } : {}) } })
+  expect(scope("engine", "off")).toEqual(scope("engine"))
+  expect(scope("engine", "brain").prompts).not.toBe(scope("engine").prompts)
+  expect(scope("engine", "brain").policy).not.toBe(scope("engine").policy)
+  expect(scope("desktop", "brain")).toEqual(scope("desktop"))
+  expect(parseReviewConfig({ json, trigger: "local" }).config.cards).toBe("brain")
+  expect(parseReviewConfig({ json, env: { REVIEW_CARDS: " Off " }, trigger: "local" }).config.cards).toBe("off")
+  expect(parseReviewConfig({ env: { REVIEW_CARDS: "brain" }, trigger: "local" }).config.cards).toBe("brain")
+  expect(
+    parseReviewConfig({ json: JSON.stringify({ cards: true }), trigger: "local" }).warnings.length,
+  ).toBeGreaterThan(0)
+  for (const trigger of ["desktop", "command", "auto"] as const) {
+    const result = parseReviewConfig({ json, trigger })
+    expect(result.config.cards).toBeUndefined()
+    expect(result.warnings.join(" ")).toContain("reviews omit them")
+  }
+  expect(
+    mergeReviewConfig({ surface: "local", trigger: "command", json: { at: "base", text: json } }).config.cards,
+  ).toBe("brain")
 })

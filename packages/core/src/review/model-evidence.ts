@@ -62,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "79985b2e2f5f83f4"
+export const REVIEW_PIPELINE_SOURCES = "a7c005e8d5b3c624"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -97,6 +97,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "maxDiffChars",
   "trivial",
   "impact",
+  "cards",
   "guardrail",
   "ruleCheck",
   "scopeGate",
@@ -457,6 +458,7 @@ export function canonicalPrompts(
       ReviewConfig,
       | "impact"
       | "depth"
+      | "cards"
       | "lenses"
       | "runtime"
       | "holdback"
@@ -489,8 +491,9 @@ export function canonicalPrompts(
           }),
         )
       : []
+  const useLenses = keys.depth === "auto" && keys.lenses === "high"
   const lenses =
-    keys.depth === "auto" && keys.lenses === "high"
+    useLenses
       ? REVIEW_LENSES.flatMap((lens) => [
           ...(["trusted", "untrusted"] as const).flatMap((trust) =>
             canonicalInputs(trust).map((input) => buildLensPrompt(effective(input), lens)),
@@ -541,6 +544,25 @@ export function canonicalPrompts(
     buildFinalizePrompt(),
     ownerBlock(["Example."]),
     ...impact,
+    ...(keys.cards === "brain"
+      ? (["trusted", "untrusted"] as const).flatMap((trust) =>
+          [undefined, ...(keys.impact === "graph" ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS] : [])].flatMap(
+            (slice) => {
+              const input: PromptInput = {
+                ...POPULATED_INPUT,
+                trust,
+                contextCards: ["[drifted] An indexed requirement.", "A scoped context document."],
+                ...(slice ? { impact: slice } : {}),
+                ...(keys.holdback === "secrets" ? { inputsRedacted: true } : {}),
+              }
+              return [
+                ...reviewers(input),
+                ...(useLenses ? REVIEW_LENSES.map((lens) => buildLensPrompt(effective(input), lens)) : []),
+              ]
+            },
+          ),
+        )
+      : []),
     ...lenses,
     ...(keys.runtime === "ask" ? [RUNTIME_EVIDENCE_INSTRUCTION, runtimeEvidenceBlock(CANONICAL_RUNTIME, [])] : []),
     ...(keys.holdback === "secrets"
@@ -591,6 +613,7 @@ export function promptsDigest(
       | "scopeGate"
       | "verifyEvidence"
       | "depth"
+      | "cards"
       | "lenses"
       | "runtime"
       | "holdback"
@@ -600,6 +623,7 @@ export function promptsDigest(
   const strict = keys.guardrail === "strict"
   const key = [
     keys.impact === "graph" ? "impact:graph" : "",
+    keys.cards === "brain" ? "cards:brain" : "",
     strict ? "guardrail:strict" : "",
     keys.ruleCheck === "strict" ? "ruleCheck:strict" : "",
     strict && keys.scopeGate === "introduced" ? "scopeGate:introduced" : "",
@@ -677,6 +701,7 @@ export function evidenceScope(input: {
     // The impact block and the strict schemas enter the prompts only once a runner applies their key (it leaves
     // UNAPPLIED_REVIEW_KEYS), and VS-42's and VS-44's schema changes only once both their key and strict are applied.
     prompts: promptsDigest({
+      ...(input.adapter === "engine" && input.config.cards === "brain" ? { cards: "brain" as const } : {}),
       ...(input.config.ruleCheck === "strict" ? { ruleCheck: "strict" as const } : {}),
       ...(input.adapter === "engine" && input.config.impact === "graph" ? { impact: "graph" as const } : {}),
       ...(input.adapter === "engine" && input.config.guardrail === "strict" ? { guardrail: "strict" as const } : {}),
@@ -703,7 +728,7 @@ export function evidenceScope(input: {
     // Graph context, the trivial proof and the strict guardrail are applied only by the engine.
     policy: policyDigest(
       input.adapter === "desktop"
-        ? { ...input.config, depth: "fixed", lenses: "off", trivial: "review", impact: "grep", guardrail: "off" }
+        ? { ...input.config, depth: "fixed", lenses: "off", cards: "off", trivial: "review", impact: "grep", guardrail: "off" }
         : input.config,
     ),
     ...(input.triage ? { triage: input.triage } : {}),

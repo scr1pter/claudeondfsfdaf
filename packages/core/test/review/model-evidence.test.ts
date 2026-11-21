@@ -64,6 +64,10 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/connect/policy.ts",
   "packages/engine/src/review/run.ts",
   "packages/engine/src/review/trivial.ts",
+  "packages/engine/src/review/card-access.ts",
+  "packages/engine/src/review/card-sources.ts",
+  "packages/engine/src/review/context.ts",
+  "packages/engine/src/review/eval.ts",
   "packages/engine/src/review/private-snapshot.ts",
   "packages/engine/src/review/strict-blobs.ts",
   "packages/engine/src/review/strict.ts",
@@ -75,6 +79,10 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/local-run.ts",
   "packages/engine/src/review/lifecycle.ts",
   "packages/engine/src/session/session.ts",
+  "packages/engine/src/session/posting.ts",
+  "packages/core/src/session/audience.ts",
+  "packages/core/src/public-session-share.ts",
+  "packages/core/src/share/archive.ts",
   "packages/engine/src/server/routes/instance/httpapi/groups/session.ts",
   "packages/engine/src/server/routes/instance/httpapi/handlers/session.ts",
   "packages/engine/src/server/routes/instance/httpapi/handlers/session-errors.ts",
@@ -105,6 +113,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/plugin/index.ts",
   "packages/engine/src/tool/registry.ts",
   "packages/core/src/brain/brain.ts",
+  "packages/core/src/brain/knowledge.ts",
   "packages/engine/src/tool/grep.ts",
   "packages/engine/src/tool/glob.ts",
   "packages/engine/src/tool/read.ts",
@@ -634,6 +643,50 @@ describe("scope", () => {
     // Every other key keeps its digest behaviour: a changed value still moves it, with trivial set or not.
     expect(policyDigest({ ...skip, maxComments: 3 })).not.toBe(policyDigest(skip))
     expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, maxSteps: 31 })).not.toBe(base)
+  })
+
+  test("SF-26 evidence counts cards on the local engine and covers combined pass prompts", () => {
+    const cards = { cards: "brain" as const }
+    const depth = { depth: "auto" as const, lenses: "high" as const }
+    const graph = { impact: "graph" as const }
+    const held = { holdback: "secrets" as const }
+    const strict = {
+      guardrail: "strict" as const,
+      scopeGate: "introduced" as const,
+      verifyEvidence: "certificate" as const,
+    }
+    const scope = (adapter: "engine" | "desktop", overrides: Partial<ReviewConfig>) =>
+      evidenceScope({ adapter, config: { ...DEFAULT_REVIEW_CONFIG, ...overrides } })
+    expect(canonicalPrompts({ cards: "off" })).toEqual(canonicalPrompts())
+    expect(promptsDigest({ cards: "off" })).toBe("5d59e9ee06077c23")
+    expect(scope("engine", { cards: "off" })).toEqual(SCOPE)
+    expect(scope("desktop", cards)).toEqual(scope("desktop", {}))
+    for (const extra of [{}, graph, depth, held, strict, { ...graph, ...depth, ...held, ...strict }]) {
+      const activated = { ...extra, ...cards }
+      const engine = scope("engine", activated)
+      expect(engine.prompts).toBe(promptsDigest(activated))
+      expect(engine.policy).toBe(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...activated }))
+      expect(engine.policy).not.toBe(scope("engine", extra).policy)
+      expect(engine.prompts).not.toBe(scope("engine", extra).prompts)
+      expect(scope("desktop", activated)).toEqual(scope("desktop", extra))
+    }
+    const shown = (keys: Parameters<typeof canonicalPrompts>[0]) =>
+      canonicalPrompts(keys).filter((prompt) => prompt.includes("<untrusted_context_cards>"))
+    expect(shown({})).toEqual([])
+    expect(shown(cards)).toHaveLength(4)
+    const combined = shown({ ...cards, ...graph, ...depth, ...held })
+    expect(combined).toHaveLength(36)
+    expect(combined.every((text) => text.includes(INPUT_REDACTION))).toBe(true)
+    for (const lens of ["concurrency", "resource", "access", "data-integrity"]) {
+      expect(
+        combined.some(
+          (text) => text.includes("Vector's " + lens + " reviewer.") && text.includes("<untrusted_impact>"),
+        ),
+      ).toBe(true)
+    }
+    expect(promptsDigest(cards)).toBe("33640ce9df53572f")
+    expect(promptsDigest({ ...cards, ...depth })).toBe("5afccaf054dc13d1")
+    expect(promptsDigest({ ...cards, ...graph, ...depth, ...held, ...strict })).toBe("d3b656ce92a51856")
   })
 
   test("the applied input-token budget keeps existing evidence scopes and their policy digest", () => {

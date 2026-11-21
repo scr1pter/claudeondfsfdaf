@@ -502,6 +502,7 @@ describe("the variant registry", () => {
       "engine:privacy-zdr",
       "engine:trivial-skip",
       "engine:impact-graph",
+      "engine:cards-brain",
       "engine:guardrail-strict",
       "engine:depth-auto",
       "engine:lenses-high",
@@ -539,7 +540,6 @@ describe("the variant registry", () => {
         pending.filter((item) => item.name.startsWith("engine:")).map((item) => [item.name, item.package]),
       ),
     ).toEqual({
-      "engine:cards-brain": "VS-26",
       "engine:precise": "VS-31",
       "engine:team-guarded": "VS-35 wiring",
       "engine:explore-slice": "VS-49 wiring",
@@ -1229,7 +1229,7 @@ describe("projection records (VS-21b)", () => {
       ),
     ).toEqual([])
     // A pending variant carrying a built one's keys is the registry's problem, as in report.ts.
-    const pending = { name: "engine:cards-brain", keys: { verifyPolicy: "shared" as const } }
+    const pending = { name: "engine:receipt-json", keys: { verifyPolicy: "shared" as const } }
     expect(variantProblems("engine", pending)).not.toEqual([])
     expect(projectionProblems(record({ variant: pending }))).toEqual(variantProblems("engine", pending))
   })
@@ -2001,4 +2001,10 @@ describe("slice utilisation records (VS-49)", () => {
       ],
     )
   })
+})
+
+test("SF-26 registers only the local engine Brain cards variant", () => {
+  expect(resolveVariant("engine:cards-brain")).toMatchObject({ ok: true, adapter: "engine", keys: { cards: "brain" } })
+  expect(resolveVariant("desktop:cards-brain")).toMatchObject({ ok: false, reason: "pending" })
+  expect(VARIANT_KEYS.desktop).not.toContain("cards")
 })

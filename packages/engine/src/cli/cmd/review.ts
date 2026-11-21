@@ -81,6 +81,7 @@ import { Git } from "@/git"
 import { ReviewGit } from "@/review/git"
 import { ReviewTrivial } from "@/review/trivial"
 import { Brain } from "@vectordevai/core/brain/brain"
+import { Database } from "@vectordevai/core/database/database"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 import { Provider } from "@/provider/provider"
@@ -88,6 +89,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { Instruction } from "@/session/instruction"
 import { Config } from "@/config/config"
 import { SessionPosting } from "@/session/posting"
+import { ReviewCardAccess } from "@/review/card-access"
 import { ReviewContext } from "@/review/context"
 import type { ReviewModel, ResolvedModel } from "@/review/model"
 import { ReviewRoutes } from "@/review/route"
@@ -169,6 +171,7 @@ export interface LocalReviewDeps<RunR = never, ModelR = never> {
   now?: () => number
   color?: boolean
   github?: GitHubAccess // for --post; the GitHub CLI's token and the real API by default
+  cards?: (input: ReviewCardAccess.Request) => Effect.Effect<ReviewContext.CardGrant | undefined>
   // What the user's documents require of the changed files, from Vector's brain; none outside a Vector repository.
   // `shared` is set when the review leaves this computer (--post): then no private document may be in it.
   requirements?: (input: {
@@ -356,8 +359,9 @@ export function executeLocalReview<RunR, ModelR>(
     // A saved branch review can contain evidence outside a service's admitted read authority.
     const requiresFreshCoverage =
       options.context && (config.guardrail === "strict" || !!options.context.admittedReads || !!readDenies?.length)
+    const cardProvider = config.cards === "brain" && !options.context ? deps.cards : undefined
     const statePath =
-      !options.context?.stateless && !requiresFreshCoverage && !worktree && options.pr === undefined && branch
+      !cardProvider && !options.context?.stateless && !requiresFreshCoverage && !worktree && options.pr === undefined && branch
         ? yield* localStatePath(git, root, branch)
         : undefined
     let strictPolicy: string | undefined
@@ -724,9 +728,34 @@ export function executeLocalReview<RunR, ModelR>(
       ...((options.context || checkRules) && ruleSourceAvailable ? { instructions: ruleFile } : {}),
     })
     // The specs the change touches, with drift flags, so the reviewer can tell when it breaks one.
-    const requirements = deps.requirements
-      ? yield* deps.requirements({ files: review.map((file) => file.path), model, shared: options.post === true })
+    const selectedCards = cardProvider
+      ? yield* cardProvider({
+          directory: root,
+          base: range.mergeBase,
+          head: range.head,
+          files: review,
+          denied: ignored,
+          shared: !!options.post || options.pr !== undefined,
+          trust,
+          config,
+          models: [model, ...(resolved.triage ? [resolved.triage] : []), ...(resolved.judge ? [resolved.judge] : [])],
+          // Codium/panel fallbacks may introduce another checker; unknown destinations get no private text.
+          onPrivateUnavailable: () =>
+            say(
+              "Personal Brain cards were left out because private storage or an enforceable model privacy route was unavailable.",
+            ),
+          mayUsePrivate:
+            !Billing.isCodium(model.providerID) &&
+            (!config.panel || !!resolved.judge) &&
+            !options.checks &&
+            !options.apply,
+          deadline: performance.now() + Math.min(4_000, config.timeoutMinutes * 60_000),
+        })
       : undefined
+    const requirements =
+      !cardProvider && deps.requirements
+        ? yield* deps.requirements({ files: review.map((file) => file.path), model, shared: options.post === true })
+        : undefined
     const headFiles =
       trust === "untrusted"
         ? yield* ReviewSource.headFiles({
@@ -831,6 +860,7 @@ export function executeLocalReview<RunR, ModelR>(
       skipped,
       ...(headFiles ? { headFiles } : {}),
       context: { ...context, ...(requirements ? { requirements } : {}) },
+      ...(selectedCards ? { selectedCards } : {}),
       ...(pr ? { pr } : {}),
       prior,
       ...(ruleSourceAvailable
@@ -1858,6 +1888,8 @@ export const ReviewCommand = effectCmd({
     const { ReviewModel } = yield* Effect.promise(() => import("@/review/model"))
     const { Review } = yield* Effect.promise(() => import("@/review/run"))
     const knowledge = yield* BrainKnowledge.Service
+    const brain = Option.getOrUndefined(yield* Effect.serviceOption(Brain.Service))
+    const db = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
     const instruction = yield* Instruction.Service
     const provider = yield* Provider.Service
     const bridge = yield* EffectBridge.make()
@@ -1911,6 +1943,18 @@ export const ReviewCommand = effectCmd({
               untrusted: input.untrusted,
               log: (line) => void process.stderr.write(`${line}\n`),
             }),
+          ),
+        cards: (input) =>
+          instruction.place().pipe(
+            Effect.flatMap((place) => ReviewCardAccess.collect(input, place, !!brain && !!db)),
+            Effect.timeoutOption(Math.max(0, input.deadline - performance.now())),
+            Effect.map(Option.getOrUndefined),
+            Effect.provideService(BrainKnowledge.Service, knowledge),
+            Effect.provideService(Provider.Service, provider),
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterrupts(cause),
+              () => Effect.succeed(undefined),
+            ),
           ),
         // Private documents only for a review model that may not train on prompts, and never in a posted review.
         requirements: (input) =>

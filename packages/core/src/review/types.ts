@@ -501,6 +501,8 @@ export interface ReviewConfig {
   // effective only with `depth: "auto"`; set without it, it is ignored with a parser note. Absent means "off"
   // (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out.
   lenses?: "off" | "high"
+  /** Local CLI context from bounded, source-checked Brain cards. Absent means off. */
+  cards?: "off" | "brain"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it: `vector review`, the local review service
@@ -610,6 +612,7 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   verifyEvidence: "off",
   depth: "fixed",
   lenses: "off",
+  cards: "off",
   runtime: "off",
   holdback: "off",
 } as const satisfies Partial<ReviewConfig>

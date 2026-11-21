@@ -195,7 +195,8 @@ export const VARIANTS = {
   },
   "cards-brain": {
     planned: 'cards: "brain", in a local-only eval with a Brain seeded from the base commit',
-    engine: { pending: "VS-26" },
+    keys: { cards: "brain" },
+    engine: { from: "VS-26" },
     desktop: { pending: "VS-26's desktop half, after VS-10" },
   },
   "guardrail-strict": {

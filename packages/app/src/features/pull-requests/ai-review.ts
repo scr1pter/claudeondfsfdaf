@@ -14,6 +14,7 @@ import { requestComposerPrompt } from "@/utils/composer-handoff"
 // each step is testable without a model.
 
 import {
+  DESKTOP_CARDS_NOTICE,
   DESKTOP_STRICT_NOTICE,
   mergeReviewConfig,
   parseReviewRules,
@@ -828,6 +829,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const settingNotes = merged.warnings.filter(
     (warning) =>
       warning === DESKTOP_STRICT_NOTICE ||
+      warning === DESKTOP_CARDS_NOTICE ||
       /\breview\.(privacy|holdback|zdrAttested)\b|"(privacy|holdback|zdrAttested)"/.test(warning),
   )
   const withSettingNotes = (text: string) => [text, ...settingNotes].join(" ")
@@ -1019,9 +1021,10 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       label,
       unchanged: true,
       // Older desktop outcomes with this settings key used ordinary selection but did not retain its warning.
-      ...(config.guardrail === "strict" && !previous.notes.includes(DESKTOP_STRICT_NOTICE)
-        ? { notes: [...previous.notes, DESKTOP_STRICT_NOTICE] }
-        : {}),
+      notes: [
+        ...previous.notes.filter((note) => note !== DESKTOP_CARDS_NOTICE),
+        ...settingNotes.filter((note) => note === DESKTOP_CARDS_NOTICE || (note === DESKTOP_STRICT_NOTICE && !previous.notes.includes(note))),
+      ],
     }
 
   // An explicit model in review.json wins; otherwise the review runs on the agent's model (see preferredModels).
