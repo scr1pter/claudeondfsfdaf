@@ -1198,7 +1198,9 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
     `handleRequest` and `offeredTicket` (`:32`, `:41`), which workerd accepts.
   - `api/_lib/ops-cleanup.ts:94` skips the Worker's erase silently when `!opsErasable()`: if the Worker's address or
     secret was removed after an account used ops, deletion finishes while the Worker may still hold its data.
-    Proposed: keep the erase pending for accounts in `ops:accounts`.
+    Proposed: keep the erase pending for accounts in `ops:accounts`. **Fixed 21 Nov 2026 (`codium-api-fixes`):** an
+    account on `ops:accounts` in either mode now throws 503 `OPS_UNAVAILABLE` before any erase step, so the ops part
+    fails and the deletion is retried; codium-deviations "A46 tombstone".
   - `github-webhook-handlers/ops.ts:276` could forward `repo.environment`; after R46-23 that only changes display, and
     the incident record stores the lower-case environment either way.
   - P5 on the API side of R46-20: `api/_lib/ops-incidents.ts:328-357`. A report already in flight in the Worker's
@@ -1209,7 +1211,9 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
     (`api/_lib/codium-erase.ts:566`) probably removes them, but only if it runs after the late report lands. Proposed:
     before any write, drop the events of a report whose account has a tombstone (`accountDeleting(report.account)`,
     `api/_lib/codium-tombstone.ts:106`) and answer 2xx so the Worker stops resending, with a root test in
-    `test/account-delete.test.ts`. A48/A57 code, outside R46b's files; not fixed here.
+    `test/account-delete.test.ts`. A48/A57 code, outside R46b's files; not fixed here. **Fixed 21 Nov 2026
+    (`codium-api-fixes`)** as proposed: `handleOpsReport` answers `{taken: 0, duplicates: 0, skipped: n}` before the
+    loop when the tombstone is set; codium-deviations "A46 tombstone".
 - R46-17's row bound (above) if the repository cap grows.
 
 ### Review round (15 Nov 2026)

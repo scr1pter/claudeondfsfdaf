@@ -18,7 +18,8 @@ export default function handler(request: ApiRequest, response: ApiResponse) {
  * once, by its id (api/_lib/ops-incidents.ts): On Call's `monitor.down` and `monitor.up` open and resolve incidents and
  * alert the phone; Release Guard's `release.regressed` opens an incident and the one revert pull request; its
  * `release.passed` marks the release. A 2xx answer means every event in the report was taken; anything else and the
- * Worker sends the same events again later, and the ones already taken are not repeated.
+ * Worker sends the same events again later, and the ones already taken are not repeated. A report for an account being
+ * deleted is answered 2xx with every event skipped and nothing written.
  */
 export async function handleOpsWorkerReport(
   request: ApiRequest,

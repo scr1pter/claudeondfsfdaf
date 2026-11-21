@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { Readable } from "node:stream"
 import { __test, handleAccountDelete } from "../api/account/delete"
 import { handleAccountDeletions } from "../api/account/deletions"
+import { handleOpsWorkerReport } from "../api/ops/worker"
 import { readEntitlement, requireEntitlement } from "../api/_lib/codium-entitlements"
 import {
   checkAccountDeletion,
@@ -56,7 +57,8 @@ import {
   reconcileModelPlanAccount,
 } from "../api/_lib/model-plan-account"
 import { cardIndexKey, cardKey } from "../api/_lib/ship-desk"
-import { incidentIndexKey, incidentKey } from "../api/_lib/ops-incidents"
+import { incidentIndexKey, incidentKey, monitorIncidentId, opsEventsKey } from "../api/_lib/ops-incidents"
+import { signInternal } from "../api/_lib/hosted-internal"
 import { opsAccountsKey } from "../api/_lib/ops-accounts"
 import { opsHealthKey } from "../api/_lib/ops-health"
 import { runTokensRevokedKey } from "../api/_lib/codium-provisioners"
@@ -83,6 +85,7 @@ import {
   VAULT_ENVIRONMENT,
   vaultBucket,
 } from "./brain-vault-fixture"
+import { registerRecordScripts } from "./ops-fixture"
 
 const original = {
   SUPABASE_URL: process.env.SUPABASE_URL,
@@ -1467,6 +1470,132 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
 
 // The last part's SCAN with a MATCH glob and its whole-word filter, on a real Valkey when VECTOR_TEST_REDIS_URL is set
 // (the CI lane); skipped otherwise. The store fake above only emulates the glob.
+// WP A46 and A57: the ops Worker keeps reporting and holding an account's data until it is told to erase it. A report
+// that arrives after the tombstone writes nothing, and a deployment that cannot reach the Worker keeps the deletion of
+// an account that used ops pending instead of finishing without the Worker's erase.
+describe("ops after the tombstone (A46)", () => {
+  let restore = () => {}
+  beforeEach(() => {
+    restore = deletionEnvironment()
+  })
+  afterEach(() => {
+    restore()
+    setSystemTime()
+  })
+
+  const MONITOR = "mon_aaaaaaaaaaaaaaaa"
+
+  /** A `monitor.down` report from the Worker, signed as the Worker signs it, through the route. */
+  function workerReport(w: World, alerts: string[]): Promise<{ status: number; body: any }> {
+    const since = w.clock() - MINUTE
+    const body = JSON.stringify({
+      v: 1,
+      account: ACCOUNT,
+      events: [
+        {
+          v: 1,
+          id: "evt_down_0000000001",
+          kind: "monitor.down",
+          at: w.clock(),
+          monitor: MONITOR,
+          since,
+          reason: "status",
+          status: 503,
+        },
+      ],
+    })
+    const headers = signInternal("ops", { method: "POST", path: "/api/ops/worker", body, now: w.clock() })
+    const request = Object.assign(Readable.from([Buffer.from(body)]), {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      url: "/api/ops/worker",
+    }) as unknown as ApiRequest
+    return new Promise((resolve, reject) => {
+      const response = {
+        statusCode: 200,
+        setHeader() {
+          return response
+        },
+        end(value?: string) {
+          resolve({ status: response.statusCode, body: value ? JSON.parse(value) : undefined })
+          return response
+        },
+      }
+      void handleOpsWorkerReport(request, response as unknown as ApiResponse, w.fetcher, w.clock, {
+        alert: async (account) => {
+          alerts.push(account)
+          return { sent: 1, failed: 0, removed: 0 }
+        },
+      }).catch(reject)
+    })
+  }
+
+  test("a late signed Worker report after the tombstone answers 200 and writes nothing; an open account's still writes", async () => {
+    const open = deletionWorld()
+    // A48's record scripts, as the ops fixture runs them, so the open account's incident can be written.
+    registerRecordScripts(open.fakes.store, open.fakes.clock)
+    const opened: string[] = []
+    expect(await workerReport(open, opened)).toMatchObject({ status: 200, body: { ok: true, taken: 1 } })
+    expect(open.fakes.store.zset(incidentIndexKey(ACCOUNT)).size).toBe(1)
+    expect(opened).toEqual([ACCOUNT])
+
+    const w = deletionWorld()
+    expect((await deleteRoute(w)).status).toBe(200)
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toBeDefined()
+    const before = w.fakes.store.commands.length
+    const alerts: string[] = []
+    expect(await workerReport(w, alerts)).toEqual({
+      status: 200,
+      body: { ok: true, taken: 0, duplicates: 0, skipped: 1 },
+    })
+    expect(alerts).toEqual([])
+    expect(w.fakes.store.live(incidentIndexKey(ACCOUNT))).toBeUndefined()
+    expect(w.fakes.store.live(opsEventsKey(ACCOUNT))).toBeUndefined()
+    const id = monitorIncidentId(MONITOR, w.clock() - MINUTE)
+    expect(w.fakes.store.live(incidentKey(ACCOUNT, id))).toBeUndefined()
+    // Only the signed request's nonce and the tombstone are touched.
+    expect(
+      w.fakes.store.commands.slice(before).filter((command) => !["GET", "SET"].includes(String(command[0]))),
+    ).toEqual([])
+  })
+
+  test("without the Worker's address, an account that used ops stays pending with its ops records until it is set", async () => {
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_WORKER_URL: undefined })
+    const w = deletionWorld()
+    await seedEverything(w)
+    const answer = await deleteRoute(w)
+    expect(answer.status).toBe(503)
+    expect(answer.body.error).toMatchObject({ code: "ACCOUNT_ERASE_PENDING", pending: true, stage: "erase" })
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({ stage: "erase", failed: ["ops", "codium", "keys"] })
+    expect(w.services.worker).toEqual([])
+    expect(w.services.identities).toEqual([])
+    expect(w.fakes.store.get(opsSettingsKey(ACCOUNT))).toBeDefined()
+    expect(w.fakes.store.get(incidentKey(ACCOUNT, INCIDENT))).toBeDefined()
+    expect(w.fakes.store.zset(opsAccountsKey()).has(ACCOUNT)).toBe(true)
+
+    restore()
+    restore = deletionEnvironment()
+    advance(w, deletionRetryMs(1))
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, deleted: 1, pending: 0 })
+    expect(w.services.worker.filter((path) => path.endsWith("/erase"))).toHaveLength(1)
+    expect(w.services.identities).toEqual([ACCOUNT])
+    expect(w.fakes.store.get(opsSettingsKey(ACCOUNT))).toBeUndefined()
+    expect(w.fakes.store.get(incidentKey(ACCOUNT, INCIDENT))).toBeUndefined()
+  })
+
+  test("without the Worker's address, an account that never used ops is still deleted", async () => {
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_WORKER_URL: undefined })
+    const w = deletionWorld()
+    expect(w.fakes.store.zset(opsAccountsKey()).has(ACCOUNT)).toBe(false)
+    const answer = await deleteRoute(w)
+    expect(answer).toMatchObject({ status: 200, body: { deleted: true, codium: "erased" } })
+    expect(w.services.worker).toEqual([])
+    expect(w.services.identities).toEqual([ACCOUNT])
+  })
+})
+
 const valkeyURL = process.env.VECTOR_TEST_REDIS_URL
 describe.skipIf(!valkeyURL)("the last part on a real Valkey (CI only)", () => {
   let restore = () => {}

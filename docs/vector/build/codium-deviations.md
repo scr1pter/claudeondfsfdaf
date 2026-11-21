@@ -7301,3 +7301,28 @@ Its commit message and the entry it appends to `connected-workspace-deviations.m
   `1d944dd9`), then with PR #36 (`b5cbad1c`, which holds `d93b40b8`). `connected-workspace-deviations.md` on main has
   one copy of the hub.test.ts entry. This record does not check the Linux 4/4 and Windows 12/12 step durations asked
   for above; main now runs six Linux shards (`9506de79`), so those shard numbers no longer apply.
+
+## A46 tombstone: late Worker reports and a Worker that cannot erase, codium-api-fixes lane (21 Nov 2026)
+
+Closes the two A46 follow-ups codium-p7-repairs records under R46b (the P5 side of R46-20, and `eraseAccountOps`
+skipping the Worker silently).
+
+- **Late reports.** `handleOpsReport` (`api/_lib/ops-incidents.ts`) reads the account's tombstone before the loop. When
+  it is set, the report answers `{taken: 0, duplicates: 0, skipped: <events>}` (200 through `POST /api/ops/worker`)
+  with no incident, events-set or alert write, so the Worker stops resending. A tombstone read failure throws like any
+  store failure, so the Worker retries. One extra `GET` per report.
+- **A Worker that cannot be called.** `eraseAccountOps` (`api/_lib/ops-cleanup.ts`) without `opsErasable()` now
+  ZSCOREs the account in `ops:accounts` for both Stripe modes (as `forgetOpsAccount` removes it). Present: 503
+  `OPS_UNAVAILABLE` before any erase step, so `finishAccountDeletion`'s ops part fails (with `codium` and `keys`, which
+  require it) and the deletions cron retries. Absent: erased as before, so a deployment whose accounts never used ops
+  still deletes with the Worker unconfigured. The lost-dispute erase in the daily cleanup and the provisioner's
+  `closing` erase take the same path and are retried the same way.
+- **Tests** (`test/account-delete.test.ts`, describe "ops after the tombstone (A46)"): a late signed report after a
+  finished deletion answers 200 `{taken: 0, skipped: 1}` with no incident, no events set and no alert, while the same
+  report for an open account writes its incident and alerts; with `VECTOR_OPS_WORKER_URL` unset an account with ops
+  history stays pending at `erase` with failed `["ops", "codium", "keys"]` and its ops records kept, and once the
+  address is back the cron's retry calls the Worker's erase and finishes; an account without ops history still
+  finishes with the Worker unset. Mutations: dropping the tombstone check fails the first case, and short-circuiting the
+  `ops:accounts` check fails the second. `ops-payment-pipeline.test.ts`'s "account deletion erases every ops record at
+  once" (`:390`) and the media-down case (`:407`) still pass: their Worker is configured. File counts: account-delete
+  44 pass, 1 skip.

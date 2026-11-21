@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 import type { OpsEvent, OpsReport, ProbeReason } from "../../packages/ops-worker/src/protocol.js"
 import { CodiumRunTrigger } from "../../packages/schema/src/codium-run-trigger.js"
 import { codiumKey, codiumKeyIn } from "./codium-keys.js"
+import { accountDeleting } from "./codium-tombstone.js"
 import { requireEntitlement } from "./codium-entitlements.js"
 import { readSnapshot, requireUsableSnapshot } from "./codium-snapshot.js"
 import type { GithubServerOptions } from "./github-app-server.js"
@@ -323,12 +324,15 @@ async function markTaken(account: string, id: string, fetcher: typeof fetch, now
 /**
  * Handles every event of one report, oldest first. An event already taken is skipped; one this server does not know or
  * that is malformed is skipped too (never retried forever). A failure (the store, GitHub during a revert) stops the
- * report there and is thrown, so the Worker sends it again and the events already taken are not repeated.
+ * report there and is thrown, so the Worker sends it again and the events already taken are not repeated. A report for
+ * an account being deleted (A57's tombstone) is answered with every event skipped and nothing written or alerted, so
+ * the Worker stops resending; a tombstone that cannot be read is thrown like any store failure.
  */
 export async function handleOpsReport(report: OpsReport, options: OpsReportOptions = {}): Promise<OpsReportResult> {
   const fetcher = options.fetcher ?? fetch
   const now = options.now ?? Date.now()
   const deadline = options.deadline ?? Date.now() + INCIDENT_LIMITS.reportBudgetMs
+  if (await accountDeleting(report.account, fetcher)) return { taken: 0, duplicates: 0, skipped: report.events.length }
   const result: OpsReportResult = { taken: 0, duplicates: 0, skipped: 0 }
   for (const raw of report.events) {
     const event = checkedEvent(raw)
