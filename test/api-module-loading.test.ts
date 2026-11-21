@@ -58,6 +58,8 @@ test("fresh Node ESM callers, run tokens and readiness initialize in either impo
     "api/model-plans/chat.ts",
     "api/model-plans/estimate.ts",
     "api/model-plans/models.ts",
+    // Vector everywhere's job body route (EV-27); a TDZ or cycle in api/_lib/everywhere would fail its rotation.
+    "api/everywhere/jobs/[jid]/body.ts",
   ]
   const temporary = await mkdtemp(path.join(tmpdir(), "vector-api-import-"))
   try {
