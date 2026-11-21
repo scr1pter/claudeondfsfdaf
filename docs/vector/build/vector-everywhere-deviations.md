@@ -4717,3 +4717,29 @@ No flag, env var, switch, route, page, nav, sitemap, dependency, lockfile or gen
 
 - packages/schema/src/codium-copy.ts (a comment) and packages/schema/test/codium-copy.test.ts (one case) are Codium's files. The new case makes the owner's R-C8/R-A8 edit to packages/schema/src/codium-run-trigger.ts fail CI until the copy is approved again, on purpose.
 - packages/engine/src/tool/shell.ts, tool/terminal.ts and the session and sync handlers change only at this lane's own EV-16 call sites.
+
+## 2026-11-21, everywhere-finish lane: final review fixes
+
+The final review before the lane's PR into main: nine findings, one blocking. Base: HEAD `2f05f15b`, with origin/main `f3d7ac74` an ancestor (merged at `535ac94e`).
+
+### Taken in code
+
+- **(a) The "Jobs for this computer" row is hidden while the block is off** (blocking; the lead ruling that nothing user-visible changes with Everywhere off). packages/app/src/features/local/local-model.ts `offInLocal` takes `{ everywhere }` and skips the `everywhere` source unless it is true; Settings > Vector Local passes `everywhereView(globalConfig).written`, the local engine's `everywhere.enabled`, the same read the Everywhere tab uses. The registry entry stays, so `Egress.fetch("everywhere")` and the sources tests are unchanged, and the other `offInLocal` caller (off-in-local.tsx) never asks for that source. local-model.test.ts asserts the row is absent with the block off and present, with the same text and state, with it on. EV-15 (h)'s KEPT_OFF line is unchanged, so no waiver of the ruling is needed.
+- **(b) vector-at-mention.yml's pull_request paths** gain `packages/core/src/everywhere/**` and `packages/schema/src/everywhere.ts`, the two files github.agent.ts now imports, so a change to either re-runs the @vector suites. The file is main's since PR #33 merged; EV-28's "the lane cannot edit" note is annotated.
+- **(c) Stale comments.** api/_lib/everywhere/config.ts's `LAPTOP_ROUTE_WIRED` docblock names EV-18's landed worktree adapter (`cf9195d0`) and the reasons that remain: the empty `OFFER_KEYS`, and that a macOS or Windows shell runs no checks (EV-16). adapters/cloud-agents.ts's `liveMode` comment says EV-29 and EV-30 closed without a production builder and points at the lane work "the live mode reader".
+- **(d) The offline-v1 case's first sandbox spawn is untimed** (packages/engine/test/everywhere/unattended-session.test.ts). Before `h.client.prompt` it reads GET /experimental/shell/unattended, which runs and caches the bubblewrap self-test, and asserts `{ shell: "offline-v1" }`. The 10 s deadline is unchanged.
+
+### Taken in the documents
+
+- **(e) The handoff's "Decisions waiting for the lead"** now carries the four "For the lead to forward to @vector" items (EV-25, EV-26, EV-28, EV-14), the scope-finish conflicts in packages/engine/src/config/config.ts (keep both `delete next.review` and `delete next.everywhere`) and packages/engine/test/config/subagent-config.test.ts (keep both sides' cases), and the EV-23 summary ruling with its fallback (drop `summary` from accountJob and privateSummary). Its KEPT_OFF pointer says the row is hidden while off.
+- **(f) The runner ledger erase** is in the lane work list, as a precondition for pinning the offer key: on `vectorAccount` sign-out or a change of the token's `sub`, delete userData/everywhere/runner.json (or drop `pending` and `jobs`), with a wiring test. Not built here: nothing can reach the file while `OFFER_KEYS` is empty, and the erase belongs with the package that pins the key and wires the account change.
+
+### Not changed, with the reason
+
+- **(g) The sweep cron stays in vercel.json** (accepted and noted at the handoff's activation step 4). It answers before any store, 401 without CRON_SECRET or `{enabled: false}`, so the cost is one function start a minute. Moving the entry to the change that sets `LAPTOP_ROUTE_WIRED` true is the lead's alternative.
+- **(h) The public config schema keeps the `everywhere` block** as generated. It follows the computer/connect precedent and is marked "Not available in Vector 1.99.112 or earlier". With the block set, the desktop tab shows and readiness calls get 404 while the server is off, which changes nothing for a user who has not set it. Marking it experimental would be a generator change for the lead; config.json is not hand-edited.
+- **(i) GET /api/everywhere/history keeps the held summary** pending EV-23's 3.12/3.7 ruling, which must be recorded before the flag is turned on (handoff, "Decisions waiting for the lead"). The route is behind the flag, the account and the installation snapshot.
+
+### Safe by default
+
+No flag, env var, route, dependency, lockfile or generated file changes. The only user-visible change is that the Vector Local pane no longer names Jobs for this computer while the `everywhere` block is off.

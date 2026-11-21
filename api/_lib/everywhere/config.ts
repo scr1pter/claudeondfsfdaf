@@ -241,9 +241,11 @@ export function sponsorListed(config: EverywhereConfig, account: string): boolea
  * offer key set, productionPorts (runtime.ts) uses the relay adapter (adapters/remote.ts), whose plan check joins the
  * allowlist only while this is true. 2026-11-16 (EV-17): the desktop now decodes and verifies offers (VE-21), but it
  * stays false while no customer job can finish on a laptop: `OFFER_KEYS` (desktop everywhere-offer.ts) is empty until
- * the owner's key handoff, so every offer is refused, and the runner has no safe worktree until EV-18, so a claimed job
- * is held. The package that pins the key and wires the worktree sets it true. It lives here, not in runtime.ts,
- * because Codium's listing imports this module and runtime.ts builds the platform routes when it loads.
+ * the owner's key handoff, so every offer is refused. *2026-11-21:* EV-18's safe worktree adapter has landed
+ * (`cf9195d0`), so a claimed job is no longer held for want of a worktree; what still keeps this false is the empty
+ * `OFFER_KEYS`, and that a macOS or Windows shell runs no checks for an unattended job (EV-16). The package that pins
+ * the key sets it true. It lives here, not in runtime.ts, because Codium's listing imports this module and runtime.ts
+ * builds the platform routes when it loads.
  */
 export const LAPTOP_ROUTE_WIRED: boolean = false
 

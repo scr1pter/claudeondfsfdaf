@@ -51,9 +51,10 @@ export type CloudPortsDeps = {
   readonly prepare?: typeof prepareCloudRun
   /**
    * The live read of `.github/workflows/vector.yml` at the default branch, with the App's single-repository token (no
-   * work package builds it yet; EV-29 and EV-30, Left open). "codium" means the workflow is in Codium mode by
-   * workflowModeOf's rule (github-app.ts) and its pinned CLI reads the job body (EV-28); anything else, or a failed
-   * read, is no Actions route. Without it there is no prepareCloud.
+   * production builder yet: EV-29 and EV-30 closed without one, and it is the lane work "the live mode reader" in
+   * Left open). "codium" means the workflow is in Codium mode by workflowModeOf's rule (github-app.ts) and its pinned
+   * CLI reads the job body (EV-28); anything else, or a failed read, is no Actions route. Without it there is no
+   * prepareCloud.
    */
   readonly liveMode?: (binding: RepoBinding) => Promise<WorkflowMode | undefined>
   /** Default: ENABLED_SOURCES, which reserves slack, linear and jira until the owner says yes (R-C8/R-A8). */
