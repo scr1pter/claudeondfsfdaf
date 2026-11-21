@@ -194,6 +194,51 @@ describe("VaultGitHub.store", () => {
     expect((await VaultBackup.read({ store: env.make("cache-d"), opened })).files[0]!.bytes.toString("utf8")).toBe("from b")
   })
 
+  // R45-4b: git's stderr can name a local path or an insteadOf URL carrying a credential; the message is fixed copy.
+  const leaky = "fatal: unable to access 'https://person:ghp_secret@github.com/octo/brain-vault/': denied\nfatal: could not create '/home/person/private'"
+  const quiet = (message: string) => {
+    for (const part of ["ghp_", "/home/person", "fatal", "https://"]) expect(message).not.toContain(part)
+  }
+
+  test("git's own text never reaches the message when the repository cannot be reached", async () => {
+    const env = await setup()
+    await using _ = env.tmp
+    const store = VaultGitHub.store({
+      repo: "octo/brain-vault",
+      remote: env.remote,
+      api: "https://api.github.test",
+      dir: path.join(env.tmp.path, "cache"),
+      git: (args, options) =>
+        args.includes("ls-remote") ? Promise.resolve({ exitCode: 128, stdout: Buffer.alloc(0), stderr: leaky }) : git(args, options),
+      send: github(() => ({ status: 404 })).send,
+    })
+    const refused = await store.list().catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(VaultError)
+    expect((refused as VaultError).code).toBe("unavailable")
+    expect((refused as Error).message).toBe("Vector could not reach octo/brain-vault. Check that it exists and that git can push to it.")
+    quiet((refused as Error).message)
+  })
+
+  test("git's own text never reaches the message when a push fails for another reason than a moved branch", async () => {
+    const env = await setup()
+    await using _ = env.tmp
+    const store = VaultGitHub.store({
+      repo: "octo/brain-vault",
+      remote: env.remote,
+      api: "https://api.github.test",
+      dir: path.join(env.tmp.path, "cache"),
+      git: (args, options) =>
+        args.includes("push") ? Promise.resolve({ exitCode: 128, stdout: Buffer.alloc(0), stderr: leaky }) : git(args, options),
+      send: github(() => ({ status: 404 })).send,
+    })
+    const created = await VaultBackup.create(store, { cost: COST })
+    const refused = await VaultBackup.backup({ store, opened: created, files: [file("first")] }).catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(VaultError)
+    expect((refused as VaultError).code).toBe("unavailable")
+    expect((refused as Error).message).toBe("git could not push to octo/brain-vault.")
+    quiet((refused as Error).message)
+  })
+
   test("deleting the vault leaves only a README, and a new vault may start there", async () => {
     const env = await setup()
     await using _ = env.tmp

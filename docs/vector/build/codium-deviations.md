@@ -3888,7 +3888,7 @@ and F28 used it too.
 
   The F28 CI receipt (`codium-p6-repairs.md`, and item 10 of the F28 section above) is a separate record from R45a's.
 - **For the lead:** R45-4(b) (`packages/core/src/vault/github.ts:115-118`: drop git's stderr line or strip paths and
-  URLs from it); R45-18 (`packages/core/src/child-environment.ts:5-14`: add `VECTOR_VAULT_RECOVERY_CODE` to
+  URLs from it; repaired 21 Nov 2026 on branch `engine-core-fixes` by dropping it, see `codium-p7-repairs.md` R45-4); R45-18 (`packages/core/src/child-environment.ts:5-14`: add `VECTOR_VAULT_RECOVERY_CODE` to
   `PRIVATE_RUNTIME_ENVIRONMENT`; repaired 21 Nov 2026 on branch `engine-core-fixes`, see `codium-p7-repairs.md`
   R45-18); R45-19 (`packages/engine/src/tool/shell/sandbox.ts:83`, `:496-514`: deny
   `<data>/vault/vault.json`); R45-20 (`packages/engine/src/cli/cmd/vault.ts:168` or the sandbox: move the CLI's copy

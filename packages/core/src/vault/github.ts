@@ -112,10 +112,9 @@ export function store(options: {
   // What this run wrote and has not pushed: path → blob sha.
   const staged = new Map<string, string>()
 
-  const failed = (what: string, result: { stderr: string }) => {
-    const line = result.stderr.split(/\r?\n/).find((item) => item.trim())?.trim()
-    return new VaultError("unavailable", `${what}${line ? `: ${line.slice(0, 200)}` : "."}`)
-  }
+  // Fixed copy only: git's stderr can name local paths or an insteadOf URL that carries a credential, so it is never
+  // shown to the person or stored in settings.error (R45-4b).
+  const failed = (what: string) => new VaultError("unavailable", `${what}.`)
 
   const init = async () => {
     const exists = await fs
@@ -125,7 +124,7 @@ export function store(options: {
     if (exists) return
     await fs.mkdir(options.dir, { recursive: true })
     const result = await options.git(["init", "--bare", "-q", options.dir])
-    if (result.exitCode !== 0) throw failed("Vector could not set up its copy of the vault", result)
+    if (result.exitCode !== 0) throw failed("Vector could not set up its copy of the vault")
   }
 
   // The branch as GitHub has it now, fetched into the local copy. Read once per store, and again after each push.
@@ -144,16 +143,16 @@ export function store(options: {
     await init()
     const listed = await git(["ls-remote", options.remote, BRANCH])
     if (listed.exitCode !== 0)
-      throw failed(`Vector could not reach ${repo.full}. Check that it exists and that git can push to it`, listed)
+      throw failed(`Vector could not reach ${repo.full}. Check that it exists and that git can push to it`)
     tip = listed.stdout.toString("utf8").trim().split(/\s+/)[0] || undefined
     const next = new Map<string, Entry>()
     if (tip) {
       const fetched = await git(["fetch", "--no-tags", "-q", options.remote, `+${BRANCH}:${LOCAL}`])
-      if (fetched.exitCode !== 0) throw failed(`Vector could not fetch ${repo.full}`, fetched)
+      if (fetched.exitCode !== 0) throw failed(`Vector could not fetch ${repo.full}`)
       const resolved = (await git(["rev-parse", LOCAL])).stdout.toString("utf8").trim()
       if (resolved !== tip) throw new VaultError("unavailable", `${repo.full} changed while Vector read it. Try again.`)
       const ls = await git(["ls-tree", "-r", "-l", "-z", LOCAL])
-      if (ls.exitCode !== 0) throw failed(`Vector could not read ${repo.full}`, ls)
+      if (ls.exitCode !== 0) throw failed(`Vector could not read ${repo.full}`)
       for (const record of ls.stdout.toString("utf8").split("\0")) {
         if (!record) continue
         const tab = record.indexOf("\t")
@@ -175,7 +174,7 @@ export function store(options: {
 
   const blob = async (input: Uint8Array | string) => {
     const result = await git(["hash-object", "-w", "--stdin"], { input })
-    if (result.exitCode !== 0) throw failed("Vector could not write the backup to its copy of the vault", result)
+    if (result.exitCode !== 0) throw failed("Vector could not write the backup to its copy of the vault")
     return result.stdout.toString("utf8").trim()
   }
 
@@ -193,22 +192,22 @@ export function store(options: {
     const env = { GIT_INDEX_FILE: index }
     await fs.rm(index, { force: true })
     const read = await git(tip ? ["read-tree", LOCAL] : ["read-tree", "--empty"], { env })
-    if (read.exitCode !== 0) throw failed("Vector could not prepare the backup", read)
+    if (read.exitCode !== 0) throw failed("Vector could not prepare the backup")
     const lines = [...changes].map(([name, sha]) =>
       sha ? `100644 ${sha}\t${name}` : current.has(name) ? `0 ${EMPTY_SHA}\t${name}` : undefined,
     )
     const info = lines.filter((line): line is string => line !== undefined).join("\n")
     if (info) {
       const updated = await git(["update-index", "--index-info"], { env, input: `${info}\n` })
-      if (updated.exitCode !== 0) throw failed("Vector could not prepare the backup", updated)
+      if (updated.exitCode !== 0) throw failed("Vector could not prepare the backup")
     }
     const written = await git(["write-tree"], { env })
-    if (written.exitCode !== 0) throw failed("Vector could not prepare the backup", written)
+    if (written.exitCode !== 0) throw failed("Vector could not prepare the backup")
     // The vault's commits are not the person's: no signing prompt, no hooks of theirs.
     const commit = await git(["-c", "commit.gpgsign=false", "commit-tree", written.stdout.toString("utf8").trim(), "-m", message], {
       env: { ...env, ...IDENTITY },
     })
-    if (commit.exitCode !== 0) throw failed("Vector could not prepare the backup", commit)
+    if (commit.exitCode !== 0) throw failed("Vector could not prepare the backup")
     const sha = commit.stdout.toString("utf8").trim()
     const pushed = await git([
       "-c",
@@ -224,7 +223,7 @@ export function store(options: {
       tree = undefined
       if (/stale info|rejected|fetch first|non-fast-forward/i.test(pushed.stderr))
         throw new VaultError("unavailable", `${repo.full} changed while Vector backed up (another computer?). Run it again.`)
-      throw failed(`git could not push to ${repo.full}`, pushed)
+      throw failed(`git could not push to ${repo.full}`)
     }
     await git(["update-ref", LOCAL, sha])
     tip = sha
@@ -330,7 +329,7 @@ export function store(options: {
       const result = await git(["cat-file", "--batch"], {
         input: `${ids.map((id) => `${LOCAL}:${objectPath(id)}`).join("\n")}\n`,
       })
-      if (result.exitCode !== 0) throw failed(`Vector could not read ${repo.full}`, result)
+      if (result.exitCode !== 0) throw failed(`Vector could not read ${repo.full}`)
       let offset = 0
       for (const id of ids) {
         const end = result.stdout.indexOf(0x0a, offset)

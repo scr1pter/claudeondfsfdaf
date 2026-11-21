@@ -149,6 +149,15 @@ searched for vault, backup and restore lines:
   reading that "the URL carries no credential" holds only for Vector's own URL. The repair belongs in core's store:
   drop the stderr line, or keep it only after removing anything that looks like a path or a URL. That file is A43's
   and outside R45a's restricted scope, so it is recorded under For the lead.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`): `failed()` now takes only the fixed copy and returns
+    `${what}.`; git's stderr is never appended (the comment there says why). The push branch's stale/rejected test of
+    stderr is unchanged and still answers its own copy. Two cases in `packages/core/test/vault/github.test.ts` wrap the
+    real git: `ls-remote` and, separately, `push` exit 128 with a token URL and a `/home/person` path on stderr. They
+    assert the exact fixed message and that it holds none of `ghp_`, `/home/person`, `fatal` or `https://`. On the old
+    `failed()` both fail (9 pass, 2 fail, the token URL in the message). Stripping paths and URLs by pattern was not
+    taken: it misses Windows paths and home folders. One consequence: desktop's runner copy "Git could not start on
+    this computer…" is no longer appended to "Vector could not set up its copy of the vault"; the desktop case
+    "git that cannot start shows plain copy" now lists the bare fixed copy as its second accepted text.
 
 ### Checks that hold
 
@@ -283,7 +292,7 @@ searched for vault, backup and restore lines:
 ### For the lead (recorded, not repaired here)
 
 - **R45-4(b).** Core's `failed()` (`packages/core/src/vault/github.ts:115-118`), as above. A43's file, outside this
-  package's scope.
+  package's scope. Repaired 21 Nov 2026 on branch `engine-core-fixes` (see R45-4 (b) above).
 - **R45-18. Confirmed: an exported `VECTOR_VAULT_RECOVERY_CODE` reaches agents' shells.** The CLI reads it
   (`cli/cmd/vault.ts:214`). `privateRuntimeKey` (`packages/core/src/child-environment.ts:163-174`) drops `VECTOR_*`
   names ending `_TOKEN`, `_KEY`, `_PASSWORD` or `_SECRET` and the names in `PRIVATE_RUNTIME_ENVIRONMENT` (`:5-14`), and
