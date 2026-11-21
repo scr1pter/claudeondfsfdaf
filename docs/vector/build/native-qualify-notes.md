@@ -2529,7 +2529,8 @@ bun/own-key diagnostic cell on `ubuntu-24.04` 20261111.127.1 only:
 - the complete eight-cell matrix (four baseline cells and the four fresh Engine-death
   cells), with owned cleanup on every path (never dispatched);
 - the native `owned` refusal case (it does not exist);
-- witness obligations 1 and 2, D34 and D4;
+- witness obligations 1 and 2 (21 Nov 2026: witnessed for Node, Bun open), D4, and D34 (moved to known limits by
+  D108, 21 Nov 2026);
 - a hosted `test.yml` run of the lane's Bun tests;
 - the reader integration clause of "Remaining qualification" (not verified here);
 - a reviewed reader re-pin before any post-merge native dispatch (D95).
@@ -3041,3 +3042,16 @@ So both checks held in both Node baseline cells. Main's copies of the three fixt
 `native-shell-payload.ts`'s sandbox `runError` regex (it also accepts "exited N"), which these checks do not use. A
 Bun witness stays open: run 19's four Bun cells failed at step 16 before any case. Per-SHA on `native-qualify`, not
 main; not a qualification; both native build switches and `FLOOR` false.
+
+## 21 November 2026: D108, D34 moves to known limits (NQ-D34)
+
+- D108. D34 (which of `/home/runner` and `/home/runner/work` the keeper cannot search) leaves the open list and is a
+  known limit. Flagged for the lead in the PR: this is a lane decision taken on the lead's behalf from the fix plan.
+  - Why it is moot now: the shipped design masks the runner home as a whole (the runner-home mask the NQ-5 obligations
+    describe), so no mask needs the keeper to search either ancestor; which one blocks changes nothing that ships. The
+    runner-home obligations that do matter are witnessed for Node (NQ-WITNESS-1-2 above) and open for Bun.
+  - What it becomes: a precondition. Any narrower mask (one that leaves `/home/runner` or `/home/runner/work`
+    reachable and masks below it) needs a per-ancestor witness first, for example D34's declined option (a), a
+    `prepare-mask-host-temp-keeper-search-runner-home`/`-runner-work` label, before it can be qualified.
+  - Edited to say so: `native-isolation-status.md` (the two "still unproven" sentences and the Open list) and this
+    file's Open list. No code, workflow or label changed; both native build switches and `FLOOR` stay false.

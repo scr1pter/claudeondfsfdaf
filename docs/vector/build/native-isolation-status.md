@@ -271,7 +271,7 @@ activation is authorized by this document.
 The bounded lane dispatch `43675930370` (job `132695971881`, head `f05f9916`) closed at
 admission with `prepare-mask-host-temp-keeper-search`. The keeper cannot search a strict
 ancestor of the fixed hosted temporary root `/home/runner/work/_temp`, which is
-`/home/runner` or `/home/runner/work`; which of the two is still unproven. The earlier
+`/home/runner` or `/home/runner/work`; which of the two is still unproven. (21 Nov 2026: D34 moved to known limits by D108 in `native-qualify-notes.md`.) The earlier
 dispatch `43660129312` closed with `...-bwrap-destination-host-temp-eacces-...` on that
 same fifth mask. Bubblewrap applies its operations in order, so the four earlier masks
 over Root-owned host directories did not fail. That last step is code reading of
@@ -421,7 +421,7 @@ ancestor of the hosted temporary root. Run 43660129312 shows this at constructio
 bubblewrap, running as the keeper, got `EACCES` on the parents of the hosted temporary
 root. Run 43675930370 shows it at admission, with the keeper-search label. Which of
 `/home/runner` and `/home/runner/work` blocks the keeper is still unproven (lane decision
-D34).
+D34). (21 Nov 2026: D34 moved to known limits by D108 in `native-qualify-notes.md`.)
 
 ### The last run
 
@@ -559,8 +559,8 @@ that cell at that head.
   cells), including owned cleanup on every path. They were never dispatched in this lane;
 - the native `owned` refusal case. It does not exist: `CASES` is at
   `native-shell-payload.ts:17-28`;
-- the two open witness obligations above, D34, and D4 (Ubuntu's rewritten userns-denied
-  message has no closed label);
+- the two open witness obligations above (21 Nov 2026: witnessed for Node, a Bun witness open), D4 (Ubuntu's
+  rewritten userns-denied message has no closed label), and D34, which D108 moves to known limits;
 - a hosted `test.yml` run of the lane's Bun tests. `test.yml` has no run on
   `native-qualify`; 21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").
 - the reader integration clause in "Remaining qualification" above. This lane has not
