@@ -96,7 +96,8 @@ const upstream = Bun.serve({
       if (parts[0] === "ZADD" || parts[0] === "ZREM") return Response.json({ result: 1 })
       if (["SMEMBERS", "HGETALL", "LRANGE", "ZRANGE", "ZRANGEBYSCORE", "HKEYS"].includes(parts[0]))
         return Response.json({ result: [] })
-      if (["HGET", "LPOP", "RPOP"].includes(parts[0])) return Response.json({ result: null })
+      // ZSCORE: the ops account list, read when the ops Worker is not set up (A46); this account never used ops.
+      if (["HGET", "LPOP", "RPOP", "ZSCORE"].includes(parts[0])) return Response.json({ result: null })
       if (["EXISTS", "SREM", "HDEL", "SCARD", "ZCARD", "LLEN", "UNLINK"].includes(parts[0]))
         return Response.json({ result: 0 })
     }
