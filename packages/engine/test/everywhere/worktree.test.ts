@@ -95,6 +95,15 @@ const present = (file: string) =>
     () => true,
     () => false,
   )
+// Windows will not remove a folder while a process has it open or as its working folder, and git that an instance
+// started there can outlive the test by a moment. Retry as Worktree.remove's cleanDirectory does (50 times, 100 ms
+// apart, on win32 only); elsewhere, and for any other error, the first failure stands.
+const removeFolder = (target: string, left = 50): Promise<void> =>
+  rm(target, { recursive: true, force: true }).catch(async (error: NodeJS.ErrnoException) => {
+    if (process.platform !== "win32" || left <= 1 || (error.code !== "EBUSY" && error.code !== "EPERM")) throw error
+    await Bun.sleep(100)
+    return removeFolder(target, left - 1)
+  })
 
 // The fixture's own git runs with hooks off, so only the positive controls fire them.
 const git = Effect.fn("EverywhereWorktreeTest.git")(function* (cwd: string, args: string[]) {
@@ -112,8 +121,8 @@ const fixture = Effect.fn("EverywhereWorktreeTest.fixture")(function* () {
   const root = path.join(Global.Path.data, "everywhere-worktree", ctx.project.id)
   yield* Effect.addFinalizer(() =>
     Effect.promise(async () => {
-      await rm(root, { recursive: true, force: true })
-      await rm(markers, { recursive: true, force: true })
+      await removeFolder(root)
+      await removeFolder(markers)
     }),
   )
   yield* fs.makeDirectory(markers, { recursive: true }).pipe(Effect.orDie)
@@ -734,7 +743,7 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
       }),
     )
     for (const item of disposables.splice(0)) await item[Symbol.asyncDispose]()
-    for (const item of cleanup.splice(0)) await rm(item, { recursive: true, force: true })
+    for (const item of cleanup.splice(0)) await removeFolder(item)
     await resetDatabase()
   })
   afterAll(async () => {
