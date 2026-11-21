@@ -88,9 +88,10 @@ async function indexMembers(key: string, fetcher: typeof fetch) {
  * set, even with VECTOR_OPS_ENABLED off), the ops settings, incidents and Release Guard records, Ship Desk's cards with
  * their images, domain health, and the guard's and cleanup's own records. Account deletion (A57) calls this one
  * function; the ops provisioner does the same on `closing`. Throws when a part cannot be reached, so the caller tries
- * again. Without the Worker's address and secret, an account that ever used ops (on the ops account list in either
- * Stripe mode) is refused with 503 before anything is erased, so its deletion stays pending until the Worker can erase
- * it; an account that never used ops is erased as before.
+ * again. Without the Worker's address and secret, an account on the ops account list in either Stripe mode is refused
+ * with 503 before anything is erased, so its deletion stays pending until the Worker can erase it; an account not on
+ * that list is erased as before. The daily cleanup drops an idle account from the list while the Worker may still hold
+ * its config, releases and baselines, so such an account is not covered.
  */
 export async function eraseAccountOps(account: string, fetcher: typeof fetch = fetch, now = Date.now()) {
   if (opsErasable()) await opsCall("erase", { account }, fetcher, now)

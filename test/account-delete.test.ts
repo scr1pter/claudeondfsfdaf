@@ -1444,8 +1444,6 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
   })
 })
 
-// The last part's SCAN with a MATCH glob and its whole-word filter, on a real Valkey when VECTOR_TEST_REDIS_URL is set
-// (the CI lane); skipped otherwise. The store fake above only emulates the glob.
 // WP A46 and A57: the ops Worker keeps reporting and holding an account's data until it is told to erase it. A report
 // that arrives after the tombstone writes nothing, and a deployment that cannot reach the Worker keeps the deletion of
 // an account that used ops pending instead of finishing without the Worker's erase.
@@ -1572,6 +1570,8 @@ describe("ops after the tombstone (A46)", () => {
   })
 })
 
+// The last part's SCAN with a MATCH glob and its whole-word filter, on a real Valkey when VECTOR_TEST_REDIS_URL is set
+// (the CI lane); skipped otherwise. The store fake above only emulates the glob.
 const valkeyURL = process.env.VECTOR_TEST_REDIS_URL
 describe.skipIf(!valkeyURL)("the last part on a real Valkey (CI only)", () => {
   let restore = () => {}

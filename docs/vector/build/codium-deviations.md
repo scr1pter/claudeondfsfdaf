@@ -7327,6 +7327,12 @@ skipping the Worker silently).
   require it) and the deletions cron retries. Absent: erased as before, so a deployment whose accounts never used ops
   still deletes with the Worker unconfigured. The lost-dispute erase in the daily cleanup and the provisioner's
   `closing` erase take the same path and are retried the same way.
+- **Review note (21 Nov 2026): the gap the list leaves.** `ops:accounts` is not a record of every account that ever
+  used ops: the daily cleanup (`cleanAccount` in `ops-cleanup.ts`) drops an account from it when nothing is left to
+  expire and no plan gives the Worker work, while the Worker may still hold that account's config, releases and
+  baselines. Such an account's deletion without the Worker's settings still finishes without the Worker's erase, as it
+  did before this lane. The `eraseAccountOps` comment now says "an account on the ops account list". Left for the
+  morning list: keep a separate record of accounts the Worker holds, or stop the cleanup dropping them.
 - **Tests** (`test/account-delete.test.ts`, describe "ops after the tombstone (A46)"): a late signed report after a
   finished deletion answers 200 `{taken: 0, skipped: 1}` with no incident, no events set and no alert, while the same
   report for an open account writes its incident and alerts; with `VECTOR_OPS_WORKER_URL` unset an account with ops
