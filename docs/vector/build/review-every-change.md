@@ -40,8 +40,9 @@ judge verdict was FAIL. This feature uses only VectorScope's existing local-revi
   `EventV2Bridge` for the current directory. A session becomes a candidate when a user `MessageUpdated` carries
   `codeReview: true` (property reads only). Admission runs only on a root session's busy-to-idle transition seen in this
   process. V1 publishes that idle only after `runSteps` returned, and `judgeGate`, with every repair round, runs inside
-  `runSteps` before its break. `eligible` also refuses while the latest judge part after the fence is pending, running
-  or was stopped by the user. The listener records `idleAt` and forks admission into the instance scope, so neither the
+  `runSteps` before its break. `eligible` also refuses while the latest judge part after the fence is pending or
+  running. A judge the user stopped holds back only the work it judged: changed files and the latest judge are read only
+  from assistant messages after the stopped judge's message, so a later Standard request is still reviewed on its own. The listener records `idleAt` and forks admission into the instance scope, so neither the
   idle event nor the prompt's answer waits for it.
 - **Pure admission (`SessionCodeReview.eligible`).** Over the history created up to `idleAt`: a root, non-internal,
   unreverted session with no guest input that the spend guard did not stop; the newest real user message carries
@@ -54,14 +55,15 @@ judge verdict was FAIL. This feature uses only VectorScope's existing local-revi
   run budget left ($0.50 assumed without one); `ReviewOwner.target` succeeds; the repository's `.vector/review.json` at
   `HEAD` neither turns on the panel nor names a `model`, `triageModel` or `judgeModel` other than the owner's
   `agent.vectorscope.model` (as Connect's model consent); the VectorScope model has a readable price. Then
-  `ReviewOwner.start` with `maxCost = min($2, remaining)`, which stays VectorScope's own gate. Every refusal is logged
-  and skipped.
+  `ReviewOwner.start` with `maxCost = min($2, remaining)`, which stays VectorScope's own gate: $2 or what is left of the
+  run's spend limit, whichever is lower, and $0.50 when the run has no limit. Expected refusals are logged at debug
+  level and skipped; a review that fails to start is logged as a warning.
 - **Result.** A fiber in the instance scope waits for the background job, verifies the run with `decodeLocalRun`, and
   enqueues one TaskNotify note of the new kind `review` (`wake: false`, quiet, metadata `reviewNotification`). The text is
   a `<vector_review_notification>` block with the verdict, the judge's last verdict, the counts and up to 10 findings,
   each tag-neutralized and cut to 300 characters (about 4 KB in all), with guidance to tell the user and change nothing
   unless asked. If the conversation is idle afterwards, admission runs once more to pick up work finished during the
-  review.
+  review, also when reading or decoding the run failed.
 - **Bounds.** At most one admission per idle, one automatic review running per conversation, one review per finished
   run (the fence), no extra build-model calls, and the judge still at most three rounds.
 - **Deviations from the written spec, both behaviour-neutral.** Admission evaluates `eligible` once without the fence
@@ -123,6 +125,7 @@ Each key line was reverted or altered, the named test file ran alone, and the fi
 | --- | --- | --- |
 | E1 | `eligible` ignores `codeReview` on the newest real user message | code-review: off by default |
 | E2 | the pending, running or user-stopped judge refusal removed | code-review: waits for the judge's last round |
+| E2b | a stopped judge again holds back every later task | code-review: a judge the user stopped holds back only the work it judged |
 | E3 | edits counted from the last request only | code-review: a steer typed during the final step |
 | E4 | the waiting-on-a-question refusal removed | code-review: a task that ends by offering more |
 | E5 | the durable fence (`previous.reviewedThrough`) ignored | code-review: each review covers only what changed |

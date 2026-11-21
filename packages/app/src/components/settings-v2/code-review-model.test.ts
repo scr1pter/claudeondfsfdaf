@@ -30,8 +30,8 @@ describe("code review after each task", () => {
       "extra model calls",
       "changes no files",
       "uncommitted changes",
-      "$0.50",
-      "$2",
+      "stops at $2 or at what is left of the run's spend limit, whichever is lower",
+      "at $0.50 when the run has no limit",
     ])
       expect(CODE_REVIEW_DESCRIPTION).toContain(words)
   })
