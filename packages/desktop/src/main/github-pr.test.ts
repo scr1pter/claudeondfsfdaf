@@ -594,6 +594,9 @@ describe("automatic reviews", () => {
     expect(Buffer.from(String(file?.body?.content), "base64").toString()).toBe(workflow.content)
     expect(pull).toMatchObject({ path: "/repos/acme/app/pulls", body: { head: setup.branch, base: "main" } })
     expect(String(pull?.body?.body)).toContain("- `ANTHROPIC_API_KEY`: Your model provider's API key.")
+    // INV-H1 (BT13 item 3): the body says what the workflow does, never "every pull request".
+    expect(String(pull?.body?.body)).toContain("reviews pull requests automatically")
+    expect(String(pull?.body?.body)).not.toContain("every pull request")
     expect(rest).toEqual([])
     // No secret is ever sent: the user adds them in GitHub.
     expect(calls.some((call) => call.path.includes("/secrets"))).toBe(false)
@@ -613,6 +616,12 @@ describe("automatic reviews", () => {
     await expect(
       openAutoReviewPullRequest({ ...owner, source: "gh" }, repository("noscope"), workflow),
     ).rejects.toThrow("gh auth refresh -s workflow")
+    // The on-request refusal names the CLI's own question, never "every pull request" (BT13 item 3).
+    const onRequest = await openAutoReviewPullRequest(owner, repository("onrequest"), workflow).catch(
+      (error: Error) => error.message,
+    )
+    expect(onRequest).toContain('answer yes to "Review pull requests automatically?"')
+    expect(onRequest).not.toContain("every pull request")
   })
 
   test("deletes its branch when GitHub refuses the workflow file", async () => {

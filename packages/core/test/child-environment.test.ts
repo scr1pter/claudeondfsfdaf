@@ -15,6 +15,8 @@ describe("untrustedChildEnvironment", () => {
       VECTOR_INSTALLER_BLOB_TOKEN: "installer-secret",
       VECTOR_LICENSE_SECRET: "license-secret",
       VECTOR_MCP_AUTH_KEY: "mcp-secret",
+      VECTOR_VAULT_RECOVERY_CODE: "recovery-secret",
+      vector_vault_recovery_code: "recovery-secret-lowercase",
       vector_future_bridge_key: "future-secret",
       OPENAI_API_KEY: "provider-secret",
       PATH: "/usr/bin:/bin",

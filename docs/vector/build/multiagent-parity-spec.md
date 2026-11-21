@@ -2521,7 +2521,7 @@ Terminal paragraphs say these arrive "with the next CLI release", and that WSL e
 
 ### 7.2 What CI must prove before the publish
 
-1. **Engine shards** (Linux 4, Windows 6) are green, including every new test file in section 6. Windows proves:
+1. **Engine shards** (Linux 6, Windows 12, per `.github/workflows/test.yml`) are green, including every new test file in section 6. Windows proves:
    - `FileLock` retries;
    - junction unlinking;
    - `core.longpaths`;

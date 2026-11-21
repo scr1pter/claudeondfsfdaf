@@ -350,8 +350,10 @@ export class OpsAccount {
         "SELECT count(*) AS count FROM releases WHERE received_at >= ? AND state != 'skipped'",
         dayStart,
       )[0]?.count ?? 0
+    // Past the watches the run state can hold at once, the release is recorded and not watched (R46-17), answered as
+    // over the day's limit: the API already records that answer as skipped.
     const refusal: ReleaseAnswer | undefined =
-      today >= plan.releaseGuard.perDay
+      today >= plan.releaseGuard.perDay || run.watches.length >= OPS_LIMITS.maxConcurrentWatches
         ? { accepted: false, reason: "daily-limit" }
         : !urls.length
           ? { accepted: false, reason: "not-verified" }
@@ -926,7 +928,15 @@ export class OpsAccount {
     return { v: 1, monitors: {}, watches: [], dns: {}, wakes: { hour: 0, count: 0 } }
   }
 
+  /**
+   * The run state is one meta row, which Cloudflare refuses over 2 MB: a refused write would fail every wake after it.
+   * Over `maxRunStateBytes` the cached DNS answers go first, then the oldest watches end (stopped), so it always fits.
+   */
   private save(run: RunState) {
+    const size = () => new TextEncoder().encode(JSON.stringify(run)).byteLength
+    if (size() > OPS_LIMITS.maxRunStateBytes) run.dns = {}
+    while (run.watches.length && size() > OPS_LIMITS.maxRunStateBytes)
+      this.endWatch(run.watches.shift()!, "stopped", this.runtime.now())
     this.setMeta("run", run)
   }
 

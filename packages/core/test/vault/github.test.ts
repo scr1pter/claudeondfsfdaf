@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
+import fs from "node:fs/promises"
 import path from "node:path"
 import { VaultError } from "@vectordevai/core/vault/error"
 import { VaultGitHub } from "@vectordevai/core/vault/github"
@@ -194,6 +195,72 @@ describe("VaultGitHub.store", () => {
     expect((await VaultBackup.read({ store: env.make("cache-d"), opened })).files[0]!.bytes.toString("utf8")).toBe("from b")
   })
 
+  // R45-4b: git's stderr can name a local path or an insteadOf URL carrying a credential; the message is fixed copy.
+  const leaky = "fatal: unable to access 'https://person:ghp_secret@github.com/octo/brain-vault/': denied\nfatal: could not create '/home/person/private'"
+  const quiet = (message: string) => {
+    for (const part of ["ghp_", "/home/person", "fatal", "https://"]) expect(message).not.toContain(part)
+  }
+
+  test("git's own text never reaches the message when the repository cannot be reached", async () => {
+    const env = await setup()
+    await using _ = env.tmp
+    const store = VaultGitHub.store({
+      repo: "octo/brain-vault",
+      remote: env.remote,
+      api: "https://api.github.test",
+      dir: path.join(env.tmp.path, "cache"),
+      git: (args, options) =>
+        args.includes("ls-remote") ? Promise.resolve({ exitCode: 128, stdout: Buffer.alloc(0), stderr: leaky }) : git(args, options),
+      send: github(() => ({ status: 404 })).send,
+    })
+    const refused = await store.list().catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(VaultError)
+    expect((refused as VaultError).code).toBe("unavailable")
+    expect((refused as Error).message).toBe("Vector could not reach octo/brain-vault. Check that it exists and that git can push to it.")
+    quiet((refused as Error).message)
+  })
+
+  test("git's own text never reaches the message when a push fails for another reason than a moved branch", async () => {
+    const env = await setup()
+    await using _ = env.tmp
+    const store = VaultGitHub.store({
+      repo: "octo/brain-vault",
+      remote: env.remote,
+      api: "https://api.github.test",
+      dir: path.join(env.tmp.path, "cache"),
+      git: (args, options) =>
+        args.includes("push") ? Promise.resolve({ exitCode: 128, stdout: Buffer.alloc(0), stderr: leaky }) : git(args, options),
+      send: github(() => ({ status: 404 })).send,
+    })
+    const created = await VaultBackup.create(store, { cost: COST })
+    const refused = await VaultBackup.backup({ store, opened: created, files: [file("first")] }).catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(VaultError)
+    expect((refused as VaultError).code).toBe("unavailable")
+    expect((refused as Error).message).toBe("git could not push to octo/brain-vault.")
+    quiet((refused as Error).message)
+  })
+
+  test("hooks planted in the copy, its own or through core.hooksPath, never run (R45-20)", async () => {
+    const env = await setup()
+    await using _ = env.tmp
+    const dir = path.join(env.tmp.path, "cache")
+    const store = env.make("cache")
+    const created = await VaultBackup.create(store, { cost: COST })
+    await VaultBackup.backup({ store, opened: created, files: [file("first")] })
+    // A sandboxed command that could write the copy plants a reference-transaction hook in hooks/ and in a folder the
+    // copy's config names; both write a marker when git updates a ref (the fetch, update-ref and push of a backup).
+    const marker = path.join(env.tmp.path, "hooked").replaceAll("\\", "/")
+    const hook = `#!/bin/sh\necho "$0" >> "${marker}"\n`
+    for (const folder of [path.join(dir, "hooks"), path.join(dir, "planted")])
+      await Bun.write(path.join(folder, "reference-transaction"), hook).then(() => fs.chmod(path.join(folder, "reference-transaction"), 0o755))
+    const planted = env.make("cache")
+    await VaultBackup.backup({ store: planted, opened: created, files: [file("second")] })
+    sh(["--git-dir", dir, "config", "core.hooksPath", path.join(dir, "planted")])
+    await VaultBackup.backup({ store: env.make("cache"), opened: created, files: [file("third")] })
+    expect(await Bun.file(marker).exists()).toBe(false)
+    expect((await VaultBackup.read({ store: env.make("cache-b"), opened: created })).files[0]!.bytes.toString("utf8")).toBe("third")
+  })
+
   test("deleting the vault leaves only a README, and a new vault may start there", async () => {
     const env = await setup()
     await using _ = env.tmp
@@ -218,7 +285,8 @@ describe("VaultGitHub.store", () => {
     // git as the desktop and the CLI run it, without blocking: each command lets the other read go on meanwhile.
     const ran: string[] = []
     const overlapping: VaultGitHub.Git = async (args, options) => {
-      ran.push(args.find((word) => !word.startsWith("-")) ?? "")
+      // The subcommand, past --git-dir=… and each -c name=value.
+      ran.push(args.find((word, index) => !word.startsWith("-") && args[index - 1] !== "-c") ?? "")
       await Bun.sleep(20)
       return git(args, options)
     }

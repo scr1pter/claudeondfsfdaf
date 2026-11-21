@@ -94,6 +94,7 @@ const REASONS = Object.keys({
   "may-train": true,
   unattended: true,
   disabled: true,
+  "cloud-workspace": true,
 } satisfies Record<ComputerAvailability.Reason, true>) as ComputerAvailability.Reason[]
 
 const hands = {
@@ -185,6 +186,21 @@ describe("the member list", () => {
       expect(computerRow(yield* hub.members())).toEqual([])
       // The hub describes every adapter before it composes the list, so Hands was still asked, once per list.
       expect(script.probes).toBe(2)
+    }),
+  )
+
+  it.instance("Hands keeps its own reason when the registry does not offer computer (CW-21)", () =>
+    Effect.gen(function* () {
+      reset()
+      const hub = yield* ConnectHub.Service
+      for (const reason of REASONS) {
+        script.reason = reason
+        // The computer tool is absent because Hands is unavailable: the row says why, with nothing to reach.
+        expect(computerRow(yield* hub.members({ tools: ["read"] }))).toEqual([
+          { ...hands, state: "unavailable", reason: ComputerAvailability.message(reason), reach: "none" },
+        ])
+      }
+      expect(script.probes).toBe(REASONS.length)
     }),
   )
 

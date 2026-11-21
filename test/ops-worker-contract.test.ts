@@ -21,6 +21,7 @@ import {
   blockedHostname as opsBlockedHostname,
 } from "../packages/ops-worker/src/ssrf"
 import { ENTITLEMENTS } from "../packages/schema/src/codium-entitlements"
+import { OPS_SETTINGS_LIMITS } from "../api/_lib/ops-settings"
 
 // WP A46: the ops Worker and Vector's server must agree byte for byte. The Worker re-implements A37's internal HMAC on
 // WebCrypto for the API's calls and for its own reports back (which the API checks with requireInternalRequest("ops")),
@@ -105,6 +106,13 @@ describe("plans", () => {
       }
       expect({ id, plan: parsePlan(plan, NOW) }).toEqual({ id, plan })
     }
+  })
+
+  test("every repository the API lets an account set up can be watched at once within the run state's bound (R46-17)", () => {
+    // One production environment per repository (.vector/ops.json), and a newer release ends the older watch.
+    expect(OPS_SETTINGS_LIMITS.repos).toBeLessThanOrEqual(OPS_LIMITS.maxConcurrentWatches)
+    expect(OPS_LIMITS.maxConcurrentWatches).toBeGreaterThanOrEqual(20)
+    expect(OPS_LIMITS.maxRunStateBytes).toBeLessThan(2_000_000)
   })
 
   test("the contract's fixed probe rules", () => {

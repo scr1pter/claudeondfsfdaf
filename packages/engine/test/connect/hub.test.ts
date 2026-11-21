@@ -1908,6 +1908,14 @@ describe("members", () => {
       expect(
         ConnectMembers.compose({ ...sources, tools: ["vector_cloud"] }).find((item) => item.id === "computer"),
       ).toMatchObject({ state: "not-installed", reason: "Not in this build.", reach: "none" })
+      // A member its adapter reported not ready keeps its own state and reason when the tool is absent (CW-21).
+      expect(
+        ConnectMembers.compose({
+          ...sources,
+          adapters: [{ ...hands, state: "unavailable", reason: "Vector Hands is turned off." }],
+          tools: ["vector_cloud"],
+        }).find((item) => item.id === "computer"),
+      ).toMatchObject({ state: "unavailable", reason: "Vector Hands is turned off.", reach: "none" })
       expect(ConnectMembers.compose(sources).some((item) => item.id === "computer")).toBe(false)
       expect(byID.get("mcp:remote")?.state).toBe("off")
       expect(byID.get("mcp:docs")?.state).toBe("ready")
