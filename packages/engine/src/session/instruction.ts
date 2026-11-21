@@ -134,7 +134,10 @@ export interface Interface {
     messageID: MessageID,
     asking: Asking,
   ) => Effect.Effect<{ readonly text?: string; readonly links: readonly Link[] }>
-  /** Where this instance's requests run, as the brain needs it: the repository, its rules and memory files, trust. */
+  /**
+   * Where this instance's requests run, as the brain needs it: the repository, its rules and memory files (never one a
+   * job's checkout holds, EV-21), trust.
+   */
   readonly place: () => Effect.Effect<Brain.Place>
   /**
    * The instruction files a prompt may carry, each found where it would be. A file a Vector everywhere job's checkout
@@ -267,41 +270,71 @@ const layer: Layer.Layer<
     // EV-21: a Vector everywhere job's checkout holds files the job wrote from platform text, and Continue opens an
     // ordinary owner session there, with network and the owner's permissions. While the owner has not trusted that
     // folder, an instruction file inside it reaches a prompt only with the content the job's base gave it, so the
-    // repository's own words go and the job's never do. This answers whether this instance is such a checkout: exactly
+    // repository's own words go and the job's never do. This answers whether this instance is in such a checkout,
     // <data>/everywhere-worktree/<project id>/<jid>, where Worktree.createUnattended puts one, compared as Worktree
-    // compares folders (real paths, so macOS's /var and /private/var agree; case folded on Windows). The base is the
-    // commit the runner fetched into the job's private ref, which createUnattended checked out; with the ref gone, or
-    // any git error, there is no base and every instruction file inside the checkout is held.
+    // compares folders (real paths, so macOS's /var and /private/var agree; case folded on Windows).
+    //
+    // The folder is found by where the instance is, never by git: git answers from the checkout's own .git marker, and
+    // the job's file tools may write anything in its folder, that marker included. A marker that names no repository
+    // (so the instance is not a git project at all), a project or folder that is not exactly this job's checkout, or a
+    // git directory inside the job's folder (a repository the job made, with a ref and objects of its own) gives no
+    // base. So does a missing ref or any git error. With no base, every instruction file in the folder is held. The
+    // base is the commit the runner fetched into the job's private ref, which createUnattended checked out.
     const jobBase = Effect.fnUntraced(function* () {
       const ctx = yield* InstanceState.context
-      const tree = canonical(ctx.worktree)
-      const jid = path.basename(tree)
-      if (!JOB_ID_PATTERN.test(jid)) return undefined
-      if (tree !== fold(path.join(real(Global.Path.data), "everywhere-worktree", ctx.project.id, jid))) return undefined
+      const parent = path.join(real(Global.Path.data), "everywhere-worktree")
+      const place = [ctx.worktree, ctx.directory].flatMap((directory) => {
+        const relative = path.relative(fold(parent), canonical(directory))
+        if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+          return []
+        const [project, jid] = relative.split(path.sep)
+        return project && jid && JOB_ID_PATTERN.test(jid) ? [{ project, jid }] : []
+      })[0]
+      if (!place) return undefined
       if ((yield* cfg.trust()).trusted) return undefined
-      const found = yield* git.run(
-        ["rev-parse", "--verify", "--quiet", "--end-of-options", `${fetchRef(jid)}^{commit}`],
-        { cwd: ctx.worktree, env: NO_FETCH },
+      const root = path.join(parent, place.project, place.jid)
+      if (canonical(ctx.worktree) !== fold(root) || place.project !== fold(ctx.project.id))
+        return { root, base: undefined } satisfies Job
+      const [found, stores] = yield* Effect.all(
+        [
+          git.run(["rev-parse", "--verify", "--quiet", "--end-of-options", `${fetchRef(place.jid)}^{commit}`], {
+            cwd: ctx.worktree,
+            env: NO_FETCH,
+          }),
+          git.run(["rev-parse", "--absolute-git-dir", "--git-common-dir"], { cwd: ctx.worktree, env: NO_FETCH }),
+        ],
+        { concurrency: 2 },
       )
+      // The job writes only inside its folder, so a git directory outside it, and the common one that holds the job's
+      // ref and objects, are the repository's own.
+      const dirs = stores.exitCode === 0 ? stores.text().trim().split(/\r?\n/) : []
+      const own =
+        dirs.length === 2 &&
+        dirs.every((item) => item !== "" && !FSUtil.contains(fold(root), canonical(path.resolve(ctx.worktree, item))))
       const base = found.exitCode === 0 ? found.text().trim() : ""
-      return { root: real(ctx.worktree), base: HEAD_SHA_PATTERN.test(base) ? base : undefined } satisfies Job
+      return { root, base: own && HEAD_SHA_PATTERN.test(base) ? base : undefined } satisfies Job
     })
 
-    // Whether a job's checkout holds this instruction file: one inside it is held unless its bytes, unfiltered, are the
-    // base's blob at the path where it really lands (a link inside the checkout is read through, and so is compared
-    // through). A file that is new, changed, outside the base or unreadable to git is held. --no-filters runs no
-    // filter driver or line-ending conversion, and nothing here fetches, so these two calls start no other program.
-    const held = Effect.fnUntraced(function* (job: Job | undefined, file: string) {
+    // Whether a job's checkout holds this instruction file: one that sits or lands inside the job's folder is held
+    // unless its bytes, unfiltered, are the base's blob at the path where it really lands (a link inside the folder is
+    // read through, and so is compared through). A file that is new, changed, outside the base, linked out of the
+    // folder or unreadable to git is held. --no-filters runs no filter driver or line-ending conversion, and nothing
+    // here fetches, so these two calls start no other program. `quiet` leaves the warning to the callers that run once
+    // per prompt or read, not to place(), which every brain call runs.
+    const held = Effect.fnUntraced(function* (job: Job | undefined, file: string, quiet = false) {
       if (!job) return false
-      const ctx = yield* InstanceState.context
-      // A file outside the checkout is the user's own, which PromptTrust decides on.
-      if (!containsPath(file, ctx)) return false
+      const inside = (item: string) => {
+        const relative = path.relative(job.root, item)
+        return (
+          relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+        )
+      }
       const target = real(file)
-      const relative = path.relative(job.root, target)
-      const inside =
-        relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+      // A file that neither sits nor lands in the job's folder is the user's own, which PromptTrust decides on.
+      if (!inside(path.join(real(path.dirname(file)), path.basename(file))) && !inside(target)) return false
+      const ctx = yield* InstanceState.context
       const [blob, hashed] =
-        job.base && inside
+        job.base && inside(target)
           ? yield* Effect.all(
               [
                 git.run(
@@ -310,7 +343,7 @@ const layer: Layer.Layer<
                     "--verify",
                     "--quiet",
                     "--end-of-options",
-                    `${job.base}:${relative.split(path.sep).join("/")}`,
+                    `${job.base}:${path.relative(job.root, target).split(path.sep).join("/")}`,
                   ],
                   { cwd: ctx.worktree, env: NO_FETCH },
                 ),
@@ -321,9 +354,10 @@ const layer: Layer.Layer<
           : [undefined, undefined]
       const expected = blob?.exitCode === 0 ? blob.text().trim() : ""
       if (expected !== "" && hashed?.exitCode === 0 && hashed.text().trim() === expected) return false
-      yield* Effect.logWarning("holding an instruction file that differs from the Vector everywhere job's base", {
-        file,
-      })
+      if (!quiet)
+        yield* Effect.logWarning("holding an instruction file that differs from the Vector everywhere job's base", {
+          file,
+        })
       return true
     })
 
@@ -360,13 +394,20 @@ const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       // A repository's rules and memory are still its own files, so VECTOR_DISABLE_PROJECT_CONFIG skips them: a code
       // review runs on a pull request's tree and must not take instructions from it.
-      const sources = Flag.VECTOR_DISABLE_PROJECT_CONFIG
+      const found = Flag.VECTOR_DISABLE_PROJECT_CONFIG
         ? []
         : yield* Effect.forEach(memoryFiles, (item) =>
             projectFiles(fs.findUp(item.file, ctx.directory, ctx.worktree)).pipe(
               Effect.map((matches) => matches.map((match) => ({ path: path.resolve(match), type: item.type }))),
             ),
           ).pipe(Effect.map((found) => found.flat()))
+      // EV-21: the brain sends a repository's rules whole, as "Repository rules", and its memory files when relevant, so
+      // a job's checkout holds them as it holds instruction files. Outside a job's checkout, or with no such file, no
+      // git runs.
+      const job = found.length > 0 ? yield* jobBase() : undefined
+      const sources = yield* Effect.filter(found, (item) =>
+        held(job, item.path, true).pipe(Effect.map((value) => !value)),
+      )
       const trust = yield* cfg.trust()
       return {
         // Every worktree and Parallel Workspace of a repository shares its memory; a folder outside git has its own.

@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
 import { HttpRouter } from "effect/unstable/http"
+import { Brain } from "@vectordevai/core/brain/brain"
 import { UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
 import { fetchRef } from "@vectordevai/core/everywhere/git"
 import { branchFor } from "@vectordevai/core/everywhere/publish"
@@ -27,13 +28,16 @@ import { provideInstance, tmpdir } from "../fixture/fixture"
 // made through the real route, as EV-13's "the job's checkout is never trusted" case makes it (worktree.test.ts, copied
 // here, not shared, because that file is in open PRs), against real git. What the owner's session gets is read from
 // the same engine's Instruction service in that checkout: its system prompt is Instruction.system() (SessionPrompt
-// sessionInstructions), the read tool attaches Instruction.resolve(), and research carries Instruction.contents().
+// sessionInstructions), the read tool attaches Instruction.resolve(), and research carries Instruction.contents(). The
+// rest of that system prompt is the brain's digest of Instruction.place(), whose rules files it sends whole.
 
 const BASE = "BASE RULES: ev21 the repository's own"
 const CLAUDE = "CLAUDE RULES: ev21 the repository's own"
 const LIB = "LIB RULES: ev21 the repository's own"
 const JOB = "JOB RULES: ev21 written by the job"
 const PKG = "PKG RULES: ev21 written by the job"
+const RULES = "REPOSITORY RULES: ev21 the repository's own"
+const JOB_RULES = "JOB REPOSITORY RULES: ev21 written by the job"
 
 describe("instruction files in a Vector everywhere job's checkout (EV-21)", () => {
   const ROUTE = "/experimental/worktree/unattended"
@@ -114,8 +118,20 @@ describe("instruction files in a Vector everywhere job's checkout (EV-21)", () =
 
   // A trusted repository whose base has AGENTS.md, CLAUDE.md and lib/AGENTS.md, one job whose base the runner fetched
   // into refs/vector-everywhere/<jid>, and the job's checkout as the owner's create route makes it.
-  const checkout = async () => {
-    const tmp = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
+  // With `rules`, the base also has the repository's .vector/RULES.md, written before the owner trusts the repository,
+  // since .vector is one of the settings trust fingerprints.
+  const checkout = async (options: { rules?: boolean } = {}) => {
+    const tmp = await tmpdir({
+      git: true,
+      trusted: true,
+      config: { formatter: false, lsp: false },
+      init: options.rules
+        ? async (directory) => {
+            await mkdir(path.join(directory, ".vector"), { recursive: true })
+            await writeFile(path.join(directory, ".vector", "RULES.md"), `- ${RULES}\n`)
+          }
+        : undefined,
+    })
     disposables.push(tmp)
     const repo = tmp.path
     await git(repo, "config", "core.autocrlf", "false")
@@ -151,8 +167,19 @@ describe("instruction files in a Vector everywhere job's checkout (EV-21)", () =
       status: 200,
       body: { trusted: false },
     })
-    return { repo, base, jid, directory }
+    return { repo, base, jid, directory, id }
   }
+
+  // A later start of the engine: no instance keeps what it resolved for the checkout while the job ran.
+  const restart = () =>
+    run(
+      Effect.gen(function* () {
+        const config = yield* Config.Service
+        const store = yield* InstanceStore.Service
+        yield* config.invalidate()
+        yield* store.disposeAll()
+      }),
+    )
 
   // What the job does on its branch: AGENTS.md rewritten and a new pkg/AGENTS.md, committed.
   const steer = async (directory: string) => {
@@ -175,16 +202,21 @@ describe("instruction files in a Vector everywhere job's checkout (EV-21)", () =
     return run(
       Effect.gen(function* () {
         const instruction = yield* Instruction.Service
+        const brain = yield* Brain.Service
         const read = (file: string) =>
           instruction
             .resolve([], path.join(directory, file), MessageID.make(`msg_ev21-read-${++messages}`))
             .pipe(Effect.map((found) => found.map((item) => item.content).join("\n")))
+        const place = yield* instruction.place()
         return {
           paths: [...(yield* instruction.systemPaths())],
           system: (yield* instruction.system()).join("\n"),
           work: (yield* instruction.contents()).work.join("\n"),
           pkg: yield* read(path.join("pkg", "x.ts")),
           lib: yield* read(path.join("lib", "y.ts")),
+          // The rest of that system prompt: the brain's digest, whose "Repository rules" are the place's rules files.
+          sources: place.sources.map((source) => source.path),
+          digest: (yield* brain.digest(place, { personal: false, index: false })).text ?? "",
         }
       }).pipe(provideInstance(directory)),
     )
@@ -269,5 +301,65 @@ describe("instruction files in a Vector everywhere job's checkout (EV-21)", () =
     // No base to compare with, so the unchanged files are held too: the hold fails closed.
     expect(seen.system).not.toContain(BASE)
     expect(seen.lib).not.toContain(LIB)
+  }, 30_000)
+
+  // The brain gives the system prompt the repository's .vector/RULES.md whole, as "Repository rules", beside
+  // Instruction.system(), so a rules file the job wrote is an instruction file too.
+  test("repository rules the job wrote stay out of the owner's digest, and the base's still go", async () => {
+    const f = await checkout({ rules: true })
+    const rules = path.join(f.directory, ".vector", "RULES.md")
+    const before = await session(f.directory)
+    expect(before.sources).toContain(rules)
+    expect(before.digest).toContain(RULES)
+
+    await writeFile(rules, `- ${JOB_RULES}\n`)
+    await git(f.directory, "commit", "-am", "job rules")
+    const seen = await session(f.directory)
+    expect(seen.digest).not.toContain(JOB_RULES)
+    expect(seen.digest).not.toContain(RULES)
+    expect(seen.sources).not.toContain(rules)
+  }, 30_000)
+
+  // A job's file tools may write anything in its folder, its .git marker included. Neither a marker that no longer
+  // names a repository nor one that names a repository the job made may decide what the owner's session reads.
+  test("a .git marker the job overwrote does not lift the hold", async () => {
+    const f = await checkout()
+    await steer(f.directory)
+    await writeFile(path.join(f.directory, ".git"), "not a git directory\n")
+    await restart()
+
+    const seen = await session(f.directory)
+    // The job's AGENTS.md is still found, and held.
+    expect(seen.paths).toContain(path.join(f.directory, "AGENTS.md"))
+    for (const text of [seen.system, seen.work, seen.pkg, seen.lib]) {
+      expect(text).not.toContain(JOB)
+      expect(text).not.toContain(PKG)
+    }
+  }, 30_000)
+
+  test("a repository the job made in its folder does not stand in for the job's base", async () => {
+    const f = await checkout()
+    await steer(f.directory)
+    const head = await git(f.directory, "rev-parse", "HEAD")
+    // The job's own repository: its ref names the job's commit, and it keeps the project's id, so the folder still
+    // looks like this project's checkout of this job.
+    const forged = path.join(f.directory, ".forged")
+    await git(f.repo, "clone", "--bare", "--quiet", "--no-local", f.repo, forged)
+    await git(forged, "remote", "remove", "origin")
+    await git(forged, "config", "core.bare", "false")
+    await git(forged, "update-ref", fetchRef(f.jid), head)
+    await mkdir(path.join(forged, "vector"), { recursive: true })
+    await writeFile(path.join(forged, "vector", "project-id"), f.id)
+    await writeFile(path.join(f.directory, ".git"), `gitdir: ${forged.replaceAll("\\", "/")}\n`)
+    expect(await git(f.directory, "rev-parse", "--verify", `${fetchRef(f.jid)}^{commit}`)).toBe(head)
+    await restart()
+
+    const seen = await session(f.directory)
+    // The job's AGENTS.md is still found, and held.
+    expect(seen.paths).toContain(path.join(f.directory, "AGENTS.md"))
+    for (const text of [seen.system, seen.work, seen.pkg, seen.lib]) {
+      expect(text).not.toContain(JOB)
+      expect(text).not.toContain(PKG)
+    }
   }, 30_000)
 })
