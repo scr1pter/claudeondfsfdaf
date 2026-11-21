@@ -2151,3 +2151,21 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   - `6895687e` fix(engine): report a sandbox timeout before the exit code.
   - `19c48b89` merges main for the Windows overlay Stop diagnostics.
 - PR #38 merged into main as `7e440a27`; all four commits are ancestors of main.
+
+## 2026-11-21 — CW-24: the supervisor refuses engine paths with dot segments
+
+- Gap (the handoff's raw-versus-normalized engine path note, CN-19): `validateEngineCommand` checked routes against
+  `url.pathname`, the normalized form the supervisor forwards, while `service.ts` keys session identity on the raw
+  `command.path`. `/session/ses_A/../ses_B/prompt_async` was checked as a prompt for `ses_B`'s route shape, keyed as
+  `ses_A`, and reached `ses_B`. Only the `/experimental` branch compared the two.
+- Fix (`packages/cloud-workspaces/src/protocol.ts`): right after `const path = url.pathname`, refuse when
+  `command.path.split("?")[0] !== path`; the `/experimental` branch's own copy of the check is gone. The earlier guards
+  (no `%`, `\`, `#`, control or space character, a single leading `/`) leave `.` and `..` segments as the only way the
+  two forms differ, so no valid route is lost.
+- Test (`packages/cloud-workspaces/test/protocol.test.ts`, "closed commands reject URL, ref and engine
+  routing/permission substitutions"): `/session/ses_A/../ses_B/prompt_async` and `.../message_id` with valid bodies,
+  `/session/ses_A/./abort`, `/session/./status`, `/session/ses_A/message/..`, `/./session?roots=true` and
+  `/provider/../session` throw the invalid-request error; the canonical prompt, message id, abort, status, roots list
+  and session create still pass. Red on the old source (6 pass, 1 fail: "Received function did not throw"). The
+  optional `service.test.ts` case was not added: the refusal is in the parser `service.ts` runs before any runtime call.
+- Pilot activation and `VECTOR_WORKSPACES_ENABLED` are unchanged (off).
