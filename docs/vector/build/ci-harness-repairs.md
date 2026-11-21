@@ -831,8 +831,8 @@ then overlay-bounds and computer-smoke-failure assertion_failed. Both follow fro
 `boundsMatch` is the region proof.
 
 Cause (inferred when written; measured on 2026-11-21, see "2026-11-21: warm-up evidence" below, which supports the cold
-first Add-Type and not the Electron first-launch alternative). Consistent with a cold first Add-Type; launch versus
-compile is not yet measured, and contention with the first Electron launch is not excluded. Step 15 is the job's first
+first Add-Type and not the Electron first-launch alternative). As written on 2026-11-20: consistent with a cold first
+Add-Type; launch versus compile was not yet measured, and contention with the first Electron launch was not excluded. Step 15 is the job's first
 Roslyn use: the only Add-Type in `.github` and `packages/desktop/scripts` is the observer's
 (`computer-overlay-smoke-window-region.ts:306` at `15f3ba77`), and it runs while PowerShell 7's compiler and reference
 assemblies are still cold on a fresh VM. The observer arms one 15 s timer at spawn; it fired after the `compile` marker
