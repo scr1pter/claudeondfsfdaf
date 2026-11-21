@@ -1,9 +1,9 @@
 # startup-acl-fixture: STARTUP-ACL-FLAKE
 
 Branch `startup-acl-fixture`, cut from origin/main `23d09a96b`. It covers one Vector v2 leftover P0 item, test only.
-Four open PRs (#61, #62, #64 and #67) touch the CI harness log `ci-harness-repairs.md`, so the dated entry lives here.
-Fold it back into that file once they merge, next to the 2026-11-20 entry "Windows company policy folder test reached
-the real PowerShell ACL reader" (#51).
+Open PRs touch the CI harness log `ci-harness-repairs.md` (#61, #62 and #64 on 2026-11-21, after #67 merged), so the
+dated entries live here. Fold them back into that file once those PRs merge, next to the 2026-11-20 entry "Windows
+company policy folder test reached the real PowerShell ACL reader" (#51).
 
 Files: `packages/core/test/local-mode/startup.test.ts` and this note. `packages/core/src/config/managed.ts` and
 `packages/core/src/local-mode/startup.ts` are unchanged.
@@ -17,8 +17,8 @@ changed. The 20 s PowerShell timeout in `managed.ts` and the 30 s test timeout s
 Line numbers: :198, :199 to :201, :283 and :346 are main's at `23d09a96b`, as the job and the plan cite them. On this
 branch those lines are :212, :213 to :215, :332 and :395. The new case starts at :231.
 
-**Failure.** pull_request run 44913258841 (branch `version-regen` at `687467eb7`), attempt 1, unit (windows), job
-136883105861. `startup.test.ts:199`, "LocalStartup.policy > leaves out a company file a standard user could have
+**Failure.** Job 136883105861: pull_request run 44913258841 (branch `version-regen` at `687467eb7`), attempt 1, unit
+(windows). `startup.test.ts:199`, "LocalStartup.policy > leaves out a company file a standard user could have
 written, as the engine's config does", took 15731.14 ms. It expected `enabled: false` and received `enabled: true`,
 `web: "none"`, with the single warning `Vector could not read who may change <tmp>\managed.` (Expected -1, Received
 +12). Attempt 2 of the same run passed, and the case took 1999.34 ms there.
@@ -97,8 +97,8 @@ passes because the file is left out as untrusted.
   - M1: `plantedAcl`'s owner set to SYSTEM (`S-1-5-18`) with no rule. The new case went red at :240 (`enabled` false to
     true).
   - M2: the owner check in `managed.ts` `windowsReason` commented out. The new case went red only at the exact-warning
-    assertion (:242). The full-control rule still left the file out, now as `<managed> lets S-1-5-21-…-1001 change
-    it.`, which is why the rule is there.
+    assertion (:242). The full-control rule still left the file out, now with the warning
+    `<managed> lets S-1-5-21-…-1001 change it.`, which is why the rule is there.
   - M3: `windowsCheck` changed to accept `acl.user` as an owner without `trust.user`. The new case went red at :240.
     This mutation covers the reader's `user` field.
 
@@ -115,3 +115,28 @@ macOS would stay green, because the spread is a no-op there. No warm-up hook was
 removes the PowerShell start from these cases instead of moving it out of the timed window. Optional follow-ups, not
 part of this fix, are #51's: `-InputFormat None` on the PowerShell call, and a review of the synchronous 20 s
 `spawnSync` blocking the desktop's 30-second policy refresh.
+
+## 2026-11-21: review of STARTUP-ACL-FLAKE
+
+Independent review of the two commits above, after merging origin/main at `6601d963d` (#67, which touches neither
+file). No change to the test or to product code came out of it. Line numbers are this branch's.
+
+- **Job log.** Read job 136883105861 directly (attempt 1 of run 44913258841): :199 failed after 15731.14 ms with the
+  diff recorded above, and "LocalStartup.managed" passed after 11598.68 ms. Attempt 2 took 1999.34 ms and 256.33 ms.
+- **The whole file on the Windows path, on macOS.** A review-only preload, never committed, set `process.platform` to
+  `win32` before the test file loaded. Every helper and `ConfigManaged.check` then took its Windows branch. macOS has no
+  `powershell.exe`, so any call that reached the real reader got no entries, as a failed read does on a runner.
+  - Red: main's `startup.test.ts` gave 16 pass, 2 fail. :199 failed with job 136883105861's diff line for line
+    (Expected -1, Received +12, the one "could not read who may change <tmp>/managed" warning), and the
+    "LocalStartup.managed" case got `true` at its planted line. So on main exactly these calls reach PowerShell on
+    Windows.
+  - Green: this branch's file gave 19 pass, 0 fail. No case reached the reader that has no PowerShell to start.
+- **Plain macOS run:** 19 pass, 0 fail, 61 `expect()` calls. `bun typecheck` in `packages/core` exit 0.
+- **Mutations**, each restored with sha256 compared equal:
+  - R1: `plantedTrust` returned `{}` on Windows too (the fixture dropped), with the `win32` preload. :213 and :332 went
+    red, and every other case passed. This is the regression the "What could go wrong" note says only Windows would
+    show.
+  - R2: `managed.ts` `windowsCheck` treated a missing ACL entry as trusted (`return undefined` in place of the
+    `unreadable` verdict). The new case went red at :262, and every other case passed.
+- **Overlap**, re-checked live: no open PR branch (#61, #62, #64, #68, #70, #71, #72, #73) and not scope-finish touches
+  either file.
