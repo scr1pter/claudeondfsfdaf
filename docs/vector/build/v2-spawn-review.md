@@ -529,7 +529,7 @@ fails closed.
 
 - Owned cleanup of the plain group under `required()` is covered by
   `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts:187`. That test has
-  NQ-2's local passes only: `test.yml` has no run on `native-qualify`.
+  NQ-2's local passes only: `test.yml` has no run on `native-qualify`. 21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").
 - Two more POSIX S4-2 tests exist only on `origin/review-fixes`, in `fa5a5639`, not merged
   here:
   - a floor-on case in `packages/core/test/process/owned-process.test.ts`

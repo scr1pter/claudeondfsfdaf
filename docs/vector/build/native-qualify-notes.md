@@ -2634,7 +2634,7 @@ From the worktree, read-only except for the four documents:
 
 ### Deferred verification
 
-- `test.yml` has no run on `native-qualify`. The branch's PR gives the first hosted run of:
+- `test.yml` has no run on `native-qualify`. The branch's PR gives the first hosted run of (21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").):
   - `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts` (renamed, D106);
   - `packages/engine/test/spawn-inventory.test.ts`;
   - `packages/engine/test/cli/github.isolation.test.ts`;
@@ -2976,3 +2976,24 @@ Read on branch `engine-core-fixes` (main `4fc245b6` merged). Source only; no CI 
   the same value, so the native-shell CI build's check (`build.ts:58`) accepts this reader.
 - Still open: the CI step-12 qualification of the stock-noble reader. This record proves presence in source, not a
   qualified run. Both native build switches and `FLOOR` stay false.
+
+## 21 November 2026: the first hosted test.yml run of the lane's Bun tests (NQ-TESTYML)
+
+Main push run 44848275007 of `test.yml`, at `f3d7ac74` (after the native-qualify work merged), all jobs read with
+get_job_logs:
+
+- engine (linux, shard 1/6), job 136673698344: `test/task/shell-required-isolation-posix-owned.test.ts` printed
+  `POSIX_OWNED_BACKGROUND_CLEANUP_CONFIRMED_UNDER_REQUIRED_ISOLATION {"elapsed":3066,"reaping":true,"ended":["ESRCH","ESRCH"]}`
+  and "(pass) owned background cleanup is confirmed under required isolation (Linux)"; the shard ended 1757 pass,
+  28 skip, 0 fail (1785 tests, 112 files).
+- engine (linux, shard 3/6), job 136673698359: `test/cli/github.isolation.test.ts` ran and passed; 1876 pass, 5 skip,
+  0 fail (1881 tests, 111 files).
+- engine (linux, shard 6/6), job 136673698427: `test/spawn-inventory.test.ts` ran and passed; 1229 pass, 19 skip,
+  0 fail (1248 tests, 111 files).
+- unit (linux), job 136673698207: `@vectordevai/core:test` "Ran 5507 tests across 416 files", 0 fail. `git ls-tree` at
+  `f3d7ac74` lists exactly 416 core test files, among them `process-isolation.test.ts`,
+  `process-isolation-linux.test.ts`, `process-isolation-runtime.test.ts`, `effect/process-isolation-spawn.test.ts` and
+  `process/owned-process.test.ts`, so they ran; this is inferred from the count, since the log tail read does not
+  name each file.
+
+This is a per-SHA record on main with both native build switches and `FLOOR` false; it is not a native qualification.

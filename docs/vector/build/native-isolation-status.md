@@ -554,7 +554,7 @@ that cell at that head.
 - the two open witness obligations above, D34, and D4 (Ubuntu's rewritten userns-denied
   message has no closed label);
 - a hosted `test.yml` run of the lane's Bun tests. `test.yml` has no run on
-  `native-qualify`;
+  `native-qualify`; 21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").
 - the reader integration clause in "Remaining qualification" above. This lane has not
   verified it;
 - a reviewed reader re-pin before any native dispatch after a merge.
