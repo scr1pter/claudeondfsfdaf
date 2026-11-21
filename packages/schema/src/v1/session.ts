@@ -393,6 +393,9 @@ export const User = Schema.Struct({
   // WP A35: the sender has Second opinion on, so the judge of Vector Codium work runs on the plan's judge from another
   // lab when one is listed for the worker's model and no judge model is configured.
   secondOpinion: Schema.optional(Schema.Boolean),
+  // Code review after each task: the sender has it on, so once the run that changed files is done (and the judge, when
+  // it runs), VectorScope reviews the uncommitted changes and reports. Never set by a client that does not send it.
+  codeReview: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "UserMessage" })
 export type User = Types.DeepMutable<Schema.Schema.Type<typeof User>>
 
