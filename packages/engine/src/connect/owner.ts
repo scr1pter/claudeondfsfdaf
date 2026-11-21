@@ -507,7 +507,10 @@ const layer = Layer.effect(
               })
               // Another retry reconciled this key first: the hub refused at the gate, and the key reads consumed.
               if (reached.consumed) return yield* requestError(reached.consumed)
-              if (run.status === "done" && run.result?.state === "refused")
+              // A refusal before the binding gate is an invalid start, and its key is tombstoned. Once the key is
+              // bound (the member gate refuses inside the released job), it replays this refused run, so it is the
+              // answer here too (C6).
+              if (reached.bind !== "bound" && run.status === "done" && run.result?.state === "refused")
                 return yield* new Error({ code: "invalid", message: run.result.summary })
               return run
             }),

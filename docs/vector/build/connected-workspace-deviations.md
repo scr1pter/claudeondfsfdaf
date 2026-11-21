@@ -2203,6 +2203,30 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
 - Not done (part 2, left for the morning list): returning a bound member-gate refusal as a 200 refused run instead of
   400 invalid. It needs a fixture that reaches the hub's member gate after the binding, which the current tests do not
   build.
+- 21 Nov 2026, later the same day: part 2 done, same branch. See "2026-11-21 — C6: a bound key's member-gate refusal
+  answers its refused run (part 2 of 2)" below.
+
+## 2026-11-21 — C6: a bound key's member-gate refusal answers its refused run (part 2 of 2)
+
+- Finding first. Through the real hub a bound key's member-gate refusal already answers 200: the gate runs inside the
+  job the binding gate released, so `hub.run` hands back the queued run and the refusal lands later, and every retry
+  replays that refused run. A new check in the test below pins this (the start answers `queued`, the run ends
+  `refused`/`unavailable`). The 400 `invalid` answer is reached only when the hub returns a run that is already done
+  for a bound key, which its detach path does when the run ended before it reads it back. That start then said
+  `invalid` while every retry of the same key replayed a 200 refused run.
+- Fix: `packages/engine/src/connect/owner.ts` maps a done refused run to 400 `invalid` only when the key is not bound
+  (`reached.bind !== "bound"`). A refusal before the binding gate still answers `invalid`, tombstones the key, and a
+  retry answers `consumed`, as `owner.test.ts` pins. A bound key answers the refused run, which is what its replay
+  answers.
+- Test: `packages/engine/test/connect/directory.test.ts` "a key bound before the member gate refused keeps the refused
+  run, as its replay answers it". The fixture member can now describe itself `unavailable` with a reason. The real hub
+  is wrapped (as the file already wraps the real ledger) so that a test can make `run` answer only once the run ended.
+  It checks the summary "VectorScope is not ready: the fixture member is offline", that an upper-case retry equals the
+  first answer, one job per anchor, no model call and no pending ask. Red on the old owner ("error: VectorScope is not
+  ready…", code `invalid`), green after: directory 24 pass, owner 7 pass, httpapi-connect 12 pass, engine typecheck
+  clean. Mutation: with the guard inverted (`=== "bound"`), this case and owner.test's "the hub refuses before the
+  binding gate tombstones its key" case both go red. No hub, policy or adapter source changed; the review pin is
+  untouched.
 
 ## 2026-11-21 — CW-07: an agent cannot resume a connect fix child
 
