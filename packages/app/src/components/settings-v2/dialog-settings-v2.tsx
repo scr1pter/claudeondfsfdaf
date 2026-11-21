@@ -27,6 +27,8 @@ import { SettingsComputerV2 } from "./computer"
 import { SettingsSpendLimitsV2 } from "./spend-limits"
 import { SettingsMemoryV2 } from "./memory"
 import { SettingsLocalV2 } from "./local"
+import { SettingsEverywhereV2, useEverywhereTab } from "./everywhere"
+import { everywhereOffered } from "./everywhere-model"
 import { SettingsGithubAgentsV2 } from "./github-agents"
 import { SettingsKeybinds } from "../settings-keybinds"
 import { spendLimitsApi } from "@/features/economics/spend-limits-api"
@@ -69,6 +71,9 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   // The Production tab (WP A50) shows on the desktop when the plan includes a listed ops perk (On Call, Release Guard
   // or Ship Desk); vectordev.ai still decides every action.
   const [producing, setProducing] = createSignal(false)
+  // The Vector everywhere tab (VE-41) shows on the desktop when the plan offers the listed perk, or when this
+  // computer's own engine already has it on (useEverywhereTab), so a computer that takes jobs always shows it.
+  const [offersEverywhere, setOffersEverywhere] = createSignal(false)
   const votingRead = newestRead()
   const readVoting = async (signedIn: boolean) => {
     const account = platform.vectorAccount
@@ -77,6 +82,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (!signedIn || !account?.codium) {
       setVoting(false)
       setProducing(false)
+      setOffersEverywhere(false)
       return setRemoting(Boolean(platform.remote) && remoteTab(undefined, local))
     }
     const status = await account.codium().catch(() => undefined)
@@ -84,10 +90,13 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     setVoting(Boolean(account.roadmap) && roadmapTab(status))
     setRemoting(Boolean(platform.remote) && remoteTab(status, local))
     setProducing(Boolean(platform.ops) && opsTab(status))
+    setOffersEverywhere(Boolean(platform.remote) && everywhereOffered(status))
   }
+  const everywhere = useEverywhereTab(offersEverywhere)
   // Spend limits live in the desktop ledger and the account in the desktop main process, which the web build does
   // not have.
   const available = (item: SettingsTab) => {
+    if (item === "everywhere") return everywhere()
     if (item === "spend") return !!spendLimitsApi()
     if (item === "account") return !!platform.vectorAccount
     if (item === "computer") return !!platform.computer
@@ -155,6 +164,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "providers") return <SettingsProvidersV2 />
     if (item === "models") return <SettingsModelsV2 />
     if (item === "servers") return <SettingsServersV2 />
+    if (item === "everywhere") return <SettingsEverywhereV2 offered={offersEverywhere()} />
     // The editor loads its v2 controls lazily; its own boundary keeps that from suspending whatever opened Settings.
     if (item === "shortcuts")
       return (

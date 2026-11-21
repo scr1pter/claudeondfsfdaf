@@ -19,6 +19,7 @@ export type SettingsTab =
   | "computer"
   | "memory"
   | "local"
+  | "everywhere"
   | "shortcuts"
   | "github"
 
@@ -171,6 +172,23 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "web access",
           "privacy",
           "company policy",
+        ],
+      },
+      // VE-41: shown on the desktop when the account's plan includes the listed perk, or when this computer's own engine
+      // already has it on (dialog-settings-v2.tsx), so a computer that takes jobs always shows it.
+      {
+        value: "everywhere",
+        label: "Vector everywhere",
+        icon: "branch",
+        keywords: [
+          "vector everywhere",
+          "jobs",
+          "this computer takes jobs",
+          "slack",
+          "linear",
+          "jira",
+          "issues",
+          "allowed repositories",
         ],
       },
       {

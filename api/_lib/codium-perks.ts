@@ -15,6 +15,7 @@ import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
 import { vaultConfigured } from "./vault-store.js"
 import { phoneAppOrigin, pushConfigured } from "./web-push.js"
+import { everywhereReady } from "./everywhere/config.js"
 
 export type PerkServices = Readonly<Partial<Record<PerkId, (fetcher: typeof fetch) => boolean | Promise<boolean>>>>
 export type ListedPerksOptions = { services?: PerkServices; runtime?: boolean }
@@ -84,6 +85,12 @@ export const perkServices: PerkServices = {
   // media bucket its reports' recordings go to. It also requires `computer` listed (CodiumCopy.requires), so it lists
   // with the computer and never before it (contract §1.2).
   overnight: () => hostedSessionsConfigured() && r2Configured("media"),
+  // EV-08 (R-C7, Q11): Vector everywhere is ready only once a paying customer's job can run: the laptop route is wired
+  // with a plan check (not yet, so this is false), offers can be signed, the sweep can run and Slack, Linear or Jira is
+  // open (everywhere/config.ts). Remote is checked through CodiumCopy.requires. The `everywhere` switch is checked
+  // below, and its `no-new` and `stop` hide the perk, as `hosted`'s `no-new` hides `computer`. Listing it stays the
+  // owner's call after the copy is approved.
+  everywhere: () => everywhereReady(),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {
@@ -100,6 +107,7 @@ const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {
   "release-guard": "ops",
   "ship-desk": "ops",
   "brain-cloud": "cloudAgents",
+  everywhere: "everywhere",
 }
 const trackB: readonly PerkId[] = ["brain", "auto-learns", "brain-cloud", "playbooks"]
 const app: readonly PerkId[] = ["github-no-secret", "on-call", "release-guard", "ship-desk"]

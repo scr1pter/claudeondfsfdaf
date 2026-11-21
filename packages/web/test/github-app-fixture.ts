@@ -94,6 +94,11 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     mergeSha: "a".repeat(40),
     workflowBlob: "c".repeat(40),
     defaultWorkflowBlob: "c".repeat(40),
+    // R-A9: the workflow text, served base64 in GitHub's 60-character lines when set, and each contents read's ref.
+    workflowContent: undefined as string | undefined,
+    workflowEncoding: "base64",
+    workflowBase64: undefined as string | undefined,
+    workflowReads: [] as string[],
     botId: 9000,
     cache: new Map<string, { value: string; until: number }>(),
     clock: Date.now(),
@@ -240,14 +245,22 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
       if (route.endsWith("/issues/comments/123") || route.endsWith("/pulls/comments/123"))
         return Response.json(state.comment)
       if (route.endsWith("/issues/17")) return Response.json(state.issue)
-      if (route.includes("/contents/"))
+      if (route.includes("/contents/")) {
+        const ref = new URL(request.url).searchParams.get("ref") ?? ""
+        state.workflowReads.push(ref)
         return Response.json({
           type: "file",
-          sha:
-            new URL(request.url).searchParams.get("ref") === "refs/heads/main"
-              ? state.defaultWorkflowBlob
-              : state.workflowBlob,
+          sha: ref === "refs/heads/main" ? state.defaultWorkflowBlob : state.workflowBlob,
+          ...(state.workflowContent === undefined
+            ? {}
+            : {
+                encoding: state.workflowEncoding,
+                content:
+                  state.workflowBase64 ??
+                  Buffer.from(state.workflowContent).toString("base64").replace(/.{60}/g, "$&\n"),
+              }),
         })
+      }
       if (route.includes("/collaborators/")) {
         const login = route.split("/").at(-2)!
         return Response.json({

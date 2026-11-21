@@ -5,7 +5,9 @@ import { Provider } from "@/provider/provider"
 import * as InstanceState from "@/effect/instance-state"
 import { Redaction } from "@vectordevai/core/redaction"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
+import { RequestOwner } from "@vectordevai/server/request-owner"
 import { Effect } from "effect"
+import { omit } from "remeda"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi } from "../api"
@@ -32,11 +34,18 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
     // `vector invite`, so stored keys go out as Redaction.MARKER. Config.update
     // treats a MARKER sent back as "unchanged".
     const get = Effect.fn("ConfigHttpApi.get")(function* () {
-      return { ...Redaction.redactConfig(yield* configSvc.get()), locked: Config.lockedKeys() }
+      const config = { ...Redaction.redactConfig(yield* configSvc.get()), locked: Config.lockedKeys() }
+      // Vector everywhere's block holds the owner's project folders and limits, as on GET /global/config.
+      if (!(yield* RequestOwner.owner)) return omit(config, ["everywhere"])
+      return config
     })
 
     const update = Effect.fn("ConfigHttpApi.update")(function* (ctx) {
-      // This writes the repository's vector.json, whose local block never applies.
+      // This writes the repository's vector.json, whose local block never applies. Vector everywhere's block never
+      // applies there either, and its absolute folder paths do not belong in a file a repository may commit. The 400
+      // carries no body on purpose, like approveTrust's: no client writes the key here (the settings page writes
+      // PATCH /global/config), and a typed refusal would need its own error schema and a regenerated SDK.
+      if (ctx.payload.everywhere !== undefined) return yield* new HttpApiError.BadRequest({})
       const locked = Config.lockedIn(ctx.payload, "repository")
       if (locked.length > 0) return yield* configLocked(locked)
       yield* configSvc.update(ctx.payload)

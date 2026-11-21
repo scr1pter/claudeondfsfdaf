@@ -78,6 +78,7 @@ describe("Everywhere real routing transitions", () => {
     const f = routerFixture()
     const job = await f.create()
     f.ports.presence = async () => ({ online: false, computers: 0 })
+    f.ports.cloudSource = (platform) => platform === "slack"
     f.ports.binding = async () => ({ account: f.account, appInstalled: true, codiumMode: true })
     f.ports.visibility = async () => { throw new Error("unreachable") }
     f.ports.prepareCloud = async () => { throw new Error("must not prepare") }
@@ -89,6 +90,7 @@ describe("Everywhere real routing transitions", () => {
     const f = routerFixture()
     const job = await f.create()
     f.ports.presence = async () => ({ online: false, computers: 0 })
+    f.ports.cloudSource = (platform) => platform === "slack"
     f.ports.binding = async () => ({ account: f.account, appInstalled: true, codiumMode: true })
     f.ports.visibility = async () => "private"
     let commits = 0
@@ -105,6 +107,7 @@ describe("Everywhere real routing transitions", () => {
     const f = routerFixture()
     const job = await f.create()
     f.ports.presence = async () => ({ online: false, computers: 0 })
+    f.ports.cloudSource = (platform) => platform === "slack"
     f.ports.binding = async () => ({ account: f.account, appInstalled: true, codiumMode: true })
     f.ports.visibility = async () => "private"
     f.ports.prepareCloud = async () => ({ ticketHash: "b".repeat(64), commit: async () => { throw new Error("uncertain") } })

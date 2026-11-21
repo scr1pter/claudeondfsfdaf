@@ -39,6 +39,7 @@ import { ComputerCommand } from "@vectordevai/core/util/computer-command"
 import { Hands } from "@vectordevai/schema/hands"
 import { ComputerSession } from "@/computer/session"
 import { Session } from "@/session/session"
+import { UnattendedShell } from "@/session/unattended-shell"
 
 export { Parameters } from "./shell/prompt"
 
@@ -1221,7 +1222,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
 ) {
   // With Vector Local's Web access None the command runs in the sandbox with no network but this computer's, whatever
   // VECTOR_SHELL_SANDBOX says, and is never run unwrapped (Sandbox.offline). Windows has no sandbox: there it runs as
-  // below, and its notice says so.
+  // below, and its notice says so. An unattended session's command arrives here as Sandbox.unattended decided it.
   if (offline?.type === "refused") return yield* Effect.die(new Error(offline.message))
   if (offline?.type === "sandboxed") {
     yield* Effect.logInfo("shell tool sandbox", {
@@ -1776,8 +1777,35 @@ export const ShellPermission = Effect.gen(function* () {
     return scan
   })
 
+  // The command's conversation ancestry, read once per command: its root, whose history and computer the gate checks,
+  // and whether it or a session above it carries the unattended shell mark (UnattendedShell.marked over the same
+  // reads). A session that is not stored is judged by the tool context's parent. A failed read is refused with
+  // UnattendedShell.LINEAGE, never taken as unmarked.
+  const lineage = Effect.fn("ShellPermission.lineage")(function* (ctx: Tool.Context) {
+    const unreadable = () => Effect.die(new Error(UnattendedShell.LINEAGE))
+    const session = yield* sessions.get(ctx.sessionID).pipe(
+      Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
+      Effect.catchDefect(unreadable),
+    )
+    let rootID = ctx.sessionID
+    let parentID = session ? session.parentID : ctx.parentID
+    let unattended = UnattendedShell.carries(session)
+    const seen = new Set([rootID])
+    while (parentID) {
+      if (seen.has(parentID) || seen.size >= 64)
+        return yield* Effect.die(new Error("The shell's conversation ancestry could not be verified."))
+      seen.add(parentID)
+      const parent = yield* sessions.get(parentID).pipe(Effect.catchDefect(unreadable), Effect.orDie)
+      unattended ||= UnattendedShell.carries(parent)
+      rootID = parent.id
+      parentID = parent.parentID
+    }
+    return { rootID, unattended }
+  })
+
   return {
     resolvePath,
+    lineage,
     ask: Effect.fn("ShellPermission.ask")(function* (
       ctx: Tool.Context,
       input: {
@@ -1793,6 +1821,8 @@ export const ShellPermission = Effect.gen(function* () {
         // The caller's own ask, made after every refusal (the guest guards above and the ownership check) and before
         // the shell's asks, so a refused line asks nothing: the terminal's ask to run outside the shell sandbox.
         readonly first?: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">
+        // The ancestry the caller already read with lineage for this command, so it is not read again.
+        readonly lineage?: { readonly rootID: Tool.Context["sessionID"] }
       },
     ) {
       const instance = yield* InstanceState.context
@@ -1802,20 +1832,7 @@ export const ShellPermission = Effect.gen(function* () {
           const tree = yield* Effect.acquireRelease(parse(input.command, ps), (tree) =>
             Effect.sync(() => tree.delete()),
           )
-          const session = yield* sessions
-            .get(ctx.sessionID)
-            .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)))
-          let rootID = ctx.sessionID
-          let parentID = session ? session.parentID : ctx.parentID
-          const seen = new Set([rootID])
-          while (parentID) {
-            if (seen.has(parentID) || seen.size >= 64)
-              return yield* Effect.die(new Error("The shell's conversation ancestry could not be verified."))
-            seen.add(parentID)
-            const parent = yield* sessions.get(parentID).pipe(Effect.orDie)
-            rootID = parent.id
-            parentID = parent.parentID
-          }
+          const rootID = (input.lineage ?? (yield* lineage(ctx))).rootID
           const history = () =>
             rootID === ctx.sessionID
               ? ctx.history
@@ -1925,6 +1942,7 @@ export const ShellTool = Tool.define(
         env: NodeJS.ProcessEnv
         timeout: number
         workspaceRoot: string
+        unattended: boolean
       },
       ctx: Tool.Context,
       beforeSpawn: Effect.Effect<void>,
@@ -1970,7 +1988,7 @@ export const ShellTool = Tool.define(
         ).pipe(Effect.catch(() => Effect.void))
       })
 
-      const offline = webNone() ? Sandbox.offline(input) : undefined
+      const offline = input.unattended ? Sandbox.unattended(input) : webNone() ? Sandbox.offline(input) : undefined
       const notice = offline && offline.type !== "refused" ? offline.notice : undefined
       // The first command of a session with Web access None says what the sandbox limits, before its own output.
       const first = notice !== undefined && !told.has(ctx.sessionID)
@@ -2155,13 +2173,14 @@ export const ShellTool = Tool.define(
         env: NodeJS.ProcessEnv
         timeout?: number
         workspaceRoot: string
+        unattended: boolean
         ops: TaskPromptOps
         beforeSpawn: Effect.Effect<void>
       },
       ctx: Tool.Context,
       shells: ShellJobs.Interface,
     ) {
-      const offline = webNone() ? Sandbox.offline(input) : undefined
+      const offline = input.unattended ? Sandbox.unattended(input) : webNone() ? Sandbox.offline(input) : undefined
       const notice = offline && offline.type !== "refused" ? offline.notice : undefined
       const first = notice !== undefined && !told.has(ctx.sessionID)
       if (first) told.add(ctx.sessionID)
@@ -2229,10 +2248,19 @@ export const ShellTool = Tool.define(
               }
               const timeout = params.timeout ?? defaultTimeoutMs
               // Refused before anything is asked: with Web access None a command runs only in the sandbox, and this
-              // computer has none to run it in.
-              const refused = webNone() ? Sandbox.offlineRefusal() : undefined
+              // computer has none to run it in. An unattended session's commands run only in the offline sandbox,
+              // whatever Vector Local and VECTOR_SHELL_SANDBOX say, and nowhere it cannot be applied (R-M2).
+              // A conversation ancestry that cannot be read is refused with its own message, never run as unmarked. The
+              // permission check below uses the same reads, so the ancestry is read once.
+              const lineage = yield* permission.lineage(ctx)
+              const unattended = lineage.unattended
+              const refused = unattended
+                ? yield* UnattendedShell.refusal(spawner)
+                : webNone()
+                  ? Sandbox.offlineRefusal()
+                  : undefined
               if (refused) return yield* Effect.die(new Error(refused))
-              const scan = yield* permission.ask(ctx, { command: params.command, cwd, shell })
+              const scan = yield* permission.ask(ctx, { command: params.command, cwd, shell, lineage })
               // Reserve resolved targets only after every permission, before any process starts.
               yield* permission.admit(ctx, [scan])
               const beforeSpawn = permission.beforeRun([scan])
@@ -2245,6 +2273,7 @@ export const ShellTool = Tool.define(
                     env: yield* shellEnv(ctx, cwd),
                     ...(params.timeout === undefined ? {} : { timeout: params.timeout }),
                     workspaceRoot: instanceCtx.worktree,
+                    unattended,
                     ops,
                     beforeSpawn,
                   },
@@ -2263,6 +2292,7 @@ export const ShellTool = Tool.define(
                   // a subdirectory still has to be able to write anywhere in the
                   // project it belongs to.
                   workspaceRoot: instanceCtx.worktree,
+                  unattended,
                 },
                 ctx,
                 beforeSpawn,

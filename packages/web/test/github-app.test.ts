@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createPrivateKey } from "node:crypto"
 import { GithubAgents } from "@vectordevai/core/github-agents"
-import { buildAgentsWorkflow, type AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
+import { buildAgentsWorkflow, readWorkflowOptions, type AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
 import { createGithubApp, githubAppConfiguration, githubTokenPermissions } from "../../../api/_lib/github-app"
 import { githubAppFixture } from "./github-app-fixture"
 import type { RepoBinding } from "../../../api/_lib/cloud-agents-binding"
@@ -533,6 +533,149 @@ test("bind checks the dedicated job and current permission before granting admin
   fixture.state.permission = "write"
   fixture.state.job.name = "Vector task"
   await expect(fixture.app.verifyBind(identity)).rejects.toMatchObject({ code: "WORKFLOW_NOT_TRUSTED" })
+  expect(fixture.tokens.size).toBe(0)
+})
+
+// R-A9 (EV-26): the mode comes only from the App's read of the workflow file the bind job ran from, checked against the
+// real generator's output, so the reader and the generator cannot drift apart unnoticed.
+test("R-A9: bind reads the workflow mode at the token's verified SHA and returns only the mode", async () => {
+  await using fixture = await githubAppFixture()
+  fixture.state.run.event = "workflow_dispatch"
+  fixture.state.job.name = "Vector bind"
+  const identity = await fixture
+    .makeToken("bind", { event_name: "workflow_dispatch" })
+    .then((token) => fixture.verify(token, "bind"))
+  const slug = fixture.config.slug
+  const codiumOptions: AgentsWorkflowOptions = {
+    mode: "codium",
+    provider: "vector",
+    model: "vector-plan",
+    keys: [],
+    autoReview: false,
+    version: GithubAgents.MIN_AGENTS_CLI,
+    handle: slug,
+  }
+  const codium = buildAgentsWorkflow(codiumOptions)
+  const ownKey = buildAgentsWorkflow({
+    mode: "own-key",
+    provider: "anthropic",
+    model: "claude-x",
+    keys: ["ANTHROPIC_API_KEY"],
+    autoReview: false,
+    version: GithubAgents.MIN_AGENTS_CLI,
+  })
+  const body = codium.split("\n").slice(1).join("\n")
+  const route = '            const mode = "codium"'
+  const cases: { name: string; content?: string; encoding?: string; base64?: string; mode?: "codium" | "own-key" }[] = [
+    { name: "no content" },
+    { name: "codium", content: codium, mode: "codium" },
+    { name: "own-key", content: ownKey, mode: "own-key" },
+    { name: "codium with CRLF lines", content: codium.replaceAll("\n", "\r\n"), mode: "codium" },
+    {
+      name: "codium with schedules",
+      content: buildAgentsWorkflow({
+        ...codiumOptions,
+        schedules: [{ id: "daily", cron: "17 9 * * 1-5", prompt: "Fix bugs" }],
+      }),
+      mode: "codium",
+    },
+    { name: "no header", content: body },
+    { name: "a header that is not JSON", content: `# vector-workflow: {\n${body}` },
+    { name: "a header mode it does not know", content: codium.replace('"mode":"codium"', '"mode":"byok"') },
+    {
+      name: "a codium header over an own-key route",
+      content: codium.replace(route, route.replace("codium", "own-key")),
+    },
+    {
+      name: "an own-key header over a codium route",
+      content: ownKey.replace('const mode = "own-key"', 'const mode = "codium"'),
+    },
+    { name: "two route lines", content: codium.replace(route, `${route}\n${route}`) },
+    { name: "no route line", content: codium.replace(`${route}\n`, "") },
+    { name: "codium for another App", content: buildAgentsWorkflow({ ...codiumOptions, handle: "vector-other" }) },
+    { name: "codium with no handle", content: buildAgentsWorkflow({ ...codiumOptions, handle: undefined }) },
+    {
+      name: "a route handle for another App",
+      content: codium.replace(`const handle = "${slug}"`, 'const handle = "vector-other"'),
+    },
+    {
+      name: "a header handle for another App",
+      content: codium.replace(`"handle":"${slug}"`, '"handle":"vector-other"'),
+    },
+    { name: "an encoding other than base64", content: codium, encoding: "none" },
+    // Buffer's decoder skips characters outside the alphabet, so only the reader's own check refuses this one.
+    {
+      name: "base64 with characters outside its alphabet",
+      content: codium,
+      base64: Buffer.from(codium).toString("base64").replace(/.{60}/g, "$&*"),
+    },
+    { name: "a large file under the response cap", content: `${codium}#${"x".repeat(650_000)}\n`, mode: "codium" },
+  ]
+  for (const item of cases) {
+    fixture.state.workflowContent = item.content
+    fixture.state.workflowEncoding = item.encoding ?? "base64"
+    fixture.state.workflowBase64 = item.base64
+    fixture.state.workflowReads.length = 0
+    expect({ name: item.name, result: await fixture.app.verifyBind(identity) }).toStrictEqual({
+      name: item.name,
+      result: {
+        installed: true,
+        defaultRef: "refs/heads/main",
+        installationId: "600",
+        adminVerified: false,
+        ...(item.mode ? { workflowMode: item.mode } : {}),
+      },
+    })
+    // One read, at the SHA the bind token and its run name, never the default branch's name.
+    expect(fixture.state.workflowReads).toEqual(["a".repeat(40)])
+    expect(fixture.tokens.size).toBe(0)
+    // The App's reader is stricter than core's readWorkflowOptions, but wherever it names a mode, core's names the
+    // same one.
+    if (item.mode)
+      expect({ name: item.name, core: readWorkflowOptions(item.content ?? "")?.mode }).toEqual({
+        name: item.name,
+        core: item.mode,
+      })
+  }
+  const contents = "/repos/fixture-owner/project/contents/.github/workflows/vector.yml"
+  expect([...new Set(fixture.state.requests.filter((path) => path.includes("/contents/")))]).toEqual([contents])
+  // The read is best effort: a missing file, a failed read and an answer over the shared 1,000,000-byte cap each name
+  // no mode, and the bind goes ahead with every token revoked, so an @vector bind never fails because of everywhere.
+  const plain = { installed: true, defaultRef: "refs/heads/main", installationId: "600", adminVerified: false }
+  fixture.state.workflowContent = codium
+  fixture.state.failPath = contents
+  for (const status of [404, 403, 503]) {
+    fixture.state.failStatus = status
+    expect({ status, result: await fixture.app.verifyBind(identity) }).toStrictEqual({ status, result: plain })
+    expect(fixture.tokens.size).toBe(0)
+  }
+  fixture.state.failPath = ""
+  fixture.state.workflowContent = `${codium}#${"x".repeat(800_000)}\n`
+  expect(await fixture.app.verifyBind(identity)).toStrictEqual(plain)
+  expect(fixture.state.events.filter((event) => event.startsWith("revoke:")).length).toBe(fixture.state.minted.length)
+  expect(fixture.tokens.size).toBe(0)
+})
+
+// The review path (pull_request_review_comment) has read the workflow's contents for its blob check since before R-A9;
+// that read is out of scope here and is not a regression.
+test("R-A9: verifyRun on an issue comment and installation() make no contents read", async () => {
+  await using fixture = await runFixture()
+  fixture.state.workflowContent = buildAgentsWorkflow({
+    mode: "codium",
+    provider: "vector",
+    model: "vector-plan",
+    keys: [],
+    autoReview: false,
+    version: GithubAgents.MIN_AGENTS_CLI,
+    handle: fixture.config.slug,
+  })
+  expect(await fixture.app.verifyRun(await fixture.runIdentity(), fixture.options)).toStrictEqual({
+    installed: true,
+    binder: "ok",
+  })
+  fixture.state.job.name = "Vector task"
+  expect((await fixture.app.installation(await fixture.identity())).installed).toBe(true)
+  expect(fixture.state.workflowReads).toEqual([])
   expect(fixture.tokens.size).toBe(0)
 })
 

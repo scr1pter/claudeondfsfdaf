@@ -1,11 +1,13 @@
-import { describe, expect, test } from "bun:test"
-import { CLOSE, FRAME, decodeFrame, encodeFrame } from "@vectordevai/relay/protocol"
+import { describe, expect, jest, test } from "bun:test"
+import { RELAY_LIMITS } from "@vectordevai/relay/limits"
+import { CLOSE, DEVICE_BYTES, FRAME, decodeFrame, encodeFrame } from "@vectordevai/relay/protocol"
 import { deviceBytes, ENVELOPE, fromBase64url, toBase64url, type Channel } from "./remote-crypto"
-import { createRemoteLink, type EngineEvent, type RemoteSocket } from "./remote-link"
+import { createRemoteLink, type EngineEvent, type LinkDependencies, type RemoteSocket } from "./remote-link"
 import { PHONE_APP_ADDRESS } from "../../../app/src/components/settings-v2/notifications-model"
 import { computerName, PHONE_APP_ORIGIN, phoneAppOrigin, relayName } from "./remote-host"
 import { decodeIdentity, type RemoteIdentity } from "./remote-pairing"
 import { fakePhone, type FakePhone } from "./remote-phone.fixture"
+import { createMemoryRelay, ticketFor, type MemoryRelay } from "./remote-relay.fixture"
 import type { EngineRequest } from "./remote-routes"
 
 const ORIGIN = "https://remote.vectordev.ai"
@@ -105,7 +107,15 @@ function engine() {
   }
 }
 
-function setup(options: { ticket?: (count: number) => Response; allowed?: boolean } = {}) {
+function setup(
+  options: {
+    ticket?: (count: number) => Response
+    allowed?: boolean
+    jobs?: LinkDependencies["jobs"]
+    log?: LinkDependencies["log"]
+    timing?: LinkDependencies["timing"]
+  } = {},
+) {
   const sockets: FakeSocket[] = []
   const apiCalls: { url: string; body: Record<string, unknown>; authorization?: string }[] = []
   const stored: { value?: RemoteIdentity } = {}
@@ -146,7 +156,9 @@ function setup(options: { ticket?: (count: number) => Response; allowed?: boolea
     computerName: () => "Studio Mac",
     relayName: () => "Mac",
     watchingChanged: () => watching.push(link.watching()),
-    timing: { heartbeatMs: 30, refreshMs: 60_000, batchMs: 20, retryMs: 10 },
+    jobs: options.jobs,
+    log: options.log,
+    timing: options.timing ?? { heartbeatMs: 30, refreshMs: 60_000, batchMs: 20, retryMs: 10 },
   })
   const socket = () => sockets.at(-1)!
   return { link, sockets, socket, apiCalls, stored, enabled, fake, watching, tickets: () => tickets }
@@ -308,6 +320,549 @@ describe("connection", () => {
       await until(() => env.link.status().state === state)
       env.link.stop()
     }
+  })
+})
+
+describe("jobs (R-C2)", () => {
+  const OFFER = `vef1.${"A".repeat(40)}.${"B".repeat(86)}`
+  const ascii = (text: string) => new TextEncoder().encode(text)
+  const offerFrame = (body: Uint8Array, device = new Uint8Array(DEVICE_BYTES), kind: number = FRAME.JOB_OFFER) =>
+    encodeFrame(kind, device, body)
+
+  /** Microtask turns only, so no timer fires meanwhile: a check that needs a timer's turn fails here. */
+  async function turns(condition: () => boolean, count = 1_000) {
+    for (let turn = 0; turn < count && !condition(); turn++) await Promise.resolve()
+    if (!condition()) throw new Error("condition never held within microtask turns")
+  }
+  async function flush(count = 200) {
+    for (let turn = 0; turn < count; turn++) await Promise.resolve()
+  }
+
+  /** A computer on the memory relay that only jobs want. Its fake API mints `vt1.computer.<device>`. */
+  function jobsComputer(relay: MemoryRelay, timing?: LinkDependencies["timing"]) {
+    const stored: { value?: RemoteIdentity } = {}
+    const enabled = { value: false }
+    const jobs = { want: true, offers: [] as string[] }
+    const minted: number[] = []
+    const opened = { count: 0 }
+    const link = createRemoteLink({
+      store: { read: async () => stored.value, write: async (identity) => void (stored.value = identity) },
+      enabled: { get: () => enabled.value, set: (value) => void (enabled.value = value) },
+      token: async () => "vct_desktop",
+      api: async () => {
+        const identity = stored.value!
+        relay.key(identity.device, identity.publicKey)
+        minted.push(Date.now())
+        return Response.json({ ticket: ticketFor("computer", identity.device), url: RELAY, protocol: "vector.v1" })
+      },
+      allowed: () => true,
+      socket: (url, protocols) => {
+        opened.count += 1
+        return relay.socket(url, protocols)
+      },
+      engine: engine().api,
+      origin: ORIGIN,
+      computerName: () => "Studio Mac",
+      jobs: { want: () => jobs.want, offer: (text) => void jobs.offers.push(text) },
+      timing: timing ?? { heartbeatMs: 30, refreshMs: 60_000, batchMs: 20, retryMs: 10 },
+    })
+    return { link, stored, enabled, jobs, minted, sockets: () => opened.count }
+  }
+
+  test("an offer frame reaches the subscriber unchanged on a computer connected only for jobs", async () => {
+    const relay = createMemoryRelay()
+    const env = jobsComputer(relay)
+    await env.link.setEnabled(true)
+    await until(() => env.link.status().state === "online")
+    expect(relay.online(env.stored.value!.device)).toBe(true)
+    expect(relay.offer(OFFER)).toBe(1)
+    await until(() => env.jobs.offers.length === 1)
+    expect(env.jobs.offers).toEqual([OFFER])
+    // Nothing binary went from this computer to the relay.
+    expect(relay.seen).toEqual([])
+    env.link.stop()
+  })
+
+  test("want() with no phone opens a computer connection and keeps it", async () => {
+    const relay = createMemoryRelay()
+    const env = jobsComputer(relay)
+    env.jobs.want = false
+    await env.link.setEnabled(true)
+    expect(env.link.status().state).toBe("ready")
+    expect(env.sockets()).toBe(0)
+    env.jobs.want = true
+    await env.link.jobsChanged()
+    const device = env.stored.value!.device
+    await until(() => env.link.status().state === "online")
+    expect(relay.online(device)).toBe(true)
+    expect(env.link.status().phones).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Looking again (a sign-in, a plan change, a pairing given up) keeps the same connection.
+    env.link.cancelPairing()
+    await env.link.refresh()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(relay.online(device)).toBe(true)
+    expect(env.link.status().state).toBe("online")
+    expect(env.sockets()).toBe(1)
+    expect(env.minted.length).toBe(1)
+    expect(relay.texts.length).toBeGreaterThan(0)
+    expect(relay.texts.every((text) => text === "ping")).toBe(true)
+    expect(relay.seen).toEqual([])
+    env.link.stop()
+  })
+
+  test("want() turning false closes the connection, and turning true opens it again", async () => {
+    const relay = createMemoryRelay()
+    const env = jobsComputer(relay)
+    await env.link.setEnabled(true)
+    const device = env.stored.value!.device
+    await until(() => relay.online(device))
+    env.jobs.want = false
+    await env.link.jobsChanged()
+    expect(relay.online(device)).toBe(false)
+    expect(env.link.status().state).toBe("ready")
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(env.sockets()).toBe(1)
+    expect(env.minted.length).toBe(1)
+    env.jobs.want = true
+    await env.link.jobsChanged()
+    await until(() => relay.online(device))
+    expect(env.sockets()).toBe(2)
+    env.link.stop()
+  })
+
+  test("over a simulated day, a job-only computer sends only heartbeats and refreshes at most twice", async () => {
+    const relay = createMemoryRelay()
+    // The app's own timing: a 25-s ping, a 4-minute phone cadence and the 12-hour jobs cadence.
+    const env = jobsComputer(relay, {})
+    env.jobs.want = false
+    // The identity's keys are made under real timers.
+    await env.link.setEnabled(true)
+    env.jobs.want = true
+    jest.useFakeTimers()
+    try {
+      const start = Date.now()
+      await env.link.jobsChanged()
+      const device = env.stored.value!.device
+      await turns(() => env.link.status().state === "online")
+      // A phone of the account, there for another computer, stays attached all day. The relay asks this computer for
+      // a fresh ticket when it arrives; a computer kept only for jobs does not take one.
+      relay.socket(RELAY, ["vector.v1", ticketFor("phone", "PHONE_OF_ANOTHER_MAC_A")])
+      await turns(() => env.link.status().viewers === 1)
+      // Stepped an hour at a time, so each refresh's API call reads the clock at the hour it was made.
+      const step = 60 * 60_000
+      for (let hour = 0; hour < 24; hour++) {
+        jest.advanceTimersByTime(step)
+        await flush()
+      }
+      const day = 24 * step
+      expect(relay.seen).toEqual([])
+      const pings = relay.texts.filter((text) => text === "ping").length
+      const refreshes = relay.texts.filter((text) => text !== "ping").map((text) => JSON.parse(text))
+      expect(pings).toBe(day / RELAY_LIMITS.heartbeatEveryMs)
+      expect(refreshes.every((message) => message.t === "refresh" && typeof message.ticket === "string")).toBe(true)
+      expect(refreshes.length).toBeGreaterThanOrEqual(1)
+      expect(refreshes.length).toBeLessThanOrEqual(2)
+      expect(env.minted.length).toBe(1 + refreshes.length)
+      // The first refresh lands at half the relay's limit, and no ticket is older than the limit at any time.
+      const first = env.minted[1]! - env.minted[0]!
+      expect(first).toBeGreaterThanOrEqual(RELAY_LIMITS.computerTicketMaxAgeMs / 2)
+      expect(first).toBeLessThan(RELAY_LIMITS.computerTicketMaxAgeMs / 2 + step)
+      expect(env.minted[0]).toBe(start)
+      const gaps = [...env.minted.slice(1), start + day].map((at, index) => at - env.minted[index]!)
+      expect(gaps.every((gap) => gap < RELAY_LIMITS.computerTicketMaxAgeMs)).toBe(true)
+      expect(relay.online(device)).toBe(true)
+      expect(env.link.status().state).toBe("online")
+      expect(env.sockets()).toBe(1)
+    } finally {
+      // Stopped here so that a failed assertion leaves no ping or refresh timer running for the tests after it.
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test("the jobs cadence counts from each connection, and a close, want(false) or stop() ends it", async () => {
+    const relay = createMemoryRelay()
+    // The app's own timing: a 25-s ping, the 12-hour jobs cadence and a 1-s retry base.
+    const env = jobsComputer(relay, {})
+    env.jobs.want = false
+    await env.link.setEnabled(true)
+    env.jobs.want = true
+    const hour = 60 * 60_000
+    const hours = async (count: number) => {
+      for (let step = 0; step < count; step++) {
+        jest.advanceTimersByTime(hour)
+        await flush()
+      }
+    }
+    const refreshes = () => relay.texts.filter((text) => text !== "ping").length
+    jest.useFakeTimers()
+    try {
+      await env.link.jobsChanged()
+      const device = env.stored.value!.device
+      await turns(() => env.link.status().state === "online")
+      await hours(11)
+      expect(env.minted.length).toBe(1)
+
+      // The relay closes the connection and the link reconnects after its backoff (2 s here).
+      relay.drop(device, CLOSE.TICKET_EXPIRED)
+      await turns(() => env.link.status().state === "connecting")
+      jest.advanceTimersByTime(2_000)
+      await turns(() => env.link.status().state === "online")
+      expect(env.minted.length).toBe(2)
+      expect(env.sockets()).toBe(2)
+      // The first connection's 12 hours end an hour after the reconnect; the refresh comes 12 hours after the new mint.
+      await hours(11)
+      expect(env.minted.length).toBe(2)
+      await hours(1)
+      expect(env.minted.length).toBe(3)
+      expect(env.minted[2]! - env.minted[1]!).toBe(12 * hour)
+      expect(refreshes()).toBe(1)
+
+      // Jobs turned off: the connection closes, and no refresh comes while it is closed.
+      env.jobs.want = false
+      await env.link.jobsChanged()
+      expect(relay.online(device)).toBe(false)
+      await hours(6)
+      expect(env.minted.length).toBe(3)
+      // On again: a new connection, whose first refresh again comes 12 hours after its own mint.
+      env.jobs.want = true
+      await env.link.jobsChanged()
+      await turns(() => env.link.status().state === "online")
+      expect(env.minted.length).toBe(4)
+      await hours(11)
+      expect(env.minted.length).toBe(4)
+      await hours(1)
+      expect(env.minted.length).toBe(5)
+      expect(env.minted[4]! - env.minted[3]!).toBe(12 * hour)
+      expect(refreshes()).toBe(2)
+
+      // stop() leaves no timer of the link running, so nothing is minted or sent again. A minute passes first, so the
+      // last mint's 15-s request timeout (AbortSignal.timeout, a timer too) has lapsed.
+      jest.advanceTimersByTime(60_000)
+      await flush()
+      env.link.stop()
+      expect(jest.getTimerCount()).toBe(0)
+      const sent = relay.texts.length
+      await hours(24)
+      expect(env.minted.length).toBe(5)
+      expect(relay.texts.length).toBe(sent)
+      expect(relay.online(device)).toBe(false)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test("the jobs cadence starts only once the relay's hello arrives", async () => {
+    const env = setup({
+      jobs: { want: () => true, offer: () => {} },
+      timing: { heartbeatMs: 30, refreshMs: 60_000, jobsRefreshMs: 40, batchMs: 20, retryMs: 10 },
+    })
+    await env.link.setEnabled(true)
+    await until(() => env.sockets.length === 1)
+    // The socket is still opening: several of the jobs cadence's periods pass with no ticket minted for it.
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(env.tickets()).toBe(1)
+    expect(env.link.status().state).toBe("connecting")
+    env.socket().open(env.stored.value!.device)
+    await until(() => env.link.status().state === "online")
+    await until(() =>
+      env
+        .socket()
+        .texts()
+        .some((text) => text.includes('"refresh"')),
+    )
+    expect(env.tickets()).toBeGreaterThanOrEqual(2)
+    env.link.stop()
+  })
+
+  test("a phone paired later restores the phone's cadence, and the jobs cadence returns without it", async () => {
+    const jobs = { want: true }
+    const env = setup({
+      jobs: { want: () => jobs.want, offer: () => {} },
+      timing: { heartbeatMs: 30, refreshMs: 25, jobsRefreshMs: 3_600_000, batchMs: 20, retryMs: 10 },
+    })
+    const refreshes = () =>
+      env
+        .socket()
+        .texts()
+        .filter((text) => text.includes('"refresh"')).length
+    await env.link.setEnabled(true)
+    await until(() => env.sockets.length === 1)
+    env.socket().open(env.stored.value!.device)
+    await until(() => env.link.status().state === "online")
+    const phone = await fakePhone({ origin: ORIGIN, name: "Pixel" })
+    // The account's phone arrives for another computer: kept only for jobs, this one takes no ticket for it.
+    env.socket().server({ t: "peers", peers: [{ device: phone.device, role: "phone" }], viewers: 1, refresh: true })
+    await until(() => env.link.status().viewers === 1)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(refreshes()).toBe(0)
+    expect(env.tickets()).toBe(1)
+
+    // A pairing opens with that phone already attached, and the relay says nothing more: its ticket lapsed, so one
+    // refresh goes at once, before any timer, then one every refreshMs.
+    const offer = await env.link.startPairing()
+    await turns(() => refreshes() === 1)
+    await flush()
+    expect(refreshes()).toBe(1)
+    await until(() => refreshes() >= 4)
+
+    // The phone scans the code and is paired.
+    env.socket().frame(phone.device, await phone.pairRequest(offer.link))
+    await until(() =>
+      env
+        .socket()
+        .frames()
+        .some((frame) => frame.to === phone.device),
+    )
+    const pending = await phone.readPending(env.socket().frames().at(-1)!.envelope)
+    await env.link.confirmPairing(pending.code)
+    expect(env.stored.value!.phones.map((item) => item.device)).toEqual([phone.device])
+
+    // The phone leaves: the phone's cadence stops, and the jobs cadence (an hour here) takes over.
+    env.socket().server({ t: "peers", peers: [], viewers: 0 })
+    await until(() => env.link.status().viewers === 0)
+    const left = refreshes()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(refreshes()).toBe(left)
+
+    // It comes back and the relay asks for a ticket: exactly one refresh for that, then the phone's cadence.
+    env.socket().server({ t: "peers", peers: [{ device: phone.device, role: "phone" }], viewers: 1, refresh: true })
+    await turns(() => refreshes() === left + 1)
+    await flush()
+    expect(refreshes()).toBe(left + 1)
+    await until(() => refreshes() >= left + 3)
+
+    // Jobs no longer wanted: the paired phone keeps the connection and its cadence.
+    jobs.want = false
+    await env.link.jobsChanged()
+    const kept = refreshes()
+    await until(() => refreshes() >= kept + 2)
+    expect(env.sockets.length).toBe(1)
+    expect(env.socket().closedWith).toBeUndefined()
+
+    // Jobs wanted again and the phone removed while still attached: with no word from the relay, the phone's cadence
+    // stops and the jobs cadence takes over, on the same connection.
+    jobs.want = true
+    await env.link.jobsChanged()
+    await env.link.unpair(phone.device)
+    const after = refreshes()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(refreshes()).toBe(after)
+    expect(env.sockets.length).toBe(1)
+    expect(env.socket().closedWith).toBeUndefined()
+    expect(env.link.status().state).toBe("online")
+    env.link.stop()
+  })
+
+  test("a malformed offer frame is dropped, and so is any offer with no subscriber; neither throws", async () => {
+    const offers: string[] = []
+    const logs: string[] = []
+    const env = setup({
+      jobs: { want: () => true, offer: (text) => void offers.push(text) },
+      log: (message) => void logs.push(message),
+    })
+    await env.link.setEnabled(true)
+    await until(() => env.sockets.length === 1)
+    env.socket().open(env.stored.value!.device)
+    await until(() => env.link.status().state === "online")
+    const device = new Uint8Array(DEVICE_BYTES)
+    device[DEVICE_BYTES - 1] = 1
+    const malformed = [
+      offerFrame(ascii(OFFER), device),
+      offerFrame(new Uint8Array()),
+      offerFrame(ascii("vef1.")),
+      offerFrame(ascii("vef2.x")),
+      offerFrame(ascii("VEF1.x")),
+      offerFrame(ascii("vef1.a b")),
+      offerFrame(ascii(`${OFFER}\n`)),
+      offerFrame(ascii(` ${OFFER}`)),
+      // Valid UTF-8 that is not ASCII, a byte-order mark, an invalid byte, NUL and DEL.
+      offerFrame(ascii(`${OFFER}é`)),
+      offerFrame(new Uint8Array([0xef, 0xbb, 0xbf, ...ascii(OFFER)])),
+      offerFrame(new Uint8Array([...ascii(OFFER), 0xff])),
+      offerFrame(new Uint8Array([...ascii(OFFER), 0x00])),
+      offerFrame(new Uint8Array([...ascii(OFFER), 0x7f])),
+      // One byte longer than the relay forwards.
+      offerFrame(ascii(`vef1.${"a".repeat(RELAY_LIMITS.internalBodyBytes - 4)}`)),
+      // Shorter than a frame's header, and a kind that is neither data nor an offer.
+      new Uint8Array([FRAME.JOB_OFFER, 0, 0]),
+      offerFrame(ascii(OFFER), new Uint8Array(DEVICE_BYTES), 0x03),
+    ]
+    for (const frame of malformed) env.socket().onmessage?.({ data: frame.buffer })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(offers).toEqual([])
+    expect(logs).toEqual([])
+    expect(env.socket().closedWith).toBeUndefined()
+    expect(env.socket().frames()).toEqual([])
+    expect(env.link.status().state).toBe("online")
+    // The longest offer the relay forwards still arrives, and so does a real one, unchanged and in order.
+    const longest = `vef1.${"a".repeat(RELAY_LIMITS.internalBodyBytes - 5)}`
+    env.socket().onmessage?.({ data: offerFrame(ascii(longest)).buffer })
+    env.socket().onmessage?.({ data: offerFrame(ascii(OFFER)).buffer })
+    await until(() => offers.length === 2)
+    expect(offers).toEqual([longest, OFFER])
+    env.link.stop()
+
+    // With no subscriber the same good frame is dropped quietly, and the phone's connection stays up.
+    const plain = setup({ log: (message) => void logs.push(message) })
+    await plain.link.startPairing()
+    await until(() => plain.sockets.length === 1)
+    plain.socket().open(plain.stored.value!.device)
+    await until(() => plain.link.status().state === "online")
+    plain.socket().onmessage?.({ data: offerFrame(ascii(OFFER)).buffer })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(logs).toEqual([])
+    expect(plain.socket().closedWith).toBeUndefined()
+    expect(plain.link.status().state).toBe("online")
+    plain.link.stop()
+  })
+
+  test("a subscriber that throws or rejects is contained, and the log line holds no offer", async () => {
+    const offers: string[] = []
+    const logs: { message: string; meta?: Record<string, unknown> }[] = []
+    const calls = { count: 0 }
+    const env = setup({
+      jobs: {
+        want: () => true,
+        offer: (text) => {
+          calls.count += 1
+          if (calls.count === 1) throw new Error(`refused ${text}`)
+          if (calls.count === 2) return Promise.reject(new Error(`refused ${text}`))
+          offers.push(text)
+          return Promise.resolve(true)
+        },
+      },
+      log: (message, meta) => void logs.push({ message, meta }),
+    })
+    await env.link.setEnabled(true)
+    await until(() => env.sockets.length === 1)
+    env.socket().open(env.stored.value!.device)
+    await until(() => env.link.status().state === "online")
+    for (let index = 0; index < 3; index++) env.socket().onmessage?.({ data: offerFrame(ascii(OFFER)).buffer })
+    await until(() => offers.length === 1 && logs.length === 2)
+    expect(calls.count).toBe(3)
+    expect(offers).toEqual([OFFER])
+    expect(logs.map((entry) => entry.message)).toEqual([
+      "remote: a job offer was not taken",
+      "remote: a job offer was not taken",
+    ])
+    expect(logs.every((entry) => entry.meta === undefined)).toBe(true)
+    expect(JSON.stringify(logs)).not.toContain("vef1.")
+    expect(env.socket().closedWith).toBeUndefined()
+    expect(env.link.status().state).toBe("online")
+    env.link.stop()
+  })
+
+  test("jobs alone never turn Remote on or make an identity", async () => {
+    const env = setup({ jobs: { want: () => true, offer: () => {} } })
+    await env.link.start()
+    await env.link.jobsChanged()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(env.sockets).toEqual([])
+    expect(env.apiCalls).toEqual([])
+    expect(env.stored.value).toBeUndefined()
+    expect(env.link.status().state).toBe("off")
+    // Remote is on, but no identity was made yet: still nothing.
+    env.enabled.value = true
+    await env.link.jobsChanged()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(env.sockets).toEqual([])
+    expect(env.apiCalls).toEqual([])
+    expect(env.stored.value).toBeUndefined()
+    expect(env.link.status().state).toBe("ready")
+    // The person turns Remote on here: the identity is made, then one computer ticket and one connection follow.
+    await env.link.setEnabled(true)
+    await until(() => env.sockets.length === 1)
+    expect(env.stored.value?.device).toBeDefined()
+    expect(env.tickets()).toBe(1)
+    expect(env.apiCalls.map((call) => call.body.role)).toEqual(["computer"])
+    env.link.stop()
+  })
+
+  test("a want() that throws counts as not wanted, and the phone's path keeps working", async () => {
+    const env = setup({
+      jobs: {
+        want: () => {
+          throw new Error("settings unreadable")
+        },
+        offer: () => {},
+      },
+    })
+    await env.link.setEnabled(true)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(env.sockets).toEqual([])
+    expect(env.link.status().state).toBe("ready")
+    // A pairing connects as it does without jobs, and the relay's ask for a ticket when a phone arrives is answered.
+    await env.link.startPairing()
+    await until(() => env.sockets.length === 1)
+    env.socket().open(env.stored.value!.device)
+    await until(() => env.link.status().state === "online")
+    env.socket().server({ t: "peers", peers: [{ device: "PHONE_A", role: "phone" }], viewers: 1, refresh: true })
+    await until(() =>
+      env
+        .socket()
+        .texts()
+        .some((text) => text.includes('"refresh"')),
+    )
+    // A dropped connection is retried.
+    env.socket().drop(CLOSE.TICKET_EXPIRED)
+    await until(() => env.sockets.length === 2)
+    expect(env.link.status().state).toBe("connecting")
+    env.link.stop()
+  })
+
+  test("at most eight offers wait on the subscriber at once; more are dropped until one settles", async () => {
+    const offers: string[] = []
+    const logs: string[] = []
+    const waiting: { resolve: () => void; reject: (error: Error) => void }[] = []
+    const env = setup({
+      jobs: {
+        want: () => true,
+        offer: (text) => {
+          offers.push(text)
+          return new Promise<void>((resolve, reject) => void waiting.push({ resolve, reject }))
+        },
+      },
+      log: (message) => void logs.push(message),
+    })
+    await env.link.setEnabled(true)
+    await until(() => env.sockets.length === 1)
+    env.socket().open(env.stored.value!.device)
+    await until(() => env.link.status().state === "online")
+    const send = (index: number) => env.socket().onmessage?.({ data: offerFrame(ascii(`${OFFER}${index}`)).buffer })
+    for (let index = 0; index < 12; index++) send(index)
+    await until(() => offers.length === 8)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(offers).toEqual(Array.from({ length: 8 }, (_, index) => `${OFFER}${index}`))
+    // One rejects and one resolves: two places free up, and the next two offers are taken.
+    waiting.shift()!.reject(new Error("declined"))
+    waiting.shift()!.resolve()
+    await until(() => logs.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    for (const index of [12, 13, 14]) send(index)
+    await until(() => offers.length === 10)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(offers.slice(8)).toEqual([`${OFFER}12`, `${OFFER}13`])
+    expect(logs).toEqual(["remote: a job offer was not taken"])
+    expect(env.socket().closedWith).toBeUndefined()
+    expect(env.link.status().state).toBe("online")
+    for (const item of waiting) item.resolve()
+    env.link.stop()
+  })
+
+  test("want() decides only the connection: an offer on a phone's connection reaches the subscriber", async () => {
+    const offers: string[] = []
+    const env = setup({ jobs: { want: () => false, offer: (text) => void offers.push(text) } })
+    await env.link.startPairing()
+    await until(() => env.sockets.length === 1)
+    env.socket().open(env.stored.value!.device)
+    await until(() => env.link.status().state === "online")
+    env.socket().onmessage?.({ data: offerFrame(ascii(OFFER)).buffer })
+    await until(() => offers.length === 1)
+    expect(offers).toEqual([OFFER])
+    env.link.stop()
   })
 })
 

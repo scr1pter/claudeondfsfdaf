@@ -57,4 +57,7 @@ export const RELAY_LIMITS = {
   noticeEveryMs: 1_000,
   /** Internal API bodies. */
   internalBodyBytes: 16 * 1024,
+  /** R-C1: job offers accepted for one account within offerWindowMs (the API's signed job-offer calls). */
+  offersPerHour: 30,
+  offerWindowMs: 60 * 60_000,
 } as const

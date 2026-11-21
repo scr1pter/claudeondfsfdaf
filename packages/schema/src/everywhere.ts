@@ -244,6 +244,19 @@ export function isJobId(value: unknown): value is string {
   return typeof value === "string" && JOB_ID_PATTERN.test(value)
 }
 
+/**
+ * The whole workflow prompt of the Actions run that serves a Vector everywhere job (3.6, R-A4): this line and the job
+ * id, with nothing before, between or after them. The prompt only names the job; the body route's answer is the proof.
+ */
+export const ACTIONS_JOB_PROMPT = "Vector everywhere job "
+
+/** The job id `value` names when it is exactly ACTIONS_JOB_PROMPT and a job id, with no space or newline around it. */
+export function jobOfActionsPrompt(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith(ACTIONS_JOB_PROMPT)) return undefined
+  const jid = value.slice(ACTIONS_JOB_PROMPT.length)
+  return isJobId(jid) ? jid : undefined
+}
+
 export function isIssueKey(value: unknown): value is string {
   return typeof value === "string" && ISSUE_KEY_PATTERN.test(value)
 }
@@ -397,6 +410,52 @@ export const COMPUTER_CAPS = {
   perDay: { default: 20, max: 100 },
 } as const
 
+/**
+ * The readiness booleans a computer sends with each `pending` call (3.1 `status`, 3.4). Nothing else about it is kept.
+ * Shared by the server (api/_lib/everywhere/jobs.ts, jobs-api.ts) and the desktop's jobs client (everywhere-runner.ts).
+ */
+export type Readiness = {
+  /** "This computer takes jobs" is on. */
+  readonly takesJobs: boolean
+  /** Vector Remote is on. */
+  readonly remote: boolean
+  /**
+   * Vector Local is on (the runner then declines every job, E15). 2026-11-16 (EV-17): the desktop sends whether Vector
+   * Local blocks laptop jobs (`!localAllows(policy)`, everywhere-runner.ts), which is true whenever Vector Local is on
+   * until the runner's GitHub calls are labelled.
+   */
+  readonly localMode: boolean
+  /** The shell sandbox the runner needs for commands exists on this computer. */
+  readonly sandbox: boolean
+  /** "Wait for my computer" (default on). */
+  readonly waitForComputer: boolean
+  /** Today's caps on this computer have room. */
+  readonly capsRoom: boolean
+  /** At least one project is allowed. */
+  readonly projects: boolean
+}
+
+export const READINESS_FIELDS = [
+  "takesJobs",
+  "remote",
+  "localMode",
+  "sandbox",
+  "waitForComputer",
+  "capsRoom",
+  "projects",
+] as const satisfies readonly (keyof Readiness)[]
+
+/** The query names of the readiness booleans on `pending`, each sent as `1` or `0`. */
+export const READINESS_QUERY: Readonly<Record<keyof Readiness, string>> = {
+  takesJobs: "jobs",
+  remote: "remote",
+  localMode: "local",
+  sandbox: "sandbox",
+  waitForComputer: "wait",
+  capsRoom: "room",
+  projects: "projects",
+}
+
 /** The step budget an unattended prompt carries (3.5 step 6). */
 export const RUN_STEPS = 200
 
@@ -409,6 +468,16 @@ export type UntrustedItem = {
   readonly text: string // ≤ 4,000 chars each
 }
 
+/**
+ * What the Actions run that serves a Vector everywhere job reads by reference (R-A4): the requester's words, the
+ * untrusted context and the platform they came from, its outside marker. Never a GitHub job's.
+ */
+export type ActionsJobBody = {
+  readonly task: string
+  readonly context: readonly UntrustedItem[]
+  readonly outside: Exclude<PlatformId, "github">
+}
+
 export const GITHUB_EVENTS = ["issue_comment", "issues", "pull_request_review_comment"] as const
 export type GithubReference = {
   readonly kind: "issue" | "pr"
@@ -417,6 +486,10 @@ export type GithubReference = {
   /** Verified immutable binder identity and event family; no GitHub text crosses the server. */
   readonly actorId?: number
   readonly event?: (typeof GITHUB_EVENTS)[number]
+  /**
+   * The lowercase hex SHA-256 of the trigger's UTF-8 body. Required when `event` is `issues` (C8), because an issue's
+   * updated_at moves on every label, assignment or comment; comment events may prove themselves by unedited timestamps.
+   */
   readonly bodySha256?: string
 }
 
@@ -672,6 +745,8 @@ function githubReference(value: unknown, path: string, platform: PlatformId): In
   const event = member(field(fields, "event"), `${path}.event`, GITHUB_EVENTS)
   if (event === "issues" ? commentId !== undefined || kind !== "issue" : commentId === undefined || (event === "pull_request_review_comment" && kind !== "pr")) refuse(path, "event does not match reference")
   const bodySha256 = field(fields, "bodySha256")
+  // C8: an issue trigger is proved by its body hash alone, so an `issues` reference must carry one.
+  if (event === "issues" && bodySha256 === undefined) refuse(`${path}.bodySha256`, "required")
   return { ...reference, actorId, event, ...(bodySha256 === undefined ? {} : { bodySha256: matching(bodySha256, `${path}.bodySha256`, /^[0-9a-f]{64}$/) }) }
 }
 
@@ -847,6 +922,28 @@ export function decodeJob(input: unknown): Decoded<EverywhereJob> {
       limits,
       reply,
       lease,
+    }
+  })
+}
+
+const ACTIONS_PLATFORMS = PLATFORMS.filter(
+  (platform): platform is Exclude<PlatformId, "github"> => platform !== "github",
+)
+
+/**
+ * What the body route answers an Actions run (R-A4): exactly `{task, context, outside}`, a task that is not blank and
+ * within its limit, the envelope's context, and the platform the job came from, never GitHub (a GitHub job's laptop
+ * reads the thread itself). Unlike decodeJob, it refuses unknown fields: nothing else may reach the run's prompt.
+ */
+export function decodeActionsJobBody(input: unknown): Decoded<ActionsJobBody> {
+  return run(() => {
+    const fields = object(input, "body", ["task", "context", "outside"])
+    const task = string(field(fields, "task"), "task", LIMITS.taskChars, 1)
+    if (task.trim() === "") refuse("task", "empty")
+    return {
+      task,
+      context: context(field(fields, "context"), "context"),
+      outside: member(field(fields, "outside"), "outside", ACTIONS_PLATFORMS),
     }
   })
 }

@@ -36,9 +36,11 @@ export async function readEverywhereGithubThread(access: GithubAccess, input: Ev
     try { related = typeof relation === "string" && new URL(relation).pathname.toLowerCase() === `${base}/${target}/${reference.number}`.toLowerCase() } catch {}
     if (!related) throw new Error("The Github trigger is on another thread")
   }
-  const unedited = trigger.updated_at === trigger.created_at
+  // C8: an issue trigger is proved by its body hash alone (decodeJob requires it): labels, assignments and comments all
+  // move an issue's updated_at. A comment trigger is unedited, or carries the hash of the body that triggered it.
   const sameBody = reference.bodySha256 !== undefined && createHash("sha256").update(trigger.body).digest("hex") === reference.bodySha256
-  if (!unedited && !sameBody) throw new Error("The Github trigger changed")
+  if (!sameBody && (reference.event === "issues" || trigger.updated_at !== trigger.created_at))
+    throw new Error("The Github trigger changed")
   const rows = await githubJson<unknown>(access, `${base}/${reference.event === "pull_request_review_comment" ? "pulls" : "issues"}/${reference.number}/comments?per_page=30`)
   if (!Array.isArray(rows)) throw new Error("The Github thread is unavailable")
   const cache = new Map<string, Promise<"writer" | "untrusted">>()

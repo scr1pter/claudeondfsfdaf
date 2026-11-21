@@ -20,6 +20,7 @@ import { SessionStatus } from "@/session/status"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
+import { UnattendedShell } from "@/session/unattended-shell"
 import { ModelV2 } from "@vectordevai/core/model"
 import { Provider } from "@/provider/provider"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -223,6 +224,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           field: "internal",
         })
       const owner = yield* RequestOwner.owner
+      // Only the owner makes a session whose commands run only in the offline sandbox, with the one accepted value.
+      const marked = UnattendedShell.admission(ctx.payload?.metadata, owner)
+      if (marked === "owner") return yield* new ForbiddenError({ message: UnattendedShell.OWNER_ONLY })
+      if (marked === "invalid")
+        return yield* new InvalidRequestError({ message: UnattendedShell.INVALID, field: "metadata" })
       if (ctx.payload?.parentID) yield* SessionAudienceHttp.admit(ctx.payload.parentID, owner)
       const created = yield* shareSvc
         .create(ctx.payload, owner ? "owner" : "guest")
@@ -292,6 +298,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       const current = yield* requireSession(ctx.params.sessionID)
       yield* requireOwnerToAllow({ permission: ctx.payload.permission })
+      // The unattended marks are set at creation only. Before anything else changes, so a refused update changes nothing.
+      if (ctx.payload.metadata !== undefined && UnattendedShell.changes(current.metadata, ctx.payload.metadata))
+        return yield* new ForbiddenError({ message: UnattendedShell.FIXED })
       if (ctx.payload.title !== undefined) {
         yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
       }
@@ -519,6 +528,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ShellPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      // This route runs a command outside the shell tool, so outside the offline sandbox too.
+      const unattended = yield* UnattendedShell.marked(session, ctx.params.sessionID).pipe(
+        Effect.catchTag("UnattendedShell.LineageError", (error) =>
+          Effect.fail(new ForbiddenError({ message: error.message })),
+        ),
+      )
+      if (unattended) return yield* new ForbiddenError({ message: UnattendedShell.USER_SHELL })
       yield* admitted(ctx.params.sessionID)
       yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
       return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))

@@ -18,11 +18,18 @@ import { TaskBridge } from "@vectordevai/schema/task-bridge"
 import type { Task } from "@vectordevai/schema/task"
 import type { TaskPromptOps } from "@/tool/task"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
+import { UnattendedShell } from "@/session/unattended-shell"
 import { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
-import { Effect, Option, Schema } from "effect"
+import { Config } from "@/config/config"
+import { InstanceRef } from "@/effect/instance-ref"
+import { InstanceStore } from "@/project/instance-store"
+import { FSUtil } from "@vectordevai/core/fs-util"
+import { AppProcess } from "@vectordevai/core/process"
+import path from "node:path"
+import { Effect, Exit, Option, Schema } from "effect"
 import { Provider } from "@/provider/provider"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -574,5 +581,103 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("taskBridgePoll", taskBridgePoll)
       .handle("taskBridgeReceipt", taskBridgeReceipt)
       .handle("resource", resource)
+  }),
+)
+
+// Vector everywhere's job checkout. Every refusal has a fixed message with no path or request text, and none of them
+// creates anything.
+const UNATTENDED_OWNER = "Unattended worktrees require the authenticated server owner."
+const UNATTENDED_INVALID = "Invalid unattended worktree request."
+const UNATTENDED_OFF = "Vector everywhere is off for this folder."
+const UNATTENDED_UNAVAILABLE = "The allowed folder is not available."
+const UNATTENDED_CLOSED = "This project is not open in Vector. No unattended worktree was created."
+const UNATTENDED_UNTRUSTED = "This project is not trusted. No unattended worktree was created."
+const UNATTENDED_SHELL_OWNER = "The unattended shell policy requires the authenticated server owner."
+
+// A forwarded guest request carries owner credentials, so the credential alone does not make the owner.
+const requireOwner = Effect.fnUntraced(function* (message: string) {
+  if (!(yield* RequestOwner.owner)) return yield* new ForbiddenError({ message })
+})
+
+export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, "unattended-worktree", (handlers) =>
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const fs = yield* FSUtil.Service
+    const store = yield* InstanceStore.Service
+    const worktree = yield* Worktree.Service
+
+    const policy = Effect.fn("UnattendedWorktreeHttpApi.policy")(function* () {
+      yield* requireOwner(UNATTENDED_OWNER)
+      return { policy: "unattended-v1" as const }
+    })
+
+    // Each check runs only once those above it pass. The allowlist runs before anything looks for an instance, and only
+    // an instance already loaded in this engine (by any authenticated request) is used: creating a job's checkout never
+    // loads one, so it never starts the project's plugins, language servers or dependency installs.
+    const create = Effect.fn("UnattendedWorktreeHttpApi.create")(function* (ctx: {
+      payload: Worktree.UnattendedInput
+    }) {
+      yield* requireOwner(UNATTENDED_OWNER)
+      const directory = ctx.payload.directory
+      if (!path.isAbsolute(directory)) return yield* refused(UNATTENDED_INVALID)
+      // Folders are compared as Worktree compares them. One with no real path (a link loop) matches no listed folder.
+      const folder = yield* Worktree.canonicalPath(directory)
+      if (folder === undefined || !(yield* allowed(folder)))
+        return yield* new ForbiddenError({ message: UNATTENDED_OFF })
+      // A listed folder that is gone, or is not a folder, has its own refusal before any instance is looked for.
+      if (!(yield* fs.isDir(directory))) return yield* refused(UNATTENDED_UNAVAILABLE)
+      const instance = yield* loaded(folder)
+      if (!instance) return yield* new ForbiddenError({ message: UNATTENDED_CLOSED })
+      return yield* Effect.gen(function* () {
+        if ((yield* config.trust()).trusted !== true)
+          return yield* new ForbiddenError({ message: UNATTENDED_UNTRUSTED })
+        return yield* mapWorktreeError(worktree.createUnattended(ctx.payload))
+      }).pipe(Effect.provideService(InstanceRef, instance))
+    })
+
+    // Only the user's own config files may enable this, never a project's. They are read afresh for each request, so
+    // turning it off by hand applies at once, and outside the cached copy every other reader uses, so an invalid hand
+    // edit fails this read alone. Any failure to read them, an invalid file's defect included, counts as off, so a
+    // refusal never carries the loader's message or the file's path. A company lock on the key also counts as off.
+    const allowed = Effect.fnUntraced(function* (folder: string) {
+      const global = yield* Effect.exit(config.readGlobal())
+      if (Exit.isFailure(global) || Config.lockedKeys().includes("everywhere")) return false
+      const block = global.value.everywhere
+      if (block?.enabled !== true) return false
+      const listed = yield* Effect.forEach(block.projects ?? [], (project) => Worktree.canonicalPath(project.directory))
+      return listed.includes(folder)
+    })
+
+    // The instance already loaded in this engine for this folder, under any spelling, or none. Any authenticated
+    // request that selects a folder loads its instance (the instance middleware), so this cannot tell an instance the
+    // owner opened from one a guest's request loaded: that would need InstanceStore to record who loaded it.
+    const loaded = Effect.fnUntraced(function* (folder: string) {
+      const instances = yield* store.loaded()
+      const folders = yield* Effect.forEach(instances, (instance) => Worktree.canonicalPath(instance.directory))
+      const index = folders.indexOf(folder)
+      return index === -1 ? undefined : instances[index]
+    })
+
+    return handlers.handle("unattendedPolicy", policy).handle("unattendedCreate", create)
+  }),
+)
+
+function refused(message: string) {
+  return new WorktreeApiError({ name: "WorktreeCreateFailedError", data: { message } })
+}
+
+// Vector everywhere's command sandbox (R-M2): whether this engine runs an unattended session's commands offline. The
+// owner's question alone, refused as the worktree probe refuses.
+export const unattendedShellHandlers = HttpApiBuilder.group(InstanceHttpApi, "unattended-shell", (handlers) =>
+  Effect.gen(function* () {
+    // The app's process service is the spawner, which owns and signals the start it tries.
+    const spawner = yield* AppProcess.Service
+
+    const policy = Effect.fn("UnattendedShellHttpApi.policy")(function* () {
+      yield* requireOwner(UNATTENDED_SHELL_OWNER)
+      return { shell: yield* UnattendedShell.policy(spawner) }
+    })
+
+    return handlers.handle("unattendedShell", policy)
   }),
 )

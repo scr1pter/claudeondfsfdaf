@@ -76,6 +76,12 @@ describe("keys", () => {
     expect(everywhereKeys.audit(account)).toBe(`vector:everywhere:audit:${account}`)
   })
 
+  test("the job status lock and edit-throttle keys stay under the prefix and validate the job id", () => {
+    expect(everywhereKeys.jobStatusLock(jid)).toBe(`vector:everywhere:job:${jid}:status`)
+    expect(everywhereKeys.jobStatusEdited(jid)).toBe(`vector:everywhere:job:${jid}:status:edited`)
+    expect(code(() => everywhereKeys.jobStatusEdited("vej_short"))).toBe("EVERYWHERE_INVALID_ID")
+  })
+
   test("account ids are written lowercase, so one account has one key", () => {
     expect(everywhereKeys.audit(account.toUpperCase())).toBe(everywhereKeys.audit(account))
   })
@@ -93,6 +99,7 @@ describe("keys", () => {
       () => everywhereKeys.state("short"),
       () => everywhereKeys.repo(slack, "C01:23"),
       () => everywhereKeys.job("vej_short"),
+      () => everywhereKeys.jobStatusEdited("vej_short"),
       () => everywhereKeys.ready(account, "device"),
       () => everywhereKeys.ready("not-an-account", device),
       () => everywhereKeys.handoff(0, 1),

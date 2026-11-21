@@ -2,33 +2,14 @@ import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { readFile, realpath, rm } from "node:fs/promises"
 import path from "node:path"
-import os from "node:os"
+import { GIT_HARDENING, fetchRef, runnerGitEnvironment, safeRepositoryConfig } from "@vectordevai/core/everywhere/git"
 import { heldBack } from "@vectordevai/core/everywhere/publish"
+import { Egress } from "@vectordevai/core/local-mode/egress"
 import { BRANCH_PATTERN, HEAD_SHA_PATTERN, JOB_ID_PATTERN, isRepositoryName } from "@vectordevai/schema/everywhere"
 import { parseGithubRemote } from "./github-api"
 
-/**
- * Local keys git and common tools write that never run a command, rewrite a URL, filter content or name a helper.
- * Git for Windows writes core.symlinks, gh writes remote.<n>.gh-resolved and branch.<b>.gh-merge-base, VS Code writes
- * branch.<b>.vscode-merge-base, and partial clones write the promisor keys. Everything else stays refused, including
- * submodule.<n>.update, filter.*, include*, url.*, http.*, credential.*, core.editor/pager/askpass and gpg.*.
- */
-const SAFE_CONFIG = new RegExp("^(?:" + [
-  "core\\.(?:repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|worktree|hookspath|fsmonitor|sshcommand|longpaths|symlinks|autocrlf)",
-  "extensions\\.(?:worktreeconfig|objectformat|partialclone)",
-  "user\\.(?:name|email)",
-  "(?:commit|tag)\\.gpgsign",
-  "pull\\.rebase",
-  "maintenance\\.(?:auto|strategy|[a-z-]+\\.(?:enabled|schedule))",
-  "remote\\.[a-z0-9_.-]+\\.(?:url|pushurl|fetch|tagopt|prune|gh-resolved|promisor|partialclonefilter)",
-  "branch\\.[a-z0-9_./-]+\\.(?:remote|merge|pushremote|rebase|vscode-merge-base|gh-merge-base|github-pr-owner-number)",
-  "submodule\\.[a-z0-9_./-]+\\.(?:url|active)",
-].join("|") + ")$", "i")
-
-/** Repository config cannot introduce a filter, include, URL rewrite, proxy, command, or credential helper. */
-export function safeRepositoryConfig(text: string) {
-  return text.split("\0").filter(Boolean).every((item) => SAFE_CONFIG.test(item.split("\n", 1)[0]!))
-}
+// The allowlist, flags and environment are shared with the engine's unattended checkout (EV-12).
+export { GIT_HARDENING, runnerGitEnvironment, safeRepositoryConfig } from "@vectordevai/core/everywhere/git"
 
 /** Why a declared project folder can or cannot take a job. The reason is local only: the job declines `not-mapped`. */
 export type RepositoryMapping = "mapped" | "unsafe-config" | "other-repository" | "unavailable"
@@ -53,29 +34,32 @@ function mapsRepository(config: string, repository: string) {
   }))
 }
 
-export const GIT_HARDENING = [
-  "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "-c", "core.sshCommand=",
-  "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=never", "-c", "commit.gpgSign=false",
-  "-c", "tag.gpgSign=false", "-c", "credential.helper=", "-c", "core.pager=cat",
-] as const
-
-export function runnerGitEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
-    PATH: source.PATH, HOME: source.HOME, USERPROFILE: source.USERPROFILE, SYSTEMROOT: source.SYSTEMROOT,
-    TMPDIR: source.TMPDIR, TEMP: source.TEMP, SSH_AUTH_SOCK: source.SSH_AUTH_SOCK,
-    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0",
-    GIT_LFS_SKIP_SMUDGE: "1", GIT_PAGER: "cat", GIT_OPTIONAL_LOCKS: "0",
-  }
+/**
+ * Whether Vector Local blocks git's request to `remote` now. git is a child process the backstop guard never sees, so
+ * each fetch and push is decided as git-remote on the remote's host before git starts, and the decision is logged, as
+ * the vault's git does (vault-github.ts remoteRefusal). A push is logged as POST, the request that carries its
+ * commits, so the network log tells it from a fetch (GET). Nothing is decided with Vector Local off.
+ */
+function localBlocks(remote: string, method: "GET" | "POST") {
+  if (!Egress.policy().enabled) return false
+  if (!URL.canParse(remote)) return true
+  return Egress.decide({ source: "git-remote", url: `${new URL(remote).origin}/`, method }).decision !== "allow"
 }
 
 export type GitExec = (input: { readonly directory: string; readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv; readonly signal?: AbortSignal }) => Promise<string>
 
 const execute: GitExec = (input) => new Promise((resolve, reject) => {
   execFile("git", [...input.args], { cwd: input.directory, env: input.env, timeout: 60_000,
-    maxBuffer: 8 * 1024 * 1024, signal: input.signal }, (error, stdout) => {
-    // Child-process errors quote their arguments. Never carry authentication or repository output into an error.
-    if (error) return reject(new Error("The Everywhere git operation failed"))
-    resolve(stdout)
+    maxBuffer: 8 * 1024 * 1024, signal: input.signal }, (error, stdout, stderr) => {
+    // Child-process errors quote their arguments (identity, commit message, the --config-env name), and stdout is
+    // repository content, so neither is carried. git's own stderr is, at most 2 KB of it: the authorization reaches git
+    // only through the variable --config-env names, git prints header values only under GIT_TRACE_CURL or
+    // GIT_CURL_VERBOSE, which runnerGitEnvironment never passes, and the runner keeps these errors on this computer.
+    // On a fetch or push the detail can carry the remote's own "remote:" lines, so it is untrusted text: it must never
+    // reach a settle summary, the relay, or a GitHub or Slack post.
+    if (!error) return resolve(stdout)
+    const detail = stderr.slice(0, 2048).trim()
+    reject(new Error(detail ? `The Everywhere git operation failed: ${detail}` : "The Everywhere git operation failed"))
   })
 })
 
@@ -162,7 +146,8 @@ export function createEverywhereGit(input: {
     },
     async fetch(snapshot: GitSnapshot, base: string, jid: string) {
       if (!JOB_ID_PATTERN.test(jid) || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/.test(base) || base.includes("..") || !await unchanged(snapshot, input.directory)) throw new Error("Everywhere git authority changed")
-      const ref = `refs/vector-everywhere/${jid}`
+      if (localBlocks(snapshot.pushUrl, "GET")) throw new Error("Vector Local blocks the Everywhere git fetch")
+      const ref = fetchRef(jid)
       await run(["fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", snapshot.pushUrl, `refs/heads/${base}:${ref}`], input.directory, true)
       const from = (await run(["rev-parse", ref])).trim()
       if (!HEAD_SHA_PATTERN.test(from)) throw new Error("Invalid Everywhere fetched base")
@@ -190,7 +175,8 @@ export function createEverywhereGit(input: {
       return (await run(["rev-parse", "HEAD"], directory)).trim()
     },
     async push(snapshot: GitSnapshot, directory: string, branch: string) {
-      if (!BRANCH_PATTERN.test(branch) || !await unchanged(snapshot, directory)) return false
+      // A refusal is a push that never started, so the runner keeps the branch on this computer and settles `held`.
+      if (!BRANCH_PATTERN.test(branch) || !await unchanged(snapshot, directory) || localBlocks(snapshot.pushUrl, "POST")) return false
       await run(["push", "--no-verify", "--", snapshot.pushUrl, `HEAD:refs/heads/${branch}`], directory, true)
       return true
     },

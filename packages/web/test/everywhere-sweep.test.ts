@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
+import { SWITCH_NAMES } from "../../../api/_lib/codium-switches"
+import { ENV_NAMES, readConfig, type EverywhereConfig } from "../../../api/_lib/everywhere/config"
 import { createJobEvents, postPending } from "../../../api/_lib/everywhere/events"
 import { claimJob, encodeJobRecord, offerJob, readJob, refuseJob, sweepDue } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { createSweep } from "../../../api/_lib/everywhere/sweep"
 import { createJobId, TIMING } from "../../../packages/schema/src/everywhere"
-import { RouteHarness, secret } from "./lib/everywhere-account"
+import { everywhereEnv, RouteHarness, secret } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { routerFixture } from "./lib/everywhere-router"
 
@@ -93,4 +95,181 @@ test("job-body expiration is never turned into an offer", async () => {
   await sweepDue(f.context())
   expect((await readJob(f.store, job.jid))?.state).toBe("expired")
   expect(f.calls.some((call) => call.kind === "offer")).toBe(false)
+})
+
+/** A sweep whose switch, store and platforms each record their use and then throw. */
+function counting(f: ReturnType<typeof routerFixture>, config: () => EverywhereConfig, calls: string[]) {
+  return createSweep({
+    config,
+    context: () => {
+      calls.push("context")
+      return {
+        ...f.context(),
+        store: async () => {
+          calls.push("store")
+          throw new Error("must not read the store")
+        },
+      }
+    },
+    platforms: () => {
+      calls.push("platforms")
+      throw new Error("must not build platforms")
+    },
+    stopped: async () => {
+      calls.push("switch")
+      throw new Error("must not read the switch")
+    },
+  })
+}
+
+test("while the feature is off the sweep answers enabled:false before any switch, store or platform call", async () => {
+  const f = routerFixture()
+  const job = await f.create()
+  await offerJob(f.context(), job.jid)
+  await claimJob(f.context(), { account: f.account, jid: job.jid, device: f.computer })
+  f.fake.clock.advance(TIMING.leaseMs + 60_000)
+  const before = await readJob(f.store, job.jid)
+  const seen = f.fake.commands.length
+  const cronSecret = secret()
+  const off = [
+    {},
+    { [ENV_NAMES.enabled]: "true" },
+    { ...everywhereEnv(), [ENV_NAMES.enabled]: "false" },
+    { ...everywhereEnv(), [ENV_NAMES.dataKey]: "A".repeat(43) },
+  ].map((env) => readConfig({ ...env, [ENV_NAMES.cronSecret]: cronSecret }))
+  for (const config of off) {
+    expect(config.enabled).toBe(false)
+    const calls: string[] = []
+    harness.mount({ "/sweep": counting(f, () => config, calls) })
+    const answer = await harness.call("GET", "/sweep", { token: cronSecret })
+    expect([answer.status, answer.body]).toEqual([200, { enabled: false }])
+    expect(calls).toEqual([])
+    // The real fake store and adapter, with the production switch reader (which reads off as `stop`).
+    harness.mount({
+      "/sweep": createSweep({ config: () => config, context: f.context, platforms: () => ({ slack: f.adapter }) }),
+    })
+    const real = await harness.call("GET", "/sweep", { token: cronSecret })
+    expect([real.status, real.body]).toEqual([200, { enabled: false }])
+  }
+  expect(f.fake.commands.length).toBe(seen)
+  expect(await readJob(f.store, job.jid)).toEqual(before)
+  expect(f.calls.filter((call) => call.kind === "finish")).toHaveLength(0)
+  // Every production default: no KV settings exist here, so any store construction or call would answer 503.
+  harness.mount({ "/sweep": createSweep({ config: () => readConfig({ [ENV_NAMES.cronSecret]: cronSecret }) }) })
+  const defaults = await harness.call("GET", "/sweep", { token: cronSecret })
+  expect([defaults.status, defaults.body]).toEqual([200, { enabled: false }])
+  // The record left behind ends, and its reply posts, at the next enabled sweep.
+  harness.mount({
+    "/sweep": createSweep({
+      config: () => ({ ...f.config, cronSecret }),
+      context: f.context,
+      platforms: () => ({ slack: f.adapter }),
+      stopped: async () => false,
+    }),
+  })
+  const on = await harness.call("GET", "/sweep", { token: cronSecret })
+  expect([on.status, on.body]).toEqual([200, { ended: 1, posted: 1 }])
+  expect((await readJob(f.store, job.jid))?.state).toBe("lost")
+  expect(JSON.stringify(f.calls)).toContain("stopped answering")
+})
+
+test("a wrong or missing bearer gets 401 before anything else, whether the feature is on or off", async () => {
+  const f = routerFixture()
+  const cronSecret = secret()
+  const configs = [{ ...f.config, cronSecret }, readConfig({ [ENV_NAMES.cronSecret]: cronSecret })]
+  expect(configs.map((config) => config.enabled)).toEqual([true, false])
+  for (const config of configs) {
+    const calls: string[] = []
+    harness.mount({ "/sweep": counting(f, () => config, calls) })
+    const wrong = [undefined, `Bearer ${secret()}`, cronSecret, `Basic ${cronSecret}`, `Bearer ${cronSecret}x`]
+    for (const authorization of wrong) {
+      const answer = await harness.call("GET", "/sweep", { headers: authorization ? { authorization } : {} })
+      expect([answer.status, answer.body]).toEqual([401, { error: { code: "CRON_UNAUTHORIZED" } }])
+    }
+    const post = await harness.call("POST", "/sweep", { token: cronSecret })
+    expect([post.status, post.body]).toEqual([405, { error: { code: "METHOD_NOT_ALLOWED" } }])
+    expect(calls).toEqual([])
+  }
+  // Without CRON_SECRET nothing is accepted, so an unauthenticated caller never learns whether the feature is on.
+  for (const config of [readConfig(everywhereEnv()), readConfig({})]) {
+    expect(config.cronSecret).toBeUndefined()
+    const calls: string[] = []
+    harness.mount({ "/sweep": counting(f, () => config, calls) })
+    for (const token of [cronSecret, "undefined"])
+      expect((await harness.call("GET", "/sweep", { token })).status).toBe(401)
+    expect(calls).toEqual([])
+  }
+})
+
+test("with the feature on the sweep reads the switch once and stop ends live work before its timeout", async () => {
+  for (const stop of [false, true]) {
+    const f = routerFixture()
+    const job = await f.create()
+    await offerJob(f.context(), job.jid)
+    await claimJob(f.context(), { account: f.account, jid: job.jid, device: f.computer })
+    const cronSecret = secret()
+    let reads = 0
+    harness.mount({
+      "/sweep": createSweep({
+        config: () => ({ ...f.config, cronSecret }),
+        context: f.context,
+        platforms: () => ({ slack: f.adapter }),
+        stopped: async () => {
+          reads++
+          return stop
+        },
+      }),
+    })
+    const answer = await harness.call("GET", "/sweep", { token: cronSecret })
+    expect([answer.status, answer.body]).toEqual([200, stop ? { ended: 1, posted: 1 } : { ended: 0, posted: 0 }])
+    expect(reads).toBe(1)
+    expect((await readJob(f.store, job.jid))?.state).toBe(stop ? "cancelled" : "claimed")
+    expect(f.calls.filter((call) => call.kind === "finish")).toHaveLength(stop ? 1 : 0)
+  }
+})
+
+test("with the feature on the production reader reads Codium's switch; unreadable, it ends live work", async () => {
+  // EV-07 (R-C6): Codium lists `everywhere`, so the production reader reads Codium's record. With no store settings
+  // persistentStore throws before any fetch, the switch reads `stop` (fail closed) and the sweep ends the live job.
+  expect(SWITCH_NAMES).toContain("everywhere")
+  const names = ["KV_REST_API_URL", "KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"] as const
+  const saved = names.map((name) => [name, process.env[name]] as const)
+  for (const name of names) delete process.env[name]
+  try {
+    expect([process.env.KV_REST_API_URL, process.env.UPSTASH_REDIS_REST_URL]).toEqual([undefined, undefined])
+    const f = routerFixture()
+    const job = await f.create()
+    await offerJob(f.context(), job.jid)
+    await claimJob(f.context(), { account: f.account, jid: job.jid, device: f.computer })
+    const cronSecret = secret()
+    harness.mount({
+      "/sweep": createSweep({
+        config: () => ({ ...f.config, cronSecret }),
+        context: f.context,
+        platforms: () => ({ slack: f.adapter }),
+      }),
+    })
+    const answer = await harness.call("GET", "/sweep", { token: cronSecret })
+    expect([answer.status, answer.body]).toEqual([200, { ended: 1, posted: 1 }])
+    expect((await readJob(f.store, job.jid))?.state).toBe("cancelled")
+    expect(f.calls.filter((call) => call.kind === "finish")).toHaveLength(1)
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) {
+        delete process.env[name]
+        continue
+      }
+      process.env[name] = value
+    }
+  }
+})
+
+test("vercel.json runs the sweep every minute, exactly once", async () => {
+  const vercel = (await Bun.file(new URL("../../../vercel.json", import.meta.url)).json()) as {
+    crons: { path: string; schedule: string }[]
+  }
+  const sweeps = vercel.crons.filter(
+    (cron) => new URL(cron.path, "https://fixture.example.test").pathname === "/api/everywhere/sweep",
+  )
+  expect(sweeps).toEqual([{ path: "/api/everywhere/sweep", schedule: "* * * * *" }])
 })

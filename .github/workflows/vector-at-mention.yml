@@ -14,7 +14,8 @@ on:
     # in the contract's api/github, api/cloud-agents, api/_lib/github-* and api/_lib/cloud-agents-* entries. The shared
     # engine files the agent phase's own-key seam, pinned policy and posting check live in, and the research runtime its
     # tests run on, start it too (V18b), as do the session retry module that holds a Codium run's gateway rule and its
-    # test (V18c).
+    # test (V18c). The Everywhere frame and the shared schema github.agent.ts imports for its task frame and job lookup
+    # start it too.
     paths:
       - api/**
       - bun.lock
@@ -29,6 +30,8 @@ on:
       - packages/core/src/brain/document/ocr.ts
       - packages/core/src/free-models.ts
       - packages/core/src/share/transport.ts
+      - packages/core/src/everywhere/**
+      - packages/schema/src/everywhere.ts
       - packages/engine/src/cli/cmd/github*.ts
       - packages/engine/src/index.ts
       - packages/engine/src/tool/shell.ts

@@ -9,7 +9,12 @@ import {
 } from "../../../../api/_lib/everywhere/authority"
 import { FINISH_DELIVERY_SCRIPT } from "../../../../api/_lib/everywhere/dedupe"
 import { CREATE_STATE_SCRIPT, LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
-import { RECORD_SEEN_SCRIPT, CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
+import {
+  RECORD_SEEN_SCRIPT,
+  CREATE_JOB_SCRIPT,
+  READ_BODY_ONCE_SCRIPT,
+  TRANSITION_SCRIPT,
+} from "../../../../api/_lib/everywhere/jobs"
 import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
 import { REPLACE_NATIVE_RESERVATION_SCRIPT } from "../../../../api/_lib/everywhere/native-resource"
 import { ERASE_JIRA_TASK_SCRIPT, WRITE_JIRA_TASK_SCRIPT } from "../../../../api/_lib/everywhere/jira/task-store"
@@ -129,6 +134,7 @@ export class FakeStore {
     }],
     [CREATE_JOB_SCRIPT, (keys, argv) => this.createJob(keys, argv)],
     [TRANSITION_SCRIPT, (keys, argv) => this.transition(keys, argv)],
+    [READ_BODY_ONCE_SCRIPT, (keys, argv) => this.readBodyOnce(keys, argv)],
     [FINISH_DELIVERY_SCRIPT, (keys, argv) => {
       const current = this.run("GET", [keys[0]!]) as string | null
       if (current?.startsWith("job:")) return 0
@@ -564,6 +570,22 @@ export class FakeStore {
     if (bodyMode === "delete") this.run("DEL", [body])
     if (postAt !== "") this.run("ZADD", [posts, postAt, jid])
     return 1
+  }
+
+  /** READ_BODY_ONCE_SCRIPT, step for step (EV-27): the marker lives as long as the body has left. */
+  private readBodyOnce(keys: string[], argv: string[]) {
+    const [job, body, marker] = keys as [string, string, string]
+    const [version, state, longest] = argv as [string, string, string]
+    const raw = this.run("GET", [job]) as string | null
+    if (raw === null) return [0]
+    const match = /^\{"version":(\d+),"state":"([a-z]+)"/.exec(raw)
+    if (!match || match[1] !== version || match[2] !== state) return [-1]
+    const sealed = this.run("GET", [body]) as string | null
+    if (sealed === null) return [-2]
+    const left = this.pttl(body)
+    const ttl = left < 1 || left > Number(longest) ? Number(longest) : left
+    if (this.run("SET", [marker, "1", "NX", "PX", String(ttl)]) === null) return [-3]
+    return [1, sealed]
   }
 
   private countJob(keys: string[], argv: string[]) {
