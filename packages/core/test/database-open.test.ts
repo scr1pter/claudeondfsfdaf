@@ -9,7 +9,7 @@ describe("database open", () => {
   // database runs WAL recovery. Another process that opens it meanwhile (the desktop engine beside a CLI run, or the
   // two probes in review/request-store.test.ts) gets SQLITE_BUSY_RECOVERY, and it must wait on the busy timeout
   // rather than fail. The holder keeps the -shm in that mid-recovery state for a second, well under that timeout.
-  test.skipIf(process.platform !== "linux")(
+  test.skipIf(process.platform !== "linux" || !Bun.which("python3"))(
     "opens a WAL database while another process is still recovering it",
     async () => {
       await using directory = await tmpdir()
