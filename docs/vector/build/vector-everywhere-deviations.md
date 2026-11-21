@@ -4793,3 +4793,11 @@ No flag, env var, route, dependency, lockfile or generated file changes. The onl
   waiting does not; one phone gives the paired-phones text; the viewers case now lists a phone. The
   `everywhere-model.test.ts` jobs-only expectation passes unchanged. Removing the new `stateLine` branch fails one case
   in each file (6 and 32 pass with it).
+
+## 2026-11-21, v2-closeout-ci: E13 and Linear's revocation hold (EV-24)
+
+- Docs and one test comment only; no code or assertion changes. Spec E13 gains a dated note: Linear's OAuthApp
+  `revoked` and PermissionChange `teamAccessChanged` hold the installation's current generation without erasing it,
+  until a reconnect; Linear erasure comes from a disconnect or account deletion. `everywhere-erase.test.ts`'s header
+  comment no longer lists "Linear's revocation" among the erasing events and says the `revoked` reason is what Jira's
+  uninstall and a future qualified Linear erase use. Closes the E13 wording gap recorded under "2026-11-20, EV-24".
