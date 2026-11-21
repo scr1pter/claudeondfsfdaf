@@ -32,6 +32,7 @@ function key(mode: StripeMode | undefined, ...parts: string[]) {
 export const opsRosterKey = (plan: PlanId, mode?: StripeMode) => key(mode, "ops", "roster", plan)
 export const opsAccountsKey = (mode?: StripeMode) => key(mode, "ops", "accounts")
 export const opsEraseDueKey = (mode?: StripeMode) => key(mode, "ops", "erase", "due")
+export const opsWorkerAccountsKey = (mode?: StripeMode) => key(mode, "ops", "worker")
 
 function unavailable(): never {
   throw new ApiError(503, "OPS_RECORDS_UNAVAILABLE", "Vector's production check records could not be read.")
