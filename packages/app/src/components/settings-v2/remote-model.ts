@@ -40,10 +40,10 @@ export function pairedCountLine(status: ModelPlanStatus.Status | undefined) {
   return limit === undefined ? undefined : `Your plan pairs up to ${limit} ${limit === 1 ? "computer" : "computers"}.`
 }
 
-/** The connection's state in words. */
 /** Online with no phone paired and no pairing open: the link is up only for Vector everywhere jobs. */
 export const JOBS_ONLY_LINE = "Connected for jobs. No phone is paired, and none is needed for jobs."
 
+/** The connection's state in words. */
 export function stateLine(status: RemoteStatus): { text: string; problem: boolean } {
   const say = (text: string, problem = false) => ({ text: status.message ?? text, problem })
   switch (status.state) {

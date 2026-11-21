@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import type { RemoteStatus } from "@/context/platform"
 import {
+  JOBS_ONLY_LINE,
   minutesAndSeconds,
   pairedCountLine,
   phoneLine,
@@ -10,7 +11,6 @@ import {
   secondsLeft,
   spacedCode,
   stateLine,
-  JOBS_ONLY_LINE,
 } from "./remote-model"
 import { filterSettingsGroups } from "./settings-registry"
 

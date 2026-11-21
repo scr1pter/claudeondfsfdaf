@@ -1012,7 +1012,7 @@ describe("Codium CI lane", () => {
         .map((match) => match[1])
         .filter((title) => new RegExp(pattern ?? "").test(title)),
     ).toEqual(["a dispatch's inputs reach the picker only as step environment, and pushes leave them empty"])
-    const PATH =`${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
+    const PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
     const system = Object.fromEntries(
       Object.entries(process.env).filter(
         (entry): entry is [string, string] =>
