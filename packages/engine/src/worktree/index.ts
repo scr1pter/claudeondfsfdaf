@@ -140,6 +140,8 @@ const UNATTENDED_FLAGS = [
 // As the runner's git (desktop everywhere-git.ts): a stuck git must not hold the repository's worktree lock.
 const UNATTENDED_TIMEOUT = "60 seconds"
 const UNATTENDED_OUTPUT_BYTES = 8 * 1024 * 1024
+// Enough of git's own stderr to name why it failed. git keeps writing past it, and it is not counted as cut off.
+const UNATTENDED_ERROR_BYTES = 2 * 1024
 
 function failedRemoves(...chunks: string[]) {
   return chunks.filter(Boolean).flatMap((chunk) =>
@@ -426,11 +428,12 @@ const layer: Layer.Layer<
     // Vector everywhere's git: the runner's hardening, an environment that inherits nothing from this process (no
     // GIT_DIR, GIT_CONFIG_* or GIT_SSH*, no system or global config), and on Windows never a git.exe in a repository.
     // Nothing here connects and every protocol is off, so neither the Local refusal nor gitEnvironment applies. Failing
-    // to start, a timeout and cut-off output answer -1, which is never one of git's own exit codes.
+    // to start, a timeout and cut-off output answer -1, which is never one of git's own exit codes. `error` is git's own
+    // reason (its stderr, at most UNATTENDED_ERROR_BYTES), so a refusal can name it.
     const unattendedGit = Effect.fnUntraced(
       function* (args: string[], cwd: string) {
         const program = UntrustedGit.program()
-        if (!program) return { code: -1, text: "" }
+        if (!program) return { code: -1, text: "", error: "No git.exe or git.com on PATH." }
         const result = yield* appProcess.run(
           ChildProcess.make(program, [...UNATTENDED_FLAGS, ...args], {
             cwd,
@@ -438,12 +441,26 @@ const layer: Layer.Layer<
             stdin: "ignore",
             env: { ...runnerGitEnvironment(), GIT_NO_LAZY_FETCH: "1" },
           }),
-          { timeout: UNATTENDED_TIMEOUT, maxOutputBytes: UNATTENDED_OUTPUT_BYTES, maxErrorBytes: 64 * 1024 },
+          {
+            timeout: UNATTENDED_TIMEOUT,
+            maxOutputBytes: UNATTENDED_OUTPUT_BYTES,
+            maxErrorBytes: UNATTENDED_ERROR_BYTES,
+          },
         )
-        if (result.stdoutTruncated) return { code: -1, text: "" }
-        return { code: result.exitCode, text: result.stdout.toString("utf8") }
+        const error = result.stderr.toString("utf8").trim()
+        if (result.exitCode !== 0 && error)
+          yield* Effect.logWarning("unattended git failed", { command: args[0], code: result.exitCode, stderr: error })
+        if (result.stdoutTruncated) return { code: -1, text: "", error }
+        return { code: result.exitCode, text: result.stdout.toString("utf8"), error }
       },
-      Effect.catch(() => Effect.succeed({ code: -1, text: "" })),
+      // The message of a failure to start or a timeout leads with the whole command line, so the cause's own goes first.
+      Effect.catch((cause) =>
+        Effect.succeed({
+          code: -1,
+          text: "",
+          error: (cause.cause instanceof Error ? cause.cause.message : cause.message).slice(0, UNATTENDED_ERROR_BYTES),
+        }),
+      ),
     )
     const unattendedPrints = (args: string[], cwd: string, value: string) =>
       unattendedGit(args, cwd).pipe(Effect.map((result) => result.code === 0 && result.text.trim() === value))
@@ -490,7 +507,9 @@ const layer: Layer.Layer<
         return yield* own
       const common = yield* unattendedGit(["rev-parse", "--git-common-dir"], ctx.worktree)
       if (common.code !== 0)
-        return yield* new CreateFailedError({ message: "The unattended worktree could not be created." })
+        return yield* new CreateFailedError({
+          message: `The unattended worktree could not be created.${common.error ? ` git: ${common.error}` : ""}`,
+        })
       const root = pathSvc.join(Global.Path.data, "everywhere-worktree", ctx.project.id)
       const directory = pathSvc.join(root, input.jid)
       const reserved = new CreateFailedError({ message: "This job's branch or folder is already reserved." })

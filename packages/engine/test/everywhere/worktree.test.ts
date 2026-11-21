@@ -468,6 +468,25 @@ describe("Worktree.createUnattended", () => {
   )
 
   it.instance(
+    "names git's own reason, at most 2 KB of it, when git cannot read the repository",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture()
+        const input = yield* job(f.base)
+        const file = path.join(f.ctx.directory, ".git", "config")
+        const config = yield* Effect.promise(() => readFile(file))
+        // An out-of-range repository format version: git exits 128 reading it, with about 3 KB of stderr.
+        yield* Effect.promise(() => writeFile(file, `[core]\n\trepositoryformatversion = ${"9".repeat(3000)}\n`))
+        const message = yield* refusal(input).pipe(Effect.ensuring(Effect.promise(() => writeFile(file, config))))
+        const prefix = "The unattended worktree could not be created. git: "
+        expect(message).toStartWith(`${prefix}fatal: bad numeric config value`)
+        expect(Buffer.byteLength(message)).toBeLessThanOrEqual(Buffer.byteLength(prefix) + 2048)
+        yield* untouched(input)
+      }),
+    { git: true },
+  )
+
+  it.instance(
     "two concurrent creates of one reservation give exactly one success",
     () =>
       Effect.gen(function* () {
