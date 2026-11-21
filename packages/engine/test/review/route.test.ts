@@ -889,10 +889,30 @@ describe("ReviewRoutes.sendBody", () => {
     expect(send({ body: "[]" })).toEqual({ refusal: "unreadable-body" })
   })
 
-  test("every route but OpenRouter's sends the body it was given, byte for byte", () => {
+  test("a compatible non-OpenAI model with no retention request preserves every byte", () => {
     const spaced = '{ "model":"coder",  "messages": [] }'
     expect(send({ body: spaced })).toEqual({ body: spaced })
     expect(send({ body: spaced, kind: "attested-host" })).toEqual({ body: spaced })
+  })
+
+  test("OpenAI, Azure and Mantle enforce cache and storage after provider options are merged", () => {
+    const body = { model: "gpt-4.1", store: true, prompt_cache_options: { ttl: "30m" } }
+    for (const npm of [
+      "@ai-sdk/openai",
+      "@ai-sdk/azure",
+      "@ai-sdk/amazon-bedrock/mantle",
+      "@ai-sdk/openai-compatible",
+    ]) {
+      expect(send({ npm, modelID: body.model, body: JSON.stringify(body) })).toEqual({
+        body: JSON.stringify({ model: body.model, store: false, prompt_cache_retention: "in_memory" }),
+      })
+      expect(send({ npm, modelID: body.model, kind: "standard", body: JSON.stringify(body) })).toEqual({
+        body: JSON.stringify(body),
+      })
+      expect(send({ npm, modelID: body.model, body: JSON.stringify({ ...body, prompt_cache_options: [] }) })).toEqual({
+        refusal: "unreadable-body",
+      })
+    }
   })
 
   test("OpenRouter's route sends zdrRequestBody, after its path, and refuses what zdrBodyRefusal names", () => {

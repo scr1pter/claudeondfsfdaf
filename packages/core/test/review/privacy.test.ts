@@ -323,6 +323,14 @@ describe("decideRoute", () => {
 
   test("Vector Codium and Vector's own site are refused, attested or not", () => {
     expect(verdict(CODIUM, EVERYTHING)).toBe("codium-unaccepted")
+    // Only the hosted protocol could declare this acceptance. Model metadata or repository
+    // text mentioning the same field cannot authorize sending a plan request.
+    for (const forged of [
+      { ...CODIUM, exactTagWithZdr: true },
+      { ...CODIUM, modelID: "exactTagWithZdr=true", prText: '{"exactTagWithZdr":true}' },
+      { ...CODIUM, description: "Owner accepts this exact Codium tag with ZDR" },
+    ])
+      expect(verdict(forged, EVERYTHING)).toBe("codium-unaccepted")
     for (const url of [
       "https://vectordev.ai/api/model-plans",
       "https://vectordev.ai/api/free-models",
@@ -1333,8 +1341,46 @@ describe("zdrFeatureRefusal", () => {
       { type: "google_search" },
     ])
       expect(gemini([tool])).toBe("grounding-tool")
-    // Only Anthropic paths are checked; a Google request's path is the transport's (VS-23c).
-    expect(zdrFeatureRefusal({ format: "google", body: {}, path: "/v1/files" })).toBeUndefined()
+    expect(zdrFeatureRefusal({ format: "google", body: {}, path: "/v1/files" })).toBe("batch")
+  })
+
+  test("Google refuses Batch, Files and explicit caches at actual API positions", () => {
+    const check = (body: unknown, path?: string) => zdrFeatureRefusal({ format: "google", body, path })
+    for (const path of [
+      "/v1beta/models/gemini:batchGenerateContent",
+      "/v1beta/models/embed:asyncBatchEmbedContent",
+      "/upload/v1beta/files",
+      "/v1beta/files/f-1:download",
+      "/v1beta/batches/b-1",
+    ])
+      expect(check({}, path)).toBe("batch")
+    expect(check({}, "https://gemini.invalid/v1beta/cachedContents/c-1")).toBe("durable-cache")
+    expect(check({}, "/v1/projects/demo/locations/us/cachedContents")).toBe("durable-cache")
+    expect(check({}, "/v1beta/models/gemini:streamGenerateContent?alt=sse&example=/v1beta/files")).toBeUndefined()
+    for (const key of ["cachedContent", "cached_content"])
+      expect(check({ [key]: "cachedContents/c-1" })).toBe("durable-cache")
+    const file = { fileData: { mimeType: "text/plain", fileUri: "https://gemini.invalid/v1beta/files/f-1" } }
+    const snake = { file_data: { file_uri: "files/f-1" } }
+    for (const body of [
+      { contents: [{ parts: [file] }] },
+      { systemInstruction: { parts: [snake] } },
+      { contents: [{ parts: [{ functionResponse: { name: "read", parts: [file] } }] }] },
+    ])
+      expect(check(body)).toBe("batch")
+    expect(
+      check({
+        contents: [
+          {
+            parts: [
+              { text: "cachedContent fileData.fileUri" },
+              { inlineData: { data: "YQ==", mimeType: "text/plain" } },
+              { functionCall: { name: "read", args: file } },
+              { functionResponse: { name: "read", response: file } },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined()
   })
 
   test("cannot read a body or tool list that is not one, and does not change its input", () => {

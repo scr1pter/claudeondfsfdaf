@@ -13,7 +13,8 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { ProjectTable } from "@vectordevai/core/project/sql"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import type { RouteRefusal } from "@vectordevai/core/review/privacy"
-import type { ZdrAttestedEntry } from "@vectordevai/core/review/types"
+import { PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
+import { REVIEW_LENSES, type ZdrAttestedEntry } from "@vectordevai/core/review/types"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SessionTable } from "@vectordevai/core/session/sql"
@@ -45,7 +46,7 @@ import { testEffect } from "../lib/effect"
 
 const guard = NetworkGuard.use()
 
-// A model server that records every request and answers none: the request is what the test reads.
+// The loopback model server records every request. Sessions in the wire audit receive a complete provider stream.
 type Hit = { method: string; path: string; headers: Record<string, string>; body: string }
 const record = async (request: Request): Promise<Hit> => {
   const url = new URL(request.url)
@@ -56,12 +57,63 @@ const record = async (request: Request): Promise<Hit> => {
     body: await request.text(),
   }
 }
+const success = new Set<string>()
+const answer = "synthetic wire reply"
+
+function completion(hit: Hit) {
+  const { model } = JSON.parse(hit.body)
+  const headers = { "content-type": "text/event-stream" }
+  if (hit.path === "/v1/messages") {
+    const frames = [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_loop",
+          type: "message",
+          role: "assistant",
+          model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: answer } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ]
+    return new Response(frames.map((frame) => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""), {
+      headers,
+    })
+  }
+  if (hit.path === "/v1/chat/completions" || hit.path === "/api/v1/chat/completions") {
+    const chunks = [
+      { delta: { role: "assistant", content: answer }, finish_reason: null },
+      { delta: {}, finish_reason: "stop" },
+    ].map(
+      (choice) =>
+        `data: ${JSON.stringify({
+          id: "chatcmpl-loop",
+          object: "chat.completion.chunk",
+          created: 1,
+          model,
+          choices: [{ index: 0, ...choice }],
+        })}\n\n`,
+    )
+    return new Response(chunks.join("") + "data: [DONE]\n\n", { headers })
+  }
+  return new Response(null, { status: 404 })
+}
 const hits: Hit[] = []
 const recorder = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   fetch: async (request) => {
-    hits.push(await record(request))
+    const hit = await record(request)
+    hits.push(hit)
+    if (success.has(hit.headers["x-session-id"]!)) return completion(hit)
     return Response.json({ error: { message: "The recorder answers nothing." } }, { status: 400 })
   },
 })
@@ -134,6 +186,7 @@ const it = testEffect(LayerNode.compile(Provider.node, fakes))
 afterEach(async () => {
   for (const id of registered.splice(0)) ReviewRoutes.release(SessionID.make(id))
   hits.length = 0
+  success.clear()
   bounced.length = 0
   nativeRequests.length = 0
   await disposeAllInstances()
@@ -197,7 +250,12 @@ const model = (providerID: string, modelID: string) =>
 
 // A session registered as Review.run registers it, with its pass's agent, from the real admission's decision for
 // `found`.
-const admitted = (found: Provider.Model, policy: ReviewRoutes.Policy, subject: Partial<ReviewRoutes.Subject> = {}) =>
+const admitted = (
+  found: Provider.Model,
+  policy: ReviewRoutes.Policy,
+  subject: Partial<ReviewRoutes.Subject> = {},
+  agent = "review",
+) =>
   Effect.gen(function* () {
     const provider = yield* Provider.Service
     const decided = yield* ReviewRoutes.decide(
@@ -206,7 +264,7 @@ const admitted = (found: Provider.Model, policy: ReviewRoutes.Policy, subject: P
       policy,
     )
     const id = fresh()
-    ReviewRoutes.register(id, { policy, agent: "review", ...decided })
+    ReviewRoutes.register(id, { policy, agent, ...decided })
     return { id, decided }
   })
 
@@ -240,7 +298,7 @@ const admittedOnLoopback = (found: Provider.Model, policy: ReviewRoutes.Policy) 
 // One streamed call through the SDK the provider built, as the session processor makes it; the error it ended with.
 const send = (
   found: Provider.Model,
-  call: Partial<Pick<LanguageModelV3CallOptions, "headers" | "providerOptions" | "tools">> = {},
+  call: Partial<Pick<LanguageModelV3CallOptions, "headers" | "providerOptions" | "tools" | "prompt">> = {},
 ) =>
   Effect.gen(function* () {
     const provider = yield* Provider.Service
@@ -529,6 +587,129 @@ it.instance(
 )
 
 it.instance(
+  "held OpenAI and compatible requests constrain storage and retention on the final SDK wire",
+  () =>
+    Effect.gen(function* () {
+      const legacy = yield* model("loop", "gpt-5.4")
+      const later = yield* model("loop", "gpt-5.5")
+      const opaque = yield* model("loop", "coder")
+      const official = yield* model("openai", "gpt-4.1")
+      const requested = {
+        store: true,
+        prompt_cache_retention: "24h",
+        prompt_cache_options: { ttl: "12h", mode: "implicit" },
+      }
+      for (const found of [legacy, later]) {
+        const selected = yield* admitted(found, zdr())
+        const options = { loop: requested }
+        sentToRecorder(yield* send(found, { headers: header(selected.id), providerOptions: options }))
+        const held = parsed(hits.at(-1))
+        expect(held.store).toBe(false)
+        expect(held.prompt_cache_retention).toBe(found === legacy ? "in_memory" : "24h")
+        expect(held.prompt_cache_options).toEqual(
+          found === legacy ? { mode: "implicit" } : requested.prompt_cache_options,
+        )
+        sentToRecorder(yield* send(found, { headers: header(fresh()), providerOptions: options }))
+        expect(parsed(hits.at(-1))).toMatchObject(requested)
+      }
+      const chosen = yield* admitted(official, zdr())
+      const options = { openai: { store: true, promptCacheRetention: "24h" } }
+      sentToRecorder(yield* send(official, { headers: header(chosen.id), providerOptions: options }))
+      expect(parsed(hits.at(-1))).toMatchObject({ store: false, prompt_cache_retention: "in_memory" })
+      sentToRecorder(yield* send(official, { headers: header(fresh()), providerOptions: options }))
+      expect(parsed(hits.at(-1))).toMatchObject({ store: true, prompt_cache_retention: "24h" })
+      const unknown = yield* admitted(opaque, zdr())
+      const oldCount = hits.length
+      refusedAs(
+        yield* send(opaque, { headers: header(unknown.id), providerOptions: { loop: requested } }),
+        "durable-cache",
+      )
+      refusedAs(
+        yield* send(legacy, {
+          headers: header((yield* admitted(legacy, zdr())).id),
+          providerOptions: { loop: { model: "gpt-5.5" } },
+        }),
+        "fallback-models",
+      )
+      expect(hits).toHaveLength(oldCount)
+      expect(guard.outside()).toEqual([])
+    }),
+  {
+    ...options,
+    config: {
+      ...config,
+      provider: {
+        ...config.provider,
+        loop: server(origin + "/v1", "@ai-sdk/openai-compatible", ["coder", "gpt-5.4", "gpt-5.5"]),
+        openai: { options: { apiKey: "synthetic", baseURL: origin + "/v1" } },
+      },
+    },
+  },
+)
+
+it.instance(
+  "held direct compatible requests refuse web search and plugins before the SDK sends anything",
+  () =>
+    Effect.gen(function* () {
+      const found = yield* model("loop", "coder")
+      const ordinary = yield* admitted(found, STANDARD)
+      const held = yield* admitted(found, zdr())
+      for (const extra of [
+        { web_search_options: { search_context_size: "low" } },
+        { plugins: [{ id: "web" }] },
+      ]) {
+        const providerOptions = { loop: extra }
+        sentToRecorder(yield* send(found, { headers: header(fresh()), providerOptions }))
+        const bytes = hits.at(-1)!.body
+        expect(parsed(hits.at(-1))).toMatchObject(extra)
+        sentToRecorder(yield* send(found, { headers: header(ordinary.id), providerOptions }))
+        expect(hits.at(-1)!.body).toBe(bytes)
+        const count = hits.length
+        refusedAs(yield* send(found, { headers: header(held.id), providerOptions }), "plugins")
+        expect(hits).toHaveLength(count)
+      }
+      expect(guard.outside()).toEqual([])
+    }),
+  options,
+)
+
+it.instance(
+  "held direct Responses requests refuse provider-stored history before the SDK sends anything",
+  () =>
+    Effect.gen(function* () {
+      const found = yield* model("openai", "gpt-4.1")
+      const ordinary = yield* admitted(found, STANDARD)
+      const held = yield* admitted(found, zdr())
+      for (const history of [
+        { sdk: { previousResponseId: "resp_fixture" }, wire: { previous_response_id: "resp_fixture" } },
+        { sdk: { conversation: "conv_fixture" }, wire: { conversation: "conv_fixture" } },
+      ]) {
+        const providerOptions = { openai: { store: false, ...history.sdk } }
+        sentToRecorder(yield* send(found, { headers: header(fresh()), providerOptions }))
+        const recorded = hits.at(-1)!
+        expect(recorded.path).toBe("/v1/responses")
+        expect(parsed(recorded)).toMatchObject({ store: false, ...history.wire })
+        sentToRecorder(yield* send(found, { headers: header(ordinary.id), providerOptions }))
+        expect(hits.at(-1)!.body).toBe(recorded.body)
+        const count = hits.length
+        refusedAs(yield* send(found, { headers: header(held.id), providerOptions }), "provider-options")
+        expect(hits).toHaveLength(count)
+      }
+      expect(guard.outside()).toEqual([])
+    }),
+  {
+    ...options,
+    config: {
+      ...config,
+      provider: {
+        ...config.provider,
+        openai: { options: { apiKey: "synthetic", baseURL: origin + "/v1" } },
+      },
+    },
+  },
+)
+
+it.instance(
   "Anthropic and Google requests are checked for features zero data retention does not cover",
   () =>
     Effect.gen(function* () {
@@ -552,9 +733,34 @@ it.instance(
       const google = yield* admitted(gemini, zdr())
       expect(google.decided.decision).toEqual({ allowed: true, kind: "loopback" })
       sentToRecorder(yield* send(gemini, { headers: header(google.id) }))
+      // Provider.getLanguage uses the SDK's generateContent model. Only its separate Interactions API accepts store.
+      expect(hits.at(-1)?.path).toBe("/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+      expect(parsed(hits.at(-1))).not.toHaveProperty("store")
       const search = { type: "provider" as const, id: "google.google_search" as const, name: "google_search", args: {} }
       refusedAs(yield* send(gemini, { headers: header(google.id), tools: [search] }), "grounding-tool")
+      const file = new URL("/v1beta/files/synthetic", origin)
+      const cached = { providerOptions: { google: { cachedContent: "cachedContents/synthetic" } } }
+      const attachment: LanguageModelV3CallOptions["prompt"] = [
+        { role: "user", content: [{ type: "file", mediaType: "text/plain", data: file }] },
+      ]
+      refusedAs(yield* send(gemini, { headers: header(google.id), ...cached }), "durable-cache")
+      refusedAs(yield* send(gemini, { headers: header(google.id), prompt: attachment }), "batch")
+      const googleFetch = yield* sdkFetch(gemini)
+      for (const [path, reason] of [
+        ["/v1beta/models/gemini:batchGenerateContent", "batch"],
+        ["/upload/v1beta/files", "batch"],
+        ["/v1beta/cachedContents/synthetic", "durable-cache"],
+      ] as const) {
+        const init = { method: "POST", headers: header(google.id), body: "{}" }
+        refusedAs(yield* call(googleFetch, origin + path, init), reason)
+      }
       expect(hits).toHaveLength(3)
+      sentToRecorder(yield* send(gemini, { headers: header(fresh()), ...cached }))
+      expect(parsed(hits.at(-1)).cachedContent).toBe("cachedContents/synthetic")
+      sentToRecorder(yield* send(gemini, { headers: header(fresh()), prompt: attachment }))
+      expect(parsed(hits.at(-1)).contents).toEqual([
+        { role: "user", parts: [{ fileData: { mimeType: "text/plain", fileUri: file.toString() } }] },
+      ])
       expect(guard.outside()).toEqual([])
     }),
   options,
@@ -694,7 +900,7 @@ const llmIt = testEffect(
 
 // A real session in the harness's database, published as the app creates one (llm.test.ts), so the review memory fence
 // (llm.ts `ordinary`) admits its requests.
-const ordinarySession = Effect.fnUntraced(function* (value: string) {
+const ordinarySession = Effect.fnUntraced(function* (value: string, internal?: string) {
   const sessionID = SessionID.make(value)
   const database = yield* Database.Service
   if (yield* database.db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
@@ -713,6 +919,7 @@ const ordinarySession = Effect.fnUntraced(function* (value: string) {
       id: sessionID,
       projectID: instance.project.id,
       directory: instance.directory,
+      ...(internal ? { internal } : {}),
       slug: "zdr-route-fixture",
       title: "ZDR route fixture",
       version: "test",
@@ -729,10 +936,12 @@ type Shape = {
   readonly small?: true
   readonly purpose?: "title" | "brain"
   readonly cache?: false
+  readonly text?: (part: string) => void
 }
 const TURN: Shape = {}
 const TITLE: Shape = { agent: "title", small: true, purpose: "title" }
 const LEARNER: Shape = { agent: "brain.learn", small: true, purpose: "brain" }
+const SKILL_DRAFT: Shape = { agent: "brain.skill", small: true, purpose: "brain" }
 const COMPACTION: Shape = { agent: "compaction", cache: false }
 const SMALL_TURN: Shape = { small: true }
 const SHAPES = [TURN, TITLE, LEARNER, COMPACTION, SMALL_TURN]
@@ -764,7 +973,14 @@ const streamed = (found: Provider.Model, sessionID: string, shape: Shape = TURN,
         ...(shape.purpose ? { purpose: shape.purpose } : {}),
         ...(shape.cache === false ? { cache: false } : {}),
       })
-      .pipe(Stream.runDrain, Effect.exit)
+      .pipe(
+        Stream.runForEach((part) =>
+          Effect.sync(() => {
+            if (part.type === "text-delta") shape.text?.(part.text)
+          }),
+        ),
+        Effect.exit,
+      )
     return Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
   })
 
@@ -773,6 +989,94 @@ const refusedInSession = (error: unknown) => {
   refusedAs(error, "unknown-destination")
   expect((error as ReviewRoutes.Refused).site).toBe("session")
 }
+
+// Production uses the pass marker for the session and the registered agent for each turn.
+// A pinned desktop run can select the vectorscope agent for all passes. The CLI uses review/security.
+llmIt.instance(
+  "all VectorScope passes complete on held wire formats and refuse auxiliary, native, free and unaccepted plan routes",
+  () =>
+    Effect.gen(function* () {
+      const anthropic = yield* model("anthropic", "claude-haiku-4-5")
+      const router = yield* model("openrouter", "deepseek/deepseek-chat-v3.1")
+      const direct = yield* model("loop", "coder")
+      const codium = yield* model(ModelPlans.PROVIDER_ID, codiumModel.id)
+      const free = yield* model("vector", laguna.id)
+      const passes = ["review", "security", "verify", "judge", "repro", ...REVIEW_LENSES.map((lens) => `lens.${lens}`)]
+      const policy = zdr(["openrouter", ModelPlans.PROVIDER_ID, "vector"])
+      // The native-enabled harness can actually take this same Anthropic model native.
+      expect(yield* streamed(anthropic, fresh())).toBeUndefined()
+      expect(nativeRequests).toHaveLength(1)
+      const gatewayBefore = gateway.seen.length
+      for (const prefix of ["vectorscope.", PINNED_SESSION_PREFIX])
+        for (const pass of passes) {
+          const internal = prefix + pass
+          const agent =
+            prefix === PINNED_SESSION_PREFIX ? VECTORSCOPE_AGENT : pass === "security" ? "security" : "review"
+          for (const [found, path] of [
+            [anthropic, "/v1/messages"],
+            [router, "/api/v1/chat/completions"],
+            [direct, "/v1/chat/completions"],
+          ] as const) {
+            const { id, decided } = yield* admitted(found, policy, {}, agent)
+            expect(decided.decision).toEqual({
+              allowed: true,
+              kind: found === router ? "openrouter-attested" : "loopback",
+            })
+            yield* ordinarySession(id, internal)
+            success.add(id)
+            const start = hits.length
+            let reply = ""
+            expect(
+              yield* streamed(found, id, {
+                agent,
+                text: (part) => {
+                  reply += part
+                },
+              }),
+            ).toBeUndefined()
+            expect(reply).toBe(answer)
+            expect(hits).toHaveLength(start + 1)
+            const hit = hits[start]!
+            expect([hit.method, hit.path, hit.headers["x-session-id"]]).toEqual(["POST", path, id])
+            const body = parsed(hit)
+            expect(body.model).toBe(found.api.id)
+            expect(body.stream).toBe(true)
+            expect(JSON.stringify(body.messages)).toContain("Review src/list.ts")
+            if (found === router) {
+              expect(body.provider).toMatchObject({ zdr: true, data_collection: "deny" })
+              for (const key of ["models", "route", "preset", "plugins"]) expect(body).not.toHaveProperty(key)
+            }
+            if (found === anthropic) {
+              expect(hit.headers["anthropic-version"]).toBeDefined()
+              for (const key of ["container", "thread", "mcp_servers"]) expect(body).not.toHaveProperty(key)
+            }
+            // Same registration and model, but these helpers cannot send on either runtime.
+            for (const shape of [TITLE, LEARNER, SKILL_DRAFT, COMPACTION, { ...SMALL_TURN, agent }])
+              refusedInSession(yield* streamed(found, id, shape))
+            refusedInSession(yield* streamed(found, fresh(), { agent }, id))
+            expect(hits).toHaveLength(start + 1)
+          }
+          for (const [found, refusal] of [
+            [codium, "codium-unaccepted"],
+            [free, "free-model"],
+          ] as const) {
+            const { id, decided } = yield* admitted(found, policy, {}, agent)
+            expect(decided.decision).toEqual({ allowed: false, refusal })
+            yield* ordinarySession(id, internal)
+            const before = freeCount()
+            // The provider SDK's own fetch also enforces refusal if a caller gets past admission.
+            refusedAs(yield* send(found, { headers: header(id) }), refusal)
+            expect(freeCount()).toEqual(before)
+          }
+        }
+      expect(hits).toHaveLength(passes.length * 2 * 3)
+      expect(gateway.seen).toHaveLength(gatewayBefore)
+      expect(nativeRequests).toHaveLength(1)
+      expect(guard.outside()).toEqual([])
+    }),
+  options,
+  30_000,
+)
 
 llmIt.instance(
   "the native runtime: other sessions go native, and a zdr session's turn goes out on the held fetch, its header named",

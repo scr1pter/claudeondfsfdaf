@@ -599,7 +599,7 @@ export function notePartial(input: {
 const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
   "free-model": "it is a free model, and free endpoints may keep or train on what they are sent.",
   "router-or-preset": "it is a router or preset, which may answer with another model.",
-  "fallback-models": "the request names fallback models, which may answer from other endpoints.",
+  "fallback-models": "the request could use a different model or endpoint from the one approved for this review.",
   plugins: "the request turns on a plugin, such as web search, which sends the query to another service.",
   "unattested-provider": "its provider, or the host its requests go to, is not listed in `zdrAttested`.",
   "unattested-openrouter": "the OpenRouter account it uses is not listed in `zdrAttested`.",
@@ -607,7 +607,7 @@ const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
   "retention-required-model": "its provider requires 30-day data retention for this model.",
   "codium-unaccepted":
     "Vector does not yet accept Vector Codium or the free models Vector provides as zero data retention routes.",
-  batch: "Vector does not send batch requests on zero data retention routes.",
+  batch: "Vector does not send batch requests or use provider-stored files on zero data retention routes.",
   "unreadable-body": "Vector could not read the request it would send.",
   "unattributed-request": "Vector could not tell which review the request belongs to.",
   "unknown-destination": "Vector cannot tell where its requests go.",
@@ -618,7 +618,7 @@ const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
     "OpenAI keeps this model's prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`).",
   "grounding-tool":
     "the request turns on a Google tool other than function calling, such as Search grounding, which may keep what it is sent.",
-  "durable-cache": "its Google Cloud project may keep cached prompts in durable storage.",
+  "durable-cache": "the route uses or may retain a durable prompt cache.",
   "anthropic-non-zdr-feature":
     "the request uses an Anthropic feature that zero data retention does not cover, or one Vector cannot tell is covered, such as the MCP connector, code execution, the Files API or message threads.",
   "attestation-unverified":

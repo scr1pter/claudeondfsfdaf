@@ -14,15 +14,14 @@
 // VS-33's Now part is here: the refusals from "server-tool" on, attestation objects in `zdrAttested`
 // (readZdrAttestation), and the `attestations` an allowed decision lists, which admission acts on. Until a verifier
 // exists (Q20) it refuses a route while any listed attestation sets `verify: "api"` ("attestation-unverified"), an
-// OpenAI one included; Q20 may later approve an admin credential for it. Only a Vertex metadata call, which waits for
-// Q20 with the other `verify: "api"` checks, can give "durable-cache", so nothing gives it yet.
+// OpenAI one included; Q20 may later approve an admin credential for it. A Vertex metadata call, which waits for
+// Q20 with the other `verify: "api"` checks, can detect project-wide caching. Explicit Google caches are refused on the wire.
 //
 // VS-33b (addendum B §1.1): zdrPathRefusal refuses a Batch or stored-file path on an OpenRouter or OpenAI-compatible
 // route as "batch" (the Anthropic format keeps anthropicPathRefusal), and zdrBatchBodyRefusal refuses a Batch API body,
 // zdrBodyRefusal's first check. The transport backstop calls zdrPathRefusal on every OpenRouter and other
-// non-Anthropic request, and zdrBatchBodyRefusal on every direct one (runner-wiring R1). Not refused yet: Gemini's own
-// Batch and Files paths, a Google `cachedContent` and a Files API upload in `fileData.fileUri` (SF-35 and VS-33's
-// runner wiring).
+// non-Anthropic request, and zdrBatchBodyRefusal on every direct one (runner-wiring R1). Google requests also pass a format-specific check for
+// Batch, Files, explicit cache resources and file references (SF-35).
 //
 // ZDR reduces retention; it cannot rule it out (invariant I-3). A provider may keep content its safety systems flag
 // (Anthropic up to two years), legal holds override any agreement, and account settings Vector cannot see, such as
@@ -55,8 +54,7 @@ export type ReviewPrivacy = NonNullable<ReviewConfig["privacy"]>
 //   ("unattributed-request"), and a body that is not a JSON string beside the URL ("unreadable-body");
 // - VS-23b's admission (engine review/route.ts) gives "attestation-unverified" for a route decideRoute allows whose
 //   decision lists an attestation with `verify: "api"`, which nothing can check yet (Q20), an OpenAI one included;
-// - "durable-cache", for a Vertex project whose cache config may keep prompts, needs the metadata call Q20 decides, so
-//   nothing gives it yet.
+// - "durable-cache" covers an explicit Google cache. Detecting project-wide caching still needs the metadata call Q20 decides.
 export const ROUTE_REFUSALS = [
   "free-model",
   "router-or-preset",
@@ -250,6 +248,43 @@ export function extendedCacheOnly(ids: readonly unknown[]): boolean {
   })
 }
 
+/** Final OpenAI wire controls on a held direct route. Compatible servers also serve unrelated models, so
+ * ordinary inference on an unrecognised model needs no OpenAI cache fields. An explicit retention option
+ * on such a model cannot establish its cache capability. The transport preserves the original bytes
+ * when this returns no replacement. */
+export function directOpenAiRetention(
+  body: unknown,
+  admittedModel: string,
+  dedicatedSdk: boolean,
+): { replacement?: Record<string, unknown>; refusal?: RouteRefusal } {
+  const fields = record(body)
+  if (!fields) return { refusal: "unreadable-body" }
+  if (fields.model !== undefined && fields.model !== admittedModel) return { refusal: "fallback-models" }
+  if (given(fields, "plugins") || given(fields, "web_search_options")) return { refusal: "plugins" }
+  // Responses can refer to provider-stored state independently of the current request's store flag.
+  if (present(fields.previous_response_id) || present(fields.conversation)) return { refusal: "provider-options" }
+  const name = admittedModel.toLowerCase()
+  const named = !!name.match(GPT_VERSION) || /(?:^|\/)o[134](?:$|[-_.:])/.test(name)
+  const hasCache = Object.hasOwn(fields, "prompt_cache_retention") || Object.hasOwn(fields, "prompt_cache_options")
+  const requestsStorage = Object.hasOwn(fields, "store") && fields.store !== false
+  if (!dedicatedSdk && !named && !hasCache && !requestsStorage) return {}
+  const options = record(fields.prompt_cache_options)
+  if (Object.hasOwn(fields, "prompt_cache_options") && !options) return { refusal: "unreadable-body" }
+  const extended = fields.prompt_cache_retention !== undefined && fields.prompt_cache_retention !== "in_memory"
+  const hasTtl = options && Object.hasOwn(options, "ttl")
+  if (!named && (extended || hasTtl)) return { refusal: "durable-cache" }
+  const replacement = { ...fields, store: false }
+  if (!named || extendedCacheOnly([admittedModel])) return { replacement }
+  const normalized: Record<string, unknown> = { ...replacement, prompt_cache_retention: "in_memory" }
+  if (hasTtl) {
+    const rest = { ...options }
+    delete rest.ttl
+    if (Object.keys(rest).length) normalized.prompt_cache_options = rest
+    else delete normalized.prompt_cache_options
+  }
+  return { replacement: normalized }
+}
+
 /**
  * Why a request body may not go to OpenRouter on a ZDR route, or undefined when zdrRequestBody may send it. `modelID`
  * is the ID the request was made for; the body's own `model` is what OpenRouter routes on, so both are checked.
@@ -326,13 +361,10 @@ export type ZdrRequestFormat = "anthropic" | "google"
 /**
  * Why an Anthropic or Google request may not be sent on a ZDR route, or undefined when it may. Both are allow lists, so
  * a feature newer than this file is refused, and neither changes its input. `path` is the request's URL or path, which
- * the transport must pass for an Anthropic request: without it only the body is checked, so neither Batch nor any other
- * endpoint is refused here.
+ * the transport supplies for both formats. Without a path only the body is checked.
  * - Google: every tool must be function calling (`functionDeclarations`, or an OpenAI-style `type: "function"` tool),
- *   so Search, Maps, URL context, retrieval, code execution and computer use are "grounding-tool" [G4 §4.2]. Nothing
- *   else is checked here: the transport (VS-23c) checks a Google request's path with zdrPathRefusal, which does not
- *   know Gemini's own Batch and Files paths, and nothing yet checks `cachedContent` or a stored Files API upload in
- *   `fileData.fileUri` (SF-35 and VS-33's runner wiring).
+ *   so Search, Maps, URL context, retrieval, code execution and computer use are "grounding-tool" [G4 §4.2].
+ *   Explicit cache resources and cachedContent give "durable-cache". Batch, Files and external file references give "batch".
  * - Anthropic: the path must be one of anthropicPathRefusal's Messages endpoints (Anthropic's, wherever the base URL
  *   puts it, and Claude's on Vertex and Bedrock), and Batch on any of them is "batch". The body may not set
  *   `mcp_servers` (the MCP connector), `container` (Agent Skills and code execution containers) or `thread` (message
@@ -351,7 +383,26 @@ export function zdrFeatureRefusal(request: {
   const fields = record(request.body)
   const tools = toolList(fields?.tools)
   if (!fields || !tools) return "unreadable-body"
-  if (request.format === "google") return tools.every(googleFunctionTool) ? undefined : "grounding-tool"
+  if (request.format === "google") {
+    if (request.path !== undefined) {
+      const path = URL.canParse(request.path) ? new URL(request.path).pathname : request.path.split(/[?#]/)[0]
+      if (/\/cachedContents(?:[/:]|$)/.test(path)) return "durable-cache"
+      if (GOOGLE_BATCH_ACTION.test(path) || GOOGLE_BATCH_OR_FILES.test(path)) return "batch"
+    }
+    if (given(fields, "cachedContent") || given(fields, "cached_content")) return "durable-cache"
+    const contents = [
+      fields.systemInstruction,
+      fields.system_instruction,
+      ...(Array.isArray(fields.contents) ? fields.contents : []),
+    ]
+    for (const content of contents) {
+      for (const part of googleParts(content)) {
+        const parts = [part, ...googleParts(part.functionResponse), ...googleParts(part.function_response)]
+        if (parts.some((item) => [item.fileData, item.file_data].some(googleFileReference))) return "batch"
+      }
+    }
+    return tools.every(googleFunctionTool) ? undefined : "grounding-tool"
+  }
   const blocks = contentBlocks(fields.messages)
   if (!blocks) return "unreadable-body"
   if (
@@ -429,6 +480,9 @@ const BATCH_ENDPOINT =
 // from (`/v1/files`). Vector never uploads a file, so every Files path is refused as Batch input. Only a `/v1/` path
 // matches: Azure OpenAI's `/openai/batches` and a relative `batches` do not (runner-wiring R1).
 const BATCH_OR_FILES_PATH = /\/v1\/(?:batches|files)(?:\/|$)/
+// Gemini uses model actions to create batches and versioned collections for file uploads and batch jobs.
+const GOOGLE_BATCH_ACTION = /\/models\/[^/:]+:(?:batchGenerateContent|asyncBatchEmbedContent)\/?$/
+const GOOGLE_BATCH_OR_FILES = /\/v1(?:beta\d*|alpha\d*)?\/(?:files|batches)(?:[/:]|$)/
 // Web search and web fetch from 20260209 on filter results with code execution unless `allowed_callers` is ["direct"]
 // (Anthropic's server tools page, "ZDR and allowed_callers", accessed 2026-11-06).
 const FILTERING_WEB_TOOL = /^web_(?:search|fetch)_(\d{8})$/
@@ -605,6 +659,18 @@ function choiceRefusal(value: unknown): RouteRefusal | undefined {
   const choice = record(value)
   if (!choice) return "unreadable-body"
   return NAMED_CHOICES.includes(choice.type) ? undefined : "server-tool"
+}
+
+// Only content and tool-result parts can refer to provider files. A function's arguments
+// and its output JSON are user data, even when their own fields have these names.
+function googleParts(content: unknown) {
+  const parts = record(content)?.parts
+  return Array.isArray(parts) ? records(parts) : []
+}
+
+function googleFileReference(value: unknown) {
+  const file = record(value)
+  return file !== undefined && (given(file, "fileUri") || given(file, "file_uri"))
 }
 
 // Google's tools are objects with one kind of tool each; only function calling keeps nothing beyond the request.

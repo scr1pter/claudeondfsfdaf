@@ -36,6 +36,7 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { OllamaServer } from "@vectordevai/core/local-mode/servers/ollama"
 import {
   decideRoute,
+  directOpenAiRetention,
   zdrBatchBodyRefusal,
   zdrBodyRefusal,
   zdrFeatureRefusal,
@@ -433,8 +434,8 @@ export function hold(input: {
  *   when it gives none);
  * - an Anthropic Messages request: zdrFeatureRefusal with its URL, which checks the path too;
  * - any other: the Batch and Files paths (zdrPathRefusal) and body (zdrBatchBodyRefusal), runner-wiring R1, and a Google
- *   request's tools (zdrFeatureRefusal).
- * Every route but OpenRouter's sends the body it was given, byte for byte.
+ *   request's tools, cache, file references and API path (zdrFeatureRefusal).
+ * Held direct OpenAI-family requests enforce the storage and cache policy after provider options are merged.
  */
 export function sendBody(input: {
   readonly kind: RouteKind
@@ -458,8 +459,16 @@ export function sendBody(input: {
     ? zdrFeatureRefusal({ format: "anthropic", body: parsed, path: input.url })
     : (zdrPathRefusal(input.url) ??
       zdrBatchBodyRefusal(parsed) ??
-      (GOOGLE_FORMAT.includes(input.npm) ? zdrFeatureRefusal({ format: "google", body: parsed }) : undefined))
-  return refusal ? { refusal } : { body: input.body }
+      (GOOGLE_FORMAT.includes(input.npm)
+        ? zdrFeatureRefusal({ format: "google", body: parsed, path: input.url })
+        : undefined))
+  if (refusal) return { refusal }
+  if (input.kind !== "standard" && OPENAI_FORMAT.includes(input.npm)) {
+    const retained = directOpenAiRetention(parsed, input.modelID, input.npm !== "@ai-sdk/openai-compatible")
+    if (retained.refusal) return { refusal: retained.refusal }
+    if (retained.replacement) return { body: JSON.stringify(retained.replacement) }
+  }
+  return { body: input.body }
 }
 
 // The sessions Review.run created and has not yet released, by session ID.
@@ -477,6 +486,7 @@ export const ADOPTED_LIMIT = 1024
 // The SDKs whose requests are Anthropic Messages requests, and Google's, for sendBody's feature checks.
 const ANTHROPIC_FORMAT = ["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic", "@ai-sdk/amazon-bedrock/anthropic"]
 const GOOGLE_FORMAT = ["@ai-sdk/google", "@ai-sdk/google-vertex"]
+const OPENAI_FORMAT = ["@ai-sdk/openai", "@ai-sdk/azure", "@ai-sdk/amazon-bedrock/mantle", "@ai-sdk/openai-compatible"]
 
 // A route privacy.ts allows is refused while any attestation it lists sets `verify: "api"`: nothing can check an
 // account yet (Q20), so an OpenAI attestation with it is refused the same way.
