@@ -32,12 +32,12 @@ afterEach(async () => {
   await resetDatabase()
 })
 
-function harness(providerUrl: string) {
+function harness(llm: TestLLMServer["Service"]) {
   return Effect.acquireRelease(Effect.promise(async () => {
     const original = Object.fromEntries(["VECTOR_SERVER_USERNAME", "VECTOR_SERVER_PASSWORD", "VECTOR_DISABLE_DEFAULT_PLUGINS"].map((key) => [key, process.env[key]]))
     const password = randomBytes(24).toString("base64url")
     Object.assign(process.env, { VECTOR_SERVER_USERNAME: "vector", VECTOR_SERVER_PASSWORD: password, VECTOR_DISABLE_DEFAULT_PLUGINS: "1" })
-    const provider = testProviderConfig(providerUrl).provider.lmstudio
+    const provider = testProviderConfig(llm.url).provider.lmstudio
     const tmp = await tmpdir({ git: true, trusted: true, config: {
       formatter: false, lsp: false, permission: { "*": "allow" }, model: `${MODEL.providerID}/${MODEL.modelID}`,
       provider: { [MODEL.providerID]: { ...provider, id: MODEL.providerID, models: { "test-model": {
@@ -73,10 +73,29 @@ function harness(providerUrl: string) {
         else process.env[key] = value
       }
     } }
-  }), (value) => Effect.promise(() => value.close()))
+  }), (value) => Effect.promise(() => value.close())).pipe(Effect.tap((h) => warm(h, llm)))
 }
 
-type Harness = Effect.Success<ReturnType<typeof harness>>
+// Spelled out because `warm` takes it inside `harness`, so it cannot be inferred from `harness`.
+type Harness = {
+  client: ReturnType<typeof createEverywhereEngine>
+  send: (route: string, method: string, body?: unknown, guest?: boolean) => Promise<Response>
+  directory: string
+}
+
+/**
+ * One untimed owner turn in a separate session, so a fresh instance's first prompt (provider, agent, tools, the first
+ * session writes) is not inside a case's 5 s and 10 s waits, which then time only the step they name. On a
+ * slow-first-touch Windows VM that first prompt took over 10 s (job 136445766431); the waits are unchanged.
+ */
+function warm(h: Harness, llm: TestLLMServer["Service"]) {
+  return Effect.gen(function* () {
+    const session = yield* plain(h, "Warm-up")
+    yield* llm.text("Warm.")
+    expect((yield* Effect.promise(() => h.send(`/session/${session}/message`, "POST", { model: MODEL, parts: [{ type: "text", text: "Reply with done." }] }))).status).toBe(200)
+    yield* llm.reset
+  })
+}
 
 function history(h: Harness, session: string) {
   return Effect.promise(async () => {
@@ -184,7 +203,7 @@ function heard(rows: readonly SessionV1.WithParts[]) {
 
 it.live("the actual guest-header request excludes personal memory, retains outside taint and arms a lower budget", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
-  const h = yield* harness(llm.url)
+  const h = yield* harness(llm)
   const personal = "Personal fixture convention: prefer amber-starfish-lantern for private examples."
   const added = yield* Effect.promise(() => h.send("/memory", "POST", { kind: "fact", scope: "personal", text: personal }))
   expect(added.status).toBe(200)
@@ -224,7 +243,7 @@ it.live("the actual guest-header request excludes personal memory, retains outsi
 
 it.live("a real read approval is rejected through the owner route without the guest header", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
-  const h = yield* harness(llm.url)
+  const h = yield* harness(llm)
   const job = h.job()
   const session = yield* Effect.promise(() => h.client.create(job, unattendedRules([{ permission: "read", pattern: "*", action: "ask" }])))
   yield* llm.tool("read", { filePath: path.join(h.directory, "README.md") })
@@ -251,7 +270,7 @@ it.live("a real read approval is rejected through the owner route without the gu
 
 it.live("a tightened budget with no earlier owner budget stops actual provider continuation", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
-  const h = yield* harness(llm.url)
+  const h = yield* harness(llm)
   const job = h.job()
   const session = yield* Effect.promise(() => h.client.create(job, unattendedRules()))
   yield* llm.push(reply().tool("read", { filePath: path.join(h.directory, "README.md") }).usage({ input: 10_000, output: 100 }))
@@ -267,7 +286,7 @@ it.live("a tightened budget with no earlier owner budget stops actual provider c
 
 it.live("a session without the unattended mark still hears the owner's particular entries and recall, guest-marked or not", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
-  const h = yield* harness(llm.url)
+  const h = yield* harness(llm)
   yield* memories(h)
   const job = { ...h.job(), task: TASK }
 
@@ -297,7 +316,7 @@ it.live("a session without the unattended mark still hears the owner's particula
 
 it.live("an unattended session hears only the screened digest, with no recall and no memory beside a file it reads", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
-  const h = yield* harness(llm.url)
+  const h = yield* harness(llm)
   yield* memories(h)
   const job = { ...h.job(), task: TASK }
   const session = yield* Effect.promise(() => h.client.create(job, unattendedRules()))
@@ -330,7 +349,7 @@ it.live("an unattended session hears only the screened digest, with no recall an
 
 it.live("a user deny written after `*: allow` still holds, though GET /global/config moves the `*` key last", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
-  const h = yield* harness(llm.url)
+  const h = yield* harness(llm)
   const files = ["config.json", "vector.json", "vector.jsonc"].map((name) => path.join(Global.Path.config, name))
   const saved = yield* Effect.promise(() => Promise.all(files.map((file) => readFile(file, "utf8").catch(() => undefined))))
   yield* Effect.addFinalizer(() => Effect.promise(async () => {
@@ -373,7 +392,7 @@ const offlineIf = offline || process.env.VECTOR_TEST_REQUIRE_BWRAP === "1" ? it.
 
 offlineIf("on offline-v1 a check runs in the offline sandbox, and network or a folder outside the checkout gets nothing, unasked", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
-  const h = yield* harness(llm.url)
+  const h = yield* harness(llm)
   const tcp = yield* Effect.acquireRelease(
     Effect.sync(() => Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reached-tcp") })),
     (server) => Effect.sync(() => void server.stop(true)),
