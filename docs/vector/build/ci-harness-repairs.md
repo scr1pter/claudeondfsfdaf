@@ -1084,3 +1084,17 @@ Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 
 `brain/database.test.ts`, `background-job-store.test.ts` and `engine/test/storage/storage.test.ts` passed (the last
 does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
 change has not run on Windows CI yet.
+
+## 2026-11-21: test coverage that CI skipped or never ran (v2-closeout-ci)
+
+Each entry below closes a gap where a suite passed locally but CI never ran it. Job IDs are to be added after the
+branch's first PR run; until then each entry is local evidence only.
+
+- **File watcher suite.** `packages/core/test/filesystem/watcher.test.ts` gated its `describe` on
+  `Watcher.hasNativeBinding() && !process.env.CI`, so every GitHub runner skipped all six cases. The gate is now
+  `Watcher.hasNativeBinding()` alone; no assertion or wait changed (5 s `nextUpdate`, 500 ms `noUpdate`). The suite sets
+  `VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"` through its own config provider, so the Windows unit job's
+  `true` does not reach it. Locally on Linux with `CI=true`: 6 skip before, 6 pass after (twice, and once more with
+  `VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER=true` in the process environment). Still to check: the unit (linux) and
+  unit (windows) logs show every Watcher case ran and passed. A real platform failure gets a root cause; only a proven
+  backend limit may get a platform gate, with the job ID and reason on line 18 and here.
