@@ -45,9 +45,9 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // team memory. The batch planner, size skip and cursor validation now determine when a large change is
 // reviewed and which files can retain coverage. Pin their contracts and the durable ReviewState reader.
 // verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
-// So are the fix executor (engine review/fix.ts) and the CLI's apply step (cli/cmd/review.fix.ts, VS-12c): they run
-// after a review, from its outcome, and decide nothing it finds or posts. So are the owner fix API's adapter (engine
-// review/fix-owner.ts, VS-12d) and its wire schema (schema review-fix.ts), for the same reason; the review routes and
+// The CLI apply step (cli/cmd/review.fix.ts, VS-12c) runs after selection. The shared executor (review/fix.ts)
+// is pinned from SF-33 because it launches consented diagnostic evidence adapters. The owner fix API adapter (engine
+// review/fix-owner.ts, VS-12d) and its wire schema (schema review-fix.ts) remain output-only. The review routes and
 // owner files they extend stay pinned. So are the fix planner the CLI step shares with the desktop (core
 // review/fix-plan.ts) and the desktop's fix adapter (app features/vectorscope/local-fix*.ts), for the same reason.
 // The route rules' admission (VS-23b's engine review/route.ts) is pinned from the day it lands: it decides which models
@@ -66,6 +66,8 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/batch.ts",
   "packages/engine/src/review/batch-local.ts",
   "packages/engine/src/review/checks.ts",
+  "packages/engine/src/review/diagnostic-adapter.ts",
+  "packages/engine/src/review/fix.ts",
   "packages/engine/src/review/trivial.ts",
   "packages/engine/src/review/card-access.ts",
   "packages/engine/src/review/card-sources.ts",

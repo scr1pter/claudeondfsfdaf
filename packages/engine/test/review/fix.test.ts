@@ -1,3 +1,5 @@
+import { DiagnosticCatalog } from "../../src/review/diagnostic-adapter"
+import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { afterEach, describe, expect } from "bun:test"
 import { createHash, randomUUID } from "node:crypto"
 import { readdirSync, readFileSync } from "node:fs"
@@ -1932,6 +1934,86 @@ describe.skipIf(!linux)("review fix checks, commit and push (VS-12b)", () => {
 })
 
 describe.skipIf(!sandboxed)("review fix checks in the sandbox (VS-12b)", () => {
+  it.instance(
+    "a pinned diagnostic sees only redacted changes, never the host listener, key fixture, shell or project config",
+    () =>
+      Effect.gen(function* () {
+        const { directory } = yield* InstanceState.context
+        const fix = yield* ReviewFix.Service
+        const host = yield* Effect.acquireRelease(
+          Effect.sync(() => Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("fixture") })),
+          (server) => Effect.promise(() => server.stop(true)),
+        )
+        const secret = "ghp_" + "adP8".repeat(9)
+        // This fixture's own program is compiled from this literal, never from the repository under review.
+        // Compilation is local; the resulting static executable is only ever run by the isolated SF-08 process owner.
+        const source = String.raw`
+        #include <arpa/inet.h>
+        #include <fcntl.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <string.h>
+        #include <sys/socket.h>
+        #include <unistd.h>
+        int main(int argc, char **argv) {
+          if (argc != 4 || getenv("HOME") || getenv("PATH") || access(argv[1], R_OK) == 0 ||
+              access(argv[2], R_OK) == 0 || access("/bin/sh", X_OK) == 0 ||
+              access("/proc/self/environ", R_OK) == 0 || open("/input/change.json", O_WRONLY) >= 0) return 1;
+          int sock = socket(AF_INET, SOCK_STREAM, 0);
+          struct sockaddr_in addr = {.sin_family=AF_INET, .sin_port=htons(atoi(argv[3]))};
+          inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+          if (sock >= 0 && connect(sock,(struct sockaddr*)&addr,sizeof(addr)) == 0) return 2;
+          FILE *input = fopen("/input/change.json", "r"); char bytes[2048] = {0};
+          if (!input || !fread(bytes, 1, sizeof(bytes)-1, input) || !strstr(bytes, "[redacted]")) return 3;
+          puts("isolated fixture"); return 0;
+        }`
+        const key = path.join(directory, "synthetic-private.txt")
+        const config = path.join(directory, "fixture-tool.config")
+        yield* Effect.promise(() =>
+          Promise.all([fs.writeFile(key, "synthetic-key-fixture"), fs.writeFile(config, "never load this fixture")]),
+        )
+        const binary = path.join(directory, "pinned-fixture")
+        const compiled = Bun.spawnSync(["/usr/bin/cc", "-static", "-O2", "-x", "c", "-", "-o", binary], {
+          cwd: directory,
+          env: { PATH: "/usr/bin:/bin" },
+          stdin: Buffer.from(source),
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        expect(compiled.exitCode).toBe(0)
+        const executable = yield* Effect.promise(() => fs.readFile(binary))
+        const pin = {
+          id: "test-fixture",
+          version: "1.0.0",
+          sha256: createHash("sha256").update(executable).digest("hex"),
+          executable,
+          argv: [key, config, String(host.port)],
+        }
+        const input = {
+          adapter: pin.id,
+          head: "a".repeat(40),
+          files: parseUnifiedDiff(
+            [
+              "diff --git a/source.ts b/source.ts",
+              "--- a/source.ts",
+              "+++ b/source.ts",
+              "@@ -1 +1 @@",
+              "-const value = null",
+              '+const value = "' + secret + '"',
+            ].join("\n"),
+          ),
+        }
+        const result = yield* fix.diagnostics.preview(input).pipe(Effect.provideService(DiagnosticCatalog, [pin]))
+        if (result.status !== "ready") throw Error("fixture pin did not produce a preview")
+        const consent = fix.diagnostics.approve(result.preview, ACTOR)!
+        const ran = yield* fix.diagnostics.run({ preview: result.preview, actor: ACTOR, consent })
+        expect(ran).toEqual({ status: "ran", adapter: pin.id, version: pin.version, output: "isolated fixture\n" })
+        expect((yield* fix.diagnostics.run({ preview: result.preview, actor: ACTOR, consent })).status).toBe("not-run")
+      }),
+    { git: true },
+    30000,
+  )
+
   it.instance(
     "an unconsented check runs nothing",
     () =>

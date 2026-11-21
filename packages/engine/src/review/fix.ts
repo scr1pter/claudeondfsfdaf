@@ -30,6 +30,7 @@ import { FileLock } from "@/tool/file-lock"
 import { FileState } from "@/tool/file-state"
 import { assertWritable } from "@/tool/owned-path"
 import { Sandbox } from "@/tool/shell/sandbox"
+import { makeDiagnosticAdapters, type ScopedCommand } from "./diagnostic-adapter"
 
 // VS-12 (SF-07, SF-08): the consented local fix executor, proposal -> preview -> apply -> checks, commit -> push.
 // Its trusted adapters are the CLI's apply step (cli/cmd/review.fix.ts, SF-09) and the owner fix API
@@ -299,9 +300,9 @@ type Plan = Change & {
 type Step = { plan: Plan; created: string[] }
 
 export const make = Effect.gen(function* () {
-  const isolation = yield* TaskIsolation.Service
-  const git = yield* Git.Service
-  const spawner = yield* ChildProcessSpawner
+  const isolation = yield * TaskIsolation.Service
+  const git = yield * Git.Service
+  const spawner = yield * ChildProcessSpawner
   // Only fixes whose placement exists: an entry goes when its placement is removed.
   const states = new Map<string, Entry>()
   // The running checks and pushes of each fix, which `cancel` stops before it waits for the fix's lock; and the fixes
@@ -928,43 +929,18 @@ export const make = Effect.gen(function* () {
       Effect.uninterruptible,
     )
 
-  /** One command in the checks sandbox, through the spawner: its scope release is the only signaller of its group. */
-  const execute = Effect.fnUntraced(function* (input: {
-    root: string
-    cwd: string
-    command: string
-    env: Record<string, string>
-    platform: NodeJS.Platform
-    timeoutMs: number
-    outputBytes: number
-  }) {
-    const offline = Sandbox.offline({
-      shell: "/bin/sh",
-      command: input.command,
-      cwd: input.cwd,
-      env: input.env,
-      workspaceRoot: input.root,
-      writes: "workspace",
-      platform: input.platform,
-    })
-    if (offline.type === "unfiltered")
-      return yield* refuse("sandbox", "Checks not run: this platform has no sandbox to run them without network.")
-    if (offline.type === "refused")
-      return yield* refuse(
-        "sandbox",
-        `Checks not run: Vector's sandbox without network is not available here (${(offline.reason ?? "the sandbox could not be applied").replace(/\.$/, "")}).`,
-      )
-    const wrapped = offline.wrapped
+  // SF-08 remains the sole process owner for offline checks and sealed diagnostic adapters.
+  const runScoped = Effect.fnUntraced(function* (input: ScopedCommand) {
     const collected = { chunks: [] as Uint8Array[], bytes: 0, truncated: false }
     const started = Date.now()
     const code = yield* Effect.scoped(
       Effect.gen(function* () {
         const handle = yield* spawner
           .spawn(
-            ChildProcess.make(wrapped.command, wrapped.args, {
+            ChildProcess.make(input.command, input.args, {
               shell: false,
               cwd: input.cwd,
-              env: wrapped.env,
+              env: input.env,
               extendEnv: false,
               stdin: "ignore",
               detached: true,
@@ -1001,6 +977,43 @@ export const make = Effect.gen(function* () {
       truncated: collected.truncated,
       durationMs: Date.now() - started,
     }
+  })
+
+  /** One command in the checks sandbox, through the spawner: its scope release is the only signaller of its group. */
+  const execute = Effect.fnUntraced(function* (input: {
+    root: string
+    cwd: string
+    command: string
+    env: Record<string, string>
+    platform: NodeJS.Platform
+    timeoutMs: number
+    outputBytes: number
+  }) {
+    const offline = Sandbox.offline({
+      shell: "/bin/sh",
+      command: input.command,
+      cwd: input.cwd,
+      env: input.env,
+      workspaceRoot: input.root,
+      writes: "workspace",
+      platform: input.platform,
+    })
+    if (offline.type === "unfiltered")
+      return yield* refuse("sandbox", "Checks not run: this platform has no sandbox to run them without network.")
+    if (offline.type === "refused")
+      return yield* refuse(
+        "sandbox",
+        `Checks not run: Vector's sandbox without network is not available here (${(offline.reason ?? "the sandbox could not be applied").replace(/\.$/, "")}).`,
+      )
+    const wrapped = offline.wrapped
+    return yield* runScoped({
+      command: wrapped.command,
+      args: wrapped.args,
+      env: wrapped.env,
+      cwd: input.cwd,
+      timeoutMs: input.timeoutMs,
+      outputBytes: input.outputBytes,
+    })
   })
 
   const checks = Effect.fn("ReviewFix.checks")(function* (
@@ -1522,7 +1535,8 @@ export const make = Effect.gen(function* () {
     return yield* isolation.fixes().pipe(Effect.mapError(isolated("worktree")))
   })
 
-  return { reserve, preview, apply, checks, commit, push, cancel, state, placements }
+  const diagnostics = makeDiagnosticAdapters(runScoped, SandboxPlatform)
+  return { reserve, preview, apply, checks, commit, push, cancel, state, placements, diagnostics }
 })
 
 /** Why the proposal's scope is not exactly this local placement and its repository, which may not overlap. */
