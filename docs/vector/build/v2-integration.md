@@ -74,6 +74,8 @@ Each pull request below merged into `main` with a merge commit. The merge commit
 | #53 | `region-compile-budget`   | `3670461a`   | 20 Nov |
 | #54 | `windows-test-budgets`    | `f3d7ac74`   | 21 Nov |
 
+GitHub also shows #25, #29, #30, #31 and #32 as merged at the same time as #33, because #33 contains their heads.
+
 PR #45 (`uia-first-lookup`) was closed without merging. Still open on 21 November: the Everywhere lane (`everywhere-finish`) is about to open its pull request, and VectorScope (`scope-finish`) is in progress in another session.
 
 ## Deleted branches
@@ -127,7 +129,7 @@ On 2026-11-14, with the owner's yes, these 41 branches were deleted from GitHub.
 
 ### Prepared final cleanup batch (not yet deleted)
 
-Superseded on 21 November 2026 by "Branches to delete" below, which rechecks every remaining branch against `main` `f3d7ac74`. Several tips marked "ancestor" here are not ancestors of that `main`.
+Superseded on 21 November 2026 by "Branches to delete" below, which rechecks every remaining branch against `main` `f3d7ac74`.
 
 The owner requested main-only branch storage. These 42 feature-branch tips were verified against source assembly
 `2aaa4f5e28efe14c630e892146fad28239f48813`: each is an ancestor or has no unique patch under `git cherry`.
@@ -184,25 +186,46 @@ The temporary assembly branch is handled only after its final CI-qualified tip r
 
 This session's GitHub access refuses branch deletion (HTTP 403), so the owner deletes these on GitHub. Each can be restored from its last commit with `git push origin <sha>:refs/heads/<name>`. `everywhere-finish` and `scope-finish` are still active and are not listed.
 
-### Fully in main (32 branches)
+### Fully in main (62 branches)
 
-Each branch's last commit is an ancestor of `origin/main` (`f3d7ac74`), rechecked on 21 November 2026 with `git merge-base --is-ancestor origin/<name> origin/main`. No branch had moved since the list was made.
+Each branch's last commit is an ancestor of `main` (`f3d7ac74`), rechecked on 21 November 2026 with `git merge-base --is-ancestor <sha> main` in a full (not shallow) blobless clone of the GitHub repository. A shallow clone gives false "not an ancestor" answers here, so do not repeat the check in one. No branch had moved since the list was made.
 
 | Branch                    | Last commit                                | Date       |
 | ------------------------- | ------------------------------------------ | ---------- |
+| `agent-environment`       | `fa938a090bc60f427809db5b904796594432cd7c` | 2026-11-14 |
 | `benchmark-before`        | `3abfbd1c3555c8efdc4e7a26b1ac178e3488c9d6` | 2026-11-10 |
 | `brain-transport`         | `0d18f75035688348171f5f97b878fb3303bbc7cc` | 2026-11-17 |
+| `build-candidate`         | `dfc26ee931fb622beac46ce800e9a65dafadd915` | 2026-11-14 |
 | `build-codium`            | `1bff87a46d28f582aea829e19eb232cc9c5fe0e9` | 2026-11-12 |
+| `build-complete`          | `00b87034faa1e3c1604ab7160f5e5c33f3745805` | 2026-11-14 |
+| `build-connect`           | `a8234d9ac34f74bb84d48bce17c0de48d4b18c38` | 2026-11-14 |
+| `build-everywhere`        | `5053d4907383ef31a61844995215eb86a53e7845` | 2026-11-14 |
+| `build-github-ui`         | `017f7144b031649967c0a1cae4f0a5be23bef34c` | 2026-11-12 |
+| `build-integrate`         | `ceed2426aa546ecc7d18357ebb1058d4598b3832` | 2026-11-14 |
+| `build-isolation`         | `cf34ffe29e5cd1b5fd05d5749f6ee4a418500b8d` | 2026-11-12 |
+| `build-native-shell`      | `faa1fa09b697b900e6125ad316a7e961de616981` | 2026-11-14 |
 | `build-process`           | `a193d18d9053f4240443415c64b9935fb2a7f8ec` | 2026-11-12 |
+| `build-scope`             | `0dcd814e6ac69edefcdffb10ff4bbd95c7062398` | 2026-11-13 |
+| `build-scope-checks`      | `7bbf4d88bca2302bb74940919597fe513ea00979` | 2026-11-12 |
+| `build-scope-joined`      | `3bb2b2ba223ced69af19ff67465de1adee34e646` | 2026-11-14 |
+| `build-scope-owner`       | `892202d4a603e7e0afc75065bb8459c2825e17c8` | 2026-11-13 |
+| `build-scope-ui`          | `e00d579b3f7ffc1a62ea1f8050aadf5c266257d5` | 2026-11-12 |
+| `build-scope-wire`        | `82cbb103e3c8ebf1299ce81a1197e93dbf2205a4` | 2026-11-14 |
+| `build-scope-witness`     | `5d672a22898770f7b3cca865dacc36586b98d513` | 2026-11-13 |
 | `ci-install-retry`        | `218d8991294e450c2090937f10cdb35478e215c6` | 2026-11-16 |
+| `cloud-workspaces`        | `d0300404e9e280891cda85122bee21bf47eb2b02` | 2026-11-14 |
 | `codium`                  | `1ce8f5f3012fa2b5de738dc234773e07ce226c0d` | 2026-11-12 |
 | `codium-finish`           | `58663f5b6256c453311a62d8e5e41ba92481e5b2` | 2026-11-17 |
 | `codium-legal`            | `fd4db7f47ff1553658aff5817049e1f6dbdbb1bb` | 2026-11-13 |
 | `connect-finish`          | `19c48b89267e61ab6d9aaf5eee23eb03f62578e8` | 2026-11-16 |
+| `connected-workspace`     | `9d77e1942e596a00b4fb7739adf88466a3ba54c8` | 2026-11-12 |
 | `e2e-linux-budget`        | `0137cda3e2b403fd241558da807a70cc216364a3` | 2026-11-16 |
+| `hands`                   | `4eb9f52fdf2ee7d04a1da0bdc1f394ca9ff70dec` | 2026-11-13 |
 | `hands-diagnostics`       | `ead163391a558f7a94c1fdb589b87b2c71bb1a84` | 2026-11-10 |
 | `hands-finish`            | `8139e5fc4abd5bf1a8393b5f27a9166a31507cf1` | 2026-11-16 |
+| `hands-ui-check`          | `24b21a02727f578fbefbd1d599f00da50b0c4237` | 2026-11-10 |
 | `native-build-parallel`   | `8aa95269c1166e69a387309dceb74cb1f7d73ff5` | 2026-11-20 |
+| `native-finish`           | `f141ef16e1a1306c065531ef22088f06103d143e` | 2026-11-14 |
 | `native-qualify`          | `2677c32cb813e2c4c7d3262986a0d3e60286673d` | 2026-11-16 |
 | `native-stop-fix`         | `a0fbfa3b16b65c0def4459d83892ee1f09c71daa` | 2026-11-14 |
 | `ownership-windows`       | `42f7b3d490c7d507dd0ad769aee8998bc1318336` | 2026-11-20 |
@@ -216,6 +239,15 @@ Each branch's last commit is an ancestor of `origin/main` (`f3d7ac74`), rechecke
 | `review-fixes`            | `1433d10542073a123d2c85f3879bb36293d12edd` | 2026-11-15 |
 | `scrollback-bun-crash`    | `79912e49120901855fec492ef068bccf31632982` | 2026-11-20 |
 | `stop-release-thread`     | `47ca8cca8275c78a3f21cf82df181334ee1cb0b1` | 2026-11-20 |
+| `v2-connect`              | `0c58e7f698ccc47fd7e4c16e2dea9f6e5ea22237` | 2026-11-13 |
+| `v2-everywhere`           | `40e7086143bad6bd6bc53d586f93ffae5082c55c` | 2026-11-13 |
+| `v2-hands`                | `3d5a45a09f0126f77591902901adfe934ec7511f` | 2026-11-14 |
+| `v2-locks`                | `06814f1df410c7105ef4f1a83dcf80d467a41611` | 2026-11-14 |
+| `v2-scope`                | `76b5619f1b63038c7c2fe7bbb9edb653baacbe6f` | 2026-11-13 |
+| `v2-vector`               | `5dbdcfb4669575ddb936c9d83b97d25613abfba4` | 2026-11-14 |
+| `vector-at-mention`       | `c0d10fb85a0cecc8264abd0bb37693a95d93e07d` | 2026-11-12 |
+| `vector-everywhere`       | `890bb072b096bf380d245321a4120ef07b12b2ea` | 2026-11-12 |
+| `vectorscope`             | `bee92d8e92ab8b058814e5825e381602b87d279a` | 2026-11-08 |
 | `windows-engine-timeouts` | `506600e10d348f190c16b14ca8b615e57343953d` | 2026-11-20 |
 | `windows-stop-guardian`   | `24436c868035b12caf2bd70efe72465826e56e48` | 2026-11-17 |
 | `windows-stop-observe`    | `b6370e89fec521ae153e7e9578c645969565de87` | 2026-11-16 |
@@ -223,44 +255,14 @@ Each branch's last commit is an ancestor of `origin/main` (`f3d7ac74`), rechecke
 | `windows-test-budgets`    | `625153c74946bd0e8b0e46ca8806980d7843a5f1` | 2026-11-20 |
 | `workspaces-finish`       | `e37ec1b5fd338ded9d39e4bf9b510162ab9088f7` | 2026-11-16 |
 
-### Needs the owner's decision (35 branches)
+### Needs the owner's decision (5 branches)
 
-These branches are not ancestors of `main`. "Commits not in main" counts the branch's non-merge commits whose patch `git cherry` does not find in `main`. Their work looks superseded by later branches that did merge (for example, `cloud-workspaces` by `workspaces-finish` and `v2-hands` by `hands-finish`), but that is not proven: a branch's own patch may differ from the merged version. The owner decides whether to keep or delete each one.
+These five branches are not ancestors of `main`. "Commits not in main" counts the branch's non-merge commits whose patch `git cherry main <sha>` does not find in `main`, checked in the same full clone. Four of them (`build-coordination`, `codium-track`, `finish-checks` and `owner-setup`) have every patch in `main` and can be deleted without losing a change. `uia-first-lookup` (PR #45, closed without merging) holds 2 commits that are not in `main`: the HF-7 (1) candidate (a) fix `1e13790d` and its docs follow-up `321a0298`. The owner decides whether to keep or delete it.
 
-| Branch                | Last commit                                | Date       | Commits not in main |
-| --------------------- | ------------------------------------------ | ---------- | ------------------- |
-| `agent-environment`   | `fa938a090bc60f427809db5b904796594432cd7c` | 2026-11-14 | 39                  |
-| `build-candidate`     | `dfc26ee931fb622beac46ce800e9a65dafadd915` | 2026-11-14 | 219                 |
-| `build-complete`      | `00b87034faa1e3c1604ab7160f5e5c33f3745805` | 2026-11-14 | 351                 |
-| `build-connect`       | `a8234d9ac34f74bb84d48bce17c0de48d4b18c38` | 2026-11-14 | 59                  |
-| `build-coordination`  | `41dac6f728ee67dc083950614fd143b0d45507b4` | 2026-11-14 | 1                   |
-| `build-everywhere`    | `5053d4907383ef31a61844995215eb86a53e7845` | 2026-11-14 | 25                  |
-| `build-github-ui`     | `017f7144b031649967c0a1cae4f0a5be23bef34c` | 2026-11-12 | 70                  |
-| `build-integrate`     | `ceed2426aa546ecc7d18357ebb1058d4598b3832` | 2026-11-14 | 104                 |
-| `build-isolation`     | `cf34ffe29e5cd1b5fd05d5749f6ee4a418500b8d` | 2026-11-12 | 103                 |
-| `build-native-shell`  | `faa1fa09b697b900e6125ad316a7e961de616981` | 2026-11-14 | 117                 |
-| `build-scope`         | `0dcd814e6ac69edefcdffb10ff4bbd95c7062398` | 2026-11-13 | 117                 |
-| `build-scope-checks`  | `7bbf4d88bca2302bb74940919597fe513ea00979` | 2026-11-12 | 87                  |
-| `build-scope-joined`  | `3bb2b2ba223ced69af19ff67465de1adee34e646` | 2026-11-14 | 145                 |
-| `build-scope-owner`   | `892202d4a603e7e0afc75065bb8459c2825e17c8` | 2026-11-13 | 113                 |
-| `build-scope-ui`      | `e00d579b3f7ffc1a62ea1f8050aadf5c266257d5` | 2026-11-12 | 86                  |
-| `build-scope-wire`    | `82cbb103e3c8ebf1299ce81a1197e93dbf2205a4` | 2026-11-14 | 109                 |
-| `build-scope-witness` | `5d672a22898770f7b3cca865dacc36586b98d513` | 2026-11-13 | 102                 |
-| `cloud-workspaces`    | `d0300404e9e280891cda85122bee21bf47eb2b02` | 2026-11-14 | 9                   |
-| `codium-track`        | `c262f74b33fdf3b8b5faddbc24395891227878be` | 2026-11-10 | 35                  |
-| `connected-workspace` | `9d77e1942e596a00b4fb7739adf88466a3ba54c8` | 2026-11-12 | 19                  |
-| `finish-checks`       | `00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a` | 2026-11-10 | 0                   |
-| `hands`               | `4eb9f52fdf2ee7d04a1da0bdc1f394ca9ff70dec` | 2026-11-13 | 286                 |
-| `hands-ui-check`      | `24b21a02727f578fbefbd1d599f00da50b0c4237` | 2026-11-10 | 246                 |
-| `native-finish`       | `f141ef16e1a1306c065531ef22088f06103d143e` | 2026-11-14 | 120                 |
-| `owner-setup`         | `6f4a7c5bb8940bb32888677ea23247208b4c7c68` | 2026-11-02 | 1                   |
-| `uia-first-lookup`    | `321a02983a8aa8f7a910d807280566fb893a81e2` | 2026-11-17 | 2                   |
-| `v2-connect`          | `0c58e7f698ccc47fd7e4c16e2dea9f6e5ea22237` | 2026-11-13 | 60                  |
-| `v2-everywhere`       | `40e7086143bad6bd6bc53d586f93ffae5082c55c` | 2026-11-13 | 27                  |
-| `v2-hands`            | `3d5a45a09f0126f77591902901adfe934ec7511f` | 2026-11-14 | 287                 |
-| `v2-locks`            | `06814f1df410c7105ef4f1a83dcf80d467a41611` | 2026-11-14 | 4                   |
-| `v2-scope`            | `76b5619f1b63038c7c2fe7bbb9edb653baacbe6f` | 2026-11-13 | 173                 |
-| `v2-vector`           | `5dbdcfb4669575ddb936c9d83b97d25613abfba4` | 2026-11-14 | 111                 |
-| `vector-at-mention`   | `c0d10fb85a0cecc8264abd0bb37693a95d93e07d` | 2026-11-12 | 78                  |
-| `vector-everywhere`   | `890bb072b096bf380d245321a4120ef07b12b2ea` | 2026-11-12 | 24                  |
-| `vectorscope`         | `bee92d8e92ab8b058814e5825e381602b87d279a` | 2026-11-08 | 58                  |
+| Branch               | Last commit                                | Date       | Commits not in main |
+| -------------------- | ------------------------------------------ | ---------- | ------------------- |
+| `build-coordination` | `41dac6f728ee67dc083950614fd143b0d45507b4` | 2026-11-14 | 0                   |
+| `codium-track`       | `c262f74b33fdf3b8b5faddbc24395891227878be` | 2026-11-10 | 0                   |
+| `finish-checks`      | `00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a` | 2026-11-10 | 0                   |
+| `owner-setup`        | `6f4a7c5bb8940bb32888677ea23247208b4c7c68` | 2026-11-02 | 0                   |
+| `uia-first-lookup`   | `321a02983a8aa8f7a910d807280566fb893a81e2` | 2026-11-17 | 2                   |
