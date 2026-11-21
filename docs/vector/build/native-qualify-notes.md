@@ -3017,3 +3017,27 @@ Per-SHA records only: not main, no qualification, both native build switches and
   `VECTOR_NATIVE_SHELL_FAILURE {"v":1,"host":"host-close",…,"driverExit":134,"probe":"probe-empty-abort-own-zero","probeNode":"probe-node-zero",…}`,
   and both runtimes' preflight printed `readerSHA256` `33c834a9…a762` for source revision `c9a8e489`.
 - This supersedes `native-isolation-status.md:474` ("No Node cell was dispatched"); a dated note is added there.
+
+## 21 November 2026: runner-home witness obligations 1 and 2 for Node (NQ-WITNESS-1-2)
+
+The two obligations `native-isolation-status.md` kept open (the runner-home canaries are exactly `ENOENT` through the
+mask, `native-shell-payload.ts:701-719`; `/home/runner/work` cannot be rebuilt, `EROFS`, `:731-743`) are checks in the
+payload's `inspect` mode. They are witnessed for Node at `c9a8e489` by run 43867414546's baseline cells
+"node, own-key, baseline" (job 133299449128) and "node, codium, baseline" (job 133299449236), both green at step 16.
+The derivation, from the fixtures at `c9a8e489`:
+
+- A baseline cell runs every case: the engine selects `CASES` unless the family is engine-death
+  (`native-shell-engine.ts:183`), and the host expects `[...CASES]` (`native-shell-host.ts:495`); `CASES` starts with
+  `inspect` (`native-shell-payload.ts:17-18`).
+- The host passes a baseline cell only with `rounds === CASES.length`, exit code 0 and `driverExit` 0
+  (`native-shell-host.ts:951`, with the summary check at `:810`), and each round needs the case it expected
+  (`:762`), so the `inspect` round completed.
+- The engine accepts the `inspect` round only when the ShellTool result has `exit === 0` and both
+  `native-inspect-stdout` and `native-inspect-stderr` (`native-shell-engine.ts:237-241`). The payload prints those
+  only after its `need(...)` checks, the canary `ENOENT` and `EROFS` checks among them, have all held; a failed
+  `need` exits non-zero first.
+
+So both checks held in both Node baseline cells. Main's copies of the three fixtures differ from `c9a8e489` only in
+`native-shell-payload.ts`'s sandbox `runError` regex (it also accepts "exited N"), which these checks do not use. A
+Bun witness stays open: run 19's four Bun cells failed at step 16 before any case. Per-SHA on `native-qualify`, not
+main; not a qualification; both native build switches and `FLOOR` false.

@@ -526,6 +526,10 @@ The three runner-home witness obligations:
 
 The two open obligations are checks in the `inspect` case, which no run reached.
 
+21 Nov 2026 (`native-qualify-notes.md`, "Runner-home witness obligations 1 and 2 for Node"): both are now
+witnessed for Node at `c9a8e489`, by the two Node baseline cells of run 43867414546 (jobs 133299449128 and
+133299449236). A Bun witness stays open (run 19's Bun cells failed at step 16). Per-SHA, not main, no qualification.
+
 ### Remaining qualification at `ce5e5605`
 
 **Proven** by one run at one head (43697711119, job `132761821581`, `ce5e5605`), for the
