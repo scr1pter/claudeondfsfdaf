@@ -250,6 +250,14 @@
       "w": 1600,
       "x": 3360,
       "y": 14200
+    },
+    "Settings-More.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Settings: the remaining pages",
+      "w": 1600,
+      "x": 0,
+      "y": 15620
     }
   },
   "createdOnFiles": {
@@ -282,7 +290,9 @@
     "rowModels",
     "rowModelsNote",
     "rowFirst",
-    "rowFirstNote"
+    "rowFirstNote",
+    "rowSettingsMore",
+    "rowSettingsMoreNote"
   ],
   "notes": {
     "howto": {
@@ -439,6 +449,20 @@
       "x": -480,
       "y": 14200,
       "text": "First run is one setup card and a few dialogs. In a session, the editor, agent terminals, context and research use the same panels and header as everything else."
+    },
+    "rowSettingsMore": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "The rest of Settings",
+      "x": 0,
+      "y": 15320
+    },
+    "rowSettingsMoreNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 15620,
+      "text": "Every Settings page the earlier boards did not draw, on the same route shell: Vector Hands, Vector Local, GitHub, Playbooks, Remote, Production, Servers, Repository trust, Spend limits, Shortcuts, Notifications, Accessibility, Roadmap vote and Updates. The dialog tweak opens each page's setup dialog."
     }
   },
   "order": [
@@ -472,7 +496,8 @@
     "Brain.dc.html",
     "Onboarding.dc.html",
     "SessionTools.dc.html",
-    "Research.dc.html"
+    "Research.dc.html",
+    "Settings-More.dc.html"
   ],
   "pages": [
     {

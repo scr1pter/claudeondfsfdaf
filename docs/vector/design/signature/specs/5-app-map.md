@@ -598,6 +598,7 @@ The board wins unless the owner says otherwise. Most departures follow today's c
 - **Memory (Brain):** Approve and Reject show an inline status line, as today's learned chip does. Skill toasts use today's strings. "Use Codium for Brain helpers" and "Approve all" are left out (fewer controls).
 - **First run (Onboarding):** no Panels button and no counts on the sidebar verbs before a session exists. Steps with buttons are about 90 px tall. Coordinated runs and Connected tools are absent from More on a first run.
 - **Session tools:** the budget stop card uses today's copy ("Budget stop", "Step limit reached: 60 of 60 steps used for this run."). The Watch steps follow the approved Tasks board's run.
+- **Settings-More:** follows today's pages wherever the spec would promise something the code doesn't do. Hands is "Let Vector use apps on your computer." with today's labels (Granted, Always-allowed apps, Built-in blocks), plus today's mouse, keep-awake, notify and Stop rows; Hands setup is today's Permissions step. Vector Local uses today's six-step setup wizard and role names (Main agent, Subagents, Vectorscope); "Allow Updates?" (with a reason field) and the loosening confirm are two separate dialogs, as today. GitHub's run dialog says "Start run", has no per-run key choice, and needs Brain approval first; schedules change in Automations. Servers has no WSL row (Windows only), no environment variables and no SSH option, as today. Repository trust has no "Ask again" switch. Spend limits are text fields. Roadmap vote uses radios and one Vote button. Pages drawn on other boards show a "Drawn on …" box in the nav.
 
 **Still to settle (owner or the finishing pass)**
 1. **Taking over the cloud computer:** the spec says control never goes back on a timer; today's code and the approved Tasks board say "Control goes back to Vector in N minutes, or when you give it back." The Codium board follows the spec.
@@ -605,6 +606,8 @@ The board wins unless the owner says otherwise. Most departures follow today's c
 3. **Selective review:** the board has one "Approve this change" box per hunk; today's code has Accept | Hold per hunk.
 4. **The "+" menu on This Mac:** Workflows adds "New workspace… ⇧⌘W"; the More board's host menu doesn't have it. One of them changes.
 5. **Search model in Memory:** the board draws a select ("Search by meaning", "Match words only"); the second option is an assumption.
+6. **Remote pairing:** Settings-More draws pairing as a dialog with the QR code and the check code stacked, as the spec asks. Today it is inline in the Remote card, and the check code replaces the QR code once the phone scans.
+7. **Production:** Settings-More stacks On Call URLs, Release Guard, Ship Desk and Domains as sections; today's page uses tabs.
 
 **Not drawn**
 - Research: the source viewer, the picker for several runs, paywalled and robots statuses, the guest notice, and the card's save buttons.
