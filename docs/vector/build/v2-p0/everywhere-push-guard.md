@@ -47,13 +47,13 @@ Files: `packages/desktop/src/main/everywhere-scan.ts` and its test, `packages/de
   - :93, every credential name and env-form secret is refused before the posting check.
   - :128, templates, placeholders, public keys and code stay pushable.
   - :156, quoted, spaced, renamed and deleted paths, and five headers the gate cannot read.
-- `everywhere-runner.test.ts` :542 is "a staged diff carrying … stays on the computer and settles held", in two variants: a `STRIPE_SECRET_KEY` line in `notes.txt`, and a new `config/.env.production`. Each settles `held` with its local branch, with no commit, push, `pushing` report or `open-pr`. Only the summary reaches the posting check.
+- `everywhere-runner.test.ts` :574 is "a staged diff carrying … stays on the computer and settles held", in two variants: a `STRIPE_SECRET_KEY` line in `notes.txt`, and a new `config/.env.production`. Each settles `held` with its local branch, with no commit, push, `pushing` report or `open-pr`. Only the summary reaches the posting check.
 
 **Evidence** (each file run alone with `--timeout 30000`):
 
 - Red-before. With main's `everywhere-scan.ts` put back in the working tree and the tests unchanged:
   - The scan file gave 5 pass and 3 fail. The failures were :77, :93 and :156; :128 passes on both, because it guards against over-blocking.
-  - The runner file gave 57 pass and 2 fail, both :542 variants.
+  - The runner file gave 57 pass and 2 fail, both :574 variants.
   - The restored file's sha256 matched.
 - Green: scan 8 of 8, runner 60 of 60 (at the end of the branch). `bun typecheck` passed in packages/desktop.
 - Mutation M1 deleted the `envSecret(lines)` clause in `mayPushDiff`. The notes.txt line (:79) went red, and so did :93's env lines. The file was restored and its sha256 compared equal.
@@ -65,26 +65,26 @@ Commits: `ef2f03a78` (scan), `4d0cf9a97` (runner case).
 
 **What it decides.** The open question in the deviations log, EV-03, "The draft PR after a stop heard during the push" (:350 at `b87cc462f`). Lead ruling (v2-rulings, section 3 calls): suppress the PR on `cancelled` only.
 
-**The fix.** `everywhere-runner.ts` :403 now reads:
+**The fix.** `everywhere-runner.ts` :408 now reads:
 
 ```ts
-const prUrl = abortedFor("cancelled") ? undefined : await deps.openPr({...}).catch(() => undefined)
+const prUrl = stopHeard() ? undefined : await deps.openPr({...}).catch(() => undefined)
 ```
 
-`abortedFor(reason)` (:229) is `controller.signal.aborted && outcome === reason`. The plan's inline form fails typecheck with TS2367: at that point TypeScript narrows `outcome` to `"failed"`, because `abort` assigns it only from callbacks. The helper, defined beside `abort`, reads the declared type and has the same meaning.
+`stopHeard()` (:233) reads a latch that `abort` sets whenever its reason is `cancelled` (:225-228). The builder's first version was `abortedFor("cancelled")`, that is `controller.signal.aborted && outcome === "cancelled"`, which is the plan's inline form behind a helper (the inline form fails typecheck with TS2367, because TypeScript narrows `outcome` to `"failed"` there: `abort` assigns it only from callbacks). Review found that form leaks; see the review entry below.
 
 Which outcomes still open the PR:
 
 - `cancelled` (a stop, a `lost` answer, a 404 or 409 heartbeat, or the toggle, Vector Local or model switch turned off during the admitted push): the push still finishes, as C3 requires, but no draft PR opens. The delivered `changes` result names the branch and carries no `prUrl`.
 - `over-budget` (the deadline): the PR still opens.
 - `interrupted` (the lease ran out): the PR still opens.
-- If the lead wants `interrupted` suppressed too, the condition becomes `controller.signal.aborted && !abortedFor("over-budget")`. The new :165 case then goes red (mutation M5).
+- If the lead wants `interrupted` suppressed too, `abort` sets the latch for every reason but `over-budget`. The new :165 case then goes red (mutation M5, run by the builder on the first version).
 
 **Docs copy.** The stop paragraph in `packages/web/src/drafts/docs/everywhere.astro` (:150-151) now reads: "Stopping it aborts the job on your computer and nothing more is pushed. A push that has already started finishes, but no draft pull request opens for it." `everywhere-docs.test.ts` pins both sentences and refuses the old clause, "draft pull request can still open".
 
 **Tests.**
 
-- In the switch-stop loop (:966) and the stop, lost, 404 and 409 receipt loop (:1023), the confirmed variants now expect no `open-pr` and no `prUrl`. These cases had pinned the behaviour the deviations log called an open question. They are now stricter.
+- In the switch-stop loop (:1001) and the stop, lost, 404 and 409 receipt loop (:1057), the confirmed variants now expect no `open-pr` and no `prUrl`. These cases had pinned the behaviour the deviations log called an open question. They are now stricter.
 - The deadline case (:146) now also pins one `open-pr`, with `prUrl` equal to `https://github.com/acme/app/pull/4`.
 - New case (:165): a lease that runs out during an admitted push still opens the PR. This pins the ruling's `interrupted` half.
 
@@ -93,7 +93,7 @@ Which outcomes still open the PR:
 - Red-before, with only `everywhere-runner.ts` reverted: 55 pass and 5 fail. The failures were exactly the confirmed variants: the switch stop, and stop, lost, 404 and 409. The restored file's sha256 matched. Green: 60 of 60, and `bun typecheck` passed in packages/desktop.
 - Docs red-before, with only the `.astro` page reverted: 16 pass and 1 fail ("says what the contract holds"). Green: 17 of 17. In packages/web, `bun typecheck` (astro check) reported 0 errors.
 - Mutation M3, dropping the `cancelled` condition (any abort suppresses): the deadline case :146 went red, and so did :165.
-- Mutation M4, making `openPr` unconditional again: the five confirmed stop variants went red, :966 among them.
+- Mutation M4, making `openPr` unconditional again: the five confirmed stop variants went red, :1001 among them.
 - Mutation M5, the `!== "over-budget"` alternative: :165 went red.
 - Each mutation was restored and its sha256 compared equal.
 
@@ -103,6 +103,24 @@ Which outcomes still open the PR:
 - The "no settle after 404/409" choice, options (b) and (c) at :348, stays the lead's.
 
 Commits: `25af5fa52` (runner), `fd9213e50` (docs copy).
+
+## 2026-11-21, EV-03 review: a stop stays heard after a later deadline or lease abort
+
+**The gap the review found.** The runner's one-second timer keeps running after an abort, until `finally` stops it. After a stop (a heartbeat answered `stop`, `lost`, 404 or 409, which call `abort("cancelled")`), a later tick still runs the deadline and lease checks. So `abort("over-budget")` or `abort("interrupted")` overwrote `outcome` while the admitted push was still running. `abortedFor("cancelled")` then read false, and the draft PR opened after the stop. The docs copy promises it does not. A switch stop was not affected, because each tick puts `cancelled` back while the switch stays off.
+
+**The fix** (`b21197910`). `abort` latches `cancelHeard` when its reason is `cancelled`, and the PR check reads that latch through `stopHeard()`. `outcome`, and so every settle, is unchanged. A deadline or lease abort with no stop before it still opens the PR, as ruled.
+
+**Tests.** New `everywhere-runner.test.ts` cases at :187, in two variants: "a stop heard during an admitted push still opens no draft PR when the deadline passes before the push ends" and "... when the lease runs out before the push ends". The heartbeat a minute into the push answers `stop`. Then the fixture clock moves past the job's deadline (5 minutes) or the lease (30-minute job, 5-minute lease) before git returns. Each expects reports `started`, `pushing` and `heartbeat`, no `open-pr`, and one `changes` result with the branch and no `prUrl`.
+
+**Evidence** (each file run alone with `--timeout 30000`):
+
+- Red-before, on the builder's `abortedFor` version with the new cases added: 60 pass and 2 fail. Both new cases failed at :212 with "Expected length: 0, Received length: 1" (`open-pr`).
+- Green: 62 of 62. `bun typecheck` passed in packages/desktop.
+- Mutation A, making `openPr` unconditional again: 7 failed, the two new cases and the five confirmed stop variants. Restored, sha256 equal.
+- Mutation B, suppressing the PR after any abort (`controller.signal.aborted`): the deadline case :146 and the lease case :165 failed. Restored, sha256 equal.
+- The reviewer reran the EV-16 checks on the final scan: M1 (no `envSecret(lines)`) failed :79, M2 (no `credentialPath`) failed :80 and :158, M3 (no `envSecret` in `checkedSummary`) failed :87, and M4 (an unreadable path no longer blocks) failed the `c/file` case. Each was restored, sha256 equal.
+
+**Left open.** `runner.stop()` (app quit, `stopRemote`) aborts the controller without a reason, so it does not set the latch. A push still running at quit opens its PR only if the process lives long enough. That matches the ruling's "cancelled only".
 
 ## Commands
 
