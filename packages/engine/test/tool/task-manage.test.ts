@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { sql } from "drizzle-orm"
@@ -895,6 +896,25 @@ describe("task management", () => {
     expect((yield* jobs.list()).map((job) => job.id)).toEqual([running.id])
     expect(SubagentLifecycle.read(yield* sessions.get(fine.id))).toMatchObject({ status: "cancelled", attempt: 1 })
     yield* jobs.cancel(running.id)
+  }))
+
+  it.instance("an agent cannot resume a connect fix child, and an ordinary child still resumes (CW-07)", () => Effect.gen(function* () {
+    const manager = yield* TaskManager.Service
+    const jobs = yield* BackgroundJob.Service
+    const { root, launch } = yield* launched()
+    const prompts: SessionPrompt.PromptInput[] = []
+    const watched: TaskPromptOps = { ...ops, prompt: (input) => Effect.sync(() => void prompts.push(input)).pipe(Effect.as(reply(input))) }
+    const fix = yield* helper(root.id, launch, { agent: ConnectPolicy.FIX_AGENT })
+    yield* said(root.id, "Resume the helpers")
+    expect(
+      yield* manager.resume({ sessionID: root.id, taskIDs: [fix.id], origin: "agent", guest: false }, watched).pipe(Effect.flip),
+    ).toMatchObject({ code: "invalid", message: "A connect fix cannot be resumed; ask connect for a new fix." })
+    expect(prompts).toEqual([])
+    expect((yield* jobs.list()).map((job) => job.id)).not.toContain(fix.id)
+    const ordinary = yield* helper(root.id, launch)
+    yield* manager.resume({ sessionID: root.id, taskIDs: [ordinary.id], origin: "agent", guest: false }, watched)
+    expect((yield* jobs.wait({ id: ordinary.id })).info?.status).toBe("completed")
+    expect(briefs(prompts, ordinary.id)).toHaveLength(1)
   }))
 
   it.instance("a completed child continues from the user with a message", () => Effect.gen(function* () {

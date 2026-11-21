@@ -2203,3 +2203,17 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
 - Not done (part 2, left for the morning list): returning a bound member-gate refusal as a 200 refused run instead of
   400 invalid. It needs a fixture that reaches the hub's member gate after the binding, which the current tests do not
   build.
+
+## 2026-11-21 — CW-07: an agent cannot resume a connect fix child
+
+- Supersedes CW-07 "Left open" (2) (a stopped `connect_fix` child resumed through `task_manage` asked no new
+  `connect_write`) and the matching line in this file's CN-20 hold list. The check is in `packages/engine/src/task/manager.ts`
+  `resumable`, beside the research-agent refusal, so the protected `tool/task-manage.ts` and `tool/task.ts` are
+  untouched: `record.agent === ConnectPolicy.FIX_AGENT` with origin `agent` fails `invalid`, "A connect fix cannot be
+  resumed; ask connect for a new fix." The owner's resume from the Tasks pane (origin `user`) stays allowed, as the
+  owner's merge asks nothing (§4.3); refusing every origin is the stricter alternative, for the lead. The `resume` offer
+  is unchanged, since the owner may still use it.
+- Test: `packages/engine/test/tool/task-manage.test.ts` "an agent cannot resume a connect fix child, and an ordinary
+  child still resumes (CW-07)": the fix child's resume fails with that code and message, starts no prompt and no job,
+  and an ordinary child in the same conversation resumes and completes. Red on the old manager (the fix child resumed
+  to attempt 2). The file passes 53 of 53.
