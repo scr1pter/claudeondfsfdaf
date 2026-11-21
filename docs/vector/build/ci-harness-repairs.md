@@ -1038,3 +1038,49 @@ transition"), and `engine (windows, shard 12/12)` job 133785925116 timed out in 
 44007029816, success). The `github.bundle.test.ts` timeout did come back later on PR #46 (job 136057825295), and #48
 changed that test (the "Windows patch-limit listing row" entry above). The `prompt.test.ts` timeout is recorded as
 intermittent, with no change.
+
+## 2026-11-21: SQLite open failed with SQLITE_BUSY_RECOVERY while another process recovered the WAL
+
+Branch `wal-busy-timeout` from `5a5b5619`. A product fix in the shared SQLite adapters. No test, fixture, deadline or
+timeout was loosened or lengthened.
+
+Evidence. PR #58 test.yml run 44871325403, attempt 1, `unit (windows)` job 136751082469:
+`packages/core/test/review/request-store.test.ts` "two processes on the same SQLite file grant only one immutable
+pending reservation" failed after 906.73 ms. One of its two probe processes exited 1 with `SQLiteError: database is
+locked` (errno 261, `SQLITE_BUSY_RECOVERY`) at `packages/core/src/database/sqlite.bun.ts:190:46`, which is the
+`PRAGMA journal_mode = WAL` run straight after `new Database(...)`. #58 does not touch these files, and earlier
+`unit (windows)` jobs passed the case (job 136722206106, 621.61 ms).
+
+Cause. Bun opens a database with no busy timeout, and the adapter's first statement was the WAL switch. The database
+layers (`database/database.ts`, `brain/database.ts`) set `busy_timeout = 5000` only after it. When the last
+connection to a file closes, SQLite removes its -wal and -shm files, so the next process to open it runs WAL
+recovery, which holds the WAL write, checkpoint and recover locks. A second process that opens the file meanwhile
+gets `SQLITE_BUSY_RECOVERY`. SQLite retries that through the busy handler, but with a timeout of 0 there is none, so
+the open failed at once. The test starts both probes together on a file the seed connection has just closed, which
+is the case of the desktop engine and a CLI run opening vector.db or brain.db together. The Node adapter had the same
+gap: `DatabaseSync` got `timeout: config.timeout`, which no caller sets.
+
+Fix. `sqlite.bun.ts` runs `PRAGMA busy_timeout = 5000` before the WAL switch, and `sqlite.node.ts` defaults
+`timeout` to 5000, which `DatabaseSync` applies at open. 5000 ms is what the database layers already set right
+after, so the wait starts earlier and is not made longer. `packages/effect-sqlite-node/src/index.ts` has the same
+order, but nothing in `src` imports it and its callers pass `timeout`, so it is left as it is.
+
+Regression test. `packages/core/test/database-open.test.ts` (Linux only) seeds a WAL database through
+`Database.layerFromPath` and closes it. `test/fixture/wal-recovery-holder.py` then keeps the -shm in the state a
+recovering process leaves it in (DMS byte shared, a zeroed 32 KiB wal-index region, bytes 120-122 exclusive) for
+1 s, well under the 5 s timeout, and the test opens the file again. It also checks that the open finished after the
+holder let go, so a holder that stopped blocking fails the test instead of passing it. Before the fix it failed
+3 of 3 runs in about 100 ms with `SQLITE_BUSY_RECOVERY` at `sqlite.bun.ts:190:46`, the CI frame. After it, the file
+passes in about 1.4 s.
+
+Mutations, each red and then restored: the new `busy_timeout` line removed (`SQLITE_BUSY_RECOVERY`); the line moved
+after the WAL switch (`SQLITE_BUSY_RECOVERY`); the holder without its exclusive locks (the open finished about 1 s
+before the holder released, so the ordering check failed). The Node adapter, bundled with `bun build --target=node`
+and run under Node 22.23.4 against the same holder, opened after 938 ms with `busy_timeout` 5000; with
+`timeout: config.timeout` put back it failed in 4 ms with "database is locked".
+
+Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 of 20 runs passed (5 tests each,
+1.24-1.69 s); `database-open.test.ts` 8 of 8; `sqlite-bun.test.ts`, `database-migration.test.ts`,
+`brain/database.test.ts`, `background-job-store.test.ts` and `engine/test/storage/storage.test.ts` passed (the last
+does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
+change has not run on Windows CI yet.
