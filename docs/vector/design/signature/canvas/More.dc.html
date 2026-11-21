@@ -148,6 +148,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 </div>
 
+<sc-if value="{{live.show}}" hint-placeholder-val="{{ true }}">
 <section aria-label="Live" style="flex: none; position: relative; margin: 12px 8px 0; padding: 4px; border-radius: 10px; background: {{t.liveFill}}; border: 1px solid {{t.liveBorder}}">
 <div style="display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 0 0 5px">
 <span style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Live</span>
@@ -185,9 +186,11 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 </sc-if>
 </section>
+</sc-if>
 
 <div class="vx-scroll" style="flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding-bottom: 12px; -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 24px), transparent)">
 
+<sc-if value="{{pinsShow}}" hint-placeholder-val="{{ true }}">
 <div role="group" aria-label="Pinned" style="padding-top: 16px">
 <div style="height: 24px; display: flex; align-items: center; padding: 0 18px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Pinned</div>
 <sc-for list="{{pins}}" as="pin" hint-placeholder-count="1">
@@ -202,6 +205,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-for>
 </div>
+</sc-if>
 
 <sc-for list="{{hosts}}" as="host" hint-placeholder-count="2">
 <div role="group" aria-label="{{host.name}}" style="padding-top: {{host.padTop}}">
@@ -392,7 +396,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div role="menu" aria-label="{{pmenu.label}}" class="vx-pop" style="position: absolute; z-index: 40; top: {{pos.proj}}; left: 252px; width: 240px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}; text-align: left">
 <button role="menuitem" class="vx-h vxs-mi" onClick="{{pop.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">New session</button>
 <button role="menuitem" aria-haspopup="dialog" class="vx-h vxs-mi" onClick="{{pmenu.edit}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Edit repository…</button>
-<button role="menuitem" class="vx-h vxs-mi" onClick="{{pmenu.toggleWs}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">{{pmenu.wsLabel}}</button>
+<sc-if value="{{pmenu.trust}}" hint-placeholder-val="{{ true }}"><button role="menuitem" aria-haspopup="dialog" class="vx-h vxs-mi" onClick="{{pmenu.trustClick}}" title="Shown only while Vector ignores this repository’s own settings. The trust dialog is drawn on the First run board" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Trust this repository…</button></sc-if>
 <button role="menuitem" class="vx-h vxs-mi" onClick="{{pmenu.clear}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Clear notifications</button>
 <div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div>
 <button role="menuitem" class="vx-h vxs-mi" onClick="{{pop.close}}" title="Removes it from the sidebar. Files stay where they are." style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Close repository</button>
@@ -581,12 +585,28 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <header style="flex: none; position: relative; z-index: 10; height: 44px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 20px; background: {{t.main}}">
 <span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4.5M7.5 9L12 4.5 16.5 9M5 14.5V19h14v-4.5"></path></svg></span>
 <h1 style="margin: 0; flex: none; white-space: nowrap; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Deploy</h1>
-<span style="flex: 0 1 auto; min-width: 0; margin-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text3}}">vector · hosting and database</span>
+<span style="flex: 0 1 auto; min-width: 0; margin-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{dep.subtitle}}</span>
 <span style="flex: 1 1 8px; min-width: 8px"></span>
+<sc-if value="{{dep.hasRepo}}" hint-placeholder-val="{{ true }}">
 <button class="vx-h" aria-label="Repository: vector" title="Choose a repository" style="height: 24px; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{t.text}}">vector<span aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></button>
 <button class="vx-h vxs-gh" onClick="{{dep.refresh}}" title="Refresh deployments and services" style="flex: none; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.46-3.54M13 2.75v2.5h-2.5"></path></svg>{{dep.refreshLabel}}</button>
-<button aria-label="Close Deploy" title="Close Deploy  Esc" onClick="{{dep.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</sc-if>
+<button aria-label="Close Deploy" title="{{dep.closeTip}}" onClick="{{dep.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
 </header>
+<sc-if value="{{dep.noRepo}}" hint-placeholder-val="{{ false }}">
+<div style="flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 32px 80px; box-sizing: border-box">
+<div style="max-width: 360px; display: flex; flex-direction: column; align-items: center; text-align: center">
+<span aria-hidden="true" style="width: 40px; height: 40px; display: grid; place-items: center; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}; color: {{t.icon}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4.5M7.5 9L12 4.5 16.5 9M5 14.5V19h14v-4.5"></path></svg></span>
+<h2 style="margin: 14px 0 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">No repositories yet</h2>
+<p style="margin: 4px 0 0; font-size: 13px; line-height: 20px; color: {{t.text2}}">Open a folder or clone a repository to deploy it.</p>
+<div style="margin-top: 16px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px">
+<button class="vxs-sec" onClick="{{dep.openFolder}}" aria-haspopup="dialog" title="Opens the macOS folder chooser" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Open a folder…</button>
+<button class="vx-h vxs-gh" onClick="{{dep.clone}}" aria-haspopup="dialog" title="Open from GitHub is drawn on the First run board" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Clone from GitHub…</button>
+</div>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{dep.hasRepo}}" hint-placeholder-val="{{ true }}">
 <div style="flex: 1; min-height: 0; display: grid; grid-template-columns: 220px minmax(0, 1fr)">
 <nav aria-label="Deploy sections" class="vx-scroll" style="min-height: 0; overflow-y: auto; padding: 8px; box-sizing: border-box; box-shadow: inset -1px 0 0 {{t.edge}}">
 <sc-for list="{{dep.nav}}" as="n" hint-placeholder-count="6">
@@ -610,8 +630,60 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-if>
 <sc-if value="{{dep.titled}}" hint-placeholder-val="{{ false }}">
-<div style="font-size: 12px; line-height: 16px; color: {{t.text3}}">vector</div>
+<div style="font-size: 12px; line-height: 16px; color: {{t.text3}}">{{dep.kicker}}</div>
 <h2 style="margin: 2px 0 0; font-size: 20px; line-height: 28px; font-weight: 600; color: {{t.text}}">{{dep.title}}</h2>
+<sc-if value="{{dep.hasDesc}}" hint-placeholder-val="{{ false }}"><p style="margin: 4px 0 0; max-width: 640px; font-size: 13px; line-height: 20px; color: {{t.text2}}">{{dep.desc}}</p></sc-if>
+</sc-if>
+<sc-if value="{{dep.isDeploys}}" hint-placeholder-val="{{ false }}">
+<section aria-labelledby="dp-pub-title" style="margin-top: 20px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<h3 id="dp-pub-title" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Publish this repository</h3>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">A preview never changes production. A production build is checked first, and production moves to it only if the checks pass.</p>
+<div style="margin-top: 12px; display: flex; align-items: center; gap: 8px">
+<div role="group" aria-label="Deployment environment" style="flex: none; height: 26px; display: flex; padding: 1px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.segTrack}}">
+<button aria-pressed="{{pub.prevPressed}}" onClick="{{pub.prev}}" style="height: 22px; padding: 0 10px; border: 0; border-radius: 6px; background: {{pub.prevBg}}; font-size: 12px; line-height: 16px; color: {{pub.prevColor}}">Preview</button>
+<button aria-pressed="{{pub.prodPressed}}" onClick="{{pub.prod}}" style="height: 22px; padding: 0 10px; border: 0; border-radius: 6px; background: {{pub.prodBg}}; font-size: 12px; line-height: 16px; color: {{pub.prodColor}}">Production</button>
+</div>
+<span style="flex: 1; min-width: 8px"></span>
+<button class="{{pub.btnCls}}" onClick="{{pub.go}}" disabled="{{pub.disabled}}" aria-busy="{{pub.busy}}" title="{{pub.tip}}" style="flex: none; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{pub.btnBg}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{pub.btnFg}}; white-space: nowrap; transition: background-color 120ms">{{pub.label}}</button>
+</div>
+<sc-if value="{{pub.hostOn}}" hint-placeholder-val="{{ true }}"><p style="margin: 8px 0 0; display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 14px; color: {{t.text2}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}; flex: none"></span>Publishes to the hosting project vector.</p></sc-if>
+<sc-if value="{{pub.hostOff}}" hint-placeholder-val="{{ false }}"><div style="margin-top: 12px; display: flex; align-items: center; gap: 12px"><span style="flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Connect a hosting account in Connections.</span><button class="vxs-sec" onClick="{{pub.openConn}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Open Connections</button></div></sc-if>
+<div style="margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: {{t.rowHover}}">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="flex: 1; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text}}">Release pipeline</span>
+<span style="font-size: 11px; line-height: 14px; color: {{t.text2}}">{{pub.pipeState}}</span>
+</div>
+<div role="list" aria-label="Release pipeline events" style="margin-top: 6px">
+<sc-for list="{{pub.events}}" as="ev" hint-placeholder-count="4">
+<div role="listitem" style="display: flex; align-items: center; gap: 8px; min-height: 22px">
+<span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{ev.dot}}; flex: none"></span>
+<span style="flex: 0 0 76px; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text3}}">{{ev.stage}}</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{ev.msg}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</section>
+<section aria-labelledby="dp-ws-title" style="margin-top: 12px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<div style="display: flex; align-items: flex-start; gap: 12px">
+<div style="flex: 1; min-width: 0">
+<h3 id="dp-ws-title" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Agent workspace previews</h3>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Deploy an isolated agent worktree before merging it. Your repository stays untouched.</p>
+</div>
+<span style="flex: none; height: 20px; display: inline-flex; align-items: center; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">1 workspace</span>
+</div>
+<div style="margin-top: 10px; padding-top: 10px; display: flex; align-items: center; gap: 10px; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<span style="display: flex; align-items: center; gap: 8px; min-width: 0">
+<span style="flex: none; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Swarm worker 2</span>
+<span style="flex: none; height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-size: 11px; line-height: 14px; color: {{t.text2}}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.running}}"><svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></svg></span>Running</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text3}}">swarm-worker-2</span>
+</span>
+<span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Editing menu.tsx</span>
+</span>
+<button class="vxs-sec" onClick="{{pub.goWs}}" disabled="{{pub.wsDisabled}}" title="Deploys this workspace’s worktree as a preview. Your repository stays untouched." style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{pub.wsColor}}; white-space: nowrap; transition: background-color 120ms">Publish preview</button>
+</div>
+</section>
 </sc-if>
 <sc-if value="{{dep.showList}}" hint-placeholder-val="{{ true }}">
 <div style="margin-top: 24px; margin-bottom: 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Latest deployments</div>
@@ -633,6 +705,86 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-for>
 </div>
 </sc-if>
+<sc-if value="{{dep.isConn}}" hint-placeholder-val="{{ false }}">
+<section aria-labelledby="dp-sc-title" style="margin-top: 20px; display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<div style="flex: 1; min-width: 0; margin-right: 4px">
+<h3 id="dp-sc-title" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Source control</h3>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Commit this repository and push it to a new or existing remote through your connected account.</p>
+</div>
+<button class="vxs-sec" aria-haspopup="dialog" title="Push to GitHub is drawn on the Session tools board" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Push to GitHub</button>
+<button class="vxs-sec" aria-haspopup="dialog" title="The same push dialog, for a GitLab remote" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Push to GitLab</button>
+</section>
+<div role="list" aria-label="Cloud accounts" style="margin-top: 12px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{conn.rows}}" as="cn" hint-placeholder-count="2">
+<div role="listitem" style="display: flex; align-items: flex-start; gap: 10px; min-height: 56px; padding: 12px 10px 12px 14px; box-sizing: border-box; box-shadow: {{cn.line}}">
+<span aria-hidden="true" style="width: 16px; height: 18px; display: grid; place-items: center; flex: none; color: {{t.icon}}">
+<sc-if value="{{cn.gHost}}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4.5M7.5 9L12 4.5 16.5 9M5 14.5V19h14v-4.5"></path></svg></sc-if>
+<sc-if value="{{cn.gDb}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="2.5"></ellipse><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"></path></svg></sc-if>
+</span>
+<div style="flex: 1; min-width: 0">
+<div style="display: flex; align-items: center; gap: 8px; min-height: 20px">
+<span style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">{{cn.name}}</span>
+<span style="flex: none; height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap"><sc-if value="{{cn.on}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}"></span></sc-if>{{cn.status}}</span>
+</div>
+<sc-if value="{{cn.hasDetail}}" hint-placeholder-val="{{ true }}"><div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{cn.detail}}</div></sc-if>
+<sc-if value="{{cn.hasNote}}" hint-placeholder-val="{{ false }}"><p style="margin: 8px 0 0; max-width: 520px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Choose the database project for this repository in Database. Vector will obtain the publishable key through your authorized account.</p></sc-if>
+<sc-if value="{{cn.form}}" hint-placeholder-val="{{ false }}">
+<div role="group" aria-label="{{cn.fieldLabel}}" style="margin-top: 8px; max-width: 520px">
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{cn.guide}}</p>
+<button class="vx-h vxs-gh" title="Opens your account’s token page in the browser" style="margin: 4px 0 0 -8px; height: 24px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Open token settings<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 4.5h6v6M19.5 4.5l-8 8M17.5 14v3.5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2H10"></path></svg></button>
+<label for="dp-token" style="display: block; margin: 8px 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">{{cn.fieldLabel}}</label>
+<input id="dp-token" class="vx-field" type="password" autocomplete="off" spellcheck="false" placeholder="{{cn.placeholder}}" value="{{conn.token}}" onChange="{{conn.onToken}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<div style="margin-top: 10px; display: flex; gap: 8px">
+<button class="vxs-pri" onClick="{{conn.save}}" disabled="{{conn.saveDisabled}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{conn.saveBg}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{conn.saveFg}}; transition: background-color 120ms">Save and connect</button>
+<button class="vx-h vxs-gh" onClick="{{conn.cancel}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+</div>
+</div>
+</sc-if>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: 4px; min-height: 20px">
+<sc-if value="{{cn.canConnect}}" hint-placeholder-val="{{ false }}"><button class="vxs-sec" onClick="{{cn.connect}}" title="{{cn.connectTip}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Connect</button></sc-if>
+<sc-if value="{{cn.canToken}}" hint-placeholder-val="{{ false }}"><button class="vx-h vxs-gh" onClick="{{cn.openToken}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Use access token</button></sc-if>
+<sc-if value="{{cn.waiting}}" hint-placeholder-val="{{ false }}"><button disabled="true" aria-busy="true" title="Finish signing in in your browser" style="height: 24px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>Waiting for sign-in…</button></sc-if>
+<sc-if value="{{cn.on}}" hint-placeholder-val="{{ true }}"><button class="vx-h vxs-gh" onClick="{{cn.disconnect}}" title="{{cn.discTip}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{cn.discColor}}">{{cn.discLabel}}</button></sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{dep.isEnv}}" hint-placeholder-val="{{ false }}">
+<section aria-labelledby="dp-add-title" style="margin-top: 20px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<h3 id="dp-add-title" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Add a variable</h3>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Values are encrypted on this device. Server-only values can never use a browser-visible name such as VITE_ or NEXT_PUBLIC_.</p>
+<div style="margin-top: 10px; display: flex; align-items: center; gap: 8px">
+<input class="vx-field" type="text" aria-label="Variable name" placeholder="API_KEY" autocomplete="off" spellcheck="false" value="{{env.name}}" onChange="{{env.onName}}" style="flex: 0 0 200px; min-width: 0; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; color: {{t.text}}; outline: none">
+<input class="vx-field" type="password" aria-label="Variable value" placeholder="value" autocomplete="off" spellcheck="false" value="{{env.val}}" onChange="{{env.onVal}}" style="flex: 1 1 auto; min-width: 0; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<button class="vx-h" aria-haspopup="listbox" aria-label="Who can read this value: From the name" title="Who can read this value: From the name, Server only or Public (browser)" style="flex: none; height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairline}}; background: transparent; font-size: 12px; line-height: 16px; color: {{t.text2}}; white-space: nowrap">From the name<span aria-hidden="true" style="display: grid; place-items: center; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></button>
+<button class="{{env.addCls}}" onClick="{{env.add}}" disabled="{{env.addDisabled}}" style="flex: none; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{env.addBg}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{env.addColor}}; transition: background-color 120ms">Add</button>
+</div>
+</section>
+<div style="margin-top: 16px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px">
+<span style="flex: 1; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">{{env.count}}</span>
+<button class="vxs-sec" title="Writes these variables to the repository’s .env file" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Write to .env</button>
+</div>
+<sc-if value="{{env.has}}" hint-placeholder-val="{{ true }}">
+<div role="list" aria-label="Environment variables" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{env.rows}}" as="vr" hint-placeholder-count="6">
+<div role="listitem" class="vxs-lr" style="min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 14px; box-sizing: border-box; box-shadow: {{vr.line}}">
+<code style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px"><span style="color: {{t.accentText}}">{{vr.key}}</span><span style="color: {{t.text3}}">=</span><span style="color: {{t.text3}}">{{vr.shown}}</span></code>
+<span style="flex: none; height: 20px; display: inline-flex; align-items: center; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-size: 11px; line-height: 14px; color: {{vr.visColor}}; white-space: nowrap">{{vr.vis}}</span>
+<button class="vx-h vxs-gh" onClick="{{vr.reveal}}" aria-label="{{vr.revealAria}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">{{vr.revealLabel}}</button>
+<button class="vx-h vxs-gh vxs-lrx" onClick="{{vr.remove}}" aria-label="Remove {{vr.key}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.failed}}">Remove</button>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{env.empty}}" hint-placeholder-val="{{ false }}">
+<div role="status" style="padding: 28px 16px; border-radius: 10px; border: 1px solid {{t.hairline}}; text-align: center">
+<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">No variables yet</div>
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Add one above, or write the empty list to .env to clear Vector’s managed variables.</div>
+</div>
+</sc-if>
+</sc-if>
 <sc-if value="{{dep.loading}}" hint-placeholder-val="{{ false }}">
 <div role="status" aria-label="Loading {{dep.title}}" style="margin-top: 24px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
 <div style="height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 14px"><span style="width: 160px; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span><span style="flex: 1"></span><span style="width: 56px; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span></div>
@@ -643,6 +795,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </div>
 </div>
+</sc-if>
 </sc-if>
 
 <sc-if value="{{hd.open}}" hint-placeholder-val="{{ false }}">
@@ -856,7 +1009,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"open":{"editor":"enum","options":["more","getting","deploy"],"default":"more","section":"More"},"runs":{"editor":"boolean","default":true,"section":"More"},"connect":{"editor":"boolean","default":true,"section":"More"},"setup":{"editor":"boolean","default":true,"section":"More"},"menu":{"editor":"enum","options":["none","hostadd","hosts","view","project","edit","row","help","feedback","notes","update"],"default":"none","section":"Menus"},"$preview":{"width":1600,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"open":{"editor":"enum","options":["more","getting","deploy","deploy-deployments","deploy-connections","deploy-env","deploy-empty"],"default":"more","section":"More"},"runs":{"editor":"boolean","default":true,"section":"More"},"connect":{"editor":"boolean","default":true,"section":"More"},"setup":{"editor":"boolean","default":true,"section":"More"},"menu":{"editor":"enum","options":["none","hostadd","hosts","view","project","edit","row","help","feedback","notes","update"],"default":"none","section":"Menus"},"$preview":{"width":1600,"height":1000}}'>
 class Component extends DCLogic {
   rgb(h) {
     let x = String(h || '').trim().replace('#', '');
@@ -873,7 +1026,7 @@ class Component extends DCLogic {
   cur() {
     const s = this.state || {};
     const p = this.props || {};
-    const okO = ['more', 'getting', 'deploy'];
+    const okO = ['more', 'getting', 'deploy', 'deploy-deployments', 'deploy-connections', 'deploy-env', 'deploy-empty'];
     const okM = ['none', 'hostadd', 'hosts', 'view', 'project', 'edit', 'row', 'help', 'feedback', 'notes', 'update'];
     let po = p.open ?? 'more';
     if (okO.indexOf(po) < 0) po = 'more';
@@ -884,7 +1037,8 @@ class Component extends DCLogic {
     const connect = flag(p.connect);
     const setup = flag(p.setup);
     const key = [po, pm, runs ? 1 : 0, connect ? 1 : 0, setup ? 1 : 0].join('|');
-    const base = { key: key, runs: runs, connect: connect, hosts3: pm === 'hosts' };
+    const onDep = po.indexOf('deploy') === 0;
+    const base = { key: key, runs: runs, connect: connect, hosts3: pm === 'hosts', open: po };
     if (s._p === key) {
       return Object.assign(base, {
         route: s.route === 'deploy' ? 'deploy' : 'session', ov: s.ov || null, setup: !!s.setupOn, hov: !!s.hov,
@@ -892,7 +1046,7 @@ class Component extends DCLogic {
       });
     }
     return Object.assign(base, {
-      route: po === 'deploy' ? 'deploy' : 'session',
+      route: onDep ? 'deploy' : 'session',
       ov: pm !== 'none' ? pm : (po === 'more' ? 'more' : (po === 'getting' ? 'getting' : null)),
       setup: setup, hov: po === 'more' && pm === 'none',
       rowId: 'warn', projKey: 'mac-vector', hostKey: 'mac'
@@ -946,6 +1100,19 @@ class Component extends DCLogic {
 
     const closeOv = () => this.put({ ov: null });
     const goSession = () => this.put({ route: 'session', ov: null });
+
+    // Deploy scenario state (today's Vector Cloud console), kept per tweak combination
+    const secByOpen = { 'deploy-deployments': 'deployments', 'deploy-connections': 'connections', 'deploy-env': 'environment' };
+    const connOpen = C.open === 'deploy-connections';
+    const dpBase = {
+      sec: secByOpen[C.open] || 'overview', noRepo: C.open === 'deploy-empty',
+      host: 'on', db: connOpen ? 'off' : 'on', form: connOpen ? 'db' : '', token: '', confirm: '',
+      env: 'preview', pubConfirm: false, publishing: false,
+      removed: [], added: [], revealed: '', envName: '', envVal: ''
+    };
+    const dp = s.dp && s.dp._k === C.key ? Object.assign({}, dpBase, s.dp) : dpBase;
+    const setDp = (patch, extra) => this.put(Object.assign({ dp: Object.assign({}, dp, patch, { _k: C.key }) }, extra || {}));
+    const noRepo = dp.noRepo === true;
 
     // Per-viewer sidebar state: archived, unread, pinned
     const archList = Array.isArray(s.arch) ? s.arch : ['rel113', 'pairing'];
@@ -1062,7 +1229,7 @@ class Component extends DCLogic {
     const hostDefs = {
       mac: {
         name: 'This Mac', isMac: true, online: true,
-        groups: () => [
+        groups: () => noRepo ? [] : [
           mkGroup('mac-vector', 'vector', { meta: '4', more: 7, rows: vectorRows.map(function (r) { return mkRow(r[0], r[1], r[2]); }) }),
           mkGroup('mac-codium', 'vector-codium', { branch: 'codium', meta: '1', needs: true, rows: [mkRow('p8', 0)] }),
           mkGroup('mac-hands', 'vector-hands', { branch: 'hands', meta: '5', more: 5 }),
@@ -1078,7 +1245,7 @@ class Component extends DCLogic {
       },
       box: { name: 'build-box', isServer: true, offline: true, groups: () => [] }
     };
-    const visibleHosts = !C.hosts3 ? ['mac', 'cloud'] : (hostSel === 'all' ? ['mac', 'cloud', 'box'] : [hostSel]);
+    const visibleHosts = noRepo ? ['mac'] : (!C.hosts3 ? ['mac', 'cloud'] : (hostSel === 'all' ? ['mac', 'cloud', 'box'] : [hostSel]));
 
     // Live strip
     const defs = [
@@ -1096,7 +1263,7 @@ class Component extends DCLogic {
     }));
     const liveOpen = !s.liveClosed;
     const live = {
-      count: String(defs.length), items: liveItems.slice(0, 4),
+      show: !noRepo, count: String(defs.length), items: liveItems.slice(0, 4),
       hasMore: liveItems.length > 4, moreLabel: '+' + Math.max(0, liveItems.length - 4) + ' more',
       open: liveOpen, expanded: liveOpen ? 'true' : 'false', rot: liveOpen ? '0deg' : '-90deg',
       toggleLabel: liveOpen ? 'Collapse Live' : 'Expand Live',
@@ -1113,7 +1280,7 @@ class Component extends DCLogic {
 
     // Hosts, with a layout pass so menus open beside the row that opened them
     const liveH = 34 + (liveOpen ? Math.min(4, liveItems.length) * 28 + (liveItems.length > 4 ? 24 : 0) : 0);
-    let y = 226 + 12 + liveH + 16 + 24 + 28 * pins.length;
+    let y = noRepo ? 226 : 226 + 12 + liveH + 16 + 24 + 28 * pins.length;
     const hostTop = {};
     const groupTop = {};
     const rowTop = {};
@@ -1123,7 +1290,7 @@ class Component extends DCLogic {
       y += i === 0 ? 16 : 12;
       hostTop[hk] = y;
       y += 28;
-      if (hk === 'box') y += 20;
+      if (hk === 'box' || noRepo) y += 20;
       groups.forEach(function (g) {
         y += 4;
         groupTop[g._key] = y;
@@ -1150,7 +1317,7 @@ class Component extends DCLogic {
         viewClick: () => this.put({ ov: viewOpen ? null : 'view', hostKey: hk }),
         addExpanded: addOpen ? 'true' : 'false', addBg: addOpen ? t.rowPressed : 'transparent',
         addClick: () => this.put({ ov: addOpen ? null : 'hostadd', hostKey: hk }),
-        empty: hk === 'box', emptyText: 'Offline. Its sessions show again when it reconnects.',
+        empty: hk === 'box' || noRepo, emptyText: hk === 'box' ? 'Offline. Its sessions show again when it reconnects.' : 'No sessions yet',
         groups: groups
       };
     });
@@ -1224,13 +1391,14 @@ class Component extends DCLogic {
 
     // Project and session row menus
     const projNames = { 'mac-vector': 'vector', 'mac-codium': 'vector-codium', 'mac-hands': 'vector-hands', 'mac-site': 'vectordev.ai', 'cloud-vector': 'vector', 'cloud-queue': 'Morning queue' };
-    const wsOffMap = s.wsOff && typeof s.wsOff === 'object' ? s.wsOff : {};
-    const wsOff = wsOffMap[C.projKey] === true;
+    // Today's live project rows (pages/home.tsx 1239-1250, 1529-1541). "Trust this repository…" shows only while
+    // Vector ignores that repository's own settings (project-trust-prompt.tsx 90-126); vector-codium is trusted here.
+    const trustAsks = { 'mac-vector': true, 'mac-hands': true, 'mac-site': true, 'cloud-vector': true };
     const pmenu = {
       label: (projNames[C.projKey] || 'vector') + ' options',
       edit: () => this.put({ ov: 'edit' }),
-      wsLabel: wsOff ? 'Turn workspaces on' : 'Turn workspaces off',
-      toggleWs: () => { const o = Object.assign({}, wsOffMap); o[C.projKey] = !wsOff; this.put({ ov: null, wsOff: o }); },
+      trust: trustAsks[C.projKey] === true,
+      trustClick: closeOv,
       clear: () => this.put({ ov: null, unread: {} })
     };
     const rid = S[C.rowId] ? C.rowId : 'warn';
@@ -1342,10 +1510,162 @@ class Component extends DCLogic {
       { label: 'Setup' },
       { id: 'connections', label: 'Connections' }, { id: 'settings', label: 'Hosting settings' }
     ];
-    const dsec = sections.some(function (x) { return x.id && x.id === s.dsec; }) ? s.dsec : 'overview';
+    const dsec = sections.some(function (x) { return x.id && x.id === dp.sec; }) ? dp.sec : 'overview';
     const dsecLabel = sections.filter(function (x) { return x.id === dsec; })[0].label;
     const line = 'inset 0 1px 0 ' + t.hairline;
+
+    // Environment variables (cloud-console.tsx 1631-1741)
+    const envBase = [
+      { key: 'DATABASE_URL', value: 'postgres://db.internal:6543/app', pub: false },
+      { key: 'DATABASE_SERVICE_KEY', value: 'svc_7d2e…41c9', pub: false },
+      { key: 'VITE_DATABASE_URL', value: 'https://db.vectordev.ai', pub: true },
+      { key: 'VITE_DATABASE_ANON_KEY', value: 'anon_1b8f…c03d', pub: true },
+      { key: 'SESSION_SECRET', value: '8c1f…e42a', pub: false },
+      { key: 'BILLING_SECRET_KEY', value: 'bk_52a0…9e17', pub: false },
+      { key: 'BILLING_WEBHOOK_SECRET', value: 'wh_0c3b…7aa2', pub: false },
+      { key: 'GITHUB_APP_ID', value: '418207', pub: false },
+      { key: 'GITHUB_APP_PRIVATE_KEY', value: 'pk_e9d4…0b6f', pub: false },
+      { key: 'CODIUM_API_URL', value: 'https://api.vectordev.ai/codium', pub: false },
+      { key: 'NOTIFY_API_KEY', value: 'nt_6f1a…d8b3', pub: false },
+      { key: 'LOG_LEVEL', value: 'info', pub: false },
+      { key: 'VITE_SITE_URL', value: 'https://vectordev.ai', pub: true },
+      { key: 'VITE_RELEASE_CHANNEL', value: 'stable', pub: true }
+    ];
+    const removed = Array.isArray(dp.removed) ? dp.removed : [];
+    const added = Array.isArray(dp.added) ? dp.added : [];
+    const addedKeys = added.map(function (v) { return v.key; });
+    const envList = envBase.filter(function (v) { return removed.indexOf(v.key) < 0 && addedKeys.indexOf(v.key) < 0; })
+      .concat(added.filter(function (v) { return removed.indexOf(v.key) < 0; }));
+    const envName = typeof dp.envName === 'string' ? dp.envName : '';
+    const envVal = typeof dp.envVal === 'string' ? dp.envVal : '';
+    const canAdd = envName.trim().length > 0;
+    const env = {
+      name: envName, val: envVal,
+      onName: (e) => setDp({ envName: e && e.target ? e.target.value : '' }),
+      onVal: (e) => setDp({ envVal: e && e.target ? e.target.value : '' }),
+      addDisabled: !canAdd, addCls: canAdd ? 'vxs-pri' : '',
+      addBg: canAdd ? t.text : 'rgba(255,255,255,0.10)', addColor: canAdd ? t.main : t.textDisabled,
+      add: () => {
+        const k = envName.trim();
+        if (!k) return;
+        setDp({
+          added: added.filter(function (v) { return v.key !== k; }).concat([{ key: k, value: envVal, pub: /^(VITE_|NEXT_PUBLIC_)/.test(k) }]),
+          removed: removed.filter(function (x) { return x !== k; }), envName: '', envVal: ''
+        });
+      },
+      count: envList.length + (envList.length === 1 ? ' variable' : ' variables'),
+      has: envList.length > 0, empty: envList.length === 0,
+      rows: envList.map((v, i) => {
+        const shown = dp.revealed === v.key;
+        return {
+          key: v.key, shown: shown ? (v.value || '""') : '••••••••••••',
+          vis: v.pub ? 'Public' : 'Server only', visColor: v.pub ? t.needs : t.text2,
+          revealLabel: shown ? 'Hide' : 'Reveal', revealAria: (shown ? 'Hide ' : 'Reveal ') + v.key,
+          reveal: () => setDp({ revealed: shown ? '' : v.key }),
+          remove: () => setDp({ removed: removed.concat([v.key]), revealed: shown ? '' : dp.revealed }),
+          line: i > 0 ? line : 'none'
+        };
+      })
+    };
+
+    // Cloud connections (cloud-console.tsx 925-1160); the build keeps today's provider names
+    const connName = { host: 'Hosting', db: 'Database' };
+    const connPatch = function (id, v, more) { const o = Object.assign({}, more || {}); o[id] = v; return o; };
+    const connRows = ['host', 'db'].map((id) => {
+      const st = dp[id] === 'off' || dp[id] === 'wait' ? dp[id] : 'on';
+      const name = connName[id];
+      const confirming = dp.confirm === id && st === 'on';
+      return {
+        gHost: id === 'host', gDb: id === 'db', name: name,
+        on: st === 'on', status: st === 'on' ? 'Connected' : 'Not connected',
+        hasDetail: st === 'on', detail: 'Account authorized', hasNote: id === 'db' && st === 'on',
+        form: dp.form === id && st === 'off',
+        guide: 'Create a token in your ' + name.toLowerCase() + ' account’s settings, for the projects you want Vector to manage. Vector validates it, encrypts it in the local credential vault, and never shows it again after saving.',
+        fieldLabel: name + ' access token', placeholder: 'Paste your ' + name.toLowerCase() + ' access token',
+        canConnect: st === 'off', canToken: st === 'off' && dp.form !== id, waiting: st === 'wait',
+        connectTip: 'Signs in to your ' + name.toLowerCase() + ' account in the browser',
+        connect: () => setDp(connPatch(id, 'wait', { form: '', token: '', confirm: '' })),
+        openToken: () => setDp({ form: id, token: '', confirm: '' }),
+        discLabel: confirming ? 'Confirm disconnect?' : 'Disconnect',
+        discColor: confirming ? t.failed : t.text2,
+        discTip: confirming ? 'Click again to disconnect and revoke Vector’s access' : 'Disconnect ' + name,
+        disconnect: () => {
+          if (confirming) setDp(connPatch(id, 'off', { confirm: '' }), { toast: name + ' disconnected, and Vector’s access is revoked' });
+          else setDp({ confirm: id });
+        },
+        line: id === 'db' ? line : 'none'
+      };
+    });
+    const token = typeof dp.token === 'string' ? dp.token : '';
+    const hasToken = token.trim().length > 0;
+    const conn = {
+      rows: connRows, token: token,
+      onToken: (e) => setDp({ token: e && e.target ? e.target.value : '' }),
+      saveDisabled: !hasToken,
+      saveBg: hasToken ? t.text : 'rgba(255,255,255,0.10)', saveFg: hasToken ? t.main : t.textDisabled,
+      save: () => {
+        const id = dp.form === 'host' ? 'host' : 'db';
+        if (hasToken) setDp(connPatch(id, 'on', { form: '', token: '' }), { toast: connName[id] + ' connected' });
+      },
+      cancel: () => setDp({ form: '', token: '' })
+    };
+    const connected = connRows.filter(function (r) { return r.on; }).length;
+
+    // Publish this repository and its release pipeline (cloud-console.tsx 1185-1300)
+    const prod = dp.env === 'production';
+    const publishing = dp.publishing === true;
+    const evDot = { info: t.text3, success: t.ready, run: t.running };
+    // Today's publish.ts messages (preparing, installing, building, complete); the board names no provider
+    const hostOn = dp.host !== 'off' && dp.host !== 'wait';
+    const doneEvents = [
+      { stage: 'Preparing', msg: 'Preparing vector for the hosting project vector.', lv: 'info' },
+      { stage: 'Building', msg: 'Production build: bun run build', lv: 'success' },
+      { stage: 'Checking', msg: 'All required release checks passed.', lv: 'success' },
+      { stage: 'Complete', msg: 'Production release is live.', lv: 'success' }
+    ];
+    const runEvents = [
+      { stage: 'Preparing', msg: (dp.pubWs ? 'Preparing Swarm worker 2' : 'Preparing vector') + ' for the hosting project vector.', lv: 'info' },
+      { stage: 'Installing', msg: 'Install dependencies: bun install', lv: 'run' }
+    ];
+    const segOn = function (on) { return { bg: on ? t.segActive : 'transparent', color: on ? t.text : t.text2, pressed: on ? 'true' : 'false' }; };
+    const sPrev = segOn(!prod);
+    const sProd = segOn(prod);
+    const pubOff = publishing || !hostOn;
+    const pub = {
+      prevPressed: sPrev.pressed, prevBg: sPrev.bg, prevColor: sPrev.color,
+      prodPressed: sProd.pressed, prodBg: sProd.bg, prodColor: sProd.color,
+      prev: () => setDp({ env: 'preview', pubConfirm: false }),
+      prod: () => setDp({ env: 'production', pubConfirm: false }),
+      label: publishing ? 'Publishing…' : (dp.pubConfirm ? 'Confirm: publish vector to production?' : (prod ? 'Publish to production →' : 'Publish preview →')),
+      tip: !hostOn ? 'Connect a hosting account first' : (prod ? 'Checks the production build first. Production moves only if the checks pass.' : 'A preview never changes production'),
+      disabled: pubOff, busy: publishing ? 'true' : 'false',
+      btnCls: pubOff ? '' : 'vxs-pri',
+      btnBg: pubOff ? 'rgba(255,255,255,0.10)' : t.text, btnFg: pubOff ? t.textDisabled : t.main,
+      go: () => {
+        if (pubOff) return;
+        if (prod && !dp.pubConfirm) { setDp({ pubConfirm: true }); return; }
+        setDp({ publishing: true, pubConfirm: false, pubWs: false });
+      },
+      wsDisabled: pubOff, wsColor: pubOff ? t.textDisabled : t.text,
+      goWs: () => { if (!pubOff) setDp({ publishing: true, pubConfirm: false, pubWs: true }); },
+      hostOn: hostOn, hostOff: !hostOn,
+      openConn: () => setDp({ sec: 'connections', confirm: '', pubConfirm: false }),
+      pipeState: publishing ? 'Running' : 'Finished',
+      events: (publishing ? runEvents : doneEvents).map(function (e) { return { stage: e.stage, msg: e.msg, dot: evDot[e.lv] }; })
+    };
+
+    const kickers = { deployments: 'Live on the internet', environment: 'Secrets and config', connections: 'Your accounts' };
+    const titles = { connections: 'Cloud connections' };
+    const descs = {
+      deployments: 'Vector ships this repository itself. It runs the build, drives the deploy and hands you the live link. You authorize your account once; Vector does the rest.',
+      connections: 'Connect your hosting and database accounts once, then publish, link projects and configure your database here or by asking Vector. Access tokens stay encrypted on this device.',
+      environment: 'Manage variables for vector. Write them locally, and manage the hosting project’s variables per environment.'
+    };
+    const drawn = ['overview', 'deployments', 'connections', 'environment'];
     const dep = {
+      hasRepo: !noRepo, noRepo: noRepo,
+      subtitle: noRepo ? 'Hosting and database' : 'vector · hosting and database',
+      openFolder: closeOv, clone: closeOv,
       nav: sections.map((x) => {
         if (!x.id) return { isLabel: true, isRow: false, label: x.label, cls: '', bg: 'transparent', shadow: 'none', color: t.text3, current: 'false', pick: closeOv };
         const sel = x.id === dsec;
@@ -1353,18 +1673,21 @@ class Component extends DCLogic {
           isLabel: false, isRow: true, label: x.label,
           cls: sel ? 'vx-row' : 'vx-h vx-row', bg: sel ? t.rowSel : 'transparent', shadow: sel ? t.rowSelShadow : 'none',
           color: sel ? t.text : t.textRow, current: sel ? 'page' : 'false',
-          pick: () => this.setState({ dsec: x.id })
+          pick: () => setDp({ sec: x.id, confirm: '', pubConfirm: false })
         };
       }),
       overview: dsec === 'overview',
       titled: dsec !== 'overview',
-      title: dsecLabel,
-      showList: dsec === 'overview' || dsec === 'deployments',
-      loading: dsec !== 'overview' && dsec !== 'deployments',
+      kicker: kickers[dsec] || 'vector',
+      title: titles[dsec] || dsecLabel,
+      hasDesc: !!descs[dsec], desc: descs[dsec] || '',
+      isDeploys: dsec === 'deployments', isConn: dsec === 'connections', isEnv: dsec === 'environment',
+      showList: dsec === 'overview' || (dsec === 'deployments' && hostOn),
+      loading: drawn.indexOf(dsec) < 0,
       tiles: [
         { label: 'Healthy releases', value: '1 of 3', hasSub: true, sub: 'Based on the latest health checks' },
-        { label: 'Accounts', value: '2 connected', hasSub: true, sub: 'Hosting and database' },
-        { label: 'Environment variables', value: '14', hasSub: true, sub: 'Stored for this repository' },
+        { label: 'Accounts', value: connected + ' connected', hasSub: true, sub: 'Hosting and database' },
+        { label: 'Environment variables', value: String(envList.length), hasSub: true, sub: 'Stored for this repository' },
         { label: 'Data', value: 'Database, authentication, storage', hasSub: false, sub: '' }
       ],
       rows: [
@@ -1377,7 +1700,8 @@ class Component extends DCLogic {
       ],
       refreshLabel: 'Refresh',
       refresh: () => this.put({ toast: 'Deployments refreshed' }),
-      close: goSession
+      close: noRepo ? closeOv : goSession,
+      closeTip: noRepo ? 'Close Deploy. With no repository open, the first-run window is drawn on the First run board' : 'Close Deploy  Esc'
     };
 
     // Help drawer
@@ -1497,7 +1821,8 @@ class Component extends DCLogic {
     const toast = { show: typeof s.toast === 'string' && s.toast.length > 0, text: typeof s.toast === 'string' ? s.toast : '' };
 
     return {
-      t: t, wall: wall, more: more, live: live, pins: pins, hosts: hosts, help: help, upd: upd,
+      t: t, wall: wall, more: more, live: live, pins: pins, pinsShow: !noRepo, hosts: hosts, help: help, upd: upd,
+      pub: pub, conn: conn, env: env,
       pop: pop, pos: pos, hostRows: hostRows, hp: hp, vw: vw, pmenu: pmenu, rmenu: rmenu,
       head: head, route: { session: !onDeploy, deploy: onDeploy }, pb: pb, pm: pm, c: c, draft: draft,
       dep: dep, hd: hd, toast: toast, dlg: dlg, gs: gs, edit: edit, fb: fb, notes: notes,

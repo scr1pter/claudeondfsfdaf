@@ -905,6 +905,7 @@ class Component extends DCLogic {
     const word = { running: 'Running', needs: 'Needs you', failed: 'Failed', ready: 'Ready to review', queued: 'Queued', done: 'Done' };
     const gColor = { running: t.running, needs: t.needs, failed: t.failed, ready: t.ready, queued: t.text3, done: t.text3 };
     const S = {
+      sim: { title: 'Check Remote’s Sessions screen on iPhone', st: 'ready', time: '1h' },
       recheck: { title: 'Recheck keyboard focus across menu reads', st: 'running', time: '12m' },
       swarm2: { title: 'Swarm worker 2', st: 'running', add: '+142', del: '−18' },
       handsReview: { title: 'Review: Hands Windows fixes', st: 'ready', time: '12m' },
@@ -967,7 +968,7 @@ class Component extends DCLogic {
       {
         name: 'This Mac', isMac: true, isCloud: false, padTop: '16px', addLabel: 'New session on This Mac', tip: 'This Mac · Runtime ready',
         groups: [
-          mkGroup('mac-vector', 'vector', { meta: '4', more: 7, rows: [mkRow('recheck', 0), mkRow('swarm2', 1, 'first'), mkRow('handsReview', 1, 'last'), mkRow('warn', 0), mkRow('packaging', 0), mkRow('installer', 0)] }),
+          mkGroup('mac-vector', 'vector', { meta: '4', more: 7, rows: [mkRow('sim', 0), mkRow('recheck', 0), mkRow('swarm2', 1, 'first'), mkRow('handsReview', 1, 'last'), mkRow('warn', 0), mkRow('packaging', 0), mkRow('installer', 0)] }),
           mkGroup('mac-codium', 'vector-codium', { branch: 'codium', meta: '1', needs: true, rows: [mkRow('p8', 0)] }),
           mkGroup('mac-hands', 'vector-hands', { branch: 'hands', meta: '5', more: 5 }),
           mkGroup('mac-site', 'vectordev.ai', { meta: '2', more: 2 })

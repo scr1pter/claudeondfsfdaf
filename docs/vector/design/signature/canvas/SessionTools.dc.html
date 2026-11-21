@@ -301,7 +301,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 
 <main aria-label="{{head.mainLabel}}" style="position: relative; z-index: 1; flex: 1 1 auto; min-width: 0; height: 900px; display: flex; flex-direction: column; background: {{t.main}}; color: {{t.text}}">
 
-<header style="flex: none; position: relative; z-index: 20; height: 44px; display: flex; align-items: center; gap: 4px; padding: 0 12px 0 20px; background: {{t.main}}; box-shadow: 0 1px 0 {{t.hairline}}">
+<header style="flex: none; position: relative; z-index: 20; height: 44px; display: flex; align-items: center; gap: 4px; padding: 0 12px 0 20px; background: {{t.main}}; box-shadow: {{head.edge}}">
 <sc-if value="{{isEd}}" hint-placeholder-val="{{ true }}">
 <div style="flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px">
 <span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h6.5L18 8v12.5H7zM13.5 3.5V8H18"></path></svg></span>
@@ -311,6 +311,17 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <span>Vector Tab</span>
 <span aria-hidden="true" style="position: relative; flex: none; width: 22px; height: 12px; box-sizing: border-box; border-radius: 6px; background: {{ed.vt.track}}; border: 1px solid {{ed.vt.trackBorder}}; transition: background-color 140ms"><span style="position: absolute; top: 1px; left: {{ed.vt.thumbX}}; width: 8px; height: 8px; border-radius: 50%; background: {{t.thumb}}; transition: left 140ms cubic-bezier(.22,1,.36,1)"></span></span>
 </button>
+<div style="flex: none; margin-left: 6px; display: flex; align-items: center; gap: 2px">
+<sc-if value="{{ed.fo.pill}}" hint-placeholder-val="{{ true }}">
+<span role="status" title="{{ed.fo.pillTip}}" style="flex: none; height: 22px; max-width: 260px; margin-right: 2px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; box-sizing: border-box; border-radius: 11px; border: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">
+<span class="vxs-breath" aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.running}}; flex: none"></span>
+<span style="min-width: 0; overflow: hidden; text-overflow: ellipsis">{{ed.fo.pillText}}</span>
+</span>
+</sc-if>
+<button aria-pressed="{{ed.fo.pressed}}" aria-label="{{ed.fo.label}}" title="{{ed.fo.tip}}" onClick="{{ed.fo.toggle}}" class="vx-h vxs-ih" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{ed.fo.bg}}; color: {{ed.fo.color}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12s3.6-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.6 6.5-9.5 6.5S2.5 12 2.5 12z"></path><circle cx="12" cy="12" r="2.75"></circle></svg></button>
+<button aria-pressed="{{ed.ex.pressed}}" aria-label="{{ed.ex.label}}" title="{{ed.ex.label}}" onClick="{{ed.ex.toggle}}" class="vx-h vxs-ih" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{ed.ex.bg}}; color: {{ed.ex.color}}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.08 3.75H17.92V16.25H2.08Z M7.5 3.75V16.25"></path></svg></button>
+<button aria-pressed="{{ed.ag.pressed}}" aria-label="{{ed.ag.label}}" title="{{ed.ag.label}}" onClick="{{ed.ag.toggle}}" class="vx-h vxs-ih" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{ed.ag.bg}}; color: {{ed.ag.color}}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.08 3.75H17.92V16.25H2.08Z M12.5 3.75V16.25"></path></svg></button>
+</div>
 <button class="vx-h vxs-gh" onClick="{{ed.back}}" title="Back to Vector Agent  ⌘⇧E" style="flex: none; height: 24px; margin-left: 4px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5.5M11 6l-6 6 6 6"></path></svg>Back to Vector Agent</button>
 </sc-if>
 
@@ -320,8 +331,8 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <span style="flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">{{head.title}}</span>
 <span title="~/vector" class="vxs-nw" style="flex: 0 100 auto; min-width: 0; margin-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; line-height: 14px; color: {{t.text3}}">vector</span>
 </div>
-<button class="vx-h" aria-label="Branch scope-evidence. Switch branch" title="Switch branch" style="flex: none; height: 22px; max-width: 180px; margin: 1px 0; display: inline-flex; align-items: center; gap: 6px; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">
-<span>scope-evidence</span>
+<button class="vx-h" aria-label="Branch {{head.branch}}. Switch branch" title="Switch branch" style="flex: none; height: 22px; max-width: 180px; margin: 1px 0; display: inline-flex; align-items: center; gap: 6px; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">
+<span>{{head.branch}}</span>
 <span aria-hidden="true" style="display: grid; place-items: center; flex: none; opacity: 0.7"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
 </button>
 <span style="position: relative; flex: none; display: inline-flex">
@@ -430,6 +441,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="position: relative; flex: 1; min-height: 0; display: flex; align-items: stretch">
 
 <sc-if value="{{isEd}}" hint-placeholder-val="{{ true }}">
+<sc-if value="{{ed.explorerOpen}}" hint-placeholder-val="{{ true }}">
 <aside aria-label="Code editor sidebar" style="flex: 0 0 240px; width: 240px; min-width: 0; height: 856px; display: flex; flex-direction: column; box-sizing: border-box; background: {{t.main}}; box-shadow: inset -1px 0 0 {{t.hairline}}">
 <div role="tablist" aria-label="Code editor views" style="flex: none; height: 36px; display: flex; align-items: center; gap: 2px; padding: 0 8px; box-sizing: border-box; box-shadow: inset 0 -1px 0 {{t.hairline}}">
 <sc-for list="{{ed.views}}" as="v" hint-placeholder-count="3">
@@ -495,6 +507,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-if>
 </aside>
+</sc-if>
 
 <section aria-label="Code editor" style="flex: 1 1 auto; min-width: 0; height: 856px; display: flex; flex-direction: column; background: {{t.code}}">
 <div role="tablist" aria-label="Open files" style="flex: none; height: 36px; display: flex; align-items: center; gap: 2px; padding: 0 8px; box-sizing: border-box; background: {{t.main}}; box-shadow: inset 0 -1px 0 {{t.hairline}}">
@@ -525,10 +538,17 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </section>
 </sc-if>
 
-<section aria-label="{{lay.chatAria}}" style="position: relative; flex: {{lay.chatFlex}}; width: {{lay.chatW}}; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-shadow: {{lay.chatEdge}}">
+<section aria-label="{{lay.chatAria}}" style="position: relative; flex: {{lay.chatFlex}}; width: {{lay.chatW}}; min-width: 0; min-height: 0; display: {{lay.chatDisp}}; flex-direction: column; box-shadow: {{lay.chatEdge}}">
 
 <sc-if value="{{notEd}}" hint-placeholder-val="{{ false }}">
 <div style="flex: none; position: relative; z-index: 6; height: 32px; display: flex; align-items: center; gap: 4px; padding: 0 12px 0 20px">
+<sc-if value="{{crumb.show}}" hint-placeholder-val="{{ false }}">
+<nav aria-label="Subagent of" style="min-width: 0; display: flex; align-items: center; gap: 4px">
+<button class="vx-h vxs-gh" onClick="{{crumb.goParent}}" style="min-width: 0; max-width: 260px; height: 24px; padding: 0 6px; margin-left: -6px; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text3}}">{{crumb.parent}}</button>
+<span aria-hidden="true" style="font-size: 11px; line-height: 14px; color: {{t.text3}}">/</span>
+<span class="vx-h" title="Rename" style="min-width: 0; height: 24px; display: inline-flex; align-items: center; padding: 0 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}">{{crumb.child}}</span>
+</nav>
+</sc-if>
 <span style="flex: 1; min-width: 8px"></span>
 <button title="Session usage: Codium" aria-label="Session usage: Codium" style="height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 10px; background: transparent">
 <span class="vx-h" style="height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairline}}; background: rgba(236,235,239,0.03); font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.accentText}}">Codium</span>
@@ -536,6 +556,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <button class="vx-h" onClick="{{ring.toggle}}" aria-label="View context usage" aria-pressed="{{ring.pressed}}" title="{{ring.tip}}" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{ring.bg}}">
 <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{t.hairlineStrong}}" stroke-width="1.5"></circle><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{ring.arc}}" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="{{ring.dash}}" transform="rotate(-90 7 7)"></circle></svg>
 </button>
+<sc-if value="{{sm.show}}" hint-placeholder-val="{{ true }}">
 <span style="position: relative; display: inline-flex">
 <button class="vx-h" onClick="{{sm.toggle}}" aria-haspopup="menu" aria-expanded="{{sm.expanded}}" aria-label="More options" title="More options" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{sm.bg}}; color: {{t.icon}}">
 <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="7.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="12.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect></svg>
@@ -552,10 +573,11 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <button role="menuitem" aria-haspopup="menu" class="vx-h vxs-mi" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}"><span style="flex: 1">Transcript view</span><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Normal</span><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.text2}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"></path></svg></span></button>
 <div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div>
 <button role="menuitem" class="vx-h vxs-mi" onClick="{{sm.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Archive</button>
-<button role="menuitem" class="vx-h" onClick="{{sm.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.diffDel}}">Delete…</button>
+<button role="menuitem" class="vx-h" onClick="{{sm.del}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.diffDel}}">Delete…</button>
 </div>
 </sc-if>
 </span>
+</sc-if>
 </div>
 </sc-if>
 
@@ -582,9 +604,39 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-if>
 
+<sc-if value="{{nf.show}}" hint-placeholder-val="{{ false }}">
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 0 24px 168px; box-sizing: border-box; text-align: center">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+<h1 style="margin: 0; max-width: 448px; font-size: 16px; line-height: 24px; font-weight: 500; color: {{t.text}}">This session cannot be found</h1>
+<p style="margin: 0; max-width: 448px; font-size: 13px; line-height: 20px; color: {{t.text2}}">This tab points to a session that no longer exists on this server.</p>
+</div>
+<div style="max-width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px">
+<div style="font-size: 11px; line-height: 14px; color: {{t.text3}}">{{nf.server}}</div>
+<code aria-label="Session ID" style="max-width: 100%; padding: 2px 4px; border-radius: 4px; background: rgba(236,235,239,0.08); font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.textRow}}; word-break: break-all">{{nf.id}}</code>
+</div>
+<button class="vxs-sec" onClick="{{nf.close}}" style="height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px 0 8px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"></path></svg>Close tab</button>
+</div>
+</sc-if>
+
+<sc-if value="{{hasSession}}" hint-placeholder-val="{{ true }}">
 <div class="vx-scroll" style="flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; padding: 0 {{lay.trPad}}; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 24px); mask-image: linear-gradient(180deg, transparent 0, #000 24px)">
 <div style="width: 100%; max-width: 720px; margin: 0 auto; padding: 8px 0 28px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px">
 
+<sc-if value="{{tr.child}}" hint-placeholder-val="{{ false }}">
+<div role="note" style="display: flex; align-items: center; gap: 12px; font-size: 12px; line-height: 16px; color: {{t.text3}}">
+<span aria-hidden="true" style="flex: 1; height: 1px; background: {{t.hairline}}"></span>
+<span style="min-width: 0; text-align: center">{{tr.startedBy}}</span>
+<span aria-hidden="true" style="flex: 1; height: 1px; background: {{t.hairline}}"></span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
+<span style="flex: none; font-weight: 500; color: {{t.text2}}">Agent working</span>
+<span style="flex: 1"></span>
+<span style="flex: none; font-size: 12px; font-variant-numeric: tabular-nums">+142 −18</span>
+</div>
+</sc-if>
+
+<sc-if value="{{tr.main}}" hint-placeholder-val="{{ true }}">
 <div class="vxs-um" style="position: relative; align-self: flex-end; max-width: 80%">
 <div style="box-sizing: border-box; padding: 10px 14px; border-radius: 12px; background: {{t.rowHover}}; font-size: 14px; line-height: 22px; color: {{t.text}}"><sc-for list="{{tr.p1}}" as="sg" hint-placeholder-count="3"><span style="background: {{sg.bg}}; box-shadow: {{sg.sh}}; border-radius: {{sg.r}}">{{sg.x}}</span></sc-for></div>
 <div class="vxs-umeta" style="position: absolute; z-index: 1; top: 100%; right: 0; height: 24px; display: flex; align-items: center; gap: 2px">
@@ -636,6 +688,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 
 <p style="margin: 0; font-size: 14px; line-height: 22px; color: {{t.text}}"><sc-for list="{{tr.p8}}" as="sg" hint-placeholder-count="5"><span style="background: {{sg.bg}}; box-shadow: {{sg.sh}}; border-radius: {{sg.r}}">{{sg.x}}</span></sc-for></p>
+</sc-if>
 
 <sc-if value="{{tr.review}}" hint-placeholder-val="{{ true }}">
 <button class="vx-h" title="Vectorscope review · Ready to review · 1 finding" style="display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; box-sizing: border-box; padding: 0 12px; border-radius: 10px; border: 1px solid {{t.hairline}}; background: transparent; text-align: left">
@@ -656,18 +709,21 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 
 <sc-if value="{{tr.ask}}" hint-placeholder-val="{{ false }}">
-<p style="margin: 0; font-size: 14px; line-height: 22px; color: {{t.text}}">Typecheck passes. Before I commit this, one question.</p>
+<p style="margin: 0; font-size: 14px; line-height: 22px; color: {{t.text}}">Typecheck passes. Before I commit this, two questions.</p>
 <sc-if value="{{tr.answered}}" hint-placeholder-val="{{ false }}">
 <div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
 <span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.ready}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
-<span style="flex: none; font-weight: 500; color: {{t.text2}}">Question</span>
-<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Which branch should the fix go on? · {{tr.answer}}</span>
+<span style="flex: none; font-weight: 500; color: {{t.text2}}">Questions</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">2 answered</span>
 </div>
 <div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
 <span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
 <span style="flex: none; font-weight: 500; color: {{t.text2}}">Shell</span>
 <span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px">{{tr.answerCmd}}</span>
 </div>
+</sc-if>
+<sc-if value="{{tr.dismissed}}" hint-placeholder-val="{{ false }}">
+<div style="align-self: flex-end; font-size: 13px; line-height: 20px; color: {{t.text3}}">Questions dismissed</div>
 </sc-if>
 </sc-if>
 
@@ -692,6 +748,13 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 
 <sc-if value="{{tr.budget}}" hint-placeholder-val="{{ false }}">
+<div class="vxs-um" style="position: relative; align-self: flex-end; max-width: 80%">
+<div style="box-sizing: border-box; padding: 10px 14px; border-radius: 12px; background: {{t.rowHover}}; font-size: 14px; line-height: 22px; color: {{t.text}}">Merge main into scope-evidence first.</div>
+<div class="vxs-umeta" style="position: absolute; z-index: 1; top: 100%; right: 0; height: 24px; display: flex; align-items: center; gap: 2px">
+<span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text3}}">11:52</span>
+</div>
+</div>
+<div role="alert" aria-label="This turn failed" style="padding: 8px 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(238,131,136,0.30); background: rgba(238,131,136,0.06); font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; color: {{t.text2}}; white-space: pre-wrap; word-break: break-word">{{tr.errText}}</div>
 <div class="vxs-um" style="position: relative; align-self: flex-end; max-width: 80%">
 <div style="box-sizing: border-box; padding: 10px 14px; border-radius: 12px; background: {{t.rowHover}}; font-size: 14px; line-height: 22px; color: {{t.text}}">Run the full app test suite and fix what fails.</div>
 <div class="vxs-umeta" style="position: absolute; z-index: 1; top: 100%; right: 0; height: 24px; display: flex; align-items: center; gap: 2px">
@@ -722,6 +785,15 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div class="vxs-um" style="position: relative; align-self: flex-end; max-width: 80%">
 <div style="box-sizing: border-box; padding: 10px 14px; border-radius: 12px; background: {{t.rowHover}}; font-size: 14px; line-height: 22px; color: {{t.text}}">Continue from where you stopped.</div>
 </div>
+<sc-if value="{{tr.retry}}" hint-placeholder-val="{{ false }}">
+<div role="status" aria-label="Retrying" style="display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(238,131,136,0.30); background: rgba(238,131,136,0.06)">
+<span aria-hidden="true" style="height: 18px; display: grid; place-items: center; flex: none; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
+<div style="min-width: 0">
+<div title="{{tr.retryMsg}}" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; color: {{t.text}}">{{tr.retryMsg}}</div>
+<div style="font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: {{t.text2}}">{{tr.retryInfo}}</div>
+</div>
+</div>
+</sc-if>
 </sc-if>
 </sc-if>
 
@@ -743,40 +815,75 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 
 <sc-if value="{{dock.q}}" hint-placeholder-val="{{ false }}">
-<section aria-label="Vector has a question" style="margin-bottom: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}; background: {{t.raised}}; box-shadow: inset 0 1px 0 rgba(255,255,255,0.045)">
-<div style="display: flex; align-items: center; gap: 8px">
+<section aria-label="Question from Vector" style="margin-bottom: 8px; padding: 8px 14px 12px; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}; background: {{t.raised}}; box-shadow: inset 0 1px 0 rgba(255,255,255,0.045)">
+<div style="height: 28px; display: flex; align-items: center; gap: 8px; margin-right: -8px">
 <span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.needs}}"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>
-<span style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Vector has a question</span>
-</div>
-<div id="st-q" style="margin-top: 6px; font-size: 13px; line-height: 18px; color: {{t.text}}">Which branch should the fix go on?</div>
-<div role="radiogroup" aria-labelledby="st-q" style="margin: 8px -6px 0; display: flex; flex-direction: column; gap: 2px">
-<sc-for list="{{dock.qOpts}}" as="o" hint-placeholder-count="2">
-<button role="radio" aria-checked="{{o.checked}}" onClick="{{o.pick}}" class="vx-h" style="height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border: 0; border-radius: 7px; background: {{o.bg}}; text-align: left; font-size: 13px; line-height: 18px; color: {{t.text}}">
-<span aria-hidden="true" style="position: relative; width: 14px; height: 14px; flex: none; box-sizing: border-box; border-radius: 50%; border: 1.5px solid {{o.ring}}"><span style="position: absolute; left: 2.5px; top: 2.5px; width: 6px; height: 6px; border-radius: 50%; background: {{t.accentText}}; opacity: {{o.dotOp}}"></span></span>
-<span><span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px">{{o.mono}}</span><span>{{o.rest}}</span></span>
-</button>
+<span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">{{dock.qTitle}}</span>
+<div style="flex: none; display: flex; align-items: center; gap: 4px">
+<sc-for list="{{dock.qSegs}}" as="qs" hint-placeholder-count="2">
+<button onClick="{{qs.pick}}" aria-label="{{qs.label}}" aria-current="{{qs.current}}" title="{{qs.label}}" style="width: 18px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent"><span aria-hidden="true" style="width: 16px; height: 4px; border-radius: 2px; background: {{qs.fill}}"></span></button>
 </sc-for>
 </div>
-<div style="margin-top: 10px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px">
-<button class="vx-h vxs-gh" onClick="{{dock.reply}}" title="Answer in the message box instead" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Or reply instead</button>
-<button class="vxs-pri" onClick="{{dock.answer}}" style="height: 24px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Answer</button>
+<button class="vx-h vxs-ih" onClick="{{dock.qMin}}" aria-label="{{dock.qMinLabel}}" title="{{dock.qMinLabel}}" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><span aria-hidden="true" style="display: grid; place-items: center; transform: rotate({{dock.qMinRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></button>
+</div>
+<div id="st-q" style="margin-top: 2px; font-size: 13px; line-height: 18px; color: {{t.text}}">{{dock.qText}}</div>
+<sc-if value="{{dock.qOpen}}" hint-placeholder-val="{{ true }}">
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{dock.qHint}}</div>
+<div role="{{dock.qRole}}" aria-labelledby="st-q" style="margin: 6px -6px 0; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{dock.qOpts}}" as="o" hint-placeholder-count="3">
+<button role="{{o.role}}" aria-checked="{{o.checked}}" onClick="{{o.pick}}" class="vx-h" style="min-height: 32px; display: flex; align-items: center; gap: 10px; padding: 6px 8px; box-sizing: border-box; border: 0; border-radius: 7px; background: {{o.bg}}; text-align: left; font-size: 13px; line-height: 18px; color: {{t.text}}">
+<sc-if value="{{o.radio}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="position: relative; width: 14px; height: 14px; flex: none; box-sizing: border-box; border-radius: 50%; border: 1.5px solid {{o.ring}}"><span style="position: absolute; left: 2.5px; top: 2.5px; width: 6px; height: 6px; border-radius: 50%; background: {{t.accentText}}; opacity: {{o.dotOp}}"></span></span></sc-if>
+<sc-if value="{{o.box}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="width: 14px; height: 14px; flex: none; display: grid; place-items: center; box-sizing: border-box; border-radius: 4px; border: 1.5px solid {{o.ring}}; background: {{o.boxFill}}; color: #FFFFFF"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="opacity: {{o.dotOp}}"><path d="M5.5 12.5l4.2 4.2 8.8-9.4"></path></svg></span></sc-if>
+<span style="min-width: 0; display: flex; flex-direction: column">
+<span><span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px">{{o.mono}}</span><span>{{o.rest}}</span></span>
+<sc-if value="{{o.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{o.desc}}</span></sc-if>
+</span>
+</button>
+<sc-if value="{{o.field}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 0 8px 4px 32px">
+<label for="st-q-own" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0">Your own answer</label>
+<input id="st-q-own" class="vx-field" type="text" autocomplete="off" placeholder="Type your answer..." value="{{o.own}}" onChange="{{o.onOwn}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; outline: none; font-size: 13px; line-height: 18px; color: {{t.text}}">
+</div>
+</sc-if>
+</sc-for>
+</div>
+</sc-if>
+<div style="margin-top: 10px; display: flex; align-items: center; gap: 8px">
+<button class="vx-h vxs-gh" onClick="{{dock.qDismiss}}" aria-keyshortcuts="Escape" style="height: 24px; margin-left: -8px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Dismiss</button>
+<span style="flex: 1"></span>
+<sc-if value="{{dock.qBack}}" hint-placeholder-val="{{ false }}"><button class="vxs-sec" onClick="{{dock.qPrev}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Back</button></sc-if>
+<sc-if value="{{dock.qNextShow}}" hint-placeholder-val="{{ true }}"><button class="vxs-sec" onClick="{{dock.qNext}}" aria-keyshortcuts="Meta+Enter" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Next</button></sc-if>
+<sc-if value="{{dock.qSubmitShow}}" hint-placeholder-val="{{ false }}"><button class="vxs-pri" onClick="{{dock.qNext}}" aria-keyshortcuts="Meta+Enter" style="height: 24px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Submit</button></sc-if>
 </div>
 </section>
 </sc-if>
 
 <sc-if value="{{dock.revert}}" hint-placeholder-val="{{ false }}">
-<section aria-label="Reverted" style="margin-bottom: 8px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}">
-<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9.5h9a5 5 0 0 1 0 10H9"></path><path d="M8 6L4.5 9.5 8 13"></path></svg></span>
-<span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">Reverted 2 files</span>
-<button class="vxs-sec" onClick="{{dock.redo}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Redo</button>
+<section aria-label="Rolled back messages" style="margin-bottom: 8px; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}; overflow: hidden">
+<button class="vx-h" onClick="{{dock.rvToggle}}" aria-expanded="{{dock.rvExpanded}}" title="{{dock.rvTip}}" style="width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 12px; box-sizing: border-box; border: 0; border-radius: 0; background: transparent; text-align: left">
+<span style="flex: none; font-size: 13px; line-height: 18px; color: {{t.text}}">{{dock.rvLabel}}</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: {{t.text2}}">{{dock.rvPreview}}</span>
+<span aria-hidden="true" style="flex: none; display: grid; place-items: center; color: {{t.icon}}; transform: rotate({{dock.rvRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<sc-if value="{{dock.rvOpen}}" hint-placeholder-val="{{ true }}">
+<div style="padding: 0 6px 8px 12px; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{dock.rvRows}}" as="rv" hint-placeholder-count="2">
+<div style="height: 32px; display: flex; align-items: center; gap: 8px">
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: {{t.text}}">{{rv.text}}</span>
+<button class="vxs-sec" onClick="{{rv.restore}}" aria-label="{{rv.aria}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Restore message</button>
+</div>
+</sc-for>
+</div>
+</sc-if>
 </section>
 </sc-if>
 
 <sc-if value="{{dock.intr}}" hint-placeholder-val="{{ false }}">
-<section aria-label="Interrupted" style="margin-bottom: 8px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}">
-<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M4.25 3v6M7.75 3v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></span>
-<span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">Vector stopped when this Mac went to sleep.</span>
-<button class="vxs-sec" onClick="{{dock.resume}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Resume</button>
+<section aria-label="Stopped subagents" style="margin-bottom: 8px; min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; box-sizing: border-box; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5 14.2 13.5H1.8Z M8 6.6v3.1 M8 11.7v.01"></path></svg></span>
+<span role="status" style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">1 subagent stopped when Vector restarted. Nothing resumes on its own.</span>
+<button class="vxs-sec" onClick="{{dock.resumeAll}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Resume all</button>
+<button class="vx-h vxs-gh" onClick="{{dock.intrDismiss}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Dismiss</button>
 </section>
 </sc-if>
 
@@ -817,6 +924,15 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-if>
 
+<sc-if value="{{child.show}}" hint-placeholder-val="{{ false }}">
+<div role="note" style="min-height: 48px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 10px 10px 14px; box-sizing: border-box; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}">
+<span style="flex: 1 1 260px; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text2}}">This is a subagent. Talk to it from Background tasks.</span>
+<button class="vxs-sec" onClick="{{child.talk}}" title="Open Background tasks to talk to Swarm worker 2" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Talk to this subagent</button>
+<button class="vx-h vxs-gh" onClick="{{child.back}}" title="Open Recheck keyboard focus across menu reads" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Back to main session</button>
+</div>
+</sc-if>
+
+<sc-if value="{{c.show}}" hint-placeholder-val="{{ true }}">
 <div class="vx-composer" style="position: relative; display: flex; flex-wrap: wrap; align-items: flex-end; column-gap: 2px; min-height: 48px; box-sizing: border-box; padding: 10px; border-radius: 14px; background: {{t.raised}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.composerBox}}; transition: border-color 120ms">
 <button class="vx-h" aria-label="Add files" title="Add files  ⌘U" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.icon}}; flex: none"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.8 7.2 8.3 11.7a2.6 2.6 0 0 1-3.68-3.68l4.6-4.6a1.75 1.75 0 0 1 2.47 2.47l-4.6 4.6a.9.9 0 0 1-1.27-1.27l4.24-4.25"></path></svg></button>
 <label for="vx-st-prompt" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0">Message Vector</label>
@@ -858,9 +974,11 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </button>
 </div>
 </div>
+</sc-if>
 
 </div>
 </div>
+</sc-if>
 
 <sc-if value="{{term.open}}" hint-placeholder-val="{{ false }}">
 <section aria-label="Terminal" style="flex: none; position: relative; z-index: 4; height: 240px; display: flex; flex-direction: column; background: {{t.terminal}}; box-shadow: inset 0 1px 0 {{t.edge}}">
@@ -1086,28 +1204,65 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 
 <sc-if value="{{dlg.push}}" hint-placeholder-val="{{ false }}">
-<div role="dialog" aria-modal="true" aria-labelledby="st-ps-t" aria-describedby="st-ps-d" class="vx-pop" style="width: 520px; max-width: 100%; max-height: 84%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div role="dialog" aria-modal="true" aria-labelledby="st-ps-t" aria-describedby="st-ps-d" class="vx-pop" style="width: 520px; max-width: 100%; max-height: 88%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
 <div style="flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 12px">
 <div style="flex: 1; min-width: 0">
-<h2 id="st-ps-t" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Commit and push this repository to GitHub</h2>
+<h2 id="st-ps-t" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Push to GitHub</h2>
 <p id="st-ps-d" style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Commit your changes and push them to a repository on your GitHub account.</p>
 </div>
 <button aria-label="Close" title="Close" onClick="{{ps.close}}" class="vx-h vxs-ih" style="flex: none; width: 24px; height: 24px; margin: -2px -4px 0 0; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
 </div>
 <div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px; display: flex; flex-direction: column; gap: 14px">
-<sc-if value="{{ps.form}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: center; gap: 6px; height: 24px; font-size: 12px; line-height: 16px; color: {{t.text2}}">
+<span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}; flex: none"></span>
+<span style="flex: 1; min-width: 0">Connected as <span style="color: {{t.text}}">@you</span></span>
+<button class="vx-h vxs-gh" aria-label="Sign out of GitHub" style="flex: none; height: 24px; padding: 0 6px; margin-right: -6px; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Sign out</button>
+</div>
+<div role="radiogroup" aria-labelledby="st-ps-dest" style="display: flex; flex-direction: column; gap: 8px">
+<div id="st-ps-dest" style="font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Destination repository</div>
+<label for="st-ps-q" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0">Search repositories</label>
+<input id="st-ps-q" class="vx-field" type="search" autocomplete="off" spellcheck="false" placeholder="Search repositories…" value="{{ps.q}}" onChange="{{ps.onQ}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; outline: none; font-size: 13px; line-height: 18px; color: {{t.text}}">
+<div class="vx-scroll" style="max-height: 156px; overflow-y: auto; padding: 4px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairline}}; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{ps.repos}}" as="rp" hint-placeholder-count="3">
+<button role="radio" aria-checked="{{rp.checked}}" onClick="{{rp.pick}}" class="{{rp.cls}}" style="width: 100%; height: 36px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 10px; box-sizing: border-box; border: 0; border-radius: 7px; background: {{rp.bg}}; text-align: left; transition: background-color 120ms">
+<span aria-hidden="true" style="position: relative; width: 14px; height: 14px; flex: none; box-sizing: border-box; border-radius: 50%; border: 1.5px solid {{rp.ring}}"><span style="position: absolute; left: 2.5px; top: 2.5px; width: 6px; height: 6px; border-radius: 50%; background: {{t.accentText}}; opacity: {{rp.dotOp}}"></span></span>
+<span style="flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}">{{rp.name}}</span>
+<sc-if value="{{rp.priv}}" hint-placeholder-val="{{ false }}"><span style="flex: none; height: 16px; display: inline-flex; align-items: center; padding: 0 5px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; color: {{t.text2}}">Private</span></sc-if>
+<span style="flex: 1"></span>
+<span style="flex: none; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text2}}">{{rp.when}}</span>
+</button>
+</sc-for>
+<sc-if value="{{ps.empty}}" hint-placeholder-val="{{ false }}"><div style="padding: 8px 10px; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{ps.emptyText}}</div></sc-if>
+</div>
+<div style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<button role="radio" aria-checked="{{ps.newChecked}}" onClick="{{ps.pickNew}}" class="{{ps.newCls}}" style="width: 100%; height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 14px; box-sizing: border-box; border: 0; border-radius: 0; background: {{ps.newBg}}; text-align: left; transition: background-color 120ms">
+<span aria-hidden="true" style="position: relative; width: 14px; height: 14px; flex: none; box-sizing: border-box; border-radius: 50%; border: 1.5px solid {{ps.newRing}}"><span style="position: absolute; left: 2.5px; top: 2.5px; width: 6px; height: 6px; border-radius: 50%; background: {{t.accentText}}; opacity: {{ps.newDotOp}}"></span></span>
+<span style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Create new repository</span>
+</button>
+<sc-if value="{{ps.isNew}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 12px; padding: 12px 14px 14px; border-top: 1px solid {{t.hairline}}">
+<div>
+<label for="st-ps-name" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Repository name</label>
+<input id="st-ps-name" class="vx-field" type="text" autocomplete="off" spellcheck="false" required="true" value="{{ps.name}}" onChange="{{ps.onName}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; outline: none; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; color: {{t.text}}">
+</div>
+<div style="display: flex; align-items: center; gap: 12px">
+<span id="st-ps-priv" style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Private repository</span>
+<button role="switch" aria-checked="{{ps.priv.checked}}" aria-labelledby="st-ps-priv" onClick="{{ps.priv.toggle}}" style="position: relative; flex: none; width: 32px; height: 24px; padding: 0; border: 0; border-radius: 9px; background: transparent">
+<span aria-hidden="true" style="position: absolute; left: 0; top: 3px; width: 32px; height: 18px; box-sizing: border-box; border-radius: 9px; background: {{ps.priv.track}}; border: 1px solid {{ps.priv.trackBorder}}; transition: background-color 140ms"></span>
+<span aria-hidden="true" style="position: absolute; top: 5px; left: {{ps.priv.thumbX}}; width: 14px; height: 14px; border-radius: 50%; background: {{t.thumb}}; box-shadow: 0 1px 3px rgba(0,0,0,0.35); transition: left 140ms cubic-bezier(.22,1,.36,1)"></span>
+</button>
+</div>
+<div>
+<label for="st-ps-desc" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Description</label>
+<input id="st-ps-desc" class="vx-field" type="text" autocomplete="off" placeholder="Optional repository description" value="{{ps.desc}}" onChange="{{ps.onDesc}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; outline: none; font-size: 13px; line-height: 18px; color: {{t.text}}">
+</div>
+</div>
+</sc-if>
+</div>
+</div>
 <div>
 <label for="st-ps-msg" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Commit message</label>
-<textarea id="st-ps-msg" class="vx-field" rows="3" spellcheck="false" value="{{ps.msg}}" onChange="{{ps.onMsg}}" style="display: block; width: 100%; min-height: 84px; box-sizing: border-box; padding: 8px 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; outline: none; resize: vertical; font-size: 13px; line-height: 20px; color: {{t.text}}"></textarea>
-</div>
-<div>
-<div style="margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Branch</div>
-<div style="height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairline}}">
-<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M4.1 2.3v6.1a2.7 2.7 0 0 0 2.7 2.7h2.45M4.1 2.3a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2Zm7.8 8.8a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2Zm0 0V5.85A2.7 2.7 0 0 0 9.2 3.15H7.45"></path></svg></span>
-<span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}">scope-evidence</span>
-<span style="flex: 1"></span>
-<span style="display: inline-flex; gap: 6px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text2}}">6 files<span style="color: {{t.diffAdd}}">+318</span><span style="color: {{t.diffDel}}">−32</span></span>
-</div>
+<textarea id="st-ps-msg" class="vx-field" rows="3" spellcheck="false" placeholder="Update from Vector" value="{{ps.msg}}" onChange="{{ps.onMsg}}" style="display: block; width: 100%; min-height: 84px; box-sizing: border-box; padding: 8px 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; outline: none; resize: vertical; font-size: 13px; line-height: 20px; color: {{t.text}}"></textarea>
 </div>
 <sc-if value="{{ps.check}}" hint-placeholder-val="{{ false }}">
 <div role="alert" style="padding: 10px 12px; border-radius: 10px; border: 1px solid {{t.needsLine}}">
@@ -1124,37 +1279,51 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </div>
 </sc-if>
-</sc-if>
 <sc-if value="{{ps.done}}" hint-placeholder-val="{{ false }}">
-<div style="display: flex; align-items: flex-start; gap: 10px">
-<span aria-hidden="true" style="height: 18px; display: grid; place-items: center; flex: none; color: {{t.ready}}"><svg width="14" height="14" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.25"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
-<div>
-<div role="status" style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Repository is up to date</div>
-<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Your repository’s files are committed and available on GitHub.</div>
+<div style="padding: 10px 12px; box-sizing: border-box; border-radius: 10px; border: 1px solid rgba(98,196,141,0.35); background: rgba(98,196,141,0.08)">
+<div style="display: flex; align-items: center; gap: 8px">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.ready}}"><svg width="14" height="14" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.25"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+<span role="status" style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Repository is up to date</span>
 </div>
-</div>
-</sc-if>
-<div>
-<button class="vx-h" onClick="{{ps.toggleLog}}" aria-expanded="{{ps.logExpanded}}" style="height: 24px; display: inline-flex; align-items: center; gap: 6px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">
+<button class="vx-h" onClick="{{ps.toggleLog}}" aria-expanded="{{ps.logExpanded}}" style="height: 24px; margin: 6px 0 0 -6px; display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">
 <span aria-hidden="true" style="display: grid; place-items: center; color: {{t.text3}}; transform: rotate({{ps.logRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"></path></svg></span>Command log
 </button>
 <sc-if value="{{ps.logOpen}}" hint-placeholder-val="{{ false }}">
-<div role="log" aria-label="Command log" style="margin-top: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.code}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; color: {{t.text2}}">
-<sc-for list="{{ps.log}}" as="pl" hint-placeholder-count="4">
-<div style="min-height: 18px; white-space: pre-wrap; color: {{pl.color}}">{{pl.text}}</div>
+<div role="log" aria-label="Command log" class="vx-scroll" style="margin-top: 6px; max-height: 144px; overflow: auto; padding: 8px 12px; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.code}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: {{t.text2}}">
+<sc-for list="{{ps.log}}" as="pl" hint-placeholder-count="6">
+<div style="min-height: 16px; white-space: pre-wrap; color: {{pl.color}}">{{pl.text}}</div>
 </sc-for>
 </div>
 </sc-if>
 </div>
+</sc-if>
 </div>
 <div style="flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid {{t.hairline}}">
-<sc-if value="{{ps.form}}" hint-placeholder-val="{{ true }}">
-<button class="vx-h vxs-gh" onClick="{{ps.close}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
-<button class="vxs-pri" onClick="{{ps.push}}" disabled="{{ps.pushDisabled}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Push</button>
-</sc-if>
+<button class="vx-h vxs-gh" onClick="{{ps.close}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Close</button>
 <sc-if value="{{ps.done}}" hint-placeholder-val="{{ false }}">
-<button class="vxs-pri" onClick="{{ps.close}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Done</button>
+<button class="vxs-sec" title="{{ps.repoUrl}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Open repository</button>
 </sc-if>
+<button class="vxs-pri" onClick="{{ps.push}}" disabled="{{ps.pushDisabled}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{ps.pushBg}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{ps.pushFg}}; transition: background-color 120ms">{{ps.pushLabel}}</button>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.del}}" hint-placeholder-val="{{ false }}">
+<div role="alertdialog" aria-modal="true" aria-labelledby="st-dl-t" aria-describedby="st-dl-d" class="vx-pop" style="width: 440px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 16px 16px">
+<h2 id="st-dl-t" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Delete session</h2>
+<p id="st-dl-d" style="margin: 4px 0 0; font-size: 13px; line-height: 20px; color: {{t.text2}}">{{dl.desc}}</p>
+<sc-if value="{{dl.hasLinks}}" hint-placeholder-val="{{ true }}">
+<ul aria-label="Public links" style="list-style: none; margin: 12px 0 0; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.code}}">
+<sc-for list="{{dl.links}}" as="lk" hint-placeholder-count="2">
+<li style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; color: {{t.text}}; word-break: break-all; user-select: text">{{lk.url}}</li>
+</sc-for>
+</ul>
+</sc-if>
+</div>
+<div style="flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid {{t.hairline}}">
+<button class="vx-h vxs-gh" onClick="{{dl.cancel}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+<button class="vxs-danger" onClick="{{dl.go}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.dangerLine}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.diffDel}}; transition: background-color 120ms">{{dl.label}}</button>
 </div>
 </div>
 </sc-if>
@@ -1272,7 +1441,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"enum","options":["context","editor","terminal","docks","docks2"],"default":"editor","section":"View"},"overlay":{"editor":"enum","options":["none","find","status","share","fork","push","watch"],"default":"none","section":"Overlay"},"$preview":{"width":1600,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"enum","options":["context","editor","terminal","docks","docks2","notfound","child"],"default":"editor","section":"View"},"overlay":{"editor":"enum","options":["none","find","status","share","fork","push","push-new","delete","watch"],"default":"none","section":"Overlay"},"$preview":{"width":1600,"height":1000}}'>
 class Component extends DCLogic {
   rgb(h) {
     let x = String(h || '').trim().replace('#', '');
@@ -1377,8 +1546,8 @@ class Component extends DCLogic {
 
   cur() {
     const s = this.state || {};
-    const V = ['context', 'editor', 'terminal', 'docks', 'docks2'];
-    const O = ['none', 'find', 'status', 'share', 'fork', 'push', 'watch'];
+    const V = ['context', 'editor', 'terminal', 'docks', 'docks2', 'notfound', 'child'];
+    const O = ['none', 'find', 'status', 'share', 'fork', 'push', 'push-new', 'delete', 'watch'];
     let pv = this.props.view ?? 'editor';
     if (V.indexOf(pv) < 0) pv = 'editor';
     let po = this.props.overlay ?? 'none';
@@ -1393,11 +1562,12 @@ class Component extends DCLogic {
     const C = this.cur();
     const u = (s._p === C.key && s.u) ? s.u : {};
     const view = C.view;
-    const ov = C.ov;
+    // A tab that points to a missing session has no session to share, push or search, so overlays stay closed there.
+    const ov = view === 'notfound' ? 'none' : C.ov;
     const ev = (view === 'editor' && ov === 'status') ? 'chat' : view;
     const set = (patch) => this.setState({ _p: C.key, view: C.view, ov: C.ov, u: Object.assign({}, u, { toast: '' }, patch) });
     const go = (v, o, patch) => this.setState({ _p: C.key, view: v, ov: o, u: Object.assign({}, patch || {}) });
-    const OVK = ['shareDone', 'shareScope', 'shareDays', 'shareCopied', 'shareRemoved', 'forkSel', 'forkQ', 'pushStage', 'pushMsg', 'logOpen', 'watchSt', 'statusTab', 'findQ', 'findIdx'];
+    const OVK = ['shareDone', 'shareScope', 'shareDays', 'shareCopied', 'shareRemoved', 'forkSel', 'forkQ', 'pushStage', 'pushMsg', 'pushSel', 'pushQ', 'pushName', 'pushPriv', 'pushDesc', 'delStage', 'logOpen', 'watchSt', 'statusTab', 'findQ', 'findIdx'];
     const goOv = (o, patch) => {
       const u2 = Object.assign({}, u);
       OVK.forEach(function (k) { delete u2[k]; });
@@ -1409,6 +1579,8 @@ class Component extends DCLogic {
     const isTerm = ev === 'terminal';
     const isDocks = ev === 'docks';
     const isDocks2 = ev === 'docks2';
+    const isNf = ev === 'notfound';
+    const isChild = ev === 'child';
     const keepOv = ov === 'status' ? 'none' : ov;
     const menu = u.menu || null;
     const close = () => set({ menu: null });
@@ -1458,8 +1630,8 @@ class Component extends DCLogic {
     const edSession = isEd || (ev === 'chat' && (view === 'editor' || !!u.fromEd));
     let sst = 'ready';
     if (edSession) sst = 'running';
-    if (isDocks) sst = u.answered ? 'running' : 'needs';
-    if (isDocks2 && (u.resumed || u.budgetGo)) sst = 'running';
+    if (isDocks) sst = u.answered ? 'running' : (u.qDismissed ? 'ready' : 'needs');
+    if (isDocks2 && u.budgetGo) sst = 'running';
     if (u.stopped) sst = 'ready';
     const working = sst === 'running';
     const needs = sst === 'needs';
@@ -1467,7 +1639,7 @@ class Component extends DCLogic {
     let workText = '';
     if (edSession) workText = '24s · Codium · Editing ai-review.ts';
     else if (isDocks) workText = '6s · Codium · Committing on ' + (qSel === 'new' ? 'a new branch' : 'scope-evidence');
-    else if (isDocks2) workText = u.budgetGo ? '5s · Codium · Running the app tests' : '3s · Codium · Resuming';
+    else if (isDocks2) workText = '14s · Codium · Retrying';
 
     // Sidebar
     const word = { running: 'Running', needs: 'Needs you', failed: 'Failed', ready: 'Ready to review', queued: 'Queued', done: 'Done' };
@@ -1484,9 +1656,11 @@ class Component extends DCLogic {
       queueJob: { title: 'Upgrade the site’s framework on vectordev.ai', st: 'queued', time: '6:00' },
       cloudRepro: { title: 'Reproduce Windows packaging limit', st: 'running', time: '4m' }
     };
+    // The child view selects Chat's subagent session; a missing session selects nothing.
+    const selId = isChild ? 'swarm2' : (isNf ? '' : 'warn');
     const mkRow = (id, level, pos) => {
       const x = S[id];
-      const selected = id === 'warn';
+      const selected = id === selId;
       const unread = !!x.unread;
       const emph = selected || x.st === 'needs' || x.st === 'failed' || unread;
       const two = !!x.line2;
@@ -1574,7 +1748,8 @@ class Component extends DCLogic {
       agentPressed: isEd ? 'false' : 'true', editorPressed: isEd ? 'true' : 'false',
       agentColor: isEd ? t.text3 : t.text, editorColor: isEd ? t.text : t.text3,
       toAgent: () => { if (isEd) go('chat', keepOv, { fromEd: true }); },
-      toEditor: () => { if (!isEd) go('editor', keepOv); }
+      // A tab with no session has nothing to open in the editor.
+      toEditor: () => { if (!isEd && !isNf) go('editor', keepOv); }
     };
 
     const moreOpen = menu === 'more';
@@ -1600,13 +1775,19 @@ class Component extends DCLogic {
     };
 
     // Header
+    // The child view is Chat's subagent session "Swarm worker 2" (running, on main), started by Recheck keyboard focus.
+    const hWorking = isChild || working;
+    const hNeeds = !isChild && needs;
     const head = {
-      mainLabel: isEd ? 'Code editor' : warnTitle,
-      title: warnTitle,
-      status: needs ? 'Needs you' : (working ? 'Working' : 'Ready'),
-      working: working, needs: needs, ready: !working && !needs
+      mainLabel: isEd ? 'Code editor' : (isNf ? 'This session cannot be found' : (isChild ? S.swarm2.title : warnTitle)),
+      title: isChild ? S.swarm2.title : warnTitle,
+      branch: isChild ? 'main' : 'scope-evidence',
+      status: hNeeds ? 'Needs you' : (hWorking ? 'Working' : 'Ready'),
+      working: hWorking, needs: hNeeds, ready: !hWorking && !hNeeds,
+      // The not-found fallback replaces the whole session route, header included (pages/session.tsx 174-235).
+      edge: isNf ? 'none' : '0 1px 0 ' + t.hairline
     };
-    const notEd = !isEd;
+    const notEd = !isEd && !isNf;
 
     const spOpen = ov === 'status';
     const stTab = u.statusTab || 'mcp';
@@ -1693,10 +1874,16 @@ class Component extends DCLogic {
     };
     const smOpen = menu === 'sm';
     const sm = {
+      show: !isChild,
       open: smOpen, expanded: smOpen ? 'true' : 'false', bg: smOpen ? t.rowPressed : 'transparent',
       toggle: toggleMenu('sm'), close: close,
-      share: () => goOv('share'), fork: () => goOv('fork'), push: () => goOv('push'),
+      // Delete… opens today's first step; the public-share warning follows when the server reports public links.
+      share: () => goOv('share'), fork: () => goOv('fork'), push: () => goOv('push'), del: () => goOv('delete', { delStage: 'confirm' }),
       copy: () => set({ menu: null, toast: 'Link copied' })
+    };
+    // Chat's breadcrumb for a subagent session (Chat.dc.html 1870-1873); the "…" menu is hidden there.
+    const crumb = {
+      show: isChild, parent: S.recheck.title, child: S.swarm2.title, goParent: close
     };
 
     // Transcript and find in chat
@@ -1704,15 +1891,16 @@ class Component extends DCLogic {
     const P2 = 'I’ll find where Vectorscope builds findings, add an evidence check, then show a warning row in the panel.';
     const P8 = 'Findings now carry an evidence state: checked, missing or stale. The review card shows a note for missing and stale evidence. I asked Vectorscope to review the change.';
     const P12 = 'Fixed: evidence older than the head commit now reads ‘Evidence may be stale’. Ready for your review: 6 files, +318 −32.';
-    const review = !isDocks;
+    const review = !isDocks && !isChild;
     const findOn = ov === 'find';
+    const hitOn = findOn && !isChild;
     const fq = typeof u.findQ === 'string' ? u.findQ : 'evidence';
     const q = fq.trim();
     const per = {
-      p1: findOn ? this.hits(P1, q) : [],
-      p2: findOn ? this.hits(P2, q) : [],
-      p8: findOn ? this.hits(P8, q) : [],
-      p12: findOn && review ? this.hits(P12, q) : []
+      p1: hitOn ? this.hits(P1, q) : [],
+      p2: hitOn ? this.hits(P2, q) : [],
+      p8: hitOn ? this.hits(P8, q) : [],
+      p12: hitOn && review ? this.hits(P12, q) : []
     };
     const total = per.p1.length + per.p2.length + per.p8.length + per.p12.length;
     const curIdx = total ? (((u.findIdx || 0) % total) + total) % total : -1;
@@ -1741,16 +1929,28 @@ class Component extends DCLogic {
       next: () => { if (total) set({ findIdx: curIdx + 1 }); },
       close: () => goOv('none')
     };
+    const qOwn1 = typeof u.qOwn1 === 'string' ? u.qOwn1 : '';
     const tr = {
       p1: mkSegs('p1', P1), p2: mkSegs('p2', P2), p8: mkSegs('p8', P8), p12: mkSegs('p12', P12),
+      // The child view draws Chat's subagent transcript instead (Chat.dc.html 780-797).
+      main: !isChild, child: isChild, startedBy: 'Started by ' + S.recheck.title,
       review: review,
       ask: isDocks, answered: isDocks && !!u.answered,
-      answer: qSel === 'new' ? 'A new branch from main' : 'scope-evidence (current)',
+      // Dismissing rejects the questions; today's transcript then reads "Questions dismissed" (message-part.tsx 1553-1561).
+      dismissed: isDocks && !!u.qDismissed && !u.answered,
       answerCmd: qSel === 'new' ? 'git switch -c warn-stale-evidence main' : 'git commit -m "Warn on stale review evidence"',
       follow: edSession, editRun: edSession && working, editStop: edSession && !working,
       editColor: working ? t.running : t.text3, editWord: working ? 'Editing' : 'Stopped by you',
       budget: isDocks2, budgetCard: isDocks2 && !u.budgetGo, budgetCont: isDocks2 && !!u.budgetGo,
-      cont: () => set({ budgetGo: true, stopped: false }),
+      // Today's plain turn error card (message-timeline.tsx 1394-1411) on the Diagnostics block recipe.
+      errText: 'Stream closed before the reply finished: connection reset (ECONNRESET)',
+      // Today's retry row (session-retry.tsx) shows only on the active turn while the session retries,
+      // so it appears once the continued run starts, never next to a finished turn.
+      retry: isDocks2 && !!u.budgetGo && !u.stopped,
+      retryMsg: 'Model is overloaded. Try again shortly.',
+      retryInfo: 'retrying in 8s - attempt #2',
+      // Sending a new message clears a rollback, as it does today.
+      cont: () => set({ budgetGo: true, stopped: false, rvFrom: 9 }),
       compacted: compacted
     };
 
@@ -1758,16 +1958,71 @@ class Component extends DCLogic {
     const qGone = u.queueGone || {};
     const qRows = [{ id: 'a', text: 'Also check the Settings search box' }, { id: 'b', text: 'Run the Windows tests after' }].filter(function (r) { return !qGone[r.id]; });
     const dropQ = (id) => () => { const o = Object.assign({}, qGone); o[id] = true; set({ queueGone: o }); };
+    // Question dock (session-question-dock.tsx): two questions, paged; the second is multi-select.
+    const qTab = u.qTab === 1 ? 1 : 0;
+    const qMulti = Object.assign({ tc: true, tests: true, win: false, own: false }, u.qMulti || {});
+    const qOwn2 = typeof u.qOwn2 === 'string' ? u.qOwn2 : '';
+    const QS = [
+      {
+        text: 'Which branch should the fix go on?', multi: false,
+        opts: [{ key: 'cur', mono: 'scope-evidence', rest: ' (current)' }, { key: 'new', mono: '', rest: 'A new branch from main' }]
+      },
+      {
+        text: 'Which checks should run before I commit?', multi: true,
+        opts: [{ key: 'tc', mono: '', rest: 'Typecheck' }, { key: 'tests', mono: '', rest: 'App tests' }, { key: 'win', mono: '', rest: 'Windows packaging dry-run' }]
+      }
+    ];
+    const QQ = QS[qTab];
+    const qOn = (key) => (QQ.multi ? !!qMulti[key] : qSel === key);
+    const qPick = (key) => () => {
+      if (!QQ.multi) { set({ qSel: key }); return; }
+      const o = Object.assign({}, qMulti);
+      o[key] = !o[key];
+      set({ qMulti: o });
+    };
+    const qOwnText = qTab ? qOwn2 : qOwn1;
+    const mkQOpt = (o, own) => {
+      const on = qOn(o.key);
+      return {
+        mono: o.mono, rest: o.rest, role: QQ.multi ? 'checkbox' : 'radio', checked: on ? 'true' : 'false',
+        radio: !QQ.multi, box: QQ.multi,
+        bg: on ? t.rowHover : 'transparent', ring: on ? (QQ.multi ? t.accentStrong : t.accentText) : t.text3,
+        boxFill: on ? t.accentStrong : 'transparent', dotOp: on ? '1' : '0',
+        hasDesc: own && !on, desc: own ? (qOwnText || 'Type your answer...') : '',
+        field: own && on, own: qOwnText,
+        onOwn: (e) => { const v = e && e.target ? e.target.value : ''; set(qTab ? { qOwn2: v } : { qOwn1: v }); },
+        pick: qPick(o.key)
+      };
+    };
+    const qMin = !!u.qMin;
+    const RV = ['Rename evidenceState to findingEvidence everywhere.', 'Then update the tests to match.'];
+    const rvFrom = typeof u.rvFrom === 'number' ? u.rvFrom : 0;
+    const rvItems = RV.map(function (text, i) { return { text: text, i: i }; }).filter(function (r) { return r.i >= rvFrom; });
+    const rvOpen = !u.rvCollapsed;
     const dock = {
       work: working && !!workText, workText: workText,
       q: isDocks && !u.answered && !u.qDismissed && !u.stopped,
-      qOpts: [{ key: 'cur', mono: 'scope-evidence', rest: ' (current)' }, { key: 'new', mono: '', rest: 'A new branch from main' }].map((o) => ({
-        mono: o.mono, rest: o.rest, checked: qSel === o.key ? 'true' : 'false',
-        bg: qSel === o.key ? t.rowHover : 'transparent', ring: qSel === o.key ? t.accentText : t.text3, dotOp: qSel === o.key ? '1' : '0',
-        pick: () => set({ qSel: o.key })
+      qTitle: (qTab + 1) + ' of ' + QS.length + ' questions',
+      qText: QQ.text,
+      qHint: QQ.multi ? 'Select all answers that apply' : 'Select one answer',
+      qRole: QQ.multi ? 'group' : 'radiogroup',
+      qOpen: !qMin,
+      qMin: () => set({ qMin: !qMin }),
+      qMinLabel: qMin ? 'Restore question' : 'Minimize question',
+      qMinRot: qMin ? '180deg' : '0deg',
+      qSegs: QS.map((x, i) => ({
+        label: 'Questions ' + (i + 1), current: i === qTab ? 'step' : 'false',
+        // Current, answered and upcoming segments all stay at 3:1 or more on the dock fill.
+        fill: i === qTab ? t.accentText : (i < qTab ? 'rgba(182,159,247,0.6)' : 'rgba(255,255,255,0.38)'),
+        pick: () => set({ qTab: i })
       })),
-      answer: () => set({ answered: true }),
-      reply: () => set({ qDismissed: true }),
+      qOpts: QQ.opts.map((o) => mkQOpt(o, false)).concat([mkQOpt({ key: 'own', mono: '', rest: 'Type your own answer' }, true)]),
+      qBack: qTab > 0,
+      qNextShow: qTab < QS.length - 1,
+      qSubmitShow: qTab === QS.length - 1,
+      qPrev: () => set({ qTab: 0 }),
+      qNext: () => { if (qTab < QS.length - 1) set({ qTab: qTab + 1 }); else set({ answered: true }); },
+      qDismiss: () => set({ qDismissed: true }),
       queue: isDocks && qRows.length > 0,
       queueRows: qRows.map((r, i) => ({ text: r.text, line: i ? 'inset 0 1px 0 ' + t.hairline : 'none', steer: dropQ(r.id), remove: dropQ(r.id) })),
       paused: isDocks && !!u.stopped,
@@ -1775,8 +2030,17 @@ class Component extends DCLogic {
       deleg: isDocks && !u.delegGone && !u.stopped,
       delegate: () => set({ delegGone: true }),
       noDeleg: () => set({ delegGone: true }),
-      revert: isDocks2 && !u.revertGone, redo: () => set({ revertGone: true, toast: 'Restored 2 files' }),
-      intr: isDocks2 && !u.intrGone, resume: () => set({ intrGone: true, resumed: true, stopped: false }),
+      // Revert dock (session-revert-dock.tsx): drawn expanded; restoring a message brings it and the ones before it back.
+      revert: isDocks2 && rvItems.length > 0,
+      rvLabel: rvItems.length + (rvItems.length === 1 ? ' rolled back message' : ' rolled back messages'),
+      rvPreview: rvOpen ? '' : (rvItems[0] ? rvItems[0].text : ''),
+      rvOpen: rvOpen, rvExpanded: rvOpen ? 'true' : 'false', rvRot: rvOpen ? '0deg' : '180deg',
+      rvTip: rvOpen ? 'Collapse rolled back messages' : 'Expand rolled back messages',
+      rvToggle: () => set({ rvCollapsed: rvOpen }),
+      rvRows: rvItems.map((r) => ({ text: r.text, aria: 'Restore message: ' + r.text, restore: () => set({ rvFrom: r.i + 1 }) })),
+      // Interrupted dock (session-interrupted-dock.tsx), root sessions only.
+      intr: isDocks2 && !u.intrGone,
+      resumeAll: () => set({ intrGone: true }), intrDismiss: () => set({ intrGone: true }),
       rec: isDocks2 && !u.recGone, useRec: () => set({ recGone: true, effort: 'Balanced' }), noRec: () => set({ recGone: true })
     };
 
@@ -1784,7 +2048,14 @@ class Component extends DCLogic {
     const draft = typeof u.draft === 'string' ? u.draft : '';
     const hasDraft = draft.trim().length > 0;
     const narrow = isCtx || isEd;
+    // A subagent session has no composer: today's notice takes its place (session-composer-region.tsx 193-222).
+    const child = { show: isChild, talk: close, back: close };
+    const nf = {
+      show: isNf, server: 'This Mac', id: 'ses_2f91c4a07ffeK8mTq3VbXwR6nD',
+      close: () => go('chat', 'none')
+    };
     const c = {
+      show: !isChild,
       stop: working || needs, send: !(working || needs),
       modelName: !isEd,
       modelMax: narrow ? '72px' : 'none',
@@ -1865,6 +2136,11 @@ class Component extends DCLogic {
     const side = u.sideTab || 'explorer';
     const ftab = u.fileTab || 'ai';
     const vtOn = !u.vtabOff;
+    // Header toggles (session-side-panel.tsx 2811-2855): Follow the agent, Explorer, the agent column.
+    const followOn = !u.followOff;
+    const explorerOpen = !u.explorerOff;
+    const agentOpen = !u.agentOff;
+    const mkTog = (on) => ({ pressed: on ? 'true' : 'false', bg: on ? t.rowPressed : 'transparent', color: on ? t.text : t.icon });
     const FILES = {
       ai: {
         name: 'ai-review.ts', dir: 'packages / app / src / features / pull-requests / ', path: 'packages/app/src/features/pull-requests/ai-review.ts', start: 140,
@@ -2014,6 +2290,17 @@ class Component extends DCLogic {
         thumbX: vtOn ? '11px' : '1px',
         toggle: () => set({ vtabOff: vtOn })
       },
+      fo: Object.assign(mkTog(followOn), {
+        pill: followOn && working,
+        pillText: 'Following Vector: editing ai-review.ts',
+        pillTip: 'Following Vector: editing ai-review.ts. The editor opens and scrolls to what it edits.',
+        label: followOn ? 'Stop following the agent' : 'Follow the agent',
+        tip: followOn ? 'Following the agent: the editor opens and scrolls to what it edits. Click to stop.' : 'Follow the agent in the editor',
+        toggle: () => set({ followOff: followOn })
+      }),
+      explorerOpen: explorerOpen,
+      ex: Object.assign(mkTog(explorerOpen), { label: explorerOpen ? 'Hide Explorer' : 'Show Explorer', toggle: () => set({ explorerOff: explorerOpen }) }),
+      ag: Object.assign(mkTog(agentOpen), { label: agentOpen ? 'Hide Vector Agent' : 'Show Vector Agent', toggle: () => set({ agentOff: agentOpen }) }),
       back: () => go('chat', keepOv, { fromEd: true })
     };
     const la = {
@@ -2022,7 +2309,10 @@ class Component extends DCLogic {
     };
 
     // Dialogs
-    const dlg = { open: ['share', 'fork', 'push', 'watch'].indexOf(ov) >= 0, share: ov === 'share', fork: ov === 'fork', push: ov === 'push', watch: ov === 'watch' };
+    const dlg = {
+      open: ['share', 'fork', 'push', 'push-new', 'delete', 'watch'].indexOf(ov) >= 0,
+      share: ov === 'share', fork: ov === 'fork', push: ov === 'push' || ov === 'push-new', del: ov === 'delete', watch: ov === 'watch'
+    };
 
     const shDone = !!u.shareDone;
     const scope = u.shareScope || 'whole';
@@ -2075,24 +2365,77 @@ class Component extends DCLogic {
     const REM = 'I review every change with Vectorscope before merging.';
     const pmsg = typeof u.pushMsg === 'string' ? u.pushMsg : DEF_MSG;
     const pst = u.pushStage || 'form';
+    // Today's "Push to GitHub" picker (session-github-push.tsx 287-414). push-new opens on an account with no
+    // repositories yet, so the create form is the only choice.
+    const noRepos = ov === 'push-new';
+    const REPOS = noRepos ? [] : [
+      { id: 'you/vector', when: '2h ago', priv: false },
+      { id: 'you/vectordev.ai', when: '3d ago', priv: false },
+      { id: 'you/vector-hands', when: '5d ago', priv: true }
+    ];
+    const psel = u.pushSel || (noRepos ? 'new' : 'you/vector');
+    const pq = typeof u.pushQ === 'string' ? u.pushQ : '';
+    const lpq = pq.trim().toLowerCase();
+    const shownRepos = REPOS.filter(function (r) { return !lpq || r.id.toLowerCase().indexOf(lpq) >= 0; });
+    const pname = typeof u.pushName === 'string' ? u.pushName : 'vector';
+    const ppriv = u.pushPriv !== false;
+    const pdesc = typeof u.pushDesc === 'string' ? u.pushDesc : '';
+    const isNewRepo = psel === 'new';
+    const target = isNewRepo ? 'you/' + (pname.trim() || 'vector') : psel;
+    const pushReady = isNewRepo ? !!pname.trim() : REPOS.some(function (r) { return r.id === psel; });
     const LOG_DONE = [
       ['$ git add -A', t.text],
       ['$ git commit -m "Warn on stale review evidence"', t.text],
       ['[scope-evidence 4e1b7c2] Warn on stale review evidence', t.text2],
-      [' 6 files changed, 318 insertions(+), 32 deletions(-)', t.text2],
-      ['$ git push origin scope-evidence', t.text],
-      ['   9f8e7d6..4e1b7c2  scope-evidence -> scope-evidence', t.text2]
-    ];
+      [' 6 files changed, 318 insertions(+), 32 deletions(-)', t.text2]
+    ].concat(isNewRepo
+      ? [['Created ' + target + (ppriv ? ' (private)' : ''), t.text2], ['$ git remote add origin https://github.com/' + target + '.git', t.text], ['$ git push -u origin scope-evidence', t.text], [' * [new branch]      scope-evidence -> scope-evidence', t.text2]]
+      : [['$ git push https://github.com/' + target + '.git scope-evidence', t.text], ['   9f8e7d6..4e1b7c2  scope-evidence -> scope-evidence', t.text2]]);
+    const pickRepo = (id) => () => set({ pushSel: id, pushStage: pst === 'check' ? 'form' : pst });
     const ps = {
-      form: pst !== 'done', check: pst === 'check', done: pst === 'done',
-      msg: pmsg, onMsg: (e) => set({ pushMsg: e && e.target ? e.target.value : '', pushStage: 'form' }),
-      push: () => set({ pushStage: pmsg.indexOf(REM) >= 0 ? 'check' : 'done' }),
-      pushDisabled: !pmsg.trim(),
-      asIs: () => set({ pushStage: 'done' }),
+      check: pst === 'check', done: pst === 'done',
+      q: pq, onQ: (e) => set({ pushQ: e && e.target ? e.target.value : '' }),
+      repos: shownRepos.map((r) => {
+        const on = psel === r.id;
+        return {
+          name: r.id, priv: r.priv, when: r.when, checked: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
+          bg: on ? t.rowSel : 'transparent', ring: on ? t.accentText : t.text3, dotOp: on ? '1' : '0',
+          pick: pickRepo(r.id)
+        };
+      }),
+      empty: shownRepos.length === 0,
+      emptyText: lpq ? 'No repositories match your search.' : 'No repositories yet — create one below.',
+      isNew: isNewRepo, newChecked: isNewRepo ? 'true' : 'false', newCls: isNewRepo ? '' : 'vx-h',
+      newBg: isNewRepo ? t.rowSel : 'transparent', newRing: isNewRepo ? t.accentText : t.text3, newDotOp: isNewRepo ? '1' : '0',
+      pickNew: pickRepo('new'),
+      name: pname, onName: (e) => set({ pushName: e && e.target ? e.target.value : '' }),
+      priv: Object.assign(mkSw(ppriv), { toggle: () => set({ pushPriv: !ppriv }) }),
+      desc: pdesc, onDesc: (e) => set({ pushDesc: e && e.target ? e.target.value : '' }),
+      msg: pmsg, onMsg: (e) => set({ pushMsg: e && e.target ? e.target.value : '', pushStage: pst === 'check' ? 'form' : pst }),
+      push: () => { if (pushReady) set({ pushStage: pmsg.indexOf(REM) >= 0 ? 'check' : 'done', logOpen: false }); },
+      pushDisabled: !pushReady,
+      pushLabel: 'Commit & push',
+      pushBg: pushReady ? t.text : 'rgba(255,255,255,0.06)', pushFg: pushReady ? t.main : t.textDisabled,
+      asIs: () => set({ pushStage: 'done', logOpen: false }),
+      repoUrl: 'https://github.com/' + target,
       logOpen: !!u.logOpen, logExpanded: u.logOpen ? 'true' : 'false', logRot: u.logOpen ? '90deg' : '0deg',
       toggleLog: () => set({ logOpen: !u.logOpen }),
-      log: (pst === 'done' ? LOG_DONE : [['No commands have run yet.', t.text3]]).map(function (l) { return { text: l[0], color: l[1] }; }),
+      log: LOG_DONE.map(function (l) { return { text: l[0], color: l[1] }; }),
       close: () => goOv('none')
+    };
+
+    // Delete session (message-timeline.tsx 921-981). The tweak opens the public-share step; the "…" menu opens the first.
+    const delStage = u.delStage || 'links';
+    const dLinks = delStage === 'links';
+    const dl = {
+      desc: dLinks
+        ? 'This session or a child session was shared publicly with an earlier release. Vector cannot remove that public copy. Save these links before deleting the local session.'
+        : 'Delete session "' + warnTitle + '"?',
+      hasLinks: dLinks,
+      links: dLinks ? [{ url: 'https://vectordev.ai/s/k3Qm8ZtRw2' }, { url: 'https://vectordev.ai/s/Hw2pX9cN4v' }] : [],
+      label: dLinks ? 'Delete local session only' : 'Delete session',
+      go: () => { if (dLinks) goOv('none'); else set({ delStage: 'links' }); },
+      cancel: () => goOv('none')
     };
 
     const ws = u.watchSt || 'working';
@@ -2134,9 +2477,10 @@ class Component extends DCLogic {
     let toastText = u.toast || '';
     let toastOk = !!u.toast;
     if (findOn && q && total === 0) { toastText = 'No chat matches'; toastOk = false; }
-    const toast = { show: !!toastText && !dlg.open, text: toastText, ok: toastOk, left: isEd ? '256px' : 'auto', right: isEd ? 'auto' : '20px' };
+    const toast = { show: !!toastText && !dlg.open, text: toastText, ok: toastOk, left: isEd ? (explorerOpen ? '256px' : '16px') : 'auto', right: isEd ? 'auto' : '20px' };
     const lay = {
-      chatAria: isEd ? 'Vector Agent' : 'Conversation',
+      chatAria: isEd ? 'Vector Agent' : (isNf ? 'Session' : 'Conversation'),
+      chatDisp: isEd && !agentOpen ? 'none' : 'flex',
       chatFlex: isEd ? '0 0 360px' : (isCtx ? '0 0 600px' : '1 1 auto'),
       chatW: isEd ? '360px' : (isCtx ? '600px' : 'auto'),
       chatEdge: isEd ? 'inset 1px 0 0 ' + t.edge : 'none',
@@ -2148,7 +2492,8 @@ class Component extends DCLogic {
       t: t, wall: wall, chrome: chrome, more: more, live: live, hosts: hosts, help: help,
       head: head, notEd: notEd, isEd: isEd, isCtx: isCtx, sp: sp, tmb: tmb, pb: pb, pm: pm, ring: ring, sm: sm,
       la: la, fx: fx, tr: tr, dock: dock, c: c, draft: draft, term: term, cx: cx, ed: ed, lay: lay, toast: toast,
-      dlg: dlg, sh: sh, fk: fk, ps: ps, wd: wd,
+      dlg: dlg, sh: sh, fk: fk, ps: ps, wd: wd, dl: dl,
+      crumb: crumb, child: child, nf: nf, hasSession: !isNf,
       onDraft: (e) => set({ draft: e && e.target ? e.target.value : '' }),
       stopRun: () => set({ stopped: true }),
       closeCtx: () => go('chat', keepOv)

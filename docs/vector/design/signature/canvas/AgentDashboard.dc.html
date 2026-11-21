@@ -587,9 +587,17 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <button class="vx-h" aria-label="View context usage" title="Context · 18% used" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent">
 <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{t.hairlineStrong}}" stroke-width="1.5"></circle><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{t.text3}}" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.2 34.6" transform="rotate(-90 7 7)"></circle></svg>
 </button>
-<button class="vx-h" aria-label="More options" title="More options" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}">
+<span style="position: relative; display: inline-flex">
+<button class="vx-h" onClick="{{so.toggle}}" aria-haspopup="menu" aria-expanded="{{so.expanded}}" aria-label="More options" title="More options" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{so.bg}}; color: {{t.icon}}">
 <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="7.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="12.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect></svg>
 </button>
+<sc-if value="{{so.open}}" hint-placeholder-val="{{ false }}">
+<div role="menu" aria-label="Session options" class="vx-pop" style="position: absolute; z-index: 60; top: 28px; right: 0; width: 220px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}">
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{so.details}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Run details</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{so.refresh}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Refresh activity</button>
+</div>
+</sc-if>
+</span>
 </div>
 
 <div class="vx-scroll" style="flex: 1; min-height: 0; overflow-y: auto; padding: 0 32px; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 24px); mask-image: linear-gradient(180deg, transparent 0, #000 24px)">
@@ -687,10 +695,24 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </main>
 </sc-if>
 
+<sc-if value="{{op.on}}" hint-placeholder-val="{{ false }}">
+<main aria-label="Isolated agent workspace" style="position: relative; z-index: 1; flex: 1 1 auto; min-width: 0; height: 900px; display: grid; place-items: center; box-sizing: border-box; padding: 0 24px; background: {{t.main}}; color: {{t.text}}">
+<section aria-labelledby="ad-opening-title" style="width: 360px; max-width: 100%; box-sizing: border-box; padding: 20px 20px 16px; border-radius: 12px; border: 1px solid {{t.hairline}}; background: {{u.card}}; display: flex; flex-direction: column; align-items: center; text-align: center">
+<span aria-hidden="true" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,0.06); color: {{t.text2}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2.5"></rect><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"></path></svg></span>
+<h1 id="ad-opening-title" style="margin: 12px 0 0; font-size: 16px; line-height: 24px; font-weight: 600; color: {{t.text}}">Opening isolated agent workspace</h1>
+<p role="{{op.role}}" style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{op.line}}</p>
+<div style="margin-top: 16px; display: flex; justify-content: center; gap: 8px">
+<button class="vxs-sec" onClick="{{op.back}}" title="Back to the Agent Dashboard  ⌘[" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Back</button>
+<button class="vxs-pri" onClick="{{op.retry}}" title="Load this workspace again" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap; transition: background-color 120ms">Retry</button>
+</div>
+</section>
+</main>
+</sc-if>
+
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"enum","options":["board","list","empty","agent"],"default":"board","section":"View"},"card":{"editor":"enum","options":["none","review"],"default":"none","section":"View"},"conflict":{"editor":"boolean","default":true,"section":"Board"},"messages":{"editor":"boolean","default":true,"section":"Board"},"picker":{"editor":"boolean","default":false,"section":"Session"},"$preview":{"width":1600,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"enum","options":["board","list","empty","agent","opening"],"default":"board","section":"View"},"card":{"editor":"enum","options":["none","review"],"default":"none","section":"View"},"conflict":{"editor":"boolean","default":true,"section":"Board"},"messages":{"editor":"boolean","default":true,"section":"Board"},"picker":{"editor":"boolean","default":false,"section":"Session"},"failed":{"editor":"boolean","default":false,"section":"Session"},"$preview":{"width":1600,"height":1000}}'>
 class Component extends DCLogic {
   rgb(h) {
     let x = String(h || '').trim().replace('#', '');
@@ -707,21 +729,22 @@ class Component extends DCLogic {
   cur() {
     const s = this.state || {};
     const p = this.props || {};
-    const views = ['board', 'list', 'empty', 'agent'];
+    const views = ['board', 'list', 'empty', 'agent', 'opening'];
     let pv = p.view ?? 'board';
     if (views.indexOf(pv) < 0) pv = 'board';
     const pc = p.card === 'review' ? 'review' : 'none';
     const pcf = !(p.conflict === false || p.conflict === 'false');
     const pms = !(p.messages === false || p.messages === 'false');
     const ppk = p.picker === true || p.picker === 'true';
-    const key = [pv, pc, pcf ? '1' : '0', pms ? '1' : '0', ppk ? '1' : '0'].join('|');
-    if (s._p === key && s.view) return { key: key, view: s.view, card: s.card, conflict: !!s.conflict, messages: !!s.messages, picker: !!s.picker };
-    return { key: key, view: pv, card: pc, conflict: pcf, messages: pms, picker: ppk };
+    const pfl = p.failed === true || p.failed === 'true';
+    const key = [pv, pc, pcf ? '1' : '0', pms ? '1' : '0', ppk ? '1' : '0', pfl ? '1' : '0'].join('|');
+    if (s._p === key && s.view) return { key: key, view: s.view, card: s.card, conflict: !!s.conflict, messages: !!s.messages, picker: !!s.picker, failed: !!s.failed };
+    return { key: key, view: pv, card: pc, conflict: pcf, messages: pms, picker: ppk, failed: pfl };
   }
 
   put(patch) {
     const c = this.cur();
-    this.setState(Object.assign({ _p: c.key, view: c.view, card: c.card, conflict: c.conflict, messages: c.messages, picker: c.picker, menu: null }, patch));
+    this.setState(Object.assign({ _p: c.key, view: c.view, card: c.card, conflict: c.conflict, messages: c.messages, picker: c.picker, failed: c.failed, menu: null }, patch));
   }
 
   renderVals() {
@@ -729,8 +752,11 @@ class Component extends DCLogic {
     const C = this.cur();
     const view = C.view;
     const isAgent = view === 'agent';
+    const isOpening = view === 'opening';
     const isEmpty = view === 'empty';
-    const route = !isAgent;
+    // The installed agent's workspace route: loaded (agent) or still opening (layout-new.tsx 4069-4106)
+    const inWorkspace = isAgent || isOpening;
+    const route = !inWorkspace;
     const menu = s.menu || null;
 
     const t = {
@@ -779,6 +805,7 @@ class Component extends DCLogic {
     const word = { running: 'Running', needs: 'Needs you', failed: 'Failed', ready: 'Ready to review', queued: 'Queued', done: 'Done' };
     const gColor = { running: t.running, needs: t.needs, failed: t.failed, ready: t.ready, queued: t.text3, done: t.text3 };
     const S = {
+      sim: { title: 'Check Remote’s Sessions screen on iPhone', st: 'ready', time: '1h' },
       recheck: { title: 'Recheck keyboard focus across menu reads', st: 'running', time: '12m' },
       swarm2: { title: 'Swarm worker 2', st: 'running', add: '+142', del: '−18' },
       handsReview: { title: 'Review: Hands Windows fixes', st: 'ready', time: '12m' },
@@ -789,7 +816,7 @@ class Component extends DCLogic {
       queueJob: { title: 'Upgrade the site’s framework on vectordev.ai', st: 'queued', time: '6:00' },
       cloudRepro: { title: 'Reproduce Windows packaging limit', st: 'running', time: '4m' }
     };
-    const selId = isAgent ? 'installer' : '';
+    const selId = inWorkspace ? 'installer' : '';
     const mkRow = (id, level, pos) => {
       const x = S[id];
       const selected = id === selId;
@@ -839,7 +866,7 @@ class Component extends DCLogic {
       {
         name: 'This Mac', isMac: true, isCloud: false, padTop: '16px', addLabel: 'New session on This Mac', tip: 'This Mac · Runtime ready',
         groups: [
-          mkGroup('mac-vector', 'vector', { meta: '4', more: 7, rows: [mkRow('recheck', 0), mkRow('swarm2', 1, 'first'), mkRow('handsReview', 1, 'last'), mkRow('warn', 0), mkRow('packaging', 0), mkRow('installer', 0)] }),
+          mkGroup('mac-vector', 'vector', { meta: '4', more: 7, rows: [mkRow('sim', 0), mkRow('recheck', 0), mkRow('swarm2', 1, 'first'), mkRow('handsReview', 1, 'last'), mkRow('warn', 0), mkRow('packaging', 0), mkRow('installer', 0)] }),
           mkGroup('mac-codium', 'vector-codium', { branch: 'codium', meta: '1', needs: true, rows: [mkRow('p8', 0)] }),
           mkGroup('mac-hands', 'vector-hands', { branch: 'hands', meta: '5', more: 5 }),
           mkGroup('mac-site', 'vectordev.ai', { meta: '2', more: 2 })
@@ -877,9 +904,9 @@ class Component extends DCLogic {
     };
 
     const nav = {
-      backDisabled: !isAgent,
-      backColor: isAgent ? t.icon : t.textDisabled,
-      back: isAgent ? toBoard : close
+      backDisabled: !inWorkspace,
+      backColor: inWorkspace ? t.icon : t.textDisabled,
+      back: inWorkspace ? toBoard : close
     };
 
     // More menu (app map section 1): a More route is on screen unless the session is open
@@ -1101,6 +1128,22 @@ class Component extends DCLogic {
         { dir: 'packages/desktop/build/', name: 'installer-copy.test.ts', add: '+2', del: '−2', aria: 'Open diff for installer-copy.test.ts' }
       ]
     };
+    // Header row 2's "…" on this session: the installed agent's Run details and Refresh activity (external-agent-workspace.tsx 117-148)
+    const soOpen = isAgent && menu === 'sessOpts';
+    const so = {
+      open: soOpen, expanded: soOpen ? 'true' : 'false', bg: soOpen ? t.rowPressed : 'transparent',
+      toggle: toggleMenu('sessOpts'), details: close, refresh: close
+    };
+
+    // Opening the workspace before its record loads, or after loading failed (layout-new.tsx 4069-4106)
+    const op = {
+      on: isOpening,
+      line: C.failed ? 'Parallel workspace was not found.' : 'Vector is reconnecting to this workspace and loading its latest activity.',
+      role: C.failed ? 'alert' : 'status',
+      back: toBoard,
+      retry: () => this.put({ failed: false })
+    };
+
     const pickModel = () => this.put({ picker: false });
     const pk = {
       open: isAgent && C.picker, expanded: isAgent && C.picker ? 'true' : 'false',
@@ -1126,7 +1169,7 @@ class Component extends DCLogic {
     return {
       t: t, u: u, wall: wall, live: live, hosts: hosts, help: help, nav: nav, more: more,
       dash: dash, seg: seg, fl: fl, q: qRaw, sum: sum, cf: cf, msg: msg, bd: bd, ls: ls, em: em,
-      sess: sess, pb: pb, pm: pm, pk: pk, c: c, draft: draft,
+      sess: sess, so: so, op: op, pb: pb, pm: pm, pk: pk, c: c, draft: draft,
       onQ: (e) => this.setState({ q: e && e.target ? e.target.value : '' }),
       onDraft: (e) => this.setState({ draft: e && e.target ? e.target.value : '' }),
       onBodyScroll: (e) => {

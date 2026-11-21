@@ -350,8 +350,8 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="flex: none; height: 36px; margin: 0 8px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-top: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; color: {{t.text3}}"><span>Vector 2.0</span><span>Desktop</span></div>
 </nav>
 
-<div class="vx-scroll" style="position: relative; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden">
-<div style="padding: 40px 32px 64px">
+<div class="vx-scroll" style="position: relative; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: {{scrollDir}}">
+<div style="flex: none; padding: 40px 32px 64px">
 <div style="max-width: 720px; margin: 0 auto">
 
 <sc-if value="{{ph.hasEyebrow}}" hint-placeholder-val="{{ false }}"><div style="margin-bottom: 4px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text3}}">{{ph.eyebrow}}</div></sc-if>
@@ -428,21 +428,10 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="min-width: 0">
 <div id="h-mouse" style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">When it needs the mouse</div>
 </div>
-<div style="position: relative">
-<button class="{{hands.mouse.cls}}" onClick="{{hands.mouse.toggle}}" aria-haspopup="listbox" aria-expanded="{{hands.mouse.expanded}}" aria-labelledby="h-mouse h-mouse-v" style="min-width: 140px; height: 24px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; padding: 0 6px; border: 0; border-radius: 6px; background: {{hands.mouse.bg}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{hands.mouse.color}}">
-<span id="h-mouse-v" style="white-space: nowrap">{{hands.mouse.value}}</span>
-<span aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{hands.mouse.chev}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
-</button>
-<sc-if value="{{hands.mouse.open}}" hint-placeholder-val="{{ false }}">
-<div role="listbox" aria-label="When it needs the mouse" class="vx-pop" style="position: absolute; z-index: 30; top: 30px; right: 0; min-width: 200px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}">
-<sc-for list="{{hands.mouse.options}}" as="o" hint-placeholder-count="2">
-<button role="option" aria-selected="{{o.selected}}" class="vx-h" onClick="{{o.pick}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; color: {{o.color}}; text-align: left; white-space: nowrap">
-<span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.accentText}}; opacity: {{o.checkOp}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></span>
-<span style="flex: 1">{{o.label}}</span>
-</button>
+<div role="radiogroup" aria-labelledby="h-mouse" style="display: inline-flex; gap: 2px; height: 26px; padding: 2px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.segTrack}}">
+<sc-for list="{{hands.mouse}}" as="sg" hint-placeholder-count="2">
+<button role="radio" class="{{sg.cls}}" aria-checked="{{sg.checked}}" onClick="{{sg.pick}}" style="height: 20px; padding: 0 8px; border: 0; border-radius: 6px; background: {{sg.bg}}; font-size: 12px; line-height: 16px; color: {{sg.color}}; white-space: nowrap">{{sg.label}}</button>
 </sc-for>
-</div>
-</sc-if>
 </div>
 </div>
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
@@ -461,10 +450,13 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
 <div style="min-width: 0">
 <div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Stop</div>
-<sc-if value="{{hands.notRec}}" hint-placeholder-val="{{ true }}"><div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Esc stops Vector Hands while it’s using your mouse and keyboard. This shortcut stops it any time: <span style="display: inline-flex; align-items: center; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; color: {{t.text}}; vertical-align: middle">⌘⇧Esc</span></div></sc-if>
-<sc-if value="{{hands.rec}}" hint-placeholder-val="{{ false }}"><div role="status" style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text}}">Press the new shortcut, or Esc to cancel.</div></sc-if>
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Esc stops Vector Hands while it’s using your mouse and keyboard. This shortcut stops it any time: <span style="display: inline-flex; align-items: center; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; color: {{t.text}}; vertical-align: middle">{{hands.chord}}</span></div>
+<sc-if value="{{hands.rec}}" hint-placeholder-val="{{ false }}">
+<input type="text" readonly="readonly" aria-label="Press the new shortcut, or Esc to cancel." aria-describedby="h-rec-err" placeholder="Press the new shortcut, or Esc to cancel." onClick="{{hands.press}}" style="display: block; margin-top: 8px; width: 100%; max-width: 320px; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.activeBorder}}; background: {{t.activeFill}}; font-size: 12px; line-height: 16px; color: {{t.text}}; outline: none">
+<sc-if value="{{hands.recHasErr}}" hint-placeholder-val="{{ false }}"><p id="h-rec-err" role="alert" style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.diffDel}}">{{hands.recErr}}</p></sc-if>
+</sc-if>
 </div>
-<button class="vx-h vxs-gh" onClick="{{hands.toggleRec}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">{{hands.recBtn}}</button>
+<button class="{{hands.changeCls}}" onClick="{{hands.startRec}}" disabled="{{hands.rec}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{hands.changeColor}}; white-space: nowrap">Change</button>
 </div>
 </div>
 </section>
@@ -496,10 +488,11 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <section aria-labelledby="h-s-blocked" style="margin-top: 16px">
 <div style="padding: 16px 0 10px">
 <h2 id="h-s-blocked" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Blocked apps</h2>
-<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Built-in blocks. Vector Hands never uses these, and it never types passwords.</p>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Vector Hands never uses an app on these lists, and it never types passwords.</p>
 </div>
-<div role="list" aria-labelledby="h-s-blocked" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
-<sc-for list="{{hands.blocked}}" as="bl" hint-placeholder-count="4">
+<h3 id="h-b-builtin" style="margin: 0 0 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Built-in blocks</h3>
+<div role="list" aria-labelledby="h-b-builtin" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{hands.blocked}}" as="bl" hint-placeholder-count="5">
 <div role="listitem" style="display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 7px 14px; box-sizing: border-box; border-top: {{bl.line}}">
 <span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M6 6l12 12"></path></svg></span>
 <span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">{{bl.title}}</span>
@@ -507,6 +500,62 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-for>
 </div>
+
+<h3 id="h-b-default" style="margin: 16px 0 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Blocked by default</h3>
+<div role="list" aria-labelledby="h-b-default" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{hands.defaults}}" as="bd" hint-placeholder-count="4">
+<div role="listitem" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 6px 8px 6px 14px; box-sizing: border-box; border-top: {{bd.line}}">
+<span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.icon}}">
+<sc-if value="{{bd.blocked}}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M6 6l12 12"></path></svg></sc-if>
+<sc-if value="{{bd.allowed}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M8.5 12.2l2.4 2.4 4.8-4.9"></path></svg></sc-if>
+</span>
+<span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">{{bd.title}}</span>
+<sc-if value="{{bd.allowed}}" hint-placeholder-val="{{ false }}"><span style="flex: none; font-size: 12px; line-height: 16px; color: {{t.text2}}">Allowed</span></sc-if>
+<button class="vxs-sec" aria-label="{{bd.actionLabel}}" onClick="{{bd.toggle}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">{{bd.action}}</button>
+</div>
+</sc-for>
+</div>
+
+<h3 id="h-b-yours" style="margin: 16px 0 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Your blocked apps</h3>
+<sc-if value="{{hands.hasYours}}" hint-placeholder-val="{{ true }}">
+<div role="list" aria-labelledby="h-b-yours" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{hands.yours}}" as="by" hint-placeholder-count="1">
+<div role="listitem" style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 7px 8px 7px 14px; box-sizing: border-box; border-top: {{by.line}}">
+<span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M3.5 9.5h17"></path></svg></span>
+<div style="flex: 1; min-width: 0">
+<div style="font-size: 13px; line-height: 18px; color: {{t.text}}">{{by.name}}</div>
+<div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">{{by.added}}</div>
+</div>
+<button class="vxs-sec" aria-label="{{by.unblockLabel}}" onClick="{{by.unblock}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Unblock</button>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{hands.blockIdle}}" hint-placeholder-val="{{ true }}">
+<div style="padding: 10px 0 0">
+<button class="vxs-sec" onClick="{{hands.openBlock}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Block an app…</button>
+</div>
+</sc-if>
+<sc-if value="{{hands.blocking}}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 10px; display: flex; align-items: center; gap: 8px">
+<div class="vx-field" style="position: relative; flex: 1; min-width: 0; max-width: 320px; height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{t.hairline}}">
+<span aria-hidden="true" style="position: absolute; left: 8px; top: 6px; width: 14px; height: 14px; display: grid; place-items: center; color: {{t.text3}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"></circle><path d="M15 15l5 5"></path></svg></span>
+<input type="search" aria-label="Search apps" autocomplete="off" spellcheck="false" placeholder="Search apps" value="{{hands.blockQ}}" onChange="{{hands.onBlockQ}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px 0 28px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; line-height: 18px; color: {{t.text}}">
+</div>
+<button class="vx-h vxs-gh" onClick="{{hands.closeBlock}}" style="flex: none; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+</div>
+<sc-if value="{{hands.hasResults}}" hint-placeholder-val="{{ true }}">
+<div role="list" aria-label="Search apps" style="margin-top: 8px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{hands.results}}" as="ba" hint-placeholder-count="3">
+<div role="listitem" style="display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 6px 8px 6px 14px; box-sizing: border-box; border-top: {{ba.line}}">
+<span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">{{ba.name}}</span>
+<button class="vxs-sec" aria-label="{{ba.blockLabel}}" onClick="{{ba.block}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Block</button>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{hands.noResults}}" hint-placeholder-val="{{ false }}"><p role="status" style="margin: 8px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">No apps found</p></sc-if>
+</sc-if>
 </section>
 
 <section aria-labelledby="h-s-shots" style="margin-top: 16px">
@@ -564,7 +613,20 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="min-width: 0">
 <div id="l-on" style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Vector Local</div>
 <div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">With Vector Local on, the agent, subagents, the judge, Vectorscope, Deep research, memory search and the helpers that write titles and summaries use only the model servers on your list. Vector blocks its own requests to vectordev.ai and to AI services that are not on your list, unless you allow one.</div>
-<button class="vx-h vxs-gh" onClick="{{local.openSetup}}" style="margin: 6px 0 0 -8px; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Set up Vector Local…</button>
+<div style="margin: 6px 0 0 -8px; display: flex; flex-wrap: wrap; gap: 4px">
+<button class="vx-h vxs-gh" onClick="{{local.openSetup}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Set up Vector Local…</button>
+<button class="vx-h vxs-gh" onClick="{{local.toggleCovers}}" aria-expanded="{{local.coversExpanded}}" style="height: 24px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap"><span aria-hidden="true" style="display: grid; place-items: center; transform: rotate({{local.coversRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 15L13 10L8 5"></path></svg></span>What Vector Local covers</button>
+</div>
+<sc-if value="{{local.coversOpen}}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: {{t.code}}">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text}}">What Vector Local does not cover</h3>
+<ul style="list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px">
+<sc-for list="{{local.covers}}" as="cv" hint-placeholder-count="5">
+<li style="font-size: 12px; line-height: 16px; color: {{t.text2}}"><span style="font-weight: 500; color: {{t.text}}">{{cv.title}}.</span> {{cv.body}}</li>
+</sc-for>
+</ul>
+</div>
+</sc-if>
 </div>
 <div style="display: flex; align-items: center; gap: 12px">
 <sc-if value="{{local.on}}" hint-placeholder-val="{{ true }}"><span title="Shown on the composer while Vector Local is on" style="flex: none; height: 16px; display: inline-flex; align-items: center; gap: 4px; padding: 0 5px; box-sizing: border-box; border-radius: 8px; background: {{t.whereFill}}; font-size: 10px; line-height: 14px; font-weight: 500; color: {{t.text2}}; white-space: nowrap"><span aria-hidden="true" style="width: 4px; height: 4px; border-radius: 50%; background: {{t.ready}}"></span>{{local.pill}}</span></sc-if>
@@ -713,27 +775,51 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </section>
 
+<section aria-labelledby="l-s-cert" style="margin-top: 16px">
+<div style="padding: 16px 0 10px">
+<h2 id="l-s-cert" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Certificates</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Vector adds these certificate files to the ones this computer trusts, for model servers and company services that use your company’s certificate authority. The desktop app asks you before it trusts one from your own config; your company’s apply without asking. The app’s windows use this computer’s certificate store.</p>
+</div>
+<p style="margin: 0; padding: 12px 0; border-top: 1px solid {{t.hairline}}; font-size: 12px; line-height: 16px; color: {{t.text3}}">Your config lists no certificate files. A company lists them in its policy file as <span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text2}}">local.ca.files</span>.</p>
+</section>
+
 <section aria-labelledby="l-s-log" style="margin-top: 16px">
 <div style="padding: 16px 0 10px; display: flex; align-items: flex-end; gap: 8px">
 <div style="flex: 1; min-width: 0">
 <h2 id="l-s-log" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Network log</h2>
-<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">What Vector sent while Vector Local is on, and what it blocked or asked about.</p>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">What Vector sent: where each request went and why, never what it said. Kept for 30 days on this computer. The log records while Vector Local is on.</p>
 </div>
-<button class="vxs-sec" onClick="{{local.openLog}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Open</button>
+<button class="vxs-sec" onClick="{{local.openLog}}" aria-haspopup="dialog" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Open</button>
 </div>
-<div role="table" aria-label="What Vector sent" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
-<div role="row" style="display: grid; grid-template-columns: 72px 128px minmax(0, 1fr) 72px; gap: 12px; align-items: center; height: 32px; padding: 0 14px; box-sizing: border-box; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text3}}">
-<span role="columnheader">Time</span><span role="columnheader">Where</span><span role="columnheader">Session</span><span role="columnheader">Result</span>
+<ul aria-label="Network log summary" style="list-style: none; margin: 0; padding: 10px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}; display: flex; flex-direction: column; gap: 4px">
+<sc-for list="{{local.logLines}}" as="ll" hint-placeholder-count="5">
+<li style="font-size: 12px; line-height: 16px; color: {{t.text}}">{{ll.text}}</li>
+</sc-for>
+</ul>
+</section>
+
+<section aria-labelledby="l-s-check" style="margin-top: 16px">
+<div style="padding: 16px 0 10px; display: flex; align-items: flex-end; gap: 8px">
+<div style="flex: 1; min-width: 0">
+<h2 id="l-s-check" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Run a check</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Reads every layer of Vector Local, one row each: the switch, the policy, the network guard, Vector’s own services, Web access, each server on your list and the network log.</p>
 </div>
-<sc-for list="{{local.log}}" as="lg" hint-placeholder-count="4">
-<div role="row" style="display: grid; grid-template-columns: 72px 128px minmax(0, 1fr) 72px; gap: 12px; align-items: center; min-height: 36px; padding: 0 14px; box-sizing: border-box; border-top: 1px solid {{t.hairline}}; font-size: 12px; line-height: 16px">
-<span role="cell" style="font-variant-numeric: tabular-nums; color: {{t.text2}}">{{lg.time}}</span>
-<span role="cell" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text}}">{{lg.where}}</span>
-<span role="cell" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: {{t.text}}">{{lg.session}}</span>
-<span role="cell" style="display: inline-flex; align-items: center; gap: 5px; color: {{t.text}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{lg.dot}}"></span>{{lg.result}}</span>
+<button class="vxs-sec" onClick="{{local.runCheck}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Run a check</button>
+</div>
+<sc-if value="{{local.checked}}" hint-placeholder-val="{{ false }}">
+<p role="status" style="margin: 0 0 8px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{local.verdict}}</p>
+<div role="list" aria-label="Check results" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{local.checkRows}}" as="ck" hint-placeholder-count="9">
+<div role="listitem" style="display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px; box-sizing: border-box; border-top: {{ck.line}}">
+<div style="flex: 1; min-width: 0">
+<div style="font-size: 13px; line-height: 18px; color: {{t.text}}">{{ck.title}}</div>
+<sc-if value="{{ck.hasDetail}}" hint-placeholder-val="{{ false }}"><div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{ck.detail}}</div></sc-if>
+</div>
+<span style="flex: none; height: 18px; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 16px; color: {{t.text}}; white-space: nowrap"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{ck.dot}}"></span>{{ck.status}}</span>
 </div>
 </sc-for>
 </div>
+</sc-if>
 </section>
 </sc-if>
 
@@ -744,6 +830,15 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <h2 id="g-s-conn" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">GitHub connection</h2>
 </div>
 <div style="border-top: 1px solid {{t.hairline}}">
+<sc-if value="{{gh.isSignin}}" hint-placeholder-val="{{ false }}">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
+<div style="min-width: 0">
+<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Sign in to GitHub to check your repository access.</div>
+</div>
+<button class="vxs-pri" onClick="{{gh.signIn}}" style="flex: none; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap; transition: background-color 120ms">Sign in to GitHub</button>
+</div>
+</sc-if>
+<sc-if value="{{gh.connected}}" hint-placeholder-val="{{ true }}">
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
 <div style="min-width: 0">
 <div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Connected as @you</div>
@@ -751,6 +846,8 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 <button class="vx-h vxs-gh" onClick="{{gh.perms}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Update GitHub permissions</button>
 </div>
+</sc-if>
+<sc-if value="{{gh.isReady}}" hint-placeholder-val="{{ true }}">
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
 <div style="min-width: 0">
 <div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Ready in vector</div>
@@ -758,9 +855,109 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 <button class="vxs-sec" onClick="{{gh.openRun}}" disabled="{{gh.runDisabled}}" style="flex: none; height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{gh.runColor}}; white-space: nowrap; transition: background-color 120ms">Run in GitHub</button>
 </div>
+</sc-if>
+<sc-if value="{{gh.isBind}}" hint-placeholder-val="{{ false }}">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
+<div style="min-width: 0">
+<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Bind this repository to your Vector account</div>
+<div style="margin-top: 2px; display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>Anyone with write access to a bound repository can start runs that use your plan.</div>
+</div>
+<div style="display: flex; align-items: center; gap: 8px">
+<sc-if value="{{gh.binding}}" hint-placeholder-val="{{ false }}"><button class="vx-h vxs-gh" onClick="{{gh.checkAgain}}" style="flex: none; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Check again</button></sc-if>
+<button class="vxs-pri" onClick="{{gh.bind}}" disabled="{{gh.binding}}" style="flex: none; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{gh.bindBg}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{gh.bindFg}}; white-space: nowrap; transition: background-color 120ms">{{gh.bindLabel}}</button>
+</div>
+</div>
+</sc-if>
 </div>
 </section>
 
+<sc-if value="{{gh.isSetup}}" hint-placeholder-val="{{ false }}">
+<section aria-labelledby="g-s-setup" style="margin-top: 16px">
+<div style="padding: 16px 0 10px">
+<h2 id="g-s-setup" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Workflow setup</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Preview the exact workflow before opening a pull request. Merge it on the default branch to apply these settings.</p>
+</div>
+<div style="border-top: 1px solid {{t.hairline}}">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 48px; box-sizing: border-box; padding: 10px 0; border-bottom: 1px solid {{t.hairline}}">
+<div style="min-width: 0">
+<div id="g-mode" style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Run with</div>
+</div>
+<div style="position: relative">
+<button class="{{gh.mode.cls}}" onClick="{{gh.mode.toggle}}" aria-haspopup="listbox" aria-expanded="{{gh.mode.expanded}}" aria-labelledby="g-mode g-mode-v" style="min-width: 140px; height: 24px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; padding: 0 6px; border: 0; border-radius: 6px; background: {{gh.mode.bg}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{gh.mode.color}}">
+<span id="g-mode-v" style="white-space: nowrap">{{gh.mode.value}}</span>
+<span aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{gh.mode.chev}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<sc-if value="{{gh.mode.open}}" hint-placeholder-val="{{ false }}">
+<div role="listbox" aria-label="Run with" class="vx-pop" style="position: absolute; z-index: 30; top: 30px; right: 0; min-width: 240px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}">
+<sc-for list="{{gh.mode.options}}" as="o" hint-placeholder-count="2">
+<button role="option" aria-selected="{{o.selected}}" class="vx-h" onClick="{{o.pick}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; color: {{o.color}}; text-align: left; white-space: nowrap">
+<span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.accentText}}; opacity: {{o.checkOp}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></span>
+<span style="flex: 1">{{o.label}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</div>
+<sc-if value="{{gh.ownKey}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Your own key works with a free Vector account. Add provider keys and <span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text}}">VECTOR_CLI_TOKEN</span> as repository secrets.</p>
+<div style="margin-top: 10px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px">
+<div>
+<label for="g-model" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Provider/model</label>
+<div class="vx-field" style="height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{t.hairline}}"><input id="g-model" type="text" autocomplete="off" spellcheck="false" placeholder="provider/model" value="{{gh.model}}" onChange="{{gh.onModel}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}"></div>
+</div>
+<div>
+<label for="g-keys" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Provider secret names, separated by commas</label>
+<div class="vx-field" style="height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{t.hairline}}"><input id="g-keys" type="text" autocomplete="off" spellcheck="false" placeholder="PROVIDER_API_KEY" value="{{gh.keys}}" onChange="{{gh.onKeys}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}"></div>
+</div>
+</div>
+<div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 20px">
+<div style="display: flex; align-items: center; gap: 10px">
+<button role="checkbox" aria-checked="{{gh.auto.checked}}" aria-labelledby="g-auto" onClick="{{gh.auto.toggle}}" style="width: 24px; height: 24px; margin: 0 0 0 -5px; display: grid; place-items: center; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent">
+<span aria-hidden="true" style="width: 14px; height: 14px; box-sizing: border-box; display: grid; place-items: center; border-radius: 4px; border: 1px solid {{gh.auto.border}}; background: {{gh.auto.bg}}; color: #FFFFFF; transition: background-color 120ms"><sc-if value="{{gh.auto.on}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></sc-if></span>
+</button>
+<span id="g-auto" style="font-size: 13px; line-height: 18px; color: {{t.text}}">Review pull requests automatically</span>
+</div>
+<div style="display: flex; align-items: center; gap: 10px">
+<button role="checkbox" aria-checked="{{gh.share.checked}}" aria-labelledby="g-share" onClick="{{gh.share.toggle}}" style="width: 24px; height: 24px; margin: 0 0 0 -5px; display: grid; place-items: center; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent">
+<span aria-hidden="true" style="width: 14px; height: 14px; box-sizing: border-box; display: grid; place-items: center; border-radius: 4px; border: 1px solid {{gh.share.border}}; background: {{gh.share.bg}}; color: #FFFFFF; transition: background-color 120ms"><sc-if value="{{gh.share.on}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></sc-if></span>
+</button>
+<span id="g-share" style="font-size: 13px; line-height: 18px; color: {{t.text}}">Include a share link in results</span>
+</div>
+</div>
+</div>
+</sc-if>
+<div style="padding: 12px 0; display: flex; align-items: center; gap: 8px">
+<button class="vxs-sec" onClick="{{gh.preview}}" disabled="{{gh.previewDisabled}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{gh.previewColor}}; white-space: nowrap; transition: background-color 120ms">Preview workflow</button>
+<button class="vx-h vxs-gh" onClick="{{gh.checkAgain}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Check again</button>
+</div>
+<sc-if value="{{gh.opened}}" hint-placeholder-val="{{ false }}">
+<p role="status" style="margin: 0 0 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 0 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><button class="vxs-link" onClick="{{gh.openGithub}}" style="height: 24px; padding: 0; border: 0; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.accentText}}">Open on GitHub</button><span>. Check and merge workflow changes before checking again.</span></p>
+</sc-if>
+</div>
+<sc-if value="{{gh.isPreview}}" hint-placeholder-val="{{ false }}">
+<article aria-labelledby="g-prev" style="padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}">
+<h3 id="g-prev" style="margin: 0; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}">.github/workflows/vector.yml</h3>
+<pre aria-label="Workflow preview" style="margin: 8px 0 0; max-height: 164px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: {{t.code}}; white-space: pre; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: {{t.text2}}">{{gh.yaml}}</pre>
+<sc-if value="{{gh.hasSecrets}}" hint-placeholder-val="{{ false }}">
+<h4 style="margin: 12px 0 6px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text}}">Repository secrets to add</h4>
+<ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px">
+<sc-for list="{{gh.secrets}}" as="sc" hint-placeholder-count="2">
+<li style="display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><span style="flex: none; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text}}">{{sc.name}}</span><span style="flex: 1; min-width: 0">{{sc.detail}}</span><sc-if value="{{sc.hasLink}}" hint-placeholder-val="{{ false }}"><button class="vx-h vxs-gh" aria-label="{{sc.linkLabel}}" onClick="{{sc.open}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Open secrets</button></sc-if></li>
+</sc-for>
+</ul>
+</sc-if>
+<div style="margin-top: 12px; display: flex; justify-content: flex-end">
+<button class="vxs-pri" onClick="{{gh.openPr}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap; transition: background-color 120ms">Open setup pull request</button>
+</div>
+</article>
+</sc-if>
+</section>
+</sc-if>
+
+<sc-if value="{{gh.isReady}}" hint-placeholder-val="{{ true }}">
+<sc-if value="{{gh.showBindings}}" hint-placeholder-val="{{ true }}">
 <section aria-labelledby="g-s-bind" style="margin-top: 16px">
 <div style="padding: 16px 0 10px">
 <h2 id="g-s-bind" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Repository bindings</h2>
@@ -787,6 +984,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 <sc-if value="{{gh.unbound}}" hint-placeholder-val="{{ false }}"><p style="margin: 0; padding: 12px 0; border-top: 1px solid {{t.hairline}}; font-size: 12px; line-height: 16px; color: {{t.text3}}">No repository bindings.</p></sc-if>
 </section>
+</sc-if>
 
 <section aria-labelledby="g-s-runs" style="margin-top: 16px">
 <div style="padding: 16px 0 10px">
@@ -817,10 +1015,10 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="border-top: 1px solid {{t.hairline}}">
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
 <div style="min-width: 0">
-<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Nightly dependency check</div>
-<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Every day at 2:00 UTC · vector</div>
+<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">nightly-deps</div>
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Check for outdated dependencies and open a pull request with the safe updates.</div>
 </div>
-<span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text2}}">0 2 * * *</span>
+<span style="white-space: nowrap; font-size: 12px; line-height: 16px; color: {{t.text2}}"><span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text}}">0 2 * * *</span> (UTC)</span>
 </div>
 </div>
 </section>
@@ -855,6 +1053,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </section>
 </sc-if>
+</sc-if>
 
 <!-- ================= Agents › Workflows with Vector Playbooks (subagents.tsx, playbooks.tsx) ================= -->
 <sc-if value="{{pg.playbooks}}" hint-placeholder-val="{{ false }}">
@@ -862,7 +1061,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <section aria-labelledby="p-s-wf" style="margin-top: 8px">
 <div style="padding: 16px 0 10px">
 <h2 id="p-s-wf" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Workflows</h2>
-<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">A workflow runs many subagents in stages.</p>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">A workflow runs many subagents in stages from a declarative plan, which Vector shows you before anything runs. A plan past these limits, one that follows web or MCP content, or one an agent’s program asked for, asks every time, whatever you choose here.</p>
 </div>
 <div style="border-top: 1px solid {{t.hairline}}">
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
@@ -872,6 +1071,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 <button role="switch" aria-checked="{{pb.wf.checked}}" aria-labelledby="p-wf" onClick="{{pb.wf.toggle}}" style="flex: none; width: 36px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 12px; background: transparent"><span aria-hidden="true" class="vxs-sw" style="position: relative; display: block; width: 32px; height: 18px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{pb.wf.border}}; background: {{pb.wf.track}}"><span class="vxs-knob" style="position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 50%; background: #F4F3F7; box-shadow: 0 1px 3px rgba(0,0,0,0.35); transform: translateX({{pb.wf.x}})"></span></span></button>
 </div>
+<sc-if value="{{pb.wfOn}}" hint-placeholder-val="{{ true }}">
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
 <div style="min-width: 0">
 <div id="p-before" style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{pb.beforeTitle}}">Before a run</div>
@@ -893,6 +1093,22 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-for>
 </div>
 </sc-if>
+</div>
+</div>
+</sc-if>
+<div role="group" aria-label="Workflow limits" style="padding: 12px 0 14px; border-bottom: 1px solid {{t.hairline}}">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px">
+<sc-for list="{{pb.ceil}}" as="cf" hint-placeholder-count="8">
+<div>
+<label for="{{cf.id}}" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">{{cf.label}}</label>
+<div class="vx-field" style="height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{cf.border}}"><input id="{{cf.id}}" type="text" inputmode="{{cf.mode}}" autocomplete="off" placeholder="{{cf.ph}}" value="{{cf.value}}" onChange="{{cf.onChange}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; line-height: 18px; font-variant-numeric: tabular-nums; color: {{t.text}}"></div>
+</div>
+</sc-for>
+</div>
+<sc-if value="{{pb.hasErr}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 10px 0 0; font-size: 12px; line-height: 16px; color: {{t.diffDel}}">{{pb.err}}</p></sc-if>
+<div style="margin-top: 12px; display: flex; justify-content: flex-end; gap: 8px">
+<button class="vx-h vxs-gh" onClick="{{pb.resetLimits}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Reset to defaults</button>
+<button class="vxs-sec" onClick="{{pb.saveLimits}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Save workflow limits</button>
 </div>
 </div>
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0">
@@ -1022,63 +1238,69 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <button class="vxs-sec" onClick="{{prod.openPhone}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Open the phone app</button>
 </div>
 
-<section aria-labelledby="o-s-call" style="margin-top: 8px">
-<div style="padding: 16px 0 10px">
-<h2 id="o-s-call" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">On Call</h2>
-<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Alerts after two failed checks in a row on your verified URLs and domains. Vector’s agent is on call, not a person.</p>
-</div>
-<div style="border-top: 1px solid {{t.hairline}}; padding-top: 12px">
-<div style="display: flex; align-items: center; gap: 8px">
-<div class="vx-field" style="flex: 1; min-width: 0; height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{t.hairline}}"><input type="text" aria-label="URL for On Call to check" autocomplete="off" spellcheck="false" placeholder="https://example.com/health" value="{{prod.urlDraft}}" onChange="{{prod.onUrl}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}"></div>
-<button class="vxs-sec" onClick="{{prod.addUrl}}" disabled="{{prod.addUrlDisabled}}" style="flex: none; height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{prod.addUrlColor}}; white-space: nowrap; transition: background-color 120ms">Add URL</button>
-</div>
-<div role="list" aria-label="URLs On Call checks" style="margin-top: 12px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
-<sc-for list="{{prod.urls}}" as="u" hint-placeholder-count="2">
-<div role="listitem" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 6px 8px 6px 14px; box-sizing: border-box; border-top: {{u.line}}">
-<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}">{{u.url}}</span>
-<span style="flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{u.dot}}"></span>{{u.state}}</span>
-<button class="vx-h vxs-gh" aria-label="{{u.removeLabel}}" onClick="{{u.remove}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Remove</button>
-</div>
+<div role="tablist" aria-label="Production" style="margin-top: 16px; display: flex; flex-wrap: wrap; gap: 2px; padding-bottom: 12px; border-bottom: 1px solid {{t.hairline}}">
+<sc-for list="{{prod.tabs}}" as="tb" hint-placeholder-count="4">
+<button role="tab" aria-selected="{{tb.selected}}" class="{{tb.cls}}" onClick="{{tb.pick}}" style="height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-radius: 7px; background: {{tb.bg}}; box-shadow: {{tb.shadow}}; font-size: 13px; line-height: 18px; color: {{tb.color}}; white-space: nowrap">{{tb.label}}</button>
 </sc-for>
 </div>
-<p style="margin: 8px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Up to 10 URLs, each checked every 5 minutes. Two failures in a row alert your phone.</p>
-</div>
-</section>
 
-<section aria-labelledby="o-s-guard" style="margin-top: 16px">
-<div style="padding: 16px 0 10px">
-<h2 id="o-s-guard" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Release Guard</h2>
-<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Watches each production release your host reports to GitHub and opens a revert pull request for you to merge when one breaks what the last one didn’t.</p>
-</div>
-<div style="border-top: 1px solid {{t.hairline}}; padding-top: 12px">
+<sc-if value="{{prod.tIncidents}}" hint-placeholder-val="{{ true }}">
+<div role="tabpanel" aria-label="Incidents" style="padding-top: 16px">
 <article aria-labelledby="o-inc" style="padding: 12px 14px; border-radius: 10px; border: 1px solid {{prod.incBorder}}">
 <div style="display: flex; align-items: center; gap: 8px">
 <h3 id="o-inc" style="flex: 1; min-width: 0; margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">A release of vectordev.ai broke checks that passed before</h3>
 <span style="flex: none; height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text}}; white-space: nowrap"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{prod.incDot}}"></span>{{prod.incState}}</span>
 </div>
-<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">/docs failed its check after this release · 6m ago</div>
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">production, c41e2a9: /docs (HTTP 500) · 6m ago</div>
 <div style="margin-top: 8px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Undoes 2 commits:</div>
 <ul style="list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 16px; color: {{t.text}}">
 <li><span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text2}}">c41e2a9</span> Move the pricing cards into a grid</li>
-<li><span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text2}}">7d03b18</span> Shorten the docs navigation</li>
+<li><span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; color: {{t.text2}}">7d03b18</span> Store the pricing plan on each account</li>
 </ul>
+<p role="note" style="margin: 8px 0 0; display: flex; align-items: flex-start; gap: 6px; font-size: 12px; line-height: 16px; color: {{t.text}}"><span aria-hidden="true" style="display: grid; place-items: center; flex: none; height: 16px; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span><span>It touches database migrations (<span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px">migrations/0042_account_plan.sql</span>). Check what undoing them does to your data before you merge.</span></p>
+<sc-if value="{{prod.fixRunning}}" hint-placeholder-val="{{ false }}"><p style="margin: 8px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">A fix run started just now. It opens a pull request for you to merge.</p></sc-if>
 <sc-if value="{{prod.incOpen}}" hint-placeholder-val="{{ true }}">
-<div style="margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px">
+<div style="margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
 <button class="vxs-sec" onClick="{{prod.openRevert}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Open revert pull request #2207</button>
-<button class="vxs-pri" onClick="{{prod.undo}}" style="height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Undo here</button>
+<sc-if value="{{prod.undoIdle}}" hint-placeholder-val="{{ true }}"><button class="vx-h vxs-gh" onClick="{{prod.askUndo}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Undo here</button></sc-if>
+<sc-if value="{{prod.undoAsk}}" hint-placeholder-val="{{ false }}">
+<button class="vxs-pri" onClick="{{prod.undo}}" style="height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap; transition: background-color 120ms">Merge with my GitHub sign-in</button>
+<button class="vx-h vxs-gh" onClick="{{prod.cancelUndo}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Cancel</button>
+</sc-if>
+<sc-if value="{{prod.fixRunning}}" hint-placeholder-val="{{ false }}"><button class="vxs-sec" onClick="{{prod.followFix}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Follow the fix run</button></sc-if>
+<sc-if value="{{prod.canFix}}" hint-placeholder-val="{{ true }}"><button class="vxs-pri" onClick="{{prod.fix}}" style="height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap; transition: background-color 120ms">Fix it</button></sc-if>
+<span style="flex: 1"></span>
+<sc-if value="{{prod.snoozeIdle}}" hint-placeholder-val="{{ true }}">
+<sc-for list="{{prod.snoozes}}" as="sz" hint-placeholder-count="3">
+<button class="vx-h vxs-gh" onClick="{{sz.pick}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">{{sz.label}}</button>
+</sc-for>
+</sc-if>
+<sc-if value="{{prod.snoozed}}" hint-placeholder-val="{{ false }}">
+<span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">{{prod.snoozeText}}</span>
+<button class="vx-h vxs-gh" onClick="{{prod.endSnooze}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">End snooze</button>
+</sc-if>
 </div>
 </sc-if>
 </article>
-<h3 style="margin: 16px 0 4px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Releases</h3>
-<ul aria-label="Releases" style="list-style: none; margin: 0; padding: 0">
+</div>
+</sc-if>
+
+<sc-if value="{{prod.tReleases}}" hint-placeholder-val="{{ false }}">
+<section role="tabpanel" aria-labelledby="o-s-guard">
+<div style="padding: 16px 0 10px">
+<h2 id="o-s-guard" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Release Guard</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Watches each production release your host reports to GitHub and opens a revert pull request for you to merge when one breaks what the last one didn’t.</p>
+</div>
+<ul aria-label="Releases" style="list-style: none; margin: 0; padding: 4px 0 0; border-top: 1px solid {{t.hairline}}">
 <sc-for list="{{prod.releases}}" as="rel" hint-placeholder-count="2">
-<li style="display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 12px; line-height: 16px; color: {{t.text}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{rel.dot}}"></span><span style="flex: 1; min-width: 0">{{rel.text}}</span><span style="flex: none; color: {{t.text2}}">{{rel.ago}}</span></li>
+<li style="display: flex; align-items: center; gap: 8px; min-height: 36px; font-size: 12px; line-height: 16px; color: {{t.text}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{rel.dot}}"></span><span style="flex: 1; min-width: 0">{{rel.text}}</span><span style="flex: none; color: {{t.text2}}">{{rel.ago}}</span></li>
 </sc-for>
 </ul>
-</div>
 </section>
+</sc-if>
 
-<section aria-labelledby="o-s-ship" style="margin-top: 16px">
+<sc-if value="{{prod.tShip}}" hint-placeholder-val="{{ false }}">
+<section role="tabpanel" aria-labelledby="o-s-ship">
 <div style="padding: 16px 0 10px">
 <h2 id="o-s-ship" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Ship Desk</h2>
 <p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Cards for pull requests from Codium runs, with their checks, the judge’s verdict and before and after screenshots.</p>
@@ -1108,6 +1330,32 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 </div>
 </section>
+</sc-if>
+
+<sc-if value="{{prod.tChecks}}" hint-placeholder-val="{{ false }}">
+<div role="tabpanel" aria-label="Domains and URLs">
+<section aria-labelledby="o-s-call">
+<div style="padding: 16px 0 10px">
+<h2 id="o-s-call" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">On Call</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Alerts after two failed checks in a row on your verified URLs and domains. Vector’s agent is on call, not a person.</p>
+</div>
+<div style="border-top: 1px solid {{t.hairline}}; padding-top: 12px">
+<div style="display: flex; align-items: center; gap: 8px">
+<div class="vx-field" style="flex: 1; min-width: 0; height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{t.hairline}}"><input type="text" aria-label="URL for On Call to check" autocomplete="off" spellcheck="false" placeholder="https://example.com/health" value="{{prod.urlDraft}}" onChange="{{prod.onUrl}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}"></div>
+<button class="vxs-sec" onClick="{{prod.addUrl}}" disabled="{{prod.addUrlDisabled}}" style="flex: none; height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{prod.addUrlColor}}; white-space: nowrap; transition: background-color 120ms">Add URL</button>
+</div>
+<div role="list" aria-label="URLs On Call checks" style="margin-top: 12px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{prod.urls}}" as="u" hint-placeholder-count="2">
+<div role="listitem" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 6px 8px 6px 14px; box-sizing: border-box; border-top: {{u.line}}">
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}">{{u.url}}</span>
+<span style="flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{u.dot}}"></span>{{u.state}}</span>
+<button class="vx-h vxs-gh" aria-label="{{u.removeLabel}}" onClick="{{u.remove}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Remove</button>
+</div>
+</sc-for>
+</div>
+<p style="margin: 8px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Up to 10 URLs, each checked every 5 minutes. Two failures in a row alert your phone.</p>
+</div>
+</section>
 
 <section aria-labelledby="o-s-dom" style="margin-top: 16px">
 <div style="padding: 16px 0 10px">
@@ -1133,6 +1381,8 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </div>
 </section>
+</div>
+</sc-if>
 </sc-if>
 
 <!-- ================= Environment & servers (servers.tsx, components/server) ================= -->
@@ -1162,12 +1412,11 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <button aria-label="{{sr.menuLabel}}" title="Server options" aria-haspopup="menu" aria-expanded="{{sr.expanded}}" onClick="{{sr.toggle}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{sr.btnBg}}; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="none" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor"></circle></svg></button>
 <sc-if value="{{sr.open}}" hint-placeholder-val="{{ false }}">
 <div role="menu" aria-label="{{sr.menuLabel}}" class="vx-pop" style="position: absolute; z-index: 30; top: 40px; right: 8px; width: 180px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}">
-<button role="menuitem" class="vx-h vxs-mi" onClick="{{sr.edit}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Edit</button>
-<sc-if value="{{sr.canDefault}}" hint-placeholder-val="{{ true }}"><button role="menuitem" class="vx-h vxs-mi" onClick="{{sr.makeDefault}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Set as default</button></sc-if>
-<sc-if value="{{sr.canDelete}}" hint-placeholder-val="{{ true }}">
+<div aria-hidden="true" style="padding: 6px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 600; color: {{t.text3}}">Server</div>
+<button role="menuitem" class="{{sr.editCls}}" onClick="{{sr.edit}}" disabled="{{sr.editOff}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{sr.editColor}}">Edit</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{sr.makeDefault}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">{{sr.defaultLabel}}</button>
 <div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div>
-<button role="menuitem" class="vx-h vxs-mi" onClick="{{sr.remove}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.diffDel}}">Delete</button>
-</sc-if>
+<button role="menuitem" class="{{sr.deleteCls}}" onClick="{{sr.remove}}" disabled="{{sr.deleteOff}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{sr.deleteColor}}">Delete</button>
 </div>
 </sc-if>
 </div>
@@ -1179,23 +1428,23 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 
 <!-- ================= Repository trust (project-trust.tsx) ================= -->
 <sc-if value="{{pg.trust}}" hint-placeholder-val="{{ false }}">
-<div role="list" aria-label="Repositories" style="margin-top: 16px; display: flex; flex-direction: column; gap: 8px">
-<sc-for list="{{trust.repos}}" as="rp" hint-placeholder-count="2">
-<article role="listitem" aria-label="{{rp.aria}}" style="padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<article aria-labelledby="t-name" style="margin-top: 16px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
 <div style="display: flex; align-items: center; gap: 8px">
-<span style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">{{rp.name}}</span>
-<span style="flex: none; height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text}}; white-space: nowrap">
-<sc-if value="{{rp.trusted}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.ready}}"><svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span></sc-if>
-<sc-if value="{{rp.notTrusted}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span></sc-if>
-{{rp.state}}
+<h2 id="t-name" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">vector</h2>
+<span role="status" style="flex: none; height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text}}; white-space: nowrap">
+<sc-if value="{{trust.trusted}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.ready}}"><svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span></sc-if>
+<sc-if value="{{trust.notTrusted}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span></sc-if>
+{{trust.state}}
 </span>
-<span style="flex: 1"></span>
-<sc-if value="{{rp.notTrusted}}" hint-placeholder-val="{{ false }}"><button class="vxs-sec" aria-label="{{rp.trustLabel}}" onClick="{{rp.trust}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Trust this repository</button></sc-if>
 </div>
-<p style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{rp.desc}}</p>
+<div style="margin-top: 2px; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: {{t.text3}}">~/code/vector</div>
+<p style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{trust.desc}}</p>
+<sc-if value="{{trust.notTrusted}}" hint-placeholder-val="{{ true }}">
+<div style="margin-top: 12px">
+<button class="vxs-sec" onClick="{{trust.trust}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Trust this repository</button>
+</div>
+</sc-if>
 </article>
-</sc-for>
-</div>
 </sc-if>
 
 <!-- ================= Spend limits (spend-limits.tsx) ================= -->
@@ -1450,11 +1699,15 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <sc-if value="{{pg.updates}}" hint-placeholder-val="{{ false }}">
 <section aria-labelledby="u-s-upd" style="padding-top: 0">
 <div style="padding: 16px 0 10px">
-<h2 id="u-s-upd" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Vector is up to date</h2>
-<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Vector 2.0.0 is the latest release.</p>
+<h2 id="u-s-upd" style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}"><span aria-hidden="true" style="width: 8px; height: 8px; flex: none; border-radius: 50%; background: {{upd.dot}}"></span>{{upd.title}}</h2>
+<p role="status" style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{upd.desc}}</p>
+<sc-if value="{{upd.hasProgress}}" hint-placeholder-val="{{ false }}">
+<div role="progressbar" aria-label="Update download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{upd.pct}}" style="margin-top: 10px; max-width: 360px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden"><span style="display: block; width: {{upd.pctW}}; height: 4px; border-radius: 2px; background: {{t.accent}}"></span></div>
+</sc-if>
 </div>
 <div style="border-top: 1px solid {{t.hairline}}; padding: 12px 0; display: flex; align-items: center; gap: 8px">
-<button class="vxs-sec" onClick="{{upd.check}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Check again</button>
+<sc-if value="{{upd.actPri}}" hint-placeholder-val="{{ false }}"><button class="vxs-pri" onClick="{{upd.act}}" style="height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap; transition: background-color 120ms"><span aria-hidden="true" style="display: grid; place-items: center"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13.9583 10.6257L10 14.584L6.04167 10.6257M10 2.08398V13.959M16.25 17.9173H3.75"></path></svg></span>{{upd.action}}</button></sc-if>
+<sc-if value="{{upd.actSec}}" hint-placeholder-val="{{ true }}"><button class="vxs-sec" onClick="{{upd.act}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">{{upd.action}}</button></sc-if>
 <button class="vx-h vxs-gh" onClick="{{upd.installers}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Latest installers</button>
 <button class="vx-h vxs-gh" onClick="{{upd.notes}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Release notes</button>
 </div>
@@ -1517,6 +1770,17 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 
 </div>
+
+<sc-if value="{{keys.conflict}}" hint-placeholder-val="{{ false }}">
+<div role="alert" style="position: absolute; z-index: 25; left: 0; right: 0; bottom: 24px; margin: 0 auto; width: 400px; max-width: calc(100% - 64px); display: flex; align-items: flex-start; gap: 10px; padding: 10px 8px 10px 14px; box-sizing: border-box; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; height: 18px; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>
+<div style="flex: 1; min-width: 0">
+<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Shortcut already in use</div>
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{keys.conflictText}}</div>
+</div>
+<button aria-label="Dismiss" title="Dismiss" onClick="{{keys.dismiss}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+</sc-if>
 </main>
 
 <sc-if value="{{dlg.any}}" hint-placeholder-val="{{ false }}">
@@ -1552,6 +1816,39 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <button class="vx-h vxs-gh" onClick="{{dlg.close}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Not now</button>
 <button class="vxs-sec" onClick="{{hs.check}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Check again</button>
 <button class="vxs-pri" onClick="{{hs.cont}}" disabled="{{hs.contDisabled}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{hs.contBg}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{hs.contFg}}; transition: background-color 120ms">Continue</button>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.handsTry}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-modal="true" aria-labelledby="dt-title" aria-describedby="dt-desc" class="vx-pop" style="width: 480px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 12px">
+<div style="flex: 1; min-width: 0">
+<h2 id="dt-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Try it</h2>
+<p id="dt-desc" style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Choose an example, then Finish to put it in your message.</p>
+</div>
+<button aria-label="Close Try it" title="Close  Esc" onClick="{{dlg.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; margin: -2px -4px 0 0; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px; display: flex; flex-direction: column; gap: 8px">
+<div role="list" aria-label="Permissions" style="padding: 4px 12px; border-radius: 8px; border: 1px solid {{t.hairline}}">
+<sc-for list="{{ht.perms}}" as="hp" hint-placeholder-count="2">
+<div role="listitem" style="display: flex; align-items: center; gap: 12px; min-height: 32px">
+<span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">{{hp.title}}</span>
+<span style="flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: {{t.text}}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.ready}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>Granted</span>
+</div>
+</sc-for>
+</div>
+<div role="group" aria-label="Examples" style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{ht.examples}}" as="ex" hint-placeholder-count="3">
+<button class="vx-h" aria-pressed="{{ex.pressed}}" onClick="{{ex.pick}}" style="display: block; width: 100%; padding: 10px 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{ex.border}}; background: {{ex.bg}}; text-align: left; font-size: 13px; line-height: 18px; color: {{t.text}}">{{ex.text}}</button>
+</sc-for>
+</div>
+<sc-if value="{{ht.failed}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 0; display: flex; align-items: flex-start; gap: 6px; font-size: 12px; line-height: 16px; color: {{t.text}}"><span aria-hidden="true" style="display: grid; place-items: center; flex: none; height: 16px; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>Open a conversation with an empty message to try this Vector Hands example.</p></sc-if>
+</div>
+<div style="flex: none; display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<button class="vx-h vxs-gh" onClick="{{dlg.close}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Not now</button>
+<button class="vxs-sec" onClick="{{ht.check}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Check again</button>
+<button class="vxs-pri" onClick="{{ht.finish}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Finish</button>
 </div>
 </div>
 </sc-if>
@@ -1693,6 +1990,93 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-if>
 
+<sc-if value="{{dlg.networkLog}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-modal="true" aria-labelledby="dn-title" aria-describedby="dn-desc" class="vx-pop" style="position: relative; width: 880px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 12px">
+<div style="flex: 1; min-width: 0">
+<h2 id="dn-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">What Vector sent</h2>
+<p id="dn-desc" style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">The latest 2,000 requests Vector decided while Vector Local was on: where each went, never what it said. Export includes every request kept on this computer. Kept for 30 days on this computer.</p>
+</div>
+<button aria-label="Close What Vector sent" title="Close  Esc" onClick="{{dlg.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; margin: -2px -4px 0 0; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<div style="flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 16px 12px">
+<div role="group" aria-label="Result" style="display: inline-flex; gap: 2px; height: 26px; padding: 2px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.segTrack}}">
+<sc-for list="{{nl.seg}}" as="sg" hint-placeholder-count="3">
+<button class="{{sg.cls}}" aria-pressed="{{sg.pressed}}" onClick="{{sg.pick}}" style="height: 20px; padding: 0 8px; border: 0; border-radius: 6px; background: {{sg.bg}}; font-size: 12px; line-height: 16px; color: {{sg.color}}; white-space: nowrap">{{sg.label}}</button>
+</sc-for>
+</div>
+<div class="vx-field" style="position: relative; flex: 1; min-width: 180px; max-width: 280px; height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{t.hairline}}">
+<span aria-hidden="true" style="position: absolute; left: 8px; top: 6px; width: 14px; height: 14px; display: grid; place-items: center; color: {{t.text3}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"></circle><path d="M15 15l5 5"></path></svg></span>
+<input type="search" aria-label="Filter by host or service" autocomplete="off" spellcheck="false" placeholder="Filter by host or service" value="{{nl.q}}" onChange="{{nl.onQ}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px 0 28px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; line-height: 18px; color: {{t.text}}">
+</div>
+<span style="flex: 1"></span>
+<button class="vxs-sec" onClick="{{nl.exportCsv}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Export CSV</button>
+<button class="vxs-sec" onClick="{{nl.exportJsonl}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Export JSONL</button>
+<button class="vx-h vxs-gh" onClick="{{nl.askErase}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Clear</button>
+</div>
+<sc-if value="{{nl.hasNotice}}" hint-placeholder-val="{{ false }}"><p role="status" style="flex: none; margin: 0; padding: 0 16px 10px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{nl.notice}}</p></sc-if>
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px">
+<sc-if value="{{nl.hasRows}}" hint-placeholder-val="{{ true }}">
+<div role="table" aria-label="What Vector sent" style="border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<div role="row" style="display: grid; grid-template-columns: 136px minmax(0, 1.2fr) 150px minmax(0, 1fr) 76px; gap: 12px; align-items: center; height: 32px; padding: 0 14px; box-sizing: border-box; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text3}}">
+<span role="columnheader">Time</span><span role="columnheader">What</span><span role="columnheader">Where</span><span role="columnheader">Session</span><span role="columnheader">Result</span>
+</div>
+<sc-for list="{{nl.rows}}" as="lg" hint-placeholder-count="6">
+<div role="row" style="display: grid; grid-template-columns: 136px minmax(0, 1.2fr) 150px minmax(0, 1fr) 76px; gap: 12px; align-items: center; min-height: 44px; padding: 6px 14px; box-sizing: border-box; border-top: 1px solid {{t.hairline}}; font-size: 12px; line-height: 16px">
+<span role="cell" style="font-variant-numeric: tabular-nums; color: {{t.text2}}">{{lg.time}}</span>
+<span role="cell" style="min-width: 0; color: {{t.text}}">{{lg.what}}<sc-if value="{{lg.hasSub}}" hint-placeholder-val="{{ false }}"><span style="display: block; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{lg.sub}}</span></sc-if></span>
+<span role="cell" style="min-width: 0"><span style="display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: {{t.text}}">{{lg.host}}</span><span style="display: block; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{lg.where}}</span></span>
+<span role="cell" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: {{t.text}}">{{lg.session}}</span>
+<span role="cell" style="display: inline-flex; align-items: center; gap: 5px; color: {{t.text}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{lg.dot}}"></span>{{lg.result}}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{nl.empty}}" hint-placeholder-val="{{ false }}"><p role="status" style="margin: 0; padding: 16px 0; border-top: 1px solid {{t.hairline}}; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{nl.emptyText}}</p></sc-if>
+</div>
+<sc-if value="{{nl.erasing}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; border-radius: 12px; background: {{t.scrim}}">
+<div role="alertdialog" aria-modal="true" aria-labelledby="de-title" aria-describedby="de-desc" class="vx-pop" style="width: 420px; max-width: 100%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="padding: 16px 16px 12px">
+<h2 id="de-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Erase the network log?</h2>
+<p id="de-desc" style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">This erases the requests in memory, the counters and the log files on this computer. It cannot be undone.</p>
+</div>
+<div style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<button class="vx-h vxs-gh" onClick="{{nl.cancelErase}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+<button class="vx-h vxs-danger" onClick="{{nl.erase}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid rgba(238,131,136,0.45); background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.diffDel}}">Erase</button>
+</div>
+</div>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.stopWork}}" hint-placeholder-val="{{ false }}">
+<div role="alertdialog" aria-modal="true" aria-labelledby="dw-title" aria-describedby="dw-desc" class="vx-pop" style="width: 440px; max-width: 100%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="padding: 16px 16px 12px">
+<h2 id="dw-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">{{sw.title}}</h2>
+<p id="dw-desc" style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{sw.desc}}</p>
+</div>
+<div style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<button class="vx-h vxs-gh" onClick="{{dlg.close}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+<button class="vxs-pri" onClick="{{sw.apply}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">{{sw.confirm}}</button>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.restart}}" hint-placeholder-val="{{ false }}">
+<div role="alertdialog" aria-modal="true" aria-labelledby="du-title" aria-describedby="du-desc" class="vx-pop" style="width: 440px; max-width: 100%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="padding: 16px 16px 12px">
+<h2 id="du-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Restart to update to Vector 2.0.1?</h2>
+<p id="du-desc" style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">3 agents in the workspace are still running and will stop.</p>
+</div>
+<div style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<button class="vx-h vxs-gh" onClick="{{dlg.close}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Later</button>
+<button class="vxs-pri" onClick="{{upd.restart}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Restart now</button>
+</div>
+</div>
+</sc-if>
+
 <sc-if value="{{dlg.githubRun}}" hint-placeholder-val="{{ false }}">
 <div role="dialog" aria-modal="true" aria-labelledby="dg-title" class="vx-pop" style="width: 520px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
 <div style="flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 12px">
@@ -1796,7 +2180,7 @@ skill · fix-lint (approved)</pre>
 <div>
 <label for="ds-addr" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Server address</label>
 <input id="ds-addr" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="http://localhost:4096" aria-describedby="ds-addr-help" value="{{sf.addr}}" onChange="{{sf.onAddr}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{sf.addrBorder}}; background: {{t.rowHover}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; color: {{t.text}}; outline: none">
-<p id="ds-addr-help" style="margin: 6px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: {{sf.helpColor}}"><sc-if value="{{sf.reachable}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}"></span></sc-if>{{sf.help}}</p>
+<p id="ds-addr-help" style="margin: 6px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: {{sf.helpColor}}"><sc-if value="{{sf.reachable}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}"></span></sc-if><sc-if value="{{sf.unreachable}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="width: 6px; height: 6px; box-sizing: border-box; border-radius: 50%; border: 1.25px solid {{t.text3}}"></span></sc-if>{{sf.help}}</p>
 </div>
 <div>
 <label for="ds-name" style="display: block; margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Server name (optional)</label>
@@ -1836,7 +2220,7 @@ skill · fix-lint (approved)</pre>
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"page":{"editor":"enum","options":["hands","local","github","playbooks","remote","production","env","trust","spend","keys","notify","a11y","roadmap","updates"],"default":"hands","section":"Settings"},"dialog":{"editor":"enum","options":["none","hands-setup","local-setup","local-allow","github-run","pair","add-server"],"default":"none","section":"Settings"},"$preview":{"width":1600,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"page":{"editor":"enum","options":["hands","local","github","playbooks","remote","production","env","trust","spend","keys","notify","a11y","roadmap","updates"],"default":"hands","section":"Settings"},"dialog":{"editor":"enum","options":["none","hands-setup","hands-try","local-setup","local-allow","network-log","github-run","pair","add-server","edit-server","stop-work"],"default":"none","section":"Settings"},"state":{"editor":"enum","options":["none","github-signin","github-bind","github-workflow","github-preview","updates-downloading","updates-ready","updates-failed","keys-recording","keys-conflict","local-check","hands-record"],"default":"none","section":"Settings"},"$preview":{"width":1600,"height":1000}}'>
 class Component extends DCLogic {
   rgb(h) {
     let x = String(h || '').trim().replace('#', '');
@@ -1852,12 +2236,15 @@ class Component extends DCLogic {
 
   cur() {
     const PAGES = ['hands', 'local', 'github', 'playbooks', 'remote', 'production', 'env', 'trust', 'spend', 'keys', 'notify', 'a11y', 'roadmap', 'updates'];
-    const DIALOGS = ['none', 'hands-setup', 'local-setup', 'local-allow', 'github-run', 'pair', 'add-server'];
+    const DIALOGS = ['none', 'hands-setup', 'hands-try', 'local-setup', 'local-allow', 'network-log', 'github-run', 'pair', 'add-server', 'edit-server', 'stop-work'];
+    const STATES = ['none', 'github-signin', 'github-bind', 'github-workflow', 'github-preview', 'updates-downloading', 'updates-ready', 'updates-failed', 'keys-recording', 'keys-conflict', 'local-check', 'hands-record'];
     let pp = this.props.page ?? 'hands';
     if (PAGES.indexOf(pp) < 0) pp = 'hands';
     let pd = this.props.dialog ?? 'none';
     if (DIALOGS.indexOf(pd) < 0) pd = 'none';
-    return { key: pp + '|' + pd, page: pp, dialog: pd };
+    let ps = this.props.state ?? 'none';
+    if (STATES.indexOf(ps) < 0) ps = 'none';
+    return { key: pp + '|' + pd + '|' + ps, page: pp, dialog: pd, state: ps };
   }
 
   // Tweak-reset pattern: local state belongs to one tweak combination and is dropped when the tweaks change.
@@ -1877,9 +2264,11 @@ class Component extends DCLogic {
     const s = raw._p === C.key ? raw : {};
     const X = s.x || {};
     // A dialog tweak opens on the page it belongs to; the nav can still move away from it.
-    const DLG_PAGE = { 'hands-setup': 'hands', 'local-setup': 'local', 'local-allow': 'local', 'github-run': 'github', pair: 'remote', 'add-server': 'env' };
+    const DLG_PAGE = { 'hands-setup': 'hands', 'hands-try': 'hands', 'local-setup': 'local', 'local-allow': 'local', 'network-log': 'local', 'github-run': 'github', pair: 'remote', 'add-server': 'env', 'edit-server': 'env', 'stop-work': 'playbooks' };
     const page = s.page || (C.dialog !== 'none' ? DLG_PAGE[C.dialog] : C.page);
     const dlgId = s.dlg || C.dialog;
+    // A state tweak applies only on the page its prefix names (github-, updates-, keys-, local-, hands-); every other page shows its default.
+    const st = C.state !== 'none' && C.state.split('-')[0] === page ? C.state : 'none';
     const menu = s.menu || null;
     const sess = 'ask';
     const chat = false;
@@ -1951,9 +2340,10 @@ class Component extends DCLogic {
     const hostOf = (u) => String(u || '').trim().replace(/^[a-z]+:\/\//i, '').split('/')[0].split(':')[0];
 
     const V0 = {
-      handsOn: true, handsMode: 'Take the screen', mouse: 'Ask me first', keepAwake: true, handsNotify: true, shots: '7 days',
+      handsOn: true, handsMode: 'Take the screen', mouse: 'Ask me first', keepAwake: true, handsNotify: true, shots: '7 days', stopChord: '⌘⇧Esc',
       web: 'Your network only', roleMain: 'coder-medium', roleSub: 'coder-medium', roleReview: 'Same as the session’s model',
-      workflows: true, beforeRun: 'Wait for my approval', remoteOn: true,
+      ghMode: st === 'github-preview' ? 'Your own key' : 'Codium (your plan, no key)',
+      workflows: true, beforeRun: 'Ask before each run', remoteOn: true,
       nAgent: true, nErrors: true, nSound: true, pFinished: true, pNeeds: true, pGuard: true, pUsage: true,
       quiet: true, qFrom: '10:00 PM', qUntil: '7:00 AM',
       scale: 100, contrast: false, motion: false, focus: true, targets: false
@@ -1989,7 +2379,7 @@ class Component extends DCLogic {
     const segOf = (opts, value, pick) => opts.map((o) => {
       const on = o === value;
       return {
-        label: o, pressed: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
+        label: o, pressed: on ? 'true' : 'false', checked: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
         bg: on ? t.segActive : 'transparent', color: on ? t.text : t.text2,
         pick: () => { if (!on) pick(o); }
       };
@@ -2234,7 +2624,7 @@ class Component extends DCLogic {
       env: ['', 'Servers', 'Manage the Vector servers this workspace can connect to.'],
       trust: ['Repository trust', 'Decide what a repository may run', 'A repository can bring its own Vector settings in vector.json and .vector, like agents, commands, plugins and MCP servers. They can run code on this computer, so Vector ignores them until you trust the repository.'],
       spend: ['', 'Spend limits', 'Caps for models on your own keys. Codium is part of your plan and shows as Codium. Vector checks caps after every model step and stops a run within one step of its cap.'],
-      keys: ['', 'Keyboard shortcuts', ''],
+      keys: ['', 'Keyboard shortcuts', 'Click a shortcut, then press the new keys. Backspace or Delete clears it, and Escape cancels.'],
       notify: ['Notifications', 'Alerts', 'Desktop notifications and sounds, and alerts on your phone when your plan includes them.'],
       a11y: ['Accessibility', 'Readable by default', 'Make Vector easier to navigate, see, and click.'],
       roadmap: ['Vector Codium', 'Roadmap vote', 'Max and Ultra choose what Vector builds next. You get one ballot a quarter and can change it until the vote closes.'],
@@ -2261,6 +2651,26 @@ class Component extends DCLogic {
     const PERMS = [['Screen Recording', 'So it can see the app it’s using.'], ['Accessibility', 'So it can click, type and use menus.']];
     const appsGone = X.appsGone || {};
     const APPS = [{ id: 'notes', name: 'Notes', added: 'Added Nov 3, 2026' }, { id: 'cal', name: 'Calendar', added: 'Added Nov 9, 2026' }].filter((a) => !appsGone[a.id]);
+    // The Stop shortcut recorder (computer.tsx 395-446): state=hands-record opens it.
+    const handsRec = X.rec !== undefined ? X.rec : st === 'hands-record';
+    const REC_ERR = {
+      invalid: 'Hold at least two modifier keys and press a letter, number, F1 to F12 or Esc.',
+      reserved: 'That shortcut is kept by the operating system. Choose another.'
+    };
+    // Blocked apps in today's three groups (computer.tsx 548-690, computer-model.ts NEVER_GROUPS and blockedRows).
+    const NEVER = [
+      ['Terminals and script tools', 'Vector uses its own terminal'], ['Vector', ''],
+      ['System Settings and security prompts', ''], ['Password managers and Keychain', ''],
+      ['Remote desktop and virtual machine viewers', 'Vector can’t see which apps run inside them']
+    ];
+    const DEF_BLOCKS = [['finance', 'Trading and crypto apps'], ['disk', 'Disk Utility'], ['findmy', 'Find My'], ['migration', 'Migration Assistant']];
+    const defAllowed = X.defAllowed || {};
+    const yoursGone = X.yoursGone || {};
+    const YOURS = [{ id: 'messages', name: 'Messages', added: 'Added Nov 6, 2026' }].concat(X.yoursAdded || []).filter((a) => !yoursGone[a.id]);
+    const blockQ = String(X.blockQ || '');
+    const FOUND = ['Mail', 'Maps', 'Music', 'Photos', 'Reminders']
+      .filter((n) => YOURS.every((y) => y.name !== n))
+      .filter((n) => !blockQ.trim() || n.toLowerCase().indexOf(blockQ.trim().toLowerCase()) >= 0);
     const hands = {
       use: swOf(handsOn, () => putV('handsOn', !handsOn)),
       status: hStatus, stReady: hStatus === 'Ready', stNeeds: hStatus === 'Needs permissions', stOff: hStatus === 'Off',
@@ -2269,20 +2679,48 @@ class Component extends DCLogic {
       check: () => setX({ permsOk: true }, { toast: say(permsOk ? 'Both permissions are granted.' : 'Both permissions are granted. Vector Hands is ready.') }),
       modes: segOf(['Take the screen', 'Alongside me'], V.handsMode, (o) => putV('handsMode', o)),
       modeDesc: V.handsMode === 'Alongside me' ? 'It works in the background where it can, so you can keep using your Mac.' : 'It uses the mouse and keyboard in front of you, the most reliable choice.',
-      mouse: mkSel('mouse', ['Ask me first', 'Just take it']),
+      mouse: segOf(['Ask me first', 'Just take it'], V.mouse, (o) => putV('mouse', o)),
       awake: mkSw('keepAwake'), notify: mkSw('handsNotify'),
-      rec: !!X.rec, notRec: !X.rec, recBtn: X.rec ? 'Cancel' : 'Change',
-      toggleRec: () => setX({ rec: !X.rec }),
+      chord: V.stopChord,
+      rec: handsRec, recErr: REC_ERR[X.recErr] || '', recHasErr: !!REC_ERR[X.recErr],
+      changeCls: handsRec ? '' : 'vx-h vxs-gh', changeColor: handsRec ? t.textDisabled : t.text2,
+      startRec: () => { if (!handsRec) setX({ rec: true, recErr: '' }); },
+      // Each click on the recorder stands for one key press: one it refuses, one the system keeps, then a valid chord.
+      press: () => {
+        if (!X.recErr) { setX({ rec: true, recErr: 'invalid' }); return; }
+        if (X.recErr === 'invalid') { setX({ rec: true, recErr: 'reserved' }); return; }
+        const nv = Object.assign({}, s.v || {});
+        nv.stopChord = '⌃⌥S';
+        this.put({ v: nv, menu: null, x: Object.assign({}, X, { rec: false, recErr: '' }), toast: say('Vector Hands now stops with ⌃⌥S.') });
+      },
       apps: APPS.map((a, i) => ({
         name: a.name, added: a.added, line: line(i), removeLabel: 'Remove ' + a.name,
         remove: () => { const g = Object.assign({}, appsGone); g[a.id] = true; setX({ appsGone: g }, { toast: say(a.name + ' was removed.') }); }
       })),
       hasApps: APPS.length > 0, noApps: APPS.length === 0,
       removeAll: () => setX({ appsGone: { notes: true, cal: true } }, { toast: say('Always-allowed apps were removed.') }),
-      blocked: [
-        ['Terminals and script tools', 'Vector uses its own terminal'], ['Vector', ''],
-        ['System Settings and security prompts', ''], ['Password managers and Keychain', '']
-      ].map((b, i) => ({ title: b[0], desc: b[1], hasDesc: !!b[1], line: line(i) })),
+      blocked: NEVER.map((b, i) => ({ title: b[0], desc: b[1], hasDesc: !!b[1], line: line(i) })),
+      defaults: DEF_BLOCKS.map((d, i) => {
+        const on = !!defAllowed[d[0]];
+        return {
+          title: d[1], allowed: on, blocked: !on, action: on ? 'Block' : 'Allow', actionLabel: (on ? 'Block ' : 'Allow ') + d[1], line: line(i),
+          toggle: () => { const m = Object.assign({}, defAllowed); m[d[0]] = !on; setX({ defAllowed: m }, { toast: say(d[1] + (on ? ' is blocked again.' : ' is allowed.')) }); }
+        };
+      }),
+      yours: YOURS.map((a, i) => ({
+        name: a.name, added: a.added, line: line(i), unblockLabel: 'Unblock ' + a.name,
+        unblock: () => { const g = Object.assign({}, yoursGone); g[a.id] = true; setX({ yoursGone: g }, { toast: say(a.name + ' is unblocked.') }); }
+      })),
+      hasYours: YOURS.length > 0,
+      blocking: !!X.blocking, blockIdle: !X.blocking,
+      openBlock: () => setX({ blocking: true, blockQ: '' }),
+      closeBlock: () => setX({ blocking: false, blockQ: '' }),
+      blockQ: blockQ, onBlockQ: (e) => setX({ blockQ: val(e) }),
+      results: FOUND.map((n, i) => ({
+        name: n, line: line(i), blockLabel: 'Block ' + n,
+        block: () => { const list = X.yoursAdded || []; setX({ yoursAdded: list.concat([{ id: 'y-' + n, name: n, added: 'Added Nov 21, 2026' }]), blocking: false, blockQ: '' }, { toast: say(n + ' is blocked.') }); }
+      })),
+      hasResults: FOUND.length > 0, noResults: FOUND.length === 0,
       shots: mkSel('shots', ['Until the task ends', '1 day', '7 days', '30 days', 'Until I delete the conversation']),
       shotsIdle: !X.shotsAsk && !X.shotsGone, shotsConfirm: !!X.shotsAsk, shotsGone: !!X.shotsGone,
       askDelete: () => setX({ shotsAsk: true }),
@@ -2296,7 +2734,24 @@ class Component extends DCLogic {
       })),
       check: () => setX({ permsOk: true }),
       contDisabled: !permsOk, contBg: priOf(permsOk).bg, contFg: priOf(permsOk).fg,
-      cont: () => { if (permsOk) closeDlg('Vector Hands is ready.'); }
+      cont: () => { if (permsOk) openDlg('hands-try', { htPick: 0, htFail: false }); }
+    };
+    // Step 3, Try it (features/computer/onboarding.tsx 159-203). Settings has no empty message box, so Finish shows today's alert.
+    const HT_EX = [
+      '@Hands put my October receipts into a Numbers table',
+      '@Hands copy the Q3 chart into my Keynote deck',
+      '@Hands open the app you just built in the iOS Simulator and tap through sign-up'
+    ];
+    const htPick = X.htPick !== undefined ? X.htPick : 0;
+    const ht = {
+      perms: PERMS.map((p) => ({ title: p[0] })),
+      examples: HT_EX.map((e, i) => {
+        const on = i === htPick;
+        return { text: e, pressed: on ? 'true' : 'false', border: on ? t.activeBorder : t.hairline, bg: on ? t.activeFill : 'transparent', pick: () => setX({ htPick: i, htFail: false }) };
+      }),
+      failed: !!X.htFail,
+      check: () => tell('Both permissions are granted.'),
+      finish: () => setX({ htFail: true })
     };
 
     // ---------- Vector Local ----------
@@ -2332,6 +2787,33 @@ class Component extends DCLogic {
       canAllow: false, allowLabel: '', allow: close
     });
     const LOG_DOT = { Allowed: t.ready, Blocked: t.failed, Asked: t.needs };
+    // "What Vector Local covers" (local.tsx 312-315; LocalCovers in features/local/egress-popover.tsx).
+    const COVERS = [
+      ['Sites you approve', 'They receive the requests you approved. That is the point of research.'],
+      ['Programs the agent starts', 'Shell commands, stdio MCP servers and language servers make their own connections. With Web access None, the shell sandbox blocks the agent’s shell commands on macOS and Linux; MCP servers and language servers run outside it, and Windows has no such block.'],
+      ['Model servers that forward requests', 'A proxy, or a model server with cloud models, can pass your prompts on to a cloud service. Vector labels the ones it can recognise.'],
+      ['Everything outside Vector', 'The operating system, other apps, and the DNS resolver for names Vector is allowed to look up.'],
+      ['It is a policy inside Vector, not a firewall', 'A person with administrator rights on this computer can change it. Companies should pair it with network controls.']
+    ];
+    // Run a check (local.tsx 842-899): state=local-check shows a finished check. Rows follow the engine's check (local-settings.ts).
+    const checkRun = X.checkRun !== undefined ? X.checkRun : st === 'local-check';
+    const WEB_LINE = { Ask: 'Ask: research and the browser can read the sites you approve.', 'Your network only': 'Your network only: only your network and sites your company lists.', None: 'None: Vector makes no internet requests. Deep research uses your brain and files.' };
+    const allowedNames = allowedRows.map((k) => SRC[k].title);
+    const CHECK_ROWS = [
+      ['pass', 'Vector Local is on', ''],
+      ['pass', 'Policy read from your user config and your company’s policy', ''],
+      ['pass', 'The network guard is installed in this process', ''],
+      ['pass', 'Requests no part of Vector labelled are blocked', ''],
+      ['pass', allowedNames.length ? 'Vector’s own services are blocked, except the ones you allowed' : 'Vector’s own services are blocked unless you allow one', (allowedNames.length ? 'You allowed ' + allowedNames.join(', ') + '. ' : '') + 'Free models provided by Vector and Vector Codium stay off with Vector Local on.'],
+      ['pass', 'Web access: ' + (WEB_LINE[V.web] || WEB_LINE['Your network only']), ''],
+      ['warn', 'Model server 0.9.2 at gpu-box:8000', 'It answers as it did when it was added. Not encrypted: prompts to this server travel in plain text on your network.'],
+      ['pass', 'Model server 1.4.0 at localhost:8080', 'It answers as it did when it was added.'],
+      ['pass', 'The network log is kept for 30 days', '']
+    ];
+    const CHECK_WORD = { pass: 'Pass', warn: 'Warning', fail: 'Failed' };
+    const CHECK_DOT = { pass: t.ready, warn: t.needs, fail: t.failed };
+    const nWarn = CHECK_ROWS.filter((r) => r[0] === 'warn').length;
+    const checkVerdict = nWarn ? 'Every layer passed, with ' + nWarn + (nWarn === 1 ? ' warning.' : ' warnings.') : 'Every layer passed.';
     const local = {
       on: localOn,
       pill: V.web === 'Ask' ? 'Local' : (V.web === 'None' ? 'Local · no web' : 'Local · your network'),
@@ -2368,13 +2850,52 @@ class Component extends DCLogic {
       })),
       hasAllowed: allowedRows.length > 0, noAllowed: allowedRows.length === 0,
       off: offRows.map((o, i) => Object.assign({ line: line(i) }, o)),
-      log: [
-        ['2:14 PM', 'gpu-box:8000', 'Warn on review model evidence', 'Allowed'],
-        ['2:12 PM', 'vectordev.ai', 'Warn on review model evidence', 'Blocked'],
-        ['2:05 PM', 'api.github.com', 'Fix Codium P8 CI', 'Allowed'],
-        ['1:52 PM', 'localhost:8080', 'Recheck keyboard focus across menu reads', 'Allowed']
-      ].map((r) => ({ time: r[0], where: r[1], session: r[2], result: r[3], dot: LOG_DOT[r[3]] })),
-      openLog: () => tell('What Vector sent opens in its own dialog, with filters and export.')
+      coversOpen: !!X.covers, coversExpanded: X.covers ? 'true' : 'false', coversRot: X.covers ? '90deg' : '0deg',
+      toggleCovers: () => setX({ covers: !X.covers }),
+      covers: COVERS.map((c) => ({ title: c[0], body: c[1] })),
+      logLines: [
+        'Model calls: 214 to gpu-box:8000, 38 to localhost:8080',
+        'Web: 12 pages, 31 other hosts they loaded, 6 searches',
+        'Memory sent: 18 repository excerpts, to 2 model servers',
+        'Blocked: 3 (Updates 2, Help assistant 1)',
+        'Including 46 helper requests'
+      ].map((x) => ({ text: x })),
+      openLog: () => openDlg('network-log', { logRes: 'all', logQ: '', logErase: false, logNotice: '' }),
+      checked: checkRun,
+      runCheck: () => setX({ checkRun: true }),
+      verdict: checkVerdict,
+      checkRows: CHECK_ROWS.map((r, i) => ({
+        title: r[1], detail: r[2], hasDetail: !!r[2], status: CHECK_WORD[r[0]], dot: CHECK_DOT[r[0]], line: line(i)
+      }))
+    };
+    // The network log dialog, "What Vector sent" (features/local/egress-log.tsx).
+    const LOG = [
+      ['2026-11-20 14:14:31', 'Model servers on your list', 'Carried 3 repository excerpts', 'gpu-box:8000', 'Your network', 'Warn on review model evidence', 'Allowed'],
+      ['2026-11-20 14:12:08', 'Vector Codium', '', 'vectordev.ai', 'Internet', 'Warn on review model evidence', 'Blocked'],
+      ['2026-11-20 14:05:52', 'GitHub pull requests', '', 'api.github.com', 'Internet', 'Fix Codium P8 CI', 'Allowed'],
+      ['2026-11-20 13:58:40', 'Updates', '', 'vectordev.ai', 'Internet', '–', 'Asked'],
+      ['2026-11-20 13:52:17', 'Model servers on your list', '', 'localhost:8080', 'This computer', 'Recheck keyboard focus across menu reads', 'Allowed'],
+      ['2026-11-20 13:47:03', 'Web reads', '', 'docs.vectordev.ai', 'On your list', 'Recheck keyboard focus across menu reads', 'Allowed']
+    ];
+    const logRes = X.logRes || 'all';
+    const logQ = String(X.logQ || '');
+    const logRows = (X.logErased ? [] : LOG)
+      .filter((r) => logRes === 'all' || (logRes === 'allowed' ? r[6] === 'Allowed' : r[6] !== 'Allowed'))
+      .filter((r) => !logQ.trim() || (r[1] + ' ' + r[3] + ' ' + r[4]).toLowerCase().indexOf(logQ.trim().toLowerCase()) >= 0);
+    const RES_SEG = [['all', 'All'], ['allowed', 'Allowed'], ['blocked', 'Blocked or asked']];
+    const nl = {
+      seg: segOf(RES_SEG.map((r) => r[1]), (RES_SEG.find((r) => r[0] === logRes) || RES_SEG[0])[1], (o) => setX({ logRes: (RES_SEG.find((r) => r[1] === o) || RES_SEG[0])[0] })),
+      q: logQ, onQ: (e) => setX({ logQ: val(e) }),
+      rows: logRows.map((r) => ({ time: r[0], what: r[1], sub: r[2], hasSub: !!r[2], host: r[3], where: r[4], session: r[5], result: r[6], dot: LOG_DOT[r[6]] })),
+      hasRows: logRows.length > 0, empty: logRows.length === 0,
+      emptyText: X.logErased ? 'Nothing yet. The log records requests while Vector Local is on.' : 'No request matches these filters.',
+      hasNotice: !!X.logNotice, notice: X.logNotice || '',
+      exportCsv: () => setX({ logNotice: 'Exported as vector-network-log-2026-11-21.csv.' }),
+      exportJsonl: () => setX({ logNotice: 'Exported as vector-network-log-2026-11-21.jsonl.' }),
+      erasing: !!X.logErase,
+      askErase: () => setX({ logErase: true }),
+      cancelErase: () => setX({ logErase: false }),
+      erase: () => setX({ logErase: false, logErased: true, logNotice: 'The network log is erased.' })
     };
     const srcId = SRC[X.allowSrc] ? X.allowSrc : 'updates';
     const src = SRC[srcId];
@@ -2453,7 +2974,53 @@ class Component extends DCLogic {
     if (X.runSent) RUNS.push({ title: X.runTitle || 'Run in GitHub', meta: 'vector · just now · In progress', running: true });
     RUNS.push({ title: 'Fix the lint error · PR #2188', meta: 'vector · yesterday · 6 minutes · Done', running: false });
     RUNS.push({ title: 'Update the docs index · PR #2171', meta: 'vector · Nov 17 · 11 minutes · Done', running: false });
+    // Setup before a repository is bound (features/github-agents/setup-card.tsx 220-410): sign in, workflow setup, its
+    // preview and setup pull request, then Bind repository. state=github-* opens a step; the buttons walk the rest.
+    const GH_STEP = { 'github-signin': 'signin', 'github-bind': 'bind', 'github-workflow': 'workflow', 'github-preview': 'preview' };
+    const ghStep = X.ghStep || GH_STEP[st] || 'ready';
+    const OWN_KEY = 'Your own key';
+    const ownKey = V.ghMode === OWN_KEY;
+    const ghModel = X.ghModel !== undefined ? X.ghModel : 'company/coder-large';
+    const ghKeys = X.ghKeys !== undefined ? X.ghKeys : 'COMPANY_API_KEY';
+    const keyNames = ghKeys.split(',').map((k) => k.trim()).filter(Boolean);
+    const canPreview = !ownKey || (!!ghModel.trim() && keyNames.length > 0 && keyNames.every((k) => /^[A-Z_][A-Z0-9_]*$/.test(k)));
+    const backToSetup = ghStep === 'preview' ? 'workflow' : ghStep;
+    const expr = (x) => '$' + '{' + '{ ' + x + ' }' + '}';
+    const YAML = ['name: vector', 'on:', '  issue_comment:', '    types: [created]', '  workflow_dispatch:', 'jobs:', '  agent:', '    runs-on: ubuntu-latest', '    env:']
+      .concat(ownKey
+        ? ['      VECTOR_MODE: own-key', '      MODEL: ' + (ghModel.trim() || 'provider/model'), '      VECTOR_CLI_TOKEN: ' + expr('secrets.VECTOR_CLI_TOKEN')].concat(keyNames.map((k) => '      ' + k + ': ' + expr('secrets.' + k)))
+        : ['      VECTOR_MODE: codium', '      MODEL: ' + expr('vars.VECTOR_MODEL || \'vector-plan\'')])
+      .concat(['    steps:', '      - uses: actions/setup-node@v4', '      - name: Install Vector'])
+      .join('\n');
     const gh = {
+      isSignin: ghStep === 'signin', connected: ghStep !== 'signin', isReady: ghStep === 'ready', isBind: ghStep === 'bind',
+      isSetup: ghStep === 'workflow' || ghStep === 'preview', showBindings: !ownKey,
+      signIn: () => setX({ ghStep: 'workflow' }, { toast: say('Signed in to GitHub as @you.') }),
+      binding: !!X.ghBinding, bindLabel: X.ghBinding ? 'Waiting for GitHub…' : 'Bind repository',
+      bindBg: priOf(!X.ghBinding).bg, bindFg: priOf(!X.ghBinding).fg,
+      bind: () => { if (!X.ghBinding) setX({ ghBinding: true }); },
+      mode: mkSel('ghMode', [OWN_KEY, 'Codium (your plan, no key)'],(v) => putV('ghMode', v, { x: Object.assign({}, X, { ghStep: backToSetup, ghOpened: false }) })),
+      ownKey: ownKey,
+      model: ghModel, onModel: (e) => setX({ ghModel: val(e), ghStep: backToSetup, ghOpened: false }),
+      keys: ghKeys, onKeys: (e) => setX({ ghKeys: val(e), ghStep: backToSetup, ghOpened: false }),
+      auto: boxOf(!!X.ghAuto, () => setX({ ghAuto: !X.ghAuto, ghStep: backToSetup, ghOpened: false })),
+      share: boxOf(!!X.ghShare, () => setX({ ghShare: !X.ghShare, ghStep: backToSetup, ghOpened: false })),
+      previewDisabled: !canPreview, previewColor: canPreview ? t.text : t.textDisabled,
+      preview: () => { if (canPreview) setX({ ghStep: 'preview', ghOpened: false }); },
+      isPreview: ghStep === 'preview' && !X.ghOpened,
+      yaml: YAML,
+      hasSecrets: ownKey,
+      secrets: [{ name: 'VECTOR_CLI_TOKEN', detail: 'Signs the workflow in to your Vector account. Create one at vectordev.ai/auth/cli.', link: true }]
+        .concat(keyNames.map((k) => ({ name: k, detail: 'Your model provider’s API key.', link: false })))
+        .map((x) => ({ name: x.name, detail: x.detail, hasLink: x.link, linkLabel: 'Open secrets for ' + x.name, open: () => tell('vectordev.ai/auth/cli opens in your browser.') })),
+      openPr: () => setX({ ghOpened: true }),
+      opened: ghStep === 'preview' && !!X.ghOpened,
+      openGithub: () => tell('The setup pull request opens on GitHub.'),
+      checkAgain: () => {
+        if (X.ghOpened) { setX({ ghStep: ownKey ? 'ready' : 'bind', ghOpened: false }, { toast: say(ownKey ? 'The workflow is current. vector is ready.' : 'The workflow is current. Bind the repository next.') }); return; }
+        if (X.ghBinding) { setX({ ghStep: 'ready', ghBinding: false }, { toast: say('vector is bound. Runs can use your plan.') }); return; }
+        tell('Nothing changed on GitHub yet.');
+      },
       perms: () => tell('GitHub opens so you can approve Vector’s access.'),
       openRun: () => { if (!X.unbound) openDlg('github-run', { runSent: false, runApproved: false }); },
       runDisabled: !!X.unbound, runColor: X.unbound ? t.textDisabled : t.text,
@@ -2495,10 +3062,42 @@ class Component extends DCLogic {
     // ---------- Agents › Workflows with Vector Playbooks ----------
     const pbInst = X.pbInst || {};
     const PB = [['flaky', 'Flaky test hunt', 2, 'new'], ['docs', 'Docs drift check', 1, 'current'], ['deps', 'Dependency sweep', 3, 'differs']];
+    // Workflow ceilings (subagents.tsx 624-737, workflow-settings-model.ts 45-52). Every save on this page reloads the
+    // engine, so it asks first with DialogStopRunningWork while work is running (subagents.tsx 145-175, 228-251).
+    const CEIL = [
+      ['max_agents', 'Agents per run', '100', 1, 1000], ['concurrency', 'Agents at once', '16', 1, 16],
+      ['steps', 'Model steps per run', '40 per agent', 1, 0], ['per_agent_steps', 'Model steps per agent', '60', 1, 0],
+      ['minutes', 'Minutes per run', '120', 1, 1440], ['runs', 'Runs at once per conversation', '1', 1, 4],
+      ['usd', 'Spend per run (USD)', 'None: the subagent ceiling applies', 0, 0], ['tokens', 'Tokens per run', 'None', 1, 0]
+    ];
+    const CEIL0 = { max_agents: '', concurrency: '8', steps: '', per_agent_steps: '', minutes: '60', runs: '', usd: '', tokens: '' };
+    const ceilV = Object.assign({}, CEIL0, X.ceil || {});
+    const ceilProblem = (f) => {
+      const raw = String(ceilV[f[0]] || '').replace(f[0] === 'usd' ? /[$,\s]/g : /[,\s]/g, '');
+      if (!raw) return '';
+      const n = Number(raw);
+      if (f[0] === 'usd') return Number.isFinite(n) && n > 0 ? '' : f[1] + ': enter an amount above 0.';
+      if (Number.isSafeInteger(n) && n >= f[3] && (!f[4] || n <= f[4])) return '';
+      return f[4] ? f[1] + ': enter a whole number from ' + f[3] + ' to ' + f[4] + '.' : f[1] + ': enter a whole number of at least ' + f[3] + '.';
+    };
+    const askStop = (title, action) => openDlg('stop-work', { swTitle: title, swAction: action, ceilErr: '', ceilBad: null });
     const pb = {
-      wf: mkSw('workflows'),
-      beforeTitle: V.workflows ? t.text : t.text2,
-      before: mkSel('beforeRun', [['Wait for my approval', 'Default'], 'Start right away'], null, !V.workflows),
+      wf: swOf(!!V.workflows, () => askStop(V.workflows ? 'Turn workflows off?' : 'Turn workflows on?', 'toggle')),
+      // Today's Before a run row shows only while workflows are on (subagents.tsx 689-706).
+      wfOn: !!V.workflows, beforeTitle: t.text,
+      before: mkSel('beforeRun', ['Ask before each run', 'Run within these limits without asking'], (v) => askStop('Change when workflows ask?', 'before:' + v), !V.workflows),
+      ceil: CEIL.map((f) => ({
+        id: 'p-c-' + f[0], label: f[1], ph: f[2], mode: f[0] === 'usd' ? 'decimal' : 'numeric', value: ceilV[f[0]],
+        border: X.ceilBad === f[0] ? 'rgba(238,131,136,0.45)' : t.hairline,
+        onChange: (e) => { const m = Object.assign({}, ceilV); m[f[0]] = val(e); setX({ ceil: m, ceilErr: '', ceilBad: null }); }
+      })),
+      hasErr: !!X.ceilErr, err: X.ceilErr || '',
+      saveLimits: () => {
+        const bad = CEIL.find((f) => ceilProblem(f));
+        if (bad) { setX({ ceilErr: ceilProblem(bad), ceilBad: bad[0] }); return; }
+        askStop('Save workflow limits?', 'save');
+      },
+      resetLimits: () => askStop('Reset workflow limits?', 'reset'),
       refresh: () => tell('Playbooks are up to date.'),
       list: PB.map((p, i) => {
         const st = pbInst[p[0]] ? 'current' : p[3];
@@ -2510,6 +3109,29 @@ class Component extends DCLogic {
         };
       }),
       openTools: () => tell('Connected tools opens under More.')
+    };
+    // DialogStopRunningWork: the title names the action; the body is stopWorkDescription (subagent-switches.ts 125-147)
+    // for the sidebar's running sessions. Saves on this page confirm with "Save anyway".
+    const swAction = X.swAction || 'save';
+    const sw = {
+      title: X.swTitle || 'Save workflow limits?',
+      desc: '3 sessions are working right now, subagents included. That work keeps the current setting until it ends; the new setting applies after that.',
+      confirm: 'Save anyway',
+      apply: () => {
+        const nv = Object.assign({}, s.v || {});
+        if (swAction === 'toggle') {
+          nv.workflows = !V.workflows;
+          this.put({ v: nv, dlg: 'none', menu: null, toast: say(nv.workflows ? 'Workflows are on.' : 'Workflows are off.') });
+          return;
+        }
+        if (swAction.indexOf('before:') === 0) {
+          nv.beforeRun = swAction.slice(7);
+          this.put({ v: nv, dlg: 'none', menu: null, toast: say('Before a run: ' + nv.beforeRun + '.') });
+          return;
+        }
+        if (swAction === 'reset') { closeDlg('Workflow limits are back to their defaults.', { ceil: { max_agents: '', concurrency: '', steps: '', per_agent_steps: '', minutes: '', runs: '', usd: '', tokens: '' } }); return; }
+        closeDlg('Workflow limits are saved.');
+      }
     };
 
     // ---------- Remote ----------
@@ -2581,7 +3203,28 @@ class Component extends DCLogic {
       { id: 'docs', name: 'docs.vectordev.ai', verified: !!X.docsOk, line2: X.docsOk ? 'Certificate expires in 81 days.' : 'Publish a TXT record at _vector.docs.vectordev.ai, then check again.' }
     ].concat(X.domsAdded || []).filter((d) => !domsGone[d.id]);
     const verifiedHost = (u) => /(^|\.)vectordev\.ai$/.test(hostOf(u));
+    // Today's tabs (ops-settings.tsx 48-54, 138-158), Incidents first and selected.
+    const prodTab = X.prodTab || 'incidents';
+    const PROD_TABS = [['incidents', 'Incidents'], ['releases', 'Releases'], ['cards', 'Ship Desk'], ['checks', 'Domains and URLs']];
+    const SNOOZE_UNTIL = { 1: 'Snoozed until 3:20 PM', 4: 'Snoozed until 6:20 PM', 24: 'Snoozed until Nov 21, 2:20 PM' };
     const prod = {
+      tabs: PROD_TABS.map((tb) => {
+        const on = prodTab === tb[0];
+        return {
+          label: tb[1], selected: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
+          bg: on ? t.rowSel : 'transparent', shadow: on ? t.rowSelShadow : 'none', color: on ? t.text : t.textRow,
+          pick: () => setX({ prodTab: tb[0] })
+        };
+      }),
+      tIncidents: prodTab === 'incidents', tReleases: prodTab === 'releases', tShip: prodTab === 'cards', tChecks: prodTab === 'checks',
+      undoIdle: !X.undoAsk, undoAsk: !!X.undoAsk,
+      askUndo: () => setX({ undoAsk: true }), cancelUndo: () => setX({ undoAsk: false }),
+      fixRunning: !!X.fixing && !X.undone, canFix: !X.fixing && !X.undone && !X.undoAsk,
+      fix: () => setX({ fixing: true }, { toast: say('A fix run started in your repository. It opens a pull request for you to merge.') }),
+      followFix: () => tell('The fix run opens in GitHub Actions.'),
+      snoozeIdle: !X.snoozed, snoozed: !!X.snoozed, snoozeText: SNOOZE_UNTIL[X.snoozed] || '',
+      snoozes: [1, 4, 24].map((h) => ({ label: 'Snooze ' + h + ' h', pick: () => setX({ snoozed: h }, { toast: say('Snoozed for ' + h + ' h: no alerts until then.') }) })),
+      endSnooze: () => setX({ snoozed: 0 }, { toast: say('Alerts are back on.') }),
       openPhone: () => tell('The phone app is at remote.vectordev.ai.'),
       urlDraft: urlDraft, onUrl: (e) => setX({ urlDraft: val(e) }),
       addUrlDisabled: !urlDraft.trim(), addUrlColor: urlDraft.trim() ? t.text : t.textDisabled,
@@ -2600,7 +3243,7 @@ class Component extends DCLogic {
       }),
       incOpen: !X.undone, incState: X.undone ? 'Resolved' : 'Open', incDot: X.undone ? t.ready : t.failed, incBorder: X.undone ? t.hairline : t.hairlineStrong,
       openRevert: () => tell('Revert pull request #2207 opens in GitHub.'),
-      undo: () => setX({ undone: true }, { toast: say('Merged revert pull request #2207 with your GitHub sign-in.') }),
+      undo: () => setX({ undone: true, undoAsk: false }, { toast: say('Merged revert pull request #2207 with your GitHub sign-in.') }),
       releases: (X.undone ? [{ text: 'vectordev.ai · production · e5b20d7: Starting to watch', ago: 'just now', dot: t.running }] : []).concat([
         { text: 'vectordev.ai · production · c41e2a9: Broke checks', ago: '6m ago', dot: t.failed },
         { text: 'vectordev.ai · production · 9a1f4c2: Passed', ago: 'yesterday', dot: t.ready }
@@ -2630,10 +3273,11 @@ class Component extends DCLogic {
     const envGone = X.envGone || {};
     const envDef = X.envDef !== undefined ? X.envDef : 'mac';
     const envQ = String(X.envQ || '');
+    const envEdits = X.envEdits || {};
     const SRV = [
       { id: 'mac', name: 'This Mac', meta: 'v2.0.0 · vector', ready: true, builtin: true },
-      { id: 'build', name: 'build-box', meta: 'SSH · build-box · Offline', ready: false }
-    ].concat(X.envAdded || []).filter((x) => !envGone[x.id]);
+      { id: 'build', name: 'build-box', meta: 'Offline', ready: false, addr: 'http://build-box.local:4096', user: 'vector' }
+    ].concat(X.envAdded || []).filter((x) => !envGone[x.id]).map((x) => Object.assign({}, x, envEdits[x.id] || {}));
     const envRows = SRV.filter((x) => !envQ.trim() || (x.name + ' ' + x.meta).toLowerCase().indexOf(envQ.trim().toLowerCase()) >= 0);
     const sfDefaults = { sfAddr: '', sfName: '', sfAuth: 'No password', sfUser: 'vector', sfPass: '', sfErr: false, sfEdit: null };
     const env = {
@@ -2645,67 +3289,73 @@ class Component extends DCLogic {
         const isDef = envDef === x.id;
         return {
           name: x.name, meta: x.meta, ready: x.ready, offline: !x.ready, isDefault: isDef,
-          canEdit: !!x.addr, canDefault: true, defaultLabel: isDef ? 'Remove default' : 'Set as default', canDelete: !x.builtin,
+          defaultLabel: isDef ? 'Remove default' : 'Set as default',
+          // Today's row menu (server-row-menu.tsx 37-56): Edit and Delete stay in the menu but are disabled for this computer's own server.
+          editOff: !x.addr, editCls: x.addr ? 'vx-h vxs-mi' : '', editColor: x.addr ? t.textRow : t.textDisabled,
+          deleteOff: !!x.builtin, deleteCls: x.builtin ? '' : 'vx-h vxs-mi', deleteColor: x.builtin ? t.textDisabled : t.diffDel,
           line: line(i), open: open, expanded: open ? 'true' : 'false', btnBg: open ? t.rowPressed : 'transparent',
           menuLabel: 'Options for ' + x.name,
           toggle: () => this.put({ menu: open ? null : mk }),
-          edit: () => openDlg('add-server', Object.assign({}, sfDefaults, { sfAddr: x.addr || '', sfName: x.name, sfEdit: x.id })),
-          makeDefault: () => setX({ envDef: isDef ? null : x.id }, { toast: say(isDef ? 'No default server.' : x.name + ' is the default server.') }),
-          remove: () => { const g = Object.assign({}, envGone); g[x.id] = true; setX(Object.assign({ envGone: g }, isDef ? { envDef: null } : {}), { toast: say(x.name + ' was removed.') }); }
+          edit: () => { if (x.addr) openDlg('edit-server', Object.assign({}, sfDefaults, { sfAddr: x.addr, sfName: x.name, sfEdit: x.id, sfAuth: x.user ? 'Password set' : 'No password', sfUser: x.user || 'vector' })); },
+          remove: () => { if (x.builtin) return; const g = Object.assign({}, envGone); g[x.id] = true; setX(Object.assign({ envGone: g }, isDef ? { envDef: null } : {}), { toast: say(x.name + ' was removed.') }); },
+          makeDefault: () => setX({ envDef: isDef ? null : x.id }, { toast: say(isDef ? 'No default server.' : x.name + ' is the default server.') })
         };
       }),
       hasRows: envRows.length > 0, empty: envRows.length === 0,
       emptyText: SRV.length ? 'No results found' : 'No servers yet'
     };
-    const sfAddr = X.sfAddr || '';
+    // dialog=edit-server opens the same dialog titled Edit server, filled in for build-box (dialog-server-v2.tsx).
+    const EDIT0 = C.dialog === 'edit-server' && !s.dlg ? { sfEdit: 'build', sfAddr: 'http://build-box.local:4096', sfName: 'build-box', sfAuth: 'Password set', sfUser: 'vector', sfPass: '' } : {};
+    const SX = Object.assign({}, EDIT0, X);
+    const sfAddr = SX.sfAddr || '';
     const sfHost = hostOf(sfAddr);
     const sfLooks = !!sfHost && (sfHost.indexOf('.') >= 0 || sfHost === 'localhost' || /:\d+/.test(sfAddr));
-    const sfEditing = X.sfEdit || null;
-    const sfAuth = X.sfAuth || 'No password';
-    const sfUser = X.sfUser !== undefined ? X.sfUser : 'vector';
+    // build-box is offline on this board, so its live check fails (server-form-model.ts "unreachable").
+    const sfDown = sfLooks && /^build-box/.test(sfHost);
+    const sfEditing = SX.sfEdit || null;
+    const sfAuth = SX.sfAuth || 'No password';
+    const sfUser = SX.sfUser !== undefined ? SX.sfUser : 'vector';
     const sf = {
       title: sfEditing ? 'Edit server' : 'Add server',
       desc: sfEditing ? 'Update this engine’s address, name or credentials.' : 'Connect Vector to an engine on another machine or port.',
       closeLabel: sfEditing ? 'Close Edit server' : 'Close Add server',
       addr: sfAddr, onAddr: (e) => setX({ sfAddr: val(e), sfErr: false }),
-      addrBorder: X.sfErr ? 'rgba(238,131,136,0.45)' : t.hairline,
-      reachable: sfLooks && !X.sfErr,
-      help: X.sfErr ? 'Enter a server address to continue' : (sfLooks ? 'Server is reachable' : 'The address of a running Vector engine, including its port.'),
-      helpColor: X.sfErr ? t.diffDel : t.text2,
-      name: X.sfName || '', onName: (e) => setX({ sfName: val(e) }),
+      addrBorder: SX.sfErr ? 'rgba(238,131,136,0.45)' : t.hairline,
+      reachable: sfLooks && !sfDown && !SX.sfErr, unreachable: sfDown && !SX.sfErr,
+      help: SX.sfErr ? 'Enter a server address to continue' : (sfDown ? 'Could not connect to server' : (sfLooks ? 'Server is reachable' : 'The address of a running Vector engine, including its port.')),
+      helpColor: SX.sfErr ? t.diffDel : t.text2,
+      name: SX.sfName || '', onName: (e) => setX({ sfName: val(e) }),
       auth: segOf(['No password', 'Password set'], sfAuth, (o) => setX({ sfAuth: o })),
       withPass: sfAuth === 'Password set',
       user: sfUser, onUser: (e) => setX({ sfUser: val(e) }),
-      pass: X.sfPass || '', onPass: (e) => setX({ sfPass: val(e) }),
+      pass: SX.sfPass || '', onPass: (e) => setX({ sfPass: val(e) }),
       saveLabel: sfEditing ? 'Save' : 'Add server',
       save: () => {
         if (!sfLooks) { setX({ sfErr: true }); return; }
-        const name = (X.sfName || '').trim() || sfHost;
-        const meta = 'v2.0.0 · ' + (sfAuth === 'Password set' && sfUser.trim() ? sfUser.trim() : 'no username');
-        const list = (X.envAdded || []).slice();
+        const name = (SX.sfName || '').trim() || sfHost;
+        const user = sfAuth === 'Password set' && sfUser.trim() ? sfUser.trim() : '';
         if (sfEditing) {
-          const at = list.findIndex((x) => x.id === sfEditing);
-          if (at >= 0) list[at] = Object.assign({}, list[at], { name: name, meta: meta, addr: sfAddr.trim() });
-          closeDlg(name + ' was saved.', { envAdded: list });
+          const ed = Object.assign({}, envEdits);
+          ed[sfEditing] = Object.assign({}, ed[sfEditing] || {}, { name: name, addr: sfAddr.trim(), user: user });
+          closeDlg(name + ' was saved.', { envEdits: ed, sfEdit: null });
         } else {
-          list.push({ id: 'srv-' + (list.length + 1), name: name, meta: meta, ready: true, addr: sfAddr.trim() });
+          const list = (X.envAdded || []).slice();
+          list.push({ id: 'srv-' + (list.length + 1), name: name, meta: 'v2.0.0 · ' + (user || 'no username'), ready: true, addr: sfAddr.trim(), user: user });
           closeDlg(name + ' was added.', { envAdded: list });
         }
       }
     };
 
-    // ---------- Repository trust ----------
-    const trusted2 = !!X.trusted2;
+    // ---------- Repository trust (project-trust.tsx 44-140): one card for the open repository ----------
+    const trusted = !!X.trusted;
     const trust = {
-      repos: [
-        { name: 'vector', trusted: true, desc: 'Vector loads vector’s own settings as they were when you trusted it. If they change, Vector ignores them until you trust the repository again.' },
-        { name: 'vectordev.ai', trusted: trusted2, desc: trusted2 ? 'Vector loads vectordev.ai’s own settings as they were when you trusted it. If they change, Vector ignores them until you trust the repository again.' : 'vectordev.ai has its own Vector settings, like agents, commands, plugins or MCP servers, which can run code on this computer. Until you trust the repository, Vector ignores them, your language servers and formatters stay off in it and your MCP servers start outside it.' }
-      ].map((r) => ({
-        name: r.name, trusted: r.trusted, notTrusted: !r.trusted, state: r.trusted ? 'Trusted' : 'Not trusted', desc: r.desc,
-        aria: r.name + ', ' + (r.trusted ? 'trusted' : 'not trusted'), trustLabel: 'Trust ' + r.name,
-        trust: () => setX({ trusted2: true }, { toast: say(r.name + ' is trusted.') })
-      }))
+      trusted: trusted, notTrusted: !trusted, state: trusted ? 'Trusted' : 'Not trusted',
+      desc: trusted
+        ? 'Vector loads vector’s own settings as they were when you trusted it. If they change, Vector ignores them until you trust the repository again.'
+        : 'vector has its own Vector settings, like agents, commands, plugins or MCP servers, which can run code on this computer. Until you trust the repository, Vector ignores them, your language servers and formatters stay off in it and your MCP servers start outside it.',
+      trust: () => setX({ trusted: true }, { toast: say('vector is trusted.') })
     };
+
 
     // ---------- Spend limits ----------
     const SP0 = { 'watch-perRun': '$2.00', 'watch-perDay': '$10.00', 'watch-perMonth': '', 'watch-warn': '80%', 'alone-perRun': '$1.00', 'alone-perDay': '$5.00', 'alone-perMonth': '$40.00', 'alone-warn': '80%' };
@@ -2742,12 +3392,18 @@ class Component extends DCLogic {
     };
 
     // ---------- Keyboard shortcuts ----------
+    // An empty binding reads "Unassigned" (settings-keybinds.tsx 468-470). Prompt and Add selection to context lost
+    // ⌘⇧E and ⌘⇧L to the redesign (D14), so they are unassigned here.
     const KG = [
-      ['General', [['Search', '⌘K'], ['Settings', '⌘,'], ['Toggle sidebar', '⌘B'], ['Agent | Editor', '⌘⇧E'], ['New workspace', '⇧⌘W']]],
+      ['General', [['Search', '⌘K'], ['Settings', '⌘,'], ['Toggle sidebar', '⌘B'], ['Agent | Editor', '⌘⇧E'], ['New workspace', '⇧⌘W'], ['Add selection to context', '']]],
       ['Session', [['New session', '⌘N'], ['Changes', '⇧⌘R'], ['Background tasks', '⇧⌘B'], ['Show or hide side panel', '⌥⌘0'], ['Browser', '⌥⌘2'], ['Plan', '⌥⌘3'], ['Artifacts', '⌥⌘4'], ['iOS Simulator', '⌥⌘5']]],
-      ['Navigation', [['Files', '⌘P']]],
-      ['Terminal', [['Terminal', '⌃`']]]
+      ['Navigation', [['Files', '⌘P'], ['Add files', '⌘U']]],
+      ['Model and agent', [['Choose model', '⌘\''], ['Cycle thinking effort', '⇧⌘D'], ['Toggle MCPs', '⌘;']]],
+      ['Terminal', [['Terminal', '⌃`']]],
+      ['Prompt', [['Prompt', '']]]
     ];
+    // state=keys-recording and keys-conflict start with Toggle sidebar recording; keys-conflict adds today's toast.
+    const keyRec = X.keyRec !== undefined ? X.keyRec : (st === 'keys-recording' || st === 'keys-conflict' ? 'General:Toggle sidebar' : null);
     const kq = String(X.keyQ || '').trim().toLowerCase();
     const keyGroups = KG
       .map((g) => ({ label: g[0], list: g[1].filter((k) => !kq || (k[0] + ' ' + g[0]).toLowerCase().indexOf(kq) >= 0) }))
@@ -2756,19 +3412,23 @@ class Component extends DCLogic {
         label: g.label,
         items: g.list.map((k, i) => {
           const id = g.label + ':' + k[0];
-          const rec = X.keyRec === id;
+          const rec = keyRec === id;
+          const none = !k[1];
           return {
-            title: k[0], key: rec ? 'Press keys' : k[1], pressed: rec ? 'true' : 'false',
-            aria: rec ? 'Recording a new shortcut for ' + k[0] + '. Press keys' : 'Change shortcut for ' + k[0] + ', now ' + k[1],
-            border: rec ? t.activeBorder : t.hairlineStrong, bg: rec ? t.activeFill : 'transparent', color: rec ? t.accentText : t.text2,
-            line: line(i), pick: () => setX({ keyRec: rec ? null : id })
+            title: k[0], key: rec ? 'Press keys' : (none ? 'Unassigned' : k[1]), pressed: rec ? 'true' : 'false',
+            aria: rec ? 'Recording a new shortcut for ' + k[0] + '. Press keys' : 'Change shortcut for ' + k[0] + ', now ' + (none ? 'unassigned' : k[1]),
+            border: rec ? t.activeBorder : t.hairlineStrong, bg: rec ? t.activeFill : 'transparent', color: rec ? t.accentText : (none ? t.text3 : t.text2),
+            line: line(i), pick: () => setX({ keyRec: rec ? null : id, conflictGone: true })
           };
         })
       }));
     const keys = {
       query: X.keyQ || '', onQuery: (e) => setX({ keyQ: val(e) }),
-      reset: () => setX({ keyRec: null }, { toast: say('Keyboard shortcuts have been reset to defaults.') }),
-      groups: keyGroups, empty: keyGroups.length === 0
+      reset: () => setX({ keyRec: null, conflictGone: true }, { toast: say('Keyboard shortcuts have been reset to defaults.') }),
+      groups: keyGroups, empty: keyGroups.length === 0,
+      conflict: st === 'keys-conflict' && !X.conflictGone,
+      conflictText: '⌘K is already assigned to Search.',
+      dismiss: () => setX({ conflictGone: true })
     };
 
     // ---------- Notifications ----------
@@ -2845,7 +3505,28 @@ class Component extends DCLogic {
     };
 
     // ---------- Updates & about ----------
+    // Today's update card (about.tsx 33-75, updater-presentation.ts 13-52): state=updates-* opens downloading, ready or failed.
+    const UPD0 = { 'updates-downloading': 'downloading', 'updates-ready': 'ready', 'updates-failed': 'error' };
+    const updSt = X.upd || UPD0[st] || 'current';
+    const UP = {
+      current: ['Vector is up to date', 'Vector 2.0.0 is the latest release.', 'Check again', t.ready],
+      checking: ['Checking for updates…', 'Vector 2.0.0 is contacting the production release feed.', '', t.running],
+      downloading: ['Downloading Vector 2.0.1', 'The update will be ready to restart shortly. 62% complete.', '', t.running],
+      ready: ['Vector 2.0.1 is ready', 'Restart Vector to finish installing the downloaded update.', 'Restart to update', t.ready],
+      installing: ['Installing Vector 2.0.1…', 'Vector will restart when installation finishes.', '', t.running],
+      error: ['Update check failed', 'Vector couldn’t install the update.', 'Try again', t.failed]
+    };
+    const up = UP[updSt] || UP.current;
     const upd = {
+      title: up[0], desc: up[1], action: up[2], dot: up[3],
+      hasProgress: updSt === 'downloading', pct: '62', pctW: '62%',
+      actPri: updSt === 'ready', actSec: !!up[2] && updSt !== 'ready',
+      act: () => {
+        if (updSt === 'ready') { openDlg('restart'); return; }
+        if (updSt === 'error') { setX({ upd: 'checking' }); return; }
+        tell('Vector is up to date.');
+      },
+      restart: () => closeDlg('', { upd: 'installing' }),
       check: () => tell('Vector is up to date.'),
       installers: () => tell('Latest installers open on vectordev.ai.'),
       notes: () => tell('Release notes open on vectordev.ai.'),
@@ -2859,10 +3540,13 @@ class Component extends DCLogic {
     // ---------- Dialogs and toast ----------
     const dlg = {
       any: dlgId !== 'none',
-      handsSetup: dlgId === 'hands-setup', localSetup: dlgId === 'local-setup', localAllow: dlgId === 'local-allow',
-      loosen: dlgId === 'loosen', githubRun: dlgId === 'github-run', pair: dlgId === 'pair', addServer: dlgId === 'add-server',
+      handsSetup: dlgId === 'hands-setup', handsTry: dlgId === 'hands-try', localSetup: dlgId === 'local-setup', localAllow: dlgId === 'local-allow',
+      networkLog: dlgId === 'network-log', loosen: dlgId === 'loosen', githubRun: dlgId === 'github-run', pair: dlgId === 'pair',
+      addServer: dlgId === 'add-server' || dlgId === 'edit-server', stopWork: dlgId === 'stop-work', restart: dlgId === 'restart',
       close: () => closeDlg()
     };
+    // Run a check sits at the foot of a long page: state=local-check opens the page scrolled to its end.
+    const scrollDir = st === 'local-check' && page === 'local' ? 'column-reverse' : 'column';
     const toastN = s.toast ? s.toast.n : 0;
     const toast = {
       a: toastN > 0 && toastN % 2 === 1, b: toastN > 0 && toastN % 2 === 0,
@@ -2873,10 +3557,10 @@ class Component extends DCLogic {
       t: t, wall: wall, live: live, hosts: hosts, more: more, help: help, gear: gear, head: head, toast: toast,
       menuOpen: !!menu, closeMenu: close,
       closeSettings: () => tell('Esc returns to your last session.'),
-      nav: nav, ph: ph, pg: pg, other: other,
+      nav: nav, ph: ph, pg: pg, other: other, scrollDir: scrollDir,
       hands: hands, local: local, gh: gh, pb: pb, rem: rem, prod: prod, env: env, trust: trust,
       spend: spend, keys: keys, notify: notify, a11y: a11y, road: road, upd: upd,
-      dlg: dlg, hs: hs, ls: ls, la: la, lo: lo, gr: gr, pairing: pairing, sf: sf
+      dlg: dlg, hs: hs, ht: ht, ls: ls, la: la, lo: lo, nl: nl, gr: gr, pairing: pairing, sf: sf, sw: sw
     };
   }
 }

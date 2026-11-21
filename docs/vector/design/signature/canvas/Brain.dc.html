@@ -492,6 +492,27 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-for>
 </div>
 
+<!-- Today's "New memory" row (memory.tsx 477-527): Kind of memory on This repository only, the field, Remember. -->
+<div role="group" aria-label="Add to memory" style="margin-top: 12px; display: flex; align-items: center; gap: 8px">
+<sc-if value="{{nm.showKind}}" hint-placeholder-val="{{ true }}">
+<div style="position: relative; flex: none">
+<button class="vx-h" onClick="{{nm.kind.toggle}}" aria-haspopup="listbox" aria-expanded="{{nm.kind.expanded}}" aria-label="{{nm.kind.aria}}" style="width: 112px; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{nm.kind.bg}}; font-size: 13px; line-height: 18px; color: {{t.text}}; text-align: left"><span style="flex: 1; min-width: 0; white-space: nowrap">{{nm.kind.value}}</span><span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></button>
+<sc-if value="{{nm.kind.open}}" hint-placeholder-val="{{ false }}">
+<div role="listbox" aria-label="Kind of memory" class="vx-pop" style="position: absolute; z-index: 30; top: 32px; left: 0; width: 180px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}">
+<sc-for list="{{nm.kind.options}}" as="o" hint-placeholder-count="4">
+<button role="option" aria-selected="{{o.selected}}" class="vx-h vxs-mi" onClick="{{o.pick}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px 0 8px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; color: {{o.color}}; text-align: left"><span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.accentText}}; opacity: {{o.checkOp}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></span><span style="flex: 1; min-width: 0">{{o.label}}</span></button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+<label for="vx-brain-new-memory" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0">New memory</label>
+<div class="vx-field" style="position: relative; flex: 1; min-width: 0; height: 28px; box-sizing: border-box; border-radius: 7px; background: {{t.rowHover}}; border: 1px solid {{t.hairline}}">
+<input id="vx-brain-new-memory" type="text" autocomplete="off" maxlength="1000" placeholder="{{nm.placeholder}}" value="{{nm.text}}" onChange="{{nm.onText}}" style="width: 100%; height: 26px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; line-height: 18px; color: {{t.text}}">
+</div>
+<button class="vxs-sec" onClick="{{nm.add}}" disabled="{{nm.disabled}}" style="flex: none; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px 0 8px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; opacity: {{nm.op}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"></path></svg>Remember</button>
+</div>
+
 <sc-if value="{{mem.showReview}}" hint-placeholder-val="{{ true }}">
 <div style="padding: 24px 0 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Needs review</div>
 <sc-if value="{{mem.reviewEmpty}}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; line-height: 16px; color: {{t.text3}}">Nothing waits for your review.</div></sc-if>
@@ -574,6 +595,29 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </section>
 </sc-if>
+
+<!-- Today's "Export and import" card (memory.tsx 1548-1690). Imports land in Needs review. -->
+<section aria-labelledby="m-xp" style="margin-top: 24px; padding: 14px 16px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<h2 id="m-xp" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Export and import</h2>
+<p style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Export what Vector keeps as Markdown to read, or as JSON to import on another computer. Never the files of your documents. What you import waits for your approval, so a changed file cannot put memory in use, and what you forgot is not imported again.</p>
+<div style="margin-top: 12px; display: flex; align-items: center; gap: 6px">
+<div style="position: relative; flex: none">
+<button class="vx-h" onClick="{{xp.what.toggle}}" aria-haspopup="listbox" aria-expanded="{{xp.what.expanded}}" aria-label="{{xp.what.aria}}" style="width: 148px; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{xp.what.bg}}; font-size: 13px; line-height: 18px; color: {{t.text}}; text-align: left"><span style="flex: 1; min-width: 0; white-space: nowrap">{{xp.what.value}}</span><span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></button>
+<sc-if value="{{xp.what.open}}" hint-placeholder-val="{{ false }}">
+<div role="listbox" aria-label="What to export" class="vx-pop" style="position: absolute; z-index: 30; top: 32px; left: 0; width: 200px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}">
+<sc-for list="{{xp.what.options}}" as="o" hint-placeholder-count="3">
+<button role="option" aria-selected="{{o.selected}}" class="vx-h vxs-mi" onClick="{{o.pick}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px 0 8px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; color: {{o.color}}; text-align: left"><span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.accentText}}; opacity: {{o.checkOp}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></span><span style="flex: 1; min-width: 0">{{o.label}}</span></button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+<button class="vxs-sec" onClick="{{xp.md}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Export as Markdown</button>
+<button class="vxs-sec" onClick="{{xp.json}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Export as JSON</button>
+<span style="flex: 1"></span>
+<button class="vxs-sec" onClick="{{xp.importFile}}" title="Markdown, JSON or text, up to 2 MB" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Import a file…</button>
+</div>
+<sc-if value="{{xp.hasNote}}" hint-placeholder-val="{{ false }}"><p role="status" style="margin: 10px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{xp.note}}</p></sc-if>
+</section>
 
 <div style="margin-top: 24px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-top: 1px solid {{t.hairline}}">
 <div style="min-width: 0">
@@ -748,10 +792,10 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 8px 8px 14px; box-sizing: border-box; border-top: {{d.line}}">
 <span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h6.5L18 8v12.5H7zM13.5 3.5V8H18"></path></svg></span>
 <div style="flex: 1; min-width: 0">
-<div style="display: flex; align-items: center; gap: 8px; min-width: 0"><span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: {{t.text}}">{{d.name}}</span><span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{d.tag}}</span></div>
+<div style="display: flex; align-items: center; gap: 8px; min-width: 0"><sc-if value="{{d.canOpen}}" hint-placeholder-val="{{ true }}"><button class="vxs-link" onClick="{{d.open}}" title="Open what Vector read in {{d.name}}" style="min-width: 0; padding: 0; border: 0; background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: {{t.text}}; text-align: left">{{d.name}}</button></sc-if><sc-if value="{{d.noOpen}}" hint-placeholder-val="{{ false }}"><span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: {{t.text}}">{{d.name}}</span></sc-if><span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{d.tag}}</span></div>
 <div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{d.meta}}</div>
 </div>
-<sc-if value="{{d.hasReview}}" hint-placeholder-val="{{ false }}"><button class="vxs-tint" onClick="{{d.review}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.activeBorder}}; background: {{t.activeFill}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.accentText}}; transition: background-color 120ms">Review 6</button></sc-if>
+<sc-if value="{{d.hasReview}}" hint-placeholder-val="{{ false }}"><button class="vxs-tint" onClick="{{d.review}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.activeBorder}}; background: {{t.activeFill}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.accentText}}; transition: background-color 120ms">{{d.reviewLabel}}</button></sc-if>
 </div>
 </sc-for>
 </div>
@@ -762,6 +806,17 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">A model reads a bounded preview and suggests records. Nothing is sent before you see the preview, and nothing is put in use without your review.</p>
 </div>
 <div style="border-top: 1px solid {{t.hairline}}">
+<!-- Today's "Use Codium for Brain helpers" On | Off row (memory-brain.tsx 219-233); the consent dialog (tab=consent) points here. -->
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
+<div style="min-width: 0">
+<div id="d-codium" style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Use Codium for Brain helpers</div>
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Let Codium help word skill drafts, learn from your corrections, and suggest records from documents. These helpers send bounded excerpts to a qualified model with zero data retention. They share a separate cap of about 10% of the month’s Codium. Subscribing never turns this on. Learning and individual helper Off settings still apply. Vector Local keeps helpers local.</div>
+<sc-if value="{{doc.codium.ask}}" hint-placeholder-val="{{ true }}"><div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text3}}">Off until you choose to enable it.</div></sc-if>
+</div>
+<button role="switch" aria-checked="{{doc.codium.checked}}" aria-labelledby="d-codium" onClick="{{doc.codium.toggle}}" style="width: 36px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 12px; background: transparent">
+<span aria-hidden="true" class="vxs-sw" style="position: relative; display: block; width: 32px; height: 18px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{doc.codium.border}}; background: {{doc.codium.track}}"><span class="vxs-knob" style="position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 50%; background: #F4F3F7; box-shadow: 0 1px 3px rgba(0,0,0,0.35); transform: translateX({{doc.codium.x}})"></span></span>
+</button>
+</div>
 <sc-for list="{{doc.helpers}}" as="h" hint-placeholder-count="2">
 <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
 <div style="min-width: 0">
@@ -787,31 +842,166 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 <sc-if value="{{doc.noResearch}}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; line-height: 16px; color: {{t.text3}}">No research kept for this repository.</div></sc-if>
 
-<div style="margin-top: 16px; border-top: 1px solid {{t.hairline}}">
-<sc-for list="{{doc.selects}}" as="sel" hint-placeholder-count="1">
-<div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; box-sizing: border-box; padding: 12px 0; border-bottom: 1px solid {{t.hairline}}">
-<div style="min-width: 0">
-<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">{{sel.title}}</div>
-<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{sel.note}}</div>
+<!-- Today's "Search by meaning" card (memory-search-model.tsx 66-147): no select; keyword search is always on. -->
+<section aria-labelledby="d-search" style="margin-top: 24px; padding: 14px 16px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<h2 id="d-search" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Search by meaning</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{search.headline}}</p>
+<sc-if value="{{search.inUse}}" hint-placeholder-val="{{ false }}">
+<div role="progressbar" aria-label="Searchable by meaning" aria-valuemin="0" aria-valuemax="100" aria-valuenow="66" style="margin-top: 10px; width: 240px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden"><span style="display: block; width: 66%; height: 4px; border-radius: 2px; background: {{search.barColor}}"></span></div>
+<p style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{search.embedded}}</p>
+</sc-if>
+<div style="margin-top: 12px; padding: 10px 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Search by meaning</span>
+<span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{search.tagBorder}}; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{search.tagColor}}">{{search.tag}}</span>
 </div>
-<div style="position: relative">
-<button class="{{sel.cls}}" onClick="{{sel.toggle}}" aria-haspopup="listbox" aria-expanded="{{sel.expanded}}" aria-label="{{sel.aria}}" style="min-width: 140px; height: 24px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; padding: 0 6px; border: 0; border-radius: 6px; background: {{sel.bg}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}">
-<span style="white-space: nowrap">{{sel.value}}</span>
-<span aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
-</button>
-<sc-if value="{{sel.open}}" hint-placeholder-val="{{ false }}">
-<div role="listbox" aria-label="{{sel.title}}" class="vx-pop" style="position: absolute; z-index: 30; bottom: 30px; right: 0; width: 300px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}">
-<sc-for list="{{sel.options}}" as="o" hint-placeholder-count="2">
-<button role="option" aria-selected="{{o.selected}}" class="vx-h vxs-mi" onClick="{{o.pick}}" style="display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 28px; padding: 5px 10px 5px 8px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; color: {{o.color}}; text-align: left">
-<span aria-hidden="true" style="width: 14px; height: 18px; display: grid; place-items: center; flex: none; color: {{t.accentText}}; opacity: {{o.checkOp}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></span>
-<span style="flex: 1; min-width: 0">{{o.label}}<sc-if value="{{o.hasNote}}" hint-placeholder-val="{{ false }}"><span style="display: block; margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{o.note}}</span></sc-if></span>
-</button>
-</sc-for>
-</div>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">A small int8 model: finds passages that say what a request means in other words.</p>
+<p style="margin: 4px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: {{t.text3}}"><span aria-hidden="true" title="Who made the model (the build shows today’s name)" style="flex: none; width: 56px; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span><span>· Apache-2.0 · source at revision d8c86521</span></p>
+<sc-if value="{{search.absent}}" hint-placeholder-val="{{ true }}">
+<p style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Search by meaning: a one-time 24 MB download, then it runs on this computer with no network.</p>
+<button class="vxs-pri" onClick="{{search.download}}" style="margin-top: 10px; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 12px 0 10px; border: 0; border-radius: 6px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.96 10.63L10 14.58L6.04 10.63M10 2.08V13.96M16.25 17.92H3.75"></path></svg>Download (24 MB)</button>
 </sc-if>
 </div>
+<sc-if value="{{search.inUse}}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 10px; display: flex; gap: 6px">
+<sc-if value="{{search.running}}" hint-placeholder-val="{{ true }}"><button class="vxs-sec" onClick="{{search.pause}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Pause embedding</button></sc-if>
+<sc-if value="{{search.paused}}" hint-placeholder-val="{{ false }}"><button class="vxs-sec" onClick="{{search.resume}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Resume embedding</button></sc-if>
+<button class="vx-h vxs-gh" onClick="{{search.remove}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Remove model</button>
 </div>
+</sc-if>
+</section>
+</sc-if>
+
+<!-- ============ A document's page (tab=document; memory-document.tsx, opened from memory-documents.tsx 472-482) ============ -->
+<sc-if value="{{tabv.document}}" hint-placeholder-val="{{ false }}">
+<div style="padding-top: 12px">
+<button class="vx-h vxs-gh" onClick="{{dp.back}}" style="height: 24px; display: inline-flex; align-items: center; gap: 4px; margin-left: -6px; padding: 0 8px 0 4px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6l-6 6 6 6"></path></svg>All documents</button>
+</div>
+<div style="padding-top: 10px">
+<div style="display: flex; align-items: center; gap: 8px; min-width: 0">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h6.5L18 8v12.5H7zM13.5 3.5V8H18"></path></svg></span>
+<h2 style="margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Codium tiers v3.pdf</h2>
+<span style="flex: none; height: 18px; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; color: {{t.text2}}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}"></span>Ready</span>
+</div>
+<p style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">PDF · 14 pages · 2.1 MB · about 9,800 tokens if sent · You added this 2 days ago</p>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Private: kept from invited guests and from models that may train on prompts.</p>
+<ol aria-label="Progress" style="list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{dp.steps}}" as="st" hint-placeholder-count="3">
+<li style="height: 22px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; box-sizing: border-box; border-radius: 11px; background: {{t.rowHover}}; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text2}}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.ready}}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></span>{{st.label}}</li>
 </sc-for>
+</ol>
+</div>
+
+<div role="tablist" aria-label="What to show" style="margin-top: 16px; display: inline-flex; gap: 2px; height: 26px; padding: 2px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.segTrack}}">
+<sc-for list="{{dp.views}}" as="v" hint-placeholder-count="5">
+<button role="tab" aria-selected="{{v.selected}}" class="{{v.cls}}" onClick="{{v.pick}}" style="height: 20px; padding: 0 8px; border: 0; border-radius: 6px; background: {{v.bg}}; font-size: 12px; line-height: 16px; color: {{v.color}}; white-space: nowrap">{{v.label}}</button>
+</sc-for>
+</div>
+<sc-if value="{{dp.hasNote}}" hint-placeholder-val="{{ false }}"><p role="status" style="margin: 10px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{dp.note}}</p></sc-if>
+
+<sc-if value="{{dp.learned}}" hint-placeholder-val="{{ true }}">
+<div style="margin-top: 12px; display: flex; align-items: center; gap: 12px; min-height: 28px">
+<span style="flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">7 requirements · 3 constraints · 2 decisions · 1 open question</span>
+<sc-if value="{{dp.findIdle}}" hint-placeholder-val="{{ true }}"><button class="vxs-sec" onClick="{{dp.find}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Find more with a model…</button></sc-if>
+</div>
+<sc-if value="{{dp.estimate}}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 8px; padding: 12px 14px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}">
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Your default model reads the sections where Vector’s rules found little. Each suggestion must quote the document word for word or it is dropped, and what is kept waits here for you to keep or drop. Not for models that may train on prompts.</p>
+<p style="margin: 6px 0 0; font-size: 13px; line-height: 18px; color: {{t.text}}">Runs on Codium Auto (Codium).</p>
+<div style="margin-top: 10px; display: flex; gap: 4px">
+<button class="vxs-pri" onClick="{{dp.send}}" style="height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Send</button>
+<button class="vx-h vxs-gh" onClick="{{dp.cancelEst}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dp.hasSug}}" hint-placeholder-val="{{ true }}">
+<div style="margin-top: 12px; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px 8px 14px; box-sizing: border-box">
+<span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>
+<span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{t.text}}">{{dp.sugLabel}}</span>
+<button class="vxs-sec" onClick="{{dp.keepAll}}" style="flex: none; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px 0 8px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 12.5l4 4 9-9"></path></svg>Keep all</button>
+<button class="vx-h vxs-gh" onClick="{{dp.toggleSug}}" aria-expanded="{{dp.sugExpanded}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">{{dp.sugBtn}}</button>
+</div>
+<sc-if value="{{dp.sugOpen}}" hint-placeholder-val="{{ false }}">
+<sc-for list="{{dp.sugRows}}" as="r" hint-placeholder-count="6">
+<article aria-label="{{r.aria}}" style="padding: 10px 10px 10px 14px; box-sizing: border-box; border-top: 1px solid {{t.hairline}}">
+<div style="display: flex; align-items: center; gap: 6px; min-width: 0">
+<span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{r.kind}}</span>
+<span style="flex: none; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{r.place}}</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; line-height: 14px; color: {{t.text2}}">· Suggested by a model: keep it or drop it</span>
+<span style="flex: none; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text3}}">{{r.id}}</span>
+</div>
+<p style="margin: 6px 0 0; font-size: 13px; line-height: 18px; color: {{t.text}}">{{r.text}}</p>
+<div style="margin-top: 8px; display: flex; gap: 4px">
+<button class="vxs-sec" onClick="{{r.keep}}" style="height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Keep</button>
+<button class="vx-h vxs-gh" onClick="{{r.drop}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Drop</button>
+</div>
+</article>
+</sc-for>
+</sc-if>
+</div>
+</sc-if>
+
+<div role="group" aria-label="Kind of record" style="margin-top: 16px; display: flex; flex-wrap: wrap; gap: 2px">
+<sc-for list="{{dp.kinds}}" as="k" hint-placeholder-count="5">
+<button class="{{k.cls}}" aria-pressed="{{k.pressed}}" onClick="{{k.pick}}" style="height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 0; border-radius: 6px; background: {{k.bg}}; box-shadow: {{k.shadow}}; font-size: 12px; line-height: 16px; color: {{k.color}}; white-space: nowrap">{{k.label}}<sc-if value="{{k.hasCount}}" hint-placeholder-val="{{ true }}"><span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text2}}">{{k.count}}</span></sc-if></button>
+</sc-for>
+</div>
+<div style="margin-top: 8px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<sc-for list="{{dp.records}}" as="r" hint-placeholder-count="5">
+<article aria-label="{{r.aria}}" style="padding: 10px 10px 10px 14px; box-sizing: border-box; border-top: {{r.line}}">
+<div style="display: flex; align-items: center; gap: 6px; min-width: 0">
+<span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{r.kind}}</span>
+<span style="flex: none; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{r.place}}</span>
+<sc-if value="{{r.hasStatus}}" hint-placeholder-val="{{ false }}"><span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{t.hairline}}; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{r.status}}</span></sc-if>
+<span style="flex: 1"></span>
+<span style="flex: none; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text3}}">{{r.id}}</span>
+</div>
+<sc-if value="{{r.editing}}" hint-placeholder-val="{{ false }}">
+<label for="vx-brain-record-edit" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0">Edit record</label>
+<textarea id="vx-brain-record-edit" rows="2" maxlength="1000" value="{{dp.draft}}" onChange="{{dp.onDraft}}" style="margin-top: 8px; display: block; width: 100%; min-height: 56px; box-sizing: border-box; padding: 6px 10px; border-radius: 7px; border: 1px solid rgba(182,159,247,0.6); background: {{t.rowHover}}; outline: none; resize: none; font-size: 13px; line-height: 20px; color: {{t.text}}"></textarea>
+</sc-if>
+<sc-if value="{{r.reading}}" hint-placeholder-val="{{ true }}"><p style="margin: 6px 0 0; font-size: 13px; line-height: 18px; color: {{r.color}}">{{r.text}}</p></sc-if>
+<p style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{r.meta}}</p>
+<div style="margin-top: 8px; display: flex; align-items: center; gap: 4px">
+<sc-if value="{{r.editing}}" hint-placeholder-val="{{ false }}">
+<button class="vxs-pri" onClick="{{dp.save}}" disabled="{{dp.saveDisabled}}" style="height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: {{t.text}}; opacity: {{dp.saveOp}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Save</button>
+<button class="vx-h vxs-gh" onClick="{{dp.cancelEdit}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+</sc-if>
+<sc-if value="{{r.idle}}" hint-placeholder-val="{{ true }}">
+<button class="vx-h vxs-gh" onClick="{{r.edit}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Edit</button>
+<button class="vx-h vxs-gh" onClick="{{r.pin}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">{{r.pinLabel}}</button>
+<button class="vx-h vxs-gh" onClick="{{r.forget}}" style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Forget</button>
+<button class="vx-h vxs-ih" onClick="{{dp.noop}}" aria-label="{{r.moreAria}}" title="{{r.moreTip}}" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="7.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="12.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect></svg></button>
+</sc-if>
+<sc-if value="{{r.archived}}" hint-placeholder-val="{{ false }}">
+<button class="vx-h vxs-gh" onClick="{{r.restore}}" style="height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 3.5 2.5 6.5l3 3M2.5 6.5h7a4 4 0 0 1 0 8H8"></path></svg>Restore</button>
+</sc-if>
+</div>
+</article>
+</sc-for>
+<sc-if value="{{dp.hasMore}}" hint-placeholder-val="{{ true }}">
+<button class="vx-h" onClick="{{dp.noop}}" style="width: 100%; height: 36px; display: flex; align-items: center; padding: 0 14px; box-sizing: border-box; border: 0; border-top: 1px solid {{t.hairline}}; border-radius: 0; background: transparent; text-align: left; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Show more</button>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{dp.other}}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 12px; padding: 14px 16px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<div style="font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">{{dp.viewTitle}}</div>
+<p style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{dp.viewText}}</p>
+<p style="margin: 8px 0 0; font-size: 11px; line-height: 14px; color: {{t.text3}}">Not drawn: built from today’s Settings › Memory.</p>
+</div>
+</sc-if>
+
+<div style="margin-top: 16px; padding-top: 12px; display: flex; align-items: center; gap: 6px; border-top: 1px solid {{t.hairline}}">
+<sc-if value="{{dp.forgetIdle}}" hint-placeholder-val="{{ true }}"><button class="vx-h vxs-danger" onClick="{{dp.forget}}" style="height: 24px; padding: 0 8px; margin-left: -8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.diffDel}}">Forget this document…</button></sc-if>
+<sc-if value="{{dp.forgetConfirm}}" hint-placeholder-val="{{ false }}">
+<span style="flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Forget this document for good? Its records, passages and links go too, also from old sessions.</span>
+<button class="vxs-danger" onClick="{{dp.forgetNow}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid rgba(238,131,136,0.45); background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.diffDel}}">Forget</button>
+<button class="vx-h vxs-gh" onClick="{{dp.forgetCancel}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Cancel</button>
+</sc-if>
 </div>
 </sc-if>
 
@@ -957,6 +1147,25 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 
 <div>
 <p style="margin: 0; font-size: 14px; line-height: 22px; color: {{t.text}}">Fixed: evidence older than the head commit now reads ‘Evidence may be stale’. Ready for your review: 6 files, +318 −32.</p>
+<!-- Today's "Used from memory" footer (session-ui knowledge-footer.tsx 8-50), drawn open. -->
+<div style="margin-top: 4px; font-size: 12px; line-height: 18px; color: {{t.text2}}">
+<button class="vx-h" onClick="{{kf.toggle}}" aria-expanded="{{kf.expanded}}" style="max-width: 100%; height: 24px; display: inline-flex; align-items: center; gap: 6px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; color: {{t.text2}}; text-align: left">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}; transform: rotate({{kf.rot}}); transition: transform 120ms ease"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+<span style="flex: none; font-weight: 500; color: {{t.text}}">Used from memory</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">1 lesson, 1 preference · 214 tokens</span>
+</button>
+<sc-if value="{{kf.open}}" hint-placeholder-val="{{ true }}">
+<ul aria-label="Used from memory" style="list-style: none; margin: 4px 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{kf.items}}" as="k" hint-placeholder-count="2">
+<li>
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: {{t.text}}"><span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: {{t.text3}}">{{k.id}}</span><span>{{k.label}}</span></div>
+<p style="margin: 2px 0 0; color: {{t.text}}">{{k.text}}</p>
+<p style="margin: 2px 0 0; color: {{t.text2}}">{{k.reason}}</p>
+</li>
+</sc-for>
+</ul>
+</sc-if>
+</div>
 <div style="position: relative; margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
 
 <span style="position: relative; display: inline-flex">
@@ -1163,10 +1372,32 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 
 </main>
+
+<!-- tab=consent: today's "Use Codium for Brain helpers" dialog (memory-brain.tsx 480-544), opened by itself over Chat's session. -->
+<sc-if value="{{consent.open}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; z-index: 60; inset: 0; display: grid; place-items: center; background: {{t.scrim}}">
+<div role="dialog" aria-modal="true" aria-labelledby="vx-brain-consent-title" aria-describedby="vx-brain-consent-desc" class="vx-pop" style="width: 440px; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; text-align: left">
+<div style="position: relative; padding: 16px 48px 12px 16px">
+<h2 id="vx-brain-consent-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Use Codium for Brain helpers</h2>
+<p id="vx-brain-consent-desc" style="margin: 4px 0 0; font-size: 13px; line-height: 20px; color: {{t.text2}}">Your Codium subscription is active. This is a separate, optional choice.</p>
+<button class="vx-h vxs-ih" onClick="{{consent.dismiss}}" aria-label="Close" title="Close" style="position: absolute; top: 14px; right: 12px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<div style="padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; line-height: 20px; color: {{t.text}}">
+<p style="margin: 0">Let Codium help word skill drafts, learn from your corrections, and suggest records from documents. These helpers send bounded excerpts to a qualified model with zero data retention. They share a separate cap of about 10% of the month’s Codium.</p>
+<p style="margin: 0">Subscribing never turns this on. Learning and individual helper Off settings still apply. Vector Local keeps helpers local.</p>
+<p style="margin: 0; color: {{t.text2}}">You can change this in Settings → Memory. Dismissing this question without making a choice does not enable helpers.</p>
+</div>
+<div style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<button class="vx-h vxs-gh" onClick="{{consent.off}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Keep Codium helpers off</button>
+<button class="vxs-pri" onClick="{{consent.on}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Use Codium for Brain helpers</button>
+</div>
+</div>
+</div>
+</sc-if>
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"tab":{"editor":"enum","options":["skills","memory","insights","documents","backup","chat"],"default":"skills","section":"Memory"},"guard":{"editor":"boolean","default":false,"section":"Memory"},"$preview":{"width":1600,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"tab":{"editor":"enum","options":["skills","memory","insights","documents","document","backup","chat","consent"],"default":"skills","section":"Memory"},"guard":{"editor":"boolean","default":false,"section":"Memory"},"$preview":{"width":1600,"height":1000}}'>
 class Component extends DCLogic {
   rgb(h) {
     let x = String(h || '').trim().replace('#', '');
@@ -1181,7 +1412,7 @@ class Component extends DCLogic {
   }
 
   cur() {
-    const ok = ['skills', 'memory', 'insights', 'documents', 'backup', 'chat'];
+    const ok = ['skills', 'memory', 'insights', 'documents', 'document', 'backup', 'chat', 'consent'];
     let pt = this.props.tab ?? 'skills';
     if (ok.indexOf(pt) < 0) pt = 'skills';
     const pg = this.props.guard === true || this.props.guard === 'true';
@@ -1195,8 +1426,10 @@ class Component extends DCLogic {
     const base = {};
     if (s._p !== c.key) {
       ['tab', 'lastTab', 'menu', 'toast', 'guardOff', 'guardOpen', 'page', 'navQ', 'scope', 'filter', 'q', 'learnOff', 'reviewsOn', 'done',
-        'skillDone', 'skMode', 'skModel', 'wfMode', 'wfStopped', 'explore', 'insReset', 'readOff', 'keepOn', 'researchGone', 'searchModel',
-        'dest', 'repo', 'nightlyOff', 'sess', 'lcDone', 'lcErase', 'remOn', 'prOn', 'fileGone', 'pasteGone', 'draft', 'liveClosed', 'grpOpen'
+        'skillDone', 'skMode', 'skModel', 'wfMode', 'wfStopped', 'explore', 'insReset', 'readOff', 'keepOn', 'researchGone', 'sm',
+        'dest', 'repo', 'nightlyOff', 'sess', 'lcDone', 'lcErase', 'remOn', 'prOn', 'fileGone', 'pasteGone', 'draft', 'liveClosed', 'grpOpen',
+        'newText', 'newKind', 'added', 'imported', 'xpWhat', 'xpNote', 'helpers', 'consentGone', 'kfClosed', 'docGone',
+        'dpView', 'dpKind', 'dpEdit', 'dpDraft', 'dpRec', 'dpSug', 'dpReview', 'dpExtra', 'dpEst', 'dpNote', 'dpForget'
       ].forEach(function (k) { base[k] = undefined; });
     }
     this.setState(Object.assign(base, { _p: c.key }, patch));
@@ -1207,12 +1440,13 @@ class Component extends DCLogic {
     const raw = this.state || {};
     const s = raw._p === C.key ? raw : {};
     const tab = s.tab || C.tab;
-    const settings = tab !== 'chat';
-    const chat = !settings;
+    // tab=consent is Chat's session (the same frame as tab=chat) with the consent dialog over it.
+    const chat = tab === 'chat' || tab === 'consent';
+    const settings = !chat;
     const menu = s.menu || null;
     const page = s.page || 'memory';
     const sess = s.sess || 'ask';
-    const lastTab = s.lastTab || (C.tab !== 'chat' ? C.tab : 'skills');
+    const lastTab = s.lastTab || (C.tab === 'consent' ? 'documents' : (C.tab !== 'chat' ? C.tab : 'skills'));
 
     const t = {
       main: '#161519', sbBg: 'rgba(32,31,36,0.860)', blur: 'blur(20px) saturate(1.15)',
@@ -1238,6 +1472,7 @@ class Component extends DCLogic {
     t.toastBorder = this.rgba(t.accentText, 0.34);
     t.needsFill = this.rgba(t.needs, 0.14);
     t.code = t.terminal;
+    t.scrim = 'rgba(0,0,0,0.32)';
 
     const wall = {
       base: '#130F22',
@@ -1464,13 +1699,26 @@ class Component extends DCLogic {
 
     // ---------- Memory data ----------
     const done = s.done || {};
+    // "Import a file…" (Export and import card) lands its items in Needs review of the scope it was read into.
+    const IMPORTS = {
+      repo: [
+        { id: 'i1', text: 'Use pnpm for the website package', meta: 'Imported from a file · now' },
+        { id: 'i2', text: 'Name branches after the issue they fix', meta: 'Imported from a file · now' }
+      ],
+      mine: [
+        { id: 'i3', text: 'Prefers short commit messages in the present tense', meta: 'Imported from a file · now' },
+        { id: 'i4', text: 'Wants a summary before a long diff', meta: 'Imported from a file · now' }
+      ]
+    };
     const REVIEW = [
       { id: 'm1', text: 'Run bun typecheck from the package folder, not the root', meta: 'From what you typed · 2d' },
       { id: 'm2', text: 'Windows tests need --timeout 30000', meta: 'From a failing check · 5d' }
-    ];
-    const memPendingAll = REVIEW.filter(function (e) { return !done[e.id]; });
+    ].concat(s.imported === 'repo' ? IMPORTS.repo : []);
+    const notDone = function (e) { return !done[e.id]; };
+    const memPendingAll = REVIEW.filter(notDone);
+    const minePendingAll = (s.imported === 'mine' ? IMPORTS.mine : []).filter(notDone);
     const skillPending = !s.skillDone;
-    const reviewCount = memPendingAll.length + (skillPending ? 1 : 0);
+    const reviewCount = memPendingAll.length + minePendingAll.length + (skillPending ? 1 : 0);
 
     const navQ = String(s.navQ || '').trim().toLowerCase();
     const groups = [];
@@ -1546,10 +1794,11 @@ class Component extends DCLogic {
       top: (56 + (chat ? 32 : 0) + (guardShow ? (guardOpen ? 118 : 36) : 0)) + 'px'
     };
     const tabs = [
-      ['memory', 'Memory', memPendingAll.length], ['skills', 'Skills', skillPending ? 1 : 0],
+      ['memory', 'Memory', memPendingAll.length + minePendingAll.length], ['skills', 'Skills', skillPending ? 1 : 0],
       ['insights', 'Workflow insights', 0], ['documents', 'Documents', 0], ['backup', 'Backup', 0]
     ].map((x) => {
-      const on = tab === x[0];
+      // A document's own page sits inside the Documents tab (memory-documents.tsx 472-482).
+      const on = tab === x[0] || (tab === 'document' && x[0] === 'documents');
       return {
         label: x[1], selected: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
         bg: on ? t.rowSel : 'transparent', shadow: on ? t.rowSelShadow : 'none', color: on ? t.text : t.text2,
@@ -1557,7 +1806,7 @@ class Component extends DCLogic {
         pick: goTab(x[0])
       };
     });
-    const tabv = { memory: tab === 'memory', skills: tab === 'skills', insights: tab === 'insights', documents: tab === 'documents', backup: tab === 'backup' };
+    const tabv = { memory: tab === 'memory', skills: tab === 'skills', insights: tab === 'insights', documents: tab === 'documents', document: tab === 'document', backup: tab === 'backup' };
 
     // ---------- Memory tab ----------
     const scope = s.scope || 'repo';
@@ -1591,20 +1840,22 @@ class Component extends DCLogic {
       }
     };
     const M = DATA[scope];
-    const pendingShown = scope === 'repo' ? memPendingAll.filter(hit) : [];
-    const pendingCount = scope === 'repo' ? memPendingAll.length : 0;
+    // What you added with "New memory" in this scope goes in use at once (savedNotice: "Saved. Vector will use it…").
+    const added = (s.added || []).filter(function (e) { return e.scope === scope; });
+    const pendingShown = (scope === 'repo' ? memPendingAll : minePendingAll).filter(hit);
+    const pendingCount = scope === 'repo' ? memPendingAll.length : minePendingAll.length;
     const mkList = (title, rows, moreN, dim) => {
       const shown = rows.filter(hit);
       return {
         title: title, hasNote: false, note: '',
-        rows: shown.map((e, i) => ({ text: e.text, meta: e.meta, line: line(i), color: dim ? t.textRow : t.text, hasKind: false, kind: '' })),
+        rows: shown.map((e, i) => ({ text: e.text, meta: e.meta, line: line(i), color: dim ? t.textRow : t.text, hasKind: !!e.kind, kind: e.kind || '' })),
         hasMore: !q && moreN > 0, moreLabel: 'Show ' + moreN + ' more'
       };
     };
     let lists = [];
     if (filter === 'inuse' || filter === 'all') {
       lists.push(mkList('Pinned', M.pinned, 0, false));
-      lists.push(mkList('Recently learned', M.recent, M.recentMore, false));
+      lists.push(mkList('Recently learned', added.slice().reverse().map(function (e) { return { text: e.text, meta: 'Added by you · now', kind: e.kind }; }).concat(M.recent), M.recentMore, false));
     }
     if (filter === 'archived' || filter === 'all') lists.push(mkList('Archived', M.archived, M.archivedMore, true));
     lists = lists.filter(function (l) { return l.rows.length > 0; });
@@ -1616,7 +1867,7 @@ class Component extends DCLogic {
       scopes: mkSeg(['This repository', 'Your memory'], scope === 'repo' ? 'This repository' : 'Your memory', (o) => this.put({ scope: o === 'This repository' ? 'repo' : 'mine', menu: null })),
       query: s.q || '',
       onQuery: (e) => this.put({ q: e && e.target ? e.target.value : '' }),
-      filters: [['inuse', 'In use', M.inUse], ['review', 'Needs review', pendingCount], ['archived', 'Archived', M.archivedCount], ['all', 'Everything', -1]].map((f) => {
+      filters: [['inuse', 'In use', M.inUse + added.length], ['review', 'Needs review', pendingCount], ['archived', 'Archived', M.archivedCount], ['all', 'Everything', -1]].map((f) => {
         const on = filter === f[0];
         return {
           label: f[1], pressed: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
@@ -1650,7 +1901,8 @@ class Component extends DCLogic {
     };
 
     // ---------- Skills tab ----------
-    const mkSel = (id, title, value, opts, notes, setKey) => {
+    // quiet: a form field (Kind of memory, What to export) picks without a toast.
+    const mkSel = (id, title, value, opts, notes, setKey, quiet) => {
       const open = menu === id;
       return {
         id: id, title: title, note: notes[value] || '', value: value, aria: title + ': ' + value,
@@ -1663,7 +1915,7 @@ class Component extends DCLogic {
             selected: on ? 'true' : 'false', checkOp: on ? '1' : '0', color: on ? t.text : t.textRow,
             pick: () => {
               if (on) { this.put({ menu: null }); return; }
-              const p = { menu: null, toast: say(notes[o[0]] || (title + ' changed.')) };
+              const p = quiet ? { menu: null } : { menu: null, toast: say(notes[o[0]] || (title + ' changed.')) };
               p[setKey] = o[0];
               this.put(p);
             }
@@ -1701,6 +1953,39 @@ class Component extends DCLogic {
       ]
     };
 
+    // ---------- Memory tab: New memory row (memory.tsx 477-527) ----------
+    const newKind = s.newKind || 'Lesson';
+    const newText = typeof s.newText === 'string' ? s.newText : '';
+    const canAdd = newText.trim().length > 0;
+    const nm = {
+      showKind: scope === 'repo',
+      kind: mkSel('nm-kind', 'Kind of memory', newKind, [['Lesson'], ['Decision'], ['Preference'], ['Fact']], {}, 'newKind', true),
+      placeholder: scope === 'repo' ? 'Something Vector should remember about this repository' : 'Something about how you work, for every repository',
+      text: newText,
+      onText: (e) => this.put({ newText: e && e.target ? e.target.value : '' }),
+      disabled: !canAdd, op: canAdd ? '1' : '0.4',
+      add: () => {
+        if (!canAdd) return;
+        const all = (s.added || []).concat([{ scope: scope, kind: scope === 'repo' ? newKind : 'Preference', text: newText.trim() }]);
+        this.put({ added: all, newText: '', menu: null, toast: say('Saved. Vector will use it when it is relevant.') });
+      }
+    };
+
+    // ---------- Memory tab: Export and import (memory.tsx 1548-1690) ----------
+    // The board calls the personal scope "Your memory" (D9); today's select says "About you" for it.
+    const xpWhat = s.xpWhat || (scope === 'repo' ? 'This repository' : 'Your memory');
+    const xpName = (fmt) => 'vector-memory-' + (xpWhat === 'Your memory' ? 'about-you' : (xpWhat === 'This repository' ? 'repository' : 'all')) + (fmt === 'json' ? '.json' : '.md');
+    const xp = {
+      what: mkSel('xp-what', 'What to export', xpWhat, [['Your memory'], ['This repository'], ['Both']], {}, 'xpWhat', true),
+      md: () => this.put({ menu: null, xpNote: 'Exported as ' + xpName('md') + '.' }),
+      json: () => this.put({ menu: null, xpNote: 'Exported as ' + xpName('json') + '.' }),
+      importFile: () => {
+        if (s.imported) { this.put({ menu: null, xpNote: 'Nothing new to import. 2 were already in memory.' }); return; }
+        this.put({ imported: scope, filter: 'review', q: '', menu: null, xpNote: 'Imported 2 items. Imported items wait for your approval.' });
+      },
+      hasNote: !!s.xpNote, note: s.xpNote || ''
+    };
+
     // ---------- Workflow insights tab ----------
     const wfMode = s.wfMode || 'Apply';
     const explore = !!s.explore && wfMode !== 'Off';
@@ -1732,7 +2017,41 @@ class Component extends DCLogic {
     // ---------- Documents tab ----------
     const readOn = !s.readOff;
     const keepOn = !!s.keepOn;
-    const searchModel = s.searchModel || 'Search by meaning';
+    // Codium helpers: "ask" until chosen (the consent dialog's premise). On tab=document the suggestions came from
+    // Codium Auto, so helpers start on there.
+    const helpers = s.helpers || (C.tab === 'document' ? 'on' : 'ask');
+    // The search model (memory-search-model.tsx): absent until downloaded; then in use, embedding or paused.
+    const sm = s.sm || 'absent';
+    const smInUse = sm !== 'absent';
+
+    // ---------- A document's page (memory-document.tsx) ----------
+    const DREC = [
+      { id: 'r7c2k9m4x8q1d', kind: 'Requirement', place: 'p.3 · Usage display', text: 'Show how much of the month’s Codium is used as a percentage.', meta: 'Used in 4 runs · 3 passed', pinned: true },
+      { id: 'r3n8w5t2h6v9a', kind: 'Constraint', place: 'p.5 · Brain helpers', text: 'Brain helpers share a separate cap of about 10% of the month’s Codium.', meta: 'Used in 2 runs · 2 passed' },
+      { id: 'r9b4f7s1z5e2k', kind: 'Decision', place: 'p.7 · Plans', text: 'Plus includes four smaller models; Max and Ultra add the larger ones.', meta: 'Not used yet' },
+      { id: 'r2y6p8j3g7c5m', kind: 'Requirement', place: 'p.9 · Alerts', text: 'Warn once when 80% of the month’s Codium is used.', meta: 'Used in 1 run' },
+      { id: 'r5h1x9d4w2n8t', kind: 'Open question', place: 'p.12 · Rollover', text: 'Does unused Codium carry over to the next month?', meta: 'Not used yet' }
+    ];
+    const DCOUNT = { Requirement: 7, Constraint: 3, Decision: 2, 'Open question': 1 };
+    const DPLURAL = { Requirement: 'Requirements', Constraint: 'Constraints', Decision: 'Decisions', 'Open question': 'Open questions' };
+    // A model's suggestions wait on the page (6, as the Documents row says). Review lists every one, as today's page does.
+    const DSUG = [
+      { id: 'r0d6m3x9k2p5w', kind: 'Term', place: 'p.1 · Overview', text: 'Codium is the monthly allowance each plan includes.' },
+      { id: 'r8q3v6k1b9z4s', kind: 'Requirement', place: 'p.4 · Plans', text: 'Plan cards name the models each plan includes.' },
+      { id: 'r7v2h8n4s6b1z', kind: 'Requirement', place: 'p.9 · Alerts', text: 'Show when the share resets next to the share used.' },
+      { id: 'r6t9c2y5f8h3w', kind: 'Contract', place: 'p.10 · Billing', text: 'A plan change takes effect at the next renewal.' },
+      { id: 'r3f9w1q7c5k8m', kind: 'Decision', place: 'p.11 · Plans', text: 'New subscribers start on Plus.' },
+      { id: 'r5t8a2y6j9e4n', kind: 'Constraint', place: 'p.13 · Scope', text: 'Features for groups wait for a later version.' }
+    ];
+    const DSUG_NEW = [
+      { id: 'r1m7d4n9s3e6x', kind: 'Constraint', place: 'p.6 · Brain helpers', text: 'Helpers stop for the month once their share is used.' },
+      { id: 'r4w8z2k6q9b5f', kind: 'Decision', place: 'p.8 · Plans', text: 'Max and Ultra stay separate plans.' }
+    ];
+    const dpSug = s.dpSug || {};
+    const sugLeft = (s.dpExtra ? DSUG_NEW : []).concat(DSUG).filter(function (r) { return !dpSug[r.id]; });
+    const sugTotal = sugLeft.length;
+    const plural = (n, one) => n + ' ' + one + (n === 1 ? '' : 's');
+    const openDoc = (review) => () => this.put({ tab: 'document', lastTab: 'document', page: 'memory', menu: null, dpView: 'learned', dpReview: review || s.dpReview });
     const mkDocSw = (id, title, on, noteOn, noteOff, key, msgOn, msgOff) => Object.assign({ id: id, title: title, note: on ? noteOn : noteOff }, mkSw(on, () => {
       const p = { menu: null, toast: say(on ? msgOff : msgOn) };
       p[key] = key === 'readOff' ? on : !on;
@@ -1747,9 +2066,9 @@ class Component extends DCLogic {
           'Vector keeps a copy of each file you add from now on.', 'Vector no longer keeps copies, and deleted the ones it kept.')
       ],
       files: [
-        { name: 'Codium tiers v3.pdf', tag: 'Private', meta: '14 pages · read · 6 suggestions', hasReview: true },
-        { name: 'docs/vector/release/README.md', tag: 'Repository', meta: 'From this repository · read', hasReview: false }
-      ].map((d, i) => Object.assign({ line: line(i), review: close }, d)),
+        { name: 'Codium tiers v3.pdf', tag: 'Private', meta: '14 pages · read' + (sugTotal > 0 ? ' · ' + plural(sugTotal, 'suggestion') : ''), hasReview: sugTotal > 0, reviewLabel: 'Review ' + sugTotal, canOpen: true, gone: !!s.docGone },
+        { name: 'docs/vector/release/README.md', tag: 'Repository', meta: 'From this repository · read', hasReview: false, reviewLabel: '', canOpen: false, gone: false }
+      ].filter((d) => !d.gone).map((d, i) => Object.assign({ line: line(i), noOpen: !d.canOpen, open: d.canOpen ? openDoc(false) : close, review: openDoc(true) }, d)),
       helpers: [
         { title: 'Suggest records from documents', note: 'Suggests decisions, constraints and contracts from your documents, for your review.' },
         { title: 'Bootstrap this repository', note: 'Reads this repository once and suggests what Vector should remember about it.' }
@@ -1757,10 +2076,127 @@ class Component extends DCLogic {
       hasResearch: !s.researchGone, noResearch: !!s.researchGone,
       exportResearch: () => this.put({ menu: null, toast: say('Exported the research.') }),
       forgetResearch: () => this.put({ researchGone: true, menu: null, toast: say('Forgot the research.') }),
-      selects: [
-        mkSel('d-search', 'Search model', searchModel, [['Search by meaning', 'A small model on this computer'], ['Match words only']],
-          { 'Search by meaning': 'Documents are searched by meaning with a small model on this computer.', 'Match words only': 'Documents are searched by their words. Nothing is downloaded.' }, 'searchModel')
-      ]
+      codium: Object.assign({ ask: helpers === 'ask' }, mkSw(helpers === 'on', () => this.put({ helpers: helpers === 'on' ? 'off' : 'on', menu: null, toast: say('Saved in your personal Brain settings.') })))
+    };
+    // "Search by meaning" card (memory-search-model.tsx 66-147, memory-documents-model.ts 984-994).
+    const search = {
+      absent: !smInUse, inUse: smInUse, running: sm === 'ready', paused: sm === 'paused',
+      headline: smInUse ? 'Searching documents by meaning, keywords and code links, all on this computer.' : 'Searching by keywords and code links. Download the 24 MB model to search by meaning.',
+      tag: smInUse ? 'In use' : '24 MB',
+      tagColor: smInUse ? t.accentText : t.text2, tagBorder: smInUse ? t.activeBorder : t.hairline,
+      barColor: sm === 'paused' ? t.text3 : t.accent,
+      embedded: '1,240 of 1,860 passages and records in this repository searchable by meaning (66%).' + (sm === 'paused' ? ' Paused: the rest waits until you resume.' : ' The rest is embedded in the background.'),
+      download: () => this.put({ sm: 'ready', menu: null }),
+      pause: () => this.put({ sm: 'paused', menu: null, toast: say('Paused. What is embedded is still searched by meaning; the rest waits until you resume.') }),
+      resume: () => this.put({ sm: 'ready', menu: null, toast: say('Resumed.') }),
+      remove: () => this.put({ sm: 'absent', menu: null, toast: say('Removed. Vector searches documents by keywords and code links until you download the model again.') })
+    };
+
+    // The page: Learned drawn, with one record in "Edit record" state; Outline, Pages, Code links and History as text.
+    const dpView = s.dpView || 'learned';
+    const dpKind = s.dpKind || 'All';
+    const dpEdit = s.dpEdit === undefined ? 'r3n8w5t2h6v9a' : s.dpEdit;
+    const dpRec = s.dpRec || {};
+    const recOf = (r) => Object.assign({ text: r.text, pinned: !!r.pinned, archived: false, edited: false }, dpRec[r.id] || {});
+    const editRec = DREC.filter(function (r) { return r.id === dpEdit; })[0];
+    const dpDraft = typeof s.dpDraft === 'string' ? s.dpDraft : (editRec ? recOf(editRec).text : '');
+    const setRec = (id, patch, note) => {
+      const m = Object.assign({}, dpRec);
+      m[id] = Object.assign({}, m[id] || {}, patch);
+      this.put({ dpRec: m, dpNote: note, menu: null });
+    };
+    const notA = (kind) => 'Not ' + (/^[aeiou]/i.test(kind) ? 'an ' : 'a ') + kind.toLowerCase();
+    const shownRecs = DREC.filter(function (r) { return dpKind === 'All' || r.kind === dpKind; });
+    const VIEWS = [['learned', 'Learned'], ['outline', 'Outline'], ['pages', 'Pages'], ['links', 'Code links'], ['history', 'History']];
+    const VIEW_TEXT = {
+      outline: 'Its headings, indented, with the pages each one covers. A heading opens that page under Pages, and a section with unread pages says so.',
+      pages: 'Each page as Vector read it, with Previous, Page 3 of 14 and Next. Records are marked in the text, and a held passage says why it never reaches the agent.',
+      links: 'Records linked to this repository’s code, each with its file, line and why it is linked, and Unlink. Link one yourself from a record under Learned with Link to file…: File in this repository, Symbol in the file (optional), Link, Cancel.',
+      history: 'How often Vector used it, then what happened to it, newest first: read, edited, pinned, and suggestions kept or dropped.'
+    };
+    const sugOpen = !!s.dpReview;
+    const dp = {
+      back: goTab('documents'),
+      steps: ['Read 14/14 pages', 'Structured 9 sections', 'Linked 3 files'].concat(smInUse ? ['Meaning 66%'] : []).map(function (x) { return { label: x }; }),
+      views: VIEWS.map((v) => {
+        const on = dpView === v[0];
+        return {
+          label: v[1], selected: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
+          bg: on ? t.segActive : 'transparent', color: on ? t.text : t.text2,
+          pick: () => this.put({ dpView: v[0], menu: null })
+        };
+      }),
+      hasNote: !!s.dpNote, note: s.dpNote || '',
+      learned: dpView === 'learned', other: dpView !== 'learned',
+      viewTitle: (VIEWS.filter(function (v) { return v[0] === dpView; })[0] || VIEWS[0])[1],
+      viewText: VIEW_TEXT[dpView] || '',
+      findIdle: !s.dpEst, estimate: !!s.dpEst,
+      find: () => this.put({ dpEst: true, menu: null }),
+      cancelEst: () => this.put({ dpEst: false, menu: null }),
+      send: () => this.put(s.dpExtra
+        ? { dpEst: false, menu: null, dpNote: 'No suggestions from Codium Auto held their quotes.' }
+        : { dpEst: false, dpExtra: true, dpReview: true, menu: null, dpNote: '2 suggestions from Codium Auto, waiting below for you to keep or drop.' }),
+      hasSug: sugTotal > 0,
+      sugLabel: plural(sugTotal, 'suggestion') + ' from Codium Auto',
+      sugOpen: sugOpen, sugExpanded: sugOpen ? 'true' : 'false', sugBtn: sugOpen ? 'Hide' : 'Review',
+      toggleSug: () => this.put({ dpReview: !sugOpen, menu: null }),
+      // Keep all keeps the ones waiting now; what a later "Find more" brings waits on its own.
+      keepAll: () => {
+        const m = Object.assign({}, dpSug);
+        sugLeft.forEach(function (r) { m[r.id] = 'k'; });
+        this.put({ dpSug: m, dpReview: false, menu: null, dpNote: 'Kept. Vector uses them now.' });
+      },
+      sugRows: sugLeft.map((r) => {
+        const mark = (v, note) => () => { const m = Object.assign({}, dpSug); m[r.id] = v; this.put({ dpSug: m, menu: null, dpNote: note }); };
+        return {
+          id: r.id, kind: r.kind, place: r.place, text: r.text, aria: r.kind + ' suggested by a model, ' + r.place,
+          keep: mark('k', 'Kept. Vector uses it now.'),
+          drop: mark('d', 'Dropped. A model’s suggestion of it is not proposed again.')
+        };
+      }),
+      kinds: [['All', -1]].concat(['Requirement', 'Constraint', 'Decision', 'Open question'].map(function (k) { return [k, DCOUNT[k]]; })).map((k) => {
+        const on = dpKind === k[0];
+        return {
+          label: k[0] === 'All' ? 'All' : DPLURAL[k[0]], pressed: on ? 'true' : 'false', cls: on ? '' : 'vx-h',
+          bg: on ? t.rowSel : 'transparent', shadow: on ? t.rowSelShadow : 'none', color: on ? t.text : t.text2,
+          hasCount: k[1] >= 0, count: String(Math.max(0, k[1])),
+          pick: () => this.put({ dpKind: k[0], menu: null })
+        };
+      }),
+      records: shownRecs.map((r, i) => {
+        const st = recOf(r);
+        const editing = dpEdit === r.id && !st.archived;
+        const status = st.archived ? 'Not used: you set it aside' : [st.pinned ? 'Pinned' : '', st.edited ? 'Edited by you' : ''].filter(Boolean).join(' · ');
+        return {
+          id: r.id, kind: r.kind, place: r.place, text: st.text, meta: r.meta, line: line(i),
+          aria: r.kind + ', ' + r.place,
+          hasStatus: !!status, status: status, color: st.archived ? t.textRow : t.text,
+          editing: editing, reading: !editing, idle: !editing && !st.archived, archived: st.archived,
+          pinLabel: st.pinned ? 'Unpin' : 'Pin',
+          moreAria: 'More actions for ' + r.id,
+          moreTip: notA(r.kind) + ' · Make this a memory · Link to file…',
+          edit: () => this.put({ dpEdit: r.id, dpDraft: st.text, menu: null }),
+          pin: () => setRec(r.id, { pinned: !st.pinned }, st.pinned ? 'Unpinned.' : 'Pinned: it now goes with every request in this repository.'),
+          forget: () => setRec(r.id, { archived: true }, 'Forgotten. Restore it from this list.'),
+          restore: () => setRec(r.id, { archived: false }, 'Restored.')
+        };
+      }),
+      hasMore: dpKind === 'All' ? true : (DCOUNT[dpKind] || 0) > shownRecs.length,
+      draft: dpDraft,
+      onDraft: (e) => this.put({ dpDraft: e && e.target ? e.target.value : '' }),
+      saveDisabled: !dpDraft.trim(), saveOp: dpDraft.trim() ? '1' : '0.4',
+      save: () => {
+        if (!editRec || !dpDraft.trim()) return;
+        const m = Object.assign({}, dpRec);
+        m[editRec.id] = Object.assign({}, m[editRec.id] || {}, { text: dpDraft.trim(), edited: true });
+        this.put({ dpRec: m, dpEdit: null, dpDraft: undefined, menu: null, dpNote: 'Saved your edit. It holds when the document is read again.' });
+      },
+      cancelEdit: () => this.put({ dpEdit: null, dpDraft: undefined, menu: null }),
+      noop: close,
+      forgetIdle: s.dpForget !== 'confirm', forgetConfirm: s.dpForget === 'confirm',
+      forget: () => this.put({ dpForget: 'confirm', menu: null }),
+      forgetCancel: () => this.put({ dpForget: null, menu: null }),
+      forgetNow: () => this.put({ docGone: true, dpForget: null, tab: 'documents', lastTab: 'documents', menu: null, toast: say('Forgot Codium tiers v3.pdf. Vector will not keep it again on its own; you can always add it again.') })
     };
 
     // ---------- Backup tab (Brain Vault) ----------
@@ -1843,14 +2279,33 @@ class Component extends DCLogic {
     c.hasAtt = c.file || c.paste;
     c.send = !c.stop;
 
+    // "Used from memory" under the reply (session-ui knowledge-footer.tsx 8-50; ids in the brain's base32).
+    const kfOpen = !s.kfClosed;
+    const kf = {
+      open: kfOpen, expanded: kfOpen ? 'true' : 'false', rot: kfOpen ? '0deg' : '-90deg',
+      toggle: () => this.put({ kfClosed: kfOpen }),
+      items: [
+        { id: 'm7k2qd', label: 'Lesson', text: 'Vectorscope findings carry an evidence state: checked, missing or stale', reason: 'It is close in meaning to the request.' },
+        { id: 'm3x8wn', label: 'Preference', text: 'Keep the Changes panel layout as it is', reason: 'You pinned it, so it goes with every request.' }
+      ]
+    };
+
+    // tab=consent: the dialog opens by itself once per account and engine while Codium helpers are "ask".
+    const consent = {
+      open: tab === 'consent' && !s.consentGone,
+      on: () => this.put({ consentGone: true, helpers: 'on', menu: null }),
+      off: () => this.put({ consentGone: true, helpers: 'off', menu: null }),
+      dismiss: () => this.put({ consentGone: true, menu: null })
+    };
+
     return {
       t: t, wall: wall, live: live, hosts: hosts, more: more, help: help, gear: gear,
       settings: settings, chat: chat, head: head, pm: pm, guard: guard, toast: toast,
       menuOpen: !!menu, closeMenu: close,
       closeSettings: goTab('chat'),
       nav: nav, page: pageInfo, tabs: tabs, tabv: tabv,
-      mem: mem, sk: sk, ins: ins, doc: doc, bk: bk, sw: sw,
-      lc: lc, wc: wc, chatv: chatv, c: c, draft: draft,
+      mem: mem, nm: nm, xp: xp, sk: sk, ins: ins, doc: doc, search: search, dp: dp, bk: bk, sw: sw,
+      lc: lc, wc: wc, kf: kf, consent: consent, chatv: chatv, c: c, draft: draft,
       onDraft: (e) => this.put({ draft: e && e.target ? e.target.value : '' })
     };
   }

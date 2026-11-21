@@ -999,10 +999,236 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </sc-if>
 
+<sc-if value="{{ov.review}}" hint-placeholder-val="{{ false }}">
+<section role="dialog" aria-modal="true" aria-labelledby="wf-rv-title" aria-describedby="wf-rv-sub" onKeyDown="{{onDlgKey}}" class="wf-drawer" style="position: absolute; z-index: 31; top: 0; right: 0; bottom: 0; width: 900px; max-width: 94%; display: flex; flex-direction: column; box-sizing: border-box; background: {{t.main}}; border-left: 1px solid {{t.edge}}; box-shadow: -28px 0 90px rgba(0,0,0,0.48); color: {{t.text}}">
+<header style="flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 14px 12px 14px 20px; box-shadow: inset 0 -1px 0 {{t.hairline}}">
+<div style="flex: 1; min-width: 0">
+<div style="display: flex; align-items: center; gap: 8px; min-width: 0">
+<h2 id="wf-rv-title" style="flex: 0 1 auto; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">{{rv.title}}</h2>
+<span role="status" style="flex: none; height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text}}; white-space: nowrap">
+<span aria-hidden="true" style="width: 10px; height: 10px; display: grid; place-items: center; flex: none; color: {{rv.st.color}}">
+<sc-if value="{{rv.st.gNeeds}}" hint-placeholder-val="{{ true }}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></sc-if>
+<sc-if value="{{rv.st.gMerged}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if>
+<sc-if value="{{rv.st.gGone}}" hint-placeholder-val="{{ false }}"><span style="width: 6px; height: 6px; border-radius: 50%; background: currentColor"></span></sc-if>
+</span>
+<span>{{rv.st.word}}</span>
+</span>
+</div>
+<p id="wf-rv-sub" style="margin: 4px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{rv.sub}}</p>
+</div>
+<button class="vx-h" onClick="{{closeSurface}}" aria-label="Close review" title="Close  esc" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</header>
+
+<div class="vx-scroll" style="flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 20px">
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+<sc-for list="{{rv.tiles}}" as="tl" hint-placeholder-count="4">
+<div style="padding: 10px 12px; border-radius: 8px; border: 1px solid {{t.hairline}}">
+<div style="font-size: 11px; line-height: 14px; color: {{t.text3}}">{{tl.label}}</div>
+<div style="margin-top: 2px; font-size: 13px; line-height: 18px; font-weight: 500; font-variant-numeric: tabular-nums; color: {{tl.color}}">{{tl.value}}</div>
+</div>
+</sc-for>
+</div>
+
+<sc-if value="{{rv.showCompare}}" hint-placeholder-val="{{ true }}">
+<section aria-labelledby="wf-rv-cmp" style="margin-top: 16px; padding: 12px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<div style="display: flex; align-items: flex-start; gap: 12px">
+<div style="flex: 1; min-width: 0">
+<h3 id="wf-rv-cmp" style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text}}">Compare agent outputs</h3>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Measured checks, risk, diff size, and reported runtime cost. Vector does not invent a quality score.</p>
+</div>
+<span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 7px; box-sizing: border-box; border-radius: 9px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">{{rv.cmpCount}}</span>
+</div>
+<div class="vx-scroll" style="margin-top: 10px; display: flex; gap: 8px; overflow-x: auto">
+<sc-for list="{{rv.cmp}}" as="cd" hint-placeholder-count="2">
+<button onClick="{{cd.pick}}" aria-current="{{cd.current}}" aria-label="{{cd.aria}}" class="wf-card" style="flex: none; width: 210px; display: block; padding: 10px 12px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{cd.border}}; background: {{cd.bg}}; text-align: left; transition: border-color 120ms, background-color 120ms">
+<span style="display: flex; align-items: center; gap: 8px">
+<span style="flex: 1; min-width: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text}}">{{cd.runtime}}</span>
+<span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{cd.dot}}; flex: none"></span>
+</span>
+<span style="display: block; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{cd.name}}</span>
+<span style="margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text2}}">
+<span>{{cd.files}}</span>
+<span>{{cd.elapsed}}</span>
+<span style="color: {{t.diffAdd}}">{{cd.add}}</span>
+<span style="color: {{t.diffDel}}">{{cd.del}}</span>
+<span>{{cd.risk}}</span>
+<span>{{cd.cost}}</span>
+</span>
+</button>
+</sc-for>
+</div>
+</section>
+</sc-if>
+
+<section aria-labelledby="wf-rv-sum" style="margin-top: 16px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<h3 id="wf-rv-sum" style="margin: 0; font-size: 11px; line-height: 14px; font-weight: 600; color: {{t.text3}}">Agent summary</h3>
+<p style="margin: 4px 0 0; max-width: 720px; font-size: 13px; line-height: 20px; color: {{t.text2}}">{{rv.summary}}</p>
+</section>
+
+<section aria-labelledby="wf-rv-val" style="margin-top: 16px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{t.hairline}}">
+<div style="display: flex; align-items: center; gap: 8px">
+<h3 id="wf-rv-val" style="flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text}}">Validation</h3>
+<span style="flex: none; font-size: 12px; line-height: 16px; color: {{t.ready}}">Passed</span>
+</div>
+<ul aria-label="Checks" style="list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px">
+<sc-for list="{{rv.checks}}" as="ck" hint-placeholder-count="3">
+<li style="display: flex; align-items: center; gap: 8px; min-height: 20px">
+<span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}; flex: none"></span>
+<span style="flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{ck.label}}<span class="vx-sr">, passed</span></span>
+<code style="flex: none; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text3}}">{{ck.command}}</code>
+</li>
+</sc-for>
+</ul>
+</section>
+
+<section style="margin-top: 16px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<button class="vx-h" onClick="{{rv.toggleAct}}" aria-expanded="{{rv.actExpanded}}" aria-controls="wf-rv-log" style="width: 100%; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 14px; border: 0; border-radius: 0; background: transparent; text-align: left">
+<span style="flex: 1; min-width: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text}}">Vector activity</span>
+<span style="flex: none; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: {{t.text3}}">{{rv.events}}</span>
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><span style="display: grid; place-items: center; transform: rotate({{rv.actRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></span>
+</button>
+<sc-if value="{{rv.actOpen}}" hint-placeholder-val="{{ false }}">
+<div id="wf-rv-log" class="vx-scroll" style="max-height: 200px; overflow-y: auto; padding: 8px 14px 10px; background: {{t.code}}; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<sc-for list="{{rv.logs}}" as="lg" hint-placeholder-count="4">
+<div style="padding: 2px 0; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: {{t.text2}}; white-space: pre-wrap; overflow-wrap: anywhere">{{lg.text}}</div>
+</sc-for>
+</div>
+</sc-if>
+</section>
+
+<div style="margin-top: 16px; display: flex; align-items: center; gap: 8px">
+<div role="radiogroup" aria-label="Which changes to show" style="flex: none; display: inline-flex; height: 26px; padding: 1px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.segTrack}}">
+<sc-for list="{{rv.modes}}" as="dm" hint-placeholder-count="3">
+<button role="radio" aria-checked="{{dm.checked}}" onClick="{{dm.pick}}" style="height: 22px; padding: 0 10px; border: 0; border-radius: 6px; background: {{dm.bg}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{dm.color}}; white-space: nowrap; transition: background-color 120ms">{{dm.label}}</button>
+</sc-for>
+</div>
+<span style="flex: 1"></span>
+<sc-if value="{{rv.showRefresh}}" hint-placeholder-val="{{ false }}"><button class="vx-h vxs-gh" onClick="{{rv.refresh}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Refresh main</button></sc-if>
+</div>
+
+<sc-if value="{{rv.modeAgent}}" hint-placeholder-val="{{ true }}">
+<section aria-labelledby="wf-rv-sel" style="margin-top: 12px; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; box-shadow: inset 0 -1px 0 {{t.hairline}}">
+<div style="flex: 1; min-width: 0">
+<h3 id="wf-rv-sel" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Selective review</h3>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Approve only the exact changes you trust.</p>
+</div>
+<span role="status" style="flex: none; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: {{t.text2}}">{{rv.count}}</span>
+<button class="vxs-sec" onClick="{{rv.mergeApproved}}" disabled="{{rv.mergeApprovedDisabled}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">Merge approved</button>
+</div>
+<sc-if value="{{rv.hasFiles}}" hint-placeholder-val="{{ true }}">
+<div style="height: 340px; display: grid; grid-template-columns: 200px minmax(0, 1fr)">
+<div class="vx-scroll" style="min-height: 0; overflow-y: auto; padding-bottom: 6px">
+<div style="height: 32px; display: flex; align-items: center; padding: 0 12px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">{{mg.filesLabel}}</div>
+<sc-for list="{{mg.files}}" as="f" hint-placeholder-count="3">
+<button class="{{f.cls}}" onClick="{{f.pick}}" aria-current="{{f.current}}" aria-label="{{f.aria}}" style="width: calc(100% - 8px); margin: 0 4px 2px; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; box-sizing: border-box; border: 0; border-radius: 7px; background: {{f.bg}}; box-shadow: {{f.shadow}}; text-align: left">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8.5z"></path><path d="M13.5 3.5v5h5"></path></svg></span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px; color: {{t.text}}">{{f.name}}</span>
+<span style="flex: none; display: inline-flex; gap: 4px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums"><span style="color: {{t.diffAdd}}">{{f.add}}</span><span style="color: {{t.diffDel}}">{{f.del}}</span></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; display: grid; place-items: center; flex: none">
+<sc-if value="{{f.approved}}" hint-placeholder-val="{{ true }}"><span style="display: grid; place-items: center; color: {{t.ready}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span></sc-if>
+<sc-if value="{{f.held}}" hint-placeholder-val="{{ false }}"><span style="width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; border: 1.25px solid {{t.text3}}"></span></sc-if>
+</span>
+</button>
+</sc-for>
+</div>
+<div style="min-width: 0; min-height: 0; display: flex; flex-direction: column; background: {{t.code}}; box-shadow: inset 1px 0 0 {{t.hairline}}">
+<div style="flex: none; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; box-sizing: border-box; background: rgba(255,255,255,0.025); box-shadow: inset 0 -1px 0 {{t.hairline}}, inset 1px 0 0 {{t.hairline}}">
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 16px"><span style="color: {{t.text3}}">{{mg.file.dir}}</span><span style="color: {{t.text2}}">{{mg.file.name}}</span></span>
+<span style="flex: none; display: inline-flex; gap: 4px; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums"><span style="color: {{t.diffAdd}}">{{mg.file.add}}</span><span style="color: {{t.diffDel}}">{{mg.file.del}}</span></span>
+</div>
+<div class="vx-scroll" style="flex: 1; min-height: 0; overflow-y: auto">
+<div style="height: 36px; display: flex; align-items: center; gap: 12px; padding: 0 6px 0 12px; box-sizing: border-box; background: #191721; box-shadow: inset 0 -1px 0 rgba(226,213,237,0.06)">
+<code style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.accentText}}">{{mg.file.hunk}}</code>
+<button role="checkbox" aria-checked="{{mg.checked}}" onClick="{{rv.toggle}}" disabled="{{rv.lock}}" class="vx-h" style="flex: none; height: 24px; display: inline-flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; opacity: {{rv.lockOp}}">
+<span aria-hidden="true" style="width: 14px; height: 14px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{mg.boxBorder}}; background: {{mg.boxBg}}; display: grid; place-items: center; flex: none"><sc-if value="{{mg.isChecked}}" hint-placeholder-val="{{ true }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4.2 4.2 8.8-9.4"></path></svg></sc-if></span>Approve this change</button>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); box-shadow: inset 0 -1px 0 {{t.hairline}}">
+<div style="padding: 4px 12px; font-size: 11px; line-height: 14px; font-weight: 600; color: {{t.text3}}; box-shadow: inset -1px 0 0 {{t.hairline}}">Before</div>
+<div style="padding: 4px 12px; font-size: 11px; line-height: 14px; font-weight: 600; color: {{t.text3}}">After</div>
+</div>
+<sc-for list="{{mg.rows}}" as="d" hint-placeholder-count="8">
+<div style="display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr); font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 12px; line-height: 20px; font-variant-ligatures: none">
+<span style="padding-right: 8px; box-sizing: border-box; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; background: {{d.lNumBg}}; color: {{d.lNumFg}}; box-shadow: inset 2px 0 0 {{d.lBar}}">{{d.lNum}}</span>
+<span style="padding: 0 12px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; background: {{d.lBg}}; color: {{d.lFg}}; box-shadow: inset -1px 0 0 rgba(255,255,255,0.04)"><span aria-hidden="true">{{d.lSign}}</span>{{d.lText}}</span>
+<span style="padding-right: 8px; box-sizing: border-box; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; background: {{d.rNumBg}}; color: {{d.rNumFg}}; box-shadow: inset 2px 0 0 {{d.rBar}}">{{d.rNum}}</span>
+<span style="padding: 0 12px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; background: {{d.rBg}}; color: {{d.rFg}}"><span aria-hidden="true">{{d.rSign}}</span>{{d.rText}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{rv.noFiles}}" hint-placeholder-val="{{ false }}"><div style="padding: 32px 20px; text-align: center; font-size: 12px; line-height: 16px; color: {{t.text3}}">No structured diff is available yet.</div></sc-if>
+</section>
+</sc-if>
+
+<sc-if value="{{rv.modeMain}}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 12px; padding: 32px 20px; border-radius: 10px; border: 1px solid {{t.hairline}}; text-align: center; font-size: 12px; line-height: 16px; color: {{t.text3}}">Main working tree is clean.</div>
+</sc-if>
+
+<sc-if value="{{rv.modeSplit}}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start">
+<section aria-labelledby="wf-rv-ro" style="min-width: 0; border-radius: 10px; border: 1px solid {{t.hairline}}; overflow: hidden">
+<div style="padding: 10px 12px; box-shadow: inset 0 -1px 0 {{t.hairline}}">
+<h3 id="wf-rv-ro" style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text}}">Agent worktree</h3>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Viewing changes — merge controls are disabled in this view.</p>
+</div>
+<sc-if value="{{rv.hasFiles}}" hint-placeholder-val="{{ true }}">
+<div class="vx-scroll" style="max-height: 360px; overflow-y: auto; background: {{t.code}}">
+<sc-for list="{{rv.split}}" as="sp" hint-placeholder-count="12">
+<sc-if value="{{sp.isFile}}" hint-placeholder-val="{{ false }}">
+<div style="height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; box-sizing: border-box; background: rgba(255,255,255,0.025); box-shadow: inset 0 -1px 0 {{t.hairline}}">
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text2}}">{{sp.path}}</span>
+<span style="flex: none; display: inline-flex; gap: 4px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums"><span style="color: {{t.diffAdd}}">{{sp.add}}</span><span style="color: {{t.diffDel}}">{{sp.del}}</span></span>
+</div>
+</sc-if>
+<sc-if value="{{sp.isHunk}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 6px 12px; background: #191721; box-shadow: inset 0 -1px 0 rgba(226,213,237,0.06)"><code style="display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.accentText}}">{{sp.text}}</code></div>
+</sc-if>
+<sc-if value="{{sp.isHead}}" hint-placeholder-val="{{ false }}">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); box-shadow: inset 0 -1px 0 {{t.hairline}}">
+<div style="padding: 4px 10px; font-size: 11px; line-height: 14px; font-weight: 600; color: {{t.text3}}; box-shadow: inset -1px 0 0 {{t.hairline}}">Before</div>
+<div style="padding: 4px 10px; font-size: 11px; line-height: 14px; font-weight: 600; color: {{t.text3}}">After</div>
+</div>
+</sc-if>
+<sc-if value="{{sp.isLine}}" hint-placeholder-val="{{ true }}">
+<div style="display: grid; grid-template-columns: 32px minmax(0, 1fr) 32px minmax(0, 1fr); font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 18px; font-variant-ligatures: none">
+<span style="padding-right: 6px; box-sizing: border-box; text-align: right; font-variant-numeric: tabular-nums; background: {{sp.lNumBg}}; color: {{sp.lNumFg}}; box-shadow: inset 2px 0 0 {{sp.lBar}}">{{sp.lNum}}</span>
+<span style="padding: 0 8px 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; background: {{sp.lBg}}; color: {{sp.lFg}}; box-shadow: inset -1px 0 0 rgba(255,255,255,0.04)"><span aria-hidden="true">{{sp.lSign}}</span>{{sp.lText}}</span>
+<span style="padding-right: 6px; box-sizing: border-box; text-align: right; font-variant-numeric: tabular-nums; background: {{sp.rNumBg}}; color: {{sp.rNumFg}}; box-shadow: inset 2px 0 0 {{sp.rBar}}">{{sp.rNum}}</span>
+<span style="padding: 0 8px 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; background: {{sp.rBg}}; color: {{sp.rFg}}"><span aria-hidden="true">{{sp.rSign}}</span>{{sp.rText}}</span>
+</div>
+</sc-if>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{rv.noFiles}}" hint-placeholder-val="{{ false }}"><div style="padding: 32px 20px; text-align: center; font-size: 12px; line-height: 16px; color: {{t.text3}}">No structured diff is available yet.</div></sc-if>
+</section>
+<div style="min-width: 0; padding: 32px 20px; border-radius: 10px; border: 1px solid {{t.hairline}}; text-align: center; font-size: 12px; line-height: 16px; color: {{t.text3}}">Main working tree is clean.</div>
+</div>
+</sc-if>
+</div>
+
+<footer style="flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 20px; box-shadow: inset 0 1px 0 {{t.hairline}}">
+<button class="vx-h vxs-gh" onClick="{{rv.open}}" title="Open this agent's session" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Open Vector</button>
+<sc-if value="{{rv.hasPr}}" hint-placeholder-val="{{ false }}"><a class="vx-h vxs-gh" href="https://github.com/pulls" target="_blank" rel="noopener noreferrer" title="Pull request #2191 on GitHub" style="height: 28px; display: inline-flex; align-items: center; padding: 0 10px; box-sizing: border-box; border-radius: 7px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; text-decoration: none; white-space: nowrap">View PR</a></sc-if>
+<sc-if value="{{rv.hasPreview}}" hint-placeholder-val="{{ true }}"><a class="vx-h vxs-gh" href="http://localhost:5174/" target="_blank" rel="noreferrer" title="http://localhost:5174/" style="height: 28px; display: inline-flex; align-items: center; padding: 0 10px; box-sizing: border-box; border-radius: 7px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; text-decoration: none; white-space: nowrap">View preview</a></sc-if>
+<span style="flex: 1"></span>
+<sc-if value="{{rv.showActions}}" hint-placeholder-val="{{ true }}">
+<sc-if value="{{rv.canPr}}" hint-placeholder-val="{{ true }}"><button class="vxs-sec" onClick="{{rv.pr}}" disabled="{{rv.actDisabled}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap; transition: background-color 120ms">{{rv.prLabel}}</button></sc-if>
+<sc-if value="{{rv.discardIdle}}" hint-placeholder-val="{{ true }}"><button class="vx-h vxs-gh" onClick="{{rv.discard}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}; white-space: nowrap">Discard</button></sc-if>
+<sc-if value="{{rv.discardArmed}}" hint-placeholder-val="{{ false }}"><button class="vxs-dng" onClick="{{rv.discard}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.dangerLine}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.diffDel}}; white-space: nowrap; transition: background-color 120ms">Confirm discard</button></sc-if>
+<button class="vxs-pri" onClick="{{rv.merge}}" disabled="{{rv.actDisabled}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap; transition: background-color 120ms">{{rv.mergeLabel}}</button>
+</sc-if>
+</footer>
+</section>
+</sc-if>
+
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"surface":{"editor":"enum","options":["drawer","launcher","workflow","race","merge"],"default":"drawer","section":"Surface"},"drawer":{"editor":"enum","options":["running","failed","empty"],"default":"running","section":"Coordinated runs"},"launcher":{"editor":"enum","options":["agent","together","run","installed"],"default":"agent","section":"Launcher"},"workflow":{"editor":"enum","options":["list","form","sent"],"default":"form","section":"Saved workflow"},"$preview":{"width":1600,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"surface":{"editor":"enum","options":["drawer","launcher","workflow","race","merge","review"],"default":"drawer","section":"Surface"},"drawer":{"editor":"enum","options":["running","failed","empty"],"default":"running","section":"Coordinated runs"},"launcher":{"editor":"enum","options":["agent","together","run","installed"],"default":"agent","section":"Launcher"},"workflow":{"editor":"enum","options":["list","form","sent"],"default":"form","section":"Saved workflow"},"$preview":{"width":1600,"height":1000}}'>
 class Component extends DCLogic {
   rgb(h) {
     let x = String(h || '').trim().replace('#', '');
@@ -1020,7 +1246,7 @@ class Component extends DCLogic {
     const P = this.props || {};
     const pick = (v, ok, d) => (ok.indexOf(v) >= 0 ? v : d);
     const k = {
-      surface: pick(P.surface, ['drawer', 'launcher', 'workflow', 'race', 'merge'], 'drawer'),
+      surface: pick(P.surface, ['drawer', 'launcher', 'workflow', 'race', 'merge', 'review'], 'drawer'),
       drawer: pick(P.drawer, ['running', 'failed', 'empty'], 'running'),
       launcher: pick(P.launcher, ['agent', 'together', 'run', 'installed'], 'agent'),
       workflow: pick(P.workflow, ['list', 'form', 'sent'], 'form')
@@ -1046,6 +1272,7 @@ class Component extends DCLogic {
       racePlanned: false,
       racePrompt: 'Make the Codium plan cards stack on phones without changing the desktop layout.',
       mws: 'swarm2', mfile: 0, mapprove: { swarm2: [true, false, true], recheck: [false, false] },
+      rmode: 'agent', ract: false, rstat: {}, rpr: {}, rmerged: {},
       menu: null
     };
     const v = (s._p === k.key && s.v) ? Object.assign(base, s.v) : base;
@@ -1356,7 +1583,7 @@ class Component extends DCLogic {
       ws: WS.map((w) => ({
         name: w.name, add: w.add, del: w.del, meta: w.meta,
         tip: w.name + ' · Running · ' + w.add + ' ' + w.del,
-        review: () => this.put({ surf: 'merge', mws: w.id, mfile: 0, mergeFrom: 'drawer', menu: null, armed: '' })
+        review: () => this.put({ surf: 'review', mws: w.id, mfile: 0, rmode: 'agent', mergeFrom: '', menu: null, armed: '' })
       })),
       runs: runs.map((r) => {
         const on = !!sel && sel.id === r.id;
@@ -1659,16 +1886,22 @@ class Component extends DCLogic {
     };
     const md = MERGE[V.mws] || MERGE.swarm2;
     const ap = (V.mapprove && V.mapprove[V.mws]) || [];
-    const fi = Math.max(0, Math.min(V.mfile || 0, md.files.length - 1));
-    const mf = md.files[fi];
-    const nAp = md.files.filter((x, i) => !!ap[i]).length;
+    // Files merged from the review sheet's Selective review leave the list (today's refresh after mergeSelection).
+    // A merged or discarded workspace keeps no diff: compactClosedParallelWorkspace clears it and keeps the file count.
+    const wsClosed = (id) => { const s = (V.rstat || {})[id]; return s === 'merged' || s === 'discarded'; };
+    const gone = (V.rmerged && V.rmerged[V.mws]) || [];
+    const liveIx = wsClosed(V.mws) ? [] : md.files.map((x, i) => i).filter((i) => !gone[i]);
+    const fi = liveIx.indexOf(V.mfile) >= 0 ? V.mfile : (liveIx.length ? liveIx[0] : -1);
+    const mf = fi >= 0 ? md.files[fi] : { name: '', dir: '', add: '', del: '', hunk: '', rows: [] };
+    const nAp = liveIx.filter((i) => !!ap[i]).length;
+    const nLive = liveIx.length;
     const SK = {
       ctx: { bg: '#121117', fg: '#D6D3DB', numBg: '#121117', numFg: t.text3, bar: 'transparent', sign: ' ' },
       del: { bg: '#271B21', fg: '#F0B0B3', numBg: '#301F25', numFg: '#D98A8F', bar: '#E6787D', sign: '−' },
       add: { bg: '#1A2323', fg: '#A8E2BF', numBg: '#1E2A28', numFg: '#7FBF98', bar: '#65C78E', sign: '+' },
       empty: { bg: '#141218', fg: '#D6D3DB', numBg: '#141218', numFg: t.text3, bar: 'transparent', sign: '' }
     };
-    const mgRows = mf.rows.map((r) => {
+    const rowVm = (r) => {
       const kind = r[0];
       const ls = kind === 'ctx' ? 'ctx' : (kind === 'add' ? 'empty' : 'del');
       const rs = kind === 'ctx' ? 'ctx' : (kind === 'del' ? 'empty' : 'add');
@@ -1680,11 +1913,13 @@ class Component extends DCLogic {
         rNum: r[3] ? String(r[3]) : '', rText: rs === 'empty' ? '' : (kind === 'ctx' ? r[2] : r[4]), rSign: B.sign,
         rBg: B.bg, rFg: B.fg, rNumBg: B.numBg, rNumFg: B.numFg, rBar: B.bar
       };
-    });
-    const mgOn = !!ap[fi];
+    };
+    const mgRows = mf.rows.map(rowVm);
+    const mgOn = fi >= 0 && !!ap[fi];
     const mg = {
-      name: md.name, filesLabel: md.files.length + ' files',
-      files: md.files.map((x, i) => {
+      name: md.name, filesLabel: nLive + (nLive === 1 ? ' file' : ' files'),
+      files: liveIx.map((i) => {
+        const x = md.files[i];
         const on = i === fi;
         const okA = !!ap[i];
         return {
@@ -1700,15 +1935,181 @@ class Component extends DCLogic {
       checked: mgOn ? 'true' : 'false', isChecked: mgOn,
       boxBg: mgOn ? t.accentStrong : 'transparent', boxBorder: mgOn ? t.accentStrong : t.dotNeutral,
       toggle: () => {
+        if (fi < 0) return;
         const m = Object.assign({}, V.mapprove || {});
         const arr = (m[V.mws] || []).slice();
         arr[fi] = !arr[fi];
         m[V.mws] = arr;
         this.put({ mapprove: m });
       },
-      count: nAp + ' of ' + md.files.length + ' files approved',
+      count: nAp + ' of ' + nLive + (nLive === 1 ? ' file approved' : ' files approved'),
       mergeDisabled: nAp === 0,
       merge: closeSurface
+    };
+
+    // Review sheet: today's "Review {name}" (layout-new.tsx 4964-5320; diff area renderDiffReview 1751-1800).
+    // Opened for Vector's own agent only (openAgentReviewByID sends an installed agent to its session's Changes).
+    const RV = {
+      swarm2: {
+        branch: 'vector-parallel/swarm-worker-2-4b1e9c07', risk: 'Medium', elapsed: '842s', preview: true,
+        summary: 'Arrow keys in menu.tsx now skip disabled items, Home and End jump to the first and last enabled item, and closing a popover returns focus to its trigger. Added a test for Home. Guardrails: 3 deterministic checks passed.',
+        logs: [
+          'Agent completed with 3 changed files. 3 deterministic checks passed.',
+          'Guardrails: 3 deterministic checks passed.',
+          'Published a preview: http://localhost:5174/',
+          'Engine status changed to busy.'
+        ]
+      },
+      recheck: {
+        branch: 'vector-parallel/recheck-keyboard-focus-across-menu-reads-9d2f61a3', risk: 'Low', elapsed: '518s', preview: false,
+        summary: 'Menu items now take focus in order, and every item shows a visible focus ring when reached by keyboard. Guardrails: 3 deterministic checks passed.',
+        logs: [
+          'Agent completed with 2 changed files. 3 deterministic checks passed.',
+          'Guardrails: 3 deterministic checks passed.',
+          'Engine status changed to busy.'
+        ]
+      }
+    };
+    const rid = MERGE[V.mws] ? V.mws : 'swarm2';
+    const rinfo = RV[rid];
+    const rstat = V.rstat || {};
+    const rst = rstat[rid] || '';
+    const rDone = rst === 'merged' || rst === 'discarded';
+    const rHasPr = !!(V.rpr || {})[rid];
+    const num = (x) => Number(String(x || '').replace(/[^0-9]/g, '')) || 0;
+    const wsStats = (id) => {
+      const d = MERGE[id];
+      const g = (V.rmerged && V.rmerged[id]) || [];
+      const fl = d.files.filter((x, i) => !g[i]);
+      const shut = wsClosed(id);
+      return {
+        n: fl.length,
+        add: shut ? 0 : fl.reduce((a, x) => a + num(x.add), 0),
+        del: shut ? 0 : fl.reduce((a, x) => a + num(x.del), 0),
+        partial: fl.length < d.files.length
+      };
+    };
+    const rs = wsStats(rid);
+    // Merge all rewrites the summary (mergeParallelWorkspace's finalSummary for a swarm worker).
+    const rSummary = rst === 'merged' && rs.n > 0
+      ? 'Merged ' + rs.n + (rs.n === 1 ? ' changed file' : ' changed files') + ' into swarm staging.'
+      : (rs.partial
+        ? (rs.n === 0
+          ? 'All approved changes were merged into swarm staging.'
+          : rs.n + (rs.n === 1 ? ' changed file remains' : ' changed files remain') + ' in isolated review.')
+        : rinfo.summary);
+    const rStatus = rst === 'merged'
+      ? { word: 'Merged', color: t.ready, gNeeds: false, gMerged: true, gGone: false }
+      : (rst === 'discarded'
+        ? { word: 'Discarded', color: t.text3, gNeeds: false, gMerged: false, gGone: true }
+        : { word: 'Needs review', color: t.needs, gNeeds: true, gMerged: false, gGone: false });
+    const comparable = ['swarm2', 'recheck'].filter((id) => rstat[id] !== 'discarded');
+    const rMode = ['agent', 'main', 'split'].indexOf(V.rmode) >= 0 ? V.rmode : 'agent';
+    const blankRow = rowVm(['ctx', 0, '', 0]);
+    const mkSp = (o) => Object.assign({}, blankRow, { isFile: false, isHunk: false, isHead: false, isLine: false, path: '', add: '', del: '', text: '' }, o);
+    const split = [];
+    liveIx.forEach((i) => {
+      const x = md.files[i];
+      split.push(mkSp({ isFile: true, path: x.dir + x.name, add: x.add, del: x.del }));
+      split.push(mkSp({ isHunk: true, text: x.hunk }));
+      split.push(mkSp({ isHead: true }));
+      x.rows.forEach((r) => split.push(mkSp(Object.assign({ isLine: true }, rowVm(r)))));
+    });
+    const armedPr = V.armed === 'rpr-' + rid;
+    const armedRDiscard = V.armed === 'rdiscard-' + rid;
+    const armedRMerge = V.armed === 'rmerge-' + rid;
+    const setRStat = (value) => {
+      const o = Object.assign({}, rstat);
+      o[rid] = value;
+      this.put({ rstat: o, armed: '' });
+    };
+    const rv = {
+      title: 'Review ' + md.name,
+      sub: 'Vector · ' + rinfo.branch + ' · Codium Auto',
+      st: rStatus,
+      tiles: [
+        { label: 'Files', value: String(rs.n), color: t.text },
+        { label: 'Added', value: '+' + rs.add, color: t.diffAdd },
+        { label: 'Removed', value: '−' + rs.del, color: t.diffDel },
+        { label: 'Risk', value: rinfo.risk, color: t.text }
+      ],
+      showCompare: comparable.length > 1,
+      cmpCount: comparable.length + ' results',
+      cmp: comparable.map((id) => {
+        const on = id === rid;
+        const c2 = wsStats(id);
+        const nm = MERGE[id].name;
+        const fw = c2.n + (c2.n === 1 ? ' file' : ' files');
+        return {
+          runtime: 'Vector', name: nm, dot: t.ready,
+          files: fw, elapsed: RV[id].elapsed,
+          add: '+' + c2.add, del: '−' + c2.del, risk: RV[id].risk + ' risk', cost: 'Codium',
+          border: on ? t.activeBorder : t.hairline, bg: on ? t.activeFill : 'transparent',
+          current: on ? 'true' : 'false',
+          aria: nm + ', Vector, checks passed, ' + fw + ', ' + RV[id].risk + ' risk',
+          // Today's view mode resets only when the selected workspace changes.
+          pick: () => { if (!on) this.put({ mws: id, mfile: 0, rmode: 'agent', armed: '' }); }
+        };
+      }),
+      summary: rSummary,
+      checks: [
+        { label: 'Typecheck', command: 'pnpm' },
+        { label: 'Test', command: 'pnpm' },
+        { label: 'Lint', command: 'pnpm' }
+      ],
+      actOpen: !!V.ract, actExpanded: V.ract ? 'true' : 'false', actRot: V.ract ? '0deg' : '-90deg',
+      toggleAct: () => this.put({ ract: !V.ract }),
+      events: rinfo.logs.length + ' events',
+      logs: rinfo.logs.map((x) => ({ text: x })),
+      modes: [
+        segVm('Agent tree', rMode === 'agent', () => this.put({ rmode: 'agent' })),
+        segVm('Main', rMode === 'main', () => this.put({ rmode: 'main' })),
+        segVm('Side-by-side', rMode === 'split', () => this.put({ rmode: 'split' }))
+      ],
+      modeAgent: rMode === 'agent', modeMain: rMode === 'main', modeSplit: rMode === 'split',
+      showRefresh: rMode !== 'agent',
+      refresh: () => this.put({ rmode: rMode }),
+      count: mg.count,
+      hasFiles: nLive > 0, noFiles: nLive === 0,
+      split: split,
+      lock: rDone, lockOp: rDone ? '0.5' : '1',
+      toggle: () => { if (!rDone) mg.toggle(); },
+      mergeApprovedDisabled: rDone || nAp === 0,
+      mergeApproved: () => {
+        if (rDone || nAp === 0) return;
+        const g = Object.assign({}, V.rmerged || {});
+        const arr = (g[rid] || []).slice();
+        const a2 = Object.assign({}, V.mapprove || {});
+        const apArr = (a2[rid] || []).slice();
+        liveIx.forEach((i) => { if (apArr[i]) { arr[i] = true; apArr[i] = false; } });
+        g[rid] = arr;
+        a2[rid] = apArr;
+        const left = md.files.filter((x, i) => !arr[i]).length;
+        const patch = { rmerged: g, mapprove: a2, armed: '' };
+        if (!left) { const o = Object.assign({}, rstat); o[rid] = 'merged'; patch.rstat = o; }
+        this.put(patch);
+      },
+      hasPr: rHasPr, hasPreview: !!rinfo.preview,
+      showActions: !rDone,
+      canPr: !rHasPr,
+      actDisabled: nLive === 0,
+      prLabel: armedPr ? 'Confirm GitHub PR' : 'Open PR',
+      discardIdle: !armedRDiscard, discardArmed: armedRDiscard,
+      mergeLabel: armedRMerge ? 'Confirm merge' : 'Merge all',
+      open: closeSurface,
+      pr: () => {
+        if (armedPr) {
+          const o = Object.assign({}, V.rpr || {});
+          o[rid] = true;
+          this.put({ rpr: o, armed: '' });
+        } else this.put({ armed: 'rpr-' + rid });
+      },
+      discard: () => { if (armedRDiscard) setRStat('discarded'); else this.put({ armed: 'rdiscard-' + rid }); },
+      merge: () => {
+        if (nLive === 0) return;
+        if (armedRMerge) setRStat('merged');
+        else this.put({ armed: 'rmerge-' + rid });
+      }
     };
 
     const ov = {
@@ -1717,13 +2118,14 @@ class Component extends DCLogic {
       launcher: V.surf === 'launcher',
       workflow: V.surf === 'workflow' && !wfSent,
       race: V.surf === 'race',
-      merge: V.surf === 'merge'
+      merge: V.surf === 'merge',
+      review: V.surf === 'review'
     };
 
     return {
       t: t, wall: wall, live: live, hosts: hosts, hostAdd: hostAdd, help: help, more: more,
       head: head, pb: pb, pm: pm, lay: lay, c: c, draft: draft, toast: toast,
-      ov: ov, dr: dr, ln: ln, wfd: wfd, race: race, mg: mg,
+      ov: ov, dr: dr, ln: ln, wfd: wfd, race: race, mg: mg, rv: rv,
       closeSurface: closeSurface, onDlgKey: onDlgKey, onMenuKey: onMenuKey,
       onDraft: (e) => this.setState({ draft: val(e) }),
       sendDraft: sendDraft

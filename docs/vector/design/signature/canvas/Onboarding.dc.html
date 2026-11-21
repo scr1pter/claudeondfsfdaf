@@ -304,15 +304,6 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </ol>
 </section>
 
-<sc-if value="{{trust.banner}}" hint-placeholder-val="{{ false }}">
-<section aria-label="Repository trust" style="display: flex; align-items: center; gap: 8px; min-height: 40px; margin-bottom: 8px; padding: 6px 6px 6px 12px; box-sizing: border-box; border-radius: 12px; border: 1px solid {{t.hairlineStrong}}; background: {{t.main}}">
-<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.9 3.1 3.7v3.9c0 3 2.05 5.45 4.9 6.5 2.85-1.05 4.9-3.5 4.9-6.5V3.7L8 1.9Zm-2.1 6.2 1.45 1.45L10.2 6.7"></path></svg></span>
-<span style="flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: {{t.text}}">{{trust.bannerText}}</span>
-<button class="vxs-sec" onClick="{{trust.open}}" aria-haspopup="dialog" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Trust this project…</button>
-<button class="vx-h vxs-gh" onClick="{{trust.later}}" style="flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Not now</button>
-</section>
-</sc-if>
-
 <div class="vx-composer" style="position: relative; display: flex; flex-wrap: wrap; align-items: center; column-gap: 2px; row-gap: 6px; min-height: 112px; box-sizing: border-box; padding: 0 10px 10px; border-radius: 16px; background: {{t.raised}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.composerBox}}; transition: border-color 120ms">
 <label for="vx-onb-prompt" class="vx-sr">Message Vector</label>
 <textarea id="vx-onb-prompt" rows="2" placeholder="Ask anything, / for commands, @ for context..." value="{{draft}}" onChange="{{onDraft}}" style="flex: 0 0 calc(100% + 20px); margin: 0 -10px; align-self: stretch; min-width: 0; min-height: 66px; max-height: 280px; box-sizing: border-box; padding: 16px 16px 8px; border: 0; outline: none; resize: none; background: transparent; font-size: 15px; line-height: 22px; color: {{t.text}}; field-sizing: content"></textarea>
@@ -376,10 +367,11 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 
 <sc-if value="{{toast.on}}" hint-placeholder-val="{{ false }}">
 <div role="status" class="vx-pop" style="position: absolute; z-index: 30; left: 50%; bottom: 20px; transform: translateX(-50%); width: 400px; max-width: calc(100% - 32px); display: flex; align-items: flex-start; gap: 8px; padding: 10px 6px 10px 12px; box-sizing: border-box; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}">
-<span aria-hidden="true" style="display: grid; place-items: center; flex: none; margin-top: 1px; color: {{t.text2}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.1"></circle><path d="M8 7.2v3.6"></path><circle cx="8" cy="5.1" r="0.7" fill="currentColor" stroke="none"></circle></svg></span>
+<sc-if value="{{toast.info}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="display: grid; place-items: center; flex: none; margin-top: 1px; color: {{t.text2}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.1"></circle><path d="M8 7.2v3.6"></path><circle cx="8" cy="5.1" r="0.7" fill="currentColor" stroke="none"></circle></svg></span></sc-if>
+<sc-if value="{{toast.skel}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="display: grid; place-items: center; flex: none; margin-top: 1px; color: {{t.ready}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.1"></circle><path d="M5.6 8.2l1.7 1.7 3.1-3.3"></path></svg></span></sc-if>
 <div style="flex: 1; min-width: 0">
-<div style="font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}">{{toast.title}}</div>
-<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{toast.desc}}</div>
+<div style="font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}"><sc-if value="{{toast.skel}}" hint-placeholder-val="{{ false }}"><span class="vx-sr">{{toast.provSr}}</span><span aria-hidden="true" style="display: inline-block; width: {{toast.w}}; height: 8px; margin-right: 5px; border-radius: 4px; background: rgba(255,255,255,0.08); vertical-align: middle"></span></sc-if>{{toast.title}}</div>
+<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><sc-if value="{{toast.skel}}" hint-placeholder-val="{{ false }}"><span class="vx-sr">{{toast.provSr}}</span><span aria-hidden="true" style="display: inline-block; width: {{toast.w}}; height: 8px; margin-right: 5px; border-radius: 4px; background: rgba(255,255,255,0.08); vertical-align: middle"></span></sc-if>{{toast.desc}}</div>
 </div>
 <button class="vx-h" onClick="{{toast.close}}" aria-label="Dismiss" title="Dismiss" style="flex: none; width: 24px; height: 24px; margin-top: -4px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
 </div>
@@ -434,7 +426,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div aria-hidden="true" style="height: 18px; display: flex; align-items: center"><span style="width: {{p.w}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span></div>
 <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Use your API key</div>
 </div>
-<button class="vxs-sec" aria-label="{{p.aria}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Connect</button>
+<button class="vxs-sec" onClick="{{p.connect}}" aria-haspopup="dialog" aria-label="{{p.aria}}" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Connect</button>
 </div>
 </sc-for>
 </div>
@@ -460,10 +452,205 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Any compatible provider</div>
 <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Add a provider by its base URL.</div>
 </div>
-<button class="vxs-sec" aria-label="Connect a custom provider" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Connect</button>
+<button class="vxs-sec" onClick="{{cn.custom}}" aria-haspopup="dialog" aria-label="Connect a custom provider" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Connect</button>
 </div>
 </div>
 
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.method}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-modal="true" aria-labelledby="onb-cm-title" aria-describedby="onb-cm-desc" class="vx-pop" style="width: 560px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 0">
+<button aria-label="Navigate back" title="Back" onClick="{{cm.back}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5.5M11 6l-6 6 6 6"></path></svg></button>
+<span style="flex: 1"></span>
+<button aria-label="Close" title="Close" onClick="{{cm.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px 12px">
+<span aria-hidden="true" style="width: 28px; height: 28px; flex: none; border-radius: 7px; background: rgba(255,255,255,0.05); display: grid; place-items: center; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="3.5"></circle><path d="M10.5 12.5L19 4M16 7l2.5 2.5M13.5 9.5l2 2"></path></svg></span>
+<h2 id="onb-cm-title" style="margin: 0; display: flex; align-items: center; gap: 7px; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Connect <span class="vx-sr">{{cm.provSr}}</span><span aria-hidden="true" style="width: {{cm.w}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span></h2>
+</div>
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px">
+<p id="onb-cm-desc" style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Select login method for <span class="vx-sr">{{cm.provSr}}</span><span aria-hidden="true" style="display: inline-block; width: {{cm.ws}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); vertical-align: middle"></span>.</p>
+<div role="group" aria-label="Login methods" style="margin-top: 10px; padding: 4px; border-radius: 10px; border: 1px solid {{t.hairline}}; display: flex; flex-direction: column; gap: 2px">
+<button class="vxs-opt" onClick="{{cm.key}}" style="width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 13px; line-height: 18px; color: {{t.text}}; transition: background-color 120ms">API key</button>
+<button class="vxs-opt" onClick="{{cm.oauth}}" aria-label="Login method 2 (name not shown in this mockup)" style="width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 13px; line-height: 18px; color: {{t.text}}; transition: background-color 120ms"><span aria-hidden="true" style="width: 120px; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span></button>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.key}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-modal="true" aria-labelledby="onb-ck-title" aria-describedby="onb-ck-desc" class="vx-pop" style="width: 560px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 0">
+<button aria-label="Navigate back" title="Back" onClick="{{ck.back}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5.5M11 6l-6 6 6 6"></path></svg></button>
+<span style="flex: 1"></span>
+<button aria-label="Close" title="Close" onClick="{{ck.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px 12px">
+<span aria-hidden="true" style="width: 28px; height: 28px; flex: none; border-radius: 7px; background: rgba(255,255,255,0.05); display: grid; place-items: center; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="3.5"></circle><path d="M10.5 12.5L19 4M16 7l2.5 2.5M13.5 9.5l2 2"></path></svg></span>
+<h2 id="onb-ck-title" style="margin: 0; display: flex; align-items: center; gap: 7px; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Connect <span class="vx-sr">{{ck.provSr}}</span><span aria-hidden="true" style="width: {{ck.w}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span></h2>
+</div>
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px">
+<p id="onb-ck-desc" style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Enter your <span class="vx-sr">{{ck.provSr}}</span><span aria-hidden="true" style="display: inline-block; width: {{ck.ws}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); vertical-align: middle"></span> API key to connect your account and use <span class="vx-sr">{{ck.provSr}}</span><span aria-hidden="true" style="display: inline-block; width: {{ck.ws}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); vertical-align: middle"></span> models in Vector.</p>
+<label for="onb-ck-key" style="display: flex; align-items: center; gap: 5px; margin: 16px 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}"><span class="vx-sr">{{ck.provSr}}</span><span aria-hidden="true" style="width: {{ck.ws}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span>API key</label>
+<input id="onb-ck-key" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="API key" value="{{ck.key}}" onChange="{{ck.onKey}}" aria-invalid="{{ck.invalid}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{ck.border}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<sc-if value="{{ck.err}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.failed}}">API key is required</p></sc-if>
+</div>
+<div style="flex: none; display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid {{t.hairline}}">
+<button class="vxs-pri" onClick="{{ck.go}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Continue</button>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.oauth}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-modal="true" aria-labelledby="onb-co-title" aria-describedby="onb-co-desc" class="vx-pop" style="width: 560px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 0">
+<button aria-label="Navigate back" title="Back" onClick="{{co.back}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5.5M11 6l-6 6 6 6"></path></svg></button>
+<span style="flex: 1"></span>
+<button aria-label="Close" title="Close" onClick="{{co.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px 12px">
+<span aria-hidden="true" style="width: 28px; height: 28px; flex: none; border-radius: 7px; background: rgba(255,255,255,0.05); display: grid; place-items: center; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="3.5"></circle><path d="M10.5 12.5L19 4M16 7l2.5 2.5M13.5 9.5l2 2"></path></svg></span>
+<h2 id="onb-co-title" style="margin: 0; display: flex; align-items: center; gap: 7px; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Connect <span class="vx-sr">{{co.provSr}}</span><span aria-hidden="true" style="width: {{co.w}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span></h2>
+</div>
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 20px">
+<p id="onb-co-desc" style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Visit <button onClick="{{co.open}}" style="padding: 0; border: 0; background: transparent; font-size: 12px; line-height: 16px; color: {{t.accentText}}; text-decoration: underline; text-underline-offset: 2px">this link</button> and enter the code below to connect your account and use <span class="vx-sr">{{co.provSr}}</span><span aria-hidden="true" style="display: inline-block; width: {{co.ws}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); vertical-align: middle"></span> models in Vector.</p>
+<label for="onb-co-code" style="display: block; margin: 16px 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Confirmation code</label>
+<div style="display: flex; align-items: center; gap: 8px">
+<input id="onb-co-code" class="vx-field" type="text" readonly="true" spellcheck="false" value="K7PQ-3XWM" style="flex: 1; min-width: 0; display: block; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 13px; line-height: 18px; letter-spacing: 0.08em; color: {{t.text}}; outline: none">
+<button class="vxs-sec" onClick="{{co.copy}}" aria-label="Copy the confirmation code" style="flex: none; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">{{co.copyLabel}}</button>
+</div>
+<div role="status" style="margin-top: 16px; display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px; color: {{t.text2}}">
+<span aria-hidden="true" style="display: grid; place-items: center; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>Waiting for authorization...
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.custom}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-modal="true" aria-labelledby="onb-cp-title" aria-describedby="onb-cp-desc" class="vx-pop" style="width: 560px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
+<div style="flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 0">
+<button aria-label="Navigate back" title="Back" onClick="{{cp.back}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5.5M11 6l-6 6 6 6"></path></svg></button>
+<span style="flex: 1"></span>
+<button aria-label="Close" title="Close" onClick="{{cp.close}}" class="vx-h" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px 12px">
+<span aria-hidden="true" style="width: 28px; height: 28px; flex: none; border-radius: 7px; background: rgba(255,255,255,0.05); display: grid; place-items: center; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"></path></svg></span>
+<h2 id="onb-cp-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Custom provider</h2>
+</div>
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px">
+<p id="onb-cp-desc" style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Configure an OpenAI-compatible provider. See the <a href="https://vectordev.ai/docs/models" target="_blank" rel="noreferrer">provider config docs</a>.</p>
+
+<div role="group" aria-labelledby="onb-cp-server" style="margin-top: 16px">
+<div id="onb-cp-server" style="margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Server</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{cp.presets}}" as="s" hint-placeholder-count="6">
+<button class="vxs-sec" aria-pressed="false" aria-label="{{s.aria}}" style="height: 24px; display: inline-flex; align-items: center; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">
+<sc-if value="{{s.skel}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="width: {{s.w}}; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08)"></span></sc-if>
+<sc-if value="{{s.named}}" hint-placeholder-val="{{ false }}"><span>{{s.label}}</span></sc-if>
+</button>
+</sc-for>
+</div>
+<button class="vxs-sec" style="margin-top: 8px; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Find servers on this computer</button>
+</div>
+
+<div style="margin-top: 16px">
+<label for="onb-cp-id" style="display: block; margin: 0 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Provider ID</label>
+<input id="onb-cp-id" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="myprovider" aria-invalid="{{cp.invalid}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{cp.border}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<sc-if value="{{cp.err}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.failed}}">Provider ID is required</p></sc-if>
+<p style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Choose a unique ID using lowercase letters, numbers, hyphens, or underscores. Existing providers cannot be replaced here.</p>
+</div>
+
+<div style="margin-top: 16px">
+<label for="onb-cp-name" style="display: block; margin: 0 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Display name</label>
+<input id="onb-cp-name" class="vx-field" type="text" autocomplete="off" placeholder="My AI Provider" aria-invalid="{{cp.invalid}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{cp.border}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<sc-if value="{{cp.err}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.failed}}">Display name is required</p></sc-if>
+</div>
+
+<div style="margin-top: 16px">
+<div style="display: flex; align-items: flex-end; gap: 8px">
+<div style="flex: 1; min-width: 0">
+<label for="onb-cp-url" style="display: block; margin: 0 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Base URL</label>
+<input id="onb-cp-url" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="https://api.myprovider.com/v1" aria-invalid="{{cp.invalid}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{cp.border}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+</div>
+<button disabled="true" style="flex: none; height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.textDisabled}}">Identify</button>
+</div>
+<sc-if value="{{cp.err}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.failed}}">Base URL is required</p></sc-if>
+</div>
+
+<div style="margin-top: 16px">
+<label for="onb-cp-key" style="display: block; margin: 0 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">API key</label>
+<input id="onb-cp-key" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="API key" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<p style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Optional. Leave empty if you manage auth via headers.</p>
+</div>
+
+<div role="group" aria-labelledby="onb-cp-models" style="margin-top: 16px">
+<div id="onb-cp-models" style="margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Models</div>
+<div style="display: flex; align-items: flex-start; gap: 8px">
+<div style="flex: 1; min-width: 0">
+<label for="onb-cp-mid" class="vx-sr">ID</label>
+<input id="onb-cp-mid" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="model-id" aria-invalid="{{cp.invalid}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{cp.border}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<sc-if value="{{cp.err}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.failed}}">Required</p></sc-if>
+</div>
+<div style="flex: 1; min-width: 0">
+<label for="onb-cp-mname" class="vx-sr">Name</label>
+<input id="onb-cp-mname" class="vx-field" type="text" autocomplete="off" placeholder="Display Name" aria-invalid="{{cp.invalid}}" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{cp.border}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+<sc-if value="{{cp.err}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.failed}}">Required</p></sc-if>
+</div>
+<button aria-label="Remove model" title="Remove model" disabled="true" style="flex: none; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.textDisabled}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 7h15M9.5 7V5h5v2M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5"></path></svg></button>
+</div>
+<div style="display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding: 0 36px 0 4px">
+<div style="flex: 1; min-width: 0">
+<label for="onb-cp-ctx" style="display: block; margin: 0 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Context (tokens)</label>
+<input id="onb-cp-ctx" class="vx-field" type="text" autocomplete="off" placeholder="Unknown" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+</div>
+<div style="flex: 1; min-width: 0">
+<label for="onb-cp-out" style="display: block; margin: 0 0 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Reply limit (tokens)</label>
+<input id="onb-cp-out" class="vx-field" type="text" autocomplete="off" placeholder="A quarter of the context" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 16px; margin-top: 6px; padding-left: 0">
+<div style="display: flex; align-items: center; gap: 2px">
+<button role="checkbox" aria-checked="{{cp.toolsChecked}}" aria-labelledby="onb-cp-tools" onClick="{{cp.toggleTools}}" style="width: 24px; height: 24px; display: grid; place-items: center; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent">
+<span aria-hidden="true" style="width: 14px; height: 14px; box-sizing: border-box; display: grid; place-items: center; border-radius: 4px; border: 1px solid {{cp.toolsBorder}}; background: {{cp.toolsBg}}; color: #FFFFFF; transition: background-color 120ms">
+<sc-if value="{{cp.tools}}" hint-placeholder-val="{{ true }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></sc-if>
+</span>
+</button>
+<span id="onb-cp-tools" style="font-size: 12px; line-height: 16px; color: {{t.text}}">Calls tools</span>
+</div>
+<div style="display: flex; align-items: center; gap: 2px">
+<button role="checkbox" aria-checked="{{cp.visionChecked}}" aria-labelledby="onb-cp-vision" onClick="{{cp.toggleVision}}" style="width: 24px; height: 24px; display: grid; place-items: center; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent">
+<span aria-hidden="true" style="width: 14px; height: 14px; box-sizing: border-box; display: grid; place-items: center; border-radius: 4px; border: 1px solid {{cp.visionBorder}}; background: {{cp.visionBg}}; color: #FFFFFF; transition: background-color 120ms">
+<sc-if value="{{cp.vision}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4 4 9-9"></path></svg></sc-if>
+</span>
+</button>
+<span id="onb-cp-vision" style="font-size: 12px; line-height: 16px; color: {{t.text}}">Reads images</span>
+</div>
+</div>
+<button class="vx-h vxs-gh" style="margin-top: 6px; height: 24px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px 0 6px; border: 0; border-radius: 7px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"></path></svg>Add model</button>
+</div>
+
+<div role="group" aria-labelledby="onb-cp-headers" style="margin-top: 16px">
+<div id="onb-cp-headers" style="margin-bottom: 6px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Headers (optional)</div>
+<div style="display: flex; align-items: flex-start; gap: 8px">
+<div style="flex: 1; min-width: 0">
+<label for="onb-cp-hkey" class="vx-sr">Header</label>
+<input id="onb-cp-hkey" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="Header-Name" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+</div>
+<div style="flex: 1; min-width: 0">
+<label for="onb-cp-hval" class="vx-sr">Value</label>
+<input id="onb-cp-hval" class="vx-field" type="text" autocomplete="off" spellcheck="false" placeholder="value" style="display: block; width: 100%; height: 28px; box-sizing: border-box; padding: 0 10px; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; font-size: 13px; line-height: 18px; color: {{t.text}}; outline: none">
+</div>
+<button aria-label="Remove header" title="Remove header" disabled="true" style="flex: none; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.textDisabled}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 7h15M9.5 7V5h5v2M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5"></path></svg></button>
+</div>
+<button class="vx-h vxs-gh" style="margin-top: 6px; height: 24px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px 0 6px; border: 0; border-radius: 7px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"></path></svg>Add header</button>
+</div>
+
+</div>
+<div style="flex: none; display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid {{t.hairline}}">
+<button class="vxs-pri" onClick="{{cp.submit}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Submit</button>
 </div>
 </div>
 </sc-if>
@@ -564,33 +751,18 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 <sc-if value="{{dlg.trust}}" hint-placeholder-val="{{ false }}">
 <div role="dialog" aria-modal="true" aria-labelledby="onb-tr-title" aria-describedby="onb-tr-desc" class="vx-pop" style="width: 480px; max-width: 100%; max-height: 80%; display: flex; flex-direction: column; box-sizing: border-box; border-radius: 12px; background: {{t.main}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.text}}">
 <div style="flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 12px">
+<span aria-hidden="true" style="width: 28px; height: 28px; flex: none; border-radius: 7px; background: rgba(255,255,255,0.05); display: grid; place-items: center; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.9 3.1 3.7v3.9c0 3 2.05 5.45 4.9 6.5 2.85-1.05 4.9-3.5 4.9-6.5V3.7L8 1.9Zm-2.1 6.2 1.45 1.45L10.2 6.7"></path></svg></span>
 <div style="flex: 1; min-width: 0">
-<h2 id="onb-tr-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Decide what a repository may run</h2>
+<h2 id="onb-tr-title" style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: {{t.text}}">Trust this repository?</h2>
 <p id="onb-tr-desc" style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{trust.desc}}</p>
 </div>
-<button aria-label="Close" title="Close" onClick="{{trust.x}}" class="vx-h" style="flex: none; width: 24px; height: 24px; margin: -2px -4px 0 0; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
 </div>
-<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px">
-<ul aria-label="What it brings" style="list-style: none; margin: 0; padding: 0; border-radius: 10px; border: 1px solid {{t.hairline}}">
-<sc-for list="{{trust.rows}}" as="w" hint-placeholder-count="3">
-<li style="display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; box-sizing: border-box; border-top: {{w.line}}">
-<span aria-hidden="true" style="width: 16px; height: 18px; display: grid; place-items: center; flex: none; color: {{t.icon}}">
-<sc-if value="{{w.gMcp}}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3.25 5.25a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm9.5 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM8 14.75a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM4.95 4.3l1.8 6.5M11.05 4.3l-1.8 6.5M5.1 3.25h5.8"></path></svg></sc-if>
-<sc-if value="{{w.gCmd}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4-4 4M11.5 16.5H19"></path></svg></sc-if>
-<sc-if value="{{w.gAgent}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2.5"></rect><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"></path></svg></sc-if>
-</span>
-<div style="flex: 1; min-width: 0">
-<div style="font-size: 13px; line-height: 18px; color: {{t.text}}">{{w.title}}</div>
-<div style="margin-top: 2px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{w.detail}}</div>
-</div>
-</li>
-</sc-for>
-</ul>
-<p style="margin: 12px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Until you trust it, Vector ignores these settings. You can trust it later from the project’s menu or in Settings › Repository trust.</p>
+<div class="vx-scroll" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px 56px">
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Until you trust it, Vector ignores these settings, your language servers and formatters stay off in it and your MCP servers start outside it. You can trust it later from the project’s ⋯ menu or in Settings, under Repository trust.</p>
 </div>
 <div style="flex: none; display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid {{t.hairline}}">
 <button class="vx-h vxs-gh" onClick="{{trust.later}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Not now</button>
-<button class="vxs-pri" onClick="{{trust.ok}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Trust</button>
+<button class="vxs-pri" onClick="{{trust.ok}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Trust this repository</button>
 </div>
 </div>
 </sc-if>
@@ -607,7 +779,40 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </sc-if>
 <sc-if value="{{boot.error}}" hint-placeholder-val="{{ false }}">
 <p role="alert" style="margin: 16px 0 0; font-size: 13px; line-height: 18px; color: {{t.text}}">Vector didn’t finish starting.</p>
-<button class="vxs-pri" onClick="{{boot.restart}}" style="margin-top: 16px; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Restart Vector</button>
+<div style="margin-top: 16px; display: flex; align-items: center; gap: 8px">
+<button class="vxs-pri" onClick="{{boot.reload}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; outline: 2px solid {{t.accentText}}; outline-offset: 2px; transition: background-color 120ms">Reload</button>
+<button class="vx-h vxs-gh" onClick="{{boot.restart}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Restart Vector</button>
+</div>
+</sc-if>
+<sc-if value="{{boot.unreachable}}" hint-placeholder-val="{{ false }}">
+<p role="alert" style="margin: 16px 0 0; font-size: 13px; line-height: 18px; color: {{t.text}}">Could not reach <span style="font-weight: 600">This Mac</span></p>
+<p role="status" style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text3}}">Retrying automatically...</p>
+<div style="margin-top: 24px; width: 320px; display: flex; flex-direction: column; gap: 8px">
+<h2 id="onb-un-other" style="margin: 0; text-align: center; font-size: 12px; line-height: 16px; font-weight: 400; color: {{t.text2}}">Other servers</h2>
+<div role="group" aria-labelledby="onb-un-other" style="padding: 4px; border-radius: 10px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; display: flex; flex-direction: column; gap: 2px">
+<button class="vxs-opt" onClick="{{boot.pick}}" aria-label="Switch to build-box" style="width: 100%; height: 36px; display: flex; align-items: center; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; text-align: left; transition: background-color 120ms">
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: {{t.text}}">build-box</span>
+</button>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{boot.crash}}" hint-placeholder-val="{{ false }}">
+<h1 style="margin: 24px 0 0; font-size: 17px; line-height: 22px; font-weight: 600; color: {{t.text}}">Something went wrong</h1>
+<p style="margin: 6px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">An error occurred while loading the application.</p>
+<div style="position: relative; width: 600px; max-width: calc(100% - 64px); margin-top: 24px">
+<label for="onb-crash-details" class="vx-sr">Error Details</label>
+<textarea id="onb-crash-details" class="vx-field vx-scroll" readonly="true" rows="8" spellcheck="false" value="{{boot.details}}" style="display: block; width: 100%; height: 160px; box-sizing: border-box; padding: 10px 84px 10px 12px; border-radius: 10px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; resize: none; outline: none; white-space: pre; overflow: auto; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: {{t.text2}}"></textarea>
+<button class="vxs-sec" onClick="{{boot.copy}}" aria-label="Copy error details" style="position: absolute; top: 8px; right: 8px; height: 24px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: {{t.main}}; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">{{boot.copyLabel}}</button>
+</div>
+<div style="margin-top: 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px">
+<button class="vxs-pri" onClick="{{boot.restart}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Restart</button>
+<button class="vx-h vxs-gh" onClick="{{boot.logs}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Export Logs</button>
+<button class="vxs-sec" onClick="{{boot.report}}" disabled="{{boot.reported}}" style="height: 28px; padding: 0 12px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{boot.reportColor}}; transition: background-color 120ms">{{boot.reportLabel}}</button>
+<sc-if value="{{boot.noUpd}}" hint-placeholder-val="{{ true }}"><button class="vx-h vxs-gh" onClick="{{boot.update}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Check for updates</button></sc-if>
+<sc-if value="{{boot.upd}}" hint-placeholder-val="{{ false }}"><button class="vxs-sec" onClick="{{boot.update}}" style="height: 28px; padding: 0 12px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Update to 2.0.1</button></sc-if>
+</div>
+<div style="margin-top: 24px; display: flex; align-items: center; gap: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Please report this error to Vector<button onClick="{{boot.issue}}" aria-haspopup="dialog" style="display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; padding: 0; border: 0; background: transparent; font-size: 12px; line-height: 16px; color: {{t.accentText}}">Report this issue<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5z"></path></svg></button></div>
+<p style="margin: 8px 0 0; font-size: 11px; line-height: 14px; color: {{t.text3}}">Version: 2.0.0</p>
 </sc-if>
 </div>
 </sc-if>
@@ -615,7 +820,7 @@ button{cursor:default;-webkit-tap-highlight-color:transparent}
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"step":{"editor":"enum","options":["welcome","signin","connect","folder","clone","trust","ready","launch","error"],"default":"welcome","section":"First run"},"$preview":{"width":1600,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"step":{"editor":"enum","options":["welcome","signin","connect","connect-key","connect-oauth","connect-custom","folder","clone","trust","ready","launch","error","unreachable","crash"],"default":"welcome","section":"First run"},"$preview":{"width":1600,"height":1000}}'>
 class Component extends DCLogic {
   rgb(h) {
     let x = String(h || '').trim().replace('#', '');
@@ -637,13 +842,17 @@ class Component extends DCLogic {
       signed: signedIn,
       proj: ps === 'trust' || ps === 'ready' ? 'vector' : '',
       trustDlg: ps === 'trust',
-      gh: 'list', sel: 'vector', repo: 'you/vector', copied: false, draft: '', menu: null, toast: ''
+      gh: 'list', sel: 'vector', repo: 'you/vector', copied: false, draft: '', menu: null, toast: '',
+      // Connect a provider: the sample opens popular provider 1, which offers an API key and a browser sign-in.
+      own: false, prov: 0, apiKey: '', kerr: false, ocopied: false, cperr: false, tools: true, vision: false,
+      // The route error page
+      dcopied: false, reported: false, upd: false
     };
   }
 
   cur() {
     const s = this.state || {};
-    const ok = ['welcome', 'signin', 'connect', 'folder', 'clone', 'trust', 'ready', 'launch', 'error'];
+    const ok = ['welcome', 'signin', 'connect', 'connect-key', 'connect-oauth', 'connect-custom', 'folder', 'clone', 'trust', 'ready', 'launch', 'error', 'unreachable', 'crash'];
     let ps = this.props.step ?? 'welcome';
     if (ok.indexOf(ps) < 0) ps = 'welcome';
     const key = ps;
@@ -651,7 +860,10 @@ class Component extends DCLogic {
       return {
         key: key, st: s.st, signed: !!s.signed, proj: s.proj || '', trustDlg: !!s.trustDlg,
         gh: s.gh || 'list', sel: s.sel || 'vector', repo: s.repo || 'you/vector', copied: !!s.copied,
-        draft: typeof s.draft === 'string' ? s.draft : '', menu: s.menu || null, toast: s.toast || ''
+        draft: typeof s.draft === 'string' ? s.draft : '', menu: s.menu || null, toast: s.toast || '',
+        own: !!s.own, prov: typeof s.prov === 'number' ? s.prov : 0, apiKey: typeof s.apiKey === 'string' ? s.apiKey : '',
+        kerr: !!s.kerr, ocopied: !!s.ocopied, cperr: !!s.cperr, tools: s.tools !== false, vision: !!s.vision,
+        dcopied: !!s.dcopied, reported: !!s.reported, upd: !!s.upd
       };
     }
     return Object.assign({ key: key, st: ps }, this.base(ps));
@@ -661,7 +873,9 @@ class Component extends DCLogic {
     const c = this.cur();
     this.setState(Object.assign({
       _p: c.key, st: c.st, signed: c.signed, proj: c.proj, trustDlg: c.trustDlg,
-      gh: c.gh, sel: c.sel, repo: c.repo, copied: c.copied, draft: c.draft, menu: null, toast: ''
+      gh: c.gh, sel: c.sel, repo: c.repo, copied: c.copied, draft: c.draft, menu: null, toast: '',
+      own: c.own, prov: c.prov, apiKey: c.apiKey, kerr: c.kerr, ocopied: c.ocopied, cperr: c.cperr, tools: c.tools, vision: c.vision,
+      dcopied: c.dcopied, reported: c.reported, upd: c.upd
     }, patch));
   }
 
@@ -705,10 +919,32 @@ class Component extends DCLogic {
     const toggle = (id) => () => this.put({ menu: menu === id ? null : id });
     const close = () => this.put({});
 
-    // Launch screen and failed launch
+    // Launch screen, failed launch, unreachable server and the route error page: full window, no sidebar
+    const DETAILS = [
+      "TypeError: Cannot read properties of undefined (reading 'directory')",
+      '    at ProjectRows (src/components/workspace-navigation.tsx:412:38)',
+      '    at WorkspaceNavigation (src/components/workspace-navigation.tsx:96:7)',
+      '    at LayoutNew (src/pages/layout-new.tsx:6880:9)',
+      '    at App (src/app.tsx:652:7)'
+    ].join('\n');
     const boot = {
-      on: st === 'launch' || st === 'error', launch: st === 'launch', error: st === 'error',
-      restart: go('launch')
+      on: ['launch', 'error', 'unreachable', 'crash'].indexOf(st) >= 0,
+      launch: st === 'launch', error: st === 'error', unreachable: st === 'unreachable', crash: st === 'crash',
+      // Failed launch: Reload is focused; the quiet Restart Vector stops the engine and relaunches.
+      reload: go('launch'), restart: go('launch'),
+      // Could not reach the server: picking another server opens the app on it.
+      pick: go('welcome'),
+      details: DETAILS,
+      copy: () => this.put({ dcopied: true }), copyLabel: C.dcopied ? 'Copied' : 'Copy',
+      logs: close,
+      reported: C.reported, report: () => this.put({ reported: true }),
+      reportLabel: C.reported ? 'Error Reported' : 'Report Error',
+      reportColor: C.reported ? t.textDisabled : t.text,
+      // Check for updates (ghost) finds 2.0.1; today's "Update to {version}" is a default (secondary) button that installs it.
+      upd: C.upd, noUpd: !C.upd,
+      update: C.upd ? go('launch') : () => this.put({ upd: true }),
+      // Opens Report a bug (drawn on the More board, menu=feedback)
+      issue: close
     };
     const app = !boot.on;
 
@@ -722,7 +958,10 @@ class Component extends DCLogic {
     const proj = C.proj ? (P[C.proj] || { name: C.proj, path: '~/code/' + C.proj, branch: '' }) : null;
     const signed = C.signed;
     const signing = st === 'signin' && !signed;
-    const done = (signed ? 1 : 0) + (proj ? 1 : 0);
+    // A model is connected by signing in (Codium) or with your own API key
+    const own = C.own && !signed;
+    const model = signed || own;
+    const done = (model ? 1 : 0) + (proj ? 1 : 0);
 
     // Sidebar
     const side = {
@@ -753,23 +992,24 @@ class Component extends DCLogic {
     // Setup card
     const card = { count: done + ' of 3' };
     const r1 = {
-      todo: !signed && !signing, signing: signing, done: signed, num: !signed && !signing,
+      todo: !model && !signing, signing: signing, done: model, num: !model && !signing,
       ring: t.activeBorder, numColor: t.accentText,
-      status: signed ? ', done' : (signing ? ', waiting for the browser' : ''),
+      status: model ? ', done' : (signing ? ', waiting for the browser' : ''),
       desc: signed
         ? 'Codium Auto, from your Codium Max plan.'
-        : (signing ? 'Finish signing in in your browser, then return to Vector.' : 'Use your Codium plan, free models, your own key or models you host.'),
+        : (own ? 'Connected with your own API key. Pick one of its models in the model picker.'
+          : (signing ? 'Finish signing in in your browser, then return to Vector.' : 'Use your Codium plan, free models, your own key or models you host.')),
       signIn: go('signin'), ownKey: go('connect'), host: go('connect'), cancel: go('welcome')
     };
     const r2 = {
       todo: !proj, done: !!proj,
-      ring: signed ? t.activeBorder : t.hairlineStrong, numColor: signed ? t.accentText : t.text2,
+      ring: model ? t.activeBorder : t.hairlineStrong, numColor: model ? t.accentText : t.text2,
       status: proj ? ', done' : '',
       desc: proj ? proj.name + ' · ' + proj.path : 'Choose a folder on this Mac or clone one from GitHub.',
       folder: go('folder'), clone: go('clone', { gh: 'list' })
     };
     const TRY = 'Look through this repository and explain how it is organised. Don’t change any files.';
-    const can3 = signed && !!proj;
+    const can3 = model && !!proj;
     const r3 = {
       active: can3,
       ring: can3 ? t.activeBorder : t.hairline, numColor: can3 ? t.accentText : t.text3,
@@ -778,21 +1018,12 @@ class Component extends DCLogic {
       tryIt: () => this.put({ draft: TRY })
     };
 
-    // Repository trust: banner above the composer, then the dialog
+    // Repository trust: today's dialog opens by itself, with no banner and no close button
     const tName = proj ? proj.name : 'vector';
     const trust = {
-      banner: st === 'trust',
-      bannerText: tName + ' has its own Vector settings. Trust it to let them run.',
-      desc: 'Trusting ' + tName + ' lets Vector load the settings it comes with. They can run code on this computer.',
-      open: () => this.put({ trustDlg: true }),
-      x: () => this.put({ trustDlg: false }),
+      desc: 'Trusting ' + tName + ' lets Vector load the settings it comes with, like its own agents, commands, plugins and MCP servers, which can run code on this computer.',
       later: go('ready', { trustDlg: false }),
-      ok: go('ready', { trustDlg: false }),
-      rows: [
-        { gMcp: true, gCmd: false, gAgent: false, title: '2 MCP servers', detail: 'repo-search and release-notes start with node from tools/mcp.' },
-        { gMcp: false, gCmd: true, gAgent: false, title: '3 commands', detail: '/typecheck, /smoke and /release-check run pnpm scripts.' },
-        { gMcp: false, gCmd: false, gAgent: true, title: '1 agent', detail: 'reviewer reads files and leaves comments. It can’t edit files.' }
-      ].map((w, i) => Object.assign({ line: i === 0 ? '0' : '1px solid ' + t.hairline }, w))
+      ok: go('ready', { trustDlg: false })
     };
 
     // Composer and its one row of chips
@@ -815,30 +1046,79 @@ class Component extends DCLogic {
       sendDisabled: !hasDraft,
       sendBg: hasDraft ? t.accentStrong : 'rgba(255,255,255,0.06)',
       sendFg: hasDraft ? '#FFFFFF' : t.textDisabled,
-      sendTip: !proj ? 'Choose a project to send' : (!signed ? 'Connect a model to send' : 'Send  ↵'),
-      send: !proj ? () => this.put({ menu: 'proj' }) : (!signed ? go('connect') : close)
+      sendTip: !proj ? 'Choose a project to send' : (!model ? 'Connect a model to send' : 'Send  ↵'),
+      send: !proj ? () => this.put({ menu: 'proj' }) : (!model ? go('connect') : close)
     };
     const pmenu = {
       has: !!proj, none: !proj, name: proj ? proj.name : '', path: proj ? proj.path : '',
       pick: close, folder: go('folder'), clone: go('clone', { gh: 'list' })
     };
+    const PW = ['92px', '76px', '104px'];
+    const pi = C.prov >= 0 && C.prov < PW.length ? C.prov : 0;
+    const provW = PW[pi];
+    const provWs = Math.round(parseInt(provW, 10) * 0.7) + 'px';
+    const provSr = 'Popular provider ' + (pi + 1);
+    const connected = C.toast === 'connected';
     const toast = {
-      on: C.toast === 'mcp',
-      title: 'Open a repository first',
-      desc: 'MCP servers are scoped to a repository so their tools cannot access unrelated files.',
+      on: C.toast === 'mcp' || connected,
+      // Today's success toast ("{provider} connected") carries a check; the MCP note keeps the info mark.
+      skel: connected, info: !connected, w: provWs, provSr: provSr,
+      title: connected ? 'connected' : 'Open a repository first',
+      desc: connected ? 'models are now available to use.' : 'MCP servers are scoped to a repository so their tools cannot access unrelated files.',
       close: close
     };
 
     // Dialogs
     const dlg = {
-      connect: st === 'connect', folder: st === 'folder', clone: st === 'clone', trust: st === 'trust' && C.trustDlg
+      connect: st === 'connect', method: st === 'method', key: st === 'connect-key', oauth: st === 'connect-oauth',
+      custom: st === 'connect-custom', folder: st === 'folder', clone: st === 'clone', trust: st === 'trust' && C.trustDlg
     };
-    dlg.open = app && (dlg.connect || dlg.folder || dlg.clone || dlg.trust);
+    dlg.open = app && (dlg.connect || dlg.method || dlg.key || dlg.oauth || dlg.custom || dlg.folder || dlg.clone || dlg.trust);
     const cn = {
       close: go('welcome'), signIn: go('signin'),
-      popular: ['92px', '76px', '104px'].map((w, i) => ({
-        w: w, line: i === 0 ? '0' : '1px solid ' + t.hairline, aria: 'Connect popular provider ' + (i + 1)
+      // Provider 1 offers two ways in, so it asks for the login method first; the others take an API key.
+      custom: go('connect-custom', { cperr: false }),
+      popular: PW.map((w, i) => ({
+        w: w, line: i === 0 ? '0' : '1px solid ' + t.hairline, aria: 'Connect popular provider ' + (i + 1),
+        connect: go(i === 0 ? 'method' : 'connect-key', { prov: i, apiKey: '', kerr: false, ocopied: false })
       }))
+    };
+    // Second step of Connect: login method, API key, browser sign-in with a confirmation code
+    const cm = {
+      w: provW, ws: provWs, provSr: provSr,
+      back: go('connect'), close: go('welcome'),
+      key: go('connect-key', { apiKey: '', kerr: false }),
+      oauth: go('connect-oauth', { ocopied: false })
+    };
+    const ck = {
+      w: provW, ws: provWs, provSr: provSr,
+      back: pi === 0 ? go('method') : go('connect'), close: go('welcome'),
+      key: C.apiKey, invalid: C.kerr ? 'true' : 'false', err: C.kerr,
+      border: C.kerr ? t.failed : t.hairline,
+      onKey: (e) => this.put({ apiKey: e && e.target ? e.target.value : '', kerr: false }),
+      go: C.apiKey.trim() ? go('welcome', { own: true, toast: 'connected', apiKey: '', kerr: false }) : () => this.put({ kerr: true })
+    };
+    const co = {
+      w: provW, ws: provWs, provSr: provSr,
+      back: go('method'), close: go('welcome'),
+      open: close,
+      copy: () => this.put({ ocopied: true }), copyLabel: C.ocopied ? 'Copied' : 'Copy'
+    };
+    // Custom provider (dialog-custom-provider.tsx): five server presets drawn as skeleton names, then Other
+    const cp = {
+      back: go('connect'), close: go('welcome'),
+      presets: ['54px', '68px', '40px', '58px', '50px', ''].map((w, i) => ({
+        w: w || '0px', skel: !!w, named: !w, label: w ? '' : 'Other',
+        aria: w ? 'Server preset ' + (i + 1) : 'Other'
+      })),
+      err: C.cperr, invalid: C.cperr ? 'true' : 'false', border: C.cperr ? t.failed : t.hairline,
+      submit: () => this.put({ cperr: true }),
+      tools: C.tools, toolsChecked: C.tools ? 'true' : 'false',
+      toolsBorder: C.tools ? t.accentStrong : 'rgba(255,255,255,0.40)', toolsBg: C.tools ? t.accentStrong : 'transparent',
+      toggleTools: () => this.put({ tools: !C.tools }),
+      vision: C.vision, visionChecked: C.vision ? 'true' : 'false',
+      visionBorder: C.vision ? t.accentStrong : 'rgba(255,255,255,0.40)', visionBg: C.vision ? t.accentStrong : 'transparent',
+      toggleVision: () => this.put({ vision: !C.vision })
     };
     const fd = {
       cancel: go('welcome'),
@@ -883,7 +1163,7 @@ class Component extends DCLogic {
       side: side, acct: acct, more: more, help: help,
       card: card, r1: r1, r2: r2, r3: r3, trust: trust,
       c: c, pmenu: pmenu, draft: draft, toast: toast,
-      dlg: dlg, cn: cn, fd: fd, cl: cl,
+      dlg: dlg, cn: cn, cm: cm, ck: ck, co: co, cp: cp, fd: fd, cl: cl,
       onDraft: (e) => this.put({ draft: e && e.target ? e.target.value : '' })
     };
   }
