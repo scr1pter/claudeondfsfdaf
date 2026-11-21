@@ -2169,3 +2169,22 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   and session create still pass. Red on the old source (6 pass, 1 fail: "Received function did not throw"). The
   optional `service.test.ts` case was not added: the refusal is in the parser `service.ts` runs before any runtime call.
 - Pilot activation and `VECTOR_WORKSPACES_ENABLED` are unchanged (off).
+
+## 2026-11-21 — CW-07: a fix child starts no project tooling
+
+- Supersedes the "Left open" bullet of "2026-11-11, review repairs for phase A3 (CW-07 and CW-08)" (the formatter after
+  an edit, and the language servers it touches, could reach the network from a fix child). The docs' option 1 is taken
+  on the tools' side: `edit.ts`, `write.ts` and `apply_patch.ts` skip `format.file` and `lsp.touchFile` when
+  `ctx.agent === ConnectPolicy.FIX_AGENT` (`connect_fix`). Each has a comment saying why. `lsp.diagnostics()` still runs:
+  it reads what already running clients published and starts none, so a fix child sees diagnostics another session's
+  server already holds, and no LSP block otherwise. The edit is written as before.
+- `packages/core/src/connect/policy.ts` is unchanged (it is pinned by VectorScope's model evidence); only its
+  `FIX_AGENT` constant is imported. The docs' option 2, leaving tool configuration and build scripts out of owned
+  paths, is not taken: the list could never be complete, and with no tooling started it no longer guards anything.
+- Test: `packages/engine/test/tool/fix-child-tooling.test.ts`. A trusted temporary project's config formatter (the
+  `formatter-append.js` fixture) appends "formatted" to each `.fmt` file it formats. For `build`, edit, write and
+  apply_patch each leave the file with the change plus "formatted"; for `connect_fix`, with the change alone. Red on
+  the old tools (3 pass, 3 fail: the three `connect_fix` cases). Language servers are not exercised by the test: the
+  guard on `touchFile` sits beside the formatter's in the same tools.
+- Local note: `test/tool/write.test.ts` "throws error when OS denies write access" fails when run as root, as in this
+  container (chmod 0444 does not stop root); unrelated and unchanged.

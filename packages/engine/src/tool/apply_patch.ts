@@ -9,6 +9,7 @@ import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { assertOwnedPath } from "./owned-path"
 import { FileLock } from "./file-lock"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { FileState } from "./file-state"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
@@ -313,7 +314,9 @@ export const ApplyPatchTool = Tool.define(
                 break
             }
 
-            if (edited) {
+            // A connect fix child starts no project tooling (CW-07): a formatter or language server runs the project's
+            // code with the network, which a fix child must not have. Reading diagnostics already published starts none.
+            if (edited && ctx.agent !== ConnectPolicy.FIX_AGENT) {
               if (yield* format.file(edited)) {
                 yield* Bom.syncFile(afs, edited, change.bom)
               }
@@ -340,7 +343,7 @@ export const ApplyPatchTool = Tool.define(
 
       // Notify LSP of file changes and collect diagnostics
       for (const change of fileChanges) {
-        if (change.type === "delete") continue
+        if (change.type === "delete" || ctx.agent === ConnectPolicy.FIX_AGENT) continue
         const target = change.movePath ?? change.filePath
         yield* lsp.touchFile(target, "document")
       }
