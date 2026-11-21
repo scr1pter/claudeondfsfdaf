@@ -45,6 +45,17 @@ The config error is how every `bool(...)` runtime flag behaves today, not someth
 | vector-codium.yml          | 43829047861                           | failure: "Codium tests" shards 1, 3 and 4 (jobs 133169654605, 133169654490, 133169654429); shard 2, the browser specs, the relay, ops and image smokes and every typecheck job passed |
 | test.yml, verify.yml       | none                                  | never run on this branch                                                                                                                                                              |
 
+21 Nov 2026 (v2-closeout-ci): B6 is cleared at PR #38's head `19c48b89`, which is in main. Read through GitHub MCP:
+test.yml 43940516400 concluded success on attempt 2. Attempt 1 failed in two jobs: unit (windows) 133557296076 at
+its "Install ripgrep (Windows)" step, where Chocolatey's community feed answered 503 before any test ran (the known-flake
+list names a Chocolatey 504; this was the same feed failing with a 503, and #41 has since removed Chocolatey), and computer-helper windows-build 133558150123 at "Run actual isolated
+medium-token Windows overlay Stop", the Hands job recorded in hands-deviations.md (item 1 of the overlay Stop entry).
+verify.yml 43940515963 and typecheck.yml 43940516191 passed at the same head. vector-codium.yml is green on main after
+the merge (44848274957 at `f3d7ac74`), and `9be63d68` and `39865a55` are in main. The "test.yml, verify.yml | none"
+row above is superseded: earlier PR #38 test.yml runs 43854951846 (`a320bdbe`), 43884114989 (`ec51507b`) and
+43913739229 (`1d944dd9`) concluded failure, the shard 2/4 hub.test.ts load failure whose root cause and fix are in
+connected-workspace-deviations.md ("TUI runtime plugin fix (`1d944dd9`)").
+
 The vector-codium.yml failures are inherited, not lane-caused. Each red shard has exactly one failing file, all three under `packages/web/test/`: `desktop-account.test.ts` (shard 1; the Everywhere closure mark is now written with an expiry, `PX 15552000000`, that the test does not expect), `cloud-agents-ledger.test.ts` (shard 3) and `model-plan-gateway-hooks.test.ts` (shard 4), the last two with "ReferenceError: Cannot access 'METER_EPOCH_PATTERN' before initialization." at `api/_lib/cloud-agents-run-token.ts:57`, an import cycle in `api/_lib`. The same three files fail on `release-finish` at `0f034957` (run 43807301713: jobs 133100897746, 133100897756 and 133100897783), which this branch merged in `3f866f30`. `release-finish` fixed them in `9be63d68` ("load the meter epoch rule from a leaf module to break the ledger import cycle") and `39865a55` ("expect the expiring Everywhere closure mark in the desktop deletion test"); vector-codium.yml passed there at `b0752dda` (run 43822075842) and `67ec3a60` (run 43829090891). Neither fix is on this branch, which gets them only through the lead's next merge. No lane commit touches `api/` or `packages/web/` except through those merges, and none of the failing files is a CN-16, CN-17 or CN-18 file (`core/src/playbooks/check.ts`, `desktop/src/main/remote-routes.ts`, the phone files). At `ac8be435`, the first lane head that ran vector-codium.yml (run 43769246637), the two `api/_lib` files failed the same way, and `docs-config-reference.test.ts` also failed; PUB-1 (`28f9d78b`) fixed that one and arrived with `3f866f30`. The run and job ids above are the evidence.
 
 ### 1.2 Before the cloud-workspaces pilot turns on
@@ -89,6 +100,10 @@ The vector-codium.yml failures are inherited, not lane-caused. Each red shard ha
 
 - No real Mac, Windows machine, phone, relay, container, supervisor host or model provider was used by the lane; tests use local fakes only.
 - Linux-only ReadOnlyGit cases are proven only on the Linux engine shard of test.yml, which has not run on this branch (B6).
+  - 21 Nov 2026 (v2-closeout-ci): they ran. test.yml 43940516400 at `19c48b89` ran all six engine (linux) shards green
+    on both attempts: attempt 1 jobs 133557297260, 133557296519, 133557296622, 133557296492, 133557296509 and
+    133557296500 (shards 1 to 6), attempt 2 jobs 133614871896, 133614871339, 133614871791, 133614872376, 133614872917
+    and 133614872527 (shards 1 to 6), read through GitHub MCP.
 
 ### 1.7 Done, with evidence
 
