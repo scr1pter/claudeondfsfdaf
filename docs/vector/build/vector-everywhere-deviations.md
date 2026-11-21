@@ -4445,3 +4445,136 @@ Not changed, with reasons:
 
 - vector-everywhere.yml (the new file, R3 in its Valkey job, D1 and D2, the lane and docs tests), vector-at-mention.yml (github-oidc, github-app*, cloud-agents-* and api-module-loading) and typecheck.yml on everywhere-finish, after the commit step's push.
 - A real GitHub token's claims (the owner's §4.1 step 1); R-A6's handling of the answers; live acceptance on a private test repository after R-A6, Q13, the desktop wiring and the App; a real laptop.
+
+## 2026-11-21, EV-32: the Actions fallback journeys (VE-33)
+
+Spec §8 VE-33; §9 FakeCloudAgents; §5 E8, E11. Base: HEAD `c18447f9` (EV-31), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` is an ancestor, and so are the precondition EV-30 `11f8f266`, EV-29 `3200acc2` and the journey harness of EV-19 and EV-20. No engine, shell, sandbox, worktree or relay file is touched, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+**origin/main.** origin/main `3670461a` (#51 to #53, desktop and engine files only) is not an ancestor. `git merge-tree --write-tree HEAD origin/main` is clean, and `git diff HEAD...origin/main` over this package's files is empty. As at EV-14 and EV-29 to EV-31, the main merge stays with the lead (the lane notes: "the lead merges main into this branch"), and this build's task forbids commits anyway.
+
+### What changed
+
+The change is test-only. No file under api/, packages/schema or any runtime package changes.
+
+- **New packages/web/test/everywhere-journey-actions.test.ts** (1,057 lines; eleven local cases and two real-Redis cases, the case table below), on EV-19's harness (lib/everywhere-journey.ts, unchanged):
+  - `cloudAgents` (:117-179): EV-29's real `createCloudPorts` over the FakeCloudAgents, with `sources("slack", "linear", "jira")` injected (or the default with `enabled: false`); EV-30's real listeners registered through `registerEverywhereRunHooks` on @vector's real run hooks; a second, recording settle listener; `start` and `settle` are @vector's own `notifyRunStart` and `notifyRunSettle`, with their 5 s budget, the settle reading @vector's run record from the stub of @vector's store. Both listeners are removed in the journey's teardown.
+  - `slackWorld` (:186-274), `linearWorld` (:277-355) and `jiraWorld` (:358-430): the platform's fixture, link and mapping (`acme/app`, id 101), the sponsor's plan, `recordSeen` when `seen`, `journeyPorts` (presence through the real relay adapter against the relay Worker with no computer connected) overlaid with the cloud ports, the platform's real adapter and route mounted with the jobs routes and the sweep, and the desktop's jobs client for the late claims (offered nothing). No `slowStore`: E12's timing belongs to EV-19 and EV-20.
+  - `throughActions` (:458-595): steps 1 to 6 for Slack and Linear, with E8's late claims after the dispatch, the start and the settle, the `pending` probe, and the run's body read through the real route.
+  - `slackActions` (:601-667) and `linearActions` (:674-739): step 7, each platform's own posts, and E4 on the command log each is given (the FakeStore's by default, the recorded Valkey commands in R1 and R2); `activityInput` (:669-671) reads a Linear activity's input.
+  - `recording` (:1012-1019): wraps the Valkey bridge's fetch and keeps every command the store sends, decoded ((n)).
+- **New packages/web/test/lib/everywhere-cloud-agents.ts** (167 lines): spec §9's FakeCloudAgents. A pure move of the @vector stand-ins that everywhere-cloud-adapter.test.ts defined (EV-29, EV-30): `BINDING_KEY`, `VECTOR_RUN_KEY`, `Command`, `bindingFields`, `bindingStore`, `stubApp`, `privateApp`, `preparer`, `liveModes`, `sources`, `vectorRun`, `vectorStore`, `runId`. Bodies unchanged; each gained `export`. Imports: `expect` (bun:test), `randomBytes` and `randomInt` (node:crypto), and type-only `GithubAgents`, `RepoBinding`, `CloudRunTrigger`, `prepareCloudRun`, `StartCloudRunResult` and `RunSource`. The core import keeps the original's relative form (`../../../core/src/github-agents`), one level deeper.
+- **packages/web/test/everywhere-cloud-adapter.test.ts** (outside the brief, a move only): the moved definitions are deleted and imported back from the lib; `ACCOUNT`, `TICKET_PREFIX`, `FixtureState`, `world`, `routed`, `ticketKeys`, `hooked` and `withHooks` stay local; the unused `randomInt`, `RepoBinding` and cloud-agents-start type imports go; the header names the lib. No case changes: 84/0, 3 skip (1,167 expects) without Redis and 85/0 (1,189) with Redis, before and after.
+- No workflow, generated file, flag, env var, switch, dependency or lockfile changes. Both new files match `packages/web/test/**/everywhere*`, so vector-everywhere.yml starts on them and its picker runs the new test file; the lib is not a test file.
+
+### Decisions
+
+- **(a) Jira has no Actions route (EV-30 (j)).** `cloudSource` refuses Jira whatever the sources say, so the Jira journey (J1) puts `jira` in the injected sources and shows that routing never looks at Actions: no binding, visibility, mode or prepare read, no ticket, presence only; the job waits Jira's 10 minutes (`TIMING.jiraQueueMs`) and ends with Jira's own text, TASK_STATE_FAILED with `renderEnd("jira-waiting", "jira")`. The brief's Jira steps 4 to 7 cannot be built until a Jira run limit exists (Left open).
+- **(b) The result has no PR link and no "checks did not run" line (EV-30 (f)).** Every reported `prUrl` is dropped, and renderResult's Actions form adds the checks line only with a link or a branch. So step 6 sends @vector's real settle a same-repository PR URL, a second, recording listener shows that @vector's notify passed it on (`{outcome, runUrl, prUrl}`), and step 7 pins the post as the outcome line alone, "Done in GitHub Actions.", with neither PR_URL nor CHECKS in any native call. The brief's checks assertion is Left open, tied to the head-branch check (the lead's).
+- **(c) No `public-repository` answer (EV-29 (e), still the lead's).** `decideRoute` never answers `public-repository`. A repository stored private and read public live is refused `no-place` when the queue is blocked too. P1 uses a computer that was never seen, so the posted text, the computer line alone, is true. P1 pins the refusal, the read counts and the absence of any ticket, never the missing "not private" sentence. The `why` itself is not observable in a journey (below, (d)): only the facts'-read row has `why.actions: "public"`; in the other two the facts read private and the refusal comes from routeJob's fallback, whose `why` is `{computer: "not-seen", actions: "none"}`. EV-29's R2 pins the facts'-read `why` directly. A fourth row makes the facts' read fail (`stubApp` throws): `liveVisibility` turns the failure into no visibility, which the policy counts as public (everywhere-policy.ts, "absent (a failed read) counts as public"), and the outcome is the facts'-read row's exactly. That is E11's other half end to end; EV-29's P6 and R3 hold it at the adapter.
+- **(d) An addition to EV-29 (e), not a new finding.** EV-29 (e) already records that `refuseJob` keeps only the code and that the posted no-place line is the generic one. The journey adds the pre-job path: intake.ts calls `adapter.refuse(trigger, decision.code)` without `why`, and the Slack, Linear and Jira adapters' `refuse` pass none to `renderRefusal`, so a refusal at intake (P1's first row) drops `why` too. The lead's question in EV-29 (e), whether to carry `why` to the reply, covers both paths.
+- **(e) The sources only through the injected port.** `createCloudPorts({sources})` enables Slack, Linear and Jira for this file's worlds; ENABLED_SOURCES is never edited. D1 is the tripwire: ENABLED_SOURCES still reserves all three, `createCloudPorts` without `sources` has no `prepareCloud`, and the same mention then reads no binding or visibility, issues no ticket and waits.
+- **(f) The stand-ins.** `liveMode` and the App's `visibility` field have no production builder (EV-30 (o)), so they are the FakeCloudAgents' `liveModes` and `stubApp`; prepareCloudRun is the recorder `preparer` (spec §9 names `startCloudRun`; the code calls prepareCloudRun, EV-29); @vector's binding decoder runs for real behind `bindingStore`; the hooks are @vector's real notify and registry over EV-30's real listeners, with @vector's run record as a read-only stub store. The binding names `acme/app` (critique): nothing checks the binding's repository against the job's today, but a future check would otherwise break the journeys confusingly.
+- **(g) The body read through the real route, beyond the brief.** The run reads its request with a real `vrt_` token (minted under a secret generated in the file, `VECTOR_RUN_TOKEN_SECRET`, restored after; its live-run check answers `ok`, as in everywhere-body-api.test.ts; the review asked for an injected secret instead, but `mintRunToken`, `readRunToken` and `requireRunToken` take no env: only `signRunTokenPayload` does, and its callers pass none, so an injected secret needs a change to @vector's api/_lib/cloud-agents-run-token.ts, which a test-only package does not make; the file keeps the save-and-restore, as everywhere-body-api.test.ts and the harness's VECTOR_CLI_TOKEN_SECRET do), at `/api/everywhere/jobs/<jid>/body?jid=<jid>`, the way Vercel passes the path segment (critique: RouteHarness does not turn the segment into a query). The first read answers the body, the second 410 EVERYWHERE_BODY_GONE. It shows E4 and E11 together: the dispatch carries only the fixed line and the job id, and the request leaves only once, by reference, after the start.
+- **(h) N1, beyond the brief.** A dispatch with no start hook ends `failed`/`not-started` through the sweep route at exactly 900 s, posts the fixed help, and a late start moves nothing.
+- **(i) The lib move, outside the brief.** The lane notes allow only the existing local fakes, and lib/everywhere-cloud-agents.ts is not a new fake: it is the existing @vector stand-ins moved so two files can share them, as EV-19 and EV-20 moved the journey harness into lib/everywhere-journey.ts, and it is spec §9's named FakeCloudAgents. EV-31 (i) dropped a similar move because its file needed only one stub; this file needs ten of them.
+- **(j) No E12 timing here.** The journeys use no slow store: the first native signal's budget is EV-19's and EV-20's, and the Actions route adds no work before it.
+- **(k) The E8 probes record the device as seen.** The claim and pending routes call `recordSeen` first, so the probes run only in worlds that already recorded the device; P1, whose refusal depends on a never-seen computer, runs none.
+- **(l) The Redis cleanup order (critique).** A describe's `afterEach` runs before the file's, so the Redis block calls `journey.teardown()` itself before `redis.close()`, as EV-19 and EV-20 do.
+- **(m) No main merge** (above).
+- **(n) E4 on Valkey (review).** R1 and R2 run on a store whose FakeStore is never used, so the plaintext checks on `w.f.fake.commands` checked nothing there, though the atomic scripts that write the body run only on Valkey. `recording` keeps every command the Valkey store sends, decoded, and R1 and R2 hand it to `slackActions` and `linearActions`, which check that it is not empty and that no command carries the task (and, for Linear, either token). M17 shows it: the task added as a spare script argument turns R1 and R2 red at exactly that check. A SCAN of the stored values would add nothing: every value reaches Valkey in a command.
+- **(o) E4 on every terminal path (review).** The settle was the only path that checked the body was erased. W1, N1 and J1 now read the body before the job ends (the task, for Slack) and find its key gone after the sweep ends it; P1's refused jobs (prepareCloud's read and the recheck) find it gone after the refusal; S1 and L1 add the body key to their list of keys gone after the settle. M16 (terminal transitions keep the body) turns every one red.
+
+### Critique of the plan (2026-11-21)
+
+All ten points taken:
+- M6 would not turn W1 red on W1's planned assertions, so W1 pins `binding.commands.length` (2 at HEAD; 3 under M6, confirmed red);
+- the body route is called with `?jid=<jid>`;
+- the move ranges are restated by definition, and `Command` is imported back for `withLoopbackKv`;
+- the citations are EV-29 (e), not (h), and (d) is an addition to EV-29 (e), naming the three adapters;
+- the P1 titles claim no `why`; their E11 evidence is the read counts, the triggers, the cancels, the dispatches and the absent ticket;
+- M12 is the single-site mutation of the prompt's job id to the repository id;
+- the lib's value imports are listed and the core specifier kept;
+- the bindings name `acme/app`, and the probes' `recordSeen` is noted ((k));
+- vector-codium is informational, not a gate, and is not dispatched for EV-32;
+- the Redis block calls the teardown itself ((l)).
+
+### Review of the build (2026-11-21)
+
+Ten findings, none blocking; two name the same range. Seven are fixed (the first six items), two asked for no code change and are recorded (the lib file, the brief's forms), and one optional change is declined (the run-token secret):
+- **E4 on Valkey** (R1, R2 checked an empty FakeStore log): fixed, (n).
+- **The `slackActions` range** (given as :597-663, raised twice): fixed; every range in "What changed" is restated for the file as it now stands.
+- **The vector-codium failure recorded without a cause** (EV-31's run 44839122921, job 136642836976): diagnosed from the job's log, read once with the GitHub tools. The one failing file is packages/web/test/model-plan-admit.test.ts (Codium's, not changed by this lane): A17 "crashed requests release concurrency at 660s but retain monthly/day/run reservations" expected MODEL_PLAN_DAILY_LIMIT at :500 and got an admission. The shard ran it at 23:52:33 UTC; the fixture's `now` is the wall clock (:39) and the case admits again at `now + 660_001`, after 00:00 UTC, where model-plan-admit.ts:101 keys the daily budget by the UTC date, so the first admission's daily reservation is in yesterday's key. The case fails whenever it starts within 11 minutes before UTC midnight. No everywhere file failed (the other 20 jobs passed or were skipped). It is the lead's to route to Codium's owner; the handoff's EV-32 block says so.
+- **The lib file outside the brief**: kept as built ((i)); the commit body names the move and the adapter test's import-only edit as outside the brief.
+- **The `input` helper shadowed by `cloudAgents(input)`**: renamed `activityInput`, with its four call sites.
+- **E4 only on the settled path**: fixed, (o).
+- **E11's failed read not in a journey**: fixed with P1's fourth row, (c).
+- **The brief's step 7 and `public-repository` not built**: unchanged, as (b) and (c) record; the commit body states both, and Left open says the change that lands the head-branch check or the `public-repository` ruling turns S1's and L1's absence checks and P1's `no-place` assertions into the brief's forms.
+- **VECTOR_RUN_TOKEN_SECRET in process.env**: kept. The run-token functions take no env, so an injected secret needs a change to @vector's runtime ((g)); the value is generated in the file and restored in `afterAll`.
+
+### The cases
+
+| Code | What it shows |
+| --- | --- |
+| S1 | A Slack channel mention, the computer offline and seen: presence only; one trigger exactly `{source: "slack", account, requestedBy {slack, U0ALICE01}, target github-run 101, prompt "Vector everywhere job <jid>", purpose "task", jobId}`, with no task text in it; the job `dispatched` on the ticket, the ticket link written; three visibility reads, five binding reads, one mode read, one dispatch. Slack: setStatus processing, users.info, setStatus processing, the plan `slackPlan("actions")`. E8: two HTTP claims (a fresh device and the sponsor's) 409 JOB_TAKEN and the jobs client stopped, after the dispatch, the start and the settle; `pending` answers `{offers: [], waiting: 0}`. The start moves the job to `running` and writes `run:<rid>` and `run:<rid>:settle`, with no native call. The run reads `{task, context, outside: "slack"}` once; the second read is 410. The settle: the listeners hear `{outcome: "changes", runUrl, prUrl}`; the job `settled`, `changes`, no `result`, the body (opened and by key), ticket, run, settle index and read marker gone, the outbox empty. Slack: chat.postMessage "Done in GitHub Actions." with the completed plan, the requester's ephemeral copy, setStatus active. E17: no thread post names `acme/app` or the device; no call carries PR_URL or CHECKS. E4: the task never in the FakeStore's commands, which are not empty |
+| L1 | The same for a Linear session: create (the first thought), user, create ("Starting your GitHub runner."), session (`linearPlan("actions")`); at the settle the completed plan with only the job page, then one `response` "Done in GitHub Actions."; `privateResult` gets the same line; Vector's activities are two thoughts and the response, the creator's prompt the only other; no `acme/app`, device, PR_URL or CHECKS in any post; neither the task nor either Linear token in the store's commands, and neither token in the trigger |
+| J1 | Jira in the injected sources: `cloudSource("jira")` false while `prepareCloud` exists; SUBMITTED, then waiting 10 minutes with no binding, visibility, mode or prepare read and no ticket; the sweep at the queue limit minus 1 ms ends nothing, at the limit `expired`/`jira-waiting`; GetTask TASK_STATE_FAILED with Jira's own text; the body kept while the job waits and gone once it expires; no private result; no late claim |
+| P1 (4 rows) | Stored private, live public, the computer never seen. The facts' read: no job, the requester's ephemeral no-place line, then setStatus active; one App read. prepareCloud's read: the job `refused` `no-place` with no route, dispatch time or ticket, posted in the thread; two App reads, no mode read, no trigger. The router's recheck: as the previous row with three App reads, one mode read, one trigger with only the fixed line, one cancel, no dispatch. In both, the refused job's body is gone. The facts' read failing: as the facts'-read row ((c)). No ticket key and no `slackPlan("actions")` post in any row |
+| W1 | A binding with no stored mode, the computer seen: waiting until the 115-minute queue limit, two binding reads, one App read, no mode read, no trigger, no ticket, the `waiting` plan; the body holds the task while the job waits; the sweep expires it with Slack's own text and the body is gone; no late claim |
+| N1 | A Slack DM dispatch with no start: the sweep at 900 s minus 1 ms ends nothing, at 900 s `failed`/`not-started` with the fixed help in the DM; the body, kept until then, gone; the ticket gone; a late start changes nothing and posts nothing; no late claim |
+| D1 | ENABLED_SOURCES reserves slack, linear and jira; with the default sources there is no `prepareCloud`; the same mention reads no binding or visibility, issues no ticket and waits |
+| G1 | The fetch guard is the fetch in place and refuses a probe; FakeSlack, FakeLinear and NativeJira refuse a foreign address |
+| R1 | S1's journey on Valkey (skips without VECTOR_TEST_REDIS_URL): the create, the fenced dispatch, the start's EVAL, the read-once script and the settle; the FakeStore saw no command, and no recorded Valkey command carries the task ((n)) |
+| R2 | L1's journey on Valkey; no recorded Valkey command carries the task or either Linear token |
+
+### Mutations
+
+14 mutations, one source edit at a time, the new file alone without Redis (/tmp/vector-v2/everywhere/ev32/mut/: mutate.py, run.log, stdout.txt, one log per mutation, before.sha256). Every mutation turned its named cases red, and `sha256sum -c` matched all five source files after the run.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 every job renders route `laptop` | events.ts | 8/2 | S1, L1 |
+| M2 `changes` maps to `no-changes` | adapters/cloud-agents.ts | 8/2 | S1, L1 |
+| M3 `cloudSource` admits Jira | adapters/cloud-agents.ts | 9/1 | J1 |
+| M4 prepareCloud skips its visibility read | adapters/cloud-agents.ts | 6/4 | S1, L1, P1 prepareCloud's read, P1 recheck |
+| M5 the router's recheck dropped | router.ts | 7/3 | S1, L1, P1 recheck |
+| M6 actionsState ignores `codiumMode` | everywhere-policy.ts | 9/1 | W1 (binding reads 3, not 2) |
+| M7 claimJob takes a dispatched job | jobs.ts | 8/2 | S1, L1 |
+| M8 the read-once marker differs per read | jobs.ts | 8/2 | S1, L1 (the second read 200, not 410) |
+| M9 the dispatched timeout drops `ending: "not-started"` | jobs.ts | 9/1 | N1 |
+| M10 routeFacts reads the binding without `sourceEnabled` | router.ts | 9/1 | J1 |
+| M11 startDispatched leaves the job `dispatched` | jobs.ts | 8/2 | S1, L1 |
+| M12 the prompt names the repository id, not the job | adapters/cloud-agents.ts | 7/3 | S1, L1, P1 recheck |
+| M13 the settle listener does not post | adapters/cloud-agents.ts | 8/2 | S1, L1 |
+| M14 the default sources enable all three | adapters/cloud-agents.ts | 9/1 | D1 |
+
+Three more after the review (/tmp/vector-v2/everywhere/ev32/fixes/mut/: mutate.py and mutate-redis.py, run.log, one log per mutation, before.sha256), on the file with its four P1 rows; M15 and M16 without Redis (11 cases), M17 with a disposable loopback Redis (13 cases). `sha256sum -c` matched adapters/cloud-agents.ts and jobs.ts afterwards, and Redis was left with 0 keys.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M15 a failed visibility read counts as private | adapters/cloud-agents.ts | 10/1 | P1 the facts' read failing |
+| M16 terminal transitions keep the body | jobs.ts | 4/7 | S1, L1, J1, P1 prepareCloud's read, P1 recheck, W1, N1 |
+| M17 the task as a spare argument of the create script | jobs.ts | 9/4 | S1, L1, R1, R2, each at its E4 check |
+
+### Left open
+
+- **The checks line and the PR link** ((b)): the head-branch check with the installation token in @vector's github-app.ts (EV-30 (f), the lead's). When it lands, S1 and L1's posts change to the link and the checks line; their PR_URL and CHECKS absence checks are the tripwires, and the same change turns them into the brief's forms (the link and "checks did not run" in the post).
+- **Jira's Actions route** ((a)): a Jira run limit and Actions wording for the A2A task (EV-30 (j)).
+- **`why` in the reply** ((c), (d)): EV-29 (e)'s question, now for the intake path too.
+- **`public-repository` naming** (EV-29 (e)). If the lead rules for a `public-repository` answer, the same change turns P1's `no-place` assertions into the brief's `public-repository` refusal.
+- **No package yet** for the live mode reader and attachmentRepository's `visibility` field (EV-30 (o)); production has no `prepareCloud` until both exist and the owner lifts R-C8/R-A8.
+- **R-C8/R-A8** (the owner): until a platform leaves RESERVED, there is no Actions route; D1 shows it.
+
+### Safe by default
+
+- Test-only. No flag, env var, switch, dependency, lockfile, workflow or generated file changes, and nothing is regenerated.
+- ENABLED_SOURCES is untouched; D1 asserts it still reserves slack, linear and jira and gives no `prepareCloud`.
+- productionPorts still has no `prepareCloud` (EV-30's S1 and S2 in everywhere-cloud-adapter.test.ts, unchanged).
+- Every key, token and secret is generated in the file; the fetch guard refuses every host but loopback (G1); the listener registry is cleaned in the teardown.
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14`, brain-transport `0d18f750` and main `3670461a`.
+
+### Deferred verification
+
+- vector-everywhere.yml (the new file with R1 and R2 in its Valkey job, the moved adapter test, the lane and docs tests) and typecheck.yml on everywhere-finish, after the commit step's push. The commit gate also dispatches vector-hosted-ci.yml and vector-at-mention.yml, which run none of this package's files. vector-codium.yml is not dispatched for this package (the lane notes: not before PR #33 is on main and merged into this branch; PR #33 is on main, but main is not merged into this branch).

@@ -1,9 +1,7 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
-import { randomBytes, randomInt, randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { GithubAgents } from "../../core/src/github-agents"
-import type { RepoBinding } from "../../../api/_lib/cloud-agents-binding"
 import { notifyRunSettle, notifyRunStart } from "../../../api/_lib/cloud-agents-runs"
-import type { CloudRunTrigger, prepareCloudRun, StartCloudRunResult } from "../../../api/_lib/cloud-agents-start"
 import { cloudAgentsEnabled } from "../../../api/_lib/model-plan-config"
 import {
   ACTIONS_OUTCOME,
@@ -41,6 +39,21 @@ import { ACTIONS_JOB_PROMPT, TIMING, createJobId, jobOfActionsPrompt } from "../
 import type { SwitchState } from "../../../packages/schema/src/everywhere-policy"
 import { githubAppFixture } from "./github-app-fixture"
 import { everywhereEnv, RouteHarness, secret } from "./lib/everywhere-account"
+import {
+  BINDING_KEY,
+  VECTOR_RUN_KEY,
+  bindingFields,
+  bindingStore,
+  liveModes,
+  preparer,
+  privateApp,
+  runId,
+  sources,
+  stubApp,
+  vectorRun,
+  vectorStore,
+  type Command,
+} from "./lib/everywhere-cloud-agents"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { routerFixture } from "./lib/everywhere-router"
 import { realRedis, testEverywhereStore, useKv, withTestAccountAuthority, type RealRedis } from "./lib/everywhere-store"
@@ -48,114 +61,15 @@ import { realRedis, testEverywhereStore, useKv, withTestAccountAuthority, type R
 /*
  * VE-30a (EV-29): the Actions route's ports over @vector, with @vector's real binding decoder behind a stub store, the
  * real attachmentRepository behind the GitHub App fixture, a recorded prepareCloudRun and the real router. Nothing
- * leaves loopback.
+ * leaves loopback. The @vector stand-ins are spec §9's FakeCloudAgents in lib/everywhere-cloud-agents.ts (EV-32).
  */
 
 const guard = installFetchGuard()
 
 const ACCOUNT = "11111111-1111-4111-8111-111111111111"
-const BINDING_KEY = "vector:cloud-agents:binding:"
 const TICKET_PREFIX = everywhereKeys.ticket("a".repeat(64)).slice(0, -64)
 
-type Command = readonly (string | number)[]
 type FixtureState = Awaited<ReturnType<typeof githubAppFixture>>["state"]
-
-/** A stored binding hash, as @vector's REDEEM writes it; `drop` removes fields, `with` adds or replaces them. */
-function bindingFields(input: {
-  readonly repositoryId: string
-  readonly account: string
-  readonly with?: Record<string, string>
-  readonly drop?: readonly string[]
-}) {
-  const fields: Record<string, string> = {
-    repositoryId: input.repositoryId,
-    ownerId: "456",
-    repository: "fixture-owner/project",
-    account: input.account,
-    visibility: "private",
-    defaultRef: "refs/heads/main",
-    generation: "1",
-    binderGithubId: "790",
-    binderLogin: "fixture-binder",
-    workflowVersion: "3",
-    boundAt: String(Date.now()),
-    installationId: "600",
-    workflowMode: "codium",
-    ...input.with,
-  }
-  for (const name of input.drop ?? []) delete fields[name]
-  return fields
-}
-
-/** Answers bindingFor's one READ with the hash, so @vector's real decoder runs; "down" throws like a lost store. */
-function bindingStore(answer: () => Record<string, string> | undefined | "down") {
-  const commands: Command[] = []
-  const store = async (command: Command) => {
-    commands.push(command)
-    const value = answer()
-    if (value === "down") throw new Error("store down")
-    expect(command[0]).toBe("EVAL")
-    expect(command[2]).toBe("1")
-    expect(String(command[3]).startsWith(BINDING_KEY)).toBe(true)
-    return [value ? Object.entries(value).flat() : []]
-  }
-  return { store, commands }
-}
-
-/** A stand-in for attachmentRepository; `visibility` is the field EV-29 asks github-app.ts to add (no package yet). */
-function stubApp(answer: () => Promise<{ publicRepository: boolean; visibility?: string }>) {
-  const calls: RepoBinding[] = []
-  return {
-    calls,
-    attachmentRepository: async (binding: RepoBinding) => {
-      calls.push(binding)
-      return answer()
-    },
-  }
-}
-const privateApp = () => stubApp(async () => ({ publicRepository: false, visibility: "private" }))
-
-function preparer(answer?: () => Promise<Awaited<ReturnType<typeof prepareCloudRun>>>) {
-  const state = {
-    triggers: [] as CloudRunTrigger[],
-    ticketHash: randomBytes(32).toString("hex"),
-    dispatches: 0,
-    cancels: 0,
-    dispatchAnswer: { ok: true, dispatchedAt: 1 } as StartCloudRunResult,
-    onDispatch: async () => {},
-  }
-  const prepare: typeof prepareCloudRun = async (trigger) => {
-    state.triggers.push(trigger)
-    if (answer) return answer()
-    return {
-      ok: true,
-      ticketHash: state.ticketHash,
-      dispatch: async () => {
-        state.dispatches++
-        await state.onDispatch()
-        return state.dispatchAnswer
-      },
-      cancel: async () => {
-        state.cancels++
-        return true
-      },
-    }
-  }
-  return { state, prepare }
-}
-
-function liveModes(answer: () => Promise<"codium" | "own-key" | undefined>) {
-  const calls: RepoBinding[] = []
-  return {
-    calls,
-    liveMode: async (binding: RepoBinding) => {
-      calls.push(binding)
-      return answer()
-    },
-  }
-}
-
-const sources = (...names: RunSource[]) => new Set<RunSource>(names)
 
 /** A world where every gate passes for a Slack job on repository 123 sponsored by `account`. */
 function world(
@@ -892,58 +806,6 @@ describe("productionPorts", () => {
  * notifyRunStart and notifyRunSettle, with their 5 s budget) over the router fixture's store, and the cron's run read
  * through @vector's real listCloudRuns over a stub of @vector's store.
  */
-
-const VECTOR_RUN_KEY = "vector:cloud-agents:run:"
-
-/** A @vector run record as recordRunStart and the settle write it, which listCloudRuns' and runPages' decoders accept. */
-function vectorRun(input: {
-  readonly account: string
-  readonly rid: string
-  readonly outcome?: GithubAgents.Outcome
-  readonly with?: Record<string, string>
-}) {
-  const parts = /^gh-(\d+)-(\d+)-(\d+)-(\d+)$/.exec(input.rid)!
-  const verdict =
-    input.outcome === "changes" ? "pass" : input.outcome === "draft" || input.outcome === "failed" ? "fail" : "none"
-  return {
-    rid: input.rid,
-    account: input.account,
-    repository: "acme/app",
-    repositoryId: parts[1]!,
-    runUrl: `https://github.com/acme/app/actions/runs/${parts[2]}`,
-    event: "workflow_dispatch",
-    source: "github-dispatch",
-    purpose: "task",
-    startedAt: "1700000000000",
-    generation: "1",
-    jti: "A".repeat(22),
-    ...(input.outcome ? { endedAt: "1700000600000", outcome: input.outcome, verdict } : {}),
-    ...input.with,
-  }
-}
-
-/**
- * @vector's store as listCloudRuns (ZREVRANGE, then the READ script) and runPages (the RECORD script) read it. It
- * records every command, and refuses any other: nothing here may write a run record.
- */
-function vectorStore(runs: () => readonly Record<string, string>[] | "down") {
-  const commands: Command[] = []
-  const store = async (command: Command) => {
-    commands.push(command)
-    const list = runs()
-    if (list === "down") throw new Error("store down")
-    if (command[0] === "ZREVRANGE") return list.map((run) => run.rid)
-    if (command[0] === "EVAL" && command[2] === "1") {
-      const run = list.find((entry) => `${VECTOR_RUN_KEY}${entry.rid}` === command[3])
-      return run ? Object.entries(run).flat() : []
-    }
-    if (command[0] === "EVAL") return [[], ...list.map((run) => [Object.entries(run).flat(), []])]
-    throw new Error(`@vector's store got ${String(command[0])}`)
-  }
-  return { store, commands }
-}
-
-const runId = () => `gh-101-${randomInt(1, 2 ** 40)}-1-${randomInt(1, 2 ** 40)}`
 
 /** The router fixture's Slack job, dispatched with its own ticket, and EV-30's listeners registered over its store. */
 async function hooked(options: { readonly store?: (store: Store) => Store } = {}) {
