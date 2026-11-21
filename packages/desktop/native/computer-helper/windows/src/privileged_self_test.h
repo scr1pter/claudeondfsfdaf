@@ -1,6 +1,7 @@
 #pragma once
 #include "core.h"
 #include "server.h"
+#include "user_input.h"
 #include <array>
 #include <atomic>
 #include <functional>
@@ -22,7 +23,7 @@ inline constexpr std::array<std::wstring_view, 17> windows_privileged_checks{
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
   L"capture-isolated-window-worker", L"input-listener-health"};
-inline constexpr std::array<std::wstring_view, 224> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 261> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -90,8 +91,18 @@ inline constexpr std::array<std::wstring_view, 224> windows_privileged_stages{
   L"apps-list-request", L"apps-list-reply", L"apps-list-decode", L"apps-list-target",
   L"affinity-plan-context", L"affinity-plan-target", L"affinity-plan-fixture", L"affinity-plan-main",
   L"affinity-plan-session", L"affinity-plan-current-frame", L"affinity-plan-display", L"affinity-plan-excluded-surface",
-  L"affinity-plan-excluded-owner", L"affinity-plan-geometry", L"affinity-plan-request", L"affinity-plan-current",
+  L"affinity-plan-excluded-owner", L"affinity-plan-geometry", L"affinity-plan-request",
+  L"affinity-plan-current-target-lost", L"affinity-plan-current-target-stale", L"affinity-plan-current-pid", L"affinity-plan-current-main-window",
+  L"affinity-plan-current-excluded-window", L"affinity-plan-current-point-patch", L"affinity-plan-current-point-excluded", L"affinity-plan-current-owner",
+  L"affinity-plan-current-hit-null", L"affinity-plan-current-hit-main", L"affinity-plan-current-hit-foreign", L"affinity-plan-current-affinity-call",
+  L"affinity-plan-current-affinity-monitor", L"affinity-plan-current-affinity-none", L"affinity-plan-current-affinity-other", L"affinity-plan-current-exception",
   L"affinity-plan-current-context", L"input-health-context", L"input-health-target", L"input-health-ready",
+  L"input-health-unavailable-listener", L"input-health-unavailable-context", L"input-health-calibrating",
+  L"input-health-no-foreground", L"input-health-foreground-refused", L"input-health-observe-slow",
+  L"affinity-capture-stale-target-lost", L"affinity-capture-stale-target-stale", L"affinity-capture-stale-pid", L"affinity-capture-stale-main-window",
+  L"affinity-capture-stale-excluded-window", L"affinity-capture-stale-point-patch", L"affinity-capture-stale-point-excluded", L"affinity-capture-stale-owner",
+  L"affinity-capture-stale-hit-null", L"affinity-capture-stale-hit-main", L"affinity-capture-stale-hit-foreign", L"affinity-capture-stale-affinity-call",
+  L"affinity-capture-stale-affinity-monitor", L"affinity-capture-stale-affinity-none", L"affinity-capture-stale-affinity-other", L"affinity-capture-stale-exception",
   L"authority-paused-detection", L"authority-paused-physical",
   L"input-settle-context", L"input-settle-session", L"input-settle-verdict"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
@@ -120,6 +131,24 @@ std::wstring windows_privileged_native_code(std::wstring_view);
 // The isolated scenario's detection settle once its bounded wait ends: empty when the session is
 // paused, otherwise the closed input-settle-* stage. Pure; it reads only the two session snapshots.
 std::wstring windows_privileged_settle_stage(bool context_available, const ServerSession& begun, const std::optional<ServerSession>& latest);
+// HF-6: the first false term of the isolated affinity sample plan, in its original short-circuit order.
+enum class WindowsAffinityStale {
+  none, target_lost, target_stale, pid, main_window, excluded_window, point_patch, point_excluded, owner,
+  hit_null, hit_main, hit_foreign, affinity_call, affinity_monitor, affinity_none, affinity_other, exception};
+// Pure: the hit-test term from an already-read root window, and the term from an already-read display affinity.
+WindowsAffinityStale windows_privileged_affinity_hit(HWND root, HWND main, HWND excluded) noexcept;
+WindowsAffinityStale windows_privileged_affinity_value(bool read, DWORD affinity) noexcept;
+// The closed stage for a stale term, at planning or during the display read; empty for none.
+std::wstring_view windows_privileged_affinity_stale_stage(WindowsAffinityStale, bool during_capture) noexcept;
+// HF-6: read-only facts taken once after row 16's unchanged health wait fails, compared with the
+// pre-setup diagnostic. The surface covers the helper, the desktop and the foreground owner's token.
+struct WindowsListenerHealthFacts {
+  UserInputSetupState setup = UserInputSetupState::unavailable;
+  bool listener_changed = false, context_changed = false, foreground_null = false, observe_slow = false;
+  WindowsSurfaceState surface = WindowsSurfaceState::unavailable;
+};
+// Pure: the closed input-health-* stage for those facts; input-health-ready when none applies.
+std::wstring_view windows_privileged_listener_health_stage(const WindowsListenerHealthFacts&) noexcept;
 std::wstring windows_privileged_origin_stage(std::wstring_view message, std::wstring_view fallback = {}, std::wstring_view capture_stage = {});
 // Injected providers exercise the same scoped observer without querying a real window or desktop.
 std::wstring windows_privileged_capture_diagnostic(CaptureBackend, const std::function<void(CaptureBackend&)>&);

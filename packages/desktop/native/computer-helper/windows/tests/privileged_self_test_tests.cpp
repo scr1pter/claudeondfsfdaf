@@ -222,6 +222,60 @@ size_t run_privileged_self_test_tests() {
         "privileged.settle-outcomes-are-closed-stages");
   });
   test([] {
+    // HF-6: the affinity plan's closed hit-test and affinity-value terms, from already-read facts only.
+    const auto main = reinterpret_cast<HWND>(uintptr_t{100}), excluded = reinterpret_cast<HWND>(uintptr_t{101});
+    require(windows_privileged_affinity_hit(excluded, main, excluded) == WindowsAffinityStale::none &&
+      windows_privileged_affinity_hit(nullptr, main, excluded) == WindowsAffinityStale::hit_null &&
+      windows_privileged_affinity_hit(main, main, excluded) == WindowsAffinityStale::hit_main &&
+      windows_privileged_affinity_hit(reinterpret_cast<HWND>(uintptr_t{102}), main, excluded) == WindowsAffinityStale::hit_foreign,
+      "privileged.affinity-hit-terms-are-closed");
+    require(windows_privileged_affinity_hit(nullptr, nullptr, nullptr) == WindowsAffinityStale::hit_null, "privileged.affinity-null-hit-never-matches-a-null-plan");
+    require(windows_privileged_affinity_value(true, WDA_EXCLUDEFROMCAPTURE) == WindowsAffinityStale::none &&
+      windows_privileged_affinity_value(false, WDA_EXCLUDEFROMCAPTURE) == WindowsAffinityStale::affinity_call &&
+      windows_privileged_affinity_value(true, WDA_MONITOR) == WindowsAffinityStale::affinity_monitor &&
+      windows_privileged_affinity_value(true, WDA_NONE) == WindowsAffinityStale::affinity_none &&
+      windows_privileged_affinity_value(true, 0x42) == WindowsAffinityStale::affinity_other, "privileged.affinity-value-terms-are-closed");
+    // Every term but none maps to a distinct catalogued stage at planning and during the display read.
+    std::set<std::wstring_view> seen;
+    for (auto index = static_cast<int>(WindowsAffinityStale::target_lost); index <= static_cast<int>(WindowsAffinityStale::exception); ++index)
+      for (const bool during_capture : {false, true}) {
+        const auto stage = windows_privileged_affinity_stale_stage(static_cast<WindowsAffinityStale>(index), during_capture);
+        require(stage.starts_with(during_capture ? L"affinity-capture-stale-" : L"affinity-plan-current-") && seen.insert(stage).second &&
+          std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), stage) != windows_privileged_stages.end(),
+          "privileged.affinity-stale-stages-are-distinct-closed-stages");
+      }
+    require(seen.size() == 32 && windows_privileged_affinity_stale_stage(WindowsAffinityStale::none, false).empty() &&
+      windows_privileged_affinity_stale_stage(WindowsAffinityStale::none, true).empty(), "privileged.affinity-fresh-plan-has-no-stale-stage");
+    require(windows_privileged_affinity_stale_stage(WindowsAffinityStale::hit_foreign, false) == L"affinity-plan-current-hit-foreign" &&
+      windows_privileged_affinity_stale_stage(WindowsAffinityStale::affinity_monitor, true) == L"affinity-capture-stale-affinity-monitor",
+      "privileged.affinity-stale-stage-follows-its-term");
+  });
+  test([] {
+    // HF-6: row 16's listener-health classification, first match in catalogue order.
+    WindowsListenerHealthFacts clean; clean.setup = UserInputSetupState::needs_calibration; clean.surface = WindowsSurfaceState::ready;
+    require(windows_privileged_listener_health_stage(clean) == L"input-health-ready", "privileged.listener-clean-facts-keep-the-original-stage");
+    auto listener = clean; listener.setup = UserInputSetupState::unavailable; listener.listener_changed = true; listener.context_changed = true;
+    listener.foreground_null = true; listener.observe_slow = true; listener.surface = WindowsSurfaceState::unavailable;
+    require(windows_privileged_listener_health_stage(listener) == L"input-health-unavailable-listener", "privileged.listener-change-precedes-every-other-fact");
+    auto context = listener; context.listener_changed = false;
+    require(windows_privileged_listener_health_stage(context) == L"input-health-unavailable-context", "privileged.listener-context-rotation-precedes-foreground");
+    auto unavailable = clean; unavailable.setup = UserInputSetupState::unavailable; unavailable.surface = WindowsSurfaceState::secure_desktop;
+    require(windows_privileged_listener_health_stage(unavailable) == L"input-health-foreground-refused", "privileged.listener-unchanged-unavailable-falls-to-foreground");
+    auto calibrating = clean; calibrating.setup = UserInputSetupState::calibrating; calibrating.listener_changed = true; calibrating.foreground_null = true;
+    require(windows_privileged_listener_health_stage(calibrating) == L"input-health-calibrating", "privileged.listener-calibrating-means-no-failure-ran");
+    auto foreground = clean; foreground.foreground_null = true; foreground.surface = WindowsSurfaceState::unavailable; foreground.observe_slow = true;
+    require(windows_privileged_listener_health_stage(foreground) == L"input-health-no-foreground", "privileged.listener-null-foreground-precedes-surface");
+    for (const auto surface : {WindowsSurfaceState::elevated, WindowsSurfaceState::secure_desktop, WindowsSurfaceState::unavailable}) {
+      auto refused = clean; refused.surface = surface; refused.observe_slow = true;
+      require(windows_privileged_listener_health_stage(refused) == L"input-health-foreground-refused", "privileged.listener-refused-surface-precedes-latency");
+    }
+    auto slow = clean; slow.observe_slow = true;
+    require(windows_privileged_listener_health_stage(slow) == L"input-health-observe-slow", "privileged.listener-slow-observation-is-its-own-stage");
+    for (const auto& facts : {clean, listener, context, unavailable, calibrating, foreground, slow})
+      require(std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), windows_privileged_listener_health_stage(facts)) != windows_privileged_stages.end(),
+        "privileged.listener-health-stages-are-closed-stages");
+  });
+  test([] {
     const WindowsPrivilegedCheck failed{std::wstring(windows_privileged_checks[3]), false, false,
       L"native_operation_failed", L"window-capture-reply", L"capture_unavailable"};
     for (size_t variation = 0; variation < 7; ++variation) {
