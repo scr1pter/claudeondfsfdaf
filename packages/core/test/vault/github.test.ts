@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
+import fs from "node:fs/promises"
 import path from "node:path"
 import { VaultError } from "@vectordevai/core/vault/error"
 import { VaultGitHub } from "@vectordevai/core/vault/github"
@@ -239,6 +240,27 @@ describe("VaultGitHub.store", () => {
     quiet((refused as Error).message)
   })
 
+  test("hooks planted in the copy, its own or through core.hooksPath, never run (R45-20)", async () => {
+    const env = await setup()
+    await using _ = env.tmp
+    const dir = path.join(env.tmp.path, "cache")
+    const store = env.make("cache")
+    const created = await VaultBackup.create(store, { cost: COST })
+    await VaultBackup.backup({ store, opened: created, files: [file("first")] })
+    // A sandboxed command that could write the copy plants a reference-transaction hook in hooks/ and in a folder the
+    // copy's config names; both write a marker when git updates a ref (the fetch, update-ref and push of a backup).
+    const marker = path.join(env.tmp.path, "hooked").replaceAll("\\", "/")
+    const hook = `#!/bin/sh\necho "$0" >> "${marker}"\n`
+    for (const folder of [path.join(dir, "hooks"), path.join(dir, "planted")])
+      await Bun.write(path.join(folder, "reference-transaction"), hook).then(() => fs.chmod(path.join(folder, "reference-transaction"), 0o755))
+    const planted = env.make("cache")
+    await VaultBackup.backup({ store: planted, opened: created, files: [file("second")] })
+    sh(["--git-dir", dir, "config", "core.hooksPath", path.join(dir, "planted")])
+    await VaultBackup.backup({ store: env.make("cache"), opened: created, files: [file("third")] })
+    expect(await Bun.file(marker).exists()).toBe(false)
+    expect((await VaultBackup.read({ store: env.make("cache-b"), opened: created })).files[0]!.bytes.toString("utf8")).toBe("third")
+  })
+
   test("deleting the vault leaves only a README, and a new vault may start there", async () => {
     const env = await setup()
     await using _ = env.tmp
@@ -263,7 +285,8 @@ describe("VaultGitHub.store", () => {
     // git as the desktop and the CLI run it, without blocking: each command lets the other read go on meanwhile.
     const ran: string[] = []
     const overlapping: VaultGitHub.Git = async (args, options) => {
-      ran.push(args.find((word) => !word.startsWith("-")) ?? "")
+      // The subcommand, past --git-dir=… and each -c name=value.
+      ran.push(args.find((word, index) => !word.startsWith("-") && args[index - 1] !== "-c") ?? "")
       await Bun.sleep(20)
       return git(args, options)
     }

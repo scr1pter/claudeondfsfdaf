@@ -319,6 +319,19 @@ searched for vault, backup and restore lines:
   `VECTOR_SHELL_SANDBOX`, or Web access None, to matter at all. Two repair sites: move the CLI's copy to
   `Global.Path.data` (this lane's CLI file), or deny the copy in the sandbox. Left for the lead because it changes the
   CLI's on-disk layout and touches the sandbox's chosen soft spot.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`), sandbox untouched: the CLI's copy is now
+    `Global.Path.data/vault/github/<owner>/<name>.git` (`githubCopy` in `cli/cmd/vault.ts`), beside `vault.json`, and
+    `gitRunner` runs in the data folder. `storeFor` removes the old `Global.Path.cache/vault` before use, so a copy
+    that was already tampered with is never fetched into again; the next backup sets up a fresh copy from GitHub. In
+    core, `init`, `fetch`, `update-ref` and `push` all pass `-c core.hooksPath=<copy>/no-hooks` (push alone did), so a
+    `reference-transaction` hook cannot run even where the copy is writable (the desktop's copy in its own cache
+    included). Tests: engine `test/cli/vault.test.ts` asserts the copy resolves under data and outside the cache (red
+    with the cache path put back); core `test/vault/github.test.ts` "hooks planted in the copy…" plants the hook in
+    `hooks/` and in a folder the copy's config names as `core.hooksPath`, backs up twice against a local bare remote,
+    and asserts no marker (red on the old core: 11 pass, 1 fail). The B10 overlap case's subcommand reader now skips
+    each `-c` value. Not done: a `credential.helper=` reset, which would also drop the person's own helper that the
+    push relies on; with the copy out of the sandbox's reach a planted helper has nowhere to be written. R45-19 (the
+    sandbox's deny list) stays with `v2-closeout-ci`.
 - **R45-21. Reading: `versions()` is not exclusive** (`vault-backup.ts:449-479`). It can fetch into the same bare copy
   while a backup runs and answer a transient "changed while Vector read it". Not a defect.
 - **R45-22. Reading for A41's next review:** `remote-runtime.ts:43-45` reads its sealed identity the way R45-1

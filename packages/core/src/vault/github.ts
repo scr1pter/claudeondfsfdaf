@@ -105,6 +105,9 @@ export function store(options: {
   if (!repo) throw new VaultError("unavailable", "Name the repository as owner/repo.")
   const label = `your GitHub repository ${repo.full}`
   const git = (args: readonly string[], more?: Parameters<Git>[1]) => options.git([`--git-dir=${options.dir}`, ...args], more)
+  // No hooks of the copy's own (R45-20): a hooks folder or core.hooksPath planted in it would otherwise run on fetch,
+  // update-ref and push. The command line's -c wins over the copy's config.
+  const noHooks = ["-c", `core.hooksPath=${path.join(options.dir, "no-hooks")}`]
   const index = path.join(options.dir, "vault-index")
 
   let tip: string | undefined
@@ -123,7 +126,7 @@ export function store(options: {
       .catch(() => false)
     if (exists) return
     await fs.mkdir(options.dir, { recursive: true })
-    const result = await options.git(["init", "--bare", "-q", options.dir])
+    const result = await options.git([...noHooks, "init", "--bare", "-q", options.dir])
     if (result.exitCode !== 0) throw failed("Vector could not set up its copy of the vault")
   }
 
@@ -147,7 +150,7 @@ export function store(options: {
     tip = listed.stdout.toString("utf8").trim().split(/\s+/)[0] || undefined
     const next = new Map<string, Entry>()
     if (tip) {
-      const fetched = await git(["fetch", "--no-tags", "-q", options.remote, `+${BRANCH}:${LOCAL}`])
+      const fetched = await git([...noHooks, "fetch", "--no-tags", "-q", options.remote, `+${BRANCH}:${LOCAL}`])
       if (fetched.exitCode !== 0) throw failed(`Vector could not fetch ${repo.full}`)
       const resolved = (await git(["rev-parse", LOCAL])).stdout.toString("utf8").trim()
       if (resolved !== tip) throw new VaultError("unavailable", `${repo.full} changed while Vector read it. Try again.`)
@@ -210,8 +213,7 @@ export function store(options: {
     if (commit.exitCode !== 0) throw failed("Vector could not prepare the backup")
     const sha = commit.stdout.toString("utf8").trim()
     const pushed = await git([
-      "-c",
-      `core.hooksPath=${path.join(options.dir, "no-hooks")}`,
+      ...noHooks,
       "push",
       "-q",
       `--force-with-lease=${BRANCH}:${tip ?? ""}`,
@@ -225,7 +227,7 @@ export function store(options: {
         throw new VaultError("unavailable", `${repo.full} changed while Vector backed up (another computer?). Run it again.`)
       throw failed(`git could not push to ${repo.full}`)
     }
-    await git(["update-ref", LOCAL, sha])
+    await git([...noHooks, "update-ref", LOCAL, sha])
     tip = sha
     tree = undefined
     staged.clear()

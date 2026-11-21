@@ -12,7 +12,7 @@ import { VaultGitHub } from "@vectordevai/core/vault/github"
 import { VaultBackup } from "@vectordevai/core/vault/vault"
 import { Vault } from "@vectordevai/schema/vault"
 import { Git } from "../../src/git"
-import { gitRunner, restoredLine, restoreTotals, send } from "../../src/cli/cmd/vault"
+import { githubCopy, gitRunner, restoredLine, restoreTotals, send } from "../../src/cli/cmd/vault"
 import { tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -30,6 +30,12 @@ const bare = (dir: string) => {
 }
 
 describe("vector vault --github", () => {
+  test("the GitHub copy lives in the data folder beside vault.json, never in the cache a sandboxed command may write (R45-20)", () => {
+    const copy = githubCopy({ owner: "octo", name: "brain-vault" })
+    expect(copy).toBe(path.join(Global.Path.data, "vault", "github", "octo", "brain-vault.git"))
+    expect(path.relative(Global.Path.cache, copy).startsWith("..")).toBe(true)
+  })
+
   it.live("backs up and restores through Git.run, checking the repository is private before the push", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.acquireRelease(
