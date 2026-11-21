@@ -1175,6 +1175,65 @@ it.instance(
 )
 
 it.instance(
+  "an isolated child merges, then its sibling of the same parent is discarded: the discard keeps its reason and patch and leaves the merged parent files untouched",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* write(f.home.directory, "merged.txt", "base\n")
+      yield* write(f.home.directory, "discarded.txt", "base\n")
+      yield* git(f.home.directory, ["add", "merged.txt", "discarded.txt"])
+      yield* git(f.home.directory, ["commit", "-m", "sibling baseline"])
+      const sibling = yield* f.sessions.create({ parentID: f.parent.id })
+      const siblingRecord = path.join(Global.Path.data, "task-isolation", f.home.project.id, sibling.id)
+      const siblingWork = path.join(Global.Path.data, "task-worktree", f.home.project.id, sibling.id)
+      // The fixture's finalizer, for the sibling.
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          const store = yield* InstanceStore.Service
+          yield* store.disposeDirectory(siblingWork)
+          const service = yield* Git.Service
+          yield* service.run(["worktree", "remove", "--force", siblingWork], { cwd: f.home.directory })
+          yield* service.run(["branch", "-D", `vector/subagent/${sibling.id}`], { cwd: f.home.directory })
+          yield* Effect.promise(async () => {
+            await fs.rm(siblingWork, { recursive: true, force: true })
+            await fs.rm(siblingRecord, { recursive: true, force: true })
+          })
+          TaskClaims.unprotect(sibling.id)
+          TaskPlace.drop(sibling.id)
+        }).pipe(Effect.orDie),
+      )
+      yield* f.start
+      yield* f.isolation.reserve({ taskID: sibling.id, parentSessionID: f.parent.id, title: "Sibling", agent: f.agent })
+      yield* f.isolation.start(sibling.id)
+      yield* write(f.workPath, "merged.txt", "child change\n")
+      yield* write(siblingWork, "discarded.txt", "sibling change\n")
+      expect((yield* f.settle()).state).toBe("changed")
+      expect((yield* f.isolation.settle({ taskID: sibling.id, attempt: 1 })).state).toBe("changed")
+
+      expect((yield* f.isolation.merge({ taskID: f.child.id, by: { kind: "owner" } })).record.state).toBe("merged")
+      expect(yield* contents(f.home.directory, "merged.txt")).toBe("child change\n")
+
+      const reason = "The merged sibling already covers this."
+      const discarded = yield* f.isolation.discard({ taskID: sibling.id, by: { kind: "owner" }, reason })
+      expect(discarded.record.state).toBe("discarded")
+      expect(discarded.record.discardReason).toBe(reason)
+      expect((yield* f.isolation.get(sibling.id)).discardReason).toBe(reason)
+      expect(discarded.saved).toBeDefined()
+      const patch = yield* Effect.promise(() => fs.readFile(discarded.saved!, "utf8"))
+      expect(patch).toContain("+sibling change")
+      expect(patch).not.toContain("child change")
+      // The discard touched no parent file the merge wrote, and the sibling's checkout is gone.
+      expect(yield* contents(f.home.directory, "merged.txt")).toBe("child change\n")
+      expect(yield* contents(f.home.directory, "discarded.txt")).toBe("base\n")
+      expect(yield* exists(siblingWork)).toBe(false)
+      expect((yield* f.isolation.get(f.child.id)).state).toBe("merged")
+    }),
+  { git: true },
+  // Two isolated lifecycles, a merge and a discard, as the neighbours above: over 30 s on a slow hosted Windows runner.
+  60_000,
+)
+
+it.instance(
   "sweep removes only queued registered tasks and retains their recovery patches",
   () =>
     Effect.gen(function* () {
