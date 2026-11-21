@@ -2,6 +2,7 @@ import { afterEach, describe, expect } from "bun:test"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { AppProcess } from "@vectordevai/core/process"
 import { parsePatch } from "diff"
 import { Deferred, Effect, Layer } from "effect"
 import fs from "fs/promises"
@@ -31,6 +32,33 @@ const layer = LayerNode.compile(
 )
 const it = testEffect(layer)
 const worktreeIt = testEffect(Layer.mergeAll(layer, testInstanceStoreLayer))
+
+// Counts the git processes each working folder starts and how many are still running, at the process boundary.
+const gitProcesses = new Map<string, { started: number; running: number }>()
+const countedProcess = Layer.effect(
+  AppProcess.Service,
+  Effect.gen(function* () {
+    const original = yield* AppProcess.Service
+    return AppProcess.Service.of({
+      ...original,
+      run: (command, options) => {
+        if (command._tag !== "StandardCommand" || command.command !== "git") return original.run(command, options)
+        const count = gitProcesses.get(command.options.cwd ?? "") ?? { started: 0, running: 0 }
+        gitProcesses.set(command.options.cwd ?? "", count)
+        return Effect.suspend(() => {
+          count.started++
+          count.running++
+          return original.run(command, options)
+        }).pipe(Effect.ensuring(Effect.sync(() => count.running--)))
+      },
+    })
+  }),
+).pipe(Layer.provide(LayerNode.compile(AppProcess.node)))
+const countedIt = testEffect(
+  LayerNode.compile(LayerNode.group([Vcs.node, Git.node, EventV2Bridge.node, FSUtil.node, CrossSpawnSpawner.node]), [
+    [AppProcess.node, countedProcess],
+  ]),
+)
 
 const git = Effect.fn("VcsTest.git")(function* (cwd: string, args: string[]) {
   const result = yield* Git.Service.use((git) => git.run(args, { cwd }))
@@ -156,6 +184,27 @@ describe("Vcs", () => {
 
         const current = yield* vcs.branch()
         expect(current).toBe(branch)
+      }),
+    { git: true },
+  )
+})
+
+describe("Vcs init", () => {
+  afterEach(async () => {
+    await disposeAllInstances()
+  })
+
+  // The lookup's git runs with the checkout as its working folder. When init only forked it, the boot returned with that
+  // git still running outside the instance, so nothing waited for it before the folder was removed (Windows EBUSY).
+  countedIt.instance(
+    "init() returns only after the branch lookup's git has exited",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* init()
+
+        expect(gitProcesses.get(test.directory)?.started).toBeGreaterThan(0)
+        expect(gitProcesses.get(test.directory)?.running).toBe(0)
       }),
     { git: true },
   )
