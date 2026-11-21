@@ -568,15 +568,15 @@ Outcome, 21 Nov 2026 (v2-closeout-ci; every ID below read through GitHub MCP). T
 44705365424 concluded success on attempt 2, and attempt 1's failure was shard 1/6's piped-output smoke, fixed by #50
 (next section, which cites that job). Main push runs with all six Linux engine shards green: 44791067930 (`c776fb60`)
 and 44800897274 (`15f3ba77`), both red only on Windows or computer-helper jobs; 44822880542 (`3670461a`), 44848275007
-(`f3d7ac74`), 44869120445 (`3e90df62`) and 44877843970 (`5a5b5619`), all success; and 44885765033 (`153f9a22`), red only
-in computer-helper mac-test (macos-15-intel). Every test.yml run created after 2026-11-20T10:37Z that concluded failure
-was checked (cancelled and still-queued runs were not): the only failed Linux engine shard jobs were 136713741411 (run
-44860782743) and 136722206152 (run 44863454630), each 2 failing cases in a shell ancestry test, and 136751082548 (run
-44871325403), 1 failing code-review case. All three logs end in ordinary `(fail)` lines and a final test count, with no
-"Bun has crashed", panic or segmentation fault. So the panic has not recurred since #49, and from now on a Bun panic in
-scrollback.surface or `runtime.test.ts` needs a root cause, not a re-run. Narrowing the blanket "Bun segfault on a Linux
-shard" flake wording in v2-handoff.md, v2-master-prompt.md and RULES-v2 is left to the lead. The upstream report and the
-residual production path below stay open for the lead or owner.
+(`f3d7ac74`), 44869120445 (`3e90df62`) and 44877843970 (`5a5b5619`), all success; and 44885765033 (`153f9a22`), red
+only in computer-helper mac-test (macos-15-intel). Every test.yml run created after 2026-11-20T10:37Z that concluded
+failure was checked (cancelled and still-queued runs were not): the only failed Linux engine shard jobs were
+136713741411 (run 44860782743) and 136722206152 (run 44863454630), each 2 failing cases in a shell ancestry test, and
+136751082548 (run 44871325403), 1 failing code-review case. All three logs end in ordinary `(fail)` lines and a final
+test count, with no "Bun has crashed", panic or segmentation fault. So the panic has not recurred since #49, and from
+now on a Bun panic in scrollback.surface or `runtime.test.ts` needs a root cause, not a re-run. Narrowing the blanket
+"Bun segfault on a Linux shard" flake wording in v2-handoff.md, v2-master-prompt.md and RULES-v2 is left to the lead.
+The upstream report and the residual production path below stay open for the lead or owner.
 
 Not changed, flagged for the lead. `packages/core/src/brain/worker/host.ts:280` terminates a Brain worker on its start
 timeout, possibly while it is still loading, and `packages/engine/src/cli/cmd/tui.ts:227` terminates the TUI worker
