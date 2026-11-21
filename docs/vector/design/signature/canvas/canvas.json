@@ -6,7 +6,7 @@
       "expand": "fill",
       "h": 960,
       "is_interactive": true,
-      "title": "Vector window (click around)",
+      "title": "Vector window (superseded by the blend boards)",
       "w": 1440,
       "x": 0,
       "y": 0
@@ -14,7 +14,7 @@
     "Sidebar.dc.html": {
       "h": 1000,
       "is_interactive": true,
-      "title": "Sidebar states",
+      "title": "Sidebar states (superseded by the blend boards)",
       "w": 1440,
       "x": 1520,
       "y": 0
@@ -178,6 +178,78 @@
       "w": 1600,
       "x": 3360,
       "y": 9940
+    },
+    "More.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "More menu, Getting started, Deploy and the sidebar's menus",
+      "w": 1600,
+      "x": 0,
+      "y": 11360
+    },
+    "AgentDashboard.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Agent Dashboard",
+      "w": 1600,
+      "x": 1680,
+      "y": 11360
+    },
+    "Workflows.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "New agents, coordinated runs, workflows and Race",
+      "w": 1600,
+      "x": 3360,
+      "y": 11360
+    },
+    "Models.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Model picker",
+      "w": 1600,
+      "x": 0,
+      "y": 12780
+    },
+    "Codium.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Codium: limits, Done by Morning and the cloud computer",
+      "w": 1600,
+      "x": 1680,
+      "y": 12780
+    },
+    "Brain.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Memory, learned skills and the prompt guard",
+      "w": 1600,
+      "x": 3360,
+      "y": 12780
+    },
+    "Onboarding.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "First run",
+      "w": 1600,
+      "x": 0,
+      "y": 14200
+    },
+    "SessionTools.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "In a session: editor, terminals, context, docks and sharing",
+      "w": 1600,
+      "x": 1680,
+      "y": 14200
+    },
+    "Research.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Deep research",
+      "w": 1600,
+      "x": 3360,
+      "y": 14200
     }
   },
   "createdOnFiles": {
@@ -204,7 +276,13 @@
     "rowPanes",
     "rowPanesNote",
     "rowAgent",
-    "rowAgentNote"
+    "rowAgentNote",
+    "rowMore",
+    "rowMoreNote",
+    "rowModels",
+    "rowModelsNote",
+    "rowFirst",
+    "rowFirstNote"
   ],
   "notes": {
     "howto": {
@@ -319,6 +397,48 @@
       "x": -480,
       "y": 9940,
       "text": "On-call is a sixth sidebar item, after Automations. It lists requests from GitHub, Slack, Linear and Jira (@vector), what Vector did, and the result: a pull request or a reply. Its rules and hours cover jobs on this Mac, and Vector never merges or deploys.\n\nComputer use is a command, not a button: /computer, /cloud, /browser, /simulator, /plan, /vectorscope, also in ⌘K. The chatbar cloud button goes away.\n\nThe tour is a welcome card and four short stops: chatbar, sidebar, top buttons, Search. Replay it from Help › Take the tour."
+    },
+    "rowMore": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "The More menu, the Agent Dashboard and multi-agent work",
+      "x": 0,
+      "y": 11060
+    },
+    "rowMoreNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 11360,
+      "text": "More holds the tools you reach less often: Agent Dashboard, Coordinated runs, MCP, Plugins, Connected tools, Deploy and Getting started. Browser, Terminal and the code editor left it: Panels, the header and the Agent | Editor switch already open them.\n\nDeploy is today's Vector Cloud console (deployments, logs, domains, database), renamed so it doesn't clash with the cloud computer."
+    },
+    "rowModels": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "Models, Codium and what Vector learns",
+      "x": 0,
+      "y": 12480
+    },
+    "rowModelsNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 12780,
+      "text": "The model picker is where Vector differs most: Codium, free models, your own keys and models you host, in one list. Codium always shows as a share of the month, never tokens or prices. Memory shows what Vector learned and waits for your review."
+    },
+    "rowFirst": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "First run, session tools and deep research",
+      "x": 0,
+      "y": 13900
+    },
+    "rowFirstNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 14200,
+      "text": "First run is one setup card and a few dialogs. In a session, the editor, agent terminals, context and research use the same panels and header as everything else."
     }
   },
   "order": [
@@ -343,7 +463,16 @@
     "Simulator.dc.html",
     "Oncall.dc.html",
     "Commands.dc.html",
-    "Walkthrough.dc.html"
+    "Walkthrough.dc.html",
+    "More.dc.html",
+    "AgentDashboard.dc.html",
+    "Workflows.dc.html",
+    "Models.dc.html",
+    "Codium.dc.html",
+    "Brain.dc.html",
+    "Onboarding.dc.html",
+    "SessionTools.dc.html",
+    "Research.dc.html"
   ],
   "pages": [
     {

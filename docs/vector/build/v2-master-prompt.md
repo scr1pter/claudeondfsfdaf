@@ -380,12 +380,14 @@ Then the follow-ups: B08 and A59, V27/V30, VectorScope modules, CW-20–25, ever
 ## 11. The redesign: Vector Signature
 
 - **Live canvas** (claude.ai, private to the owner's account): https://claude.ai/artifact/H5htgm9tPE9WnxNoKMDwAG
-- **Source:** `docs/vector/design/signature/`. It has 22 interactive boards in 8 rows: `canvas/*.dc.html` plus `canvas.json`, in the Design canvas format (an `<x-dc>` template and a `class Component extends DCLogic` script).
+- **Source:** `docs/vector/design/signature/`. It has 32 interactive boards in 12 rows: `canvas/*.dc.html` plus `canvas.json`, in the Design canvas format (an `<x-dc>` template and a `class Component extends DCLogic` script).
 - **Specs:**
   - `specs/1-concept.md`: the sidebar, `--vxs-*` tokens, native vibrancy (macOS) or Mica (Windows), the Live strip.
   - `specs/2-blend.md`: the blend with today's app. Section 4.4 is the one-row chips; section 6.G is the browser reference; section 10 is the open decisions.
   - `specs/3-screens.md`: Vectorscope, Settings, Tasks, Search, Connected tools, Automations.
   - `specs/4-places.md`: where future features live. Section 7 is the open decisions.
+  - `specs/5-app-map.md`: **start here.** Every screen in today's app and the board that draws it, the final More menu, the build split between Fable, Opus and Sonnet (section 5), decisions D1-D13 (section 6), and where the boards depart from the spec (section 8).
+- **Owner direction (2026-11-20):** the redesign is "just a better Vector, incorporating the same features". The window looks about the same whichever agent runs a session; Vector's only visible differences are tokenomics (Codium as percentages) and more models. Build the newer boards 1:1; Main and Sidebar are superseded. Ship v2 completely by January 1, 2027.
 - **What the owner approved and asked for:**
   - **Sidebar and look:**
     - One calm graphite sidebar (#201F24) over an opaque stage (#161519).
