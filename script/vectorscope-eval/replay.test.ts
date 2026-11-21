@@ -317,7 +317,7 @@ describe("replay admission", () => {
     const ledger = Ledger.open({ limits })
     const before = ledger.entries.length
     for (const [variant, detail] of [
-      ["engine:trivial-skip", "registered for VS-24 wiring, which has not landed"],
+      ["engine:impact-graph", "registered for VS-25b wiring, which has not landed"],
       ["desktop:cross-family", "registered for VS-29a's desktop half, after VS-10, which has not landed"],
       ["engine:verify-isolated", "registered for VS-44c wiring (R3), which has not landed"],
       ["desktop:verify-isolated", "registered for VS-27 desktop guardrail, which has not landed"],
@@ -500,6 +500,7 @@ describe("the variant registry", () => {
       "engine:shared-verify",
       "desktop:shared-verify",
       "engine:privacy-zdr",
+      "engine:trivial-skip",
       "engine:cross-family",
       "engine:holdback-secrets",
       "desktop:holdback-secrets",
@@ -516,7 +517,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 6)
+    expect(pending).toHaveLength(2 * entries.length - 7)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -530,7 +531,6 @@ describe("the variant registry", () => {
         pending.filter((item) => item.name.startsWith("engine:")).map((item) => [item.name, item.package]),
       ),
     ).toEqual({
-      "engine:trivial-skip": "VS-24 wiring",
       "engine:impact-graph": "VS-25b wiring",
       "engine:cards-brain": "VS-26",
       "engine:guardrail-strict": "VS-27c",
@@ -675,9 +675,13 @@ describe("the variant registry", () => {
     expect(variantProblems("engine", { name: "engine", keys: {} })).toEqual([
       "its variant record names the frozen pipeline, engine, which has none",
     ])
-    expect(variantProblems("engine", { name: "engine:trivial-skip", keys: {} })[0]).toContain(
-      "registered for VS-24 wiring",
-    )
+    expect(resolveVariant("engine:trivial-skip")).toMatchObject({
+      ok: true,
+      keys: { trivial: "skip" },
+      adapter: "engine",
+    })
+    expect(resolveVariant("desktop:trivial-skip")).toMatchObject({ ok: false, reason: "pending" })
+    expect(variantProblems("engine", { name: "engine:trivial-skip", keys: {} })[0]).toContain("not the registry's")
     expect(variantProblems("engine", { name: "engine:bogus", keys: {} })[0]).toContain("not a registered variant")
     // A pending name carrying a built variant's keys, which ReviewEval.replay would run, is still pending.
     expect(variantProblems("engine", { name: "engine:impact-graph", keys: { verifyPolicy: "shared" } })[0]).toContain(

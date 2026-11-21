@@ -31,6 +31,7 @@ import {
   noteIgnoredCommitted,
   notePrivacyRefused,
   noteRedacted,
+  noteTrivialSkip,
   noteTriageFixedUnchecked,
   noteTriageUnchecked,
   noteVerifySkipped,
@@ -84,6 +85,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Review } from "../../src/review/run"
+import { ReviewSource } from "../../src/review/source"
+import { ReviewTrivial } from "../../src/review/trivial"
 import { ReviewService } from "../../src/review/service"
 import { ReviewLocalRun } from "../../src/review/local-run"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
@@ -3960,6 +3963,234 @@ describe("VS-23b route admission", () => {
       }),
     TIMEOUT,
   )
+})
+
+describe("VS-24 trivial policy skip (SF-16)", () => {
+  // Commit both sides. The proof must cover the same full Git diff the runner receives.
+  const change = (before: Record<string, string>, after: Record<string, string | null>) =>
+    Effect.gen(function* () {
+      const { llm, directory } = yield* useServer(PRICE)
+      const fs = yield* FSUtil.Service
+      const git = yield* Git.Service
+      const commit = (message: string) =>
+        Effect.gen(function* () {
+          for (const args of [
+            ["add", "-A"],
+            ["commit", "-qm", message],
+          ]) {
+            const result = yield* git.run(args, { cwd: directory })
+            expect(result.exitCode).toBe(0)
+          }
+          const result = yield* git.run(["rev-parse", "HEAD"], { cwd: directory })
+          expect(result.exitCode).toBe(0)
+          return result.text().trim()
+        })
+      for (const [name, text] of Object.entries(before)) yield* fs.writeWithDirs(path.join(directory, name), text)
+      const base = yield* commit("base")
+      for (const [name, text] of Object.entries(after)) {
+        if (text === null) yield* Effect.promise(() => Bun.file(path.join(directory, name)).delete())
+        else yield* fs.writeWithDirs(path.join(directory, name), text)
+      }
+      const head = yield* commit("change")
+      const files = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+      const settings = config({ trivial: "skip", security: "off" })
+      const trivialProof = yield* ReviewTrivial.prove({
+        directory,
+        base,
+        head,
+        files,
+        config: settings,
+        instructions: [],
+      })
+      return {
+        llm,
+        run: input(directory, { base, head, files, anchors: files, model: priced, config: settings, trivialProof }),
+      }
+    })
+
+  const prose = "docs/field-guide.md"
+  const source = "src/clock.ts"
+  const before = { [prose]: "The timer runs here.\n", [source]: "// Start the timer.\nexport const clock = 1\n" }
+  const after = { [prose]: "The timer runs once.\n", [source]: "// Start the clock.\nexport const clock = 1\n" }
+
+  linuxInstance(
+    "a proved documentation and plain comment change creates no session, provider request or attempt",
+    () =>
+      Effect.gen(function* () {
+        const { llm, run } = yield* change(before, after)
+        expect(run.trivialProof).toBeDefined()
+        const sessions = yield* Session.Service
+        const original = (yield* sessions.list({ limit: 50 })).map((session) => session.id)
+        const observed: Review.Observation[] = []
+        const outcome = yield* Review.run({ ...run, observe: (event) => observed.push(event) })
+        expect(observed).toEqual([])
+        expect(yield* llm.inputs).toEqual([])
+        expect((yield* sessions.list({ limit: 50 })).map((session) => session.id)).toEqual(original)
+        expect(outcome).toMatchObject({
+          trivial: true,
+          report: { summary: "", files: [], findings: [] },
+          notes: [noteTrivialSkip()],
+          specialists: [],
+          sessions: [],
+          skipped: [],
+          unreviewed: [],
+          stats: { files: 2, additions: 2, deletions: 2 },
+        })
+        expect(outcome.cost).toBeUndefined()
+        expect(outcome.passes).toBeUndefined()
+        expect(reviewVerdict({ kind: "outcome", outcome })).toEqual({
+          verdict: "policy-skip",
+          causes: ["trivial"],
+          notes: [],
+        })
+
+        const prior = {
+          id: "aaaaaaaaaaaa",
+          where: "summary" as const,
+          path: source,
+          line: 2,
+          side: "RIGHT" as const,
+          severity: "blocking" as const,
+          category: "bug" as const,
+          title: "The clock never stops",
+          sha: run.base,
+          status: "open" as const,
+        }
+        const retained = yield* Review.run({
+          ...run,
+          mode: "incremental",
+          since: run.base,
+          focus: [{ path: source, start: 1, end: 1 }],
+          prior: [prior],
+          observe: (event) => observed.push(event),
+        })
+        expect(retained.trivial).toBe(true)
+        expect(retained.selection.stillOpen).toEqual([prior])
+        expect(retained.selection.fixed).toEqual([])
+        expect(reviewVerdict({ kind: "outcome", outcome: retained }).verdict).toBe("blocking")
+        expect(observed).toEqual([])
+        expect(yield* llm.inputs).toEqual([])
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  linuxInstance(
+    "D3: the unset policy, explicit review, and a requested full review send identical requests under identical rules",
+    () =>
+      Effect.gen(function* () {
+        const { llm, run } = yield* change(before, after)
+        expect(run.trivialProof).toBeDefined()
+        const sessions = yield* Session.Service
+        const runs = yield* Effect.forEach(
+          [
+            { config: config({ security: "off" }) },
+            { config: config({ security: "off", trivial: "review" }) },
+            { config: run.config, forceFull: true },
+          ],
+          (override) =>
+            Effect.gen(function* () {
+              yield* llm.reset
+              yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+              const outcome = yield* Review.run({ ...run, ...override })
+              const rules = yield* Effect.forEach(outcome.sessions, (id) =>
+                sessions.get(SessionID.make(id)).pipe(Effect.map((session) => session.permission)),
+              )
+              const { durationMs, sessions: ids, ...stable } = outcome
+              expect(ids).toHaveLength(1)
+              expect(durationMs).toBeGreaterThanOrEqual(0)
+              expect(outcome.trivial).toBeUndefined()
+              return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), rules, outcome: stable }
+            }),
+        )
+        expect(runs[0].bodies).toHaveLength(1)
+        expect(runs[0].rules[0]?.length).toBeGreaterThan(0)
+        expect(runs[1]).toEqual(runs[0])
+        expect(runs[2]).toEqual(runs[0])
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  linuxInstance(
+    "missing GitHub proof, incomplete payload, skipped files, and restricted reads each keep the reviewer",
+    () =>
+      Effect.gen(function* () {
+        const { llm, run } = yield* change(before, after)
+        expect(run.trivialProof).toBeDefined()
+        const cases: Partial<Review.RunInput>[] = [
+          { trigger: "auto", trivialProof: undefined },
+          { trust: "untrusted" },
+          { files: run.files.slice(1) },
+          { skipped: [{ path: "package-lock.json", reason: "lockfile" }] },
+          { config: { ...run.config, holdback: "secrets" }, ignored: [prose] },
+          { readDenies: [prose] },
+        ]
+        for (const override of cases) {
+          yield* llm.reset
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+          const outcome = yield* Review.run({ ...run, ...override })
+          expect(outcome.trivial).toBeUndefined()
+          expect(outcome.specialists[0]?.status).toBe("ok")
+          expect(yield* modelRequests(llm)).toHaveLength(1)
+        }
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  const regressions: { name: string; before: Record<string, string>; after: Record<string, string | null> }[] = [
+    {
+      name: "directive comment",
+      before: { [source]: before[source] },
+      after: { [source]: "// @ts-ignore\nexport const clock = 1\n" },
+    },
+    {
+      name: "Python indentation",
+      before: { "timer.py": "if ready:\n    tick()\n" },
+      after: { "timer.py": "if ready:\n  tick()\n" },
+    },
+    {
+      name: "MDX component",
+      before: { "docs/timer.mdx": "<Timer />\n" },
+      after: { "docs/timer.mdx": "<Timer live />\n" },
+    },
+    {
+      name: "dependency bump",
+      before: { "requirements.txt": "wheel==1.0\n" },
+      after: { "requirements.txt": "wheel==2.0\n" },
+    },
+    {
+      name: "import-breaking rename",
+      before: { [source]: "export const clock = 1\n", "src/user.ts": 'import { clock } from "./clock"\n' },
+      after: { [source]: null, "src/timer.ts": "export const clock = 1\n" },
+    },
+    {
+      name: "case-only rename",
+      before: { [source]: "export const clock = 1\n" },
+      after: { [source]: null, "src/Clock.ts": "export const clock = 1\n" },
+    },
+  ]
+  for (const scenario of regressions) {
+    linuxInstance(
+      `the reviewer still checks a ${scenario.name}`,
+      () =>
+        Effect.gen(function* () {
+          const { llm, run } = yield* change(scenario.before, scenario.after)
+          expect(run.files).toHaveLength(1)
+          if (scenario.name.endsWith("rename")) expect(run.files[0].status).toBe("renamed")
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+          const observed: Review.Observation[] = []
+          const outcome = yield* Review.run({ ...run, observe: (event) => observed.push(event) })
+          expect(outcome.trivial).toBeUndefined()
+          expect(outcome.specialists).toMatchObject([{ name: "review", status: "ok" }])
+          expect(observed.filter((event) => event.type === "attempt" && event.admitted)).toHaveLength(1)
+          expect(yield* modelRequests(llm)).toHaveLength(1)
+        }),
+      { git: true },
+      TIMEOUT,
+    )
+  }
 })
 
 describe("VS-34 holdback payload (SF-13b)", () => {

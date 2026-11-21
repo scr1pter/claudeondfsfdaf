@@ -11,6 +11,7 @@
 // glob tools redact what they return.
 
 import path from "path"
+import { isDeepStrictEqual } from "node:util"
 import { Billing } from "@vectordevai/schema/billing"
 import { Cause, Duration, Effect, Exit, Option, Scope } from "effect"
 import type { EventV2 } from "@vectordevai/core/event"
@@ -35,6 +36,7 @@ import {
   noteIgnoredCommitted,
   notePrivacyRefused,
   noteRedacted,
+  noteTrivialSkip,
   noteTriageFixedUnchecked,
   noteTriageUnchecked,
   noteVerifySkipped,
@@ -113,6 +115,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { readAuthority, type ReadAuthority } from "./read-authority"
 import type { ResolvedModel } from "./model"
 import { ReviewRoutes } from "./route"
+import { ReviewTrivial } from "./trivial"
 
 export interface RunInput {
   parentID?: SessionID
@@ -123,6 +126,10 @@ export interface RunInput {
   head: string
   since?: string
   mode: "full" | "incremental"
+  /** A requested full review bypasses the trivial policy. A first review also has mode "full". */
+  forceFull?: boolean
+  /** Issued for the exact committed diff by the private local or replay collector. */
+  trivialProof?: ReviewTrivial.Proof
   files: DiffFile[] // the PR diff for the model, classified and filtered
   anchors: DiffFile[] // the diff findings are anchored against
   focus?: FocusHunk[]
@@ -309,6 +316,57 @@ export const run: (
   const started = Date.now()
   const deadline = started + input.config.timeoutMinutes * 60_000
   const config = input.config
+  // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
+  // untrusted block the prompts quote (holdback.ts). Only what the model is shown changes: anchors, the plan, stats,
+  // findings' suggestions and review state keep the change as it is. Unset, nothing here runs.
+  const hold = config.holdback === "secrets" ? holdback(input) : undefined
+  if (config.trivial === "skip" && !input.forceFull && input.trivialProof) {
+    // Only the complete diff can justify skipping every reviewer. A filtered model payload, withheld reads,
+    // or a failed proof keeps the normal review path. The GitHub job has no proof until its posting path handles skips.
+    const whole =
+      input.trust === "trusted" &&
+      !input.skipped.length &&
+      !input.ignored?.length &&
+      !input.admittedReads?.patterns.length &&
+      !input.readDenies?.length &&
+      !input.stopSignal?.aborted &&
+      isDeepStrictEqual(input.files, input.anchors)
+    if (whole && !hold?.held.length && !hold?.redactions.length && (!hold || input.ignored)) {
+      const kinds = yield* ReviewTrivial.kinds(input.trivialProof, {
+        directory: input.directory,
+        base: input.base,
+        head: input.head,
+        files: input.anchors,
+        config,
+      })
+      if (kinds?.length && !input.stopSignal?.aborted) {
+        return {
+          trivial: true,
+          report: { summary: "", risk: "low", files: [], findings: [] },
+          selection: selectFindings({
+            findings: [],
+            anchors: input.anchors,
+            head: input.head,
+            trust: input.trust,
+            mode: input.mode,
+            config,
+            prior: input.prior,
+          }),
+          skipped: [],
+          base: input.base,
+          head: input.head,
+          ...(input.since ? { since: input.since } : {}),
+          mode: input.mode,
+          unreviewed: [],
+          specialists: [],
+          sessions: [],
+          stats: changeStats(input.files),
+          notes: [noteTrivialSkip()],
+          durationMs: Date.now() - started,
+        } satisfies ReviewOutcome
+      }
+    }
+  }
   const priceOf = (model: ResolvedModel) =>
     model.costKind === "priced" && config.maxCostUsd > 0 ? model.price : undefined
   // VS-23b: under privacy "zdr" every model a pass may use needs a route the rules allow (route.ts), checked before any
@@ -353,10 +411,6 @@ export const run: (
     priceOf(model) !== undefined ||
     priceOf(triage) !== undefined ||
     (judgeModel !== undefined && priceOf(judgeModel) !== undefined)
-  // VS-34 (holdback "secrets"): credential files held back whole, and secret-shaped values redacted in every
-  // untrusted block the prompts quote (holdback.ts). Only what the model is shown changes: anchors, the plan, stats,
-  // findings' suggestions and review state keep the change as it is. Unset, nothing here runs.
-  const hold = config.holdback === "secrets" ? holdback(input) : undefined
   const heldPaths = new Set(hold?.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
   // The saved long outputs hold every session the user ever ran, so a review of someone else's pull request, which its
   // author can steer, cannot read them back; it only loses the cut-off end of a long tool output. Under holdback
@@ -1310,11 +1364,7 @@ export const run: (
         ...(entry.detail ? { detail: entry.detail } : {}),
       })),
       sessions: [...sessionIDs],
-      stats: {
-        files: input.files.length,
-        additions: input.files.reduce((sum, file) => sum + file.additions, 0),
-        deletions: input.files.reduce((sum, file) => sum + file.deletions, 0),
-      },
+      stats: changeStats(input.files),
       // A refusal says what was sent before it, and nothing about passes it stopped.
       notes: refused
         ? [
@@ -1353,6 +1403,14 @@ export const run: (
 // VS-34: what the prompts quote under holdback "secrets": the files and head files sent (credential files held back,
 // values redacted), and the untrusted context blocks the same way, with the pull request's text and the earlier
 // findings among them.
+function changeStats(files: DiffFile[]) {
+  return {
+    files: files.length,
+    additions: files.reduce((sum, file) => sum + file.additions, 0),
+    deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+  }
+}
+
 function holdback(input: RunInput) {
   const result = holdbackFiles(input.files, {
     ...(input.headFiles ? { headFiles: input.headFiles } : {}),

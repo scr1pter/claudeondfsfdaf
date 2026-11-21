@@ -12,6 +12,9 @@ import {
 } from "@vectordevai/core/review/config"
 import { DEFAULT_REVIEW_CONFIG, OPTIONAL_REVIEW_DEFAULTS, UNAPPLIED_REVIEW_KEYS } from "@vectordevai/core/review/types"
 
+const GITHUB_TRIVIAL_WARNING =
+  'GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.'
+
 describe("parseReviewConfig", () => {
   test("returns the defaults in new arrays", () => {
     const { config, warnings } = parseReviewConfig()
@@ -400,10 +403,21 @@ describe("mergeReviewConfig", () => {
     for (const text of texts)
       for (const env of envs)
         for (const trigger of ["local", "command", "auto", "desktop"] as const)
-          for (const at of ["base", "working-tree"] as const)
-            expect(mergeReviewConfig({ surface: "local", json: { at, text }, env, trigger })).toEqual(
-              parseReviewConfig({ json: text, env, trigger }),
-            )
+          for (const at of ["base", "working-tree"] as const) {
+            const parsed = parseReviewConfig({ json: text, env, trigger })
+            const local = mergeReviewConfig({ surface: "local", json: { at, text }, env, trigger })
+            // The direct GitHub entry refuses the trivial key for automatic and command jobs. The local surface
+            // preserves it for these same replay triggers, with every other setting and warning unchanged.
+            if (parsed.warnings.includes(GITHUB_TRIVIAL_WARNING)) {
+              expect(parsed.config.trivial).toBeUndefined()
+              expect(local).toEqual({
+                config: { ...parsed.config, trivial: "skip" },
+                warnings: parsed.warnings.filter((line) => line !== GITHUB_TRIVIAL_WARNING),
+              })
+              continue
+            }
+            expect(local).toEqual(parsed)
+          }
   })
 
   // What those surfaces now read differently. None is a default change: each is a sourced key named in review.json or
@@ -869,10 +883,8 @@ describe("review.md rules", () => {
   })
 })
 
-// VS-24c: `trivial` and `maxInputTokens` are parsed, and no runner reads them before VS-24 wiring. With neither set,
-// nothing changes (I-1); with a value that would change a review, the parser says it is not applied yet.
+// The engine applies the opt-in trivial policy. The input-token cap is parsed but still awaits SF-17.
 describe("VS-24's keys", () => {
-  const SKIP = '"trivial": "skip" is not applied yet: every change is still reviewed.'
   const CAP = '"maxInputTokens" is not applied yet: no input-token cap is enforced.'
 
   test("neither has a default entry, so the defaults and their digests stay as they were", () => {
@@ -896,10 +908,10 @@ describe("VS-24's keys", () => {
     })
   })
 
-  test("review.json sets them, and a value that would change a review says it is not applied", () => {
+  test("review.json accepts the trivial policy and warns only for the unapplied cap", () => {
     const set = parseReviewConfig({ json: JSON.stringify({ trivial: "skip", maxInputTokens: 200_000 }) })
     expect(set.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "skip", maxInputTokens: 200_000 })
-    expect(set.warnings).toEqual([SKIP, CAP])
+    expect(set.warnings).toEqual([CAP])
     // Their defaults, written out, change nothing a runner would do, so they warn about nothing.
     const defaults = parseReviewConfig({ json: JSON.stringify({ trivial: "review", maxInputTokens: 0 }) })
     expect(defaults.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "review", maxInputTokens: 0 })
@@ -913,7 +925,22 @@ describe("VS-24's keys", () => {
     })
     expect(config.trivial).toBe("skip")
     expect(config.maxInputTokens).toBe(100_000)
-    expect(warnings).toEqual([SKIP, CAP])
+    expect(warnings).toEqual([CAP])
+  })
+
+  test("automatic and command GitHub jobs keep reviewing, while local replays can apply the opt-in", () => {
+    for (const trigger of ["auto", "command"] as const) {
+      for (const input of [{ json: '{"trivial":"skip"}' }, { env: { REVIEW_TRIVIAL: "skip" } }]) {
+        const github = { config: DEFAULT_REVIEW_CONFIG, warnings: [GITHUB_TRIVIAL_WARNING] }
+        expect(parseReviewConfig({ trigger, ...input })).toEqual(github)
+        const sources = { trigger, json: { at: "base" as const, text: input.json }, env: input.env }
+        expect(mergeReviewConfig({ surface: "github", ...sources })).toEqual(github)
+        expect(mergeReviewConfig({ surface: "local", ...sources })).toEqual({
+          config: { ...DEFAULT_REVIEW_CONFIG, trivial: "skip" },
+          warnings: [],
+        })
+      }
+    }
   })
 
   test("a bad value warns naming the value in use, which for an unset key is its default", () => {
@@ -934,7 +961,7 @@ describe("VS-24's keys", () => {
     // A set value is the one named.
     expect(
       parseReviewConfig({ json: JSON.stringify({ trivial: "skip" }), env: { REVIEW_TRIVIAL: "x" } }).warnings,
-    ).toEqual(['REVIEW_TRIVIAL must be "review", "skip"; using "skip".', SKIP])
+    ).toEqual(['REVIEW_TRIVIAL must be "review", "skip"; using "skip".'])
     // A key with no default keeps today's text, which names nothing.
     expect(parseReviewConfig({ json: JSON.stringify({ model: "nope" }) }).warnings).toEqual([
       `${REVIEW_CONFIG_PATH}: "model" must be a "provider/model" string; using undefined.`,
@@ -1591,8 +1618,8 @@ describe("VS-34's holdback key", () => {
         json: { at: "base", text: '{"trivial": "skip", "holdback": "secrets"}' },
       }),
     ).toEqual({
-      config: { ...DEFAULT_REVIEW_CONFIG, trivial: "skip", holdback: "secrets" },
-      warnings: ['"trivial": "skip" is not applied yet: every change is still reviewed.'],
+      config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+      warnings: [GITHUB_TRIVIAL_WARNING],
     })
   })
 })

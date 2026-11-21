@@ -242,10 +242,6 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  trivial: {
-    applies: (config) => config.trivial === "skip",
-    warning: '"trivial": "skip" is not applied yet: every change is still reviewed.',
-  },
   maxInputTokens: {
     applies: (config) => (config.maxInputTokens ?? 0) > 0,
     warning: '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
@@ -335,7 +331,15 @@ export function parseReviewConfig(
   input: { json?: string; env?: Record<string, string | undefined>; trigger?: Trigger } = {},
 ): { config: ReviewConfig; warnings: string[] } {
   const warnings: string[] = []
-  const config = settle(readJson(input.json, warnings), input.env ?? {}, input.trigger, warnings)
+  // The GitHub job still uses this entry point with an automatic or command trigger. Local replays of those
+  // triggers use mergeReviewConfig and supply their actual surface.
+  const config = settle(
+    readJson(input.json, warnings),
+    input.env ?? {},
+    input.trigger,
+    warnings,
+    input.trigger === "auto" || input.trigger === "command",
+  )
   return { config, warnings }
 }
 
@@ -386,6 +390,7 @@ export function mergeReviewConfig(input: {
     env,
     input.trigger,
     warnings,
+    input.surface === "github",
   )
   const sources: { values: Record<string, unknown> | undefined; trusted: boolean; label: (key: string) => string }[] = [
     { values: input.global, trusted: input.surface === "local", label: (key) => `review.${key} in the global config` },
@@ -456,6 +461,7 @@ function settle(
   env: Record<string, string | undefined>,
   trigger: Trigger | undefined,
   warnings: string[],
+  github: boolean,
 ): ReviewConfig {
   // New arrays, so a caller that mutates its config never changes the shared defaults.
   const config: ReviewConfig = {
@@ -518,6 +524,11 @@ function settle(
         ? '"depth": "auto" keeps "security": "off": no band adds the security pass or the access lens.'
         : '"depth": "auto" keeps "security": "off": no band adds the security pass.',
     )
+  // Until SF-38 can record a policy skip without marking the commit reviewed, GitHub reviews the change.
+  if (github && config.trivial === "skip") {
+    delete config.trivial
+    warnings.push('GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.')
+  }
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),
   )

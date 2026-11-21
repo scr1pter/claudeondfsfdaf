@@ -369,6 +369,8 @@ export interface ReviewOutcome {
   since?: string
   mode: "full" | "incremental" | "carry"
   forcePushed?: boolean
+  // SF-16: only a zero-attempt policy skip carries this marker. The verdict retains earlier open findings.
+  trivial?: true
   // "privacy" and "budget-estimate" are VS-23's and VS-24's stops. Review.run and `vector review` make "privacy" when
   // the route rules refuse a model or an attempt (VS-23b), with every file unreviewed; no runner makes
   // "budget-estimate" before VS-24 wiring.
@@ -456,9 +458,7 @@ export interface ReviewConfig {
   modelEvidence: "off" | "warn"
   // VS-24's opt-in (D3): "skip" ends a review whose every changed file is trivial (trivial.ts: whitespace, docs, rename
   // or comment-only under strict rules) with zero attempts and a note. Absent means "review" (OPTIONAL_REVIEW_DEFAULTS),
-  // and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they were. Parsed, and read by no
-  // runner until VS-24 wiring (UNAPPLIED_REVIEW_KEYS), so the parser warns that "skip" is not applied; the GitHub skip
-  // waits for the @vector merge.
+  // and DEFAULT_REVIEW_CONFIG leaves it out. The desktop and GitHub review surfaces still review the change.
   trivial?: "review" | "skip"
   // VS-25's opt-in (D3, Q15). Under "graph", Review.run will build the Tier 1 impact slice (impact.ts) and send it as
   // <untrusted_impact>. Absent means "grep" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every
@@ -620,7 +620,6 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
-  "trivial",
   "maxInputTokens",
   "impact",
   "guardrail",

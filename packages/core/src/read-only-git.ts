@@ -16,6 +16,9 @@ const LIMIT = {
   refs: 4 * 1024 * 1024,
   objects: 1024 * 1024 * 1024,
   files: 50_000,
+  show: 1024 * 1024,
+  links: 64,
+  linkBytes: 64 * 1024,
 }
 export const INTEGRITY = Object.freeze({
   addressSpace: 512 * 1024 * 1024,
@@ -1256,6 +1259,8 @@ export interface Repository {
   readonly head: string
   readonly branch?: string
   readonly shallow: boolean
+  /** Whether the snapshot's info/attributes or info/exclude contains potential rules. */
+  readonly hasInfoRules?: boolean
   /** Synchronous lifetime witness; false as soon as close starts. */
   readonly isOpen: () => boolean
   readonly status: () => Promise<{ head: string; dirty: boolean }>
@@ -1300,6 +1305,20 @@ export type Read =
       readonly last: number
     }
   | { readonly kind: "tree"; readonly revision: string; readonly file: string }
+  /** Raw bytes of one regular file in an exact commit, subject to maxBytes (at most 1 MiB).
+   * A missing commit or file, another entry type, or an oversized file gives code 1 and no bytes. */
+  | { readonly kind: "show"; readonly revision: string; readonly file: string; readonly maxBytes: number }
+  /** Case-insensitive literal mentions of the path's basename without its last extension, anywhere in the commit.
+   * Code 0 means found, 1 proves absence, and 2 means unsearchable. No file contents or names are returned. */
+  | { readonly kind: "path-references"; readonly revision: string; readonly file: string }
+  /** Zero only if links and their regular destinations are unchanged between both commits and unrelated to
+   * the supplied changed paths. Ambiguous or incomplete inventories return 2 (or refuse). No output. */
+  | {
+      readonly kind: "unaliased-changes"
+      readonly from: string
+      readonly to: string
+      readonly files: readonly string[]
+    }
   | { readonly kind: "subjects"; readonly from: string; readonly to: string }
   // VS-34 item 4: which of these work-tree paths the work tree's .gitignore files and the copied info/exclude ignore,
   // index or not (`check-ignore --no-index`). Global excludes are /dev/null here.
@@ -1326,6 +1345,74 @@ export function repositoryPath(file: string) {
 function relative(file: string) {
   requireValue(repositoryPath(file), "repository-relative path is unsupported")
   return file
+}
+
+type CommitLink = { oid: string; text: string; target: string; entry: string }
+
+// Resolve against exact entries in the captured tree. In particular, "dir/../file" requires a real directory at
+// dir. Lexically simplifying it first could cross a symlink, escape the tree, or accept a dangling component.
+function linkDestination(file: string, text: string, entries: ReadonlyMap<string, string>) {
+  const directory = file.split("/").slice(0, -1)
+  const parts = text.split("/")
+  if (directory.length > 64 || parts.length > 64 || !/^[A-Za-z0-9_./ -]+$/.test(text)) return
+  for (const [index, part] of parts.entries()) {
+    if (!part) return
+    if (part === "." || part === "..") {
+      if (index === parts.length - 1 || (part === ".." && !directory.pop())) return
+      continue
+    }
+    if (part.endsWith(".") || part.endsWith(" ") || part.toLowerCase() === ".git") return
+    directory.push(part)
+    const name = directory.join("/")
+    const entry = entries.get(name)
+    if (index < parts.length - 1) {
+      if (entry !== "040000") return
+      continue
+    }
+    if (entry?.startsWith("100644 ") || entry?.startsWith("100755 ")) return { target: name, entry }
+  }
+}
+
+// No link on disk is opened. The caller supplies only blob bytes from this same integrity-checked snapshot.
+async function commitLinks(list: Buffer, readLink: (oid: string, size: number) => Promise<string | undefined>) {
+  const text = list.toString("utf8")
+  if (!Buffer.from(text).equals(list)) return
+  const rows = text.split("\0")
+  if (rows.pop() !== "" || rows.length > LIMIT.files * 2) return
+  const entries = new Map<string, string>()
+  const names = new Set<string>()
+  const links: { file: string; oid: string; size: number }[] = []
+  let leaves = 0
+  let bytes = 0
+  for (const row of rows) {
+    const tab = row.indexOf("\t")
+    const header = /^(040000|100644|100755|120000) ([0-9a-f]{40}) (-|[0-9]{1,13})$/.exec(row.slice(0, tab))
+    const file = row.slice(tab + 1)
+    if (!header || tab < 0 || !repositoryPath(file)) return
+    const folded = file.normalize("NFC").toLowerCase()
+    if (names.has(folded)) return
+    names.add(folded)
+    const [, mode, oid, size] = header
+    if ((mode === "040000") !== (size === "-")) return
+    entries.set(file, mode === "040000" ? mode : mode + " " + oid)
+    if (mode === "040000") continue
+    if (++leaves > LIMIT.files) return
+    if (mode !== "120000") continue
+    const length = Number(size)
+    if (!Number.isSafeInteger(length) || length <= 0 || length > 4096 || links.length >= LIMIT.links) return
+    bytes += length
+    if (bytes > LIMIT.linkBytes) return
+    links.push({ file, oid, size: length })
+  }
+  const result = new Map<string, CommitLink>()
+  for (const { file, oid, size } of links) {
+    const text = await readLink(oid, size)
+    if (text === undefined) return
+    const destination = linkDestination(file, text, entries)
+    if (!destination) return
+    result.set(file, { oid, text, ...destination })
+  }
+  return result
 }
 
 /** A scoped private Git view for the entire review collection; callers still enforce their own file/read policy. */
@@ -1507,10 +1594,19 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     await step(startup, () =>
       fs.writeFile(path.join(privateGit, "config"), safe.join("\n"), { mode: 0o600, flag: "wx" }),
     )
+    let hasInfoRules = false
     for (const name of ["attributes", "exclude"]) {
       const data = await read(commonHandle, "info/" + name, LIMIT.config, true, startup)
-      if (data)
-        await step(startup, () => fs.writeFile(path.join(privateGit, "info", name), data, { mode: 0o600, flag: "wx" }))
+      if (!data) continue
+      // Missing, blank and full-line comments are inert (including Git's default info/exclude template).
+      if (
+        data
+          .toString("latin1")
+          .split("\n")
+          .some((line) => !line.startsWith("#") && !/^[ \t]*\r?$/.test(line))
+      )
+        hasInfoRules = true
+      await step(startup, () => fs.writeFile(path.join(privateGit, "info", name), data, { mode: 0o600, flag: "wx" }))
     }
     const shallow = await read(commonHandle, "shallow", LIMIT.refs, true, startup)
     if (shallow) {
@@ -1663,6 +1759,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       )
       return value === "HEAD" ? capturedHead : value
     }
+    const linkInventories = new Map<string, Map<string, CommitLink>>()
     const perform = async (operation: Read, context: Operation) => {
       context.check()
       const literal = (file: string) => ":(literal)" + relative(file)
@@ -1677,6 +1774,56 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       const run = (query: string[], input?: Buffer) => commands.command(context, [...args, ...query], input)
       // Only a regex-checked object id reaches this, and only the private snapshot answers for it.
       const peel = (oid: string) => run(["rev-parse", "--verify", "--quiet", "--end-of-options", oid + "^{commit}"])
+      const isCommit = async (oid: string) => {
+        requireValue(typeof oid === "string" && /^[0-9a-f]{40}$/.test(oid), "an exact commit is required")
+        // The captured HEAD was authenticated at open. A tag that peels to a commit is not itself a commit.
+        if (oid === capturedHead) return true
+        const result = await peel(oid)
+        return result.code === 0 && result.bytes.equals(Buffer.from(oid + "\n"))
+      }
+      const linksOf = async (commit: string) => {
+        const cached = linkInventories.get(commit)
+        if (cached) return cached
+        if (!(await isCommit(commit))) return
+        // Include directories: an intermediate component of a link must be a real directory in this tree.
+        const tree = await commands.command(
+          context,
+          [
+            ...args,
+            "ls-tree",
+            "-rtz",
+            "--full-tree",
+            "--format=%(objectmode) %(objectname) %(objectsize)%x09%(path)",
+            commit,
+          ],
+          undefined,
+          INTEGRITY.output,
+        )
+        if (tree.code !== 0 || commandDiagnostics.get(tree)?.stderr !== 0) return
+        // Identical blobs across paths and commits share bytes; each link resolves relative to its own parent.
+        const texts = new Map<string, string>()
+        for (const inventory of linkInventories.values())
+          for (const link of inventory.values()) texts.set(link.oid, link.text)
+        const links = await commitLinks(tree.bytes, async (oid, size) => {
+          const cached = texts.get(oid)
+          if (cached !== undefined) return cached
+          const result = await commands.command(
+            context,
+            [...args, "show", "--no-ext-diff", "--no-textconv", oid, "--"],
+            undefined,
+            size,
+          )
+          if (result.code !== 0 || commandDiagnostics.get(result)?.stderr !== 0 || result.bytes.length !== size) return
+          const text = result.bytes.toString("latin1")
+          texts.set(oid, text)
+          return text
+        })
+        if (!links) return
+        // Keep just two revisions' bounded link records; the full entry inventories are released after validation.
+        if (linkInventories.size >= 2) linkInventories.delete(linkInventories.keys().next().value!)
+        linkInventories.set(commit, links)
+        return links
+      }
       // Every place rev-parse looks a name up, in Git's order. Only a branch, remote-tracking branch or tag may
       // answer. A second match, or one anywhere else, refuses where Git would warn or resolve something else.
       const named = async (name: string) => {
@@ -1911,6 +2058,93 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           ])
         case "tree":
           return run(["ls-tree", "-z", revision(operation.revision), "--", literal(operation.file)])
+        case "show": {
+          const { revision: commit, file, maxBytes } = operation
+          requireValue(typeof file === "string" && file.isWellFormed() && repositoryPath(file), "invalid show path")
+          requireValue(Number.isSafeInteger(maxBytes) && maxBytes >= 0 && maxBytes <= LIMIT.show, "invalid show limit")
+          const missing = { code: 1, bytes: Buffer.alloc(0) }
+          if (!(await isCommit(commit))) return missing
+          // Size the blob before show and reject symlinks, trees and gitlinks. The literal pathspec can select only
+          // this entry; the fixed-size metadata format never asks Git to print a repository-controlled path.
+          const entry = await commands.command(
+            context,
+            [
+              ...args,
+              "ls-tree",
+              "--full-tree",
+              "-z",
+              "--format=%(objectmode) %(objectsize)",
+              commit,
+              "--",
+              literal(file),
+            ],
+            undefined,
+            256,
+          )
+          const regular = /^(?:100644|100755) (0|[1-9][0-9]{0,12})\x00$/.exec(entry.bytes.toString("latin1"))
+          if (entry.code !== 0 || !regular || Number(regular[1]) > maxBytes) return missing
+          const size = Number(regular[1])
+          const result = await commands.command(
+            context,
+            [...args, "show", "--no-ext-diff", "--no-textconv", commit + ":" + file, "--"],
+            undefined,
+            size,
+          )
+          return result.code === 0 && result.bytes.length === size ? result : missing
+        }
+        case "path-references": {
+          const { revision: commit, file } = operation
+          requireValue(
+            typeof file === "string" && file.isWellFormed() && repositoryPath(file),
+            "invalid reference path",
+          )
+          const unknown = { code: 2, bytes: Buffer.alloc(0) }
+          // Searching the stem also covers literal mentions of the basename, with extension, and the full path.
+          // The private process uses the C locale, so claim a case-insensitive answer only for simple ASCII stems.
+          const stem = path.posix.parse(file).name
+          if (!/^[A-Za-z0-9_.-]{1,255}$/.test(stem)) return unknown
+          const links = await linksOf(commit)
+          if (!links) return unknown
+          // Git grep omits link blobs. Their literal target text is still a possible reference.
+          for (const link of links.values())
+            if (link.text.toLowerCase().includes(stem.toLowerCase())) return { code: 0, bytes: Buffer.alloc(0) }
+          const found = await commands.command(
+            context,
+            [...args, "grep", "--threads=1", "--no-textconv", "-a", "-F", "-i", "-q", "-e", stem, commit, "--"],
+            undefined,
+            256,
+          )
+          if (found.bytes.length || commandDiagnostics.get(found)?.stderr !== 0 || ![0, 1].includes(found.code))
+            return unknown
+          return found
+        }
+        case "unaliased-changes": {
+          const { from, to, files } = operation
+          requireValue(Array.isArray(files) && files.length > 0 && files.length <= 64, "invalid changed path count")
+          const changed = Array.from(files, (file) => {
+            requireValue(
+              typeof file === "string" && file.isWellFormed() && repositoryPath(file),
+              "invalid changed path",
+            )
+            return file.normalize("NFC").toLowerCase()
+          })
+          const unknown = { code: 2, bytes: Buffer.alloc(0) }
+          const before = await linksOf(from)
+          if (!before) return unknown
+          const after = await linksOf(to)
+          if (!after || before.size !== after.size) return unknown
+          const touches = (path: string) => {
+            const name = path.normalize("NFC").toLowerCase()
+            return changed.some((file) => file === name || file.startsWith(name + "/") || name.startsWith(file + "/"))
+          }
+          for (const [name, link] of after) {
+            const prior = before.get(name)
+            if (!prior || prior.oid !== link.oid || prior.target !== link.target || prior.entry !== link.entry)
+              return unknown
+            if (touches(name) || touches(link.target)) return unknown
+          }
+          return { code: 0, bytes: Buffer.alloc(0) }
+        }
         case "subjects":
           return run([
             "log",
@@ -2043,7 +2277,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     await status(startup)
     startup.check()
     transferred = true
-    return Object.defineProperty(
+    return Object.defineProperties(
       {
         directory: root,
         gitDirectory: git,
@@ -2052,13 +2286,16 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         head: capturedHead,
         branch,
         shallow: !!shallow?.byteLength,
+        hasInfoRules,
         isOpen: () => !closed && !controller.signal.aborted,
         status: () => observe(status),
         read: safeRead,
         close,
       },
-      "isOpen",
-      { writable: false, configurable: false },
+      {
+        isOpen: { writable: false, configurable: false },
+        hasInfoRules: { writable: false, configurable: false },
+      },
     )
   } catch (error) {
     throw unavailable(error)

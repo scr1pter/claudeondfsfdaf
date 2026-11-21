@@ -84,6 +84,7 @@ const prior = Schema.Struct({
   also: optional(many(PositiveInt)),
 })
 const Outcome = Schema.Struct({
+  trivial: optional(Schema.Literal(true)),
   report: Schema.Struct({
     summary: text,
     risk,
@@ -305,6 +306,26 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
     (!result.target ||
       result.outcome.head !== expected.head ||
       (result.outcome.strict && result.outcome.strict.head !== expected.head))
+  )
+    return undefined
+  const outcome = result.outcome
+  if (
+    outcome?.trivial &&
+    (outcome.cost ||
+      outcome.sessions.length ||
+      outcome.specialists.length ||
+      outcome.passes?.length ||
+      outcome.partial ||
+      outcome.held?.length ||
+      outcome.unreviewed.length ||
+      outcome.skipped.length ||
+      outcome.report.findings.length ||
+      outcome.report.files.length ||
+      outcome.selection.inline.length ||
+      outcome.selection.overflow.length ||
+      outcome.selection.outsideDiff.length ||
+      outcome.selection.elsewhere.length ||
+      outcome.selection.nits.length)
   )
     return undefined
   if (result.error !== undefined && (result.outcome || result.exitCode !== 2)) return undefined

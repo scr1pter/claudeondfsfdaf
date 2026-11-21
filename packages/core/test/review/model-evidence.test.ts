@@ -62,6 +62,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/connect/adapters/vectorscope.ts",
   "packages/core/src/connect/policy.ts",
   "packages/engine/src/review/run.ts",
+  "packages/engine/src/review/trivial.ts",
   "packages/engine/src/review/read-authority.ts",
   "packages/engine/src/review/service.ts",
   "packages/engine/src/review/git.ts",
@@ -572,10 +573,9 @@ describe("scope", () => {
       { zdrAttested: ["openrouter"] },
       // VS-33's attestation objects are route settings too.
       { zdrAttested: [{ id: "openrouter", operator: "openrouter", region: "eu" as const, extendedCache: true }] },
-      // VS-24's token cap is a budget, and its trivial gate is applied by no runner yet.
+      // VS-24's token cap is a budget; the explicit default for the trivial gate has no policy effect.
       { maxInputTokens: 200_000 },
       { trivial: "review" as const },
-      { trivial: "skip" as const },
       // VS-25's impact slice is applied by no runner yet either, nor VS-27's guardrail.
       { impact: "grep" as const },
       { impact: "graph" as const },
@@ -603,19 +603,16 @@ describe("scope", () => {
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
 
-  // VS-24c: `trivial` is a policy key (a skipped change is not reviewed) that no runner applies before VS-24 wiring, so
-  // it never enters the digest yet: a review whose config sets `trivial: "skip"` runs, and is scoped as, the full
-  // review. Once a runner applies it (it leaves UNAPPLIED_REVIEW_KEYS), it counts only when set to "skip", so the digest
-  // of every config made before it, the frozen engine baseline's included, still holds.
-  test("the policy digest leaves out VS-24's trivial until a runner applies it", () => {
-    // Printed by policyDigest at 8f38f824, before `trivial` was a policy key.
-    expect(policyDigest(DEFAULT_REVIEW_CONFIG)).toBe("70512122f41ec160")
+  test("only the engine's opt-in trivial skip changes its evidence policy; the default and desktop remain stable", () => {
     const base = policyDigest(DEFAULT_REVIEW_CONFIG)
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("trivial")
-    for (const trivial of ["skip", "review", undefined] as const)
+    expect(base).toBe("70512122f41ec160")
+    expect(EVIDENCE_POLICY_KEYS).toContain("trivial")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("trivial")).toBe(false)
+    for (const trivial of ["review", undefined] as const)
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, trivial })).toBe(base)
     const skip: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, trivial: "skip" }
-    expect(evidenceScope({ adapter: "engine", config: skip })).toEqual(SCOPE)
+    expect(policyDigest(skip)).not.toBe(base)
+    expect(evidenceScope({ adapter: "engine", config: skip })).toEqual({ ...SCOPE, policy: policyDigest(skip) })
     expect(evidenceScope({ adapter: "desktop", config: skip })).toEqual(
       evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
     )

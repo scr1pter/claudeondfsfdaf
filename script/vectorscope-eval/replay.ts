@@ -183,8 +183,9 @@ export const VARIANTS = {
   },
   "trivial-skip": {
     planned: 'trivial: "skip"',
-    engine: { pending: "VS-24 wiring" },
-    desktop: { pending: "VS-24 wiring" },
+    keys: { trivial: "skip" },
+    engine: { from: "VS-24" },
+    desktop: { pending: "VS-24: the desktop replay has no private Git view to prove a trivial change" },
   },
   "impact-graph": {
     planned: 'impact: "graph"',

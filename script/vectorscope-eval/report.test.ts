@@ -513,6 +513,17 @@ describe("saved replay artifacts", () => {
       [],
     )
     expect(failed).toMatchObject({ status: "failed", detail: "model error", posted: [] })
+    const trivial = fromArtifact(
+      artifact(
+        { files: { reviewed: [], skipped: [] }, posted: [], attempts: [] },
+        { trivial: true, specialists: [], unreviewed: [], passes: [] },
+      ),
+      seed,
+      [],
+    )
+    expect(trivial.status).toBe("not-sent")
+    expect(trivial.detail).toContain("Not reviewed")
+    expect(trivial.detail).toContain("trivial")
     const empty = fromArtifact(
       artifact({
         outcome: undefined,
@@ -654,7 +665,7 @@ describe("report.ts", () => {
     )
     writeFileSync(
       join(dir, "pending.json"),
-      JSON.stringify(artifact({ label: "pending", variant: { name: "engine:trivial-skip", keys: {} } })),
+      JSON.stringify(artifact({ label: "pending", variant: { name: "engine:cards-brain", keys: {} } })),
     )
     writeFileSync(
       join(dir, "mismatched.json"),
@@ -682,7 +693,7 @@ describe("report.ts", () => {
     expect(problems[1]).toStartWith(join(dir, "mismatched.json"))
     expect(problems[1]).toContain("not the registry's")
     expect(problems[2]).toStartWith(join(dir, "pending.json"))
-    expect(problems[2]).toContain("registered for VS-24 wiring, which has not landed")
+    expect(problems[2]).toContain("registered for VS-26, which has not landed")
     expect(problems[3]).toBe(`${join(dir, "primitive.json")}: its variant record is not an object`)
     // The record that is not an object names the frozen pipeline, as VS-06's reader took it.
     expect(loaded.runs.find((run) => run.case === "primitive")?.variant).toBe("engine")
@@ -705,7 +716,7 @@ describe("report.ts", () => {
     // A pending, unknown or malformed variant cannot be the candidate or the baseline, a mistyped runner included;
     // only single-prompt and the empty control pass as given.
     for (const [flag, value, detail] of [
-      ["--candidate", "engine:trivial-skip=vendor/reviewer-large", "registered for VS-24 wiring"],
+      ["--candidate", "engine:cards-brain=vendor/reviewer-large", "registered for VS-26"],
       ["--candidate", "engine:verify-isolated=vendor/reviewer-large", "registered for VS-44c wiring (R3)"],
       ["--baseline", "engine:verify=vendor/reviewer-large", "not a registered variant"],
       ["--candidate", "engine:Shared=vendor/reviewer-large", "is not a variant name"],

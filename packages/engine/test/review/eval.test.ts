@@ -26,7 +26,8 @@ import {
   UNAPPLIED_REVIEW_KEYS,
 } from "@vectordevai/core/review/types"
 import { parseReviewConfig } from "@vectordevai/core/review/config"
-import { noteHeldBack } from "@vectordevai/core/review/format"
+import { noteHeldBack, noteTrivialSkip } from "@vectordevai/core/review/format"
+import { readState } from "@vectordevai/core/review/state"
 import { estimateDispatch } from "@vectordevai/core/review/dispatch"
 import { findingKey, type SliceUtilisation } from "@vectordevai/core/review/eval"
 import { evidenceScope, policyDigest, promptsDigest } from "@vectordevai/core/review/model-evidence"
@@ -1047,10 +1048,56 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-24c: config.ts parses VS-24's keys, and no runner applies them yet, so a base review.json that sets one is
-  // replayed and recorded without it, with the parser's "not applied" warning, and its scope claims no such policy.
   it.instance(
-    "replays a base review.json that sets VS-24's keys without them, keeping the parser's warnings",
+    "the trivial-skip variant proves its committed docs change before posting a policy note without a reviewed head",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "README.md": "A small library.\n", ".gitignore": "vector.json\n" },
+          head: { "README.md": "A tiny library.\n" },
+          price: PRICE,
+        })
+        // Keep the fake provider out of the tree using the checked-in rule. A private info/exclude rule
+        // is deliberately insufficient evidence for a skip, even when it only names this test provider.
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const variant = { name: "engine:trivial-skip", keys: { trivial: "skip" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          variant,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.variant).toEqual(variant)
+        if (process.platform !== "linux") {
+          // The private Git reader is Linux-only; another host follows the ordinary review path.
+          expect(artifact.outcome?.trivial).toBeUndefined()
+          expect(artifact.attempts.some((attempt) => attempt.admitted)).toBe(true)
+          return
+        }
+        expect(artifact.outcome?.trivial).toBe(true)
+        expect(yield* llm.hits).toHaveLength(0)
+        expect(artifact.attempts).toEqual([])
+        expect(artifact.passes).toEqual([])
+        expect(artifact.files.reviewed).toEqual([])
+        expect(artifact.context.locations).toEqual([])
+        expect(artifact.posted).toHaveLength(1)
+        const note = artifact.posted[0]
+        expect(note?.write).toBe("createIssueComment")
+        if (note?.write !== "createIssueComment") throw new Error("the replay did not record the policy note")
+        expect(note.body).toContain(noteTrivialSkip())
+        expect(note.body).not.toContain("No issues found")
+        expect(readState(note.body)).toBeUndefined()
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // SF-16 applies the trivial policy; the independently staged input-token cap is still pending.
+  it.instance(
+    "replays the base's trivial policy and retains the warning for the pending input-token cap",
     () =>
       Effect.gen(function* () {
         const settings = JSON.stringify({ trivial: "skip", maxInputTokens: 1_000, minConfidence: 0.75 })
@@ -1067,16 +1114,14 @@ describe("ReviewEval.replay", () => {
           posting: ReviewEval.recordingPosting(),
           check: recordingCheck().check,
         })
-        expect(Object.hasOwn(artifact.config.value, "trivial")).toBe(false)
+        expect(artifact.config.value.trivial).toBe("skip")
         expect(Object.hasOwn(artifact.config.value, "maxInputTokens")).toBe(false)
         expect(artifact.config.value.minConfidence).toBe(0.75)
         expect(artifact.config.warnings).toEqual([
-          '"trivial": "skip" is not applied yet: every change is still reviewed.',
           '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
         ])
         expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
-        // It claims no skip policy: until a runner applies `trivial`, no value of it moves the digest.
-        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, trivial: "skip" }))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, trivial: "review" }))
         // The run was a review, not a skip.
         expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
       }),
@@ -1433,12 +1478,12 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-23b (I-1): with no sourced key named, the replay's switch to mergeReviewConfig reads what parseReviewConfig read.
+  // VS-23b (I-1): ordinary keys have the same semantics on both surfaces. SF-16's opt-in applies only locally.
   it.instance(
-    "a base review.json that names no sourced key is replayed with parseReviewConfig's settings and warnings",
+    "replays ordinary GitHub parser settings and warnings while applying the local trivial-skip policy",
     () =>
       Effect.gen(function* () {
-        // Ordinary keys, one unknown key and one no runner applies yet, read under the variant's verify policy.
+        // Ordinary keys, including the opt-in trivial policy and one unknown key, read under the variant's verify policy.
         const settings = JSON.stringify({
           verify: "blocking",
           maxSteps: 3,
@@ -1467,11 +1512,17 @@ describe("ReviewEval.replay", () => {
         })
         const applied: ReviewConfig = { ...parsed.config }
         UNAPPLIED_REVIEW_KEYS.forEach((key) => delete applied[key])
-        expect(parsed.warnings.length).toBeGreaterThan(0)
-        expect(artifact.config.warnings).toEqual(parsed.warnings)
-        // The replay's own settings over it, as it applies them: the eval's cap, limits and the variant's keys.
+        const unknown = '.vector/review.json: unknown key "nonsense" is ignored.'
+        expect(parsed.warnings).toEqual([
+          unknown,
+          'GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.',
+        ])
+        expect(Object.hasOwn(parsed.config, "trivial")).toBe(false)
+        expect(artifact.config.warnings).toEqual([unknown])
+        // All other settings match the GitHub parser, subject to the replay's cap, limits and variant.
         expect(artifact.config.value).toEqual({
           ...applied,
+          trivial: "skip",
           ...SHARED.keys,
           maxCostUsd: 2,
           maxSteps: DEFAULT_REVIEW_CONFIG.maxSteps,
@@ -1619,20 +1670,21 @@ describe("ReviewEval.replay", () => {
           "config sets privacy, zdrAttested, a route setting a replay cannot apply",
         )
         expect(yield* refused({ config: { privacy: "standard" } })).toContain("config sets privacy, a route setting")
-        // Nor VS-24's keys (VS-24c), which no runner applies before VS-24 wiring.
-        // @ts-expect-error VS-24's keys are parsed but applied by no runner, so a typed caller cannot put one in config.
+        // @ts-expect-error A trivial policy belongs to a named variant or the committed base, not the eval's overrides.
         const unwired: ReplayInput["config"] = { trivial: "skip" }
         expect(unwired).toBeDefined()
         expect(yield* refused({ config: { trivial: "skip", maxInputTokens: 5 } })).toContain(
-          "config sets trivial, maxInputTokens, which no runner applies yet (VS-24 wiring)",
+          "config sets trivial, a pipeline variant's setting",
         )
-        expect(yield* refused({ config: { trivial: "review" } })).toContain("config sets trivial, which no runner")
+        expect(yield* refused({ config: { trivial: "review" } })).toContain(
+          "config sets trivial, a pipeline variant's setting",
+        )
         // Nor VS-25b's impact, named by its own wiring package, and grouped by package when both are set.
         expect(yield* refused({ config: { impact: "graph" } })).toContain(
           "config sets impact, which no runner applies yet (VS-25b wiring), so the artifact would record a setting the run did not have.",
         )
-        expect(yield* refused({ config: { trivial: "skip", impact: "grep" } })).toContain(
-          "config sets trivial, impact, which no runner applies yet (VS-24 wiring for trivial; VS-25b wiring for impact)",
+        expect(yield* refused({ config: { maxInputTokens: 5, impact: "grep" } })).toContain(
+          "config sets maxInputTokens, impact, which no runner applies yet (VS-24 wiring for maxInputTokens; VS-25b wiring for impact)",
         )
         // Nor VS-27's guardrail, which VS-27c applies.
         expect(yield* refused({ config: { guardrail: "strict" } })).toContain(
@@ -1695,14 +1747,20 @@ describe("ReviewEval.replay", () => {
           'engine:holdback-secrets sets holdback "off": a variant may raise holdback to "secrets", never lower it.',
         )
         // A pending variant's key is refused as a key this replay does not apply.
-        expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
-          "engine:trivial-skip sets trivial, which this replay does not apply",
+        expect(yield* refused({ variant: { name: "engine:impact-graph", keys: { impact: "graph" } } })).toContain(
+          "engine:impact-graph sets impact, which this replay does not apply",
         )
         // A variant raises privacy and never lowers it (VS-23c): its keys go over the base's raise-only privacy.
         expect(yield* refused({ variant: { name: "engine:privacy-zdr", keys: { privacy: "standard" } } })).toContain(
           'engine:privacy-zdr sets privacy "standard": a variant may raise privacy to "zdr", never lower it.',
         )
-        // A pending name with nothing to set would be the frozen pipeline.
+        for (const variant of [
+          { name: "engine:trivial-skip", keys: { trivial: "review" as const } },
+          { name: "engine:shared-verify", keys: { trivial: "skip" as const } },
+          { name: "engine:trivial-skip", keys: { verifyPolicy: "shared" as const } },
+        ])
+          expect(yield* refused({ variant })).toContain('engine:trivial-skip variant sets only trivial: "skip"')
+        // An empty variant would replay the frozen pipeline.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: {} } })).toContain(
           "sets no key and no model requirement, so it would run the frozen pipeline under its name",
         )

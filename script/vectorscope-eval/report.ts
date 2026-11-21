@@ -24,6 +24,7 @@ import {
   type StrictIncomplete,
 } from "../../packages/core/src/review/guardrail"
 import { verifyCandidates, verifyUnanswered } from "../../packages/core/src/review/plan"
+import { noteTrivialSkip } from "../../packages/core/src/review/format"
 import {
   buildReport,
   DEFAULT_GATE,
@@ -657,20 +658,24 @@ export function fromArtifact(
     ? "partial"
     : failed
       ? "failed"
-      : outcome.partial || outcome.unreviewed.length || unfinished.length
-        ? "partial"
-        : "completed"
+      : outcome.trivial
+        ? "not-sent"
+        : outcome.partial || outcome.unreviewed.length || unfinished.length
+          ? "partial"
+          : "completed"
   const detail = !outcome
     ? `every changed file was skipped (${artifact.files.skipped.length}), so nothing was reviewed`
     : failed
       ? (reviewers.find((entry) => entry.detail)?.detail ?? "every reviewer failed")
-      : status === "partial"
-        ? [
-            ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
-            ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
-            ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
-          ].join(", ")
-        : undefined
+      : outcome.trivial
+        ? noteTrivialSkip()
+        : status === "partial"
+          ? [
+              ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
+              ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
+              ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
+            ].join(", ")
+          : undefined
   const selection = outcome?.selection
   const writes = postedParts(artifact, failed)
   const posted = selection

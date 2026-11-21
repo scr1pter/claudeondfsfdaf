@@ -83,6 +83,34 @@ const expectedRun = { parentID: "ses_result_parent", request: { requestID: "requ
 const decode = (value: unknown) => decodeLocalRun(value, expectedRun)
 
 describe("retained local review result decoding", () => {
+  test("an exact zero-attempt policy skip round-trips while mixed provider work cannot claim a skip", () => {
+    const value = outcome()
+    const skipped: ReviewOutcome = {
+      ...value,
+      trivial: true,
+      cost: undefined,
+      specialists: [],
+      sessions: [],
+      passes: [],
+    }
+    const stored = result(skipped)
+    expect(stored.verdict).toEqual({ verdict: "policy-skip", causes: ["trivial"], notes: [] })
+    expect(decodeLocalResult(JSON.parse(JSON.stringify(stored)), target)?.outcome?.trivial).toBe(true)
+    for (const mixed of [
+      { cost: value.cost },
+      { sessions: value.sessions },
+      { specialists: value.specialists },
+      { passes: value.passes },
+      { unreviewed: ["unsafe.ts"] },
+      { partial: "timeout" as const },
+      { report: { ...value.report, files: [{ path: "unsafe.ts", note: "Reviewed" }] } },
+    ]) {
+      expect(decodeLocalResult(JSON.parse(JSON.stringify(result({ ...skipped, ...mixed }))), target)).toBeUndefined()
+    }
+    for (const trivial of [false, "true", null])
+      expect(decodeLocalResult({ ...stored, outcome: { ...skipped, trivial } }, target)).toBeUndefined()
+  })
+
   test("keeps placed findings, optional strict data and usage while withholding serialized own-usage proof", async () => {
     const value = outcome()
     const finding = {

@@ -26,6 +26,7 @@ import {
   noteMoved,
   noteNothingToReview,
   notePrivacyRefused,
+  noteTrivialSkip,
 } from "@vectordevai/core/review/format"
 import {
   buildCreateReviewPayload,
@@ -69,6 +70,7 @@ import type {
 } from "@vectordevai/core/review/types"
 import { Git } from "@/git"
 import { ReviewGit } from "@/review/git"
+import { ReviewTrivial } from "@/review/trivial"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 import { Provider } from "@/provider/provider"
@@ -632,13 +634,44 @@ export function executeLocalReview<RunR, ModelR>(
           )
         : undefined
 
+    // Only a complete, trusted commit comparison can authorize the zero-token policy. Staged changes and
+    // working files have no immutable head blob for their edits. A service cache reset is not a user --full.
+    const forceFull = options.full === true && !options.context
+    const trivialProof =
+      config.trivial === "skip" &&
+      !forceFull &&
+      target.kind === "branch" &&
+      trust === "trusted" &&
+      !authority?.patterns.length &&
+      !readDenies?.length &&
+      !skipped.length &&
+      !withheld.length &&
+      !saved?.unreviewed?.length &&
+      prior.filter((finding) => finding.status === "open").length === open.length &&
+      Option.isSome(settings)
+        ? yield* settings.value.get().pipe(
+            Effect.flatMap((effective) =>
+              ReviewTrivial.prove({
+                directory: root,
+                base: range.mergeBase,
+                head: range.head,
+                files: range.files,
+                config,
+                instructions: effective.instructions ?? [],
+                denied: ignored,
+              }),
+            ),
+            Effect.catchDefect(() => Effect.succeed(undefined)),
+          )
+        : undefined
+
     // 7. The review.
     if (options.context?.stopSignal?.aborted)
       return yield* new LocalReviewError({ message: "The review was cancelled before it started." })
     if (options.context && (yield* commitOf(git, root, "HEAD")) !== options.context.expectedHead)
       return yield* new LocalReviewError({ message: "The review head changed before the review could start." })
     yield* ReviewGit.preflight
-    say(`Reviewing ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
+    if (!trivialProof) say(`Reviewing ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
     const result = yield* deps.runReview({
       directory: root,
       ...(options.context?.parentID ? { parentID: options.context.parentID } : {}),
@@ -650,6 +683,8 @@ export function executeLocalReview<RunR, ModelR>(
       ...(options.context?.identity ? { identity: options.context.identity } : {}),
       trigger: "local",
       trust,
+      ...(config.trivial === "skip" && forceFull ? { forceFull: true } : {}),
+      ...(trivialProof ? { trivialProof } : {}),
       base: range.mergeBase,
       head: range.head,
       ...(range.since ? { since: range.since } : {}),
@@ -687,6 +722,13 @@ export function executeLocalReview<RunR, ModelR>(
           notes: [...result.notes, "Some changed files were not reviewed because this conversation cannot read them."],
         }
       : result
+    if (reviewed.trivial) {
+      const open = reviewed.selection.stillOpen
+      if (options.json)
+        yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(reviewed) }, null, 2) + "\n")
+      else yield* print(noteTrivialSkip() + stillOpen(open) + "\n")
+      return { exitCode: countAtOrAbove(open, failOn) ? 1 : 0, target, outcome: reviewed } satisfies LocalReviewResult
+    }
     if (reviewed.partial === "privacy") return yield* notReviewed(reviewed)
     // Under holdback "secrets" a change whose every file, or in an incremental review every new hunk, was held back
     // from the model runs no pass (Review.run): no reviewer failed, but nothing was reviewed either.
@@ -1439,7 +1481,7 @@ function inTree(root: string, file: string) {
   return fs.existsSync(full)
 }
 
-function stillOpen(open: SummaryFinding[]): string {
+function stillOpen(open: readonly { severity: Severity }[]): string {
   if (!open.length) return ""
   const blocking = open.filter((finding) => finding.severity === "blocking").length
   const which = blocking ? ` (${blocking} blocking)` : ""

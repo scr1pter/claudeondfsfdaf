@@ -54,6 +54,7 @@ import {
   noteInlineCap,
   noteNothingToReview,
   notePartial,
+  noteTrivialSkip,
 } from "@vectordevai/core/review/format"
 import { buildCreateReviewPayload, type CreateReviewPayload } from "@vectordevai/core/review/github-payload"
 import {
@@ -108,6 +109,7 @@ import { ReviewGit } from "./git"
 import type { ResolvedModel } from "./model"
 import { Review, type Observation } from "./run"
 import { ReviewSource } from "./source"
+import { ReviewTrivial } from "./trivial"
 
 export interface ReplayCase {
   label: string // names the case in the artifact; never sent to a model
@@ -150,7 +152,7 @@ export interface ReplayInput {
   // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
   // applies to the prompt since SF-13b and to the reviewer's read and grep tools since SF-14, and so may the
   // engine:holdback-secrets variant (VARIANT_KEYS.engine), which may only raise it to "secrets". Nor a key
-  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's
+  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's maxInputTokens, VS-25b's impact, VS-27's
   // guardrail, VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is also
   // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
@@ -825,7 +827,21 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // followed at once by the attempt it admitted, so that attempt's seq is the next one.
   const observed: Observation[] = []
   const over: ProjectedOverCap[] = []
+  // Only a trusted committed checkout can supply SF-16 evidence. The helper derives it from the private Git view.
+  const trivialProof =
+    config.trivial === "skip" && item.trust === "trusted" && trusted && !skipped.length
+      ? yield* ReviewTrivial.prove({
+          directory,
+          base: plan.mergeBase,
+          head: item.head,
+          files: plan.files,
+          config,
+          instructions: effective.instructions ?? [],
+          denied: ignored,
+        })
+      : undefined
   const outcome = yield* Review.run({
+    ...(trivialProof ? { trivialProof } : {}),
     directory,
     trigger,
     trust: item.trust,
@@ -872,6 +888,10 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify")
   const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
   const run = digest([item.label, repetition]).slice(0, 8)
+  if (outcome.trivial) {
+    const body = buildNoteBody({ note: noteTrivialSkip() })
+    yield* post({ write: "createIssueComment", pr: prNumber, body }, outcome.sessions)
+  }
   if (failed) {
     const detail = reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no review"
     const state = nextState(undefined, {
@@ -891,7 +911,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       outcome.sessions,
     )
   }
-  if (!failed && selection.inline.length) {
+  if (!outcome.trivial && !failed && selection.inline.length) {
     const payload = buildCreateReviewPayload({
       head: item.head,
       inline: selection.inline,
@@ -903,7 +923,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     })
     yield* post({ write: "createReview", pr: prNumber, payload }, outcome.sessions)
   }
-  if (!failed) {
+  if (!outcome.trivial && !failed) {
     const count = posted.flatMap((write) => (write.write === "createReview" ? write.payload.comments : [])).length
     const detail = outcome.specialists.find((entry) => entry.status === "failed")?.detail
     const banners = outcome.partial
@@ -1033,18 +1053,23 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   const held = new Set(outcome.held?.map((file) => file.path))
   const artifact: ReplayArtifact = {
     ...common,
-    files: { reviewed: files.flatMap((file) => (held.has(file.path) ? [] : [file.path])), skipped: outcome.skipped },
+    files: {
+      reviewed: outcome.trivial ? [] : files.flatMap((file) => (held.has(file.path) ? [] : [file.path])),
+      skipped: outcome.skipped,
+    },
     context: {
       digest: digest({ gathered, headFiles: headFiles ?? [] }),
       related: gathered.related.length,
       history: gathered.history.length,
       instructions: gathered.instructions !== undefined,
       headFiles: headFiles?.length ?? 0,
-      locations: quotedLocations(
-        config.holdback === "secrets"
-          ? (holdbackContext({ related: gathered.related }, { held: outcome.held ?? [] }).related ?? [])
-          : gathered.related,
-      ),
+      locations: outcome.trivial
+        ? []
+        : quotedLocations(
+            config.holdback === "secrets"
+              ? (holdbackContext({ related: gathered.related }, { held: outcome.held ?? [] }).related ?? [])
+              : gathered.related,
+          ),
     },
     // Every session of a pass counts toward it. One pass event per pass name today; VS-28's lenses add several "lens"
     // passes and must match them by lens too.
@@ -1237,7 +1262,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  trivial: "VS-24 wiring",
   maxInputTokens: "VS-24 wiring",
   impact: "VS-25b wiring",
   guardrail: "VS-27c",
@@ -1303,6 +1327,11 @@ function variantProblem(input: ReplayInput) {
   if (!keys.length && !variant.models)
     return `${variant.name} sets no key and no model requirement, so it would run the frozen pipeline under its name.`
   const triaged = input.triage && modelRecord(input.triage).id !== modelRecord(input.model).id
+  if (
+    (variant.name === "engine:trivial-skip" || variant.keys.trivial !== undefined) &&
+    (variant.name !== "engine:trivial-skip" || variant.keys.trivial !== "skip" || keys.length !== 1 || variant.models)
+  )
+    return 'The engine:trivial-skip variant sets only trivial: "skip".'
   if (variant.models === "triage-pair" && !triaged)
     return `${variant.name} is made by its models: it needs a triage model other than the review model.`
   return undefined

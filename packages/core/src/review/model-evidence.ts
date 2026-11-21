@@ -60,7 +60,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "c1356b88102ce805"
+export const REVIEW_PIPELINE_SOURCES = "9c2b2bb22a43697c"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -570,8 +570,7 @@ const POLICY_ONLY_WITH: Partial<
 
 // Default-stable (contract §0.3): a key with an entry in OPTIONAL_REVIEW_DEFAULTS counts only when set to another value,
 // so every digest made before it stays as it was; every other key counts as it always has. A key no runner applies yet
-// (UNAPPLIED_REVIEW_KEYS, all optional) reads as absent, so it never counts: a review under `trivial: "skip"` before
-// VS-24 wiring runs the full review, and its scope says so. A key in POLICY_ONLY_WITH reads as absent without the
+// (UNAPPLIED_REVIEW_KEYS, all optional) reads as absent. A key conditional on another counts only with the
 // setting it depends on.
 export function policyDigest(config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>): string {
   return fnv1a64(
@@ -632,7 +631,12 @@ export function evidenceScope(input: {
       // VS-34's input-redaction sentence (Review.run under "secrets" since SF-13b) and its tool half (SF-14).
       ...(input.config.holdback === "secrets" ? { holdback: "secrets" as const } : {}),
     }),
-    policy: policyDigest(input.config),
+    // The desktop pipeline has no private tree proof for the trivial gate.
+    policy: policyDigest(
+      input.adapter === "desktop" && input.config.trivial === "skip"
+        ? { ...input.config, trivial: "review" }
+        : input.config,
+    ),
     ...(input.triage ? { triage: input.triage } : {}),
     ...(input.route ? { route: input.route } : {}),
   }

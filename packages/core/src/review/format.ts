@@ -439,6 +439,10 @@ function diffBlock(code: string): string {
 // ---------------------------------------------------------------------------------------------------------------
 // Notes (section 1.1 and the variants in 1.2)
 
+export function noteTrivialSkip(): string {
+  return "Not reviewed. The change met the configured policy for skipping trivial changes."
+}
+
 export function noteNothingToReview(): string {
   return "Nothing to review: every changed file is a lockfile, generated, or ignored."
 }
@@ -710,6 +714,7 @@ export interface SummaryInput {
   mode: ReviewOutcome["mode"]
   report?: Pick<ModelReport, "summary" | "files">
   selection?: Selection
+  trivial?: true
   // The strict guardrail's result (VS-27b's wording), set only under `guardrail: "strict"`; nothing sets it before
   // VS-27c. With it, an empty result never reads as "No issues found".
   strict?: Pick<StrictResult, "complete" | "findings" | "dropped">
@@ -773,6 +778,12 @@ export function capBody(input: SummaryInput, max = MAX_BODY_CHARS): string {
 
 function render(input: SummaryInput, limits: Limits): string {
   const selection = input.selection
+  if (input.trivial) {
+    const lines = ["## Vectorscope review", "", noteTrivialSkip(), ""]
+    if (selection) lines.push(...detailSections(input, selection, limits))
+    if (input.form !== "desktop") lines.push(SUMMARY_MARKER)
+    return lines.join("\n")
+  }
   const lines = [selection ? `## Vectorscope review · Risk: ${capital(selection.risk)}` : "## Vectorscope review", ""]
   if (input.banners?.length) lines.push(quote(input.banners), "")
   const summary = input.report?.summary.trim()

@@ -168,7 +168,7 @@ export function within<A, E, R>(placement: ReadOnlyGit.Metadata, expectedHead: s
   )
 }
 
-function sameBinding(left: ReadOnlyGit.Input, right: ReadOnlyGit.Input) {
+export function sameBinding(left: ReadOnlyGit.Input, right: ReadOnlyGit.Input) {
   return (
     left.directory === right.directory &&
     left.gitDirectory === right.gitDirectory &&

@@ -315,6 +315,27 @@ function followsWordingRule(body: string) {
 }
 
 describe("the summary comment", () => {
+  test("a trivial policy skip states that no review ran and retains earlier open findings", () => {
+    const input: SummaryInput = {
+      ...FULL,
+      trivial: true,
+      selection: selection(),
+      notes: ["stale"],
+      report: { summary: "No issues found", files: [] },
+    }
+    expect(buildSummaryBody(input)).toBe(
+      "## Vectorscope review\n\nNot reviewed. The change met the configured policy for skipping trivial changes.\n\n<!-- vector-review:summary -->",
+    )
+    const body = buildSummaryBody({
+      ...input,
+      selection: selection({ stillOpen: [prior({ title: "Unresolved earlier finding", severity: "blocking" })] }),
+    })
+    expect(body).toContain("Still open from earlier reviews (1)")
+    expect(body).toContain("**Blocking**")
+    expect(body).toContain("Unresolved earlier finding")
+    expect(body).not.toContain("No issues found")
+  })
+
   test("a full review", async () => {
     const body = buildSummaryBody(FULL)
     await golden("full", body)
