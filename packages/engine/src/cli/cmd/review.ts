@@ -9,7 +9,7 @@ import { createHash } from "node:crypto"
 import fs from "fs"
 import fsp from "fs/promises"
 import path from "path"
-import { Effect, Option, Schema } from "effect"
+import { Cause, Effect, Option, Schema } from "effect"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
 import { Flock } from "@vectordevai/core/util/flock"
 import {
@@ -49,7 +49,7 @@ import {
   type GitAttributes,
 } from "@vectordevai/core/review/ignore"
 import { completeStrictReview } from "@vectordevai/core/review/local-result"
-import { policyDigest } from "@vectordevai/core/review/model-evidence"
+import { policyDigest, REVIEW_PIPELINE_SOURCES } from "@vectordevai/core/review/model-evidence"
 import { diffBudgetChars, estimateCostUsd } from "@vectordevai/core/review/plan"
 import type { PromptInput } from "@vectordevai/core/review/prompt"
 import { collectSecretValues, redactSecrets } from "@vectordevai/core/review/redact"
@@ -80,6 +80,7 @@ import { unfinishedCauses } from "@vectordevai/core/review/verdict"
 import { Git } from "@/git"
 import { ReviewGit } from "@/review/git"
 import { ReviewTrivial } from "@/review/trivial"
+import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 import { Provider } from "@/provider/provider"
@@ -386,7 +387,34 @@ export function executeLocalReview<RunR, ModelR>(
               agent.permission,
             ],
         )
+        // The actual reviewer loads local instruction sources and repository rules independently of the
+        // committed diff. The read-only projection observes their current authority and never fetches a URL.
+        const instruction = Option.getOrUndefined(yield * Effect.serviceOption(Instruction.Service))
+        const brain = Option.getOrUndefined(yield * Effect.serviceOption(Brain.Service))
+        const projectMemory = brain?.previewReviewContext
+        const context =
+          instruction && projectMemory
+            ? yield *
+              Effect.gen(function* () {
+                const place = yield* instruction.place()
+                const instructions = yield* instruction.contents()
+                // An empty habit selection projects rules and instruction mirrors without selecting task memories.
+                const memory = yield* projectMemory(place, {
+                  personal: true,
+                  kinds: [],
+                  query: "",
+                  files: [],
+                  wrap: (lines) => lines.join("\n"),
+                })
+                // A mirror waiting to be synchronized has no current comparable projection.
+                if (memory) return { instructions, memory, place }
+              }).pipe(
+                Effect.catchCauseIf((cause) => !Cause.hasInterrupts(cause), () => Effect.succeed(undefined)),
+              )
+            : undefined
         const applied = [
+          REVIEW_PIPELINE_SOURCES,
+          context,
           policyDigest(config),
           config,
           rulesText,
@@ -397,7 +425,7 @@ export function executeLocalReview<RunR, ModelR>(
           options.checks === true,
         ]
         // Keep only the digest; prompts, review rules and attribute patterns can be private.
-        strictPolicy = createHash("sha256").update(JSON.stringify(applied)).digest("hex")
+        if (context) strictPolicy = createHash("sha256").update(JSON.stringify(applied)).digest("hex")
       }
     }
     const stored = statePath ? yield* readLocalState(statePath, !options.full || !!strictPolicy, config.verifyEvidence) : undefined

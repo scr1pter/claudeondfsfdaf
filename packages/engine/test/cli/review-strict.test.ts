@@ -3,6 +3,8 @@ import { expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Effect } from "effect"
+import { Brain } from "@vectordevai/core/brain/brain"
+import { Instruction } from "@/session/instruction"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -29,6 +31,8 @@ const it = testEffect(
   LayerNode.compile(
     LayerNode.group([
       Config.node,
+      Brain.node,
+      Instruction.node,
       SessionPrompt.node,
       Session.node,
       SpendGuard.node,
@@ -429,4 +433,84 @@ it.instance(
       }
     }),
   { git: true },
+)
+
+it.instance(
+  "an edited working instruction invalidates the same-head strict result",
+  () =>
+    Effect.gen(function* () {
+      const { directory, invoke, llm } = yield* setup
+      const sentinel = "Check nulls in arithmetic. WORKTREE_INSTRUCTION_FIXTURE."
+      yield* llm.respond((hit) => {
+        if (firstUserText(hit.body).includes("You are Vector's code reviewer"))
+          return reply().tool("StructuredOutput", {
+            summary: "No blocking findings.",
+            risk: "low",
+            files: [],
+            findings: [],
+          })
+      })
+      const initial = yield* invoke(Review.run)
+      expect(initial.result.outcome?.strict?.complete).toBe(true)
+      const before = (yield* llm.hits).length
+      expect(before).toBeGreaterThan(0)
+      yield* Effect.promise(() => fs.writeFile(path.join(directory, "AGENTS.md"), sentinel))
+      // A forced recheck establishes that the same command really does send this instruction to the same model.
+      const cached = yield* invoke(Review.run)
+      const hits = (yield* llm.hits).length
+      const forced = yield* invoke(Review.run, { full: true })
+      expect(forced.result.outcome?.strict?.complete).toBe(true)
+      expect(JSON.stringify(yield* llm.inputs)).toContain(sentinel)
+      expect(JSON.parse(cached.text).cached).toBeUndefined()
+      expect(hits).toBeGreaterThan(before)
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "same-head instruction authority changes force a full strict retry before range planning",
+  () =>
+    Effect.gen(function* () {
+      const { directory, invoke, cache } = yield* setup
+      const runs: string[] = []
+      const run = (input: Review.RunInput) =>
+        Effect.sync(() => {
+          runs.push(input.mode)
+          return fixed(input)
+        })
+      const current = () => invoke(run)
+      const first = yield* current()
+      expect(first.result.error).toBeUndefined()
+      expect(JSON.parse((yield* current()).text).cached).toBe(true)
+      for (const name of ["AGENTS.md", "CLAUDE.md", ".vector/RULES.md"]) {
+        const sentinel = "Instruction fixture for " + name
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(directory, ".vector"), { recursive: true })
+          await fs.writeFile(path.join(directory, name), sentinel)
+        })
+        const count = runs.length
+        const fresh = yield* current()
+        expect(fresh.result.error).toBeUndefined()
+        expect(JSON.parse(fresh.text).cached).toBeUndefined()
+        expect(runs.slice(count)).toEqual(["full"])
+        expect(yield* Effect.promise(() => fs.readFile(cache, "utf8"))).not.toContain(sentinel)
+        yield* Effect.promise(() => fs.unlink(path.join(directory, name)))
+      }
+      const instruction = yield* Instruction.Service
+      const changedGlobal = yield* current().pipe(
+        Effect.provideService(Instruction.Service, {
+          ...instruction,
+          contents: () => Effect.succeed({ work: [], private: ["Owner rule fixture"] }),
+        }),
+      )
+      expect(JSON.parse(changedGlobal.text).cached).toBeUndefined()
+      const unavailable = yield* current().pipe(Effect.provideService(Instruction.Service, {
+        ...instruction, contents: () => Effect.die("instruction snapshot unavailable"),
+      }))
+      expect(unavailable.result.error).toBeUndefined()
+      expect(JSON.parse(unavailable.text).cached).toBeUndefined()
+    }),
+  { git: true },
+  90_000,
 )
