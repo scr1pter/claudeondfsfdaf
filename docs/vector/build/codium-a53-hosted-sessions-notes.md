@@ -191,3 +191,15 @@ and the desktop's bar and the phone's Cloud computer page offer the files from i
 `hostedComputers` now share `knownComputers` and the margin constant; their behaviour is unchanged. `kept` is a hosted
 API field added by H1c rather than H1a (D2, for the lead). `codium-deviations.md` "Codium finish: H1 clients (15 Nov
 2026)".
+
+**Status, 21 Nov 2026 (v2 leftover P0, branch `hosted-download-billing`).** The files flow of `recordHeartbeat` changed
+on the server. The build record, with its red and green runs and mutations, is `v2-p0/hosted-download-billing.md`.
+- O1 (`codium-deviations.md` "Codium finish: H1 computer (15 Nov 2026)", Observations) is closed. A beat with no
+  upload decides between pack and upload from its own `archiveBytes`, never from the size an earlier beat left, so a
+  job session's hostd that dropped its copy is asked to pack again instead of being handed a link for a copy it no
+  longer has. The size kept from earlier beats is still what an `uploaded` beat's HEAD is checked against. The HEAD now
+  reads as confirmed (200 with that length), rejected (404, or 200 with another length) or unknown (a failure, a
+  timeout, another status or no length, `checkUpload`). For a job session an unknown check answers a fresh upload link,
+  so hostd keeps its copy and the next beat checks again, and a rejected one answers nothing, so hostd drops the copy
+  and its next beat is asked to pack. Download-only sessions are unchanged by this line. Signing the PUT, with the
+  archives key's SADD first, is one helper (`signUpload`).

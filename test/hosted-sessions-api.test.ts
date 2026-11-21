@@ -914,7 +914,87 @@ describe("the session's files", () => {
     expect(answer.status).toBe(409)
     expect(answer.body.error.code).toBe("HOSTED_DOWNLOAD_UNAVAILABLE")
   })
+
+  test("a job session's computer that dropped an unconfirmed copy is asked to pack again, not handed a link (O1)", async () => {
+    const w = await hostedWorld(ledger)
+    const session = await started(w)
+    await action(w, session.id, "download")
+    expect((await beat(w, session.id, {})).body.pack).toBe(true)
+    const packed = await beat(w, session.id, { archiveBytes: 4096 })
+    const key = objectKey(packed)
+    // The PUT went through as far as the computer knows, but the bucket holds nothing: the check rejects the upload
+    // and the answer asks for nothing, so a job session's hostd drops its copy.
+    const rejected = await beat(w, session.id, { archiveBytes: 4096, uploaded: true })
+    expect(rejected.status).toBe(200)
+    expect(rejected.body.pack).toBeUndefined()
+    expect(rejected.body.upload).toBeUndefined()
+    // Its next beat carries no size. The size an earlier beat left decides nothing: no link for a copy it no longer has.
+    const dropped = await beat(w, session.id, {})
+    expect(dropped.body.pack).toBe(true)
+    expect(dropped.body.upload).toBeUndefined()
+    // An object of another size is rejected the same way, and the session's files are not ready.
+    const repacked = await beat(w, session.id, { archiveBytes: 2048 })
+    expect(repacked.body.upload.headers["content-length"]).toBe("2048")
+    w.bucket.set(key, 1024)
+    const short = await beat(w, session.id, { archiveBytes: 2048, uploaded: true })
+    expect([short.body.pack, short.body.upload]).toEqual([undefined, undefined])
+    expect((await beat(w, session.id, {})).body.pack).toBe(true)
+    expect((await readSessionRecord(session.id, w.fetcher))!.download!.readyAt).toBeUndefined()
+    expect((await action(w, session.id, "download")).body).toEqual({ ready: false })
+    // The upload the bucket holds at its size makes them ready.
+    expect((await beat(w, session.id, { archiveBytes: 2048 })).body.upload.headers["content-length"]).toBe("2048")
+    w.bucket.set(key, 2048)
+    const confirmed = await beat(w, session.id, { archiveBytes: 2048, uploaded: true })
+    expect([confirmed.body.pack, confirmed.body.upload]).toEqual([undefined, undefined])
+    expect((await action(w, session.id, "download")).status).toBe(200)
+  })
+
+  test("a HEAD that fails keeps a job session's copy: a fresh link, and the next check decides (O1)", async () => {
+    const w = await hostedWorld(ledger)
+    const session = await started(w)
+    await action(w, session.id, "download")
+    await beat(w, session.id, {})
+    const key = objectKey(await beat(w, session.id, { archiveBytes: 4096 }))
+    w.bucket.set(key, 4096)
+    // The bucket holds the files, but the checks cannot tell: a timeout, another status, or no length. Each answer
+    // carries a fresh link for the same size, which keeps hostd's copy (it uploads nothing while it reports the upload).
+    const heads = failHeads(w, [
+      () => {
+        throw new DOMException("The operation timed out.", "TimeoutError")
+      },
+      () => new Response(null, { status: 503 }),
+      () => new Response(null, { status: 200 }),
+    ])
+    for (let check = 0; check < 3; check++) {
+      const unknown = await beat(w, session.id, { archiveBytes: 4096, uploaded: true })
+      expect(unknown.body.pack).toBeUndefined()
+      expect(unknown.body.upload.headers["content-length"]).toBe("4096")
+      expect(objectKey(unknown)).toBe(key)
+    }
+    expect(heads.left()).toBe(0)
+    expect((await readSessionRecord(session.id, w.fetcher))!.download!.readyAt).toBeUndefined()
+    // The next check confirms the upload: nothing more is asked, and the link is given.
+    const confirmed = await beat(w, session.id, { archiveBytes: 4096, uploaded: true })
+    expect([confirmed.body.pack, confirmed.body.upload]).toEqual([undefined, undefined])
+    expect((await action(w, session.id, "download")).status).toBe(200)
+  })
 })
+
+/** The bucket key an answer's upload link names. */
+function objectKey(answer: Answer) {
+  return decodeURIComponent(new URL(answer.body.upload.url).pathname.split("/").slice(2).join("/"))
+}
+
+/** The media bucket's next HEAD checks answer (or throw) as `answers` say, in order; later ones reach the fake bucket. */
+function failHeads(w: HostedWorld, answers: (() => Response)[]) {
+  const fetcher = w.options.fetcher
+  w.options.fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input))
+    if (url.host === R2_HOST && init?.method === "HEAD" && answers.length) return answers.shift()!()
+    return fetcher(input, init)
+  }) as typeof fetch
+  return { left: () => answers.length }
+}
 
 /** The daemon packs and uploads the disk as the answers ask (WP A54): pack, size, upload, done. */
 async function upload(w: HostedWorld, id: string, bytes = 8192) {

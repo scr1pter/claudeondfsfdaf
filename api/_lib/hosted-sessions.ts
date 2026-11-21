@@ -1561,6 +1561,40 @@ async function requireDaemonBeat(id: string, input: Record<string, unknown>, kee
 }
 
 /**
+ * What the media bucket holds of an upload a beat reported (O1, O4): `confirmed` when it answers 200 with the size the
+ * upload was signed for, `rejected` when it holds no object (404) or one of another size, and `unknown` when the check
+ * cannot tell: it failed or timed out, answered another status, or gave no length.
+ */
+async function checkUpload(key: string, bytes: number, now: number, fetcher: typeof fetch) {
+  const head = presignR2("media", { method: "HEAD", key, expiresIn: 60, now })
+  const found = await fetcher(head.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(10_000) }).catch(
+    () => undefined,
+  )
+  if (!found) return "unknown" as const
+  if (found.status === 404) return "rejected" as const
+  const length = found.headers.get("content-length")?.trim()
+  if (found.status !== 200 || !length || !/^\d+$/.test(length)) return "unknown" as const
+  return Number(length) === bytes ? ("confirmed" as const) : ("rejected" as const)
+}
+
+/**
+ * Signs the PUT of a session's packed files at `bytes` for the heartbeat's answer (WP A54). The session is noted first,
+ * so account deletion finds the object even if no later beat confirms it.
+ */
+async function signUpload(record: SessionRecord, key: string, bytes: number, now: number, fetcher: typeof fetch) {
+  await store(["SADD", hostedArchivesKey(record.account), record.id], fetcher)
+  const put = presignR2("media", {
+    method: "PUT",
+    key,
+    contentLength: bytes,
+    contentType: "application/gzip",
+    expiresIn: 900,
+    now,
+  })
+  return { url: put.url, headers: put.headers, expiresAt: put.expiresAt }
+}
+
+/**
  * The computer's daemon reports (`POST /api/hosted/sessions/<id>/heartbeat` on the run-API host, with the session's run
  * token): its CPU, its agent's last activity, page loads and egress (cumulative), whether it booted, finished or packed
  * the files the person asked for. The answer tells it the session's state, who has control, its deadline, whether the
@@ -1569,6 +1603,11 @@ async function requireDaemonBeat(id: string, input: Record<string, unknown>, kee
  * upload the disk; the bytes it uploads are noted so the nightly egress charge leaves them to Vector, at most one
  * archive's worth per computer until its disk's deletion date. A beat's image generation is also kept for the
  * computer (`hosted:generation:<account>`, H2a), so the image floor can read it after the session ends.
+ *
+ * The files (WP A54, O1): a beat with no size is asked to pack, one with a size gets an upload link for it, and one that
+ * says `uploaded` has the upload checked in the bucket (`checkUpload`). Only a confirmed upload makes the files ready.
+ * For a job session a check that cannot tell gets a fresh link, so its hostd keeps the copy, and a rejected upload gets
+ * no answer, so hostd drops the copy and its next beat is asked to pack again.
  */
 export async function recordHeartbeat(
   claims: HostedRunClaims,
@@ -1669,11 +1708,15 @@ export async function recordHeartbeat(
   if (download && download.readyAt === undefined && r2Configured("media")) {
     const key = archiveKey(record.account, id)
     if (beat.uploaded && next.archiveBytes !== undefined) {
-      const head = presignR2("media", { method: "HEAD", key, expiresIn: 60, now })
-      const found = await fetcher(head.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(10_000) }).catch(
-        () => undefined,
-      )
-      if (found?.ok && Number(found.headers.get("content-length")) === next.archiveBytes) {
+      // The upload is checked against the size it was signed for, which the beat that reports it may leave out.
+      const check = await checkUpload(key, next.archiveBytes, now, fetcher)
+      if (check === "unknown" && record.mode !== "download") {
+        // O1: a check that could not tell is tried again on the next beat. A job session's hostd keeps its copy only
+        // while an answer asks for something, so it gets a fresh link, which it leaves unused while it reports the
+        // upload. A rejected upload gets no answer: hostd drops the copy, and its next beat, with no size, is asked to
+        // pack again.
+        answer.upload = await signUpload(record, key, next.archiveBytes, now, fetcher)
+      } else if (check === "confirmed") {
         const saved = await updateSessionRecord(
           id,
           (value) =>
@@ -1701,22 +1744,11 @@ export async function recordHeartbeat(
           }
         }
       }
-    } else if (next.archiveBytes === undefined) {
-      // The person asked for the files and the computer has not packed them yet (WP A54).
+    } else if (beat.archiveBytes === undefined) {
+      // The person asked for the files and the computer holds no packed copy now (WP A54). This beat's own size
+      // decides, never one an earlier beat left: a computer that dropped its copy is asked to pack again (O1).
       answer.pack = true
-    } else {
-      // Noted before the link goes out, so account deletion finds the object even if no later beat confirms it.
-      await store(["SADD", hostedArchivesKey(record.account), id], fetcher)
-      const put = presignR2("media", {
-        method: "PUT",
-        key,
-        contentLength: next.archiveBytes,
-        contentType: "application/gzip",
-        expiresIn: 900,
-        now,
-      })
-      answer.upload = { url: put.url, headers: put.headers, expiresAt: put.expiresAt }
-    }
+    } else answer.upload = await signUpload(record, key, beat.archiveBytes, now, fetcher)
   }
   if (record.mode === "download") return answer
   for (const hook of heartbeatHooks.values())
