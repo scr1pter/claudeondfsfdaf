@@ -385,6 +385,8 @@ export interface ReviewCost {
 
 export interface ReviewOutcome {
   report: ModelReport
+  // Local metadata only. These bounded claims cannot choose a reviewer.
+  claimedAuthor?: { source: "branch" | "pr-body" | "trailer"; lab: import("../model-lab").Lab }[]
   selection: Selection
   skipped: SkippedFile[]
   cost?: ReviewCost

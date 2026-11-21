@@ -1286,6 +1286,8 @@ export type Read =
    * the private snapshot with that prefix. It refuses when a ref has its spelling, when no object or several have the
    * prefix, and when that object peels to no commit. */
   | { readonly kind: "resolve"; readonly revision: string }
+  /** Fixed metadata of a verified commit for trusted local authorship matching. */
+  | { readonly kind: "author-commit"; readonly revision: string }
   | { readonly kind: "merge-base"; readonly left: string; readonly right: string }
   | {
       readonly kind: "diff"
@@ -1933,6 +1935,20 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             `--untracked-files=${operation.untracked ?? "all"}`,
             "--ignore-submodules=all",
           ])
+        case "author-commit": {
+          if (!(await isCommit(operation.revision))) return { code: 1, bytes: Buffer.alloc(0) }
+          return boundedTextRead(
+            [
+              "show",
+              "--no-patch",
+              "--no-notes",
+              "--no-show-signature",
+              "--format=%T%n%(trailers:key=Co-authored-by,key=Generated-by,key=Authored-by,valueonly)",
+              operation.revision,
+            ],
+            8192,
+          )
+        }
         case "resolve": {
           const given = operation.revision
           // Git reads an object id's digits in either case; HEAD has none to lowercase.

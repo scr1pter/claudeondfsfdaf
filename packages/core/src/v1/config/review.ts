@@ -20,6 +20,12 @@ import type { DeepMutable } from "../../schema"
 // Q16): the published config.json leaves it out (engine script/schema.ts), and no settings page or docs page names it.
 
 export const Info = Schema.Struct({
+  inversion: Schema.optional(Schema.Unknown).annotate({
+    description: 'Set to "local" to compare the reviewer with locally proven authorship.',
+  }),
+  alternateModel: Schema.optional(Schema.Unknown).annotate({
+    description: "An owner-declared equal-tier, different-lab review model. Used only for local authorship inversion.",
+  }),
   privacy: Schema.optional(Schema.Unknown).annotate({
     description: 'Review privacy: "zdr" only raises what a repository asks.',
   }),

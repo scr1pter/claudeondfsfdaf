@@ -109,6 +109,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/session/system.ts",
   "packages/engine/src/agent/agent.ts",
   "packages/engine/src/review/model.ts",
+  "packages/engine/src/review/author.ts",
   "packages/engine/src/review/route.ts",
   "packages/engine/src/config/agent.ts",
   "packages/engine/src/session/processor.ts",

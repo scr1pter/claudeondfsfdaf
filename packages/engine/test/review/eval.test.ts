@@ -2127,10 +2127,10 @@ describe("ReviewEval.replay", () => {
           head: { "src/list.ts": LIST_HEAD },
         })
         // Typed as an untyped caller's settings would be: ReplayInput's own config type leaves a variant's keys out.
-        const refused = (input: Pick<ReplayInput, "variant" | "triage"> & { config?: Partial<ReviewConfig> }) =>
+        const refused = (input: Pick<ReplayInput, "variant" | "triage"> & { config?: Partial<ReviewConfig>; model?: ReplayInput["model"] }) =>
           ReviewEval.replay({
             case: replayCase(directory, base, head),
-            model: MODEL,
+            model: input.model ?? MODEL,
             config: { maxCostUsd: 2, ...input.config },
             ...(input.variant ? { variant: input.variant } : {}),
             ...(input.triage ? { triage: input.triage } : {}),
@@ -2141,6 +2141,11 @@ describe("ReviewEval.replay", () => {
             Effect.map((error) => error.message),
           )
 
+        for (const key of ["inversion", "alternateModel"])
+          expect(yield* refused({ config: { [key]: "local" } })).toContain("cannot establish local assistant authorship")
+        const fromLocal = { ...MODEL, inversion: { note: "local", privacy: "zdr" as const } }
+        expect(yield* refused({ model: fromLocal })).toContain("cannot establish local assistant authorship")
+        expect(yield* refused({ triage: fromLocal })).toContain("cannot establish local assistant authorship")
         // @ts-expect-error A variant's key is never the eval's own setting, so a typed caller cannot put it in config.
         const typed: ReplayInput["config"] = { verifyPolicy: "shared" }
         expect(typed).toBeDefined()

@@ -3527,22 +3527,26 @@ describe("VS-23b route admission", () => {
         )
         yield* files.writeWithDirs(path.join(test.directory, "src/list.ts"), LIST_SOURCE)
         yield* Effect.promise(() => trustWorkspace(test.directory))
-        const outcome = yield* Review.run(
-          input(test.directory, {
-            model: {
-              providerID: ProviderV2.ID.make("remote"),
-              modelID: ref.modelID,
-              context: 100_000,
-              costKind: "priced",
-            },
-            config: zdr(),
-          }),
-        )
-        expect(yield* modelRequests(llm)).toEqual([])
-        expect(outcome.sessions).toEqual([])
-        expect(outcome.notes).toEqual([
-          notePrivacyRefused({ model: "remote/test-model", refusal: "unattested-provider", attempts: 0 }),
-        ])
+        const remoteModel = {
+          providerID: ProviderV2.ID.make("remote"),
+          modelID: ref.modelID,
+          context: 100_000,
+          costKind: "priced" as const,
+        }
+        for (const [model, settings] of [
+          [remoteModel, zdr()],
+          [
+            { ...remoteModel, inversion: { privacy: "zdr" as const, note: "local switch" } },
+            config({ privacy: "standard" }),
+          ],
+        ] as const) {
+          const outcome = yield* Review.run(input(test.directory, { model, config: settings }))
+          expect(yield* modelRequests(llm)).toEqual([])
+          expect(outcome.sessions).toEqual([])
+          expect(outcome.notes).toEqual([
+            notePrivacyRefused({ model: "remote/test-model", refusal: "unattested-provider", attempts: 0 }),
+          ])
+        }
       }),
     TIMEOUT,
   )

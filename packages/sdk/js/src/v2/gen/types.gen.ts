@@ -2387,6 +2387,8 @@ export type ConnectConfig = {
 }
 
 export type GlobalReviewConfig = {
+  inversion?: unknown
+  alternateModel?: unknown
   privacy?: unknown
   holdback?: unknown
   diagnostics?: unknown

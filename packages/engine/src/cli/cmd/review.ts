@@ -95,6 +95,7 @@ import { Instruction } from "@/session/instruction"
 import { Config } from "@/config/config"
 import { SessionPosting } from "@/session/posting"
 import { ReviewCardAccess } from "@/review/card-access"
+import { ReviewAuthor } from "@/review/author"
 import { ReviewContext } from "@/review/context"
 import type { ReviewModel, ResolvedModel } from "@/review/model"
 import { ReviewRoutes } from "@/review/route"
@@ -337,7 +338,9 @@ function localReview<RunR, ModelR>(
     // connect's reviews. Only tests that build executeLocalReview's runtime by hand omit it, and they read no user
     // config, as before SF-15. No production entry may omit it: without it the user config's privacy is not read.
     const settings = yield* Effect.serviceOption(Config.Service)
-    const global = Option.isSome(settings) ? (yield* settings.value.getGlobal()).review : undefined
+    const ownerSettings = Option.isSome(settings) ? yield* settings.value.getGlobal() : undefined
+    const global = ownerSettings?.review
+    const localInversion = global?.inversion === "local" && ReviewAuthor.localEnvironment("local", env)
     const setting = (file: string) =>
       denied(file)
         ? Effect.succeed(undefined)
@@ -366,7 +369,7 @@ function localReview<RunR, ModelR>(
     })
     output.diagnostics = parsed.config.diagnostics === "offline"
     for (const warning of parsed.warnings) say(`Warning: ${warning}`)
-    const config = withFlags(
+    let config = withFlags(
       parsed.config,
       options.context && options.maxCost !== undefined && parsed.config.maxCostUsd > 0
         ? { ...options, maxCost: Math.min(options.maxCost, parsed.config.maxCostUsd) }
@@ -552,7 +555,7 @@ function localReview<RunR, ModelR>(
     const recheckRules = config.ruleCheck === "strict" || stored?.checkedRules === true
     const diagnosticsHost =
       config.diagnostics === "offline" ? (process.platform === "linux" ? "linux" : "unsupported") : undefined
-    const fullRetry = retryFull || retryStrict === true || recheckRules || stored?.diagnosticsHost !== diagnosticsHost
+    const fullRetry = retryFull || retryStrict === true || recheckRules || stored?.diagnosticsHost !== diagnosticsHost || (!localInversion && !!stored?.inversionKey)
     const saved = !options.full || fullRetry || batchKey ? stored?.state : undefined
     // Full review still starts with no prior findings, but cannot reset this target's accumulated spend.
     const accounting = saved ?? (stored?.batchAccounting ? { ...emptyState(), ...accountingOf(stored.state) } : undefined)
@@ -560,29 +563,7 @@ function localReview<RunR, ModelR>(
       return yield* new LocalReviewError({
         message: "The existing local review checkpoint is unreadable. No batch ran.",
       })
-    const writeOptions = { strictPolicy, checkedRules: config.ruleCheck === "strict", diagnosticsHost, locked } as const
-    const batchState =
-      locked && contextPolicy
-        ? localBatchStore(
-            stored?.state,
-            stored?.batch,
-            // A service's grants and its execution identity must travel together across invocations.
-            JSON.stringify([
-              stateName,
-              root,
-              options.context?.identity,
-              options.context?.readRoot,
-              options.context?.settingsRef,
-              contextPolicy,
-              authority?.patterns,
-              ...(diagnosticsHost ? [diagnosticsHost] : []),
-            ]),
-            !fullRetry && !!stored?.outcome,
-            (pending, metadata) =>
-              writeLocalState(stored, now(), statePath, pending, say, { ...writeOptions, outcome: stored?.outcome, batch: metadata }),
-            { now, carriedMonth: stored?.batchUncertainMonth, knownMonthLedger: stored?.batchAccounting },
-          )
-        : undefined
+    const stateOptions = { strictPolicy, checkedRules: config.ruleCheck === "strict", diagnosticsHost, locked } as const
     const range: Range =
       options.pr !== undefined
         ? yield* pullRange(git, root, options.pr, base!)
@@ -595,7 +576,7 @@ function localReview<RunR, ModelR>(
               saved,
               config,
               ignored,
-              full: options.full || fullRetry || batchKey,
+              full: options.full || fullRetry || batchKey || localInversion,
             })
     const target = range.target
     const open = (saved?.findings ?? []).filter((finding) => finding.status === "open")
@@ -643,7 +624,9 @@ function localReview<RunR, ModelR>(
     }
     // As CI skips a commit it already reviewed; --fail-on still sees what that review left open. The last review of
     // this commit is printed again, so a script, or someone who lost the first output, still gets its findings.
-    if (!batchKey && !fullRetry && saved?.head === range.head && !saved.unreviewed.length && !saved.failed) {
+    const cacheable =
+      !batchKey && !options.full && !fullRetry && saved?.head === range.head && !saved.unreviewed.length && !saved.failed
+    const cached = Effect.gen(function* () {
       const note = `Nothing new to review: ${short(range.head)} was already reviewed.${stillOpen(open)} Run \`vector review --full\` to review it again.`
       if (options.apply)
         say(
@@ -667,10 +650,11 @@ function localReview<RunR, ModelR>(
             }),
         )
       return { exitCode: countAtOrAbove(open, failOn) ? 1 : 0, target, outcome: last } satisfies LocalReviewResult
-    }
+    })
+    if (cacheable && !localInversion) return yield* cached
 
     // Earlier findings follow the lines through what changed since the last review.
-    const priorHead = range.since ?? (fullRetry ? saved?.head : undefined)
+    const priorHead = range.since ?? (fullRetry || localInversion ? saved?.head : undefined)
     const changes =
       saved && priorHead && priorHead !== range.head
         ? yield* ReviewSource.prDiff({ directory: root, mergeBase: priorHead, head: range.head }).pipe(
@@ -694,7 +678,7 @@ function localReview<RunR, ModelR>(
         statePath,
         nextState(accounting, { head: range.head, base: range.mergeBase, mode: "carry", now: now(), prior }),
         say,
-        writeOptions,
+        stateOptions,
       )
       return yield* early(
         `Nothing new to review: rebased onto ${target.baseRef} with no change to this branch's own diff.${stillOpen(open)}`,
@@ -735,18 +719,93 @@ function localReview<RunR, ModelR>(
     // Under "modelEvidence": "warn" (VS-07) a retired model is refused as retired. Under privacy "zdr" (VS-23b) each
     // model needs a route the rules allow, and a refused one stops the review here, before anything is gathered or sent.
     const evidence = config.modelEvidence === "warn" ? { evidence: true } : {}
-    const route = ReviewRoutes.policyOf(config)
-    const routed = route.privacy === "zdr" ? { route } : {}
+    // Authorship is local, owner-opted-in and limited to a complete committed change the caller may read.
+    // Uncommitted inputs and a partial read scope cannot be bound to the stored assistant's snapshots.
+    const attribution =
+      localInversion && !range.worktree && !withheld.length && review.length === range.files.length
+        ? yield* ReviewAuthor.lookup({
+            directory: root,
+            base: range.mergeBase,
+            head: range.head,
+            paths: [...new Set(review.flatMap((file) => (file.oldPath ? [file.path, file.oldPath] : [file.path])))],
+            parent: options.context?.parentID,
+            branch,
+            body: pull?.body,
+          })
+        : undefined
+    // The same commit can acquire a conflicting snapshot or a fence. Recheck its proof before replaying
+    // the saved result; the cache holds only a digest, never the assistant's session or snapshot IDs.
+    const activeSettings =
+      localInversion && !options.context?.identity && Option.isSome(settings)
+        ? yield* settings.value.get()
+        : ownerSettings
+    const activeAgent = activeSettings?.agent?.[options.context?.identity ?? "review"]
+    const inversionKey = localInversion
+      ? createHash("sha256")
+          .update(
+            JSON.stringify([
+              range.mergeBase,
+              attribution && "proof" in attribution ? ReviewAuthor.trustedLab(attribution.proof) : undefined,
+              global?.alternateModel,
+              ownerSettings?.model,
+              options.context?.identity ?? "review",
+              ownerSettings?.agent?.[options.context?.identity ?? "review"]?.model,
+              ownerSettings?.agent?.[options.context?.identity ?? "review"]?.variant,
+              activeAgent?.model,
+              activeAgent?.variant,
+              activeSettings?.model,
+              options.model,
+              config.model,
+              config.privacy,
+              config.zdrAttested,
+            ]),
+          )
+          .digest("hex")
+      : undefined
+    const authorChanged = localInversion && !!stored && stored.inversionKey !== inversionKey
+    if (localInversion && cacheable && !authorChanged) return yield* cached
+    const writeOptions = { ...stateOptions, inversionKey }
+    const batchState =
+      locked && contextPolicy
+        ? localBatchStore(
+            stored?.state,
+            stored?.batch,
+            // A service's grants and its execution identity must travel together across invocations.
+            JSON.stringify([
+              stateName,
+              root,
+              options.context?.identity,
+              options.context?.readRoot,
+              options.context?.settingsRef,
+              contextPolicy,
+              authority?.patterns,
+              ...(diagnosticsHost ? [diagnosticsHost] : []),
+              ...(inversionKey ? [inversionKey] : []),
+            ]),
+            !fullRetry && !authorChanged && !!stored?.outcome,
+            (pending, metadata) =>
+              writeLocalState(stored, now(), statePath, pending, say, { ...writeOptions, outcome: stored?.outcome, batch: metadata }),
+            { now, carriedMonth: stored?.batchUncertainMonth, knownMonthLedger: stored?.batchAccounting },
+          )
+        : undefined
+    let route = ReviewRoutes.policyOf(config)
+    let routed = route.privacy === "zdr" ? { route } : {}
     const resolved = yield* Effect.gen(function* () {
       const model = yield* deps.resolveModel({
         trigger: "local",
         flag: options.model,
+        ...(attribution && "proof" in attribution && attribution.proof ? { author: attribution.proof, route } : {}),
         config: config.model,
         env,
         ...evidence,
         ...routed,
         ...(options.context?.identity ? { identity: options.context.identity } : {}),
       })
+      if (model.inversion) {
+        config = { ...config, privacy: model.inversion.privacy }
+        route = ReviewRoutes.policyOf(config)
+        routed = { route }
+      }
       // review.json's cheaper first pass; the double-check stays on `model`.
       const triage = config.triageModel
         ? yield* deps.resolveModel({
@@ -978,7 +1037,7 @@ function localReview<RunR, ModelR>(
         : {}),
       ...((config.trivial === "skip" && forceFull) || (batchKey && options.full) ? { forceFull: true } : {}),
       ...(batchKey
-        ? { restartBatch: options.full === true || (!!stored && stored.diagnosticsHost !== diagnosticsHost) }
+        ? { restartBatch: options.full === true || authorChanged || (!localInversion && !!stored?.inversionKey) || (!!stored && stored.diagnosticsHost !== diagnosticsHost) }
         : {}),
       ...(batchState ? { batchStore: batchState.store } : {}),
       ...(stored?.batchAccounting ? { accountBatchSpend: true as const } : {}),
@@ -1025,7 +1084,19 @@ function localReview<RunR, ModelR>(
       rulesSource: options.context || trust !== "trusted" ? "base branch" : "working tree",
       ...(ignoredPaths ? { ignored: ignoredPaths } : {}),
     })
-    const result = yield* Effect.provideService(request, ReviewMcpSnapshot.Trusted, snapshot)
+    const run = yield* Effect.provideService(request, ReviewMcpSnapshot.Trusted, snapshot)
+    const authorNote =
+      model.inversion?.note ??
+      (localInversion && (!attribution || !("proof" in attribution) || !attribution.proof)
+        ? "VectorScope kept the configured reviewer. No eligible local assistant snapshots established authorship of this change."
+        : undefined)
+    const result = localInversion
+      ? {
+          ...run,
+          ...(attribution?.claimedAuthor.length ? { claimedAuthor: attribution.claimedAuthor } : {}),
+          ...(authorNote ? { notes: [...run.notes, authorNote] } : {}),
+        }
+      : run
     const visible = withheld.length
       ? {
           ...result,
@@ -1036,6 +1107,7 @@ function localReview<RunR, ModelR>(
     const reviewed = withheld.length && config.guardrail === "strict" ? incompleteStrictCoverage(visible) : visible
     if (
       batchState?.alreadyComplete &&
+      !authorChanged &&
       !fullRetry &&
       !options.full &&
       stored?.outcome &&
@@ -1824,6 +1896,7 @@ interface LocalReviewRecord {
   batchAccounting?: true
   batchUncertainMonth?: string
   diagnosticsHost?: "linux" | "unsupported"
+  inversionKey?: string
   strictPolicy?: string
   outcome?: ReviewOutcome
 }
@@ -1865,6 +1938,7 @@ function readLocalState(
       ...(data.diagnosticsHost === "linux" || data.diagnosticsHost === "unsupported"
         ? { diagnosticsHost: data.diagnosticsHost }
         : {}),
+      ...(typeof data.inversionKey === "string" ? { inversionKey: data.inversionKey } : {}),
       ...(typeof data.strictPolicy === "string" ? { strictPolicy: data.strictPolicy } : {}),
     }
     if (
@@ -1948,10 +2022,11 @@ function writeLocalState(
     strictPolicy,
     checkedRules,
     diagnosticsHost,
+    inversionKey,
     locked,
     batch,
     written,
-  }: Partial<Pick<LocalReviewRecord, "outcome" | "strictPolicy" | "checkedRules" | "diagnosticsHost">> & {
+  }: Partial<Pick<LocalReviewRecord, "outcome" | "strictPolicy" | "checkedRules" | "diagnosticsHost" | "inversionKey">> & {
     locked?: Awaited<ReturnType<typeof lockBatchFile>>
     batch?: ReturnType<typeof localBatchStore>["metadata"]
     unchangedRecord?: string
@@ -2043,6 +2118,7 @@ function writeLocalState(
             ...(strictPolicy ? { strictPolicy } : {}),
             ...(checkedRules ? { checkedRules: true } : {}),
             ...(diagnosticsHost ? { diagnosticsHost } : {}),
+            ...(inversionKey ? { inversionKey } : {}),
           }
         : { ...JSON.parse(unchangedRecord), state: encoded }
     return publish(record, unchangedRecord === undefined)

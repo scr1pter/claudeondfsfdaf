@@ -1,6 +1,7 @@
 // Browser-safe decoding of the engine's retained result. This validates the
 // shared runner's selection; it never selects findings or grants execution.
 import { Option, Schema } from "effect"
+import { LABS } from "../model-lab"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { NonNegativeInt, optional, PositiveInt } from "@vectordevai/schema/schema"
 import { hash } from "../util/encode"
@@ -103,6 +104,9 @@ const prior = Schema.Struct({
   also: optional(many(PositiveInt)),
 })
 const Outcome = Schema.Struct({
+  claimedAuthor: optional(
+    many(Schema.Struct({ source: Schema.Literals(["branch", "pr-body", "trailer"]), lab: Schema.Literals(LABS) })),
+  ),
   trivial: optional(Schema.Literal(true)),
   report: Schema.Struct({
     summary: text,

@@ -1,5 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { Database } from "@vectordevai/core/database/database"
+import { directory, file, first, last, lookupFixture, outsideCI, seedAuthorship } from "../fixture/review-author"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
@@ -82,6 +84,7 @@ interface Setup {
   vectorscope?: { model?: string; variant?: string; disable?: boolean }
   projectVectorscope?: { model?: string; variant?: string }
   globalModel?: string
+  globalReview?: { inversion?: string; alternateModel?: string }
   projectModel?: string
   /** Provider options by provider ID, as getProvider gives them (VS-23b reads the base URL there). */
   options?: Record<string, Record<string, unknown>>
@@ -158,6 +161,7 @@ const services = (setup: Setup) =>
       getGlobal: () =>
         Effect.succeed({
           ...(setup.globalModel ? { model: setup.globalModel } : {}),
+          ...(setup.globalReview ? { review: setup.globalReview } : {}),
           ...(setup.vectorscope ? { agent: { vectorscope: setup.vectorscope } } : {}),
         }),
     }),
@@ -804,3 +808,75 @@ describe("privacy zdr (VS-23b)", () => {
     }),
   )
 })
+
+const localAuthors = testEffect(Database.layerFromPath(":memory:"))
+
+localAuthors.live(
+  "only authenticated local same-lab authorship selects and names the owner's equal-tier alternate",
+  () =>
+    Effect.gen(function* () {
+      yield* outsideCI
+      const write = yield* seedAuthorship(directory)
+      yield* write(0, first, last, "claude-sonnet", [file])
+      const found = yield* lookupFixture()
+      const proof = "proof" in found ? found.proof : undefined
+      expect(proof).toBeDefined()
+      const setup = {
+        globalModel: "anthropic/sonnet",
+        globalReview: { inversion: "local", alternateModel: "openai/gpt" },
+      }
+      const normal = {
+        trigger: "local",
+        flag: "anthropic/sonnet",
+        env: {},
+        route: { privacy: "standard", attested: ["models.invalid"] },
+      } as const
+      const switched = yield* resolve({ ...normal, author: proof }, setup)
+      expect(switched).toMatchObject({ providerID: "openai", modelID: "gpt", inversion: { privacy: "zdr" } })
+      expect(switched.inversion?.note).toContain(
+        "switched from anthropic/sonnet to your equal-tier alternate openai/gpt",
+      )
+      const alternateOverride = yield* resolve(
+        { ...normal, author: proof },
+        {
+          ...setup,
+          agent: { model: "openai/gpt", variant: "project-tier" },
+        },
+      )
+      expect(alternateOverride.modelID).toBe(ModelV2.ID.make("gpt"))
+      expect(alternateOverride.variant).toBeUndefined()
+      expect(alternateOverride.subject?.choice?.setting).toBe("review.alternateModel in your global Vector settings")
+      const changedPrimary = yield* resolve(
+        { ...normal, author: proof },
+        {
+          ...setup,
+          agent: { model: "anthropic/sonnet", variant: "project-tier" },
+        },
+      )
+      expect(changedPrimary.inversion).toBeUndefined()
+      expect(yield* resolve(normal, setup)).toEqual(yield* resolve(normal, {}))
+      expect(
+        yield* resolve({ ...normal, author: proof }, { ...setup, globalReview: { alternateModel: "openai/gpt" } }),
+      ).toEqual(yield* resolve(normal, {}))
+      expect((yield* resolve({ ...normal, author: proof, flag: "openai/gpt" }, setup)).inversion).toBeUndefined()
+      const refusal = yield* resolve(
+        { ...normal, route: { privacy: "standard", attested: [] }, author: proof },
+        setup,
+      ).pipe(Effect.flip)
+      expect(refusal.refusal).toBe("unattested-provider")
+      const same = yield* resolve(
+        { ...normal, author: proof },
+        { ...setup, globalReview: { inversion: "local", alternateModel: "anthropic/sonnet" } },
+      ).pipe(Effect.flip)
+      expect(same.message).toContain("different model lab")
+      for (const denied of [
+        { trigger: "auto" },
+        { trigger: "command" },
+        { trigger: "desktop" },
+        { env: { CI: "true" } },
+      ] as const) {
+        const err = yield* resolve({ ...normal, ...denied, author: proof }, setup).pipe(Effect.flip)
+        expect(err.message).toContain("trusted local review outside CI")
+      }
+    }),
+)

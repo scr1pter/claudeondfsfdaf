@@ -518,7 +518,8 @@ const execute = Effect.fn("Review.run")(function* (input: RunInput) {
 
   const started = Date.now()
   const deadline = started + input.config.timeoutMinutes * 60_000
-  const requested = strictReviewConfig(input.config)
+  const inversion = input.model.inversion ?? input.triage?.inversion ?? input.judge?.inversion
+  const requested = strictReviewConfig(inversion ? { ...input.config, privacy: "zdr" as const } : input.config)
   const config =
     requested.cards === "brain" &&
     input.trigger !== "local" &&

@@ -38807,6 +38807,8 @@
       "GlobalReviewConfig": {
         "type": "object",
         "properties": {
+          "inversion": {},
+          "alternateModel": {},
           "privacy": {},
           "holdback": {},
           "diagnostics": {},

@@ -1426,6 +1426,12 @@ const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
 // the run unnamed, a route setting there, which nothing would enforce, or a variant that would run the frozen pipeline,
 // or anything but itself, under its name.
 function variantProblem(input: ReplayInput) {
+  if (
+    input.model.inversion ||
+    input.triage?.inversion ||
+    (input.config && (Object.hasOwn(input.config, "inversion") || Object.hasOwn(input.config, "alternateModel")))
+  )
+    return "A replay cannot establish local assistant authorship or select the owner's equal-tier alternate."
   // A route setting a variant may raise (privacy) is still a route setting in `config`, which gets its own message.
   const misplaced = VARIANT_KEYS.engine.filter(
     (key) =>

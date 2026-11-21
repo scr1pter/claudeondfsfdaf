@@ -2,7 +2,11 @@ import { $ } from "bun"
 import { expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { Database } from "@vectordevai/core/database/database"
+import { ReviewAuthor } from "@/review/author"
+import { TestConfig } from "../fixture/config"
+import { outsideCI, seedAuthorship } from "../fixture/review-author"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -270,4 +274,91 @@ it.live("a declined full rerun keeps the saved review and retries the full branc
     yield* run()
     expect(runs).toEqual([["a.ts"], ["a.ts"], ["a.ts"], ["a.ts"], ["a.ts", "b.ts"]])
   }),
+)
+
+const authorCli = testEffect(
+  Layer.merge(LayerNode.compile(LayerNode.group([Git.node])), Database.layerFromPath(":memory:")),
+)
+const nativeAuthorship = process.platform === "linux" ? authorCli.live : authorCli.live.skip
+nativeAuthorship(
+  "local review dispatch uses matched V2 authorship, forwards ZDR and renews a cached review when owner settings change",
+  () =>
+    Effect.gen(function* () {
+      yield* outsideCI
+      const repo = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const directory = repo.path
+      const git = (...args: string[]) =>
+        Effect.promise(() => $`git ${args}`.cwd(directory).quiet().text()).pipe(Effect.map((v) => v.trim()))
+      yield* git("branch", "-M", "main")
+      const before = yield* git("rev-parse", "HEAD^{tree}")
+      yield* git("checkout", "-qb", "codex/feature")
+      yield* Effect.promise(() => fs.writeFile(path.join(directory, "a.ts"), "export const x = 1\n"))
+      yield* git("add", "a.ts")
+      yield* git("commit", "-m", "Implement change", "-m", "Generated-by: Gemini")
+      const after = yield* git("rev-parse", "HEAD^{tree}")
+      const seed = yield* seedAuthorship(directory, yield* git("rev-list", "--max-parents=0", "HEAD"))
+      yield* seed(0, before, after, "claude-sonnet", ["a.ts"])
+      const dispatches: string[] = []
+      let ambiguous = false
+      const note = "Selected the owner's equal-tier different-lab reviewer."
+      const run = (enabled: boolean) =>
+        executeLocalReview(
+          { directory, base: "main", env: {} },
+          {
+            resolveModel: (request) =>
+              resolveModel(request).pipe(
+                Effect.map((reviewer) => {
+                  if (!enabled) {
+                    expect(request.author).toBeUndefined()
+                    return reviewer
+                  }
+                  if (ambiguous) {
+                    expect(request.author).toBeUndefined()
+                    return reviewer
+                  }
+                  expect(ReviewAuthor.trustedLab(request.author)).toBe("anthropic")
+                  return { ...reviewer, inversion: { note, privacy: "zdr" as const } }
+                }),
+              ),
+            confirm: async () => false,
+            stdout: async () => {},
+            stderr: () => {},
+            posting: async () => [],
+            runReview: (input) =>
+              Effect.sync(() => {
+                dispatches.push(input.config.privacy ?? "standard")
+                return outcomeFor(input)
+              }),
+          },
+        ).pipe(
+          Effect.provide(
+            TestConfig.layer({
+              getGlobal: () =>
+                Effect.succeed(enabled ? { review: { inversion: "local", alternateModel: "openai/gpt" } } : {}),
+            }),
+          ),
+        )
+      expect((yield* run(false)).exitCode).toBe(0)
+      const switched = yield* run(true)
+      expect(switched.outcome?.notes).toContain(note)
+      expect(switched.outcome?.claimedAuthor).toEqual([
+        { source: "branch", lab: "openai" },
+        { source: "trailer", lab: "google" },
+      ])
+      expect((yield* run(true)).exitCode).toBe(0)
+      // A second local step claims the same end tree. It invalidates the proof while HEAD and owner
+      // settings stay byte-identical. An unchanged refusal then hits the ordinary result cache.
+      yield* seed(1, before, after, "gpt-5", ["a.ts"])
+      ambiguous = true
+      const fallback = yield* run(true)
+      expect(fallback.outcome?.notes.join(" ")).toContain("No eligible local assistant snapshots")
+      expect(fallback.outcome?.notes).not.toContain(note)
+      expect((yield* run(true)).exitCode).toBe(0)
+      expect((yield* run(false)).outcome?.claimedAuthor).toBeUndefined()
+      expect(dispatches).toEqual(["standard", "zdr", "standard", "standard"])
+    }),
+  60_000,
 )

@@ -1394,6 +1394,13 @@ it.instance("a trusted repository's run limits alone leave no budget", () =>
 // Research's settings are the user's (sections 5.7 and 7.2): a repository, trusted or not, may only add domains to
 // avoid and turn the build agent's research tool down. Its preferred domains, caps and robots.txt switch never apply,
 // so a cloned repository cannot choose what research reads.
+const ownerReviewSettings = {
+  privacy: "zdr",
+  holdback: "secrets",
+  zdrAttested: ["acme"],
+  inversion: "local",
+  alternateModel: "openai/gpt",
+}
 for (const trusted of [true, false])
   it.instance(`${trusted ? "a trusted" : "an untrusted"} repository's research block only adds avoided domains`, () =>
     withGlobalConfig(
@@ -1465,15 +1472,21 @@ it.instance("a repository cannot turn the build agent's research tool back on", 
 // lower review privacy).
 for (const trusted of [true, false])
   it.instance(`${trusted ? "a trusted" : "an untrusted"} repository's review block never applies (SF-15)`, () =>
-    withGlobalConfig({ config: { review: { privacy: "zdr", holdback: "secrets", zdrAttested: ["acme"] } } }, () =>
+    withGlobalConfig({ config: { review: ownerReviewSettings } }, () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const write = trusted ? writeTrustedConfigEffect : writeConfigEffect
         yield* write(test.directory, {
-          review: { privacy: "standard", holdback: "off", zdrAttested: ["attacker.example"] },
+          review: {
+            privacy: "standard",
+            holdback: "off",
+            zdrAttested: ["attacker.example"],
+            inversion: "off",
+            alternateModel: "forged/alternate",
+          },
           share: "disabled",
         })
-        const user = { privacy: "zdr", holdback: "secrets", zdrAttested: ["acme"] }
+        const user = ownerReviewSettings
         expect((yield* Config.use.getGlobal()).review).toEqual(user)
         const merged = yield* Config.use.get()
         expect(merged.review).toEqual(user)
