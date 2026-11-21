@@ -21,6 +21,8 @@ import { ContentPart, DEFAULT_PROMPT, isPromptEqual, Prompt, usePrompt, ImageAtt
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
+import { useServerSync } from "@/context/server-sync"
+import { codeReviewOffered } from "./settings-v2/code-review-model"
 import { useComments } from "@/context/comments"
 import { Button } from "@vectordevai/ui/button"
 import { DockShellForm, DockTray } from "@vectordevai/ui/dock-surface"
@@ -273,6 +275,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const sdk = useSDK()
 
   const sync = useSync()
+  const serverSync = useServerSync()
   const files = useFile()
   const prompt = props.state ?? usePrompt()
   const layout = useLayout()
@@ -1703,6 +1706,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       llmJudge: settings.general.llmJudge,
       judgeScope: settings.general.judgeScope,
       secondOpinion: settings.general.secondOpinion,
+      // A setting left on while its row is hidden (VectorScope off, or an older engine) sends nothing.
+      codeReview: () =>
+        settings.general.codeReview() &&
+        codeReviewOffered({
+          capability: serverSync().capabilities().codeReviewAfterTask,
+          vectorscope: serverSync().globalConfig()?.experimental?.vectorscope,
+          disabled: serverSync().globalConfig()?.agent?.vectorscope?.disable,
+        }),
       autoModelRouting: settings.general.autoModelRouting,
       connectProvider: () => setModelStartNudge((count) => count + 1),
       localMode: () => localMode.status()?.policy.enabled === true,
