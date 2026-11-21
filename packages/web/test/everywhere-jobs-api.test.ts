@@ -4,6 +4,8 @@ import { mintCliToken } from "../../../api/_lib/cli-token"
 import { drainAfter } from "../../../api/_lib/everywhere/after"
 import { AUDIT_APPEND_SCRIPT } from "../../../api/_lib/everywhere/audit"
 import { ENV_NAMES, readConfig } from "../../../api/_lib/everywhere/config"
+import { missingAccountAuthority } from "../../../api/_lib/everywhere/authority"
+import { tombstoneKey } from "../../../api/_lib/codium-tombstone"
 import { DEVICE_HEADER, createJobsApi, type JobEvents, type JobsApiDeps } from "../../../api/_lib/everywhere/jobs-api"
 import {
   createJob,
@@ -169,6 +171,29 @@ async function claimed(input = slackJob()) {
 }
 
 describe("who may call", () => {
+  // EV-27: with no store or authority injected, the route builds its own store, which must carry Codium's account
+  // authority; only an explicitly missing authority answers 503.
+  test("the default store carries Codium's account authority, and only a missing one is unverified", async () => {
+    const pending = () =>
+      harness.call("GET", "/api/everywhere/jobs/pending", { token: token(), headers: { [DEVICE_HEADER]: device() } })
+    mount({ store: undefined, accountAuthority: undefined })
+    const open = await pending()
+    expect({ status: open.status, code: open.body.error?.code }).toEqual({ status: 200, code: undefined })
+    fake.send(["SET", tombstoneKey(ALICE.id.toLowerCase()), JSON.stringify({ erased: true })])
+    const closed = await pending()
+    expect({ status: closed.status, code: closed.body.error?.code }).toEqual({
+      status: 409,
+      code: "EVERYWHERE_AUTHORITY_CHANGED",
+    })
+    fake.send(["DEL", tombstoneKey(ALICE.id.toLowerCase())])
+    mount({ store: undefined, accountAuthority: missingAccountAuthority })
+    const unverified = await pending()
+    expect({ status: unverified.status, code: unverified.body.error?.code }).toEqual({
+      status: 503,
+      code: "EVERYWHERE_ACCOUNT_UNVERIFIED",
+    })
+  })
+
   test("only the desktop app's own, unrevoked sign-in token works", async () => {
     const body = { jid: "vej_0000000000000000000000", device: device() }
     expect((await harness.call("POST", "/api/everywhere/jobs/claim", { body })).status).toBe(401)

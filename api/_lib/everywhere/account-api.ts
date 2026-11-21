@@ -11,6 +11,7 @@ import { sanitizeReply, type Ending } from "../../../packages/schema/src/everywh
 import { requireTrustedJsonRequest } from "../abuse.js"
 import { requireAccountUser } from "../account.js"
 import { ApiError, handleApiError, json, queryValue, readJson, type ApiRequest, type ApiResponse } from "../http.js"
+import { codiumAccountAuthority } from "./adapters/account.js"
 import { readAudit, type AuditEntry } from "./audit.js"
 import { checkAccount } from "./authority.js"
 import { platformOn, readConfig, type Env, type EverywhereConfig } from "./config.js"
@@ -61,7 +62,7 @@ export type AccountApiDeps = {
   readonly accountAuthority?: import("./authority.js").AccountAuthorityPort
   readonly env?: Env
   readonly store?: Store
-  /** For `requireAccountUser`'s call to the account service. */
+  /** For `requireAccountUser`'s call to the account service and, with no `store`, the default store's calls. */
   readonly fetcher?: typeof fetch
   readonly now?: () => number
   /**
@@ -124,7 +125,7 @@ async function begin(request: ApiRequest, deps: AccountApiDeps): Promise<Session
   const config = readConfig(deps.env ?? process.env)
   if (!config.enabled) throw notFound()
   const user = await requireAccountUser(request, deps.fetcher ?? fetch)
-  const store = deps.store ?? everywhereStore()
+  const store = deps.store ?? everywhereStore(deps.fetcher ?? fetch, deps.accountAuthority ?? codiumAccountAuthority)
   const now = (deps.now ?? Date.now)()
   await checkAccount({ store, accountAuthority: deps.accountAuthority }, user.id)
   return {

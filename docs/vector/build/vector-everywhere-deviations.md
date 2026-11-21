@@ -4743,3 +4743,23 @@ The final review before the lane's PR into main: nine findings, one blocking. Ba
 ### Safe by default
 
 No flag, env var, route, dependency, lockfile or generated file changes. The only user-visible change is that the Vector Local pane no longer names Jobs for this computer while the `everywhere` block is off.
+
+## 2026-11-21, v2-closeout-ci: the jobs and account routes' default store carries Codium's account authority
+
+- **What was wrong.** `jobs-api.ts` `start()` built `everywhereStore(deps.fetcher ?? fetch)` and `account-api.ts`
+  `begin()` built `everywhereStore()`, both with no account authority. With no `deps.store` and no
+  `deps.accountAuthority` (the shape `everywhereAccountApi = createAccountApi()` and a default `createJobsApi` deploy
+  with), `accountGuards` fell back to `missingAccountAuthority`, so every request with the flag on answered 503
+  `EVERYWHERE_ACCOUNT_UNVERIFIED`. `runtime.ts` and the job body route already pass `codiumAccountAuthority`.
+- **Change.** Both now default only the constructed store to
+  `everywhereStore(deps.fetcher ?? fetch, deps.accountAuthority ?? codiumAccountAuthority)`. `ctx.accountAuthority` is
+  not defaulted, so an injected authority (every fixture) still wins. In `account-api.ts` `deps.fetcher` now also
+  carries the default store's REST calls (its comment says so); production injects no fetcher, so both still use
+  `fetch`, and no existing test injects a fetcher without a store.
+- **Tests.** `packages/web/test/everywhere-jobs-api.test.ts` ("the default store carries Codium's account authority")
+  and `everywhere-pages.test.ts` ("the default store") mount the routes with no store and no authority, the flag on
+  through the injected env and the FakeStore REST fetch: 200; with a Codium tombstone seeded at
+  `tombstoneKey(account)`: 409 `EVERYWHERE_AUTHORITY_CHANGED`; with an explicit `missingAccountAuthority`: 503
+  `EVERYWHERE_ACCOUNT_UNVERIFIED`. On the old source the jobs case answered 503 where it expects 200; reverting only
+  the account-api default fails the pages case. Both whole files pass (23 pass; 66 pass, 1 skip). No flag, route or
+  generated file changes; the feature stays off by default.

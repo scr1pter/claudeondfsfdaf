@@ -108,7 +108,16 @@ import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { seedJobAuthority } from "./lib/everywhere-job-authority"
 import { FakeLinear } from "./lib/everywhere-linear"
 import { FakeSlack } from "./lib/everywhere-slack"
-import { FakeStore, realRedis, testAccountAuthority, testEverywhereStore, useKv } from "./lib/everywhere-store"
+import {
+  FAKE_KV_URL,
+  FakeStore,
+  realRedis,
+  testAccountAuthority,
+  testEverywhereStore,
+  useKv,
+} from "./lib/everywhere-store"
+import { missingAccountAuthority } from "../../../api/_lib/everywhere/authority"
+import { tombstoneKey } from "../../../api/_lib/codium-tombstone"
 
 // As in account-page.test.ts: this package's tsconfig compiles JSX for Solid, and Astro builds the React islands
 // itself, so the everywhere components are compiled here with React's automatic runtime.
@@ -574,6 +583,28 @@ describe("the feature off", () => {
     for (const call of b.calls) expect(headers(call).authorization).toBe(`Bearer ${alice.token}`)
     expect(accounts.calls).toBe(0)
     expect(fake.commands).toEqual([])
+  })
+})
+
+// EV-27: with no store or authority injected, the account routes build their own store, which must carry Codium's
+// account authority; only an explicitly missing authority answers 503.
+describe("the default store", () => {
+  test("carries Codium's account authority, and only a missing one is unverified", async () => {
+    const fetcher = ((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input instanceof Request ? input.url : input).startsWith(FAKE_KV_URL)
+        ? fake.fetch(input, init)
+        : fetch(input, init)) as typeof fetch
+    const links = async () => {
+      const answer = await harness.call("GET", EVERYWHERE_ROUTES.links, { token: alice.token })
+      return { status: answer.status, code: answer.body.error?.code }
+    }
+    harness.use(createAccountApi(deps({ store: undefined, accountAuthority: undefined, fetcher })))
+    expect(await links()).toEqual({ status: 200, code: undefined })
+    fake.send(["SET", tombstoneKey(alice.id.toLowerCase()), JSON.stringify({ erased: true })])
+    expect(await links()).toEqual({ status: 409, code: "EVERYWHERE_AUTHORITY_CHANGED" })
+    fake.send(["DEL", tombstoneKey(alice.id.toLowerCase())])
+    harness.use(createAccountApi(deps({ store: undefined, accountAuthority: missingAccountAuthority, fetcher })))
+    expect(await links()).toEqual({ status: 503, code: "EVERYWHERE_ACCOUNT_UNVERIFIED" })
   })
 })
 
