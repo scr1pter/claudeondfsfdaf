@@ -94,6 +94,7 @@ const REASONS = Object.keys({
   "may-train": true,
   unattended: true,
   disabled: true,
+  "cloud-workspace": true,
 } satisfies Record<ComputerAvailability.Reason, true>) as ComputerAvailability.Reason[]
 
 const hands = {

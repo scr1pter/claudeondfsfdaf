@@ -2232,3 +2232,19 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   message and reach `none`, one probe per list; red on the old `registered()` (9 pass, 1 fail). The ready case still
   reads "Not in this build." `test/connect/hub.test.ts`'s compose case adds a non-ready Hands member without its tool
   and expects its state and reason kept (52 pass). Spec §6's Hands row says so.
+
+## 2026-11-21 — CW-24: Hands reads unavailable inside a cloud workspace
+
+- With the supervisor's marker (`RuntimeFlags.cloudWorkspace`, `VECTOR_CLOUD_WORKSPACE_WORKER=1`),
+  `packages/engine/src/computer/availability.ts` gives the new reason `cloud-workspace` ("Vector Hands isn't available
+  in a Vector cloud workspace. Open this conversation in the Vector desktop app on your computer to use it.") ahead of
+  the WSL and platform readings, and never builds a bridge endpoint, so no bridge is probed from a container even if
+  the bridge variables leak in. `policy()` still runs first, so company policy, the conversation switch and Vector
+  Local's Web access None keep their own reasons. `capabilities()` keeps answering `no_desktop_bridge`, the string
+  ClientCapabilities consumers already handle, and `actions()` is empty. The Hands adapter (connect/adapters/hands.ts)
+  is unchanged: its cloud-place summary now always comes with this unavailable reason.
+- Tests: `packages/engine/test/computer/availability.test.ts` adds three cases with the marker and valid bridge
+  variables: `cloud-workspace` with no HTTP call and no actions; the same ahead of WSL; `policy` still wins. The fixture
+  takes the runtime flags as a fourth argument (default `{ client: "cli" }`). With the flag check removed (the reason
+  kept), the first two fail. `test/connect/hands.test.ts` lists the new reason in `REASONS` (its typecheck requires
+  every reason), 10 pass; `test/connect/place.test.ts` 9 pass. Hands stays off by default; the pilot stays off.
