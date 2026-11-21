@@ -26,9 +26,11 @@ on:
       - packages/core/src/v1/config/everywhere.ts
       - packages/desktop/src/main/everywhere-*
       - packages/app/src/components/settings-v2/everywhere*
-      - packages/web/src/pages/everywhere*
-      - packages/web/src/pages/everywhere/**
-      - packages/web/src/pages/docs/everywhere.astro
+      # The vectordev.ai pages and docs page are unreleased drafts until 2.0.0 (EV-23, EV-24). When the owner moves
+      # these drafts to src/pages at 2.0.0, everywhere-lane.test.ts fails until these three entries move with them.
+      - packages/web/src/drafts/everywhere*
+      - packages/web/src/drafts/everywhere/**
+      - packages/web/src/drafts/docs/everywhere.astro
       - packages/web/src/components/everywhere/**
       - packages/web/src/components/marketing/everywhere/**
       - integrations/slack/**
@@ -82,6 +84,34 @@ on:
       - api/_lib/github-oidc.ts
       - api/_lib/github-http.ts
       - packages/core/src/github-agents.ts
+      # The sweep cron (EV-04, R-C11); Codium's perk, plan and switch vocabulary the lane extends (EV-07, EV-08;
+      # codium-copy.ts and codium-run-trigger.ts are listed above); and the relay Worker that answers presence and
+      # forwards job offers (EV-05, EV-06), which the remote adapter test and the journeys run in process.
+      - vercel.json
+      - api/_lib/codium-perks.ts
+      - packages/schema/src/codium-entitlements.ts
+      - packages/schema/src/codium-owner.ts
+      - packages/relay/src/**
+      # The desktop's Remote link and its registration, the shared keep-awake, and the sign-in claims that pick which
+      # account's offers are checked (EV-11, EV-17, EV-18). Desktop everywhere tests run only in this lane.
+      - packages/desktop/src/main/remote-link.ts
+      - packages/desktop/src/main/remote-runtime.ts
+      - packages/desktop/src/main/keep-awake.ts
+      - packages/desktop/src/main/vector-account.ts
+      # The engine's unattended worktree, outward audience and offline shell (EV-12 to EV-16). The shell's bubblewrap
+      # cases run only in this lane.
+      - packages/engine/src/worktree/index.ts
+      - packages/engine/src/session/prompt.ts
+      - packages/engine/src/session/unattended-shell.ts
+      - packages/engine/src/tool/shell.ts
+      - packages/engine/src/tool/shell/sandbox.ts
+      # Vector Local's everywhere source (EV-15, R-M1), and the settings registry and dialog that the settings page
+      # joins (EV-21).
+      - packages/core/src/local-mode/sources.ts
+      - packages/app/src/components/settings-v2/settings-registry.ts*
+      - packages/app/src/components/settings-v2/dialog-settings-v2.ts*
+      # The account client the vectordev.ai account components sign in with (EV-22).
+      - packages/web/src/lib/account-client.ts
   workflow_dispatch:
 
 concurrency:

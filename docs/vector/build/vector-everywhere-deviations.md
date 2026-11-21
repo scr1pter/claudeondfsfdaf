@@ -4578,3 +4578,94 @@ Three more after the review (/tmp/vector-v2/everywhere/ev32/fixes/mut/: mutate.p
 ### Deferred verification
 
 - vector-everywhere.yml (the new file with R1 and R2 in its Valkey job, the moved adapter test, the lane and docs tests) and typecheck.yml on everywhere-finish, after the commit step's push. The commit gate also dispatches vector-hosted-ci.yml and vector-at-mention.yml, which run none of this package's files. vector-codium.yml is not dispatched for this package (the lane notes: not before PR #33 is on main and merged into this branch; PR #33 is on main, but main is not merged into this branch).
+
+## 2026-11-21, EV-33: lane close-out: the lane's paths, the handoff and the progress record (VE-00, F1, FIT-4)
+
+Spec §8 VE-00 (the lane's path rules); review:everywhere:fit F1; pre-merge FIT-4. Base: HEAD `9944b7b5`, equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish review-fixes`; FIT-4 (`f251ac2c`, `48b76a5b`), FIT-5 (`dcd781d0`) and origin/release-finish `67ec3a60` are ancestors. origin/main `f3d7ac74` (#51 to #54, 23 files, none of them a file this branch changes) was merged first, as `535ac94e` ((l)). No engine, shell, sandbox, worktree or relay source changes, only path names, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Receipts: vector-everywhere-progress.md, "EV-33".
+
+### What changed
+
+- **.github/workflows/vector-everywhere.yml**, `on.pull_request.paths` and its comments only. The three src/pages entries become packages/web/src/drafts/everywhere*, packages/web/src/drafts/everywhere/** and packages/web/src/drafts/docs/everywhere.astro, under a comment that the owner's 2.0.0 move takes them back to src/pages. After the last helper, five commented groups add 18 patterns:
+  - vercel.json, api/_lib/codium-perks.ts, packages/schema/src/codium-entitlements.ts, packages/schema/src/codium-owner.ts, packages/relay/src/**;
+  - packages/desktop/src/main/{remote-link,remote-runtime,keep-awake,vector-account}.ts, one entry each;
+  - packages/engine/src/worktree/index.ts, packages/engine/src/session/prompt.ts, packages/engine/src/session/unattended-shell.ts, packages/engine/src/tool/shell.ts, packages/engine/src/tool/shell/sandbox.ts;
+  - packages/core/src/local-mode/sources.ts, packages/app/src/components/settings-v2/settings-registry.ts* and dialog-settings-v2.ts* (`.ts*` matches the one file that exists of each, settings-registry.ts and dialog-settings-v2.tsx, and not settings-registry.test.ts);
+  - packages/web/src/lib/account-client.ts.
+
+  60 paths before; 60 − 3 + 21 = 78 after, all unique. Nothing else in the file changes: workflow_dispatch, push `[main]`, the concurrency group, permissions, runners, services, every job and step and both scripts are byte-identical.
+- **packages/web/test/everywhere-lane.test.ts**: the paths test's zones, helpers (20 new pins, 48 in all) and unrelated files; a new test that every path names a tracked file but the Solid zone; three new scope commits. Details in the progress receipt.
+- **The lane documents**: the spec's status line and one dated note in §9 "In CI" (the only spec pointer; the VE-00 row and §6.6 are covered here, (m)); the handoff's new top, "Current state", with the old status section kept as the package log and dated annotations; the progress receipt; this entry.
+
+### Decisions
+
+- **(a) The brief's entries already present are kept once.** api/_lib/remote-relay.ts, packages/schema/src/codium-copy.ts and codium-run-trigger.ts, api/_lib/cloud-agents-{run-token,binding,start,runs}.ts, api/_lib/github-oidc.ts and packages/engine/src/cli/cmd/github.agent.ts were added by EV-09 to EV-31. The lane test refuses a duplicate (mutation M7), so the groups' comments name them instead of listing them again.
+- **(b) Nothing is restored.** FIT-4 kept packages/core/src/v1/config/everywhere.ts (it exists since EV-10, `7146a98f`), so the brief's conditional restore does not apply. FIT-4's push trigger, header, concurrency and scope-step comments, its test pins and workflow-compliance's new rule are untouched.
+- **(c) The drafts, narrowly, and the 2.0.0 tripwire.** The three draft entries replace the three src/pages ones, which matched nothing since EV-23 and EV-24 put the pages under packages/web/src/drafts/. EV-24 asked review-fixes for packages/web/src/drafts/**; that glob is not used, because drafts/docs/vector-hands.astro and drafts/docs/vectorscope-github.astro are other lanes' drafts and would start this lane for nothing. The lane test pins vector-hands.astro as unrelated (M10). The new tracked-file test turns red when the owner moves the drafts to src/pages at 2.0.0 until the three entries move with them, as a path that names nothing would otherwise hide a move (FIT-4's lesson).
+- **(d) Three files beyond the brief.**
+  - packages/engine/src/session/unattended-shell.ts is the lane's own R-M2 file (EV-16) and sits outside spec 6.6's zones; engine test/everywhere/offline-shell.test.ts imports it, and its bubblewrap cases run only in this lane.
+  - packages/desktop/src/main/vector-account.ts: everywhere-wiring.ts:38 imports `tokenClaims`, which EV-17 changed, to pick the account whose offers are checked.
+  - packages/web/src/lib/account-client.ts: EverywhereAccount.tsx:3 and EverywhereLink.tsx:3 import it, and EV-22 recorded the gap.
+- **(e) Every other lane-changed file has another check.** `git diff --name-only origin/main...HEAD` lists 190 files; 127 match the paths, and these 63 do not, each covered elsewhere:
+  - @vector's and Codium's hosted API (api/_lib/cloud-agents-api.ts, cloud-agents-ledger.ts, codium-owner-api.ts): vector-at-mention.yml and vector-hosted-ci.yml both start on api/**, test.yml runs the root test/ suite, and vector-codium.yml takes Codium's;
+  - the engine's route plumbing and config (server/routes/instance/httpapi/api.ts, server.ts, groups/experimental.ts, handlers/{config,experimental,global,session,sync}.ts; config/config.ts; session/instruction.ts; tool/read.ts, also vector-at-mention's; tool/subagent-lifecycle.ts; tool/terminal.ts) and its tests and fixtures (test/cli/github.cloud.test.ts, vector-at-mention's; test/config/subagent-config.test.ts; test/session/instruction.test.ts; test/fixture/config.ts; test/server/httpapi-exercise/index.ts): test.yml's engine shards and its HttpApi exerciser, and typecheck.yml. The only lane-only engine cases are offline-shell's bubblewrap ones, which depend on the three shell files now listed; the handlers' mark refusals need no bubblewrap and run in test.yml too;
+  - core (config/managed.ts; review/model-evidence.ts, also vector-at-mention's packages/core/src/review/**; v1/config/config.ts; test/local-mode/sources.test.ts): test.yml's `turbo test` and typecheck.yml;
+  - the app (context/server-sdk.tsx, server-sync.tsx; features/local/local-model.ts and its test; settings-v2/settings-registry.test.ts) and packages/ui/src/context/helper.tsx: test.yml's `turbo test` and typecheck.yml;
+  - the desktop's remote-link.test.ts and remote-relay.fixture.ts, the relay's e2e/relay-smoke.ts, test/internal.test.ts and test/relay.test.ts, the schema's codium-copy and codium-entitlements tests, and the root test/codium-owner, codium-pool, codium-switches and remote-relay-contract tests: vector-hosted-ci.yml (packages/desktop/src/main/remote-*, packages/relay/**, packages/schema/**, test/**, with the relay's wrangler dry run and local smoke); test.yml also runs the root suite, and vector-codium.yml the Codium-named ones;
+  - packages/web's Codium tests and component (components/marketing/codium/CodiumPricing.test.ts, components/marketing/owner/CodiumOwner.tsx and its test, test/codium-docs, codium-public, model-plan-admit, model-plan-status-api and docs-config-reference): vector-codium.yml, which picks Codium-named files and every test file changed since origin/main (packages/web has no test script, so test.yml runs none of them);
+  - packages/web's @vector tests (cloud-agents-bind-api, cloud-agents-binding, cloud-agents-runs, cloud-agents-start, github-app, github-oidc): vector-at-mention.yml;
+  - the generated files (packages/sdk/js/src/gen/{sdk,types}.gen.ts, src/v2/gen/{sdk,types}.gen.ts, packages/sdk/openapi.json): test.yml's `check:generated`; packages/web/public/config.json: test.yml's deployed-schemas.test.ts, and docs-config-reference.test.ts in vector-codium.yml;
+  - docs/vector/build/v2-notes/v2-complete-plan.md: the lead's record, documentation only.
+
+  Also considered and not added: the fixtures the lane's tests import that it did not change (packages/relay/test/fakes.ts, packages/web/test/fixture/codium-fakes.ts); everywhere-runner-delivery.md (documentation only); a relay entry in the typecheck matrix, which would change a job, outside the brief.
+- **(f) The Solid zone stays, named as the only empty path.** packages/web/src/components/everywhere/** is spec 6.6's Solid zone and matches nothing: the account components are React, under components/marketing/everywhere/**. Dropping it would change 6.6, which is the lead's; the new test allows exactly that one empty path (M9 turns it red when the zone is dropped).
+- **(g) The handoff's old status is kept, as the package log.** "Current continuation status (2026-11-12)" becomes "Package log (2026-11-12 to 2026-11-21)" with a dated line that "Current state" supersedes it; its bullets stay as each package recorded them, because "Left open" and the deviations log point into them.
+- **(h) Per platform, registration comes before the flag.** The brief lists the flag (step 9) before the app registrations (step 11). The handoff keeps that numbering but writes step 9 as a per-platform sequence (the app's registration, then its flag, then its VE-50) and marks step 11 as done before that platform's step 9, so nobody sets VECTOR_EVERYWHERE_PLATFORMS for an app that does not exist; the owner guides already give this order.
+- **(i) The vector-codium hold has ended.** The lane notes hold vector-codium.yml until PR #33 is on main and merged into this branch. PR #33 is on main as `b362fdf6` and arrived here with `1035f87c`, before EV-25; EV-32's handoff note still held it back. Dispatching it is the lead's at the lane end.
+- **(j) EV-32's and `9944b7b5`'s CI are recorded here**, read back with the GitHub tools, with the test jobs' "71/71 test files passed" lines: progress record, "EV-32 CI (recorded by EV-33)" and "CI follow-up before EV-33".
+- **(k) F1 is closed.** F1 said the lane did not know v2. The retired branches are gone from the triggers (FIT-4: push `[main]` only, and workflow-compliance allows no build or integration branch), and the paths now name the files the lane depends on in their current places. The Tier B table's F1 row carries the dated note.
+- **(l) The main merge is a commit.** The brief's first step asks for a merge, never a rebase, so `535ac94e` is a `--no-ff` merge commit made with the Vector identity and the trailers before any EV-33 edit. Every EV-33 change is left uncommitted, as this build's task asks.
+- **(m) The spec gets the status line and one note.** The critique asked to keep the contract's diff small: the status line is rewritten, and §9's "In CI" sentence, now wrong ("each push to the branch"), gets one dated note that points here. The VE-00 row's "on push to `vector-everywhere`" and §6.6's src/pages names are explained by (b), (c) and (k) instead of notes of their own.
+
+### Critique of the plan (2026-11-21)
+
+All ten points taken:
+- the merge read main's tip at merge time (`f3d7ac74`, #54, 23 files) and is titled "merge main after #54"; the desktop typecheck ran after it (#53 changed packages/desktop/tsconfig.json);
+- the handoff's A17 line (EV-32's loose ends) gets a dated annotation that `9944b7b5` changed Codium's file here, with the cause and vector-codium 44847317908, and that main still fails in the 11 minutes before UTC midnight until this lane's PR merges; it is in Coordination and in the handoff's decisions for the lead;
+- the counts: 60 − 3 + 21 = 78, and 20 helper pins for 18 patterns, counted from the final test;
+- EV-24's drafts/** request is recorded as narrowed, with the reason ((c));
+- (e) lists the 63 files by group with their workflows;
+- step 9 of the activation list is a per-platform sequence ((h));
+- the YAML comment says what fails and when;
+- "How CI runs on this branch" gets an annotation on dispatches through the GitHub tools, the historical `gh` commands and the retired ref, and the path-filtered pushes to main; the moved line another lane's document cites is in Coordination;
+- the mutations restore by copying a saved original.yml and checking its sha256 after each;
+- the spec carries the status line and one §9 note only ((m)).
+
+### Review (2026-11-21)
+
+Four non-blocking findings, all taken; no code or workflow change:
+- the three paths beyond the brief are (d); the commit body names them as outside the brief, so the PR reviewer sees it. The side effect, the lane also starting on a desktop sign-in change, only runs the read-only, secret-free lane more often;
+- the package log's "Current gates and remaining coverage" heading gets one dated annotation (superseded by "Current state"; the runner abort-matrix item closed by EV-03 `9426c945`; the cron's start), because "Left open by the repairs" still points to it by name. Its text is not rewritten ((g));
+- activation step 4 is now a check, not an owner action: main deploys vectordev.ai on every merge, so the per-minute cron in vercel.json:559-562 starts at the first main deploy after this lane's PR merges, while the relay Worker deploy (step 3) stays a separate manual step. The "Dormant" bullet says the same. It is still safe: the sweep answers 401 without CRON_SECRET, otherwise `{enabled: false}`, before any switch or store read (api/_lib/everywhere/sweep.ts:25-32);
+- activation step 1 says CRON_SECRET is Codium's existing secret, to confirm and not change, as spec §10's EV-24 note and the owner guides say.
+
+### Left open
+
+- GitHub's own `pull_request` path filter is first exercised on the lane's PR into main (Deferred verification).
+- The Solid zone question ((f)) is the lead's.
+- Everything in the handoff's "Current state" lists (lane work with no package, decisions for the lead, the owner's activation steps) is unchanged by EV-33.
+
+### Safe by default
+
+No runtime code changes. The edit touches only `on.pull_request.paths` (which the scope job also reads for pushes to main), YAML comments, a test and documents. A wider path list only starts the read-only, secret-free lane more often. No flag, env, switch, route, page, nav, sitemap, dependency or generated file changes, and nothing becomes reachable on vectordev.ai.
+
+### Coordination
+
+- Other lanes' changes that now start this lane: scope-finish's (session/prompt.ts, tool/shell.ts, tool/shell/sandbox.ts); Codium's (codium-perks.ts, codium-entitlements.ts, codium-owner.ts, the relay, remote-link.ts and remote-runtime.ts, vercel.json); Hands' (keep-awake.ts, the settings registry and dialog); main's owners' (worktree/index.ts, session/prompt.ts).
+- `9944b7b5` changed Codium's packages/web/test/model-plan-admit.test.ts on this branch (A17 kept inside one UTC day; the assertions unchanged). It is not on main and reaches it only with this lane's PR; Codium's owners should know before they edit that file.
+- docs/vector/build/multiagent-parity-deviations.md cites `vector-everywhere-handoff.md:124` for the flake list. That line had already moved, and EV-33's new top moves the section further; the handoff's "How CI runs on this branch" now says to cite it by heading. The other lane's document is not edited here.
+- FIT-4 is untouched ((b)).
+
+### Deferred verification
+
+- vector-everywhere.yml and typecheck.yml on everywhere-finish, dispatched after the commit step's push; test.yml once for the lane end and vector-codium.yml are the lead's.
+- GitHub's `pull_request` path filter: locally only Bun's globs are proven, which are what the scope job uses for pushes to main. The patterns use only `*` and `**`, which mean the same to both (the lane test's no-brace check), but GitHub's own filter first runs on the lane's PR into main.

@@ -1,8 +1,105 @@
-# Vector everywhere: handoff (2026-11-11)
+# Vector everywhere: handoff (2026-11-21)
 
-This build moves to a new agent. Start here, then read the contract (`vector-everywhere-spec.md`) and the deviations log (`vector-everywhere-deviations.md`) in this folder. The deviations log records every reading the build made where the contract was silent or wrong about the code; it wins over the contract where they differ.
+Start with "Current state" below, the lane's summary at its close-out (EV-33). The package log and "Left open by the repairs" follow it with each package's own record and every open item; the owner's rules at the end are binding and are only ever annotated. Then read the contract (`vector-everywhere-spec.md`) and the deviations log (`vector-everywhere-deviations.md`) in this folder. The deviations log records every reading the build made where the contract was silent or wrong about the code; it wins over the contract where they differ. Receipts, with every CI run id, are in `vector-everywhere-progress.md`.
 
-## Current continuation status (2026-11-12)
+## Current state (2026-11-21, EV-33)
+
+**Where the code is.** Branch `everywhere-finish`, cut from `release-finish` (PR #33) at `0ee486e3`. PR #33 is on main as `b362fdf6` and reached this branch through the main merge `1035f87c` (main `8e34d05e`); main `f3d7ac74` (#51 to #54) is merged in as `535ac94e`. The lane's packages are the commits below; the EV-33 commit sits on `535ac94e`. Nothing from this branch is on main. It reaches main only through the lead's PR from `everywhere-finish`, with the owner's yes.
+
+**Built.** Every package below is dormant in production (next list). CI receipts per package are in the progress record.
+
+| Package | What | Commit | Request |
+| --- | --- | --- | --- |
+| Stage A | P1 and P2 (VE-00 to VE-08, VE-10 to VE-13): the CI lane, shared types and policy, the server foundation, identity, jobs and offers, the router and intake, the runner core, the engine check, and the GitHub, Slack, Linear and Jira intakes; the review repairs C1 to C6 | on main through PR #33 (`b362fdf6`) | C1 to C6 |
+| EV-01 | Docs refresh and Tier B status | `b82acf57` (after the merge `5733ceea`) | F3 |
+| EV-02 | The GitHub status lock is released; the issue body hash is required | `c46a6598` | C7, C8 |
+| EV-03 | The runner's abort matrix at the push boundary | `9426c945` | the C test gap |
+| EV-04 | The per-minute sweep cron, store-free while off | `dbf9bca1` | R-C11, F4 |
+| EV-05 | Relay presence honours the kill flag and suspension | `8caf62cb` | R-C4 |
+| EV-06 | The relay forwards signed job offers | `411317d8` | R-C1, relay half |
+| EV-07 | Codium's `everywhere` runtime switch | `bd34820c` | R-C6 |
+| EV-08 | The unlisted `everywhere` perk on every paid plan | `3443cfa3` | R-C7, listing half |
+| EV-09 | The Remote relay adapter: presence, offers and the plan check | `735d592b` | VE-20, R-C1 API half |
+| EV-10 | The user config key `everywhere` | `7146a98f` | VE-40 |
+| EV-11 | The Remote link carries job offers | `901d9e4b` | R-C2 |
+| Codium CI fix | The pool test's subscription takes the key's own period | `d31d418f` | CI |
+| EV-12 | The safe unattended worktree service | `46471914` | the safe worktree (main request) |
+| EV-13 | Its owner-only route and probe | `0d9f852c` | the safe worktree's route |
+| EV-14 | The outward audience for unattended sessions | `cb2a73ba`, `12b3ad09` | R-M3 |
+| EV-15 | Vector Local's `everywhere` source | `bc254e85` | R-M1 |
+| EV-16 | The offline shell for unattended sessions (Linux bubblewrap) | `b0240ba2`, `dcb93939` | R-M2 |
+| EV-17 | The desktop wiring: the jobs module, `pending` and the Remote registration | `c9275df0` | VE-21, R-C3 |
+| EV-18 | The desktop adapters: safe worktree, offline shell and the shared keep-awake | `cf9195d0`, `503bab3b` | VE-21, F6 |
+| EV-19 | The Slack laptop journey | `6d5c1afc` | VE-22a |
+| EV-20 | The Linear and Jira laptop journeys | `6a74ac3b` | VE-22b |
+| EV-21 | The desktop settings page, read-only | `8aff3462` | VE-41 |
+| EV-22 | The vectordev.ai account components | `f11330ef` | VE-42a |
+| EV-23 | The draft pages, the OAuth landing, jobs and audit | `f3abbd6c` | VE-42b, PUB-8 |
+| EV-24 | The docs draft and the owner's go-live guides | `3c3ddf29` | VE-44 |
+| EV-25 | @vector's run start and settle hooks | `7a806f91` (after the main merge `1035f87c`) | R-A1 to R-A3 |
+| EV-26 | @vector bindings record the workflow mode | `5b040d39` | R-A9, part |
+| EV-27 | The job body route, server half | `c1112608` | R-A4 |
+| EV-28 | The agent phase reads the body, runner half | `d605eaed` | R-A4 |
+| EV-29 | The Actions fallback adapter | `3200acc2` | VE-30a |
+| EV-30 | The Actions listeners and settle transition | `11f8f266` | VE-30b |
+| EV-31 | The GitHub handoff's OIDC audience and verifier | `c18447f9` | VE-31, R-A5 |
+| EV-32 | The Actions fallback journeys | `742f46ac` | VE-33 |
+| CI fix | Codium's A17 admission case kept inside one UTC day (Codium's file) | `9944b7b5` | CI |
+| Main merge | main after #54 | `535ac94e` | none |
+| EV-33 | Lane close-out: the lane's paths, this summary and the receipts | this commit | VE-00, F1 |
+
+**Findings.** F1 is closed by FIT-4 (`f251ac2c`) and EV-33. F2 was fixed by the merge. F3 by EV-01, with FIT-5 (`dcd781d0`). F4 is done (registration, and the cron in EV-04). F5 is accepted (deviations log, F5). F6 by EV-18. C1 to C8 are done. Review-fixes' DP-1, PUB-2, PUB-4, PUB-5, PUB-6, SEC-1, SEC-2, FIT-4 and FIT-5 are on main.
+
+**Dormant, and why.** Nothing runs a job in production today:
+- VECTOR_EVERYWHERE_ENABLED is unset. The platform and account routes answer 404, the GitHub handoff 501 before any read, and the jobs API `stop` after the token check, before any store. The sweep answers 200 `{enabled: false}` before any switch or store call (api/_lib/everywhere/sweep.ts:32). productionPorts is safePorts exactly, and no run hooks are registered (run-hooks.ts:20).
+- There is no data key and no offer signing key pair.
+- `OFFER_KEYS` is empty (packages/desktop/src/main/everywhere-offer.ts:5), so the desktop refuses every offer.
+- The relay changes (EV-05, EV-06) are not deployed; the relay Worker deploy is a separate manual step (activation step 3). The cron (EV-04) is not on main yet and starts with the first main deploy after this lane's PR merges (step 4).
+- Codium's production `everywhere` switch is not set.
+- The perk is unlisted, so the desktop settings tab is hidden.
+- `LAPTOP_ROUTE_WIRED` is false (api/_lib/everywhere/config.ts:248).
+- `RESERVED` (packages/schema/src/codium-run-trigger.ts:24) keeps Slack, Linear and Jira out of ENABLED_SOURCES, so there is no Actions route.
+- Every handoff binding says `laptopFirst: false` until Q13/R-A6, so the GitHub handoff answers `handled: false`.
+- The vectordev.ai pages and docs page are drafts under packages/web/src/drafts/.
+- No platform app is registered.
+
+**Activation, in order** (each step is the owner's, or the lead's where named; step 4 is a check):
+1. The owner's keys: VECTOR_EVERYWHERE_DATA_KEY (made once, never rotated), the offer signing key pair and key id (VECTOR_EVERYWHERE_OFFER_SIGNING_KEY, VECTOR_EVERYWHERE_OFFER_KEY_ID), the platform secrets (VECTOR_SLACK_*, VECTOR_LINEAR_*, VECTOR_JIRA_FORGE_APP_ID), and CRON_SECRET (Codium's existing secret: confirm it is set, do not change it).
+2. The public key in the desktop's `OFFER_KEYS`, then a desktop release.
+3. The relay Worker deploy with the presence fix and job-offer forwarding (EV-05, EV-06).
+4. A check, not an owner action: the per-minute sweep cron (EV-04) starts at the first main deploy after this lane's PR merges, since main deploys on every merge. It is harmless while off: 401 without CRON_SECRET, otherwise `{enabled: false}`.
+5. Codium's `everywhere` switch, starting at `stop`.
+6. Approval of the perk's label and text, then listing (MODEL_PLANS_ENABLED and CODIUM_LISTED_PERKS), only after the plan check and the four listing preconditions ("Owner decisions" below).
+7. ENABLED_SOURCES: remove Slack, Linear and Jira from `RESERVED` (R-C8/R-A8). Jira still has no Actions route until a Jira run limit exists (EV-30 (j)).
+8. Q13/R-A6: @vector's route job gains `id-token: write` and the `laptopFirst` option. Until then GitHub ships without laptop-first.
+9. The flag, platform by platform, in spec §7's order (G2 Slack, G3 Linear, G4 Jira; G1's GitHub laptop-first only after step 8), with only the owner's account allowed first: for each platform, first its app registration (step 11), then VECTOR_EVERYWHERE_ENABLED, VECTOR_EVERYWHERE_PLATFORMS and VECTOR_EVERYWHERE_ALLOW_ACCOUNTS, then its VE-50 (step 12). The per-platform guides in docs/vector/owner-actions/ give this order. Turning off: the switch to `stop`, one sweep, then the flag (EV-04).
+10. At 2.0.0: the drafts move from packages/web/src/drafts/ to src/pages, with the `"everywhere"` keep line in script/prune-vector-site.mjs, the docs-nav.ts entry and the lane's three draft paths moved back to src/pages (everywhere-lane.test.ts fails until they are); then the desktop and CLI releases (R-A4's agent phase needs a published CLI).
+11. The app registrations, each before its platform's step 9: GitHub through @vector's §4 steps, then Slack, Linear and Jira. The listings L2 to L4 come later.
+12. VE-50, the live acceptance per platform with the owner, on a private test repository and the owner's own workspaces.
+
+**Lane work with no package yet, needed before go-live** (each in "Left open by the repairs"):
+- a production `repository` port (EV-19);
+- adding Linear and Jira mappings on vectordev.ai (EV-22);
+- the private result surface, `privateResult` (EV-20, EV-23);
+- the live mode reader and attachmentRepository's `visibility` field (EV-29, EV-30);
+- the head-branch check that lets a PR link be posted (EV-30, in @vector's file);
+- the desktop's GitHub calls, a production GitHub platform adapter and R-C5's status port (EV-31);
+- the desktop write path for the settings page (EV-21);
+- hardening `Worktree.remove` and `Worktree.reset`, the 7-day sweep and the instruction-file hold (EV-12, EV-21; listing preconditions);
+- reconciling a lost start event (EV-27, EV-30);
+- the Jira compare-and-set and Linear's acknowledgement cost (EV-20);
+- a relay `unreachable` that queues instead of refusing (EV-09);
+- the macOS and Windows shell for unattended runs (EV-16): until then laptop jobs there edit but run no checks.
+
+**Not built by choice:** VE-32 (waits for V27's manifest.files[], R-A7, Q6), VE-43 (Q11: no CLI), R-C10 (Q7, later), R-M4, R-H1 and R-W1 (the connect lane's, with its SDK regeneration).
+
+**Decisions waiting for the lead** (pointers only; each item is in "Left open by the repairs" and the deviations log): EV-03's two push-boundary points; the perk's plan check and one bad switch hiding every perk (EV-08, a request to Codium); the Vector Local pane's `KEPT_OFF` line (EV-15); the summary rule for the job page (EV-23); the body-route fallback for a lost start event (EV-27, EV-30); EV-28's three prepareCloudRun questions; internal visibility and `why` against `public-repository` (EV-29); the head-branch check and a single-run reader (EV-30); the review comment's App check, an IP rate limit and the switch order (EV-31); the shared loopback harness's close (EV-22); adding the body route to test/api-module-loading.test.ts (EV-27); and `9944b7b5`'s fix to Codium's packages/web/test/model-plan-admit.test.ts, which reaches main only with this lane's PR (EV-32's loose ends, annotation of 2026-11-21).
+
+**CI at the close.** The last receipts, all success, are on `742f46ac` (EV-32) and `9944b7b5` (the CI fix), with vector-everywhere's test job at 71/71 files on Valkey both times; run ids in the progress record, "EV-32 CI" and "CI follow-up before EV-33". EV-33's own dispatches (vector-everywhere.yml, typecheck.yml) follow its push and are recorded at the lane end. test.yml once for the lane end, and vector-codium.yml now that PR #33 is merged here, are the lead's.
+
+## Package log (2026-11-12 to 2026-11-21)
+
+*2026-11-21 (EV-33):* "Current state" above supersedes this section. Its content is kept as each package recorded it, with dated annotations.
 
 This section supersedes the original handoff status below. The 2026-11-12 continuation ran on branch `build-everywhere`, based on `vector-everywhere` at `f9b19a041`. **Reviewed P1c/P2 software at `15e92e6ac9d75885f53e1edc3ff2712ad5eb9c85` was pushed normally to `vector-everywhere` and passed dedicated and general CI.** No main push, PR or platform registration is authorized by this checkpoint. *2026-11-15:* `build-everywhere`, `vector-everywhere` and `v2-everywhere` are now merged history inside PR #33 (head branch `release-finish`), and the isolated worktree this paragraph used to name is gone. The current vehicle is PR #33, then this lane's branch `everywhere-finish`, which was cut from `release-finish` at `0ee486e3` (see "Tier B status at 0ee486e3" in vector-everywhere-progress.md).
 
@@ -34,6 +131,8 @@ All three runs identify the exact `15e92e6ac9d75885f53e1edc3ff2712ad5eb9c85` sou
 Independent review and re-review closed the five reported P1c findings; the optional-worktree-config compatibility correction was also reviewed without a new blocker. Final local repair receipts: dedupe 8 passed / 36 assertions; jobs 43 / 334; intake 6 / 29; sweep 6 / 34; git 7 / 73; scan 4 / 24; runner 12 / 59. API and desktop typechecks pass. Dedupe skips two real-Redis cases and two setup/teardown hooks locally; jobs skips five real-Redis cases and two hooks. Exact scope and earlier receipts are in `vector-everywhere-progress.md`.
 
 **Current gates and remaining coverage:**
+
+*2026-11-21 (EV-33):* superseded by "Current state" above; "Left open by the repairs" still points here by name, so read this block against it. The runner abort-matrix item below was closed by EV-03 (`9426c945`), and the sweep cron goes live at the first main deploy after this lane's PR merges ("Current state", activation step 4).
 
 - **Whole-P2 software checks are qualified locally and in CI.** Exact authorized active-to-closing CAS, private installation epochs, record/index writes, exact link/mapping admission, canonical counter/type preflight, actor404 privacy and native generation receipts are implemented and reviewed. Native revocation has pending/confirmed/uncertain phases: another eraser cannot permit reconnect while an old operation may be in flight. Uncertain outcomes erase local content and credentials while retaining minimal closing metadata; owner GET/202 exposes `review-native-revocation`, and retries cannot assert native confirmation. Confirmed cleanup interruptions remain visible with `retry-disconnect`. There is no automatic process-death/native reconciliation in this phase.
 - **The actual Codium deletion adapter remains a prerequisite gate.** The trusted port must provide the correct mode-separated read-only tombstone key; missing authority fails closed, including audit writes to unverified accounts. Local erasure does not require that active-account adapter. This branch does not import Codium's tombstone implementation and does not claim that integration is qualified. Permanent minimal account/epoch markers prevent delayed write resurrection. *2026-11-15:* the port is now wired. `productionPorts` returns `codiumAccountAuthority` (api/_lib/everywhere/runtime.ts:16-18), which takes Codium's `tombstoneKey` (api/_lib/everywhere/adapters/account.ts:2, :7-13; commit `75532fc36`). The integration is still unqualified against a live deletion.
@@ -92,6 +191,7 @@ Independent review and re-review closed the five reported P1c findings; the opti
 - **GitHub handoff verifier (2026-11-20, EV-31; committed, CI pending).** R-A5 is built in @vector's api/_lib/github-oidc.ts: a `handoff` audience (`https://vectordev.ai/api/everywhere/github/handoff`) with the mint's workflow, ref, runner and strict-claim rules, no bot, and only issue_comment, issues and pull_request_review_comment. New `createHandoffVerifier` (adapters/cloud-agents.ts) loads it lazily, rechecks the audience, takes only GitHub-hosted runners and maps any other failure to 503 GITHUB_UNAVAILABLE. runtime.ts `productionHandoffDeps` wires the verifier, `createHandoffBinding` and `productionPorts` into api/everywhere/github/handoff.ts only with the flag on, so the flag off is still 501 before any read. Decisions the critique forced: the route takes the mint's owner and default-ref rules; a review comment hands back until an App check equal to the mint's exists; `shared` follows the token's signed `repository_visibility` (only `private` is unshared); verifier refusals keep their own 401/403/503 codes. Production still answers `handled: false` for every handoff: every binding says `laptopFirst: false` until R-A6 and Q13, and the generator and the route job are untouched. Not wired, and blocking live laptop-first: the desktop's GitHub calls (`githubThread`, `privateRepository`, `openPr` in everywhere-wiring.ts), a production GitHub platform adapter and R-C5's status port. Tests: packages/web/test/everywhere-github-live.test.ts (22 cases, one real-Redis), seven new cases in github-oidc.test.ts, D1 in everywhere-pr.test.ts and D2 in everywhere-runner.test.ts; 24 mutations, all red; a Node probe of the route file. No main merge (`3670461a` is the lead's). Deviations log, "2026-11-20, EV-31".
   *2026-11-21 annotation (EV-32):* EV-31's CI at `c18447f9`: vector-everywhere 44839110642 success, vector-at-mention 44839118627 success, typecheck 44839127635 success; vector-hosted-ci 44839114618 cancelled 15 s after it started, beside the vector-codium run, so no hosted receipt; vector-codium 44839122921 failed in "Codium tests (shard 1/4)" (job 136642836976), informational only (dispatched outside the lane rule, which waits for PR #33 on main merged into this branch; not a gate). The one failing file is Codium's packages/web/test/model-plan-admit.test.ts (A17, a wall-clock case that crossed UTC midnight), not an everywhere file; see the EV-32 block below. Progress record, "EV-31 CI (recorded by EV-32)".
 - **Actions fallback journeys (2026-11-21, EV-32; committed by the commit gate of 2026-11-21, CI pending).** VE-33 is built test-only in new packages/web/test/everywhere-journey-actions.test.ts on EV-19's harness, with spec §9's FakeCloudAgents moved unchanged from the adapter test into new packages/web/test/lib/everywhere-cloud-agents.ts (the adapter test now imports them; its counts are unchanged). Slack (S1) and Linear (L1) run end to end through GitHub Actions with the computer offline: the signed event, the real intake and router, presence through the relay Worker, EV-29's adapter with the sources injected through `createCloudPorts({sources})` (ENABLED_SOURCES untouched, and D1 shows it still reserves all three), a recording prepareCloudRun, @vector's real start and settle notify over EV-30's listeners, the run's one body read through the real route with a real `vrt_` token (the second read 410), and the result posted by the platform's adapter. Late claims get 409 after the dispatch, the start and the settle. Decisions forced by the lane record: Jira never takes the Actions route (J1: it waits 10 minutes and ends with Jira's own text, EV-30 (j)); the result is "Done in GitHub Actions." with no PR link and no checks line (EV-30 (f)); a repository read public live at any of the three reads is refused `no-place` before any ticket (P1, EV-29 (e)). Beyond the brief: N1 (no start hook: `not-started` at 900 s) and W1 (no stored mode: waits, then expires). After the review: a failed visibility read in a journey (P1's fourth row), the body checked gone on every terminal path, and R1 and R2's plaintext checks on the recorded Valkey commands. 11 local cases and 2 real-Redis cases; 17 mutations, all red. No main merge (`3670461a` is the lead's). Deviations log, "2026-11-21, EV-32".
+  *2026-11-21 annotation (EV-33):* EV-32's CI at `742f46ac`: vector-everywhere 44846060288 success (9/9 jobs; test job 136666073616, 71/71 test files on Valkey), vector-hosted-ci 44846064414, vector-at-mention 44846068331 and typecheck 44846072015 success. The CI fix after it, `9944b7b5`, ran green in all five lane workflows, vector-codium 44847317908 included. Progress record, "EV-32 CI (recorded by EV-33)" and "CI follow-up before EV-33".
 - P3, P4, Surfaces and go-live retain their specified merge and owner gates. No registration, credentials/settings change, paid inference, PR, release or main merge occurred in this continuation.
 
 **What Vector everywhere is:** an @Vector bot on GitHub, Slack, Linear and Jira that is local-first.
@@ -199,6 +299,7 @@ Each item below is also in the deviations log.
   - **The loopback harness's close.** packages/web/test/lib/everywhere-account.ts `RouteHarness.stop()` never returns once a route has refused a request body it did not read, after the account check; the EV-22 refused-token case answers its writes' 401 in its request wrapper for that reason. A fix to the shared fake is for the lead.
   - **Mapping writes are last-write-wins**; the page reloads after each write.
   - **The lane's path filter** does not list packages/web/src/lib/account-client.ts, which the root imports.
+    *2026-11-21 (EV-33):* closed: vector-everywhere.yml's pull_request paths list it, and everywhere-lane.test.ts pins it among the helpers.
 
   Deviations log, "2026-11-20, EV-22", Left open.
 - **The vectordev.ai pages' loose ends (EV-23, open).**
@@ -208,6 +309,7 @@ Each item below is also in the deviations log.
   - **An ended job's sealed summary outlives its installation.** jobs.ts `eraseInstallationJobs` cancels live jobs and deletes bodies, but an ended job's record keeps its `summaryEnc` until the record's 30 days run out (E13). The page hides it after a disconnect or any later install (install time against receipt time), but the data stays. Clearing `summaryEnc` of ended jobs on erase is for the lead.
   - **Cancelled and directory OAuth returns.** Slack and Linear send `?error=access_denied&state=…` when a person cancels; both callbacks answer a blank 400 instead of landing on /everywhere with a fixed problem. Spec 3.8's install that starts in a platform directory (sign in first, then finish) is not built either; a signed-out landing drops the return. Both matter for the listings (L2, L3).
   - **The lane's path filter** (vector-everywhere.yml, review-fixes' FIT-4) does not cover packages/web/src/drafts/everywhere*, so a change to a draft alone does not start the lane's workflow.
+    *2026-11-21 (EV-33):* closed: the paths now list packages/web/src/drafts/everywhere*, packages/web/src/drafts/everywhere/** and packages/web/src/drafts/docs/everywhere.astro in place of the three src/pages entries. Not packages/web/src/drafts/** (EV-24's request below): drafts/docs/vector-hands.astro and vectorscope-github.astro belong to other lanes and would start this lane for nothing, so the three narrow entries replace the requested glob, and everywhere-lane.test.ts refuses the wide one. The test also fails when the drafts move to src/pages at 2.0.0 until these entries move with them.
   - **Small ones:** `?job=` is dropped by the sign-in round trip (`signInPath` keeps the path only); no platform thread links (only the PR link); the link page also reads each installation's repositories; the fragment stays in the address bar until the page's script runs.
 
   Deviations log, "2026-11-20, EV-23", Left open.
@@ -216,7 +318,9 @@ Each item below is also in the deviations log.
   - **No per-platform stop switch:** removing a platform from VECTOR_EVERYWHERE_PLATFORMS leaves its live replies unable to post (runtime.ts `configuredPlatforms`), so the guides give only the full order.
   - **The docs' set-up steps wait for the desktop write path** (EV-21 (aj)); the copy test fails when the page starts writing.
   - **The lane's path filter** (FIT-4, review-fixes) does not cover packages/web/src/drafts/**. **For review-fixes:** when it repairs the vector-everywhere.yml path filter, include packages/web/src/drafts/**. Until then, dispatch vector-everywhere.yml for any draft-only change.
+    *2026-11-21 (EV-33):* closed by EV-33, not by FIT-4, and narrowed: the paths list the three everywhere drafts (drafts/everywhere*, drafts/everywhere/** and drafts/docs/everywhere.astro) instead of drafts/**, because drafts/docs/vector-hands.astro and vectorscope-github.astro are other lanes' drafts and would start this lane for nothing. See EV-23's item above.
   - **The runner's abort matrix after `pushing`:** `stop`, `lost`, 404 and 409 answered to the `pushing` report, and a stop after the push is admitted, are untested. The docs say only what the runner does (a push already started finishes, and its draft pull request can still open); check that sentence when those cases are built.
+    *2026-11-21 (EV-33):* stale when written: EV-03 (`9426c945`) had already built these cases, at packages/desktop/src/main/everywhere-runner.test.ts :796 (`stop` and `lost` on `pushing`), :842 (the actual client's 404 and 409), :884 (a stop before the push is admitted), :920 (a switch stop during an admitted push) and :977 (refused publication settles), lines as of EV-33. The docs sentence (packages/web/src/drafts/docs/everywhere.astro:150-151) was checked against them and holds: a push already admitted finishes (:884 keeps the branch local only before admission), and the draft pull request still opens after a stop (pinned at :966-967, an open question for the lead under EV-03).
   - **Linear's uninstall holds work without erasing** (integrations/linear/README.md), unlike spec E13's wording; the docs promise erase on a disconnect only.
   - **/owner/codium's account list can be partial**, and it is where the guides send the owner for their account id.
 
@@ -326,15 +430,18 @@ Each item below is also in the deviations log.
 - **The Actions journeys' loose ends (EV-32, open).**
   - **For the lead:** the head-branch check that lets the PR link and the checks line be posted (EV-30 (f); S1 and L1's PR_URL and CHECKS absence checks are the tripwires, and the same change turns them into the brief's "checks did not run" form); `why` in the reply, now for the intake path too, and `public-repository` against `no-place` (EV-29 (e); a ruling for `public-repository` turns P1's `no-place` assertions into the brief's form in the same change); Jira's Actions route, which needs a Jira run limit (EV-30 (j)); the origin/main merge.
   - **For the lead (Codium's file):** EV-31's vector-codium run 44839122921 failed in job 136642836976 on packages/web/test/model-plan-admit.test.ts, A17 "crashed requests release concurrency at 660s but retain monthly/day/run reservations" (:500 expected MODEL_PLAN_DAILY_LIMIT, got an admission). Root cause from the log: the shard ran it at 23:52:33 UTC, the fixture's `now` is the wall clock (:39), and the case admits again at `now + 660_001`, after 00:00 UTC, where model-plan-admit.ts:101 keys the daily budget by the UTC date. It fails whenever it starts in the 11 minutes before UTC midnight. Not an everywhere file and not changed by this lane; it needs a fixed clock in Codium's owning lane. Deviations log, "2026-11-21, EV-32", "Review of the build".
+    *2026-11-21 (EV-33):* no longer true: this lane changed that Codium-owned file. `9944b7b5` (`fix(web): keep the crashed-request admission case inside one UTC day`) starts A17 at the next UTC day's first instant when the wall clock is within 660 s of midnight, so the crash and the later admissions share one day; its three assertions are unchanged. vector-codium 44847317908 passed at `9944b7b5`. The fix is not on main: main still carries the failure in the 11 minutes before UTC midnight until this lane's PR merges, and Codium's owners should know the file changed here (deviations log, "2026-11-21, EV-33", Coordination; progress record, "CI follow-up before EV-33").
   - **Owner:** R-C8/R-A8. Until a platform leaves RESERVED there is no Actions route (D1).
   - **No package yet:** the live mode reader and attachmentRepository's `visibility` field (EV-30 (o)); without both, production has no `prepareCloud` even after R-C8/R-A8.
   - **The commit step (the commit gate of 2026-11-21):** one package commit, `test(everywhere): add mocked Actions fallback journeys` (the gate brief's title, in place of the planned `test(everywhere): add the mocked Actions fallback journeys`), no main merge. Its body states that the lib move and the adapter test's import-only edit are outside the brief, and that the brief's step 7 ("checks did not run") and its `public-repository` refusal are not built (EV-30 (f), EV-29 (e)), with what replaces them. Then the push; vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml and typecheck.yml dispatched on everywhere-finish. vector-codium.yml is not dispatched: the lane notes hold it until PR #33 is merged into this branch, and its `hosted` job calls vector-hosted-ci.yml, whose concurrency group (`vector-hosted-ci-<event>-<ref>`, cancel-in-progress) is then the standalone run's, which is why the standalone hosted run was cancelled after 15 s at EV-29 and EV-31. Left: the run ids and vector-everywhere.yml's result, in the next receipt and here.
+    *2026-11-21 (EV-33):* the run ids are recorded (the EV-32 status bullet's annotation above, and the progress record, "EV-32 CI (recorded by EV-33)"), and the vector-codium hold has ended: PR #33 is on main as `b362fdf6` and reached this branch through `1035f87c`, before EV-32. vector-codium 44847317908 ran green at `9944b7b5`, started after that commit's standalone hosted run 44846932178 had finished, so neither cancelled the other. vector-codium.yml is the lead's to dispatch at the lane end.
 
   Deviations log, "2026-11-21, EV-32", Left open.
 
 ## How CI runs on this branch
 
 - *2026-11-15:* on `everywhere-finish`, none of the workflows the lane uses (vector-everywhere.yml, typecheck.yml, test.yml, vector-hosted-ci.yml, vector-at-mention.yml) has a push trigger for the branch, so every run is a `workflow_dispatch` on `everywhere-finish` until a pull request from `everywhere-finish` is open; then each workflow's `pull_request` trigger also runs (test.yml always, typecheck.yml for a pull request into `main`, the lane workflows by their paths). The rest of this section describes the retired `vector-everywhere` branch.
+- *2026-11-21 (EV-33):* every run on `everywhere-finish` is a `workflow_dispatch` made with the GitHub MCP tools (owner scr1pter, repo vectordev.ai); job logs are read with `get_job_logs`. The `gh` commands below and their `vector-everywhere` ref are historical: `gh` is not signed in here and that branch is retired. Since review-fixes' FIT-4, vector-everywhere.yml runs on pull requests that touch its paths, on pushes to `main` (its scope job runs the lane only when a pushed file matches those paths) and by dispatch, never on a push to this branch. The flake list below is kept as it was; the lead's lane rules carry the current one. Another lane's document (multiagent-parity-deviations.md) cites a line number in this file for the flake list; EV-33's rewrite of the top moved it, so cite this section by its heading.
 - The `Vector everywhere` lane runs on every push to this branch, with Redis, and covers every `everywhere` test file plus the typechecks.
 - Also dispatch the general checks:
 

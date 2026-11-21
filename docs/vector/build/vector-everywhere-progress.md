@@ -7,6 +7,11 @@ The handoff, detailed contract and accepted decisions remain in
 `release-finish` (PR #33) at `0ee486e3`. Nothing reaches main except through
 the lead's PR merges, and nothing is registered with a platform.
 
+*2026-11-21 (EV-33):* the lane is closed out at EV-33. Its current-state
+summary (what is built, with commits, what is dormant and the activation
+order) is at the top of `vector-everywhere-handoff.md`; the receipts below run
+in package order, ending with EV-33's.
+
 ## Tier B status at 0ee486e3 (2026-11-15)
 
 Each row was re-read in the code at `0ee486e3`, and line numbers are at that
@@ -29,10 +34,10 @@ here.
 | C7, the GitHub status lock is never released | Delivered by EV-02 (`c46a6598`); CI green: vector-everywhere 43668358969, typecheck 43668370110, vector-hosted-ci 43675737368 (at `9426c945`, which contains EV-02) | At 0ee486e3: api/_lib/everywhere/github/status.ts:23 (`"1"`, `onlyNew`, 30 s, never released); the pattern to copy is slack/adapter.ts:88-97 (a token plus `swapValue`). Lines at EV-02's change: status.ts:20-26 (a `randomUUID` token, 120 s), :31 (the job is read under the lock), :36-37 (the `jobStatusEdited` throttle, progress only), :50 (set after the platform write, before the reference write), :53 (`swapValue` release in `finally`); keys.ts:168 (`jobStatusEdited`); tests packages/web/test/everywhere-github.test.ts:186-441 (the gate and fixture helpers at :186-227, then nine cases from :229, the token case at :282) | none |
 | C8, `bodySha256` is optional | Delivered by EV-02 (`c46a6598`); CI green: vector-everywhere 43668358969, typecheck 43668370110, vector-hosted-ci 43675737368 (at `9426c945`; it runs packages/schema test/everywhere.test.ts) | At 0ee486e3: packages/schema/src/everywhere.ts:674-675 (optional), :679 (`decodeGithubReference`); api/_lib/everywhere/github/adapter.ts:79-80 (passed through); packages/desktop/src/main/everywhere-github.ts:39-41 (an unedited `updated_at` is accepted instead of the hash). Lines at EV-02's change: everywhere.ts:680 (required for `issues`), the JSDoc at :420-423; adapter.ts unchanged (:82 answers 400 before any write); everywhere-github.ts:39-43 (issues by the hash alone); tests packages/schema/test/everywhere.test.ts:568, packages/desktop/src/main/everywhere-github.test.ts:103 (issues by the hash) and :82 (spec 4.1's comment rule pinned) | none |
 | C test gap, the runner abort matrix | Covered by EV-03 (`9426c945`); CI green: vector-everywhere 43675734861, typecheck 43675742876 | Existing cases, one line lower after EV-03's import: packages/desktop/src/main/everywhere-runner.test.ts:297, :306, :325-359, :361-417, :420, :462, :489, :506. EV-03's cases: :538 (a lost acknowledgement of a `held` result, the regression for the fix at everywhere-runner.ts:320), :566 (`stop`/`lost` on `pushing`), :611 (actual HTTP 404/409 on `pushing`), :654 (a heartbeat `stop` before push admission), :690 (a switch `stop` during an admitted push), :747 (`stop`/`lost`/404/409 heartbeats during an admitted push, publication settle refused). Two points wait for the lead (deviations log, EV-03) | the two lead points only |
-| F1, the lane does not know v2 | Partly fixed | paths added at .github/workflows/vector-everywhere.yml:53 (`codium-keys.ts`) and :55 (`integrations/linear/**`); the push trigger still names `vector-everywhere` (:15), and packages/web/test/everywhere-lane.test.ts:156 pins it | review-fixes FIT-4 (not yet on `release-finish`) |
+| F1, the lane does not know v2 | Partly fixed | paths added at .github/workflows/vector-everywhere.yml:53 (`codium-keys.ts`) and :55 (`integrations/linear/**`); the push trigger still names `vector-everywhere` (:15), and packages/web/test/everywhere-lane.test.ts:156 pins it | review-fixes FIT-4 (not yet on `release-finish`). *2026-11-21 (EV-33): closed. FIT-4 (`f251ac2c`, on main) dropped the retired push branch (push is `[main]` only, pinned by everywhere-lane.test.ts and by workflow-compliance.test.ts's "Vector's workflows trigger on main and name no build or integration branch"); EV-33 moved the page paths to the drafts and added the shared files the lane depends on (this record, "EV-33")* |
 | F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
-| F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`) |
-| F4, erase registration and the sweep cron | Done: registration, and the cron by EV-04 (`dbf9bca1`); CI green: vector-everywhere 43678721793, vector-hosted-ci 43678724007, typecheck 43678728633. The cron runs after the owner's deploy | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`). EV-04: vercel.json:559-562 (`/api/everywhere/sweep`, `* * * * *`); api/_lib/everywhere/sweep.ts:29 (200 `{enabled: false}` after the 405 and 401 checks, before any switch, store or platform call); tests packages/web/test/everywhere-sweep.test.ts (the `counting` helper at :101, five cases at :125, :176, :204, :231, :251) | Request to review-fixes (FIT-4): add `vercel.json` to vector-everywhere.yml's `pull_request` paths (deviations log, EV-04, known gap) |
+| F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`). *2026-11-21 (EV-33): FIT-5 landed as `dcd781d0`; the path is now at spec :1119* |
+| F4, erase registration and the sweep cron | Done: registration, and the cron by EV-04 (`dbf9bca1`); CI green: vector-everywhere 43678721793, vector-hosted-ci 43678724007, typecheck 43678728633. The cron runs after the owner's deploy | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`). EV-04: vercel.json:559-562 (`/api/everywhere/sweep`, `* * * * *`); api/_lib/everywhere/sweep.ts:29 (200 `{enabled: false}` after the 405 and 401 checks, before any switch, store or platform call); tests packages/web/test/everywhere-sweep.test.ts (the `counting` helper at :101, five cases at :125, :176, :204, :231, :251) | Request to review-fixes (FIT-4): add `vercel.json` to vector-everywhere.yml's `pull_request` paths (deviations log, EV-04, known gap). *2026-11-21 (EV-33): done here, not by FIT-4: vercel.json is in the paths and pinned among everywhere-lane.test.ts's helpers* |
 | F5, an engine test imports desktop | Accepted; deviation entry. *2026-11-17 (EV-18): the import surface grew with `everywhereSettings`, imported from desktop everywhere-settings.ts (core and schema only), so the engine compiles three desktop files; still open. 2026-11-20 (EV-19): packages/web test/everywhere-journey-laptop.test.ts also imports eight desktop files (the runner, offer, ledger, engine, git, settings, scan and github-api, no electron); deviations EV-19 (a). 2026-11-20 (EV-20): those imports moved into packages/web/test/lib/everywhere-journey.ts, which the Slack and the Linear and Jira journeys share (both journey files still import `unattendedRules` from everywhere-engine); the compiled desktop set is the same eight files* | packages/engine/test/everywhere/unattended-session.test.ts:9, :13 | done in EV-01; a later move of the pure settings and rules functions, or the client, into core/everywhere |
 | F6, a second keep-awake owner | Closed by EV-18 (2026-11-17; CI pending) | At `dcb93939`: everywhere-awake.ts:2-13 called `start`/`stop` itself. Now everywhere-awake.ts holds keep-awake.ts `holdDesktopWork()` (:471), the same `desktopWork` set as `whileDesktopWorks` (:455) under the one blocker index.ts:640-651 sets (`setDesktopWorkBlocker`, :396); it takes no blocker id, and holds only while the link can deliver offers. "One owner" means keep-awake.ts: engine-session keep-awake (`startKeepAwake`, which also keeps an unattended job's own session awake) keeps its own `powerSaveBlocker` id through the same `blocker` object, unchanged, so while a job runs two ids can be held, each released by its own holder. Tests: everywhere-awake.test.ts A1 to A5 (:58, :95, :108, :136, :151), everywhere-wiring.test.ts W28 (:1725) and W29 (:1794); deviations log, "2026-11-17, EV-18", (k) | the package commit's SHA and its CI run ids (the next receipt; a commit cannot name itself) |
 | `75532fc36` (not a finding) | Account authority wired | api/_lib/everywhere/runtime.ts:16-18 (`productionPorts` returns `codiumAccountAuthority`); adapters/account.ts:2 (`tombstoneKey`), :7-13 | none |
@@ -4681,3 +4686,89 @@ Test-only: no file under api/ or packages/schema, and no flag, env var, switch, 
 | after this receipt: everywhere-lane; everywhere-docs; root test/ no-personal-paths; no-project-wording (from test/); `git diff --check` | 13/0 (162); 17/0 (215); 1/0 (2); 2/0 (16); clean |
 
 The commit is `test(everywhere): add mocked Actions fallback journeys` (the gate brief's title, in place of the planned `test(everywhere): add the mocked Actions fallback journeys`). The push and the dispatches of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml and typecheck.yml on everywhere-finish follow it. vector-codium.yml is not dispatched: the lane notes hold it until PR #33 is merged into this branch, and its `hosted` job calls vector-hosted-ci.yml, whose concurrency group (`vector-hosted-ci-<event>-<ref>`, cancel-in-progress) is the standalone run's, so dispatching both cancels the standalone hosted run (EV-29's and EV-31's 15 s cancellations). The run ids and results go in the next receipt.
+
+### EV-32 CI (recorded by EV-33, 2026-11-21)
+
+Dispatched on everywhere-finish at `742f46ac` after the EV-32 commit gate's push, read back with the GitHub tools (head `742f46ac`, workflow_dispatch):
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| Vector everywhere | [44846060288](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846060288) | success, 9/9 jobs; the test job 136666073616 reports "Vector everywhere: 71/71 test files passed" (the new everywhere-journey-actions.test.ts with R1 and R2 on Valkey among them) and workflow-compliance 58/0 (1,104 expects) |
+| Vector hosted CI | [44846064414](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846064414) | success (no Vector Codium run beside it, so no cancellation) |
+| Vector at-mention | [44846068331](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846068331) | success |
+| typecheck | [44846072015](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846072015) | success |
+
+vector-codium.yml was not dispatched for EV-32, as its commit gate recorded.
+
+### CI follow-up before EV-33: the crashed-request admission case (`9944b7b5`)
+
+**Cause.** EV-31's vector-codium run 44839122921 failed in shard 1/4 (job 136642836976) on Codium's packages/web/test/model-plan-admit.test.ts, A17 "crashed requests release concurrency at 660s but retain monthly/day/run reservations" (:500 expected MODEL_PLAN_DAILY_LIMIT, got an admission). The fixture's `now` is the wall clock, and the step ran at 23:52:33 UTC, so the case's admission at `now + 660_001` fell on the next UTC day, where api/_lib/model-plan-admit.ts keys the day reservation by the UTC date. It fails whenever it starts within 660 s of UTC midnight, on any branch; the test and model-plan-admit.ts were identical to origin/main.
+
+**Fix** (`fix(web): keep the crashed-request admission case inside one UTC day`). A17 starts at the fixture's `now`, or at the next UTC day's first instant when `now` is within 660 s of midnight, so the crash and the requests 660 s later share one day. It moves forward, never back, because the Lua sets absolute expiries from the passed clock on a Valkey that keeps real time. The three assertions and their values are unchanged. Only that test file changed. It is Codium's file and is not on main (deviations log, "2026-11-21, EV-33", Coordination).
+
+**Local receipts** (from the commit, against a throwaway loopback Valkey): the case alone at clocks 23:48:59, 23:55:00, 23:59:59 and 12:00:00 UTC, 1 pass each (23:55 failed before the fix); the whole file at the real clock 70/0 (429 expects); without VECTOR_TEST_REDIS_URL 29 pass, 41 skip, 0 fail; packages/web typecheck and the full turbo typecheck (27 tasks) pass.
+
+**CI at `9944b7b5`** (workflow_dispatch on everywhere-finish, read back with the GitHub tools):
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| Vector everywhere | [44846928787](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846928787) | success, 9/9 jobs; the test job 136668910648 reports 71/71 test files and workflow-compliance 58/0 (1,104 expects) |
+| Vector hosted CI | [44846932178](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846932178) | success (00:54:59 to 00:58:06 UTC) |
+| Vector at-mention | [44846935665](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846935665) | success |
+| typecheck | [44846939722](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44846939722) | success |
+| Vector Codium | [44847317908](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44847317908) | success (00:58:48 to 01:05:43 UTC). It started after the hosted run above had finished, so its nested call of vector-hosted-ci.yml cancelled nothing. PR #33 has been merged into this branch since `1035f87c`, so the lane rule's hold on vector-codium.yml had already ended |
+
+## EV-33: lane close-out (2026-11-21)
+
+Spec §8 VE-00 (the lane's path rules); review:everywhere:fit F1; pre-merge FIT-4. Deviations log: "2026-11-21, EV-33". Scratch and logs in /tmp/vector-v2/everywhere/ev33/{base,merge,after,mut,docs,scripts}/.
+
+**Base and merge.** `git fetch origin release-finish main everywhere-finish review-fixes`: HEAD `9944b7b5` equalled origin/everywhere-finish; review-fixes' FIT-4 commits `f251ac2c` and `48b76a5b`, FIT-5 `dcd781d0` and origin/release-finish `67ec3a60` are ancestors. origin/main had moved to `f3d7ac74` (#51 to #54, 23 files; the plan read `3670461a`), none of them a file this branch changes; `git merge-tree --write-tree HEAD origin/main` was clean. Merged with `--no-ff` as `535ac94e` (`chore(everywhere): merge main after #54`), as the brief's first step asks. Incoming: packages/engine/test/fixture/managed-policy.ts (imported by engine test/everywhere/config.test.ts and worktree.test.ts; only its Windows-only branch changed) and packages/desktop/tsconfig.json (one script include, #53). After the merge: workflow-compliance 58/0 (1,104 expects); the hosted API typecheck and `bun typecheck` in packages/desktop exit 0; engine test/everywhere/config.test.ts alone, with TMPDIR under /tmp/vector-v2/everywhere-finish/ev33/ so the preload's XDG roots were fresh, 19/0 (68 expects).
+
+**FIT-4, read before editing.** `f251ac2c` set vector-everywhere.yml's push trigger to `[main]` only, rewrote the header, concurrency and scope-step comments (the scope script is unchanged and still filters only pushes to main), pinned `{branches: ["main"]}` in everywhere-lane.test.ts, renamed two tests and dropped the scope test's branch case, and added workflow-compliance.test.ts's "Vector's workflows trigger on main and name no build or integration branch". `48b76a5b` did not touch the workflow. FIT-4 kept packages/core/src/v1/config/everywhere.ts in the paths (it exists since EV-10, `7146a98f`), so nothing is restored. EV-33 redoes and undoes none of it.
+
+**Files.**
+- .github/workflows/vector-everywhere.yml, `on.pull_request.paths` and comments only: the three src/pages entries become packages/web/src/drafts/everywhere*, drafts/everywhere/** and drafts/docs/everywhere.astro; 18 new patterns follow the last helper in five commented groups (the sweep cron, Codium's vocabulary and the relay; the desktop's Remote link, keep-awake and sign-in claims; the engine's worktree, audience and shell; Vector Local's source and the settings registry and dialog; the account client). 60 paths before, 60 − 3 + 21 = 78 after, all unique: 3 drafts, the brief's 15 entries that were not there yet, and 3 beyond the brief (unattended-shell.ts, vector-account.ts, account-client.ts). The brief's 8 entries already present are kept once. workflow_dispatch, push `[main]`, the concurrency group, permissions, runners, services, jobs, steps and both scripts are unchanged.
+- packages/web/test/everywhere-lane.test.ts: the paths test is renamed ("…, the main helpers that code imports and the shared files the lane depends on"); its zones name the three drafts; its helpers gain 20 pins for the 18 new patterns (the relay glob is pinned by account-relay.ts, index.ts and protocol.ts), 28 to 48 in all, each also checked to exist; its unrelated files swap session/prompt.ts (now a helper) for session/compaction.ts and add tool/shell/prompt.ts, relay/wrangler.jsonc, settings-v2/general.tsx and drafts/docs/vector-hands.astro, with comments. New test "every path names a tracked file, but for the Solid zone spec 6.6 keeps free" (git ls-files through the file's own `git()` helper; only packages/web/src/components/everywhere/** may match nothing). The scope test gains commits g (an everywhere draft), h (vercel.json) and i (another lane's draft): (f, g) and (g, h) run, (h, i) does not.
+- The lane documents: the spec's status line and one dated §9 note; the handoff's new top ("Current state"), the renamed package log, the EV-32 CI annotation and the closing annotations; this record; the deviations entry.
+
+No runtime code, flag, env, switch, route, page, nav, sitemap, dependency, lockfile or generated file changes; nothing is regenerated.
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`; "pass/fail (expects)"):
+
+| Check | Before (HEAD `9944b7b5`) | After |
+| --- | --- | --- |
+| packages/web test/everywhere-lane.test.ts | 13/0 (163) | 14/0 (170): the new test's one expect and the three scope calls' six |
+| packages/cloud src/workflow-compliance.test.ts | 58/0 (1,104) | 58/0 (1,104), after the merge and after the edit |
+| `bun typecheck` in packages/web (astro check, which covers test/) | | exit 0: 309 files, 0 errors, 0 warnings, 455 hints (unchanged) |
+| hosted API typecheck; `bun typecheck` in packages/desktop | | exit 0; exit 0 (after the merge) |
+| prettier `--check` on everywhere-lane.test.ts; `git diff --check` | | clean (`--write` changed nothing); clean |
+| root test/no-personal-paths, no-project-wording (from test/), after the handoff edit | | 1/0 (2); 2/0 (16) |
+| the owner's rules: `diff` of the handoff from "## Rules (from the owner; all still binding)" to the end, HEAD against the edit | | empty (sha256 7e532229…8044b8 both) |
+| `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2` | | exit 0, 27/27 tasks (23 cached) |
+| after every lane document edit: everywhere-lane; everywhere-docs; root test/no-personal-paths, no-project-wording (from test/); `git diff --check` | | 14/0 (170); 17/0 (215); 1/0 (2); 2/0 (16); clean |
+
+One slip: a one-line `bun -e` that counted the edited workflow's paths (78, all unique) ran without vector-serial. No test, typecheck or install did; every other bun command went through the lock.
+
+**Mutations** (/tmp/vector-v2/everywhere/ev33/mut/: original.yml and original.sha256, the script in ../scripts/mutate.py, run.log and one log per mutation). Each edits vector-everywhere.yml in place, runs the lane test alone, then copies original.yml back and checks its sha256 before the next; `sha256sum -c` matched after the run.
+
+| # | Mutation | Result | Red at |
+| --- | --- | --- | --- |
+| M1 | drop vercel.json | 12/2 | helpers (:354); scope (g, h) (:433) |
+| M2 | drop packages/relay/src/** | 13/1 | helpers (:354) |
+| M3 | add packages/web/src/pages/everywhere* back | 13/1 | the tracked-file test (:391) |
+| M4 | drop packages/web/src/drafts/everywhere/** | 12/2 | zones (:290); scope (f, g) (:432) |
+| M5 | the settings pair as one brace pattern | 13/1 | the no-brace check (:253) |
+| M6 | session/prompt.ts widened to packages/engine/src/session/** | 13/1 | unrelated, compaction.ts (:379) |
+| M7 | api/_lib/remote-relay.ts listed again | 13/1 | uniqueness (:254) |
+| M8 | drop unattended-shell.ts | 13/1 | helpers (:354) |
+| M9 | drop packages/web/src/components/everywhere/** | 12/2 | zones, Installs.tsx (:290); the tracked-file test (:391) |
+| M10 | the three drafts as packages/web/src/drafts/** | 12/2 | unrelated, vector-hands.astro (:379); scope (h, i) (:434) |
+
+**Path report** (/tmp/vector-v2/everywhere/ev33/scripts/path-report.ts; output in ../after/path-report.txt). Against the edited workflow and the 10,847 tracked files: 78 paths, 78 unique, and only packages/web/src/components/everywhere/** matches no tracked file. Of the 190 files `git diff --name-only origin/main...HEAD` lists, 127 match the paths and 63 do not; every one of the 63 is covered by another workflow or check, listed by group in the deviations entry, decision (e). No lane-added file is unmatched: the three drafts and unattended-shell.ts, the two kinds the plan's scan found, now match.
+
+**Review fixes (2026-11-21).** Four non-blocking findings, documents only (deviations log, EV-33, "Review"): the handoff's activation step 1 (CRON_SECRET is Codium's, confirm and do not change), step 4 (a check: the cron starts at the first main deploy after the PR merges) and the matching "Dormant" bullet, and one dated annotation under the package log's "Current gates" heading. Re-run after them: everywhere-lane 14/0 (170); workflow-compliance 58/0 (1,104); everywhere-docs 17/0 (215); root test/no-personal-paths 1/0 (2) and no-project-wording 2/0 (16), from test/; the owner's rules section unchanged (sha256 7e532229…8044b8); `git diff --check` clean; the full turbo typecheck exit 0, 27/27 tasks (23 cached).
+
+**For the lead.**
+- This commit cannot name its own runs. After the push, vector-everywhere.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next receipt.
+- test.yml once for the lane end, and vector-codium.yml (its hold has ended: PR #33 is merged here), are the lead's dispatches.
+- `9944b7b5` changed Codium's packages/web/test/model-plan-admit.test.ts; it reaches main only with this lane's PR.

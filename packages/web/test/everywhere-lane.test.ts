@@ -247,7 +247,7 @@ describe("the lane's shape", () => {
     expect(existsSync(path.join(root, "packages/cloud/src/workflow-compliance.test.ts"))).toBe(true)
   })
 
-  test("the paths cover every everywhere zone and the main helpers that code imports", () => {
+  test("the paths cover every everywhere zone, the main helpers that code imports and the shared files the lane depends on", () => {
     // The scope job matches pushes to main with Bun's globs and GitHub filters pull requests with its own, so the
     // patterns use only * and **, which mean the same to both.
     expect(paths.filter((pattern) => /[{}?+![\]]/.test(pattern))).toEqual([])
@@ -269,9 +269,9 @@ describe("the lane's shape", () => {
       "packages/app/src/components/settings-v2/everywhere.tsx",
       "packages/app/src/components/settings-v2/everywhere-model.ts",
       "packages/app/src/components/settings-v2/everywhere-model.test.ts",
-      "packages/web/src/pages/everywhere.astro",
-      "packages/web/src/pages/everywhere/link.astro",
-      "packages/web/src/pages/docs/everywhere.astro",
+      "packages/web/src/drafts/everywhere.astro",
+      "packages/web/src/drafts/everywhere/link.astro",
+      "packages/web/src/drafts/docs/everywhere.astro",
       "packages/web/src/components/everywhere/Installs.tsx",
       "packages/web/src/components/marketing/everywhere/SignIn.tsx",
       "integrations/slack/manifest.json",
@@ -324,6 +324,32 @@ describe("the lane's shape", () => {
       // github-oidc.ts imports them, and serverImports scans only everywhere code.
       "api/_lib/github-http.ts",
       "packages/core/src/github-agents.ts",
+      // The sweep cron (EV-04), Codium's perk, plan and switch vocabulary (EV-07, EV-08) and the relay Worker the
+      // remote adapter test and the journeys run in process (EV-05, EV-06).
+      "vercel.json",
+      "api/_lib/codium-perks.ts",
+      "packages/schema/src/codium-entitlements.ts",
+      "packages/schema/src/codium-owner.ts",
+      "packages/relay/src/account-relay.ts",
+      "packages/relay/src/index.ts",
+      "packages/relay/src/protocol.ts",
+      // The desktop's Remote link and registration, the shared keep-awake and the sign-in claims (EV-11, EV-17, EV-18).
+      "packages/desktop/src/main/remote-link.ts",
+      "packages/desktop/src/main/remote-runtime.ts",
+      "packages/desktop/src/main/keep-awake.ts",
+      "packages/desktop/src/main/vector-account.ts",
+      // The engine's unattended worktree, outward audience and offline shell (EV-12 to EV-16).
+      "packages/engine/src/worktree/index.ts",
+      "packages/engine/src/session/prompt.ts",
+      "packages/engine/src/session/unattended-shell.ts",
+      "packages/engine/src/tool/shell.ts",
+      "packages/engine/src/tool/shell/sandbox.ts",
+      // Vector Local's everywhere source (EV-15) and the settings registry and dialog the settings page joins (EV-21).
+      "packages/core/src/local-mode/sources.ts",
+      "packages/app/src/components/settings-v2/settings-registry.ts",
+      "packages/app/src/components/settings-v2/dialog-settings-v2.tsx",
+      // The account client the vectordev.ai account components sign in with (EV-22).
+      "packages/web/src/lib/account-client.ts",
     ]
     expect(helpers.filter((file) => !matches(file))).toEqual([])
     // A helper that moves on main would silently stop starting the lane.
@@ -335,8 +361,15 @@ describe("the lane's shape", () => {
     const unrelated = [
       "README.md",
       "api/_lib/usage.ts",
+      // Only the schema's entitlements file is a helper.
       "api/_lib/codium-entitlements.ts",
-      "packages/engine/src/session/prompt.ts",
+      // Only the named engine, relay and settings files are, not their folders.
+      "packages/engine/src/session/compaction.ts",
+      "packages/engine/src/tool/shell/prompt.ts",
+      "packages/relay/wrangler.jsonc",
+      "packages/app/src/components/settings-v2/general.tsx",
+      // Another lane's draft.
+      "packages/web/src/drafts/docs/vector-hands.astro",
       "packages/web/test/teams-api.test.ts",
       "packages/desktop/src/main/github-pr.ts",
       "packages/web/src/pages/workspaces.astro",
@@ -344,6 +377,18 @@ describe("the lane's shape", () => {
       ".github/workflows/test.yml",
     ]
     expect(unrelated.filter(matches)).toEqual([])
+  })
+
+  test("every path names a tracked file, but for the Solid zone spec 6.6 keeps free", () => {
+    // A path that names nothing starts the lane for nothing and hides a move (FIT-4). The owner's move of the drafts to
+    // src/pages at 2.0.0 fails here until their three entries move with them. The Solid zone is empty because the
+    // vectordev.ai account components are React, under components/marketing/everywhere/**.
+    const tracked = git(root, "ls-files", "-z").split("\0").filter(Boolean)
+    const empty = paths.filter((pattern) => {
+      const glob = new Bun.Glob(pattern)
+      return !tracked.some((file) => glob.match(file))
+    })
+    expect(empty).toEqual(["packages/web/src/components/everywhere/**"])
   })
 })
 
@@ -357,6 +402,9 @@ describe("the scope job", () => {
       const d = await commit(directory, { "api/_lib/http.ts": "export {}\n" })
       const e = await commit(directory, { "packages/web/test/teams-api.test.ts": "export {}\n" })
       const f = await commit(directory, { "api/_lib/codium-tombstone.ts": "export {}\n" })
+      const g = await commit(directory, { "packages/web/src/drafts/everywhere/link.astro": "---\n---\n" })
+      const h = await commit(directory, { "vercel.json": "{}\n" })
+      const i = await commit(directory, { "packages/web/src/drafts/docs/vector-hands.astro": "---\n---\n" })
       const bun = path.dirname(process.execPath)
       const scope = async (EVENT: string, REF: string, BEFORE: string, AFTER: string) => {
         const result = await runStep(SCOPE, directory, {
@@ -380,6 +428,10 @@ describe("the scope job", () => {
       expect(await scope("push", "refs/heads/main", c, d)).toBe("run=true")
       expect(await scope("push", "refs/heads/main", a, e)).toBe("run=true")
       expect(await scope("push", "refs/heads/main", e, f)).toBe("run=true")
+      // An everywhere draft and a shared file the lane depends on start it; another lane's draft does not.
+      expect(await scope("push", "refs/heads/main", f, g)).toBe("run=true")
+      expect(await scope("push", "refs/heads/main", g, h)).toBe("run=true")
+      expect(await scope("push", "refs/heads/main", h, i)).toBe("run=false")
       // A change that cannot be listed (a new ref, or a history GitHub no longer has) runs the lane.
       expect(await scope("push", "refs/heads/main", "0".repeat(40), b)).toBe("run=true")
       expect(await scope("push", "refs/heads/main", "1234567890abcdef1234567890abcdef12345678", b)).toBe("run=true")
