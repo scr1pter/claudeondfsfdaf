@@ -1787,6 +1787,7 @@ Lane numbering: the older notes (EV-11 to EV-16) say "EV-21" for all of the desk
   - consent and Remote on through `setEnabled(true)`, show `needs-remote`, call `refresh()` after a write while Remote is off, the config-skew decision for writing `everywhere`, and the job-only link that reads `online` (VE-41);
   - when it labels the GitHub calls and removes the `github` guard, decide whether `localAllows` should require `remote` too ((f)). Today `pending` follows the link, which Vector Local's `remote` decision already stops, and a running job does not stop if `remote` is blocked mid-job. Requiring it would add that stop;
   - update index.ts's comment above `startRemote`, which still says Remote "connects only while Remote is on and a phone is paired or pairing". It should add "or this computer takes Vector everywhere jobs (everywhere-wiring.ts)". index.ts is outside EV-17's file list, so this waits for EV-21 or the final docs sweep.
+    *2026-11-21 (v2-closeout-ci):* done: the comment now names Vector everywhere jobs (handoff, "Docs sweep").
 - **For the lead (R-C4, R-C6):** the server's `pending` route checks only the everywhere switch (jobs-api.ts), not Codium's `remote` switch. The desktop's gate ((z)) covers an honest client only. Making the route also honour the `remote` switch belongs with R-C4's presence fix and R-C6's switch.
 - **Not yet built:**
   - an up-front `modelAllowed` check (g);
@@ -1828,6 +1829,7 @@ Twelve findings, all non-blocking; two repeat one another. Eleven are taken or r
 - **W6 pins the owner-gated constant.** Taken, the better option. W6 passes `keys: {}`. A separate, labelled guard case (W6g) asserts the shipped default and says it is meant to go red at the key handoff, and the Owner action line says so too.
 - **"Off means no ledger read or write" is true only while no offer verifies.** Taken: Safe by default is reworded as proposed.
 - **index.ts's comment above `startRemote` is stale.** Recorded: a Left open line for EV-21 or the final docs sweep. index.ts is untouched.
+  *2026-11-21 (v2-closeout-ci):* done: the comment now names Vector everywhere jobs (handoff, "Docs sweep").
 
 ## 2026-11-17, EV-18: the desktop adapters: the safe worktree, the offline shell and the shared keep-awake (VE-21, F6)
 
