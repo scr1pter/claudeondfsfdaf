@@ -304,6 +304,16 @@ export interface BatchCheckpoint {
   last?: string
 }
 
+export const REVIEW_VERDICTS = [
+  "not-reviewed",
+  "policy-skip",
+  "incomplete",
+  "blocking",
+  "findings",
+  "clean-complete",
+] as const
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number]
+
 export interface ReviewState {
   v: 1
   batch?: BatchCheckpoint // present only while coverage is incomplete
@@ -319,6 +329,8 @@ export interface ReviewState {
   failed?: boolean
   // An in-flight or refused budget-gated run can retry the entire diff, even when the head moves.
   retryFullAfterBudget?: true
+  verdict?: ReviewVerdict // opt-in fail-closed result for verdictHead, independent of findings coverage
+  verdictHead?: string
   notedHead?: string
   inlinePosted: number
   inflight?: { run: string; head: string; at: number; costUsd: number }
@@ -554,7 +566,7 @@ export interface ReviewConfig {
   // were. Read by no runner until the VS-30 executor (UNAPPLIED_REVIEW_KEYS), so mergeReviewConfig warns that "ask" is
   // not applied.
   runtime?: "off" | "ask"
-  failOn: "never" | "blocking" // "blocking" fails the job while blocking findings are open
+  failOn: "never" | "blocking" | "blocking-or-incomplete" // the last value is accepted only from the trusted base policy
   ignore: string[] // added to the defaults
   ignoreDefaults: boolean
   skipAuthors: string[]

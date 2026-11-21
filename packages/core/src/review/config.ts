@@ -367,15 +367,23 @@ export function mergeReviewConfig(input: {
   const env = input.env ?? {}
   const text = input.json?.text
   const source = readJson(text, warnings)
+  // A gate can only come from the base blob, explicitly identified by the caller. Leave the old decoder
+  // and REVIEW_FAIL_ON untouched for their existing values; neither can activate or lower this gate.
+  const gated = input.json?.at === "base" && !input.json.privacyOnly && source?.failOn === "blocking-or-incomplete"
   const config = settle(
     input.json?.privacyOnly || !source
       ? undefined
-      : Object.fromEntries(Object.entries(source).filter(([key]) => !SOURCED_REVIEW_KEYS.some((item) => item === key))),
+      : Object.fromEntries(
+          Object.entries(source).filter(
+            ([key]) => !(gated && key === "failOn") && !SOURCED_REVIEW_KEYS.some((item) => item === key),
+          ),
+        ),
     env,
     input.trigger,
     warnings,
     input.surface === "github",
   )
+  if (gated) config.failOn = "blocking-or-incomplete"
   const sources: {
     values: Record<string, unknown> | undefined
     trusted: (key: string) => boolean

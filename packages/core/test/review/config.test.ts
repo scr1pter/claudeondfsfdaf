@@ -292,9 +292,8 @@ describe("parseReviewConfig", () => {
     ])
   })
 
-  // VS-32a: the value lands with the GitHub job's wiring, after vector-at-mention. Until then it is an unknown value,
-  // so it warns and keeps what the other sources say, exactly as today, and exit codes cannot change.
-  test("VS-32: blocking-or-incomplete is not a failOn value before the wiring", () => {
+  // The legacy entry points have no trusted base provenance.
+  test("VS-32: blocking-or-incomplete stays unknown to the untagged decoder", () => {
     const json = '{"failOn":"blocking-or-incomplete"}'
     const fromJson = parseReviewConfig({ json })
     expect(fromJson.config.failOn).toBe("never")
@@ -310,7 +309,7 @@ describe("parseReviewConfig", () => {
     })
     expect(kept.config.failOn).toBe("blocking")
     expect(kept.warnings).toEqual(['REVIEW_FAIL_ON must be "never", "blocking"; using "blocking".'])
-    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text: json } })).toEqual(fromJson)
+    expect(mergeReviewConfig({ surface: "github", json: { at: "working-tree", text: json } })).toEqual(fromJson)
   })
 
   // VS-35a: guarded team memory's rules land uncalled (team.ts); the key and its parse wait for runner-wiring. Until
@@ -1710,4 +1709,33 @@ test("offline diagnostics accepts only a trusted owner setting or a complete bas
   expect(
     mergeReviewConfig({ surface: "local", global: { diagnostics: { command: "anything" } } }).config,
   ).not.toHaveProperty("diagnostics")
+})
+
+describe("base-only blocking-or-incomplete gate (SF-39)", () => {
+  test("only local and GitHub configs tagged as the base may select the gate, even with an overriding environment", () => {
+    const text = JSON.stringify({ failOn: "blocking-or-incomplete" })
+    for (const surface of ["local", "github"] as const) {
+      for (const env of [{}, { REVIEW_FAIL_ON: "never" }, { REVIEW_FAIL_ON: "blocking" }])
+        expect(mergeReviewConfig({ surface, json: { at: "base", text }, env }).config.failOn).toBe(
+          "blocking-or-incomplete",
+        )
+      for (const at of ["snapshot", "working-tree"] as const) {
+        const ignored = mergeReviewConfig({ surface, json: { at, text } })
+        expect(ignored.config.failOn).toBe("never")
+        expect(ignored.warnings.join(" ")).toContain("failOn")
+      }
+      expect(mergeReviewConfig({ surface, json: { at: "base", text, privacyOnly: true } }).config.failOn).toBe("never")
+      const ignoredEnv = mergeReviewConfig({ surface, env: { REVIEW_FAIL_ON: "blocking-or-incomplete" } })
+      expect(ignoredEnv.config.failOn).toBe("never")
+      expect(ignoredEnv.warnings.join(" ")).toContain("REVIEW_FAIL_ON")
+      expect(
+        mergeReviewConfig({
+          surface,
+          json: { at: "base", text: '{"failOn":"blocking"}' },
+          env: { REVIEW_FAIL_ON: "never" },
+        }).config.failOn,
+      ).toBe("never")
+    }
+    expect(parseReviewConfig({ json: text, trigger: "auto" }).config.failOn).toBe("never")
+  })
 })

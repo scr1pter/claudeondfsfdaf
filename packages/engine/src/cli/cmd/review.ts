@@ -60,6 +60,7 @@ import {
   emptyState,
   monthKey,
   nextState,
+  type NextStateInput,
   priorFromState,
   reviewCostHasCodium,
   reviewCostIsCodium,
@@ -78,7 +79,7 @@ import type {
   SummaryFinding,
   Trust,
 } from "@vectordevai/core/review/types"
-import { unfinishedCauses } from "@vectordevai/core/review/verdict"
+import { postingPlan, reviewVerdict, unfinishedCauses, type PostingPlan, type ReviewVerdict } from "@vectordevai/core/review/verdict"
 import { Git } from "@/git"
 import { ReviewGit } from "@/review/git"
 import { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
@@ -235,14 +236,29 @@ interface Range {
   nothing: string // what to say when nothing changed
 }
 
+interface LocalOutputPolicy {
+  diagnostics?: boolean
+  failClosedPR?: boolean
+  skipVerdict?: ReviewVerdict
+}
+
 export function executeLocalReview<RunR, ModelR>(
   options: LocalReviewOptions,
   deps: LocalReviewDeps<RunR, ModelR>,
 ): Effect.Effect<LocalReviewResult, never, Git.Service | RunR | ModelR> {
   return Effect.gen(function* () {
     // Each execution has its own output policy, including when the same Effect runs concurrently.
-    const output: { diagnostics?: boolean } = {}
-    const result = yield* localReview(options, deps, output)
+    const output: LocalOutputPolicy = {}
+    let result = yield* localReview(options, deps, output)
+    if (output.failClosedPR) {
+      // A base policy applies to this PR even when an explicit severity flag or an environment override is weaker.
+      // One-off PR reviews do not read or write the GitHub job's bot-owned state or check outputs.
+      const verdict = result.outcome
+        ? reviewVerdict({ kind: "outcome", outcome: result.outcome }).verdict
+        : output.skipVerdict ?? "not-reviewed"
+      const failed = verdict === "not-reviewed" || verdict === "incomplete" || verdict === "blocking"
+      if (failed || result.error) result = { ...result, exitCode: 1 }
+    }
     // Git can fail before a base settings blob is available. The owner's independent config still applies.
     if (result.error && output.diagnostics === undefined) {
       const settings = yield* Effect.serviceOption(Config.Service)
@@ -266,7 +282,7 @@ export function executeLocalReview<RunR, ModelR>(
 function localReview<RunR, ModelR>(
   options: LocalReviewOptions,
   deps: LocalReviewDeps<RunR, ModelR>,
-  output: { diagnostics?: boolean },
+  output: LocalOutputPolicy,
 ): Effect.Effect<LocalReviewResult, never, Git.Service | RunR | ModelR> {
   return Effect.gen(function* () {
     const refused = refuseFlags(options)
@@ -367,6 +383,7 @@ function localReview<RunR, ModelR>(
       env,
       trigger: "local",
     })
+    output.failClosedPR = options.pr !== undefined && settingsAt === "base" && parsed.config.failOn === "blocking-or-incomplete"
     output.diagnostics = parsed.config.diagnostics === "offline"
     for (const warning of parsed.warnings) say(`Warning: ${warning}`)
     let config = withFlags(
@@ -582,8 +599,12 @@ function localReview<RunR, ModelR>(
     const open = (saved?.findings ?? []).filter((finding) => finding.status === "open")
     const failOn = options.failOn ?? (config.failOn === "blocking" ? "blocking" : "never")
 
-    const early = (note: string, left: SummaryFinding[] = []) =>
+    const early = (note: string, left: SummaryFinding[] = [], policySkip = false) =>
       Effect.gen(function* () {
+        if (policySkip && output.failClosedPR)
+          output.skipVerdict = countAtOrAbove(left, "blocking")
+            ? "blocking"
+            : reviewVerdict({ kind: "skip", reason: "nothing-to-review" }).verdict
         if (options.json) yield* printJson({ version: 1, target, outcome: null, note })
         else yield* print(note + "\n")
         return { exitCode: countAtOrAbove(left, failOn) ? 1 : 0, target } satisfies LocalReviewResult
@@ -620,7 +641,7 @@ function localReview<RunR, ModelR>(
     if (!range.files.length) {
       if (target.kind === "branch" && (yield* dirty(git, root, true)))
         say("Add --uncommitted to review the changes you have not committed.")
-      return yield* early(range.nothing, open)
+      return yield* early(range.nothing, open, true)
     }
     // As CI skips a commit it already reviewed; --fail-on still sees what that review left open. The last review of
     // this commit is printed again, so a script, or someone who lost the first output, still gets its findings.
@@ -711,7 +732,7 @@ function localReview<RunR, ModelR>(
       return yield* new LocalReviewError({
         message: "The changed files are outside this conversation's read access; no review ran.",
       })
-    if (!review.length) return yield* early(noteNothingToReview(), open)
+    if (!review.length) return yield* early(noteNothingToReview(), open, true)
 
     yield* ReviewGit.preflight
 
@@ -1132,6 +1153,10 @@ function localReview<RunR, ModelR>(
     }
     // A charged failure, an incomplete verification and a successful batch all use the usual
     // cost/finding record. Only a complete current batch advances the physical cursor.
+    const stateVerdict = (outcome: ReviewOutcome): NextStateInput["verdict"] =>
+      output.failClosedPR
+        ? { failOn: "blocking-or-incomplete", result: reviewVerdict({ kind: "outcome", outcome }).verdict }
+        : undefined
     const persistStoppedBatch = () =>
       Effect.gen(function* () {
         if (!batchState?.recorded || !locked) return
@@ -1144,6 +1169,7 @@ function localReview<RunR, ModelR>(
             failed: true,
             unreviewed: reviewed.unreviewed,
             prior,
+            verdict: stateVerdict(reviewed),
             ...(reviewed.cost ? { cost: reviewed.cost } : {}),
           }),
         )
@@ -1240,6 +1266,7 @@ function localReview<RunR, ModelR>(
       ...(outcome.cost ? { cost: outcome.cost } : {}),
       prior: settled,
       selection,
+      verdict: stateVerdict(outcome),
       moved: selection.inline,
     })
     if (retryFull && unfinishedCauses(outcome).length) next.retryFullAfterBudget = true
@@ -1365,6 +1392,8 @@ const postToPull = Effect.fnUntraced(function* (input: {
   const repo = { owner: where.owner, repo: where.repo }
   const head = input.target.head
   const inline = input.outcome.selection.inline
+  const verdict = reviewVerdict({ kind: "outcome", outcome: input.outcome }).verdict
+  const plan = postingPlan(verdict, inline.length, { failOn: input.config.failOn })
   const draft = buildCreateReviewPayload({
     head,
     inline,
@@ -1409,8 +1438,8 @@ const postToPull = Effect.fnUntraced(function* (input: {
       }),
     catch: failed,
   })
-  const moved = count
-    ? yield* Effect.tryPromise({ try: () => postReview(gh, input.pr, inline, payload), catch: failed })
+  const moved = plan.createReview && count
+    ? yield* Effect.tryPromise({ try: () => postReview(gh, input.pr, inline, payload, plan.marker), catch: failed })
     : []
   const movedIds = new Set(moved.map((finding) => finding.id))
   const selection: Selection = {
@@ -1430,6 +1459,7 @@ const postToPull = Effect.fnUntraced(function* (input: {
     mode: input.outcome.mode,
     report: input.outcome.report,
     selection,
+    ...(input.config.failOn === "blocking-or-incomplete" && verdict === "incomplete" ? { incomplete: true } : {}),
     ...(requestStop
       ? {
           incomplete: true,
@@ -1459,9 +1489,11 @@ async function postReview(
   pr: number,
   findings: PlacedFinding[],
   payload: CreateReviewPayload,
+  marker?: PostingPlan["marker"],
 ): Promise<PlacedFinding[]> {
   try {
-    await gh.createReview(pr, payload)
+    // A 422 can split a review into several objects. Mark every actual incomplete review, including continuations.
+    await gh.createReview(pr, marker ? { ...payload, body: marker + "\n" + payload.body } : payload)
     return []
   } catch (error) {
     if (statusOf(error) !== 422) throw error
@@ -1469,8 +1501,8 @@ async function postReview(
     const [first, second] = splitHalves(payload)
     const middle = Math.ceil(findings.length / 2)
     return [
-      ...(await postReview(gh, pr, findings.slice(0, middle), first)),
-      ...(await postReview(gh, pr, findings.slice(middle), second)),
+      ...(await postReview(gh, pr, findings.slice(0, middle), first, marker)),
+      ...(await postReview(gh, pr, findings.slice(middle), second, marker)),
     ]
   }
 }

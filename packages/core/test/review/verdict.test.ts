@@ -1,3 +1,11 @@
+import {
+  decodeState,
+  encodeState,
+  emptyState,
+  nextState,
+  storedReviewVerdict,
+  withReviewVerdict,
+} from "@vectordevai/core/review/state"
 import { describe, expect, test } from "bun:test"
 import { decideSkip, type SkipInput, type SkipReason } from "@vectordevai/core/review/skip"
 import {
@@ -1023,3 +1031,40 @@ function deepFreeze<T>(value: T): T {
   }
   return value
 }
+
+test("stored fail-closed verdicts round-trip only for the exact head and opt-in policy (SF-39)", () => {
+  const previous = { ...emptyState(), head: "a".repeat(40) }
+  const activeHead = "b".repeat(40)
+  const legacy = encodeState(previous)
+  expect(storedReviewVerdict(decodeState(legacy), previous.head)).toBeUndefined()
+  for (const result of REVIEW_VERDICTS) {
+    const saved = withReviewVerdict(previous, activeHead, "blocking-or-incomplete", result)
+    const round = decodeState(encodeState(saved))!
+    expect(round.head).toBe(previous.head)
+    expect(storedReviewVerdict(round, activeHead)).toBe(result)
+    expect(storedReviewVerdict(round, previous.head)).toBeUndefined()
+    for (const legacyPolicy of ["never", "blocking"] as const)
+      expect(encodeState(withReviewVerdict(round, activeHead, legacyPolicy, result))).toBe(legacy)
+  }
+  expect(encodeState(withReviewVerdict(previous, "short", "blocking-or-incomplete", "clean-complete"))).toBe(legacy)
+})
+
+test("only a requested verdict is persisted on a normal, carry or failed transition", () => {
+  const head = "c".repeat(40)
+  const prior = { ...emptyState(), head: "a".repeat(40) }
+  for (const mode of ["full", "carry"] as const) {
+    for (const failed of [true, false]) {
+      const fields = { mode, failed, head, base: "b".repeat(40), now: Date.UTC(2025, 0, 1) }
+      const old = encodeState(nextState(prior, fields))
+      const written = nextState(prior, {
+        ...fields,
+        verdict: { failOn: "blocking-or-incomplete", result: "incomplete" },
+      })
+      expect(storedReviewVerdict(decodeState(encodeState(written)), head)).toBe("incomplete")
+      expect(written.head).toBe(failed ? prior.head : head)
+      expect(
+        encodeState(nextState(withReviewVerdict(prior, prior.head, "blocking-or-incomplete", "findings"), fields)),
+      ).toBe(old)
+    }
+  }
+})

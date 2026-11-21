@@ -15,16 +15,8 @@
 import type { SkipReason } from "./skip"
 import type { HeldFile, ReviewOutcome, Severity, SkippedFile } from "./types"
 
-// In the order reviewVerdict tests them. They move to types.ts with ReviewState.verdict when the job stores one.
-export const REVIEW_VERDICTS = [
-  "not-reviewed",
-  "policy-skip",
-  "incomplete",
-  "blocking",
-  "findings",
-  "clean-complete",
-] as const
-export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number]
+import { REVIEW_VERDICTS, type ReviewVerdict } from "./types"
+export { REVIEW_VERDICTS, type ReviewVerdict } from "./types"
 
 export interface PostingPlan {
   createReview: boolean

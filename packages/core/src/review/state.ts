@@ -18,6 +18,9 @@ import {
 } from "./team"
 import {
   CATEGORIES,
+  REVIEW_VERDICTS,
+  type ReviewVerdict,
+  type ReviewConfig,
   SEVERITIES,
   type BatchCheckpoint,
   type Category,
@@ -432,6 +435,7 @@ export interface NextStateInput {
   cost?: ReviewCost
   prior?: PriorFinding[] // classified, with current lines
   selection?: Selection // absent for carry and failed runs
+  verdict?: { failOn: "blocking-or-incomplete"; result: ReviewVerdict }
   moved?: Finding[] // inline findings GitHub refused, now listed in the summary
   posted?: number // inline comments created by this run
   notedHead?: string
@@ -489,7 +493,9 @@ export function nextState(prev: ReviewState | undefined, input: NextStateInput):
   }
   const noted = input.notedHead ?? before.notedHead
   if (noted) next.notedHead = noted
-  return pruneState(next)
+  return pruneState(
+    input.verdict ? withReviewVerdict(next, input.head, input.verdict.failOn, input.verdict.result) : next,
+  )
 }
 
 export function monthKey(now: number): string {
@@ -589,12 +595,36 @@ interface CompactState {
   u: number[]
   f?: 1
   j?: BatchCheckpoint // verified against an authenticated plan before use
+  w?: [head: string, verdict: ReviewVerdict]
   q?: 1 // retry the full diff after a pre-dispatch budget stop
   n?: string
   i: number
   x?: [string, string, number, number]
   s: CompactFinding[]
   p: string[]
+}
+
+// Skips/failures may concern another head than the last completed findings review. Never carry a verdict across
+// that boundary. Historical/malformed/absent state yields no stored verdict, which reviewVerdict fails closed.
+export function storedReviewVerdict(state: ReviewState | undefined, head: string): ReviewVerdict | undefined {
+  return state?.verdictHead === head &&
+    /^[0-9a-f]{40}$/.test(head) &&
+    state.verdict &&
+    REVIEW_VERDICTS.includes(state.verdict)
+    ? state.verdict
+    : undefined
+}
+
+export function withReviewVerdict(
+  state: ReviewState,
+  head: string,
+  failOn: ReviewConfig["failOn"],
+  result: ReviewVerdict,
+): ReviewState {
+  const { verdict: _old, verdictHead: _oldHead, ...without } = state
+  if (failOn !== "blocking-or-incomplete" || !/^[0-9a-f]{40}$/.test(head) || !REVIEW_VERDICTS.includes(result))
+    return without
+  return { ...without, verdict: result, verdictHead: head }
 }
 
 export function encodeState(state: ReviewState): string {
@@ -642,6 +672,10 @@ function encodeRaw(state: ReviewState): string {
   if (state.failed) compact.f = 1
   if (state.batch) compact.j = state.batch
   if (state.retryFullAfterBudget) compact.q = 1
+  if (state.verdictHead) {
+    const verdict = storedReviewVerdict(state, state.verdictHead)
+    if (verdict) compact.w = [state.verdictHead, verdict]
+  }
   if (state.notedHead) compact.n = state.notedHead
   if (state.inflight) compact.x = [state.inflight.run, state.inflight.head, state.inflight.at, state.inflight.costUsd]
   return toBase64url(JSON.stringify(compact))
@@ -686,6 +720,16 @@ export function decodeState(payload: string): ReviewState | undefined {
     else state.failed = true // retain other state but never call an unreadable checkpoint clean
   }
   if (raw.q === 1) state.retryFullAfterBudget = true
+  if (
+    Array.isArray(raw.w) &&
+    raw.w.length === 2 &&
+    typeof raw.w[0] === "string" &&
+    /^[0-9a-f]{40}$/.test(raw.w[0]) &&
+    REVIEW_VERDICTS.includes(raw.w[1])
+  ) {
+    state.verdictHead = raw.w[0]
+    state.verdict = raw.w[1]
+  }
   if (isSha(raw.n)) state.notedHead = raw.n
   if (Array.isArray(raw.x) && typeof raw.x[0] === "string" && isSha(raw.x[1]))
     state.inflight = { run: raw.x[0], head: raw.x[1], at: count(raw.x[2]), costUsd: amount(raw.x[3]) }
