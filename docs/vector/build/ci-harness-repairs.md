@@ -1005,7 +1005,8 @@ Re-run classes. The lead re-runs a failed job once, and only when nothing else i
   windows-build job 136368889023.
 - (d) A job whose log shows "oh no: Bun has crashed" (a Bun 1.3.14 panic or segmentation fault) and no failing test.
   Example: `engine (windows, shard 5/12)` job 136610692430, where Bun crashed in `bun install` before any test ran. An
-  upstream Bun report was not filed: filing one is a public action left to the owner.
+  upstream Bun report was not filed: filing one is a public action left to the owner. The exception is the
+  scrollback.surface / `runtime.test.ts` panic covered by the #49 entry above, which needs a root cause, not a re-run.
 
 This file does not describe classes (b) and (c).
 
