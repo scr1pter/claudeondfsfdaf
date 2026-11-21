@@ -111,6 +111,16 @@ describe("retained local review result decoding", () => {
       expect(decodeLocalResult({ ...stored, outcome: { ...skipped, trivial } }, target)).toBeUndefined()
   })
 
+  test("reopening a graph review preserves incomplete diff coverage and omitted files", async () => {
+    const value = outcome()
+    value.selection.diffIncomplete = true
+    value.unreviewed = ["src/large.ts"]
+    const decoded = await decode(await info(result(value)))
+    expect(decoded?.verdict.verdict).toBe("incomplete")
+    expect(decoded?.result?.outcome?.selection.diffIncomplete).toBe(true)
+    expect(decoded?.result?.outcome?.unreviewed).toEqual(["src/large.ts"])
+  })
+
   test("keeps placed findings, optional strict data and usage while withholding serialized own-usage proof", async () => {
     const value = outcome()
     const finding = {

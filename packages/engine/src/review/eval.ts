@@ -152,7 +152,7 @@ export interface ReplayInput {
   // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
   // applies to the prompt since SF-13b and to the reviewer's read and grep tools since SF-14, and so may the
   // engine:holdback-secrets variant (VARIANT_KEYS.engine), which may only raise it to "secrets". Nor a key
-  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's maxInputTokens, VS-25b's impact, VS-27's
+  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's maxInputTokens, VS-27's
   // guardrail, VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is also
   // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
@@ -261,7 +261,7 @@ export interface ReplayArtifact {
   }
   // VS-25b's Tier 1 impact slice as core impact.ts's ImpactRecord: its stage counts and drops, the scan plan, git's
   // version, the clone mode, grep, parse and total time, tokens, tests, unsupported files and why it is incomplete.
-  // Absent until VS-25b wiring builds the slice inside Review.run; context.locations then gains the slice's locations.
+  // Present only when the runner built the slice. Its quoted locations appear in context.locations after admission.
   tier1?: ImpactRecord
   files: { reviewed: string[]; skipped: SkippedFile[] }
   // Each pass's prompt, and, for a pass that had a session, its wall time and cache use from the messages of every
@@ -390,7 +390,8 @@ export interface ProjectionRecord {
   variant?: ReplayVariant
   scope: EvidenceScope
   rules: { digest: string }
-  context: { digest: string }
+  context: { digest: string; locations?: string[] }
+  tier1?: ImpactRecord
   models: ReplayArtifact["models"]
   files: ReplayArtifact["files"]
   // Every decision the dollar cap refused, which the projection ran. From the first on, the record describes an
@@ -1050,11 +1051,28 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
 
   // VS-34: under holdback "secrets" a held file was not reviewed, and the prompt quoted related code without the hits
   // holdback drops (holdbackContext), so a location is listed only when the model saw it.
-  const held = new Set(outcome.held?.map((file) => file.path))
+  const excluded = new Set(outcome.held?.map((file) => file.path))
+  const graph = config.impact === "graph"
+  if (graph) {
+    for (const file of outcome.unreviewed) excluded.add(file)
+  }
+  const impact = observed.find((event) => event.type === "impact")
+  const quoted =
+    !outcome.trivial &&
+    (!graph ||
+      attempts.some((attempt) => attempt.admitted && (attempt.pass === "review" || attempt.pass === "security")))
+  const relatedLocations = quoted
+    ? quotedLocations(
+        config.holdback === "secrets"
+          ? (holdbackContext({ related: gathered.related }, { held: outcome.held ?? [] }).related ?? [])
+          : gathered.related,
+      )
+    : []
   const artifact: ReplayArtifact = {
     ...common,
+    ...(impact ? { tier1: impact.record } : {}),
     files: {
-      reviewed: outcome.trivial ? [] : files.flatMap((file) => (held.has(file.path) ? [] : [file.path])),
+      reviewed: quoted ? files.flatMap((file) => (excluded.has(file.path) ? [] : [file.path])) : [],
       skipped: outcome.skipped,
     },
     context: {
@@ -1063,13 +1081,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       history: gathered.history.length,
       instructions: gathered.instructions !== undefined,
       headFiles: headFiles?.length ?? 0,
-      locations: outcome.trivial
-        ? []
-        : quotedLocations(
-            config.holdback === "secrets"
-              ? (holdbackContext({ related: gathered.related }, { held: outcome.held ?? [] }).related ?? [])
-              : gathered.related,
-          ),
+      locations: impact && quoted ? [...new Set([...relatedLocations, ...impact.locations])] : relatedLocations,
     },
     // Every session of a pass counts toward it. One pass event per pass name today; VS-28's lenses add several "lens"
     // passes and must match them by lens too.
@@ -1202,7 +1214,11 @@ function projectionOf(input: {
     ...(artifact.variant ? { variant: artifact.variant } : {}),
     scope: artifact.scope,
     rules: artifact.rules,
-    context: { digest: artifact.context.digest },
+    context: {
+      digest: artifact.context.digest,
+      ...(artifact.tier1 ? { locations: artifact.context.locations } : {}),
+    },
+    ...(artifact.tier1 ? { tier1: artifact.tier1 } : {}),
     models: artifact.models,
     files: artifact.files,
     cap: { maxCostUsd: artifact.config.value.maxCostUsd, over: [...input.over] },
@@ -1263,7 +1279,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
   maxInputTokens: "VS-24 wiring",
-  impact: "VS-25b wiring",
   guardrail: "VS-27c",
   scopeGate: "VS-42 wiring",
   verifyEvidence: "VS-44 wiring",
@@ -1332,6 +1347,11 @@ function variantProblem(input: ReplayInput) {
     (variant.name !== "engine:trivial-skip" || variant.keys.trivial !== "skip" || keys.length !== 1 || variant.models)
   )
     return 'The engine:trivial-skip variant sets only trivial: "skip".'
+  if (
+    (variant.name === "engine:impact-graph" || variant.keys.impact !== undefined) &&
+    (variant.name !== "engine:impact-graph" || variant.keys.impact !== "graph" || keys.length !== 1 || variant.models)
+  )
+    return 'The engine:impact-graph variant sets only impact: "graph".'
   if (variant.models === "triage-pair" && !triaged)
     return `${variant.name} is made by its models: it needs a triage model other than the review model.`
   return undefined

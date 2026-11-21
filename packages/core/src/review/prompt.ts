@@ -74,7 +74,7 @@ export interface PromptInput {
   focus?: FocusHunk[]
   headFiles?: HeadFile[]
   related?: RelatedCode[]
-  impact?: ImpactPrompt // VS-25b's Tier 1 slice, set only under `impact: "graph"` (no runner sets it before VS-25b wiring)
+  impact?: ImpactPrompt // immutable Git context from the engine's impact: "graph" review
   history?: HistoryEntry[]
   // Requirements and contracts from the user's documents linked to the changed files, with drift flags (Vector's brain)
   requirements?: string
@@ -610,6 +610,7 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
 export function impactBlock(slice: ImpactPrompt | undefined): string {
   if (
     !slice ||
+    slice.promptOmitted ||
     (!slice.changed.length &&
       !slice.dependents.length &&
       !slice.incomplete?.length &&
@@ -676,7 +677,7 @@ export function impactCallSite(site: ImpactPrompt["dependents"][number]): string
 }
 
 // The one-line "context considered" note (VS-38 item 6): impact incompleteness is context, never coverage.
-function impactNote(incomplete: readonly ImpactIncomplete[], unsearched: number | undefined): string {
+export function impactNote(incomplete: readonly ImpactIncomplete[], unsearched?: number): string {
   const reasons = incomplete.map((reason) =>
     reason === "partial-clone" && unsearched
       ? `${unsearched} ${unsearched === 1 ? "file" : "files"} not searched, missing from a partial clone`

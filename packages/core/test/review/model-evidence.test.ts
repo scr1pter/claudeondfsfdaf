@@ -32,10 +32,8 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // parser (VS-25a), the Tier 1 impact slice and its builder (VS-25b), and the review and security agents' own prompts.
 // REVIEW_PIPELINE_SOURCES pins a digest of them. The web-tree-sitter runtime init the parser shares with the shell tool
 // (engine util/tree-sitter.ts) is left out on purpose: it decides nothing a review finds, and pinning it would tie shell
-// changes to the review pin. So, for now, are the slice's shared readers, BrainCode and BrainGraph (core brain/code.ts
-// and graph.ts, which also rank the desktop's files) and the changedSymbols fallback (review/symbols.ts): no runner
-// reaches them through the slice before VS-25b wiring, which adds them here when it makes them decide the slice. The
-// strict guardrail (VS-27b's guardrail.ts) is pinned from the day it lands, though no runner calls it before VS-27c: it
+// changes to the review pin. The slice's shared readers, BrainCode and BrainGraph, and its changed-symbol fallback
+// determine which related code the engine sends under impact: "graph". The strict guardrail (VS-27b's guardrail.ts) is pinned from the day it lands, though no runner calls it before VS-27c: it
 // decides what a strict review posts, and its shared rule pass is the one report.ts's offline re-selection applies, so
 // a change to either moves this pin on purpose. So is the rule citation check (VS-43a's citation.ts), pinned from the
 // day it lands, as guardrail.ts is: it will decide what a review drops or strips. So is the change-risk band (VS-28c's
@@ -45,7 +43,7 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // pinned from the day they land: once wired they decide which findings select.ts demotes and which dismissals become
 // team memory. Their body reader in state.ts (parseDismissalMarker, guardedTeamPatterns) decides which dismissals
 // count as marked, but stays unpinned for now: pinning state.ts would tie this pin to codium's and vector-at-mention's
-// edits there. It joins here when the job first calls guardedTeamPatterns, as BrainCode joins with VS-25b wiring.
+// edits there. It joins here when the job first calls guardedTeamPatterns.
 // verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
 // So are the fix executor (engine review/fix.ts) and the CLI's apply step (cli/cmd/review.fix.ts, VS-12c): they run
 // after a review, from its outcome, and decide nothing it finds or posts. So are the owner fix API's adapter (engine
@@ -115,6 +113,9 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/runtime.ts",
   "packages/core/src/review/team.ts",
   "packages/engine/src/review/parse.ts",
+  "packages/core/src/brain/code.ts",
+  "packages/core/src/brain/graph.ts",
+  "packages/core/src/review/symbols.ts",
   "packages/core/src/review/impact.ts",
   "packages/engine/src/review/impact.ts",
   "packages/engine/src/agent/prompt/review.txt",
@@ -560,6 +561,7 @@ describe("scope", () => {
       { nits: true },
       // VS-34's holdback, which Review.run applies since SF-13b, counts as "secrets".
       { holdback: "secrets" as const },
+      { impact: "graph" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).not.toBe(base)
     for (const change of [
@@ -576,9 +578,8 @@ describe("scope", () => {
       // VS-24's token cap is a budget; the explicit default for the trivial gate has no policy effect.
       { maxInputTokens: 200_000 },
       { trivial: "review" as const },
-      // VS-25's impact slice is applied by no runner yet either, nor VS-27's guardrail.
+      // The explicit default for impact is the existing grep context.
       { impact: "grep" as const },
-      { impact: "graph" as const },
       { guardrail: "off" as const },
       { guardrail: "strict" as const },
       // Nor VS-42's scopeGate, with or without strict.
@@ -621,18 +622,29 @@ describe("scope", () => {
     expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, maxSteps: 31 })).not.toBe(base)
   })
 
-  // VS-25b: `impact` is a policy key (the slice is context the model reviews with) that no runner applies before VS-25b
-  // wiring, so neither the policy digest nor the prompts digest of a scope moves with it yet. Once a runner applies it,
-  // only "graph" counts, in both.
-  test("the scope leaves out VS-25b's impact until a runner applies it", () => {
-    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("impact")
-    for (const impact of ["graph", "grep", undefined] as const)
-      expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, impact })).toBe(base)
+  test("only the engine's graph review has impact evidence", () => {
+    expect(EVIDENCE_POLICY_KEYS).toContain("impact")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("impact")).toBe(false)
+    for (const impact of ["grep", undefined] as const)
+      expect(evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, impact } })).toEqual(SCOPE)
+
     const graph: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, impact: "graph" }
-    expect(evidenceScope({ adapter: "engine", config: graph })).toEqual(SCOPE)
-    expect(evidenceScope({ adapter: "engine", config: graph }).prompts).toBe(promptsDigest())
-    expect(policyDigest({ ...graph, nits: true })).not.toBe(policyDigest(graph))
+    expect(policyDigest(graph)).not.toBe(SCOPE.policy)
+    expect(evidenceScope({ adapter: "engine", config: graph })).toEqual({
+      ...SCOPE,
+      policy: policyDigest(graph),
+      prompts: promptsDigest({ impact: "graph" }),
+    })
+    const desktop = evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG })
+    for (const trivial of ["skip", "review", undefined] as const)
+      expect(evidenceScope({ adapter: "desktop", config: { ...graph, trivial } })).toEqual(desktop)
+    const held: ReviewConfig = { ...graph, holdback: "secrets" }
+    expect(evidenceScope({ adapter: "desktop", config: held })).toEqual(
+      evidenceScope({ adapter: "desktop", config: { ...held, impact: "grep" } }),
+    )
+    expect(evidenceScope({ adapter: "engine", config: held }).prompts).toBe(
+      promptsDigest({ impact: "graph", holdback: "secrets" }),
+    )
   })
 
   // VS-27a: `guardrail` is a policy key (it selects what is posted) that no runner applies before VS-27c, so neither the

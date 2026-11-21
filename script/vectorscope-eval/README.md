@@ -571,9 +571,8 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     name. Match the two by pass name: the artifact lists every planned pass,
     and a verify pass planned and skipped for budget or time has none of the
     four; the outcome lists only the passes that reported usage;
-  - `tier1` and `shrink`, typed for VS-25b's impact slice and VS-24's
-    pre-dispatch shrink, and absent until those packages' wiring fills them.
-    `tier1` is core `impact.ts`'s `ImpactRecord`: `stages` (candidates and
+  - When the graph builder runs, `tier1` records its code-free
+    `ImpactRecord`. Results include `stages` (candidates and
     gated files, confirmed and packed call sites), `dropped` (ignored,
     unchecked, gate, cap, time, budget and definitions), `plan`,
     `gitVersion`, `clone`, `grepMs`, `parseMs`, `ms`, `tokens` (what the
@@ -592,8 +591,10 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     past top-k). A same-package file is a speculative lookup, so one left
     unread is named there but never counted in `fallback`. The scopes and
     outbound signatures themselves are code text, so the record leaves them
-    out. Once VS-25b wiring builds the slice in `Review.run`,
-    `context.locations` also gains the slice's locations.
+    out. `context.locations` includes the graph locations quoted by an
+    admitted reviewer. Incomplete graph context is recorded separately
+    from changed files omitted from review. The pre-dispatch `shrink`
+    field remains reserved for VS-24 budget wiring.
   - `utilisation`, typed for VS-49's slice utilisation (core `eval.ts`
     `SliceUtilisation`) and absent until the VS-49 wiring observer fills it
     from the passes' session events, at zero tokens. It enters no digest.
@@ -768,7 +769,7 @@ word, so only the registry keeps model ids out.
 | `shared-verify`    | `verifyPolicy: "shared"`                                                                | built (VS-06)               | built (VS-06)                                                                 |
 | `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run`, at the transport and in the session runtime | built (VS-23c)              | pending, documented difference (VS-23d: the engine server holds the sessions) |
 | `trivial-skip`     | `trivial: "skip"`                                                                       | VS-24, trusted committed checkout | pending: desktop has no private Git proof                                 |
-| `impact-graph`     | `impact: "graph"`                                                                       | pending VS-25b wiring       | pending, after VS-10                                                          |
+| `impact-graph`     | `impact: "graph"`                                                                       | built (VS-25b)              | pending, after VS-10                                                          |
 | `cards-brain`      | `cards: "brain"`, local-only eval                                                       | pending VS-26               | pending, after VS-10                                                          |
 | `guardrail-strict` | `guardrail: "strict"`                                                                   | pending VS-27c              | pending VS-27c                                                                |
 | `depth-auto`       | `depth: "auto"`                                                                         | pending VS-28 wiring        | pending, after VS-10                                                          |

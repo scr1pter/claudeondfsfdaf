@@ -99,7 +99,10 @@ describe("the flags", () => {
       { name: "engine" },
       { name: "engine:shared-verify", record: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } },
     ])
-    expect(parseReplayArgs([...base, "--variant", "engine:impact-graph"])).toContain("VS-25b wiring")
+    expect(flags([...base, "--variant", "engine:impact-graph"]).variants).toEqual([
+      { name: "engine:impact-graph", record: { name: "engine:impact-graph", keys: { impact: "graph" } } },
+    ])
+    expect(parseReplayArgs([...base, "--variant", "engine:cards-brain"])).toContain("VS-26")
     // VS-23c (SF-12b): privacy-zdr's engine half is built.
     expect(flags([...base, "--variant", "engine:privacy-zdr"]).variants).toEqual([
       { name: "engine:privacy-zdr", record: { name: "engine:privacy-zdr", keys: { privacy: "zdr" } } },

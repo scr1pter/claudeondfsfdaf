@@ -1,32 +1,27 @@
-// VS-25b's Tier 1 impact slice builder (contract §4 VS-25b; addendum A VS-36 items 1, 2, 4 and 5 and VS-38 items 1, 3,
-// 4, 6 and 7). Nothing calls it yet: VS-25b wiring calls `build` from Review.run under `impact: "graph"`.
+// The impact slice is built from exact base and head commits in a scoped private Git snapshot.
+// A fork may be checked out at the base. Missing objects, unsupported hosts and stale bindings
+// leave the slice incomplete. No file or command is read through the live checkout or Git service.
 //
-// It reads the head and base tree-ishes only, never the working tree (I-8), because a fork review in CI runs on a
-// merge-base checkout. File content is read with `git show --no-textconv` and searched with `git grep` of the head
-// tree-ish; `git ls-tree`, `git rev-list --missing=print`, `git config` and `git version` read only trees and object
-// metadata (whether I-8's words cover those is put to the owner with Q18). Every exported call (`build`, `parseChanged`,
-// `importLines`) runs each git command with lazy fetching off and inside a time box, and first lists, without
-// fetching, what a partial clone lacks, which it then leaves out of every read, so nothing is ever fetched, whatever
-// git's version. A caller of `parseChanged` that passes `missing` takes that check on itself. `build` never fails: an
-// error becomes an empty or incomplete slice, and the slice never touches what a review counts as reviewed.
-//
-// VS-37a: given eval-only `packing` parameters, `build` packs the slice in three tiers (core packTiers): it asks the
+// VS-37a: production uses three-tier packing with optional eval-only parameters (core packTiers): it asks the
 // confirmation parse for statements and, after confirmation, reads the files the changed lines' imports name, so
 // tier b's reads never take time from confirmation and never mark the slice incomplete. Without `packing` it builds
-// VS-25b's slice exactly as before. Nothing passes `packing` yet: the eval's variant parameters (addendum A §1) and
-// VS-25b wiring decide that. VS-37c: tier b also reads, after those files and inside the same read cap, the other Go
+// VS-25b's original comparison arm in algorithm fixtures. VS-37c: tier b also reads, after those files and inside the same read cap, the other Go
 // files of a changed Go file's folder, for the declarations its added lines use without an import.
 
-import { Effect, Option, Stream } from "effect"
-import { Git } from "@/git"
+import { Effect, Fiber, Option, Stream } from "effect"
+import type { Git } from "@/git"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
+import { heldReason, holdbackFiles, holdbackLines, holdbackText } from "@vectordevai/core/review/holdback"
+import { ReviewGit } from "./git"
 import { BrainCode } from "@vectordevai/core/brain/code"
 import type { DiffFile } from "@vectordevai/core/review/diff"
-import { classifyPath, hasGeneratedHeader } from "@vectordevai/core/review/ignore"
+import { classifyPath, hasGeneratedHeader, parseGitAttributes } from "@vectordevai/core/review/ignore"
 import {
   IMPACT_INCOMPLETE,
   IMPACT_LIMITS,
   IMPACT_TIERS,
   barrels,
+  capImpactSlice,
   changedDefinitions,
   changedPaths,
   impactNames,
@@ -82,14 +77,7 @@ const MANIFESTS = [
 // generated-file markers, so a generated header is seen before the cap. They are sent as one alternation in one -e:
 // git 2.43 tests several -e patterns line by line, which took over 30 s on 100 files of this repository where the one
 // alternation took 89 ms.
-export const IMPORT_LINE: readonly string[] = Object.freeze([
-  "(^|[^[:alnum:]_$])(import|export|from|require|require_relative|require_once|include|include_once|use|mod)([^[:alnum:]_$]|$)",
-  "(src|href)[[:space:]]*=",
-  "^[[:space:]]*([[:alnum:]_.]+[[:space:]]+)?[\"'`]",
-  "^[[:space:]]*\\)",
-  "^[[:space:]]+[[:alnum:]_]+([[:space:]]+as[[:space:]]+[[:alnum:]_]+)?[[:space:]]*,?[[:space:]]*$",
-  "@generated|DO NOT EDIT",
-])
+export const IMPORT_LINE = ReadOnlyGit.IMPACT_IMPORT_LINE
 
 // What VS-24 wiring and Review.run need from the changed files' parse: each side's text, definitions, comments and
 // strings, keyed by the path on that side (the old path for LEFT), as TrivialInput's callbacks take them.
@@ -113,11 +101,14 @@ export interface BuildInput {
   files: readonly DiffFile[]
   ignore?: readonly string[] // globs left out of the search, as relatedCode takes them
   ignored?: (path: string) => boolean
+  holdback?: "secrets"
   context: number // the review model's context window, in tokens
+  signal?: AbortSignal
   budgetMs?: number // the time box, IMPACT_LIMITS.timeBoxMs by default
+  // Used only by the portable graph-comparison fixtures. The production builder always parses its private snapshot.
   changed?: ChangedFiles
-  // VS-37a, eval-only (never parsed from config or env): pack in three tiers with these parameters. Unset builds
-  // VS-25b's slice, unchanged. Tier a sends changed definitions whole and tier b signatures from files outside the
+  // Eval-only override (never parsed from config or env). Production uses the default three-tier proportions.
+  // Tier a sends changed definitions whole and tier b signatures from files outside the
   // diff, so a tiered build needs `files` to be the set already left after the secret holdback (VS-34) and the
   // privacy rules: a file the prompt must not carry is left out of `files`, never passed with `diffShown` false or
   // `inline` false, which only say how much of it the prompt already shows (a file with no diff shown gets more of
@@ -125,6 +116,11 @@ export interface BuildInput {
   packing?: ImpactPackingInput
   inline?: (path: string) => boolean // a changed file the prompt shows whole; by default none
   diffShown?: (path: string) => boolean // a changed file whose diff the prompt carries; by default every one
+  // Tier packing needs the exact diff layout calculated after ranking and before the prompts are built.
+  promptView?: (ranks: ReadonlyMap<string, number>) => {
+    inline: (path: string) => boolean
+    diffShown: (path: string) => boolean
+  }
 }
 
 type Confirmed =
@@ -141,15 +137,16 @@ type Run = (
  * runs inside `deadline` (IMPACT_LIMITS.timeBoxMs from now by default) and, unless the caller passes `missing`, lists
  * what a partial clone lacks first and never shows it.
  */
-export const parseChanged = Effect.fn("ReviewImpact.parseChanged")(function* (input: {
+type Reader = Pick<Git.Interface, "run">
+interface ParseInput {
   directory: string
   base: string
   head: string
   files: readonly DiffFile[]
   deadline?: number
   missing?: (path: string, side: Side) => boolean
-}) {
-  const git = yield* Git.Service
+}
+const parseFrom = Effect.fnUntraced(function* (git: Reader, input: ParseInput) {
   const deadline = input.deadline ?? performance.now() + IMPACT_LIMITS.timeBoxMs
   const run = runner(git, input.directory, deadline, new Set())
   const missing = input.missing ?? (yield* lacking(run, input.head, input.base))
@@ -161,13 +158,13 @@ export const parseChanged = Effect.fn("ReviewImpact.parseChanged")(function* (in
  * inside `deadline` (IMPACT_LIMITS.timeBoxMs from now by default) and never reads a path whose blob a partial clone
  * lacks: such a path, like any unread one, is left out of the map.
  */
-export const importLines = Effect.fn("ReviewImpact.importLines")(function* (input: {
+interface ImportInput {
   directory: string
   head: string
   paths: readonly string[]
   deadline?: number
-}) {
-  const git = yield* Git.Service
+}
+const importsFrom = Effect.fnUntraced(function* (git: Reader, input: ImportInput) {
   const run = runner(git, input.directory, input.deadline ?? performance.now() + IMPACT_LIMITS.timeBoxMs, new Set())
   if (!revision(input.head)) return new Map<string, string>()
   const lacks = yield* lacking(run, input.head)
@@ -184,8 +181,18 @@ export const importLines = Effect.fn("ReviewImpact.importLines")(function* (inpu
  * manifests, grep the changed exported names once, gate the candidates by their import lines, parse-confirm the
  * gated files in rank order, and pack.
  */
-export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInput) {
-  const git = yield* Git.Service
+export interface BuildResult {
+  slice: ImpactSlice
+  changed: ChangedFiles
+  changedRanks?: ReadonlyMap<string, number>
+}
+
+const buildFrom = Effect.fnUntraced(function* (
+  git: Reader,
+  input: BuildInput,
+  denied: readonly string[] = [],
+  inventory?: ReturnType<typeof treeEntries>,
+) {
   const started = performance.now()
   const deadline = started + (input.budgetMs ?? IMPACT_LIMITS.timeBoxMs)
   const incomplete = new Set<ImpactIncomplete>()
@@ -198,7 +205,8 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   const finish = (
     slice: Partial<ImpactSlice>,
     changed: ChangedFiles,
-  ): { slice: ImpactSlice; changed: ChangedFiles } => {
+    changedRanks?: ReadonlyMap<string, number>,
+  ): BuildResult => {
     const done = {
       ...emptySlice(),
       ...(tiered && slice.scopes === undefined
@@ -227,7 +235,7 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
       ...(incomplete.size ? { incomplete: IMPACT_INCOMPLETE.filter((reason) => incomplete.has(reason)) } : {}),
       ...(scan.unsearched ? { unsearched: scan.unsearched } : {}),
     }
-    return { slice: { ...done, tokens: impactTokens(done) }, changed }
+    return { slice: { ...done, tokens: impactTokens(done) }, changed, ...(changedRanks ? { changedRanks } : {}) }
   }
   const given = input.changed ?? noFiles()
   const packOnly = (changed: ChangedFiles) => {
@@ -295,7 +303,7 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   // 3. The head tree (already listed in a partial clone, where -l would read blob sizes) and the changed files.
   const [tree, changed] = yield* Effect.all(
     [
-      present
+      present || inventory
         ? Effect.succeed(undefined)
         : run(["ls-tree", "-r", "-z", "-l", "--full-tree", input.head], { maxOutputBytes: TREE_BYTES }),
       input.changed ? Effect.succeed(input.changed) : readChanged(run, { ...input, deadline, missing: present?.lacks }),
@@ -305,9 +313,7 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   if (changed.missing.length) incomplete.add("partial-clone")
   const entries = present
     ? present.head
-    : tree && tree.exitCode === 0 && !tree.truncated
-      ? treeEntries(tree.text())
-      : undefined
+    : (inventory ?? (tree && tree.exitCode === 0 && !tree.truncated ? treeEntries(tree.text()) : undefined))
   if (!entries) return packOnly(changed)
   // Regular and executable files; links and submodules drop out.
   const blobs = new Map(
@@ -319,13 +325,17 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   const unread = new Set(missing)
   const excludes = [
     ...(input.ignore ?? []).map((glob) => `:(top,exclude,glob)${glob}`),
-    ...collapse(missing, [...blobs.keys()]).map((file) => `:(top,exclude,literal)${file}`),
+    ...collapse([...new Set([...missing, ...denied])], [...entries.keys()]).map(
+      (file) => `:(top,exclude,literal)${file}`,
+    ),
   ]
   // When every blob is missing there is nothing to search; when the excludes do not fit one command line, a search
   // could reach a missing blob (or an ignored path), so none runs.
   const fits = chars(excludes) <= ARG_CHARS
   const searchable = missing.length < blobs.size && fits
-  if (!fits && !missing.length) incomplete.add("error")
+  if (!fits) incomplete.add("error")
+
+  for (const file of denied) blobs.delete(file)
 
   // 4. The names: the changed exported definitions, a moved file's exports, and changedSymbols or BrainCode.symbols for
   // the files the parser did not read; and, for each changed module, the names it gives.
@@ -393,13 +403,15 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   )
   // The manifests are the head's, which a fork's author writes: BrainCode.workspace is bounded and gets the deadline,
   // and a throw leaves the workspace out and marks the slice an error.
-  const attempted = manifests !== undefined && performance.now() < deadline
+  const materialized = lines(manifests, input.head)
+  if (!materialized) incomplete.add("output")
+  const attempted = manifests !== undefined && materialized !== undefined && performance.now() < deadline
   const read = attempted
     ? yield* Effect.option(
         Effect.try({
           try: () =>
             BrainCode.workspace(
-              [...lines(manifests, input.head)].map(([file, text]) => ({ path: file, text })),
+              [...materialized!].map(([file, text]) => ({ path: file, text })),
               { deadline },
             ),
           catch: (cause) => cause,
@@ -425,7 +437,7 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   const reads = [
     ...new Set([...candidates, ...barrels([...own], lookup).filter((file) => blobs.has(file))].filter(readable)),
   ]
-  const imported = yield* readImports(run, input.head, reads)
+  const imported = yield* readImports(run, input.head, reads, () => incomplete.add("output"))
   const imports = new Map([
     ...candidates.flatMap((file) => (importable(file) ? [] : [[file, ""] as const])),
     ...imported,
@@ -530,7 +542,7 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
       unread: outbound?.unread ?? [],
       external: outbound?.external ?? 0,
       packing: tiered,
-      ...views(input),
+      ...views(input, selection.changedRanks),
     })
     return finish(
       {
@@ -557,6 +569,7 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
         ...tiersOf(packed),
       },
       changed,
+      selection.changedRanks,
     )
   }
 
@@ -593,13 +606,282 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
       },
     },
     changed,
+    selection.changedRanks,
   )
 })
 
-// git, through Git.Service, with lazy fetching off and inside the time box. Undefined when the box ran out first
+// CPU and scheduling tests can exercise the graph algorithm with a controlled reader on hosts without the
+// private port. None of the production entry points accept this reader or a cached caller-supplied parse.
+export const algorithm = { build: buildFrom, parseChanged: parseFrom, importLines: importsFrom }
+
+type Placement = { directory: string; head: string; base?: string; signal?: AbortSignal }
+const exactCommit = /^[0-9a-f]{40}$/
+
+function withPrivate<A>(
+  input: Placement,
+  deadline: number,
+  read: (git: Reader, view: ReviewGit.View) => Effect.Effect<A>,
+  unavailable: (reason: ImpactIncomplete) => A,
+): Effect.Effect<A> {
+  return Effect.gen(function* () {
+    if (!exactCommit.test(input.head) || (input.base !== undefined && !exactCommit.test(input.base)))
+      return unavailable("error")
+    const remaining = deadline - performance.now()
+    if (!(remaining > 0) || input.signal?.aborted) return unavailable("time")
+    // Both metadata acquisition and release are masked. Arm the deadline before starting them. Interrupting the
+    // wait aborts their native signal first, then joins the child so no snapshot is left copying after this review.
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const timer = setTimeout(abort, Math.min(remaining, 60_000))
+    input.signal?.addEventListener("abort", abort, { once: true })
+    const signal = controller.signal
+    const use = Effect.gen(function* () {
+      const view = yield* ReviewGit.Current
+      if (
+        !view ||
+        view.metadata.directory !== input.directory ||
+        view.repository.directory !== input.directory ||
+        !view.repository.isOpen() ||
+        view.metadata.head !== view.repository.head ||
+        (view.repository.head !== input.head && view.repository.head !== input.base)
+      )
+        return unavailable("error")
+      yield* view.preflight(signal)
+      const result = yield* read(ReviewGit.impactClient(view, input.directory, input.head, input.base), view)
+      yield* view.preflight(signal)
+      return performance.now() < deadline && !signal.aborted ? result : unavailable("time")
+    })
+    const collect = Effect.gen(function* () {
+      const current = yield* ReviewGit.Current
+      const scoped = current
+        ? use
+        : ReviewGit.metadata(input.directory, signal).pipe(
+            Effect.flatMap((metadata) => ReviewGit.within(metadata, metadata.head, use, signal)),
+          )
+      const refused = () => Effect.succeed(unavailable(signal.aborted ? "time" : "error"))
+      return yield* scoped.pipe(
+        Effect.catchTag("ReviewGit.Refused", refused),
+        // Cleanup can surface the private port's own unavailable error as a defect. Unexpected program failures
+        // and fiber interruption must still propagate to the caller.
+        Effect.catchDefect((defect) => (defect instanceof ReadOnlyGit.Unavailable ? refused() : Effect.die(defect))),
+      )
+    })
+    const cancelled = Effect.callback<A>((resume) => {
+      const stopped = () => resume(Effect.succeed(unavailable("time")))
+      if (signal.aborted) {
+        stopped()
+        return
+      }
+      signal.addEventListener("abort", stopped, { once: true })
+      return Effect.sync(() => signal.removeEventListener("abort", stopped))
+    })
+    return yield* Effect.acquireUseRelease(
+      Effect.forkChild(collect),
+      (child) => Effect.raceFirst(Fiber.join(child), cancelled),
+      (child) =>
+        Effect.gen(function* () {
+          clearTimeout(timer)
+          input.signal?.removeEventListener("abort", abort)
+          abort()
+          yield* Fiber.interrupt(child)
+        }),
+    )
+  })
+}
+
+export const parseChanged = Effect.fn("ReviewImpact.parseChanged")(function* (input: ParseInput) {
+  const deadline = input.deadline ?? performance.now() + IMPACT_LIMITS.timeBoxMs
+  return yield* withPrivate(
+    input,
+    deadline,
+    (git) => parseFrom(git, { ...input, deadline, missing: undefined }),
+    noFiles,
+  )
+})
+
+export const importLines = Effect.fn("ReviewImpact.importLines")(function* (input: ImportInput) {
+  const deadline = input.deadline ?? performance.now() + IMPACT_LIMITS.timeBoxMs
+  return yield* withPrivate(
+    input,
+    deadline,
+    (git) => importsFrom(git, { ...input, deadline }),
+    () => new Map<string, string>(),
+  )
+})
+
+export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInput) {
+  const start = performance.now()
+  const deadline = start + Math.min(60_000, input.budgetMs ?? IMPACT_LIMITS.timeBoxMs)
+  const unavailable = (reason: ImpactIncomplete): BuildResult => {
+    const slice = { ...emptySlice(), incomplete: [reason], ms: Math.round(performance.now() - start) }
+    slice.tokens = impactTokens(slice)
+    return { slice, changed: noFiles() }
+  }
+  return yield* withPrivate(
+    input,
+    deadline,
+    (git, view) =>
+      Effect.gen(function* () {
+        // Private info attributes/excludes, when present, could change what is eligible. They have no committed version.
+        if (view.repository.hasInfoRules !== false) return unavailable("error")
+        const run = runner(git, input.directory, deadline, new Set())
+        // Reuse the head inventory in the graph. Only the base attribute policy needs a second (size-free) listing.
+        const tree = (rev: string, sizes: boolean) =>
+          run(["ls-tree", "-r", "-z", ...(sizes ? ["-l"] : []), "--full-tree", rev], {
+            maxOutputBytes: 12 * 1024 * 1024,
+          })
+        const head = yield* tree(input.head, true)
+        const base = input.base === input.head ? head : yield* tree(input.base, false)
+        if (!base || !head) return unavailable("time")
+        if (base.truncated || head.truncated) return unavailable("output")
+        if (base.exitCode !== 0 || head.exitCode !== 0) return unavailable("error")
+        const inventory = (read: Git.Result) => {
+          let count = 0
+          for (let index = read.stdout.indexOf(0); index >= 0; index = read.stdout.indexOf(0, index + 1)) {
+            if (++count > 50_000) return
+          }
+          const source = read.stdout.toString("utf8")
+          if (!Buffer.from(source).equals(read.stdout)) return
+          const entries = treeEntries(source)
+          if (
+            entries.size !== count ||
+            [...entries.keys()].some((file) => !ReadOnlyGit.repositoryPath(file) || file.split("/").length > 64)
+          )
+            return
+          return entries
+        }
+        const heads = inventory(head)
+        const bases = head === base ? heads : inventory(base)
+        if (!heads || !bases) return unavailable("output")
+        const held = input.holdback === "secrets"
+        const config = { ignore: [...(input.ignore ?? [])], ignoreDefaults: false }
+        const disallowed = (file: string) =>
+          !ReadOnlyGit.repositoryPath(file) ||
+          input.ignored?.(file) === true ||
+          classifyPath(file, { config }) !== undefined ||
+          (held && (heldReason(file) !== undefined || holdbackText(file) !== file))
+        // Read only the trusted base's policy. A symbolic link or policy we cannot understand can't establish permission
+        // to include that directory. Limit both the per-file and aggregate policy work before opening it.
+        const rules = new Map<string, (file: string) => boolean>()
+        let uncertainPolicy = false
+        let ruleCount = 0
+        const prohibitDirectory = (dir: string) => {
+          uncertainPolicy = true
+          rules.set(dir, () => true)
+        }
+        const policies = [...bases].filter(([file]) => file === ".gitattributes" || file.endsWith("/.gitattributes"))
+        if (policies.length > 64) return unavailable("output")
+        for (const [file, entry] of policies) {
+          const dir = file.slice(0, -".gitattributes".length)
+          if (disallowed(file) || !["100644", "100755"].includes(entry.mode)) {
+            prohibitDirectory(dir)
+            continue
+          }
+          const shown = yield* run(["show", "--no-textconv", input.base + ":" + file], { maxOutputBytes: 32 * 1024 })
+          if (!shown) return unavailable("time")
+          if (shown.exitCode !== 0 || shown.truncated || shown.stdout.includes(0)) {
+            prohibitDirectory(dir)
+            continue
+          }
+          const attrs = shown
+            .text()
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith("#"))
+          ruleCount += attrs.length
+          if (ruleCount > 1_024) return unavailable("output")
+          if (attrs.some((line) => line.length > 1_024 || !/^\/?[\w.*?/-]+(?:[ \t]+[\w.!=-]+)+$/.test(line))) {
+            prohibitDirectory(dir)
+            continue
+          }
+          const policy = parseGitAttributes(attrs.join("\n"))
+          const binary = parseGitAttributes(
+            attrs
+              .flatMap((line) => {
+                const [pattern, ...tokens] = line.split(/\s+/)
+                return tokens.some((token) => ["binary", "-text", "-diff"].includes(token))
+                  ? [pattern + " linguist-generated"]
+                  : []
+              })
+              .join("\n"),
+          )
+          rules.set(
+            dir,
+            (relative) => policy.vendored(relative) || policy.generated(relative) || binary.generated(relative),
+          )
+        }
+        const cache = new Map<string, boolean>()
+        const denied = (file: string) => {
+          const previous = cache.get(file)
+          if (previous !== undefined) return previous
+          const deny =
+            disallowed(file) || [...rules].some(([dir, check]) => file.startsWith(dir) && check(file.slice(dir.length)))
+          cache.set(file, deny)
+          return deny
+        }
+        const regular = (entry: { type: string; mode: string } | undefined) =>
+          entry?.type === "blob" && (entry.mode === "100644" || entry.mode === "100755")
+        const blocked: string[] = []
+        for (const [file, entry] of heads) {
+          if (performance.now() >= deadline) return unavailable("time")
+          if (!regular(entry) || denied(file)) blocked.push(file)
+        }
+        const eligible = input.files.filter((file) => {
+          const old = file.oldPath ?? file.path
+          return (
+            !denied(file.path) &&
+            !denied(old) &&
+            (file.status === "deleted" || regular(heads.get(file.path))) &&
+            (file.status === "added" || regular(bases.get(old)))
+          )
+        })
+        if (performance.now() >= deadline) return unavailable("time")
+        const files = held ? holdbackFiles(eligible, { ignored: [] }).files : eligible
+        const reader: Reader = held
+          ? {
+              run: (args, options) =>
+                git.run(args, options).pipe(
+                  Effect.map((result) => {
+                    if (args[0] !== "show" || result.exitCode !== 0 || result.truncated || result.stdout.includes(0))
+                      return result
+                    // Preserve line numbers and redact whole blobs before indexing. A window can start halfway through a key.
+                    const text = holdbackLines(result.text().split("\n")).join("\n")
+                    return { ...result, stdout: Buffer.from(text), text: () => text }
+                  }),
+                ),
+            }
+          : git
+        const result = yield* buildFrom(
+          reader,
+          {
+            ...input,
+            files,
+            packing: input.packing ?? {},
+            changed: undefined,
+            // The inventory evaluated the review classifier's globs. Forward only its literal exclusions to Git,
+            // whose pathspec grammar differs (including escaped brackets and anchored patterns).
+            ignore: [],
+            ignored: denied,
+            budgetMs: deadline - performance.now(),
+          },
+          blocked,
+          heads,
+        )
+        result.slice.ms = Math.round(performance.now() - start)
+        if (uncertainPolicy && !result.slice.incomplete?.includes("error")) {
+          result.slice.incomplete = [...(result.slice.incomplete ?? []), "error"]
+          result.slice.tokens = impactTokens(result.slice)
+        }
+        return result
+      }),
+    unavailable,
+  ).pipe(Effect.map((result) => ({ ...result, slice: capImpactSlice(result.slice, input.context) })))
+})
+
+// Reads from the supplied immutable Git view, with lazy fetching off and inside the time box. Undefined when the box ran out first
 // (interrupting git, which AppProcess's scope then kills). An exit other than 0, or 1 with nothing on stderr where
 // "no match" is allowed, marks the slice incomplete as an error.
-function runner(git: Git.Interface, cwd: string, deadline: number, incomplete: Set<ImpactIncomplete>): Run {
+function runner(git: Reader, cwd: string, deadline: number, incomplete: Set<ImpactIncomplete>): Run {
   return (args, options = {}) =>
     Effect.gen(function* () {
       const remaining = deadline - performance.now()
@@ -732,7 +1014,12 @@ const readChanged = Effect.fnUntraced(function* (
  * characters, rebuilt at full length with every other line blank. A path of a finished chunk with no such line maps
  * to "", so undefined means never read: its chunk ran out of time, failed or passed its output limit.
  */
-const readImports = Effect.fnUntraced(function* (run: Run, head: string, paths: readonly string[]) {
+const readImports = Effect.fnUntraced(function* (
+  run: Run,
+  head: string,
+  paths: readonly string[],
+  overLimit?: () => void,
+) {
   const chunks = paths.reduce<string[][]>((all, file) => {
     const spec = `:(top,literal)${file}`
     const last = all.at(-1)
@@ -743,6 +1030,7 @@ const readImports = Effect.fnUntraced(function* (run: Run, head: string, paths: 
     all.push([spec])
     return all
   }, [])
+  let retained = 0
   const done = yield* Effect.forEach(
     chunks,
     (chunk) =>
@@ -771,7 +1059,12 @@ const readImports = Effect.fnUntraced(function* (run: Run, head: string, paths: 
             (result.exitCode !== 0 && !(result.exitCode === 1 && !result.stderr.length))
           )
             return []
-          const found = lines(result, head)
+          const found = lines(result, head, GREP_BYTES - retained)
+          if (!found) {
+            overLimit?.()
+            return []
+          }
+          for (const text of found.values()) retained += text.length
           return chunk.map((spec) => {
             const file = spec.slice(":(top,literal)".length)
             return [file, found.get(file) ?? ""] as const
@@ -785,29 +1078,31 @@ const readImports = Effect.fnUntraced(function* (run: Run, head: string, paths: 
 
 // `git grep -n -z` output of a tree-ish, rebuilt into each path's text: its matched lines at their numbers, never
 // trimmed or clipped, and every other line blank.
-function lines(result: Git.Result | undefined, head: string) {
-  const files = new Map<string, Map<number, string>>()
+function lines(result: Git.Result | undefined, head: string, limit = GREP_BYTES) {
   if (!result || result.exitCode !== 0) return new Map<string, string>()
+  // Grep emits matches in source order. Sparse matches near the end of many files must not expand into
+  // millions of array entries per file. Bound both the reconstructed file and the total before expanding.
+  const files = new Map<string, { last: number; size: number; parts: string[] }>()
+  let total = 0
   for (const line of result.text().split("\n")) {
     const name = line.indexOf("\0")
     const number = line.indexOf("\0", name + 1)
-    if (name < 0 || number < 0 || !line.startsWith(`${head}:`)) continue
+    if (name < 0 || number < 0 || !line.startsWith(head + ":")) continue
     const file = line.slice(head.length + 1, name)
     const at = Number(line.slice(name + 1, number))
-    if (!Number.isInteger(at) || at < 1) continue
-    const found = files.get(file) ?? new Map<number, string>()
-    found.set(at, line.slice(number + 1))
+    const value = line.slice(number + 1)
+    const found = files.get(file) ?? { last: 0, size: 0, parts: [] }
+    if (!Number.isSafeInteger(at) || at <= found.last) return
+    const spacing = at - (found.last || 1)
+    const chars = spacing + value.length
+    total += chars
+    found.size += chars
+    if (total > limit || found.size > ReviewParse.PARSE_LIMITS.inputBytes) return
+    found.parts.push("\n".repeat(spacing), value)
+    found.last = at
     files.set(file, found)
   }
-  return new Map(
-    [...files].map(([file, found]) => [
-      file,
-      Array.from(
-        { length: [...found.keys()].reduce((top, at) => Math.max(top, at), 0) },
-        (_, index) => found.get(index + 1) ?? "",
-      ).join("\n"),
-    ]),
-  )
+  return new Map([...files].map(([file, found]) => [file, found.parts.join("")]))
 }
 
 // The entries of `git ls-tree -r -z [-l]` by path: mode, type, object ID and, when -l gave it, size.
@@ -1108,7 +1403,11 @@ function changedFallback(files: readonly DiffFile[], changed: ChangedFiles): Imp
 }
 
 // What the prompt shows of the changed files, for tier a: by default no file whole and every file's diff.
-function views(input: Pick<BuildInput, "inline" | "diffShown">) {
+function views(
+  input: Pick<BuildInput, "inline" | "diffShown" | "promptView">,
+  ranks: ReadonlyMap<string, number> = new Map(),
+) {
+  if (input.promptView) return input.promptView(ranks)
   return {
     ...(input.inline ? { inline: input.inline } : {}),
     ...(input.diffShown ? { diffShown: input.diffShown } : {}),

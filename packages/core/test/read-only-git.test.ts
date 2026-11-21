@@ -971,6 +971,84 @@ async function liveGit(f: Awaited<ReturnType<typeof fixture>>, args: string[]) {
   return result
 }
 
+local(
+  "impact reads committed trees, literal import paths and word matches within each requested output cap",
+  async () => {
+    const f = await fixture("*.ts diff=fixture\n")
+    await fs.mkdir(path.join(f.directory, "src"))
+    const importer = "src/[x].ts"
+    await fs.writeFile(path.join(f.directory, importer), 'import { Needle } from "./dep"\nconst joinedNeedle = 1\n')
+    await fs.writeFile(path.join(f.directory, "src", "other.ts"), "export const Needle = 1\n")
+    await fs.writeFile(path.join(f.directory, "package.json"), '{"name":"pinned"}\n')
+    await f.git(["add", "--all"])
+    await f.git([...author, "commit", "-qm", "impact sources"])
+    const reviewed = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    await f.git(["checkout", "-q", "--detach", "HEAD^"])
+    await fs.mkdir(path.join(f.directory, "src"), { recursive: true })
+    await fs.writeFile(path.join(f.directory, importer), "export const LiveOnly = 3\n")
+    await fs.writeFile(path.join(f.directory, "package.json"), '{"name":"live"}\n')
+    await f.git(["config", "diff.fixture.textconv", f.command])
+    await guarded(f)
+    const repo = await ReadOnlyGit.open(f.input)
+    const grep = (search: Extract<ReadOnlyGit.Read, { kind: "impact-grep" }>["search"], maxBytes = 1024) =>
+      repo.read({ kind: "impact-grep", revision: reviewed, maxBytes, search })
+    try {
+      expect(repo.head).not.toBe(reviewed)
+      const noSizes = (rev: string) =>
+        repo.read({ kind: "impact-tree", revision: rev, maxBytes: 4096, namesAndIdsOnly: true })
+      expect((await noSizes(reviewed)).bytes.toString()).toContain("\t" + importer + "\0")
+      expect((await noSizes(repo.head)).bytes.toString()).not.toContain(importer)
+      const listed = await repo.read({ kind: "impact-tree", revision: reviewed, maxBytes: 4096 })
+      expect(listed.code).toBe(0)
+      expect(listed.bytes.toString()).toContain("\t" + importer + "\0")
+      expect(await repo.read({ kind: "impact-tree", revision: repo.head, maxBytes: 1 })).toEqual({
+        code: 3,
+        bytes: Buffer.alloc(0),
+      })
+      const manifest = await grep({ kind: "manifests", exclude: [] })
+      expect(manifest.code).toBe(0)
+      expect(manifest.bytes.toString()).toContain('{"name":"pinned"}')
+      expect(manifest.bytes.toString()).not.toContain('"live"')
+      const imports = await grep({ kind: "imports", files: [importer] })
+      expect(imports.code).toBe(0)
+      expect(imports.bytes.toString()).toContain("import { Needle }")
+      expect(imports.bytes.toString()).not.toContain("joinedNeedle")
+      expect(imports.bytes.toString()).not.toContain("LiveOnly")
+      expect(imports.bytes.toString()).not.toContain("other.ts")
+      expect(
+        (
+          await grep({ kind: "symbols", names: ["Needle"], exclude: [":(top,exclude,literal)src/other.ts"] })
+        ).bytes.toString(),
+      ).toBe(reviewed + ":" + importer + "\0")
+      expect(await grep({ kind: "symbols", names: ["Missing"], exclude: [] })).toEqual({
+        code: 1,
+        bytes: Buffer.alloc(0),
+      })
+      expect(
+        await repo.read({ kind: "show", revision: reviewed, file: importer, maxBytes: 2, distinguishLarge: true }),
+      ).toEqual({ code: 3, bytes: Buffer.alloc(0) })
+      for (const op of [
+        { kind: "imports", files: ["../outside"] },
+        { kind: "symbols", names: ["Needle\nother"], exclude: [] },
+        { kind: "manifests", exclude: [":(attr)probe"] },
+      ] as const)
+        await expect(grep(op)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+      await expect(repo.read({ kind: "impact-tree", revision: "HEAD", maxBytes: 4096 })).rejects.toBeInstanceOf(
+        ReadOnlyGit.Unavailable,
+      )
+      await expect(repo.read({ kind: "impact-version" }, AbortSignal.abort())).rejects.toBeInstanceOf(
+        ReadOnlyGit.Unavailable,
+      )
+      await expect(repo.status(AbortSignal.abort())).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+      expect((await repo.status()).head).toBe(repo.head)
+      expect((await repo.read({ kind: "impact-version" })).bytes.toString()).toStartWith("git version ")
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repo.close()
+    }
+  },
+)
+
 local("show reads bounded raw bytes only from a regular file in the exact private commit", async () => {
   const f = await fixture("probe.txt diff=fixture\n")
   const first = (await f.git(["rev-parse", "HEAD"])).stdout.trim()

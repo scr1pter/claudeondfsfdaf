@@ -246,10 +246,6 @@ const UNAPPLIED: Record<
     applies: (config) => (config.maxInputTokens ?? 0) > 0,
     warning: '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
   },
-  impact: {
-    applies: (config) => config.impact === "graph",
-    warning: '"impact": "graph" is not applied yet: related code still comes from git grep.',
-  },
   guardrail: {
     applies: (config) => config.guardrail === "strict",
     warning: '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
@@ -529,6 +525,8 @@ function settle(
     delete config.trivial
     warnings.push('GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.')
   }
+  if (!github && trigger === "desktop" && config.impact === "graph")
+    warnings.push('Desktop reviews use grep for related code. The engine review supports "impact": "graph".')
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),
   )

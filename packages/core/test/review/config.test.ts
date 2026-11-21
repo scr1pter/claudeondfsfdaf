@@ -991,23 +991,20 @@ describe("VS-24's keys", () => {
   })
 })
 
-// VS-25b: `impact` is parsed, and no runner reads it before VS-25b wiring. Unset, nothing changes (I-1); "graph" says it
-// is not applied yet. A plain key: every surface reads it from review.json and REVIEW_IMPACT, as parseReviewConfig does.
 describe("VS-25b's impact key", () => {
-  const GRAPH = '"impact": "graph" is not applied yet: related code still comes from git grep.'
-
   test("has no default entry, so the defaults and their digests stay as they were", () => {
     const { config, warnings } = parseReviewConfig()
     expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "impact")).toBe(false)
     expect(Object.hasOwn(config, "impact")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.impact).toBe("grep")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("impact")).toBe(false)
   })
 
-  test("review.json and REVIEW_IMPACT set it; graph says it is not applied, grep says nothing", () => {
+  test("the engine accepts graph from review.json and the environment; desktop reports its grep behavior", () => {
     expect(parseReviewConfig({ json: JSON.stringify({ impact: "graph" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, impact: "graph" },
-      warnings: [GRAPH],
+      warnings: [],
     })
     expect(parseReviewConfig({ json: JSON.stringify({ impact: "grep" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, impact: "grep" },
@@ -1015,7 +1012,11 @@ describe("VS-25b's impact key", () => {
     })
     const env = parseReviewConfig({ json: JSON.stringify({ impact: "grep" }), env: { REVIEW_IMPACT: " Graph " } })
     expect(env.config.impact).toBe("graph")
-    expect(env.warnings).toEqual([GRAPH])
+    expect(env.warnings).toEqual([])
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_IMPACT: "graph" } }).warnings).toEqual([
+      'Desktop reviews use grep for related code. The engine review supports "impact": "graph".',
+    ])
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_IMPACT: "grep" } }).warnings).toEqual([])
   })
 
   test("a bad value warns naming the value in use", () => {
@@ -1025,7 +1026,7 @@ describe("VS-25b's impact key", () => {
     })
     expect(
       parseReviewConfig({ json: JSON.stringify({ impact: "graph" }), env: { REVIEW_IMPACT: "x" } }).warnings,
-    ).toEqual(['REVIEW_IMPACT must be "grep", "graph"; using "graph".', GRAPH])
+    ).toEqual(['REVIEW_IMPACT must be "grep", "graph"; using "graph".'])
   })
 
   test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {

@@ -26,11 +26,13 @@ import {
   type DiffFile,
 } from "@vectordevai/core/review/diff"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
-import { holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
+import { heldReason, holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
+import { IMPACT_LIMITS, impactRecord, orderImpactFiles, type ImpactRecord } from "@vectordevai/core/review/impact"
 import { checkedLabs, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import {
+  codeSpan,
   noteHeldBack,
   noteIgnoreUnchecked,
   noteIgnoredCommitted,
@@ -70,6 +72,7 @@ import {
   buildReviewPrompt,
   buildSecurityPrompt,
   buildVerifyPrompt,
+  impactNote,
   SCOPE,
   PINNED_SESSION_PREFIX,
   VECTORSCOPE_AGENT,
@@ -116,6 +119,7 @@ import { readAuthority, type ReadAuthority } from "./read-authority"
 import type { ResolvedModel } from "./model"
 import { ReviewRoutes } from "./route"
 import { ReviewTrivial } from "./trivial"
+import { ReviewImpact } from "./impact"
 
 export interface RunInput {
   parentID?: SessionID
@@ -130,6 +134,8 @@ export interface RunInput {
   forceFull?: boolean
   /** Issued for the exact committed diff by the private local or replay collector. */
   trivialProof?: ReviewTrivial.Proof
+  /** A staged or working-tree diff has no committed head from which to collect impact context. */
+  impactWorktree?: true
   files: DiffFile[] // the PR diff for the model, classified and filtered
   anchors: DiffFile[] // the diff findings are anchored against
   focus?: FocusHunk[]
@@ -215,6 +221,7 @@ export interface Projection {
 }
 
 export type Observation =
+  | { type: "impact"; record: ImpactRecord; locations: string[] }
   // A pass is about to run with this prompt and step cap, or was planned and skipped (verify with no budget or time
   // left).
   | { type: "pass"; pass: Name; model: string; text: string; maxSteps: number }
@@ -415,6 +422,15 @@ export const run: (
   // The saved long outputs hold every session the user ever ran, so a review of someone else's pull request, which its
   // author can steer, cannot read them back; it only loses the cut-off end of a long tool output. Under holdback
   // "secrets" the rules also deny the read tool the credential files and every held path, old paths included (SF-14).
+  const authority =
+    input.admittedReads ??
+    (input.readDenies?.length
+      ? readAuthority(input.readDenies, {
+          directory: input.directory,
+          worktree: (yield* InstanceState.context).worktree,
+          ...(input.readRoot ? { readRoot: input.readRoot } : {}),
+        })
+      : undefined)
   const rules = reviewPermissionRules({
     allowDirs: input.allowDirs,
     checks: input.checks,
@@ -422,13 +438,7 @@ export const run: (
     ...(hold ? { holdback: "secrets" as const, held: [...heldPaths] } : {}),
     readDenies: input.admittedReads
       ? input.admittedReads.patternsFor((yield* InstanceState.context).worktree)
-      : input.readDenies?.length
-        ? readAuthority(input.readDenies, {
-            directory: input.directory,
-            worktree: (yield* InstanceState.context).worktree,
-            ...(input.readRoot ? { readRoot: input.readRoot } : {}),
-          }).patterns
-        : undefined,
+      : authority?.patterns,
   })
   const reviewed = {
     paths: input.files.map((file) => file.path),
@@ -965,19 +975,78 @@ export const run: (
     const prior = hold?.context.prior ?? input.prior
     // Prompts: the diff that fits the model's context, focus files first in incremental mode.
     const focused = new Set((focus ?? []).map((hunk) => hunk.path))
-    const ordered =
-      input.mode === "incremental"
-        ? [...files.filter((file) => focused.has(file.path)), ...files.filter((file) => !focused.has(file.path))]
-        : files
-    const split = budgetDiff(ordered, diffBudgetChars(Math.min(model.context, triage.context), config.maxDiffChars))
-    // Each changed file once: annotated when its pull request text is at hand, and only its changed lines when an
-    // incremental review has nothing new in it.
-    const packed = packChanges({
-      inline: split.inline,
-      changed: files,
-      ...(headFiles ? { headFiles } : {}),
-      ...(input.mode === "incremental" && focus ? { focus } : {}),
+    const context = Math.min(model.context, triage.context)
+    const graph =
+      config.impact === "graph" && !nothingToSend && files.length > 0 && !refusedUpFront && !input.stopSignal?.aborted
+    const layout = (ranks?: ReadonlyMap<string, number>) => {
+      const ranked = ranks ? orderImpactFiles(files, ranks) : files
+      const ordered =
+        input.mode === "incremental"
+          ? [...ranked.filter((file) => focused.has(file.path)), ...ranked.filter((file) => !focused.has(file.path))]
+          : ranked
+      const split = budgetDiff(ordered, diffBudgetChars(context, config.maxDiffChars))
+      const overBudget = new Set(graph ? split.notInlined.map((file) => file.path) : [])
+      // Each changed file once: annotated when its pull request text is at hand, and only its changed lines when an
+      // incremental review has nothing new in it.
+      const packed = packChanges({
+        inline: split.inline,
+        changed: files,
+        ...(headFiles
+          ? { headFiles: overBudget.size ? headFiles.filter((file) => !overBudget.has(file.path)) : headFiles }
+          : {}),
+        ...(input.mode === "incremental" && focus ? { focus } : {}),
+      })
+      return { split, overBudget, packed }
+    }
+    const collectImpact = Effect.gen(function* () {
+      const excluded = new Set([...input.skipped.map((file) => file.path), ...heldPaths])
+      // The private view admits regular Git blobs only. Match their relative and absolute spellings
+      // against the alias rules frozen at admission, without resolving a candidate in the live checkout.
+      const denied = (file: string) =>
+        excluded.has(file) ||
+        classifyPath(file, { config }) !== undefined ||
+        (hold !== undefined && heldReason(file) !== undefined) ||
+        Permission.evaluate("read", file, rules).action !== "allow" ||
+        (!!authority?.patterns.length &&
+          Permission.evaluate("read", path.resolve(input.directory, file).replaceAll("\\", "/"), rules).action !==
+            "allow")
+      // A move keeps the restrictions of both spellings, even when an adapter supplied only one skipped path.
+      for (const file of input.anchors) {
+        if (file.oldPath && (denied(file.path) || denied(file.oldPath))) {
+          excluded.add(file.path)
+          excluded.add(file.oldPath)
+        }
+      }
+      const admitted = files.filter((file) => !denied(file.path) && (!file.oldPath || !denied(file.oldPath)))
+      const remaining = deadline - Date.now()
+      if (!admitted.length || remaining <= 0) return undefined
+      return yield* ReviewImpact.build({
+        directory: input.directory,
+        base: input.base,
+        head: input.head,
+        files: admitted,
+        context,
+        ...(input.stopSignal ? { signal: input.stopSignal } : {}),
+        promptView(ranks) {
+          const { split, packed } = layout(ranks)
+          const full = new Set(packed.headFiles.filter((file) => file.exact).map((file) => file.path))
+          const shown = new Set(split.inline.map((file) => file.path))
+          return { inline: (file) => full.has(file), diffShown: (file) => shown.has(file) }
+        },
+        ignore: config.ignore,
+        ignored: denied,
+        ...(hold ? { holdback: "secrets" as const } : {}),
+        budgetMs: Math.min(IMPACT_LIMITS.timeBoxMs, remaining),
+      }).pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          () => Effect.succeed(undefined),
+        ),
+      )
     })
+    const impact = graph && !input.impactWorktree ? yield* collectImpact : undefined
+    const { split, overBudget, packed } = layout(impact?.changedRanks)
+    const checkFiles = overBudget.size ? headFiles?.filter((file) => !overBudget.has(file.path)) : headFiles
     const promptInput: PromptInput = {
       mode: input.mode,
       trust: input.trust,
@@ -997,6 +1066,7 @@ export const run: (
       ...(headFiles ? { headFiles: packed.headFiles } : {}),
       ...input.context,
       ...hold?.context,
+      ...(impact ? { impact: impact.slice } : {}),
       ...(hold ? { inputsRedacted: true as const } : {}),
       rules: input.rules,
       rulesSource:
@@ -1006,6 +1076,12 @@ export const run: (
       maxComments: config.maxComments,
       nits: wantsNits(config),
     }
+    if (impact && !input.stopSignal?.aborted && input.observe)
+      observe({
+        type: "impact",
+        record: structuredClone(impactRecord(impact.slice)),
+        locations: [...impact.slice.locations],
+      })
 
     // 1–5. The specialists, in parallel, one session each. When holdback left nothing to send no pass runs: the held
     // files are skipped, nothing is unreviewed, and no reviewer leaves the verdict incomplete.
@@ -1054,10 +1130,11 @@ export const run: (
     const open = new Map(prior.filter((entry) => entry.status === "open").map((entry) => [entry.id, entry]))
     const shown = new Set(prior.map((entry) => entry.id))
     const unshown = new Set(input.prior.flatMap((entry) => (shown.has(entry.id) ? [] : [entry.id])))
+    for (const entry of prior) if (overBudget.has(entry.path)) unshown.add(entry.id)
     const claims = triaged
       ? (report.priorStatus ?? []).flatMap((entry) => {
           const listed = open.get(entry.id)
-          return entry.status === "fixed" && listed && !reported.has(listed.id)
+          return entry.status === "fixed" && listed && !unshown.has(listed.id) && !reported.has(listed.id)
             ? [{ ...listed, reason: entry.reason }]
             : []
         })
@@ -1069,7 +1146,7 @@ export const run: (
             head: input.head,
             candidates,
             ...(claims.length ? { fixed: claims } : {}),
-            headFiles: verifyHeadFiles(files, headFiles, [...candidates, ...claims]),
+            headFiles: verifyHeadFiles(files, checkFiles, [...candidates, ...claims]),
           })
         : ""
     const verifyPrice = priceOf(model)
@@ -1121,7 +1198,7 @@ export const run: (
             head: input.head,
             candidates,
             checks: verify.value ?? [],
-            headFiles: verifyHeadFiles(files, headFiles, candidates),
+            headFiles: verifyHeadFiles(files, checkFiles, candidates),
           })
         : ""
     const judgePrice = judgeModel ? priceOf(judgeModel) : undefined
@@ -1242,13 +1319,14 @@ export const run: (
       ? ("privacy" as const)
       : (asked.find((entry) => entry.stop)?.stop ??
         (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined))
-    const unreviewed = nothingToSend
+    const missed = nothingToSend
       ? []
       : refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
         ? files.map((file) => file.path)
         : partial && partial !== "model-error"
           ? yield* uncovered(asked.flatMap((entry) => (entry.value && entry.sessionID ? [entry.sessionID] : [])))
           : []
+    const unreviewed = overBudget.size ? [...new Set([...missed, ...overBudget])] : missed
 
     function uncovered(ids: SessionID[]) {
       return Effect.gen(function* () {
@@ -1343,7 +1421,7 @@ export const run: (
       : []
     return {
       report: refused ? { summary: "", risk: "low", files: [], findings: [] } : checked,
-      selection,
+      selection: overBudget.size && !refused ? { ...selection, diffIncomplete: true } : selection,
       // A held file is skipped, never unreviewed, so a re-trigger on the same head still takes already-reviewed.
       skipped: hold?.held.length
         ? [...input.skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))]
@@ -1377,6 +1455,21 @@ export const run: (
           ]
         : [
             ...picked.notes,
+            ...(graph && input.impactWorktree
+              ? ["Impact context is unavailable for staged or uncommitted changes."]
+              : graph && !impact && !input.stopSignal?.aborted
+                ? [impactNote(["error"])]
+                : impact?.slice.incomplete?.length
+                  ? [impactNote(impact.slice.incomplete, impact.slice.unsearched)]
+                  : []),
+            ...(impact?.slice.promptOmitted === "budget"
+              ? ["The impact context did not fit the review's context budget."]
+              : []),
+            ...(overBudget.size
+              ? [
+                  `Changed files left unreviewed because their diffs exceeded the context budget include ${[...overBudget].slice(0, 10).map(codeSpan).join(", ")}${overBudget.size > 10 ? ` and ${overBudget.size - 10} more` : ""}.`,
+                ]
+              : []),
             ...holdNotes,
             ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
             ...verifyNotes,

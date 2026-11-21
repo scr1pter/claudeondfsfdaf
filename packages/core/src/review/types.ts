@@ -253,6 +253,8 @@ export interface PriorFinding {
 }
 
 export interface Selection {
+  /** Whole changed files omitted by graph-mode diff packing. Related context never establishes coverage. */
+  diffIncomplete?: true
   inline: PlacedFinding[]
   outsideDiff: (Finding & { reason: AnchorFailure })[]
   elsewhere: Finding[]
@@ -460,10 +462,8 @@ export interface ReviewConfig {
   // or comment-only under strict rules) with zero attempts and a note. Absent means "review" (OPTIONAL_REVIEW_DEFAULTS),
   // and DEFAULT_REVIEW_CONFIG leaves it out. The desktop and GitHub review surfaces still review the change.
   trivial?: "review" | "skip"
-  // VS-25's opt-in (D3, Q15). Under "graph", Review.run will build the Tier 1 impact slice (impact.ts) and send it as
-  // <untrusted_impact>. Absent means "grep" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every
-  // config and its digest stay as they were. Parsed, and read by no runner until VS-25b wiring (UNAPPLIED_REVIEW_KEYS),
-  // so the parser warns that "graph" is not applied.
+  // The engine builds graph context from the reviewed Git trees under "graph". The default and the separate
+  // desktop review use grep. Leaving this key absent preserves existing configuration and evidence digests.
   impact?: "grep" | "graph"
   // VS-27's opt-in (D3, Q3, Q15). Under "strict", the strict guardrail (VS-27b's strictSelect) will keep only verified,
   // blocking findings in the five failure classes, each anchored, quoted, with its impact and a fix, and report them as
@@ -621,7 +621,6 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
   "maxInputTokens",
-  "impact",
   "guardrail",
   "scopeGate",
   "verifyEvidence",

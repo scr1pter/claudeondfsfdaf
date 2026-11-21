@@ -9,6 +9,17 @@ import path from "node:path"
 import os from "node:os"
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
+import { isUtf8 } from "node:buffer"
+
+// The fixed import-line grammar shared by the private impact reader and its collector.
+export const IMPACT_IMPORT_LINE: readonly string[] = Object.freeze([
+  "(^|[^[:alnum:]_$])(import|export|from|require|require_relative|require_once|include|include_once|use|mod)([^[:alnum:]_$]|$)",
+  "(src|href)[[:space:]]*=",
+  "^[[:space:]]*([[:alnum:]_.]+[[:space:]]+)?[\"'`]",
+  "^[[:space:]]*\\)",
+  "^[[:space:]]+[[:alnum:]_]+([[:space:]]+as[[:space:]]+[[:alnum:]_]+)?[[:space:]]*,?[[:space:]]*$",
+  "@generated|DO NOT EDIT",
+])
 
 const LIMIT = {
   index: 64 * 1024 * 1024,
@@ -514,8 +525,7 @@ async function makeCommands(
     typeof process.getuid === "function" && process.getuid() !== 0 && process.getuid() === process.geteuid?.(),
     "this host has no supported unprivileged Git verifier",
   )
-  const signal = opening.signal
-  const image = await DirectoryIdentityReader.pythonImage(opening.expires, signal)
+  const image = await DirectoryIdentityReader.pythonImage(opening.expires, opening.signal)
   requireValue(image, "the fixed Git verifier runtime is unavailable")
   try {
     opening.check()
@@ -532,6 +542,7 @@ async function makeCommands(
     directory = cwd,
     index?: string,
   ) => {
+    const signal = context.signal
     requireValue(index === undefined || path.dirname(index) === cwd, "Git's private observation index is unavailable")
     requireValue(directory === cwd || inside(cwd, directory), "Git's private working directory is unavailable")
     const expires = Math.min(context.expires, performance.now() + INTEGRITY.milliseconds)
@@ -1263,8 +1274,8 @@ export interface Repository {
   readonly hasInfoRules?: boolean
   /** Synchronous lifetime witness; false as soon as close starts. */
   readonly isOpen: () => boolean
-  readonly status: () => Promise<{ head: string; dirty: boolean }>
-  readonly read: (operation: Read) => Promise<{ code: number; bytes: Buffer }>
+  readonly status: (signal?: AbortSignal) => Promise<{ head: string; dirty: boolean }>
+  readonly read: (operation: Read, signal?: AbortSignal) => Promise<{ code: number; bytes: Buffer }>
   readonly close: () => Promise<void>
 }
 
@@ -1305,9 +1316,31 @@ export type Read =
       readonly last: number
     }
   | { readonly kind: "tree"; readonly revision: string; readonly file: string }
+  | { readonly kind: "impact-version" }
+  | {
+      readonly kind: "impact-tree"
+      readonly revision: string
+      readonly maxBytes: number
+      readonly namesAndIdsOnly?: true
+    }
+  | {
+      readonly kind: "impact-grep"
+      readonly revision: string
+      readonly maxBytes: number
+      readonly search:
+        | { readonly kind: "manifests"; readonly exclude: readonly string[] }
+        | { readonly kind: "symbols"; readonly names: readonly string[]; readonly exclude: readonly string[] }
+        | { readonly kind: "imports"; readonly files: readonly string[] }
+    }
   /** Raw bytes of one regular file in an exact commit, subject to maxBytes (at most 1 MiB).
    * A missing commit or file, another entry type, or an oversized file gives code 1 and no bytes. */
-  | { readonly kind: "show"; readonly revision: string; readonly file: string; readonly maxBytes: number }
+  | {
+      readonly kind: "show"
+      readonly revision: string
+      readonly file: string
+      readonly maxBytes: number
+      readonly distinguishLarge?: true
+    }
   /** Case-insensitive literal mentions of the path's basename without its last extension, anywhere in the commit.
    * Code 0 means found, 1 proves absence, and 2 means unsearchable. No file contents or names are returned. */
   | { readonly kind: "path-references"; readonly revision: string; readonly file: string }
@@ -1434,13 +1467,13 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
   const cancel = () => controller.abort()
   options?.signal?.addEventListener("abort", cancel, { once: true })
   if (options?.signal?.aborted) cancel()
-  const operation = (expires: number): Operation => ({
+  const operation = (expires: number, signal = controller.signal): Operation => ({
     expires,
-    signal: controller.signal,
+    signal,
     resources,
     check: () =>
       requireValue(
-        !closed && !cleanupFailed && !controller.signal.aborted && performance.now() < expires,
+        !closed && !cleanupFailed && !signal.aborted && performance.now() < expires,
         "Git inspection was cancelled or expired",
       ),
     unsafe: () => {
@@ -1449,8 +1482,11 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     },
   })
   const startup = operation(opening)
-  const observe = <A>(body: (context: Operation) => Promise<A>) => {
-    const context = operation(performance.now() + INTEGRITY.milliseconds)
+  const observe = <A>(body: (context: Operation) => Promise<A>, signal?: AbortSignal) => {
+    const context = operation(
+      performance.now() + INTEGRITY.milliseconds,
+      signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+    )
     const pending = Promise.resolve()
       .then(async () => {
         context.check()
@@ -1781,6 +1817,24 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         const result = await peel(oid)
         return result.code === 0 && result.bytes.equals(Buffer.from(oid + "\n"))
       }
+      const impactRead = async (query: string[], limit: number, input?: Buffer) => {
+        try {
+          // No live worktree is in this process's authority, including for Git's attribute lookups.
+          const result = await commands.command(
+            context,
+            ["--no-pager", "--no-optional-locks", "--git-dir=" + privateGit, "--work-tree=" + temporary, ...query],
+            input,
+            limit,
+          )
+          return commandDiagnostics.get(result)?.stderr === 0 && isUtf8(result.bytes)
+            ? result
+            : { code: 2, bytes: Buffer.alloc(0) }
+        } catch (error) {
+          const cause = error instanceof Unavailable ? (error.cause as CommandDiagnostic | undefined) : undefined
+          if (cause?.reason === "output-limit") return { code: 3, bytes: Buffer.alloc(0) }
+          throw error
+        }
+      }
       const linksOf = async (commit: string) => {
         const cached = linkInventories.get(commit)
         if (cached) return cached
@@ -2058,6 +2112,99 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           ])
         case "tree":
           return run(["ls-tree", "-z", revision(operation.revision), "--", literal(operation.file)])
+        case "impact-version":
+          return { code: 0, bytes: Buffer.from(version.bytes) }
+        case "impact-tree":
+        case "impact-grep": {
+          const { maxBytes, revision: commit } = operation
+          const tree = operation.kind === "impact-tree"
+          requireValue(
+            Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= (tree ? LIMIT.index : 16 * 1024 * 1024),
+            "invalid impact output limit",
+          )
+          if (!(await isCommit(commit))) return { code: 2, bytes: Buffer.alloc(0) }
+          if (operation.kind === "impact-tree")
+            return impactRead(
+              ["ls-tree", "-r", "-z", ...(operation.namesAndIdsOnly ? [] : ["-l"]), "--full-tree", commit],
+              maxBytes,
+            )
+          const search = operation.search
+          const grep = ["grep", "--threads=1", "--no-textconv", "-z", "-I", "--no-color", "--no-column", "--full-name"]
+          const specs = search.kind === "imports" ? search.files : search.exclude
+          requireValue(Array.isArray(specs) && specs.length <= 4096, "invalid impact path count")
+          let chars = 0
+          for (const spec of specs) {
+            requireValue(
+              typeof spec === "string" && spec.isWellFormed() && (chars += spec.length + 1) <= 24_000,
+              "invalid impact paths",
+            )
+            if (search.kind === "imports") relative(spec)
+            else {
+              const prefix = spec.startsWith(":(top,exclude,literal)")
+                ? ":(top,exclude,literal)"
+                : ":(top,exclude,glob)"
+              requireValue(spec.startsWith(prefix), "invalid impact exclusion")
+              relative(spec.slice(prefix.length))
+            }
+          }
+          switch (search.kind) {
+            case "imports":
+              requireValue(specs.length > 0, "an import query must name files")
+              return impactRead(
+                [
+                  ...grep,
+                  "-n",
+                  "-E",
+                  "-e",
+                  IMPACT_IMPORT_LINE.map((rule) => "(" + rule + ")").join("|"),
+                  commit,
+                  "--",
+                  ...specs.map((file) => ":(top,literal)" + file),
+                ],
+                maxBytes,
+              )
+            case "manifests":
+              return impactRead(
+                [
+                  ...grep,
+                  "-n",
+                  "-e",
+                  "",
+                  commit,
+                  "--",
+                  ":(top,glob)**/package.json",
+                  ":(top,glob)**/tsconfig.json",
+                  ":(top,glob)**/jsconfig.json",
+                  ":(top,literal)pnpm-workspace.yaml",
+                  ":(top,exclude,glob)**/node_modules/**",
+                  ...specs,
+                ],
+                maxBytes,
+              )
+            case "symbols": {
+              requireValue(
+                Array.isArray(search.names) && search.names.length > 0 && search.names.length <= 50_000,
+                "invalid impact symbol count",
+              )
+              let bytes = 0
+              for (const name of search.names)
+                requireValue(
+                  typeof name === "string" &&
+                    name.length <= 1024 &&
+                    /^[\p{L}\p{M}\p{N}_$]+$/u.test(name) &&
+                    (bytes += Buffer.byteLength(name) + 1) <= 1024 * 1024,
+                  "invalid impact symbol",
+                )
+              return impactRead(
+                [...grep, "-l", "-w", "-F", "-f", "-", commit, "--", ":/", ...specs],
+                maxBytes,
+                Buffer.from(search.names.join("\n") + "\n"),
+              )
+            }
+            default:
+              throw new Unavailable("unsupported impact search")
+          }
+        }
         case "show": {
           const { revision: commit, file, maxBytes } = operation
           requireValue(typeof file === "string" && file.isWellFormed() && repositoryPath(file), "invalid show path")
@@ -2082,7 +2229,9 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             256,
           )
           const regular = /^(?:100644|100755) (0|[1-9][0-9]{0,12})\x00$/.exec(entry.bytes.toString("latin1"))
-          if (entry.code !== 0 || !regular || Number(regular[1]) > maxBytes) return missing
+          if (entry.code !== 0 || !regular) return missing
+          if (Number(regular[1]) > maxBytes)
+            return operation.distinguishLarge ? { code: 3, bytes: Buffer.alloc(0) } : missing
           const size = Number(regular[1])
           const result = await commands.command(
             context,
@@ -2246,7 +2395,8 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           throw new Unavailable("Git operation is not supported by the read-only port")
       }
     }
-    const safeRead = (operation: Read) => observe((context) => perform(operation, context))
+    const safeRead = (operation: Read, signal?: AbortSignal) =>
+      observe((context) => perform(operation, context), signal)
     let statusQueue: Promise<unknown> = Promise.resolve()
     const status = (context: Operation) => {
       // Keep normalized index stat fields empty. A refreshed Git cache missed a real equal-size edit with restored
@@ -2288,7 +2438,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         shallow: !!shallow?.byteLength,
         hasInfoRules,
         isOpen: () => !closed && !controller.signal.aborted,
-        status: () => observe(status),
+        status: (signal?: AbortSignal) => observe(status, signal),
         read: safeRead,
         close,
       },

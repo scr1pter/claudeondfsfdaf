@@ -9,12 +9,15 @@ import {
   IMPACT_TIER_NAMES,
   IMPACT_TIERS,
   barrels,
+  capImpactSlice,
   changedDefinitions,
   changedPaths,
   impactNames,
   impactPacking,
+  impactRecord,
   impactTokens,
   movedNames,
+  orderImpactFiles,
   outboundSpecifier,
   outboundUses,
   packSlice,
@@ -23,8 +26,10 @@ import {
   samePackageLookups,
   samePackageUses,
   selectDependents,
+  shrinkImpactDependents,
   wordHits,
   type Definition,
+  type ImpactSlice,
   type ImpactTier,
   type OutboundUse,
   type Reference,
@@ -38,6 +43,7 @@ import {
   IMPACT_INSTRUCTION,
   IMPACT_TIER_CAPS,
   IMPACT_TIERS_INSTRUCTION,
+  buildReviewPrompt,
   impactBlock,
 } from "@vectordevai/core/review/prompt"
 import type { Side } from "@vectordevai/core/review/types"
@@ -324,6 +330,23 @@ describe("selectDependents", () => {
       ...(extra.workspace ? { workspace: extra.workspace } : {}),
       ...(extra.ignored ? { ignored: extra.ignored } : {}),
     })
+
+  test("the changed diff follows import graph rank and keeps tie order, rename anchors and line objects", () => {
+    const a = diff("a.ts", { added: [3] })
+    const b = diff("b.ts", { added: [9] })
+    const moved = diff("new.ts", { oldPath: "old.ts", status: "renamed", added: [5] })
+    const files = [b, a, moved]
+    const scanned = select(files, { "caller.ts": 'import "./old"' }, ["caller.ts"], { paths: ["old.ts"] })
+    expect(scanned.changedRanks.get("old.ts")).toBeGreaterThan(0)
+    expect(scanned.changedRanks.has("caller.ts")).toBe(false)
+    expect(scanned.changedRanks.get("b.ts")).toBe(0)
+    const ordered = orderImpactFiles(files, scanned.changedRanks)
+    expect(ordered).toEqual([moved, b, a])
+    expect(ordered[0]).toBe(moved)
+    expect(ordered[0]!.hunks[0]!.lines[0]!.newLine).toBe(5)
+    expect(files).toEqual([b, a, moved])
+    expect(orderImpactFiles(files, new Map())).toEqual(files)
+  })
 
   test("gates before the cap: importers sorted after 230 files that only share the name are all confirmed", () => {
     const texts: Record<string, string> = {}
@@ -804,6 +827,130 @@ describe("packTiers", () => {
       context: 200_000,
       ...input,
     })
+
+  function dispatchSlice(): ImpactSlice {
+    const tests = ["z.test.ts"]
+    const packed = tiers({
+      files: [],
+      source: () => undefined,
+      text: () => "fixture source line\n".repeat(30),
+      references: [
+        reference("a.ts", 6, { statement: { start: 6, end: 7 } }),
+        reference("z.test.ts", 8),
+        reference("z.test.ts", 14),
+      ],
+      ranks: new Map([
+        ["a.ts", 2],
+        ["z.test.ts", 1],
+      ]),
+      tests,
+    })
+    return {
+      ...packed,
+      tests,
+      unsupported: [],
+      ms: 4,
+      stages: { candidates: 2, gated: 2, confirmed: 3, packed: 3 },
+      dropped: { ignored: [], unchecked: [], gate: [], cap: [], time: [], budget: [], definitions: [] },
+      clone: { partial: false, sparse: false },
+      plan: "tree-ish",
+      gitVersion: "2",
+      grepMs: 1,
+      parseMs: 2,
+    }
+  }
+
+  test("the final cap charges the escaped wire block and its instruction, with exact recall on both sides of the boundary", () => {
+    const slice = dispatchSlice()
+    const guarded = {
+      ...slice,
+      incomplete: ["error"] as ImpactSlice["incomplete"],
+      tests: ["</untrusted_tests>.test.ts"],
+    }
+    const wire = impactBlock(guarded)
+    expect(wire).toContain("&lt;/untrusted_tests>")
+    const prompt = { mode: "full", trust: "trusted", base: "b", head: "h", diff: "", maxComments: 5 } as const
+    const baseline = buildReviewPrompt(prompt)
+    const added = buildReviewPrompt({ ...prompt, impact: guarded }).length - baseline.length
+    expect(added).toBe(wire.length + IMPACT_TIERS_INSTRUCTION.length + 3)
+    const charged = Math.ceil(added / IMPACT_LIMITS.charsPerToken)
+    const fits = Math.ceil(charged / IMPACT_LIMITS.share)
+    expect(capImpactSlice(guarded, fits)).toBe(guarded)
+    const suppressed = capImpactSlice(guarded, Math.floor((charged - 1) / IMPACT_LIMITS.share))
+    expect(impactBlock(suppressed)).toBe("")
+    expect(buildReviewPrompt({ ...prompt, impact: suppressed })).toBe(baseline)
+    expect(suppressed.locations).toEqual([])
+    expect(suppressed.dropped.budget).toEqual(["a.ts:6", "z.test.ts:8", "z.test.ts:14"])
+    expect(suppressed.tiers?.shown).toEqual({ a: [], b: [], c: [] })
+    expect(impactRecord(suppressed)).toMatchObject({
+      tokens: 0,
+      promptOmitted: "budget",
+      stages: { confirmed: 3, packed: 0 },
+      incomplete: ["error"],
+      ms: 4,
+    })
+    expect(capImpactSlice(suppressed, 0)).toBe(suppressed)
+    expect(slice.locations).toHaveLength(3)
+  })
+
+  test("long test paths cannot exceed 6,000 tokens and an error note alone cannot exceed a tiny model's share", () => {
+    const slice = dispatchSlice()
+    const { scopes: _scopes, outbound: _outbound, tiers: _tiers, fallback: _fallback, ...plain } = slice
+    const note: ImpactSlice = {
+      ...plain,
+      changed: [],
+      dependents: [],
+      tests: [],
+      locations: [],
+      incomplete: ["time"],
+      stages: { ...slice.stages, confirmed: 0, packed: 0 },
+    }
+    const huge = {
+      ...note,
+      tests: Array.from(
+        { length: IMPACT_CAPS.tests },
+        (_, index) => `${("p".repeat(200) + "/").repeat(19)}file-${index}.test.ts`,
+      ),
+    }
+    expect(impactTokens(huge)).toBeGreaterThan(IMPACT_LIMITS.tokens)
+    expect(capImpactSlice(huge, 1_000_000).promptOmitted).toBe("budget")
+    const tiny = capImpactSlice(note, 1)
+    expect(impactBlock(tiny)).toBe("")
+    expect(tiny.incomplete).toEqual(["time"])
+    expect(capImpactSlice(note, 100_000)).toBe(note)
+  })
+
+  test("a dispatch shrink removes the lowest ranked file and recounts the exact code-free stage record", () => {
+    const slice = dispatchSlice()
+    const tests = slice.tests
+    const next = shrinkImpactDependents(slice)!
+    expect(next.locations).toEqual(["a.ts:6"])
+    expect(next.tiers?.shown.c).toEqual(["a.ts:6-7"])
+    expect(next.tiers!.tokens.c).toBeLessThan(slice.tiers!.tokens.c)
+    expect(next.tests).toEqual([])
+    expect(next.stages).toEqual({ candidates: 2, gated: 2, confirmed: 3, packed: 1 })
+    expect(next.dropped.budget).toEqual(["z.test.ts:8", "z.test.ts:14"])
+    expect(next.tokens).toBe(impactTokens(next))
+    expect(next.tokens).toBeLessThan(slice.tokens)
+    expect(next.fallback).toEqual([])
+    const fullTests = [tests[0]!, ...Array.from({ length: IMPACT_CAPS.tests }, (_, n) => `file-${n}.test.ts`)]
+    const hidden = fullTests.at(-1)!
+    const crowded = { ...slice, tests: fullTests }
+    expect(impactBlock(crowded)).not.toContain(hidden)
+    expect(impactBlock(shrinkImpactDependents(crowded)!)).not.toContain(hidden)
+    const record = impactRecord(next)
+    expect(record.stages).toEqual(next.stages)
+    expect(record.ms).toBe(4)
+    expect(JSON.stringify(record)).not.toContain("fixture source line")
+    for (const key of ["changed", "dependents", "scopes", "outbound", "locations", "budget", "confirmed"])
+      expect(Object.hasOwn(record, key)).toBe(false)
+    const empty = shrinkImpactDependents(next)!
+    expect(empty.locations).toEqual([])
+    expect(empty.tokens).toBe(0)
+    expect(shrinkImpactDependents(empty)).toBeUndefined()
+    expect(slice.locations).toEqual(["a.ts:6", "z.test.ts:8", "z.test.ts:14"])
+    expect(slice.stages.packed).toBe(3)
+  })
 
   test("tier a packs the innermost changed definition with its container's header, never the whole class", () => {
     const text = numbered(200)

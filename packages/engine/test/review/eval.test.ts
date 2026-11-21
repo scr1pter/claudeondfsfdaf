@@ -1129,10 +1129,8 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-25b: the same for `impact`. A base review.json under "graph" is replayed with related code from git grep, as every
-  // runner still reviews, and its scope claims neither the policy nor the prompts the impact block would add.
   it.instance(
-    "replays a base review.json that sets VS-25b's impact without it, keeping the parser's warning",
+    "records the graph policy from the committed base even when private ignore rules make its context incomplete",
     () =>
       Effect.gen(function* () {
         const { directory, llm, base, head } = yield* checkout({
@@ -1148,17 +1146,66 @@ describe("ReviewEval.replay", () => {
           posting: ReviewEval.recordingPosting(),
           check: recordingCheck().check,
         })
-        expect(Object.hasOwn(artifact.config.value, "impact")).toBe(false)
-        expect(artifact.config.warnings).toEqual([
-          '"impact": "graph" is not applied yet: related code still comes from git grep.',
-        ])
-        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, impact: "graph" }))
-        expect(artifact.scope.prompts).toBe(promptsDigest())
-        expect(artifact.scope.prompts).not.toBe(promptsDigest({ impact: "graph" }))
-        expect(lastUserText((yield* llm.hits).find(REVIEW)!.body)).not.toContain("untrusted_impact")
-        expect(artifact.tier1).toBeUndefined()
-        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+        expect(artifact.config.value.impact).toBe("graph")
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, impact: "grep" }))
+        expect(artifact.scope.prompts).toBe(promptsDigest({ impact: "graph" }))
+        expect(artifact.tier1?.incomplete?.length).toBeGreaterThan(0)
+        expect(artifact.outcome?.unreviewed).toEqual([])
+        expect(artifact.files.reviewed).toEqual(["src/list.ts"])
+        expect(artifact.attempts.some((attempt) => attempt.admitted)).toBe(true)
       }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "records the named graph replay's private head-tree context separately from the changed files it reviewed",
+    () =>
+      isolated(
+        Effect.gen(function* () {
+          const use = 'import { last } from "./list"\nexport const result = last([1, 2])\n'
+          const { directory, llm, base, head } = yield* checkout({
+            base: { "src/list.ts": LIST_BASE, "src/use.ts": use, ".gitignore": "vector.json\n" },
+            head: { "src/list.ts": LIST_HEAD },
+            untrusted: true,
+            price: PRICE,
+          })
+          yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+          const variant = { name: "engine:impact-graph", keys: { impact: "graph" as const } }
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+          const artifact = yield* ReviewEval.replay({
+            case: replayCase(directory, base, head, { trust: "untrusted" }),
+            model: MODEL,
+            config: { maxCostUsd: 2, verify: "off" },
+            variant,
+            posting: ReviewEval.recordingPosting(),
+            check: recordingCheck().check,
+          })
+          expect(artifact.variant).toEqual(variant)
+          expect(artifact.files.reviewed).toEqual(["src/list.ts"])
+          expect(artifact.outcome?.unreviewed).toEqual([])
+          const text = lastUserText((yield* llm.hits).find(REVIEW)!.body)
+          if (process.platform !== "linux") return
+          const record = artifact.tier1
+          if (!record) throw new Error("the graph replay did not record its private head-tree analysis")
+          expect(record.plan).toBe("tree-ish")
+          expect(record.stages.packed).toBeGreaterThan(0)
+          expect(record.ms).toBeGreaterThanOrEqual(0)
+          expect(record.grepMs).toBeGreaterThanOrEqual(0)
+          expect(record.parseMs).toBeGreaterThanOrEqual(0)
+          expect(record.tokens).toBeGreaterThan(0)
+          expect(record).not.toHaveProperty("changed")
+          expect(record).not.toHaveProperty("dependents")
+          expect(text).toContain("<untrusted_impact>")
+          expect(text).toContain('path="src/use.ts"')
+          expect(artifact.context.locations).toContain("src/list.ts:1")
+          expect(artifact.context.locations).toContain("src/use.ts:2")
+          expect(new Set(artifact.context.locations).size).toBe(artifact.context.locations!.length)
+          expect(artifact.files.reviewed).not.toContain("src/use.ts")
+        }),
+      ),
     GIT,
     TIMEOUT,
   )
@@ -1679,12 +1726,12 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { trivial: "review" } })).toContain(
           "config sets trivial, a pipeline variant's setting",
         )
-        // Nor VS-25b's impact, named by its own wiring package, and grouped by package when both are set.
+        // An impact override must go through its named variant so the artifact identifies the graph pipeline.
         expect(yield* refused({ config: { impact: "graph" } })).toContain(
-          "config sets impact, which no runner applies yet (VS-25b wiring), so the artifact would record a setting the run did not have.",
+          "config sets impact, a pipeline variant's setting",
         )
         expect(yield* refused({ config: { maxInputTokens: 5, impact: "grep" } })).toContain(
-          "config sets maxInputTokens, impact, which no runner applies yet (VS-24 wiring for maxInputTokens; VS-25b wiring for impact)",
+          "config sets impact, a pipeline variant's setting",
         )
         // Nor VS-27's guardrail, which VS-27c applies.
         expect(yield* refused({ config: { guardrail: "strict" } })).toContain(
@@ -1746,10 +1793,12 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ variant: { name: "engine:holdback-secrets", keys: { holdback: "off" } } })).toContain(
           'engine:holdback-secrets sets holdback "off": a variant may raise holdback to "secrets", never lower it.',
         )
-        // A pending variant's key is refused as a key this replay does not apply.
-        expect(yield* refused({ variant: { name: "engine:impact-graph", keys: { impact: "graph" } } })).toContain(
-          "engine:impact-graph sets impact, which this replay does not apply",
-        )
+        for (const variant of [
+          { name: "engine:impact-graph", keys: { impact: "grep" as const } },
+          { name: "engine:shared-verify", keys: { impact: "graph" as const } },
+          { name: "engine:impact-graph", keys: { verifyPolicy: "shared" as const } },
+        ])
+          expect(yield* refused({ variant })).toContain('engine:impact-graph variant sets only impact: "graph"')
         // A variant raises privacy and never lowers it (VS-23c): its keys go over the base's raise-only privacy.
         expect(yield* refused({ variant: { name: "engine:privacy-zdr", keys: { privacy: "standard" } } })).toContain(
           'engine:privacy-zdr sets privacy "standard": a variant may raise privacy to "zdr", never lower it.',
@@ -1824,7 +1873,7 @@ describe("ReviewEval.replay", () => {
         expect(pass?.ms).toBeGreaterThanOrEqual(150)
         // The outcome's pass of the same name, matched by name and not by position, counted the same cache reads.
         expect(artifact.outcome?.passes?.find((entry) => entry.name === pass?.pass)?.cacheRead).toBe(400)
-        // Typed for VS-25b and VS-24, and absent until they fill them.
+        // A default replay never builds graph context. The pre-dispatch budget field remains pending.
         expect(artifact.tier1).toBeUndefined()
         expect(artifact.dispatch).toBeUndefined()
         expect(artifact.shrink).toBeUndefined()
@@ -1940,7 +1989,11 @@ describe("ReviewEval.replay", () => {
     () =>
       Effect.gen(function* () {
         const { directory, llm, base, head } = yield* checkout({
-          base: { "src/list.ts": LIST_BASE, "bun.lock": "{}\n" },
+          base: {
+            "src/list.ts": LIST_BASE,
+            "bun.lock": "{}\n",
+            ".vector/review.json": JSON.stringify({ impact: "graph" }),
+          },
           head: { "bun.lock": '{ "lockfileVersion": 1 }\n' },
         })
         const posting = ReviewEval.recordingPosting()
@@ -1953,6 +2006,8 @@ describe("ReviewEval.replay", () => {
           check: recordingCheck().check,
         })
 
+        expect(artifact.config.value.impact).toBe("graph")
+        expect(artifact.tier1).toBeUndefined()
         expect(artifact.outcome).toBeUndefined()
         expect(artifact.files).toEqual({ reviewed: [], skipped: [{ path: "bun.lock", reason: "lockfile" }] })
         expect(artifact.attempts).toEqual([])

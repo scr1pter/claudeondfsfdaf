@@ -104,6 +104,7 @@ const Outcome = Schema.Struct({
     priorStatus: optional(many(Schema.Struct({ id: text, status: Schema.Literals(["fixed", "open"]), reason: text }))),
   }),
   selection: Schema.Struct({
+    diffIncomplete: optional(Schema.Literal(true)),
     inline: many(
       Schema.Struct({
         ...finding,

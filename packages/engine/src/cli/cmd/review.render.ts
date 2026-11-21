@@ -87,7 +87,9 @@ export function renderLocalReview(input: RenderInput): string {
       ? "Not reviewed"
       : !outcome.specialists.length && outcome.held?.length
         ? `Not reviewed: ${outcome.mode === "incremental" ? "everything new since the last review is in files" : "every changed file was"} held back from the model.`
-        : `Risk: ${capitalize(selection.risk)} · ${counts(outcome)}`,
+        : selection.diffIncomplete
+          ? ["Partial review", counts(outcome)].filter(Boolean).join(" · ")
+          : `Risk: ${capitalize(selection.risk)} · ${counts(outcome) || "No issues found"}`,
   )
   const partial = partialLine(input)
   if (partial) lines.push(partial)
@@ -162,7 +164,7 @@ function counts(outcome: ReviewOutcome): string {
   if (blocking) parts.push(`${blocking} blocking`)
   if (concerns) parts.push(`${concerns} ${concerns === 1 ? "concern" : "concerns"}`)
   if (nits) parts.push(`${nits} ${nits === 1 ? "nit" : "nits"}`)
-  return parts.length ? parts.join(" · ") : "No issues found"
+  return parts.join(" · ")
 }
 
 function partialLine(input: RenderInput): string | undefined {

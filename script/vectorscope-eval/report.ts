@@ -654,29 +654,34 @@ export function fromArtifact(
   const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
   const unfinished =
     outcome?.specialists.filter((entry) => ["failed", "timeout", "stopped"].includes(entry.status)) ?? []
-  const status = !outcome
-    ? "partial"
-    : failed
-      ? "failed"
-      : outcome.trivial
-        ? "not-sent"
-        : outcome.partial || outcome.unreviewed.length || unfinished.length
-          ? "partial"
-          : "completed"
+  // A graph plan may collect context before a provider admits its first reviewer. Planning supplies no review coverage.
+  const graphUnsent =
+    artifact.config?.value?.impact === "graph" &&
+    !artifact.files.reviewed.length &&
+    !artifact.attempts.some((attempt) => attempt.admitted && (attempt.pass === "review" || attempt.pass === "security"))
+  const status = failed
+    ? "failed"
+    : graphUnsent || outcome?.trivial
+      ? "not-sent"
+      : !outcome || outcome.partial || outcome.unreviewed.length || unfinished.length
+        ? "partial"
+        : "completed"
   const detail = !outcome
     ? `every changed file was skipped (${artifact.files.skipped.length}), so nothing was reviewed`
     : failed
       ? (reviewers.find((entry) => entry.detail)?.detail ?? "every reviewer failed")
       : outcome.trivial
         ? noteTrivialSkip()
-        : status === "partial"
-          ? [
-              ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
-              ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
-              ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
-            ].join(", ")
-          : undefined
-  const selection = outcome?.selection
+        : graphUnsent
+          ? "Not reviewed. No reviewer request was admitted."
+          : status === "partial"
+            ? [
+                ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
+                ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
+                ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
+              ].join(", ")
+            : undefined
+  const selection = graphUnsent ? undefined : outcome?.selection
   const writes = postedParts(artifact, failed)
   const posted = selection
     ? [
@@ -712,7 +717,7 @@ export function fromArtifact(
     trust: artifact.trust,
     status,
     ...(detail ? { detail } : {}),
-    proposed: (outcome?.report.findings ?? []).map((finding) => evalFinding(finding)),
+    proposed: (graphUnsent ? [] : (outcome?.report.findings ?? [])).map((finding) => evalFinding(finding)),
     posted,
     ...(outcome ? { ms: outcome.durationMs } : {}),
     attempts: artifact.attempts.filter((attempt) => attempt.admitted).length,

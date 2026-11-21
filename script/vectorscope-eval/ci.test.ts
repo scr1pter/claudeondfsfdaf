@@ -399,7 +399,8 @@ describe("the replay pipeline", () => {
   test("takes the default variants, or registry names built for the engine, and refuses everything else", () => {
     expect(inputs(REPLAY)).toMatchObject({ pipeline: "replay", variants: DEFAULT_VARIANTS })
     expect(inputs({ ...REPLAY, EVAL_VARIANTS: " engine:shared-verify " }).variants).toEqual(["engine:shared-verify"])
-    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:impact-graph" }).join("\n")).toContain("VS-25b wiring")
+    expect(inputs({ ...REPLAY, EVAL_VARIANTS: "engine:impact-graph" }).variants).toEqual(["engine:impact-graph"])
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:cards-brain" }).join("\n")).toContain("VS-26")
     // VS-23c (SF-12b): the engine half of privacy-zdr is built.
     expect(inputs({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" }).variants).toEqual(["engine:privacy-zdr"])
     expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" })).toEqual([])

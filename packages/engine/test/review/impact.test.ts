@@ -53,8 +53,17 @@ const commit = (cwd: string, message: string, files: Record<string, string>) =>
     return yield* git(cwd, "rev-parse", "HEAD")
   })
 
+// The portable algorithm fixtures also simulate historic Git versions, partial clones and stalled reads.
+// Production entry points always acquire the native immutable snapshot; its end-to-end cases live alongside these.
+const fixtureBuild = (input: ReviewImpact.BuildInput) =>
+  Git.Service.pipe(Effect.flatMap((reader) => ReviewImpact.algorithm.build(reader, input)))
+const fixtureImports = (input: Parameters<typeof ReviewImpact.importLines>[0]) =>
+  Git.Service.pipe(Effect.flatMap((reader) => ReviewImpact.algorithm.importLines(reader, input)))
+const fixtureParse = (input: Parameters<typeof ReviewImpact.parseChanged>[0]) =>
+  Git.Service.pipe(Effect.flatMap((reader) => ReviewImpact.algorithm.parseChanged(reader, input)))
+
 const build = (input: Omit<ReviewImpact.BuildInput, "context"> & { context?: number }) =>
-  ReviewImpact.build({ context: 200_000, budgetMs: GENEROUS, ...input })
+  fixtureBuild({ context: 200_000, budgetMs: GENEROUS, ...input })
 
 // The stage arithmetic every slice keeps, whatever stopped it.
 function invariants(slice: ImpactSlice) {
@@ -119,6 +128,132 @@ const fixture = (dir: string) =>
     const files = yield* ReviewSource.prDiff({ directory: dir, mergeBase: base, head })
     return { base, head, files }
   })
+
+describe("SF-18 private impact builder", () => {
+  const native = process.platform === "linux" ? it.live : it.live.skip
+
+  native(
+    "a base checkout supplies the head graph, with denied, generated and credential paths excluded",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* scopedTmpdir({ git: true })).path
+        const secret = "ghp_" + "c1A3".repeat(9)
+        const caller = (word: string) =>
+          'import { computeTotal } from "./util"\nexport const result = computeTotal([1]) // ' + word + "\n"
+        const base = yield* commit(dir, "trusted base", {
+          "src/util.ts": UTIL_BASE,
+          "src/a.ts": caller("BASE_ONLY"),
+          "src/.gitattributes": "generated.ts linguist-generated\n",
+          "src/generated.ts": caller("GENERATED_CONTENT"),
+          "src/denied.ts": caller("DENIED_CONTENT"),
+          "src/ignored[policy].ts": caller("GLOB_EXCLUDED_CONTENT"),
+          "src/.env.ts": caller("HELD_CONTENT"),
+        })
+        const head = yield* commit(dir, "fork head", {
+          "src/util.ts": UTIL_HEAD,
+          "src/a.ts": caller(secret),
+          "src/.gitattributes": "",
+        })
+        const diff = yield* ReviewSource.prDiff({ directory: dir, mergeBase: base, head })
+        const files = diff.filter((file) => file.path === "src/util.ts")
+        yield* git(dir, "checkout", "-q", base)
+        yield* write(dir, { "src/a.ts": caller("WORKTREE_ONLY"), "src/untracked.ts": caller("UNTRACKED_CONTENT") })
+        const result = yield* ReviewImpact.build({
+          directory: dir,
+          base,
+          head,
+          files,
+          context: 200_000,
+          holdback: "secrets",
+          // The classifier treats these brackets literally. A raw Git exclusion carrying backslashes is refused.
+          ignore: [String.raw`src/ignored\[policy\].ts`],
+          ignored: (file) => file === "src/denied.ts",
+        }).pipe(
+          Effect.provideService(Git.Service, {
+            ...(yield* Git.Service),
+            run: () => Effect.die("production impact read escaped to the live Git service"),
+          }),
+        )
+        expect(result.slice.incomplete).toBeUndefined()
+        expect(result.slice.tiers).toBeDefined()
+        expect(result.slice.dependents.map((dependent) => dependent.path)).toEqual(["src/a.ts"])
+        expect(result.slice.dependents[0]!.window).toContain("[redacted]")
+        expect(result.slice.locations).toContain("src/a.ts:2")
+        expect(result.changedRanks?.get("src/util.ts")).toBeGreaterThan(0)
+        expect(result.changed.text("src/util.ts", "RIGHT")).toBe(UTIL_HEAD)
+        const artifact = JSON.stringify(result.slice)
+        for (const hidden of [
+          secret,
+          "BASE_ONLY",
+          "WORKTREE_ONLY",
+          "UNTRACKED_CONTENT",
+          "DENIED_CONTENT",
+          "GLOB_EXCLUDED_CONTENT",
+          "src/ignored[policy].ts",
+          "GENERATED_CONTENT",
+          "HELD_CONTENT",
+          "src/.env.ts",
+          "src/denied.ts",
+          "src/generated.ts",
+        ])
+          expect(artifact).not.toContain(hidden)
+      }),
+    60_000,
+  )
+
+  it.live("an import match with a huge sparse line number is omitted before reconstructing its text", () =>
+    Effect.gen(function* () {
+      const head = "1".repeat(40)
+      const file = "src/late-import.ts"
+      const read = (args: string[]) => {
+        const content = args[0] === "grep" ? head + ":" + file + "\0" + "900000000" + "\0import x from './x'\n" : ""
+        return Effect.succeed({
+          exitCode: args[0] === "config" ? 1 : 0,
+          stdout: Buffer.from(content),
+          stderr: Buffer.alloc(0),
+          truncated: false,
+          text: () => content,
+        })
+      }
+      const found = yield* ReviewImpact.algorithm.importLines(
+        { run: read },
+        { directory: "/fixture", head, paths: [file] },
+      )
+      expect(found.has(file)).toBe(false)
+    }),
+  )
+
+  const unsupportedHost = process.platform === "linux" ? it.live.skip : it.live
+  unsupportedHost(
+    "an unsupported host cannot fall back to the live repository",
+    () =>
+      Effect.gen(function* () {
+        const directory = (yield* scopedTmpdir({ git: true })).path
+        const { base, head, files } = yield* fixture(directory)
+        const built = yield* ReviewImpact.build({ directory, base, head, files, context: 100_000 })
+        expect(built.slice.incomplete).toEqual(["error"])
+        expect(built.slice.locations).toEqual([])
+      }),
+    30_000,
+  )
+
+  it.live("an unsupported revision or expired deadline supplies only incomplete context", () =>
+    Effect.gen(function* () {
+      const directory = (yield* scopedTmpdir()).path
+      const input = { directory, base: "1".repeat(40), head: "2".repeat(40), files: [], context: 100_000 }
+      for (const [options, reason] of [
+        [{ head: "HEAD" }, "error"],
+        [{ budgetMs: 0 }, "time"],
+      ] as const) {
+        const built = yield* ReviewImpact.build({ ...input, ...options })
+        expect(built.slice.incomplete).toEqual([reason])
+        expect(built.slice.locations).toEqual([])
+        expect(built.changed.text("no.ts", "RIGHT")).toBeUndefined()
+        invariants(built.slice)
+      }
+    }),
+  )
+})
 
 describe("ReviewImpact.build", () => {
   it.live("reads the head tree-ish, gates by import, and records every stage", () =>
@@ -547,7 +682,7 @@ describe("ReviewImpact.build", () => {
       // Reading the config opens the FIFO, which blocks until a writer opens it: no writer ever does.
       yield* Effect.promise(() => fs.writeFile(config, `${original}[include]\n\tpath = ${fifo}\n`))
       const started = performance.now()
-      const { slice } = yield* ReviewImpact.build({
+      const { slice } = yield* fixtureBuild({
         directory: dir,
         base,
         head,
@@ -802,7 +937,7 @@ describe("ReviewImpact.build in tiers", () => {
       const dir = (yield* scopedTmpdir({ git: true })).path
       const { base, head, files } = yield* tieredFixture(dir)
       for (const budgetMs of [0, 1, 20, 150]) {
-        const { slice } = yield* ReviewImpact.build({
+        const { slice } = yield* fixtureBuild({
           directory: dir,
           base,
           head,
@@ -1295,7 +1430,7 @@ describe("ReviewImpact.build in tiers: same-package Go (VS-37c)", () => {
       const dir = (yield* scopedTmpdir({ git: true })).path
       const { base, head, files } = yield* goFixture(dir)
       for (const budgetMs of [0, 1, 20, 150]) {
-        const { slice } = yield* ReviewImpact.build({
+        const { slice } = yield* fixtureBuild({
           directory: dir,
           base,
           head,
@@ -1341,7 +1476,7 @@ describe("ReviewImpact.importLines", () => {
         "gen.ts": "/* header */\n// @generated by tool\nexport const g = 1\n",
       }
       const head = yield* commit(dir, "sources", sources)
-      const lines = yield* ReviewImpact.importLines({
+      const lines = yield* fixtureImports({
         directory: dir,
         head,
         paths: [...Object.keys(sources), "absent.ts"],
@@ -1458,15 +1593,13 @@ describe("partial clones", () => {
         expect(yield* missing(dir, head)).toBe(before)
         expect(yield* missing(dir, base)).toBe(missingBase)
         // parseChanged and importLines list what the clone lacks first, and never read it.
-        const parsed = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files })
+        const parsed = yield* fixtureParse({ directory: dir, base, head, files })
         expect(parsed.missing).toEqual(["base:src/util.ts", "src/util.ts"])
-        expect((yield* ReviewImpact.importLines({ directory: dir, head, paths: ["src/a.ts"] })).has("src/a.ts")).toBe(
-          false,
-        )
+        expect((yield* fixtureImports({ directory: dir, head, paths: ["src/a.ts"] })).has("src/a.ts")).toBe(false)
         expect(yield* missing(dir, head)).toBe(before)
         expect(yield* missing(dir, base)).toBe(missingBase)
         // The backstop: told nothing is missing and asked to read a missing blob, git refuses rather than fetch it.
-        const direct = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files, missing: () => false })
+        const direct = yield* fixtureParse({ directory: dir, base, head, files, missing: () => false })
         expect(direct.text("src/util.ts", "LEFT")).toBeUndefined()
         expect(direct.text("src/util.ts", "RIGHT")).toBeUndefined()
         expect(direct.missing).toEqual([])

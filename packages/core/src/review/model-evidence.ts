@@ -60,7 +60,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "9c2b2bb22a43697c"
+export const REVIEW_PIPELINE_SOURCES = "afff38d8ada45dfd"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -601,9 +601,7 @@ export function evidenceScope(input: {
     // The impact block and the strict schemas enter the prompts only once a runner applies their key (it leaves
     // UNAPPLIED_REVIEW_KEYS), and VS-42's and VS-44's schema changes only once both their key and strict are applied.
     prompts: promptsDigest({
-      ...(input.config.impact === "graph" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "impact")
-        ? { impact: "graph" as const }
-        : {}),
+      ...(input.adapter === "engine" && input.config.impact === "graph" ? { impact: "graph" as const } : {}),
       ...(input.config.guardrail === "strict" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail")
         ? { guardrail: "strict" as const }
         : {}),
@@ -631,11 +629,9 @@ export function evidenceScope(input: {
       // VS-34's input-redaction sentence (Review.run under "secrets" since SF-13b) and its tool half (SF-14).
       ...(input.config.holdback === "secrets" ? { holdback: "secrets" as const } : {}),
     }),
-    // The desktop pipeline has no private tree proof for the trivial gate.
+    // Both graph context and the trivial proof require the engine's private Git view.
     policy: policyDigest(
-      input.adapter === "desktop" && input.config.trivial === "skip"
-        ? { ...input.config, trivial: "review" }
-        : input.config,
+      input.adapter === "desktop" ? { ...input.config, trivial: "review", impact: "grep" } : input.config,
     ),
     ...(input.triage ? { triage: input.triage } : {}),
     ...(input.route ? { route: input.route } : {}),

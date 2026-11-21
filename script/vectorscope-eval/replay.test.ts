@@ -317,7 +317,7 @@ describe("replay admission", () => {
     const ledger = Ledger.open({ limits })
     const before = ledger.entries.length
     for (const [variant, detail] of [
-      ["engine:impact-graph", "registered for VS-25b wiring, which has not landed"],
+      ["desktop:impact-graph", "registered for VS-25's desktop half, after VS-10, which has not landed"],
       ["desktop:cross-family", "registered for VS-29a's desktop half, after VS-10, which has not landed"],
       ["engine:verify-isolated", "registered for VS-44c wiring (R3), which has not landed"],
       ["desktop:verify-isolated", "registered for VS-27 desktop guardrail, which has not landed"],
@@ -501,6 +501,7 @@ describe("the variant registry", () => {
       "desktop:shared-verify",
       "engine:privacy-zdr",
       "engine:trivial-skip",
+      "engine:impact-graph",
       "engine:cross-family",
       "engine:holdback-secrets",
       "desktop:holdback-secrets",
@@ -517,7 +518,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 7)
+    expect(pending).toHaveLength(2 * entries.length - 8)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -531,7 +532,6 @@ describe("the variant registry", () => {
         pending.filter((item) => item.name.startsWith("engine:")).map((item) => [item.name, item.package]),
       ),
     ).toEqual({
-      "engine:impact-graph": "VS-25b wiring",
       "engine:cards-brain": "VS-26",
       "engine:guardrail-strict": "VS-27c",
       "engine:depth-auto": "VS-28 wiring",
@@ -683,9 +683,9 @@ describe("the variant registry", () => {
     expect(resolveVariant("desktop:trivial-skip")).toMatchObject({ ok: false, reason: "pending" })
     expect(variantProblems("engine", { name: "engine:trivial-skip", keys: {} })[0]).toContain("not the registry's")
     expect(variantProblems("engine", { name: "engine:bogus", keys: {} })[0]).toContain("not a registered variant")
-    // A pending name carrying a built variant's keys, which ReviewEval.replay would run, is still pending.
+    // A built name still requires its own exact settings.
     expect(variantProblems("engine", { name: "engine:impact-graph", keys: { verifyPolicy: "shared" } })[0]).toContain(
-      "engine:impact-graph is registered for VS-25b wiring, which has not landed",
+      "not the registry's",
     )
   })
 
@@ -1202,8 +1202,8 @@ describe("projection records (VS-21b)", () => {
         record({ passes: [], files: { reviewed: [], skipped: [] }, egress: { attempts: 0, outside: 0 } }),
       ),
     ).toEqual([])
-    // A pending variant's name carrying a built one's keys is the registry's problem, as in report.ts.
-    const pending = { name: "engine:impact-graph", keys: { verifyPolicy: "shared" as const } }
+    // A pending variant carrying a built one's keys is the registry's problem, as in report.ts.
+    const pending = { name: "engine:cards-brain", keys: { verifyPolicy: "shared" as const } }
     expect(variantProblems("engine", pending)).not.toEqual([])
     expect(projectionProblems(record({ variant: pending }))).toEqual(variantProblems("engine", pending))
   })
@@ -1492,8 +1492,9 @@ describe("the entry point's variants and the pilot's limits", () => {
       detail: "desktop runs on the desktop runner; replays and projections here run the engine.",
     })
     expect(variantRecord("engine:impact-graph")).toEqual({
-      ok: false,
-      detail: expect.stringContaining("registered for VS-25b wiring"),
+      ok: true,
+      name: "engine:impact-graph",
+      record: { name: "engine:impact-graph", keys: { impact: "graph" } },
     })
     expect(variantRecord("not a name")).toEqual({ ok: false, detail: expect.stringContaining("is not a variant name") })
     // admitReplay keeps its own wording for a desktop name, and hands out the same record.

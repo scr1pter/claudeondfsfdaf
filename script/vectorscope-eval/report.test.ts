@@ -537,6 +537,35 @@ describe("saved replay artifacts", () => {
     expect(empty.detail).toContain("nothing was reviewed")
   })
 
+  test("a graph budget stop before reviewer admission supplies no review credit", () => {
+    const shape = {
+      files: { reviewed: [], skipped: [] },
+      attempts: [{ seq: 1, pass: "review", phase: "turn", admitted: false, stop: "budget", estimateUsd: 0.25 }],
+    }
+    const outcome = {
+      partial: "budget",
+      unreviewed: [labelled.path],
+      specialists: [{ name: "review", status: "stopped", steps: 0 }],
+    }
+    const graph = { ...shape, config: { digest: "d", warnings: [], value: { impact: "graph" } } }
+    expect(fromArtifact(artifact(graph, outcome), seed, [])).toMatchObject({
+      status: "not-sent",
+      stop: "budget",
+      attempts: 0,
+      proposed: [],
+      posted: [],
+      detail: "Not reviewed. No reviewer request was admitted.",
+    })
+    // Once a reviewer was admitted, unfinished changed files retain normal partial-review and spend accounting.
+    const sent = fromArtifact(artifact({ ...graph, attempts: [artifact().attempts[0]!] }, outcome), seed, [])
+    expect(sent).toMatchObject({ status: "partial", attempts: 1, spend: { costUsd: 0.05 } })
+    expect(fromArtifact(artifact(shape, outcome), seed, [])).toMatchObject({
+      status: "partial",
+      stop: "budget",
+      attempts: 0,
+    })
+  })
+
   test("a refused summary leaves its findings unposted", () => {
     const run = fromArtifact(artifact({ posted: [artifact().posted[0]], refused: "secret in output" }), seed, [])
     expect(run.posted.map((finding) => finding.anchored)).toEqual([true])
@@ -673,7 +702,7 @@ describe("report.ts", () => {
         artifact({ label: "mismatched", variant: { name: "engine:shared-verify", keys: { verifyPolicy: "legacy" } } }),
       ),
     )
-    // A pending name carrying a built variant's keys: ReviewEval.replay, which cannot see the registry, would run it.
+    // A built graph variant with another variant's keys cannot supply graph evidence.
     writeFileSync(
       join(dir, "mislabeled.json"),
       JSON.stringify(
@@ -689,7 +718,8 @@ describe("report.ts", () => {
     const problems = loaded.problems.filter((problem) => problem.startsWith(dir))
     expect(problems).toHaveLength(4)
     expect(problems[0]).toStartWith(join(dir, "mislabeled.json"))
-    expect(problems[0]).toContain("engine:impact-graph is registered for VS-25b wiring, which has not landed")
+    expect(problems[0]).toContain("not the registry's")
+    expect(problems[0]).toContain('{"keys":{"impact":"graph"}}')
     expect(problems[1]).toStartWith(join(dir, "mismatched.json"))
     expect(problems[1]).toContain("not the registry's")
     expect(problems[2]).toStartWith(join(dir, "pending.json"))

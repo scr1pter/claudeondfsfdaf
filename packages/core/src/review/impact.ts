@@ -1,7 +1,7 @@
 // VS-25b's Tier 1 impact slice: the definitions a change touches and the call sites of their names in files that import
 // the changed modules, ranked and packed into a bounded share of the context (contract §1.2 and §4 VS-25b; addendum A
-// VS-36 items 1, 2, 4 and 5 and VS-38 items 6 and 7). Nothing calls it yet: engine review/impact.ts builds a slice with
-// it, and no runner calls that before VS-25b wiring. VS-37a adds the three-tier packing (packTiers and its helpers),
+// VS-36 items 1, 2, 4 and 5 and VS-38 items 6 and 7). The engine builds a slice for the opt-in graph review.
+// VS-37a adds the three-tier packing (packTiers and its helpers),
 // reached only when the builder is given eval-only packing parameters; packSlice stays the VS-25b arm. VS-37c adds tier
 // b's same-package Go lookups (samePackageLookups, samePackageUses), reached only through the builder's tier b.
 //
@@ -86,6 +86,8 @@ export interface ImpactSlice {
   // What the <untrusted_impact> block as rendered costs (impactTokens), 0 when it renders nothing. The trusted sentence
   // that comes with the block (IMPACT_INSTRUCTION) is charged to the budget but not counted here.
   tokens: number
+  // The final block and its trusted instruction did not fit, including the diagnostic notes. Keep the scan metadata.
+  promptOmitted?: "budget"
   ms: number
   // "path:line" of every block the prompt shows, so slice recall can be computed from artifacts. LEFT definitions are
   // shown but carry none: a base line cannot be joined with head-line labels.
@@ -122,7 +124,15 @@ export interface ImpactSlice {
 // holds no code text: scopes and outbound signatures are left out with the definitions and call sites.
 export type ImpactPrompt = Pick<
   ImpactSlice,
-  "changed" | "dependents" | "tests" | "incomplete" | "unsearched" | "scopes" | "outbound" | "fallback"
+  | "changed"
+  | "dependents"
+  | "tests"
+  | "incomplete"
+  | "unsearched"
+  | "scopes"
+  | "outbound"
+  | "fallback"
+  | "promptOmitted"
 >
 export type ImpactRecord = Omit<ImpactSlice, "changed" | "dependents" | "locations" | "scopes" | "outbound">
 
@@ -418,6 +428,8 @@ export function barrels(changed: readonly string[], lookup: BrainCode.Lookup): s
 }
 
 export interface Selection {
+  // Only changed module paths, including the old path of a rename. Used to order the diff before packing.
+  changedRanks: ReadonlyMap<string, number>
   // `reaches`: the changed modules the file reaches, directly, through a barrel or a header, or as their package
   // neighbour; its call sites are matched against their names only.
   confirm: { path: string; rank: number; importsChanged: boolean; reaches: string[] }[]
@@ -553,6 +565,7 @@ export function selectDependents(input: {
     }))
     .toSorted((a, b) => b.rank - a.rank || compare(a.path, b.path))
   return {
+    changedRanks: new Map(changed.map((file) => [file, mass.get(file) ?? 0])),
     confirm: ranked.slice(0, IMPACT_LIMITS.confirm),
     cap: ranked.slice(IMPACT_LIMITS.confirm).map((entry) => entry.path),
     gate: checked.filter((file) => !gatedSet.has(file)),
@@ -563,6 +576,13 @@ export function selectDependents(input: {
       .filter((file) => TEST_PATHS.some((glob) => minimatch(file, glob, { dot: true, nocase: true })))
       .toSorted(compare),
   }
+}
+
+/** Stable within equal graph ranks. Sorting leaves the original diff files and their anchor coordinates intact. */
+export function orderImpactFiles(files: readonly DiffFile[], ranks: ReadonlyMap<string, number>): DiffFile[] {
+  const rank = (file: DiffFile) =>
+    Math.max(ranks.get(file.path) ?? 0, file.oldPath ? (ranks.get(file.oldPath) ?? 0) : 0)
+  return files.toSorted((a, b) => rank(b) - rank(a))
 }
 
 /**
@@ -606,20 +626,17 @@ export function packSlice(input: {
   context: number
   tests?: readonly string[]
 }) {
-  const budget = Math.floor(
-    Math.min(IMPACT_LIMITS.tokens, Math.floor(IMPACT_LIMITS.share * Math.max(0, input.context))) *
-      IMPACT_LIMITS.charsPerToken,
-  )
-  const frame =
+  const budget = impactBudgetChars(input.context)
+  const frame = impactFrameChars(
     impactBlock({
       changed: [],
       dependents: [],
       tests: (input.tests ?? []).slice(),
       incomplete: [...IMPACT_INCOMPLETE],
       unsearched: Number.MAX_SAFE_INTEGER,
-    }).length +
-    IMPACT_INSTRUCTION.length +
-    1
+    }),
+    false,
+  )
   const state = { used: frame, open: frame <= budget }
   // A cap ends only its own kind of block; the budget ends packing.
   const fits = (block: string, index: number, cap: number) => {
@@ -683,14 +700,7 @@ export function packSlice(input: {
     changed,
     dependents,
     tokens: impactTokens({ changed, dependents, tests: (input.tests ?? []).slice() }),
-    locations: [
-      ...new Set([
-        ...changed
-          .filter((definition) => definition.side === "RIGHT")
-          .map((definition) => `${definition.path}:${definition.start}`),
-        ...dependents.map((dependent) => `${dependent.path}:${dependent.line}`),
-      ]),
-    ],
+    locations: impactLocations({ changed, dependents }),
     confirmed: sites.length,
     budget: budgeted,
     definitions: input.changed
@@ -706,6 +716,145 @@ export function packSlice(input: {
 /** What the <untrusted_impact> block costs as rendered, at IMPACT_LIMITS.charsPerToken: 0 when it renders nothing. */
 export function impactTokens(slice: ImpactPrompt) {
   return Math.ceil(impactBlock(slice).length / IMPACT_LIMITS.charsPerToken)
+}
+
+function impactBudgetChars(context: number) {
+  const tokens = Math.min(IMPACT_LIMITS.tokens, Math.floor(IMPACT_LIMITS.share * Math.max(0, context)))
+  return Math.floor(tokens * IMPACT_LIMITS.charsPerToken)
+}
+
+function impactFrameChars(block: string, tiered: boolean) {
+  // The trusted sentence joins its paragraph with one newline. The new block joins the prompt with two more.
+  return block.length + (tiered ? IMPACT_TIERS_INSTRUCTION : IMPACT_INSTRUCTION).length + 3
+}
+
+/** Check the actual rendered frame after the collector has added its final notes. No suppressed line counts as shown. */
+export function capImpactSlice(slice: ImpactSlice, context: number): ImpactSlice {
+  const block = impactBlock(slice)
+  if (!block || impactFrameChars(block, slice.scopes !== undefined) <= impactBudgetChars(context)) return slice
+  const scopes = slice.scopes ?? []
+  const outbound = slice.outbound ?? []
+  const tiers = slice.tiers
+  return {
+    ...slice,
+    promptOmitted: "budget",
+    changed: [],
+    dependents: [],
+    ...(slice.scopes ? { scopes: [] } : {}),
+    ...(slice.outbound ? { outbound: [] } : {}),
+    tokens: 0,
+    locations: [],
+    stages: { ...slice.stages, packed: 0 },
+    dropped: {
+      ...slice.dropped,
+      definitions: [
+        ...new Set([
+          ...scopes.map(definitionLocation),
+          ...slice.changed.map(definitionLocation),
+          ...(tiers?.dropped.covered ?? []),
+          ...slice.dropped.definitions,
+        ]),
+      ],
+      budget: [...slice.dependents.map((site) => `${site.path}:${site.line}`), ...slice.dropped.budget],
+    },
+    ...(tiers
+      ? {
+          tiers: {
+            ...tiers,
+            tokens: { a: 0, b: 0, c: 0 },
+            shown: { a: [], b: [], c: [] },
+            dropped: {
+              ...tiers.dropped,
+              covered: [],
+              scope: [...scopes.map(definitionLocation), ...tiers.dropped.scope],
+              outbound: [...outbound.map((item) => `${item.path}:${item.start}`), ...tiers.dropped.outbound],
+            },
+          },
+        }
+      : {}),
+  }
+}
+
+// LEFT definitions still reach the prompt but only head locations join to the replay's labels.
+function impactLocations(slice: Pick<ImpactPrompt, "changed" | "dependents" | "scopes" | "outbound">) {
+  return [
+    ...new Set([
+      ...(slice.scopes ?? []).filter((scope) => scope.side === "RIGHT").map((scope) => `${scope.path}:${scope.start}`),
+      ...slice.changed.filter((item) => item.side === "RIGHT").map((item) => `${item.path}:${item.start}`),
+      ...(slice.outbound ?? []).map((item) => `${item.path}:${item.start}`),
+      ...slice.dependents.map((item) => `${item.path}:${item.line}`),
+    ]),
+  ]
+}
+
+/** Remove the last packed dependent file, retaining all higher-ranked excerpts. No changed diff coverage is lost. */
+export function shrinkImpactDependents(slice: ImpactSlice): ImpactSlice | undefined {
+  const path = slice.dependents.at(-1)?.path
+  if (path === undefined) return
+  const dependents = slice.dependents.filter((site) => site.path !== path)
+  const removed = slice.dependents.filter((site) => site.path === path)
+  // Removing a visible test must not promote a previously hidden path into the request.
+  const visibleTests = slice.tests.slice(0, IMPACT_CAPS.tests)
+  const tests = visibleTests.includes(path) ? visibleTests : slice.tests
+  const next: ImpactSlice = {
+    ...slice,
+    dependents,
+    tests: tests.filter((file) => file !== path),
+    locations: impactLocations({ ...slice, dependents }),
+    stages: { ...slice.stages, packed: dependents.length },
+    dropped: {
+      ...slice.dropped,
+      budget: [...removed.map((site) => `${site.path}:${site.line}`), ...slice.dropped.budget],
+    },
+  }
+  if (slice.tiers) {
+    next.tiers = {
+      ...slice.tiers,
+      tokens: {
+        ...slice.tiers.tokens,
+        c: Math.ceil(
+          dependents.reduce((size, site) => size + impactCallSite(site).length + 1, 0) / IMPACT_LIMITS.charsPerToken,
+        ),
+      },
+      shown: {
+        ...slice.tiers.shown,
+        c: slice.tiers.shown.c.filter((range) => range.slice(0, range.lastIndexOf(":")) !== path),
+      },
+    }
+    // A file contributes to this fallback count only if at least one of its shown windows lacked a statement.
+    if (
+      slice.fallback &&
+      removed.some((site) => !site.statement || site.line < site.statement.start || site.line > site.statement.end)
+    ) {
+      next.fallback = slice.fallback.flatMap((item) =>
+        item.kind !== "c:no-statement" ? [item] : item.count > 1 ? [{ ...item, count: item.count - 1 }] : [],
+      )
+    }
+  }
+  next.tokens = impactTokens(next)
+  return next
+}
+
+/** Only metadata belongs in the replay's tier1 record. Source text remains inside the untrusted prompt. */
+export function impactRecord(slice: ImpactSlice): ImpactRecord {
+  return {
+    tests: slice.tests,
+    unsupported: slice.unsupported,
+    tokens: slice.tokens,
+    ...(slice.promptOmitted ? { promptOmitted: slice.promptOmitted } : {}),
+    ms: slice.ms,
+    stages: slice.stages,
+    dropped: slice.dropped,
+    plan: slice.plan,
+    gitVersion: slice.gitVersion,
+    clone: slice.clone,
+    grepMs: slice.grepMs,
+    parseMs: slice.parseMs,
+    ...(slice.incomplete ? { incomplete: slice.incomplete } : {}),
+    ...(slice.unsearched === undefined ? {} : { unsearched: slice.unsearched }),
+    ...(slice.fallback ? { fallback: slice.fallback } : {}),
+    ...(slice.tiers ? { tiers: slice.tiers } : {}),
+  }
 }
 
 /** The changed modules: the new paths of files that still exist, and the old paths of renamed and deleted files. */
@@ -1101,11 +1250,8 @@ export function packTiers(input: {
   const inline = input.inline ?? (() => false)
   const diffShown = input.diffShown ?? (() => true)
   const tests = (input.tests ?? []).slice()
-  const budget = Math.floor(
-    Math.min(IMPACT_LIMITS.tokens, Math.floor(IMPACT_LIMITS.share * Math.max(0, input.context))) *
-      IMPACT_LIMITS.charsPerToken,
-  )
-  const frame =
+  const budget = impactBudgetChars(input.context)
+  const frame = impactFrameChars(
     impactBlock({
       changed: [],
       dependents: [],
@@ -1115,9 +1261,9 @@ export function packTiers(input: {
       incomplete: [...IMPACT_INCOMPLETE],
       unsearched: Number.MAX_SAFE_INTEGER,
       fallback: IMPACT_FALLBACK_KINDS.map((kind) => ({ kind, count: Number.MAX_SAFE_INTEGER })),
-    }).length +
-    IMPACT_TIERS_INSTRUCTION.length +
-    1
+    }),
+    true,
+  )
   const avail = frame <= budget ? budget - frame : 0
   const ledger = { used: 0, carry: 0 }
   const spent: Record<ImpactTier, number> = { a: 0, b: 0, c: 0 }
@@ -1538,14 +1684,7 @@ export function packTiers(input: {
     dependents,
     fallback,
     tokens: impactTokens({ changed, dependents, scopes, outbound, tests, fallback }),
-    locations: [
-      ...new Set([
-        ...scopes.filter((scope) => scope.side === "RIGHT").map((scope) => `${scope.path}:${scope.start}`),
-        ...changed.filter((item) => item.side === "RIGHT").map((item) => `${item.path}:${item.start}`),
-        ...outbound.map((item) => `${item.path}:${item.start}`),
-        ...dependents.map((item) => `${item.path}:${item.line}`),
-      ]),
-    ],
+    locations: impactLocations({ scopes, changed, outbound, dependents }),
     confirmed: sites.length,
     budget: budgeted,
     definitions: unpacked,
@@ -1735,7 +1874,7 @@ function definitionKey(definition: Definition) {
   return `${definition.side}\0${definition.path}\0${definition.name}\0${definition.start}`
 }
 
-function definitionLocation(definition: Definition) {
+function definitionLocation(definition: Pick<Definition, "path" | "side" | "start">) {
   return definition.side === "RIGHT"
     ? `${definition.path}:${definition.start}`
     : `base:${definition.path}:${definition.start}`

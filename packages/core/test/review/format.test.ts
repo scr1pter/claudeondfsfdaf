@@ -315,6 +315,24 @@ function followsWordingRule(body: string) {
 }
 
 describe("the summary comment", () => {
+  test("a diff that did not fit lists its omissions without publishing a clean summary", () => {
+    const input: SummaryInput = {
+      ...FULL,
+      selection: selection({ diffIncomplete: true }),
+      report: { summary: "No issues found", files: [] },
+      notes: ["Diffs outside the context budget: `large.ts`."],
+    }
+    const body = buildSummaryBody(input)
+    expect(body).toContain("## Vectorscope review · Partial review")
+    expect(body).toContain("No findings on the reviewed lines.")
+    expect(body).toContain("`large.ts`")
+    expect(body).not.toContain("No issues found")
+    expect(body).not.toContain("Risk: Low")
+    expect(
+      buildSummaryBody({ ...input, selection: selection({ diffIncomplete: true, inline: [blocking] }) }),
+    ).toContain("**1 blocking**")
+  })
+
   test("a trivial policy skip states that no review ran and retains earlier open findings", () => {
     const input: SummaryInput = {
       ...FULL,

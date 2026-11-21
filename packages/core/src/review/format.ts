@@ -784,10 +784,16 @@ function render(input: SummaryInput, limits: Limits): string {
     if (input.form !== "desktop") lines.push(SUMMARY_MARKER)
     return lines.join("\n")
   }
-  const lines = [selection ? `## Vectorscope review · Risk: ${capital(selection.risk)}` : "## Vectorscope review", ""]
+  const heading = selection?.diffIncomplete
+    ? "## Vectorscope review · Partial review"
+    : selection
+      ? `## Vectorscope review · Risk: ${capital(selection.risk)}`
+      : "## Vectorscope review"
+  const lines = [heading, ""]
   if (input.banners?.length) lines.push(quote(input.banners), "")
   const summary = input.report?.summary.trim()
-  if (summary) lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
+  if (summary && !selection?.diffIncomplete)
+    lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
   if (selection) {
     lines.push(countLine(selection, input.strict), "")
     const since = sinceLine(input, selection)
@@ -828,6 +834,7 @@ function countLine(selection: Selection, strict?: SummaryInput["strict"]): strin
   if (blocking) parts.push(`${blocking} blocking`)
   if (concerns) parts.push(`${concerns} ${concerns === 1 ? "concern" : "concerns"}`)
   if (strict) return strictCountLine(strict, parts, below)
+  if (selection.diffIncomplete && !parts.length) return `No findings on the reviewed lines${below || "."}`
   if (!parts.length) return `**No issues found** on the changed lines${below || "."}`
   return `**${parts.join(" · ")}** on the changed lines${below}`
 }

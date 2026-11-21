@@ -189,7 +189,8 @@ export const VARIANTS = {
   },
   "impact-graph": {
     planned: 'impact: "graph"',
-    engine: { pending: "VS-25b wiring" },
+    keys: { impact: "graph" },
+    engine: { from: "VS-25b" },
     desktop: { pending: "VS-25's desktop half, after VS-10" },
   },
   "cards-brain": {
