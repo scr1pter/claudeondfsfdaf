@@ -141,6 +141,8 @@ const upstream = Bun.serve({
     const record = JSON.parse(raw)
     if (record.state !== parts[4] || record.challenge !== parts[5] || record.expiresAt <= Number(parts[6]))
       return Response.json({ result: null })
+    // A16's expected purpose, ARGV[4] ("" when the client sent none): the desktop sends "sign-in" or "delete".
+    if (parts[7] !== "" && (record.purpose ?? "sign-in") !== parts[7]) return Response.json({ result: null })
     records.delete(parts[3])
     return Response.json({ result: raw })
   },
