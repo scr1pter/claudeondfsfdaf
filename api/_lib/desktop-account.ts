@@ -69,10 +69,16 @@ export async function consumeDesktopCode(input: unknown, fetcher: typeof fetch =
     !/^[A-Za-z0-9._~-]{43,128}$/.test(input.verifier)
   )
     throw invalid()
+  // A16: the client may say which purpose it expects ("sign-in", "cli" or "delete"). It only narrows what the code may
+  // buy: a code saved for another purpose is refused before it is consumed, and the credential is still chosen by the
+  // saved purpose alone. Left out, any saved purpose is accepted, as older clients expect.
+  const expected = "expect" in input ? input.expect : undefined
+  if (expected !== undefined && !(typeof expected === "string" && ["sign-in", "cli", "delete"].includes(expected)))
+    throw invalid()
   // Verification and deletion must be one transaction across all Vercel instances.
   // Incorrect bindings cannot burn a valid code, and two exchanges cannot both win.
   const script =
-    "local raw = redis.call('GET', KEYS[1]); if not raw then return false end; local item = cjson.decode(raw); if item.state ~= ARGV[1] or item.challenge ~= ARGV[2] or item.expiresAt <= tonumber(ARGV[3]) then return false end; if item.purpose ~= nil and item.purpose ~= 'delete' and item.purpose ~= 'cli' then return false end; redis.call('DEL', KEYS[1]); return raw"
+    "local raw = redis.call('GET', KEYS[1]); if not raw then return false end; local item = cjson.decode(raw); if item.state ~= ARGV[1] or item.challenge ~= ARGV[2] or item.expiresAt <= tonumber(ARGV[3]) then return false end; if item.purpose ~= nil and item.purpose ~= 'delete' and item.purpose ~= 'cli' then return false end; if ARGV[4] ~= '' and (item.purpose or 'sign-in') ~= ARGV[4] then return false end; redis.call('DEL', KEYS[1]); return raw"
   const raw = await persistentStore(
     [
       "EVAL",
@@ -82,6 +88,7 @@ export async function consumeDesktopCode(input: unknown, fetcher: typeof fetch =
       input.state,
       createHash("sha256").update(input.verifier).digest("base64url"),
       String(now),
+      expected ?? "",
     ],
     fetcher,
   )

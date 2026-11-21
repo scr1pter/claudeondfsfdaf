@@ -411,6 +411,62 @@ test.each([
   expectDomains(desk, lessons.key.key)
 })
 
+// B08 (BT10 item 4): the owner read also answers the visibility the server recorded for the run's Brain context. It can
+// only make screening stricter, and with neither it nor an approved bundle the run's visibility is unknown.
+test("the server's recorded public visibility screens a private run's drafts as public in preview and import", async () => {
+  const lessons = await brainArtifact({ publicRun: false, drafts: "lessons" })
+  using desk = returnedDesk(lessons)
+  desk.state.historical = true
+  const preview = await desk.brain.previewReturned(RETURNED)
+  expect(preview).toMatchObject({ currentPublicRepository: false, publicRepository: true })
+  // The Import click's fresh read leaves the field out; the value cached with the preview still screens as public.
+  desk.state.historical = undefined
+  expect(await desk.brain.importReturned({ previewId: preview.id, approvedSha256: preview.sha256 })).toEqual(
+    ENGINE_ANSWER,
+  )
+  expect(desk.seen.engine.map((request) => (request.json as { publicRepository: boolean }).publicRepository)).toEqual([
+    true,
+  ])
+  // A procedure draft is refused when only the server says the run was public.
+  const procedures = await brainArtifact({ publicRun: false, drafts: "lessons-and-skill" })
+  desk.state.zip = procedures.zip
+  desk.state.historical = true
+  await expect(desk.brain.previewReturned(RETURNED)).rejects.toThrow("Invalid returned repository Brain drafts")
+  expectDomains(desk, lessons.key.key)
+})
+
+test("a run's public approval is never lowered by the server's recorded private visibility", async () => {
+  const lessons = await brainArtifact({ publicRun: true, drafts: "lessons" })
+  using desk = returnedDesk(lessons)
+  desk.state.historical = false
+  const preview = await desk.brain.previewReturned(RETURNED)
+  expect(preview).toMatchObject({ currentPublicRepository: false, publicRepository: true })
+  expect(await desk.brain.importReturned({ previewId: preview.id, approvedSha256: preview.sha256 })).toEqual(
+    ENGINE_ANSWER,
+  )
+  expect(desk.seen.engine.map((request) => (request.json as { publicRepository: boolean }).publicRepository)).toEqual([
+    true,
+  ])
+})
+
+test("returned drafts with no approved bundle and no recorded visibility, or a malformed field, are refused", async () => {
+  const bare = await brainArtifact({ publicRun: false, drafts: "lessons", bundle: false })
+  using desk = returnedDesk(bare)
+  await expect(desk.brain.previewReturned(RETURNED)).rejects.toThrow(
+    "This run has no recorded visibility for its returned proposals.",
+  )
+  // The server's recorded visibility alone is enough.
+  desk.state.historical = false
+  const preview = await desk.brain.previewReturned(RETURNED)
+  expect(preview.publicRepository).toBe(false)
+  desk.state.historical = "true"
+  await expect(desk.brain.importReturned({ previewId: preview.id, approvedSha256: preview.sha256 })).rejects.toThrow(
+    "no longer authorized",
+  )
+  await expect(desk.brain.previewReturned(RETURNED)).rejects.toThrow("Vector could not authorize this run artifact.")
+  expect(desk.seen.engine).toHaveLength(0)
+})
+
 test("what a desktop Brain run saves today, with no returned drafts, previews nothing, and only that run's Brain key opens its artifact", async () => {
   const today = await brainArtifact({ publicRun: false, drafts: "none" })
   using desk = returnedDesk(today)
@@ -488,7 +544,12 @@ test("an account change or sign-out retires a returned preview before any import
 })
 
 /** Seals what the engine's save writes for a desktop Brain run, zipped as GitHub serves the uploaded artifact. */
-async function brainArtifact(input: { publicRun: boolean; drafts: "none" | "lessons" | "lessons-and-skill" }) {
+async function brainArtifact(input: {
+  publicRun: boolean
+  drafts: "none" | "lessons" | "lessons-and-skill"
+  // Leave the approved bundle (and its approval) out of the sealed artifact.
+  bundle?: false
+}) {
   // Core's Brain graph, and the engine's opener and upload fixture, load only in the cases that seal an artifact. Core's
   // Brain graph creates core's global directories when imported, so a local run sets XDG_DATA_HOME, XDG_CONFIG_HOME,
   // XDG_STATE_HOME, XDG_CACHE_HOME and VECTOR_TEST_HOME to scratch directories, as the lane's runs do.
@@ -571,7 +632,9 @@ async function brainArtifact(input: { publicRun: boolean; drafts: "none" | "less
     identity: RUN,
     key,
     session: { messages: ["PRIVATE_SESSION_CANARY"] },
-    brain: { path: BrainRunBundle.PATH, bytes: opened.bytes, approval: opened.approval },
+    ...(input.bundle === false
+      ? {}
+      : { brain: { path: BrainRunBundle.PATH, bytes: opened.bytes, approval: opened.approval } }),
     ...(proposals ? { proposals: { path: RunProposalsCodec.PATH, bytes: proposals.bytes } } : {}),
   })
   const writer = new ZipWriter(new Uint8ArrayWriter())
@@ -608,6 +671,8 @@ function returnedDesk(artifact: { zip: Uint8Array; key: { key: string; keyId: st
     token: "desktop-only" as string | undefined,
     private: true,
     ownerPublic: undefined as boolean | undefined,
+    // The owner read's `historicalPublicRepository`: left out when undefined, as a server before B08's field answers.
+    historical: undefined as unknown,
     ownerKey: artifact.key,
     authority: 0,
     name: "vector-session-dispatch-99",
@@ -688,6 +753,7 @@ function returnedDesk(artifact: { zip: Uint8Array; key: { key: string; keyId: st
         rid: RUN.rid,
         artifactId: "7",
         publicRepository: state.ownerPublic ?? !state.private,
+        ...(state.historical === undefined ? {} : { historicalPublicRepository: state.historical }),
       }
     },
     // Loopback requests reach the fakes and the signed storage URL is answered here; any other host fails closed, so no

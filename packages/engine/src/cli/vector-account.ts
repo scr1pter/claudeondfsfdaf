@@ -270,7 +270,8 @@ async function exchange(input: { code: string; state: string; verifier: string }
   const response = await Egress.fetch(ACCOUNT_SOURCE.id, `${site()}/api/account/cli-exchange`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify(input),
+    // `expect` only narrows: the server refuses a code saved for another purpose before consuming it (A16).
+    body: JSON.stringify({ ...input, expect: "cli" }),
     redirect: "error",
     signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
   }).catch(() => undefined)

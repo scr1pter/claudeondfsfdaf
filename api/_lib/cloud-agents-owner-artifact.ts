@@ -1,6 +1,6 @@
 import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
 import { bindingFor } from "./cloud-agents-binding.js"
-import { cloudRunArtifactKey, cloudBrainArtifactKey } from "./cloud-agents-artifact.js"
+import { cloudBrainArtifactKey } from "./cloud-agents-artifact.js"
 import { requireCloudAgentsDesktop } from "./cloud-agents-desktop.js"
 import { ownerCloudRun } from "./cloud-agents-runs.js"
 import { githubApp } from "./github-app.js"
@@ -16,7 +16,13 @@ export type OwnerArtifactReadKey = {
   thread: string
   rid: string
   artifactId: string
+  /** The repository's visibility now, from GitHub's metadata. */
   publicRepository: boolean
+  /**
+   * The visibility the run's Brain context was recorded with (the run record's `brainPublic`, which also chose the
+   * key's domain). A client screens the run's returned drafts by the stricter of the two.
+   */
+  historicalPublicRepository: boolean
 }
 
 /** Account-owner export authority is separate from live inference/dispatch authority and may read a completed run. */
@@ -69,6 +75,10 @@ export function createOwnerArtifactReadApi(
     )
       throw unavailable()
     const record = await ownerCloudRun(owner.account, body.rid, store)
+    // BT03 D3: a desktop run without recorded Brain context holds no conversation key, so nothing can be read. This
+    // answers before the binding or any GitHub metadata read.
+    const brain = record.brain
+    if (!brain) throw unavailable()
     const binding = await bindingFor(record.repositoryId, store)
     if (!binding || binding.account !== owner.account || binding.generation !== record.generation || binding.suspended)
       throw unavailable()
@@ -87,14 +97,14 @@ export function createOwnerArtifactReadApi(
     )
       throw unavailable()
     const claims = { sub: owner.account, repo: record.repositoryId, gen: record.generation, thr: record.thread }
-    const key = record.brain ? cloudBrainArtifactKey(claims, record.brain, env) : cloudRunArtifactKey(claims, env)
     const result: OwnerArtifactReadKey = {
-      ...key,
+      ...cloudBrainArtifactKey(claims, brain, env),
       repositoryId: record.repositoryId,
       thread: record.thread,
       rid: record.rid,
       artifactId: body.artifactId,
       publicRepository: metadata.publicRepository,
+      historicalPublicRepository: brain.publicRepository,
     }
     json(response, 200, result)
   }

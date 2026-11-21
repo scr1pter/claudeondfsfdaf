@@ -214,8 +214,8 @@ The v2 order is process-finish, release-coordination, codium, then @vector. I si
 - Release-coordination and codium add 0 conflicts. Codium's last commit `1ce8f5f30` already has an equivalent here (`8d5e79a7e`).
 
 After codium is on v2:
-- The A59 joint check on v2: allowance `27e140de9`; verifier, gateway-hook and meter registrations; real-Redis mint and admission; the final webhook registration from `d8516df3d`; cloud run reader registration: BT11 (the repository binding reader and the ops run starter remain, deviations "2026-11-16 BT11" item 8).
-- V31 (Ship Desk capture job, workflow golden) once A49 is on v2: built in BT12 on `brain-transport` (the ticket step after mint, the capture job behind `vars.VECTOR_SHIP_DESK`, publish's `pr` output; deviations "2026-11-16 BT12"). It captures nothing in production until the repository binding reader is registered (BT11 item 8) and the owner activates Ship Desk.
+- The A59 joint check on v2: allowance `27e140de9`; verifier, gateway-hook and meter registrations; real-Redis mint and admission; the final webhook registration from `d8516df3d`; cloud run reader registration: BT11; the repository binding reader and the ops run starter: `api/_lib/ops-registration.ts` on `codium-api-fixes` (2026-11-21, deviations "2026-11-21 A59 registrations"; closes BT11 item 8 once merged).
+- V31 (Ship Desk capture job, workflow golden) once A49 is on v2: built in BT12 on `brain-transport` (the ticket step after mint, the capture job behind `vars.VECTOR_SHIP_DESK`, publish's `pr` output; deviations "2026-11-16 BT12"). It captures nothing in production until the cloud-agents service is on (the binding reader registered on 2026-11-21 reads only then) and the owner activates Ship Desk.
 
 ### What waits for the owner (never done by agents)
 

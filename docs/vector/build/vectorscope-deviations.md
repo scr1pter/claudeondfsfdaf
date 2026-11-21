@@ -26440,3 +26440,7 @@ Connect adds the tool-output deny and the caller’s inherited read restrictions
 The portable test covers a genuine same-head cache hit, a tampered file read before model dispatch, more restrictive user reads, a stronger security setting, strict reviews and stateless requests. Every fresh Connect run still enforces the original denied reads. Pinned strict reviews and batches continue to require fresh coverage.
 
 The local Connect cache regressions passed 1 tests, the strict review file passed 5 and model evidence passed 36. The engine, evaluation project and 27 workspace packages passed typechecking. The review source pin moved from `4883e382dcfeabaf` to `29d724d7ad1daa56` at revision 5. The two original Connect cases still require successful hosted Linux runs at the repaired commit.
+
+## 2026-11-21 · Integrate the Codium fixes from main
+
+Merged main at `94823aee817c` after the Connect cache repair. The desktop GitHub pull-request fixture passed 31 tests and the review model evidence fixture passed 36. The evaluation project and 27 workspace packages passed typechecking. The two trailing blank-line warnings in the incoming Codium and GitHub logs matched main’s diff. The review pipeline source digest is `29d724d7ad1daa56` at revision 5.
