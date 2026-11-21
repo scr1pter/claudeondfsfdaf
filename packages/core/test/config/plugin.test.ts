@@ -194,11 +194,14 @@ describe("ConfigExternalPlugin", () => {
               }),
             ),
           )
-          for (let attempt = 0; attempt < 100; attempt++) {
-            if (yield* fsUtil.existsSafe(marker)) break
-            yield* Effect.sleep("10 millis")
+          // The plugin's Bun.write creates the marker before it writes the bytes, and on Windows a reader can see the
+          // empty file in between, so wait for the content rather than the name.
+          let imported = ""
+          for (let attempt = 0; attempt < 100 && imported === ""; attempt++) {
+            imported = yield* fsUtil.readFileString(marker).pipe(Effect.orElseSucceed(() => ""))
+            if (imported === "") yield* Effect.sleep("10 millis")
           }
-          expect(yield* fsUtil.readFileString(marker)).toBe("approved")
+          expect(imported).toBe("approved")
         }),
       ),
     ),

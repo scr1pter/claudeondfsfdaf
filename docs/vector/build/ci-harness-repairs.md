@@ -623,3 +623,371 @@ Review follow-up.
   (only when the reader wrote any), as the timeout report already separates its parts.
 - Windows. Only Linux was validated locally. Check the Windows engine shard that runs `piped-output.test.ts` on the
   PR's CI (the `2>` and `>` redirects and the 512 KB size) before merging.
+
+## 2026-11-20: Windows company policy folder test reached the real PowerShell ACL reader
+
+Branch `policy-acl-timeout` from `8e34d05e`. Changes: `packages/engine/test/config/local-policy.test.ts` and
+`packages/engine/test/fixture/managed-policy.ts`. `packages/core/src/config/managed.ts` is unchanged: a failed or
+timed-out PowerShell read still yields no entries, an `unreadable` verdict and Vector Local on with Web access None.
+No deadline, assertion, skip or retry changed, and the 20 s PowerShell timeout stays.
+
+Failure. main push run 44746217530 at `8e34d05e`, engine (windows, shard 9/12), job 136322673267:
+`local-policy.test.ts:1254` "sources Vector cannot read > a company policy file that is a folder turns Local on with
+Web access None" took 20831.45 ms and its first warning was `Vector could not read who may change <managed>.` instead
+of `Vector could not read <managed>\vector.json.` The second warning, `enabled: true` and `web: "none"` held. Every
+shard passed at `14cb9720`, and `14cb9720..8e34d05e` touches only `cli-process.ts`, `piped-output.test.ts` and a doc.
+
+Cause. A test-isolation gap. This was the only test in the file that made the managed path itself (`mkdirSync(file)`)
+instead of calling `writeManaged()`, so it never installed `useManagedPolicyFixture`. On Windows `ConfigManaged.read()`
+then went `check()` -> `windowsCheck()` -> `cachedAcl()` -> the real `powershellAcl()`, a `spawnSync` of
+`powershell.exe` with a 20,000 ms timeout. Process starts on this runner were slow at the time, and the cold PowerShell
+start (normally 2 to 3.5 s) most likely ran past the timeout; a non-zero status gave `{ entries: {} }`, and
+`windowsCheck` reported the first missing entry, the folder. The product failed closed as designed. The slow start is
+inferred from the timing below, not observed directly: the log shows nothing from inside the 20 s window.
+
+Evidence.
+
+- 20831.45 ms is the 20,000 ms timeout plus about 0.8 s.
+- The same shard, 20 to 47 s earlier, ran neighbours 3.5 to 6.7 times slower than a passing run (44736225208): "the
+  policy is resolved before the first catalog fetch" 25379.50 ms against 5222 ms (finished 14:03:40), "the environment
+  turned on ..." 11554.31 ms against 1720 ms (14:03:51), "a nested vector keeps Local on ..." 12220.72 ms against
+  3498 ms (14:04:07). All three spawn child Bun processes. The folder test started at about 14:04:27.3; the tests just
+  before it (14:04:24 to 14:04:27) and just after it (from 14:04:48.17) ran at their usual millisecond times. That points to slow process creation on this runner, not a slow PowerShell path in `managed.ts`.
+- In 14 sampled runs this test took 1819 to 5415 ms except the one failure. A product cause (a stdin wait, the minimal
+  environment, the script blocking) would slow every call, not one in 14.
+- `test/fixture/managed-policy.ts` exists so policy-semantics tests skip Windows ACL discovery. Its reader answers SYSTEM
+  as owner, with no rules, for the managed folder and every managed file in it that exists, a folder named
+  `vector.json` included, so the verdict is trusted and the read of the folder then fails with exactly the two warnings
+  the test asserts, the same path the passing runs took through real PowerShell.
+
+Change.
+
+- The folder test installs the fixture right after `mkdirSync`, with the same line `writeManaged()` uses:
+  `managedFixture.restore ??= useManagedPolicyFixture(managedDirectory)`. The existing `afterEach` restores it. Both
+  exact assertions stay.
+- The fixture's reader is now the exported `managedPolicyAcl(directory)`; `useManagedPolicyFixture` installs it on
+  Windows as before and is still a no-op elsewhere.
+- Pins that run on Linux too: the file's `afterEach` now fails a test that leaves a company policy file
+  (`vector.json` or `vector.jsonc`, a folder of that name included) in the managed folder without the fixture
+  installed, and a new test checks, with `platform: "win32"`, that the fixture's reader makes `check()` trust a folder
+  named `vector.json` and answers only for its own managed paths that exist (not an absent `vector.jsonc`, not
+  `other.json`).
+
+Validation (Linux, Bun 1.3.14, through the serial lock, from the package directories):
+
+- `local-policy.test.ts` 69 pass, 2 skip, 0 fail; `core` `managed.test.ts` 3 pass, 1 skip; `bun typecheck` exit 0 in
+  `packages/core` and `packages/engine`.
+- `managed-trust.test.ts` 25 pass, 3 skip, 1 fail: "POSIX ownership > checks the real file and every folder above it"
+  expects a file the test user made not to be root's, and this sandbox runs as root (uid 0). The file is not touched
+  here; CI runs it as a standard user.
+- Mutations, each red on Linux, then restored with matching sha256: dropping the new fixture line from the folder test
+  (the `afterEach` guard fails), removing `vector.json` from the fixture's owned paths, and changing the fixture's owner
+  to Users (`S-1-5-32-545`) (the new check test fails on both).
+
+What Windows CI must show.
+
+- The engine (windows) shard holding `local-policy.test.ts` (shard 9 at `8e34d05e`'s file list) passes, with the folder
+  test unchanged and exact. That test takes milliseconds with no PowerShell start and never logs "could not read who
+  may change".
+- The shard holding `managed-trust.test.ts` (shard 12) still passes its real PowerShell tests ("checks a real file's
+  access rules with PowerShell" and the trusted managed file tests).
+- Linux and macOS engine shards are unchanged.
+
+Note. `managed-trust.test.ts` still runs real PowerShell on purpose; it is where the fixture contract puts the Windows
+allow/deny integration. A runner stall of the same size could fail it the same way. That would be runner contention,
+not a product bug: check the shard's neighbouring test times before suspecting `managed.ts`. Optional follow-ups, not
+part of this fix: `-InputFormat None` on the PowerShell call (tested only in `managed-trust`), and a review of the
+synchronous 20 s `spawnSync` blocking the desktop's 30-second policy refresh.
+
+Review follow-up.
+
+- The first `afterEach` guard failed any test that ran while the managed folder existed. An empty folder is harmless
+  (`ConfigManaged.read()` checks only the policy files that exist), but `test/cli/run-local.test.ts` left one behind:
+  its `afterEach` removed only `managed/vector.json`. `preload.ts` picks the managed folder once per process and a shard
+  runs its files in one process, so had the two files landed on the same shard, or run in one local `bun test`, the
+  first local-policy test (which uses no managed policy) would have failed the guard. The guard now looks only for
+  `vector.json` and `vector.jsonc`, and `run-local.test.ts` removes the whole managed folder after each test.
+- `managed-trust.test.ts` gains a Windows-only real PowerShell test that a folder named `vector.json` in the policy
+  file's place is read (trusted with `user: true`), the `[System.IO.Directory]::Exists` branch of `ACL_SCRIPT` that the
+  folder test in `local-policy.test.ts` used to cover through real PowerShell before it moved to the fixture. It runs
+  only on Windows CI (shard 12 at `8e34d05e`) and was not run locally.
+- Validation (Linux, through the serial lock): `local-policy.test.ts` 69 pass, 2 skip; `run-local.test.ts` 5 pass;
+  `managed-trust.test.ts` 25 pass, 4 skip, 1 fail (the same root-uid sandbox failure as above); `bun typecheck` exit 0
+  in `packages/core` and `packages/engine`. Mutations, each restored with matching sha256: an empty managed folder
+  made at load time stays green with the new guard and turns "the policy is resolved before the first catalog fetch"
+  red with the old one; dropping the fixture line from the folder test still fails the guard; dropping the fixture
+  reader's `existsSync` filter fails the renamed fixture test.
+
+## 2026-11-20: Windows helper compile at the 300 s cmake deadline
+
+Branch `native-build-parallel` from `8e34d05e`. Changes: `/MP2` to `/MP4` in the shared compile options of
+`packages/desktop/native/computer-helper/windows/CMakeLists.txt`, and `CMAKE_BUILD_PARALLEL_LEVEL: "2"` plus a
+processor-count line on the two Windows helper build steps (`computer-helper.yml` "Build both channel helper
+architectures", `test.yml` "Build only the x64 native diagnostic artifacts"). The build script, the overlay-smoke
+script, `macos/`, `identity.json` and `macos/identity.lock.json` are unchanged; `helperVersion` stays 1.0.15.
+
+Failure. PR #51 (engine tests and docs only) test.yml run 44759083191. Attempt 1 failed only in the known HF-7 overlay
+Stop flake (job 136368889023; its step 9 passed in 562 s). The re-run's windows-build job 136403306943 failed in step 9
+with "The native helper command failed: cmake (timed-out)." Step 9 ran from 16:07:36.15 to 16:17:52.37 (616 s). The
+captured output is the ARM64 `cmake --build build --config Release`: computer-core (35 files), then caller, target,
+overlay-driver-support and vector-computer, then the unit list, stopped at `accessibility_tests.cpp` (24 of 29), with
+no node prefixes and no compiler error.
+
+Cause. The build is compute-bound and had almost no room under the fixed 300000 ms per-command cap
+(`build-computer-helper.ts:467`). It is not a hang, a flake or anything in PR #51. Every target compiled with `/MP2`,
+so two cl workers ran on a runner that very likely has 4 vCPU, and `cmake --build` had no `--parallel`, so MSBuild
+built projects one at a time. computer-core and then vector-computer-tests have to run in order (tests link core and
+depend on vector-computer and computer-test-caller), so project parallelism can only overlap the four one-file
+projects. Source growth since Nov 14 (+3.1% lines) and possibly image 20261116.315.1 (MSVC 14.52) used up the margin.
+Precedent: run 42031291175 hit the same deadline and `/MP2` fixed it (`hands-progress.md`, "Windows native compile
+budget evidence").
+
+Evidence (step 9, both architectures including configure; the groups do not overlap):
+
+| Group          | Step 9 (s)                                     | Per-architecture build (s, inferred: half of step 9; not measured) | Note                       |
+| -------------- | ---------------------------------------------- | ------------------------------------------------------------------ | -------------------------- |
+| Fast passing   | 314-342                                        | about 155-170                                                      | well under the cap         |
+| Middle passing | 400, 410, 470                                  | about 200-235                                                      | 67-78% of the cap          |
+| Slow passing   | 514-562 (recent: 555, 555, 558, 562)           | about 255-281                                                      | 85-94% of the cap          |
+| Timed out      | 616 (job 136403306943), 620 (job 136058227563) | ARM64 `--build` killed at 300 (the cap); x64 under 300 (it passed) | both slow-group, new image |
+
+In the two timed-out jobs, x64 configure and build, the ARM64 configure and the script's toolchain probes took about
+316 s and 320 s (step 9 minus the 300 s kill), so the x64 `cmake --build` was itself close to the cap. Both observed
+kills were in the ARM64 `cmake --build` (136403306943 on `accessibility_tests.cpp`, 24 of 29 unit files; 136058227563
+after printing all 29 unit sources). That build is also the second build command in step 9, so these two jobs cannot
+tell whether ARM64 compiles slower or the kill simply lands on whichever build runs second.
+
+The overlay-stage build (37 files, same CMakeLists) took 83-150 s and tracks step 9 (r = 0.84). Passing jobs print no
+per-command times, so per-command figures are inferred from step durations and the two kill points. The 4-vCPU count
+is inferred: this repo's ubuntu-24.04 runner recorded `cpuCount: 4` and 16.7 GB in
+`docs/benchmarks/vector-hands-1.99.112/baseline-manifest.json`, the standard tier that also covers windows-2025. The
+new step line makes it a measurement.
+
+Why only CMake and the workflows. `scripts/build-computer-helper.ts` and `scripts/build-computer-overlay-smoke.ts`
+are in `COMPUTER_HELPER_BUILD_INPUTS`, which feed the darwin source digest under the enforced macOS identity lock
+(helperVersion 1.0.15). Editing either would fail "Enforce the measured production identity lock" and break
+invariant 2. `windows/` feeds only the Windows digest, and the workflow files are not digest inputs. The script
+already passes `process.env` to cmake, so `CMAKE_BUILD_PARALLEL_LEVEL` reaches MSBuild as `/m:2`.
+
+Change.
+
+- `/MP4` in place of `/MP2`; every other compile and link flag is unchanged. The count stays explicit so the worker
+  count and memory never follow a larger host. `/MP4` is per project: with the workflow's `/m:2`, at most eight cl
+  workers run while two multi-file projects overlap. The dependency chain (computer-core, then vector-computer-tests)
+  keeps that to the short window when the one-file projects build alongside one of them. `/MPn` changes only how many cl
+  processes run; each translation unit still compiles the same way under `/Brepro`, and link order comes from the
+  vcxproj source order. Because the vCPUs may be SMT siblings, expect the compile phases to speed up about 1.4-1.9x, not
+  2x.
+- `CMAKE_BUILD_PARALLEL_LEVEL: "2"` on both build steps (expected saving about 15-30 s) and
+  `Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"` before the bun call.
+- The 300000 ms cap, `timeout-minutes: 20` and `timeout-minutes: 15` are unchanged. Nothing retries, skips or lengthens
+  a deadline. Precompiled headers were rejected for this fix: they change the compile pipeline and object generation.
+
+Validation (Linux; no native tool runs here):
+
+- `build-computer-helper.test.ts` (20 pass) gains a CMakeLists pin: exactly one `/MP4` and no other `/MP` flag in the
+  file, the eight hardening and reproducibility compile flags, the `/guard:cf /Brepro /PDBALTPATH:%_PDB%` link
+  options inside the `VECTOR_COMPUTER_TARGETS` loop, and every `add_library`/`add_executable` target listed there
+  (with computer-overlay-driver appended under `VECTOR_COMPUTER_OVERLAY_DRIVER`). The injected win32 fixture now
+  records each call's settings and checks that both architectures' configure and `--build` get `timeoutMs: 300000` and
+  that an injected `CMAKE_BUILD_PARALLEL_LEVEL` reaches each `--build` env.
+- `computer-workflow.test.ts` (37 pass) checks both build steps set exactly `CMAKE_BUILD_PARALLEL_LEVEL: "2"`, log the
+  processor count first, and keep 20 and 15 minutes.
+- Mutations, each red and then restored to its recorded sha256: `/MP4` to `/MP2`; dropping `/sdl`; the script's
+  300_000 to 600_000; the computer-helper.yml level "2" to "4"; test.yml's 15 to 20 minutes.
+- `packages/desktop` `bun typecheck` and the full turbo typecheck pass.
+
+What Windows CI must show. At least 3 windows-build jobs, including at least one slow-group job (overlay-stage proxy at
+least 135 s before, or clearly above the fast group after). The logged processor count must be 4. Step 9 at or below
+about 420 s in every job, and the fast group at or below about 260 s, which is about 190 s or less per `cmake --build`
+(at least 35% headroom) and about 25 s or less per configure. windows-arm64-test, the native units, the fresh
+version/probe checks and the overlay-stage build must also pass. Before judging headroom, compare the x64 and ARM64
+build times rather than halving step 9. Passing step logs do not show them: `build-computer-helper.ts` captures cmake
+output and prints it only on a failure, so no timestamped `vector-computer-tests.vcxproj ->` lines appear, and adding
+per-command timing there would move the darwin source digest. Use what the logs do give: any killed command's captured
+output names its architecture, and the x64-only "Build only the x64 native diagnostic artifacts" step in test.yml's
+computer-helper-windows-units job times x64 alone (on a different runner, so only as a rough share). Until the split is
+known, treat the ARM64 build as the binding one. The overlay-stage build (`diagnose-build-computer-overlay-smoke.ts`)
+uses the same CMakeLists but its steps do not set `CMAKE_BUILD_PARALLEL_LEVEL`, so its timings reflect `/MP4` alone and
+understate any `/m:2` saving in step 9. If a slow-group step 9 exceeds about 470 s, this is not enough: the next lever
+(a measured per-phase `--build` budget or precompiled headers, which need a helperVersion bump and a re-measured macOS
+lock) goes to the lead as its own package, and the cap is not changed silently. Only the Windows source digest changes;
+since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows exe hash changes for that reason alone. PR #51
+needs no code change: once this merges, merge main into `policy-acl-timeout` to re-run it.
+
+## 2026-11-20: Windows region observer at deadline_compile on a cold PowerShell 7 compiler
+
+Branch `region-compile-budget` from `15f3ba77`. Changes: `packages/desktop/scripts/computer-overlay-smoke-window-region.ts`
+(a bounded compiler warm-up and Node-side phase timing), `computer-overlay-smoke-window-region-report.ts` (an optional
+closed `elapsed` field), a new entry `scripts/computer-overlay-smoke-region-warm.ts`, one new windows-build step in
+`.github/workflows/computer-helper.yml`, and their Linux tests. `REGION_SCRIPT`, the 15 s observer limit, the 120 s
+parent limit, the command path and flags, stdin, `maxBytes`, the receipt parser and every native check are unchanged.
+
+Failure. main's push run 44791067930 of test.yml (head `c776fb60`) failed only in computer-helper / windows-build job
+136479415862, step 15 "Run real Electron overlay properties and controller lifecycle":
+`computer-smoke-window-region {"windows":4,"owned":0,"simple":0,"matched":0,"painted":4,"ok":false,"reason":"deadline_compile"}`,
+then overlay-bounds and computer-smoke-failure assertion_failed. Both follow from the region line, because on Windows
+`boundsMatch` is the region proof.
+
+Cause (inferred, not measured). Consistent with a cold first Add-Type; launch versus compile is not yet measured, and
+contention with the first Electron launch is not excluded. Step 15 is the job's first Roslyn use: the only Add-Type in
+`.github` and `packages/desktop/scripts` is the observer's (`computer-overlay-smoke-window-region.ts:306` at
+`15f3ba77`), and it runs while PowerShell 7's compiler and reference assemblies are still cold on a fresh VM. The
+observer arms one 15 s timer at spawn; it fired after the `compile` marker and before `input`, which is exactly
+`deadline_compile`.
+
+Evidence (job log timestamps):
+
+| Job                         | Step 15 properties to region line (cold) | Step 18 observer (new pwsh, same source) | Note                              |
+| --------------------------- | ---------------------------------------- | ---------------------------------------- | --------------------------------- |
+| 136479415862 (this failure) | 15.58 s, deadline_compile                | not reached                              | step 9 446.5 s, controller 5.48 s |
+| 136368889023                | 14.60 s, ok 4/4/4/4                      | 1.41 s                                   | passed, at least 0.4 s left (1)   |
+| 136322885617                | 10.91 s, ok 4/4/4/4                      | 1.15 s                                   | step 9 469.6 s                    |
+
+(1) Step 9 561.8 s. The 14.60 s span also covers work done before the observer spawns (about 0.58 s in the failing job,
+whose observer was capped at 15 s), so this observer finished in at most 14.60 s and had at least 0.4 s left, probably
+about 0.9 s. Step 9 figures come from job log timestamps; the job API's whole-second step times agree (470 s, 562 s).
+
+- Step 18 starts a new pwsh process and compiles the same embedded source again, and finishes the whole observer in
+  1.15-1.41 s in the two tabled jobs. That shows only that the first observer span in a job takes 10.9-15.6 s and a
+  later one 1.15-1.41 s. It is consistent with an earlier compile in another process warming the next one (file cache and
+  assembly scans), but step 18 also runs after a second Electron launch and the native-stage build step, so these pairs
+  do not separate cold Roslyn from cold Electron or Defender contention.
+- The failing VM was not generally slow. Step 9 took 446.5 s, faster than both tabled passing jobs (469.6 s and
+  561.8 s), and the controller phase took 5.48 s against the usual 5.2-5.8 s. Today's ~1.75x slow Windows runner group
+  does not explain this job.
+- The PowerShell 5.1 warm-up in run 42125718778 (`hands-progress.md`, "Windows region compiler control") was also a
+  separate-process compile placed right before the first Electron proof, and it did not help. 5.1's Add-Type runs
+  csc.exe out of process, but under the theory that one process warms the file cache for the next, csc.exe should have
+  benefited the same way. So that result is consistent with the Electron first-launch alternative, unless 5.1 was slow
+  even when warm, which no run shows. The new `elapsed` field and the warm-up `ms` are what will decide between the
+  two.
+- Still open: the stderr phase marks were consumed and never logged, so no run shows how the 15 s splits between pwsh
+  launch and Add-Type. Launch is very likely small (every earlier step already runs under pwsh). Contention with the
+  first Electron launch's file scans in step 15 is the other candidate, which step 18 would also not pay.
+
+Change.
+
+- `warmComputerSmokeRegionCompiler()` runs the same protected `<SystemRoot drive>\Program Files\PowerShell\7\pwsh.exe`
+  with the same `-NoProfile -NonInteractive -EncodedCommand`, a separate fixed script
+  (`Add-Type -TypeDefinition 'public static class VectorRegionWarm {}' -Language CSharp`, then stdout `ok`), empty
+  stdin, and its own 60 s timer (`COMPUTER_SMOKE_REGION_WARM_TIMEOUT_MS`). It returns only `{ok, ms}` or a closed
+  reason (unsupported_platform, launch, compile, output, deadline). It never produces a region result and grants
+  nothing. Add-Type emits in memory, so nothing compiled there survives for the observer to load; the observer still
+  compiles exactly its embedded source inside the unchanged 15 s.
+- New windows-build step "Warm the protected PowerShell 7 compiler", right after "Install the exact pinned Electron
+  runtime" and right before step 15, `timeout-minutes: 2`, no `continue-on-error`. It prints
+  `computer-smoke-region-warm {"protocol":1,"ok":...,"ms":N}` and exits 0 on a warm-up failure or deadline, since the
+  real observer still decides.
+- The runner (now exported as `runComputerSmokeRegionBridge`) records, in Node, the whole milliseconds from spawn to the
+  first arrival of each valid marker, capped at `timeoutMs` (the parsers need values within the limit), so a logged
+  value of exactly 15000 means at or after the limit, not an arrival measured at 15000. The logged
+  `computer-smoke-window-region` summary gains an optional `elapsed` object keyed by the phases reached (`compile`,
+  `input`, `parent`, `region`, `output`): an ordered prefix with nondecreasing integers in 0..15000. `elapsed.compile` is the launch time and `elapsed.input -
+elapsed.compile` the Add-Type time. The script stays byte-identical. Timing is diagnostic only: a malformed value is
+  dropped by the observer and rejected by the summary parser, and it never enters the pass condition.
+- Rejected: a separate 60 s compile budget with the 15 s starting at `input`. That lets the child run up to 75 s
+  before a verdict and lets the proof's own compile take 60 s, which lengthens the proof's deadline. The chosen design
+  also gives the first cold compile 60 s, but only in the warm-up step: there the cold cost, which has nothing to do
+  with the proof, is paid in a separate step that grants nothing and cannot fail the job, while the observation
+  deadline and the proof's own compile stay inside the unchanged 15 s observer limit.
+
+Validation (Linux; no PowerShell or native code runs here):
+
+- `computer-overlay-smoke-window-region.test.ts` (16 pass): timeoutMs is still 15_000 and the UTF-16LE SHA-256 of
+  `REGION_SCRIPT` equals the `15f3ba77` value `0049ef8603fe93d3f5fa48184d3100adba2d582c362165e22ab49640328baac8`;
+  the warm-up uses the identical command and flags, its decoded script is exactly the fixed source, it sends empty
+  stdin, its limit is 60_000, and its failures stay closed; `ok` output and warm-up-shaped JSON can never satisfy
+  `observeComputerSmokeWindowRegions`. The real runner is driven by local `process.execPath` children that write the
+  fixed markers (no external host): elapsed values are monotonic and at most `timeoutMs`, deadline cases carry only
+  the phases reached, and the deadline_launch, deadline_compile, deadline_input and invalid-order mappings are
+  unchanged.
+- `computer-overlay-smoke-window-region-report.test.ts` (5 pass) covers `elapsed` in the summary and rejects
+  out-of-range, fractional, non-prefix, decreasing, unknown-key and non-object values.
+- `computer-overlay-workflow.test.ts` (7 pass) pins the warm-up step's position, exact run line, `timeout-minutes: 2`,
+  its missing `continue-on-error`, and that step 15's run lines and 3 minutes and step 18's 3 minutes are unchanged.
+  `computer-workflow.test.ts` (37), `computer-overlay-smoke-source.test.ts` (19), `build-computer-overlay-smoke.test.ts`
+  (7) and `computer-overlay-smoke-report.test.ts` (51) pass unchanged.
+- Mutations, each red and then restored to its recorded sha256: the observer limit 15_000 to 60_000; dropping the
+  marker timing line; the warm-up's stdin `""` to `"{}"`; the elapsed bound `limit` to `limit * 2`; the warm-up step's
+  2 to 5 minutes; one character of `REGION_SCRIPT`.
+- `packages/desktop` `bun typecheck` passes. actionlint is not installed in this container.
+
+What Windows CI must show, on at least 3-5 computer-helper runs: the warm-up line `ok` with its `ms` (the 3-14 s cold
+cost should now show up there); step 15 `computer-smoke-window-region` ok 4/4/4/4 with `elapsed.compile` (launch)
+small, `elapsed.input - elapsed.compile` close to step 18's range (about 2 s or less), and the total well under 15 s;
+step 18 unchanged. If the instrumented runs instead show launch as the large share, or compile still slow after a
+successful warm-up, the cold-Roslyn cause is refuted; plan for the measured phase next (Electron first-launch
+contention is the next candidate). Do not widen the deadline. Moving the readback into the built native test binary
+changes what the proof is bound to and is the lead's decision. Two workflow_dispatch-only test.yml lanes still run a
+fresh-VM overlay smoke without this warm-up and can still hit the same deadline_compile: the
+`computer-helper-windows-overlay` fast lane (the same step 15 smoke) and the staged overlay diagnostic in
+`computer-helper-windows-units` (`computer-overlay-smoke.ts --native-stage`). Neither is changed here; if either is
+used for evidence, add the same fixed warm-up step there as its own reviewed change, with no `continue-on-error` and a
+bounded timeout.
+
+## 2026-11-20: Windows engine tests running close to their 30 s budget
+
+Branch `windows-test-budgets` from `15f3ba77`. Four test files, one commit each. No product code, test deadline,
+timeout or assertion changed. Windows engine shards run `bun test` with a 30 s default per test. About 14% of hosted
+Windows VMs are slow on first touch (setup-node "Environment details" 17-35 s instead of 3.5-5.4 s), and those VMs
+make tests that start many processes 2-4x slower, so a test at 60-100% of its budget on a normal VM fails there.
+`review/impact.test.ts` and `everywhere/unattended-session.test.ts` also hit their budgets today, but the
+`scope-finish` and `everywhere-finish` lanes are rewriting those files, so they are left to those lanes.
+
+Local times are Linux, per test, from `bun test --timeout 30000 --reporter=junit`, one file at a time through the
+Bun lock.
+
+| Target                                                                                                                                                                           | Windows evidence                                                                                                                                                                                                        | Change                                                                                                                                                                                                                                                                                                                                                                                                         | Local before               | Local after                                              |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | -------------------------------------------------------- |
+| `cli/import.test.ts` "an owner-only conversation keeps its marker on local export and refuses the portable format"                                                               | 23.2-30.0 s over 5 runs. Timed out at 30.0 s on job 136531095350, a normal VM (Environment details 5.9 s). It started 6 cold CLI processes at about 4 s each.                                                           | A file-level `beforeAll` (30 s, the owner-only test's former budget for these two processes and four more) runs `vector serve`, POST /session and `vector export` once inside `withCliFixture`, checks the export's exit code and stops the server before any test runs. The source home and its DB stay until `afterAll`. The owner-only test imports into that DB; the round trip imports into a fresh home. | 14.6 s (round trip 13.3 s) | 10.6 s (round trip 8.5 s), plus about 5.5 s for the hook |
+| `tool/task-manage.test.ts` "an agent merges and discards only its direct children: an ancestor or a caller naming another session is refused and nothing is asked"               | 13.0-20.4 s. The 20.4 s (68%) came from job 136513156060, a normal VM. It was the only test of the three that built two isolated children (about 55-60 git processes each).                                             | The six refused merges and discards all name one settled, changed child. The `dropped` child and its state check are gone.                                                                                                                                                                                                                                                                                     | 4.2-4.6 s                  | 2.4-2.5 s                                                |
+| `server/task-isolation.test.ts` "a guest whose session claim or workspace directory covers a fenced family gets only the counts; outside it, 403"                                | 17.3-20.6 s (58-69%) on every run with no VM in the 17-35 s slow band. The 20.6 s came from job 136445766690, whose Environment details took 11.4 s. It spawned 200 git processes, all product isolation and diff work. | Split into one test per family: session claim (with the outside-scope 403) and workspace directory. Both use the same `guestStack`, `base` and `isolate`, and the guest's workspace is served during both, as before. The per-family guest checks move into `guestSeesCounts`. The file's total time does not drop, because there is one more instance boot.                                                   | 9.2-9.4 s                  | claim 5.6-6.5 s, workspace 4.4-5.4 s                     |
+| `session/task-size.test.ts` "an approval or build it after a Thorough plan from Plan mode carries it out at its size, and the judge checks it" (already on the known-flake list) | 13.8-19.0 s on normal VMs (19.0 s = 63% on job 136513155982) and 25.3 s on slow VM 136445766835. Undo snapshots accounted for 218 of its 259 git processes.                                                             | `providerConfig` sets `snapshot: false` next to `formatter: false, lsp: false`. `setup` already approves the project's trust, so the setting is honoured. `{ git: true }` stays.                                                                                                                                                                                                                               | 10.4 s (file 249.9 s)      | 7.0 s (file 198.7 s)                                     |
+
+Why these keep their meaning.
+
+- import: the archive is still a real local export, made by a real CLI process, of a session a real `vector serve`
+  created. The test still adds the owner-only marker itself and reads it back through a real `vector import`. Every
+  assertion stays. The only export exit-code check is now the hook's, and if it fails, every test in the file fails,
+  including the two that do not use the archive. The import itself reads the source session: `SessionArchive.import`
+  forks a source its DB knows (`audience.knows`), which runs the lease check and records a fork lineage edge that
+  puts the source in the owner-only fence's family. So the owner-only test imports into the source's own DB, which the
+  hook keeps until `afterAll`, as it did when it served, exported and imported in one home; a local probe showed the
+  fork edge to the source. The round trip imports into a fresh home, as before, and still asserts
+  `importedID !== source.id`.
+- task-manage: the refusal comes from the caller checks in TaskManager and TaskIsolation's `by`, not from which task is
+  named. TaskManager checks the caller before any state, so a merge stays forbidden whatever the task's state. If a
+  refused discard went through, its own `Effect.flip` and `forbidden` check would fail, and the final "changed" check
+  would fail too. `asked` stays empty and merged.txt stays at base.
+- task-isolation: every expect is unchanged and sits under the family it was about (64 expect calls before and after).
+- task-size: no test in the file reads a snapshot or a patch part. As a probe, `changedFiles` was made to ignore patch
+  parts while snapshots were still on, and all 68 tests still passed. With snapshots off, all 68 pass and the judge
+  learns of tui.rs from the write input alone. That makes the test stricter: if write/edit inputs are ignored it now
+  fails on the first answer ("build it"), where the snapshot patch had covered that case before.
+
+Mutations (each red, then restored and checked against its recorded sha256):
+
+- import: the `--public` refusal in `export.ts` disabled (the `portable` exit code is 0); the owner-only
+  `fenceIsolation` in `core/src/share/archive.ts` import disabled (privacy is undefined).
+- task-manage: TaskManager's discard caller check disabled (the `[root, lead]` discard goes through); TaskManager's and
+  TaskIsolation's merge caller checks disabled (a refused merge goes through).
+- task-isolation: `guestSessionIDs` dropped in `server/auth.ts` (only the claim test fails, 403 instead of 200);
+  `guestWorkspaceDirectories` dropped (only the workspace test fails).
+- task-size: write/edit inputs ignored in `changedFiles` (judge count 0); approvals never inherit Thorough in
+  `core/src/task-size.ts` (reasoning_effort undefined).
+
+`packages/engine` `bun typecheck` passes. Expected effect on a normal Windows VM: import owner-only 15-18 s instead of
+23-30 s; the refusal test in the 11-17 s range of its one-child sibling; each guest test near 8.7-12 s (30-40%); the
+Plan mode approval test about 6-9 s. This branch has not run on Windows CI yet. A real cut to the guest tests needs a
+product change: rev-parse lookups are repeated many times in each isolation.
+
+Follow-up on this branch's first CI run (test.yml run 44829529636): `unit (windows)` job 136610691971 failed in
+`packages/core/test/config/plugin.test.ts` "ConfigExternalPlugin > imports the approved plugin bytes from a private
+snapshot after the live file changes" with `Expected: "approved"`, `Received: ""` after 187 ms. That is a race in the
+test, not a slow VM: it polled for the marker file to exist and then read it, but the plugin's `Bun.write` creates the
+file before it writes the bytes, and on Windows the reader saw the empty file in between. The test now polls for the
+marker's content (same 100 × 10 ms bound) and asserts it. Locally 9/9 pass; pointing `executablePath` at the live file
+instead of the approved snapshot still fails it with `Received: "changed"`. The same run's other two failures were
+infrastructure: Bun 1.3.14 segfaulted in `bun install` before any test ran (`engine (windows, shard 5/12)`, job
+136610692430, re-run class d), and HF-7 at stage `uia-runtime-id` in the Windows overlay Stop (job 136611151009).

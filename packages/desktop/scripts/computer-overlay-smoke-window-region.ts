@@ -12,8 +12,8 @@ export type ComputerSmokeWindowRegion = {
   matches: boolean
 }
 export type ComputerSmokeWindowRegions =
-  | { ok: true; windows: ComputerSmokeWindowRegion[] }
-  | { ok: false; reason: ComputerSmokeRegionFailure }
+  | { ok: true; windows: ComputerSmokeWindowRegion[]; elapsed?: ComputerSmokeRegionElapsed }
+  | { ok: false; reason: ComputerSmokeRegionFailure; elapsed?: ComputerSmokeRegionElapsed }
 export const COMPUTER_SMOKE_REGION_FAILURES = [
   "unsupported_platform",
   "invalid_windows",
@@ -57,10 +57,15 @@ export type ComputerSmokeRegionRunner = (request: RegionRequest) => Promise<{
   stdout: string
   failed?: boolean
   reason?: RegionRunnerFailure
+  elapsed?: ComputerSmokeRegionElapsed
 }>
 const LIMIT = 65_536
+/** The whole observer limit: process start, the in-process Add-Type compile and every native read. */
+export const COMPUTER_SMOKE_REGION_TIMEOUT_MS = 15_000
 export const COMPUTER_SMOKE_REGION_PHASE_MARK = "computer-region-phase "
 export const COMPUTER_SMOKE_REGION_PHASES = ["compile", "input", "parent", "region", "output"] as const
+/** Whole milliseconds from spawn until each trusted marker first arrived, for the phases reached only. */
+export type ComputerSmokeRegionElapsed = Partial<Record<(typeof COMPUTER_SMOKE_REGION_PHASES)[number], number>>
 export type ComputerSmokeRegionProgress = {
   phase?: (typeof COMPUTER_SMOKE_REGION_PHASES)[number]
   count: number
@@ -93,6 +98,7 @@ export function computerSmokeRegionProgress() {
     marked += Buffer.byteLength(value, "utf8") + 1
   }
   return {
+    reached: () => count,
     feed(chunk: Buffer | string) {
       if (closed) return
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8")
@@ -124,6 +130,31 @@ export function computerSmokeRegionProgress() {
       return { ...(phase === undefined ? {} : { phase }), count, invalid }
     },
   }
+}
+
+/** Accepts only an ordered prefix of phases with nondecreasing whole milliseconds inside the observer limit. */
+export function computerSmokeRegionElapsed(value: unknown, limit: number): ComputerSmokeRegionElapsed | undefined {
+  if (!record(value)) return
+  const keys = Object.keys(value)
+  const phases = COMPUTER_SMOKE_REGION_PHASES.slice(0, keys.length)
+  if (
+    keys.length > COMPUTER_SMOKE_REGION_PHASES.length ||
+    !keys.every((key) => (phases as readonly string[]).includes(key))
+  )
+    return
+  const values = phases.map((phase) => value[phase])
+  if (
+    !values.every(
+      (item, index): item is number =>
+        typeof item === "number" &&
+        Number.isSafeInteger(item) &&
+        item >= 0 &&
+        item <= limit &&
+        (index === 0 || item >= Number(values[index - 1])),
+    )
+  )
+    return
+  return Object.fromEntries(phases.map((phase, index) => [phase, values[index]]))
 }
 
 export function computerSmokeRegionDeadline(
@@ -351,14 +382,17 @@ public sealed class VectorOwnedWindowRegions : IDisposable {
 }
 `
 
-const runRegionBridge: ComputerSmokeRegionRunner = (request) =>
+/** One spawned child under one timer armed at spawn; marker arrival times are measured here, outside the script. */
+export const runComputerSmokeRegionBridge: ComputerSmokeRegionRunner = (request) =>
   new Promise((resolve) => {
+    const started = performance.now()
     const child = spawn(request.command, request.args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
     let settled = false,
       spawned = false,
       bytes = 0
     const stdout: Buffer[] = []
     const progress = computerSmokeRegionProgress()
+    const elapsed: ComputerSmokeRegionElapsed = {}
     const finish = (code: number | null, received?: RegionRunnerFailure) => {
       if (settled) return
       settled = true
@@ -377,6 +411,7 @@ const runRegionBridge: ComputerSmokeRegionRunner = (request) =>
         stdout: reason ? "" : Buffer.concat(stdout).toString("utf8"),
         failed: Boolean(reason),
         ...(reason ? { reason } : {}),
+        elapsed: { ...elapsed },
       })
     }
     const timer = setTimeout(() => finish(null, "deadline"), request.timeoutMs)
@@ -388,7 +423,11 @@ const runRegionBridge: ComputerSmokeRegionRunner = (request) =>
     child.stderr.on("data", (chunk: Buffer) => {
       bytes += chunk.length
       if (bytes > request.maxBytes) return finish(null, "output")
+      const before = progress.reached()
       progress.feed(chunk)
+      // A chunk handled before a late timer callback is still inside the budget, so the value is capped at it.
+      const now = Math.min(request.timeoutMs, Math.floor(performance.now() - started))
+      for (const phase of COMPUTER_SMOKE_REGION_PHASES.slice(before, progress.reached())) elapsed[phase] = now
     })
     child.once("spawn", () => {
       spawned = true
@@ -494,12 +533,12 @@ export async function observeComputerSmokeWindowRegions(
   })
   if (Buffer.byteLength(stdin, "utf8") > LIMIT) return { ok: false, reason: "invalid_windows" }
   if (process.platform !== "win32" && !dependencies.run) return { ok: false, reason: "unsupported_platform" }
-  const drive = path.win32.parse(process.env.SystemRoot ?? "C:\\Windows").root
-  if (!/^[a-z]:\\$/i.test(drive)) return { ok: false, reason: "launch" }
+  const command = protectedPowerShell()
+  if (!command) return { ok: false, reason: "launch" }
   try {
-    const result = await (dependencies.run ?? runRegionBridge)({
+    const result = await (dependencies.run ?? runComputerSmokeRegionBridge)({
       // CI's protected PowerShell 7 installation compiles the same embedded C# in-process.
-      command: path.win32.join(drive, "Program Files", "PowerShell", "7", "pwsh.exe"),
+      command,
       args: [
         "-NoProfile",
         "-NonInteractive",
@@ -507,21 +546,74 @@ export async function observeComputerSmokeWindowRegions(
         Buffer.from(REGION_SCRIPT, "utf16le").toString("base64"),
       ],
       stdin,
-      timeoutMs: 15_000,
+      timeoutMs: COMPUTER_SMOKE_REGION_TIMEOUT_MS,
       maxBytes: LIMIT,
     })
+    // Timing is diagnostic only: a malformed value is dropped and never changes the verdict.
+    const elapsed = computerSmokeRegionElapsed(result.elapsed, COMPUTER_SMOKE_REGION_TIMEOUT_MS)
+    const timed = (value: ComputerSmokeWindowRegions): ComputerSmokeWindowRegions =>
+      elapsed ? { ...value, elapsed } : value
     if (result.failed)
-      return {
+      return timed({
         ok: false,
         reason: REGION_RUNNER_FAILURES.includes(result.reason as RegionRunnerFailure) ? result.reason! : "launch",
-      }
+      })
     const parsed = parseComputerSmokeWindowRegions(
       result.stdout,
       windows.map((entry) => entry.expected),
     )
-    if (result.code !== (parsed.ok ? 0 : 1)) return { ok: false, reason: "output" }
-    return parsed
+    if (result.code !== (parsed.ok ? 0 : 1)) return timed({ ok: false, reason: "output" })
+    return timed(parsed)
   } catch {
     return { ok: false, reason: "output" }
   }
+}
+
+export const COMPUTER_SMOKE_REGION_WARM_MARK = "computer-smoke-region-warm "
+export const COMPUTER_SMOKE_REGION_WARM_TIMEOUT_MS = 60_000
+export type ComputerSmokeRegionWarm =
+  | { ok: true; ms: number }
+  | { ok: false; reason: "unsupported_platform" | "launch" | "compile" | "output" | "deadline"; ms: number }
+
+/** Fixed trivial source: no stdin, environment, repository or caller value reaches the warm-up. */
+const WARM_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$WarningPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -TypeDefinition 'public static class VectorRegionWarm {}' -Language CSharp
+[Console]::Out.WriteLine('ok')
+`
+
+/**
+ * Pays PowerShell 7's cold first Roslyn use in a separate process before the real observer runs. Add-Type emits in
+ * memory, so nothing compiled here survives for the observer to load; the observer still compiles its own embedded
+ * source inside its unchanged limit. The result grants nothing and is never a region observation.
+ */
+export async function warmComputerSmokeRegionCompiler(
+  dependencies: { run?: ComputerSmokeRegionRunner } = {},
+): Promise<ComputerSmokeRegionWarm> {
+  const started = performance.now()
+  const ms = () => Math.floor(performance.now() - started)
+  if (process.platform !== "win32" && !dependencies.run) return { ok: false, reason: "unsupported_platform", ms: 0 }
+  const command = protectedPowerShell()
+  if (!command) return { ok: false, reason: "launch", ms: ms() }
+  const result = await (dependencies.run ?? runComputerSmokeRegionBridge)({
+    command,
+    args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WARM_SCRIPT, "utf16le").toString("base64")],
+    stdin: "",
+    timeoutMs: COMPUTER_SMOKE_REGION_WARM_TIMEOUT_MS,
+    maxBytes: LIMIT,
+  }).catch(() => undefined)
+  if (!result) return { ok: false, reason: "output", ms: ms() }
+  if (result.failed && result.reason?.startsWith("deadline")) return { ok: false, reason: "deadline", ms: ms() }
+  if (result.failed) return { ok: false, reason: result.reason === "launch" ? "launch" : "output", ms: ms() }
+  if (result.code !== 0) return { ok: false, reason: "compile", ms: ms() }
+  if (!["ok\n", "ok\r\n"].includes(result.stdout)) return { ok: false, reason: "output", ms: ms() }
+  return { ok: true, ms: ms() }
+}
+
+function protectedPowerShell() {
+  const drive = path.win32.parse(process.env.SystemRoot ?? "C:\\Windows").root
+  if (!/^[a-z]:\\$/i.test(drive)) return
+  return path.win32.join(drive, "Program Files", "PowerShell", "7", "pwsh.exe")
 }

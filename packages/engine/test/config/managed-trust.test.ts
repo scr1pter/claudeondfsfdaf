@@ -268,6 +268,17 @@ describe("Windows access rules", () => {
     writeFileSync(file, "{ }")
     expect(ConfigManaged.untrusted(file, { user: true })).toBe(`${file} lets ${EVERYONE} change it.`)
   })
+
+  test.skipIf(process.platform !== "win32")(
+    "reads a real folder's access rules in the policy file's place",
+    async () => {
+      await using dir = await tmpdir()
+      const folder = path.join(dir.path, "vector.json")
+      mkdirSync(folder)
+      // A read that missed the folder would say "Vector could not read who may change" it.
+      expect(ConfigManaged.untrusted(folder, { user: true })).toBe(undefined)
+    },
+  )
 })
 
 describe("the Windows policy key", () => {

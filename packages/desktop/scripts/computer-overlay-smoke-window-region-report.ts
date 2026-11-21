@@ -1,5 +1,8 @@
 import {
   COMPUTER_SMOKE_REGION_FAILURES,
+  COMPUTER_SMOKE_REGION_TIMEOUT_MS,
+  computerSmokeRegionElapsed,
+  type ComputerSmokeRegionElapsed,
   type ComputerSmokeRegionFailure,
   type ComputerSmokeRegionRect,
   type ComputerSmokeWindowRegions,
@@ -15,6 +18,7 @@ export type ComputerSmokeWindowRegionSummary = {
   painted: number
   ok: boolean
   reason?: ComputerSmokeRegionFailure
+  elapsed?: ComputerSmokeRegionElapsed
 }
 
 /** Every unshaped window must match its own request, rather than another strip's rectangle. */
@@ -32,15 +36,22 @@ export function parseComputerSmokeWindowRegionSummary(line: string): ComputerSmo
   if (!line.startsWith(COMPUTER_SMOKE_WINDOW_REGION_MARK) || line.length > 512)
     throw new Error("The computer smoke window region receipt is invalid.")
   const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_WINDOW_REGION_MARK.length))
-  const fields = ["protocol", "windows", "owned", "simple", "matched", "painted", "ok", "reason"]
+  const fields = ["protocol", "windows", "owned", "simple", "matched", "painted", "ok", "reason", "elapsed"]
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error("The computer smoke window region receipt is invalid.")
   const record = value as Record<string, unknown>
   const count = (number: unknown): number is number =>
     typeof number === "number" && Number.isSafeInteger(number) && number >= 0 && number <= Number(record.windows)
+  // Phase timing is diagnostic only; it never takes part in the pass condition below.
+  const elapsed =
+    record.elapsed === undefined
+      ? undefined
+      : computerSmokeRegionElapsed(record.elapsed, COMPUTER_SMOKE_REGION_TIMEOUT_MS)
+  const required = 7 + Number(record.reason !== undefined) + Number(record.elapsed !== undefined)
   if (
     Object.keys(record).some((key) => !fields.includes(key)) ||
-    ![7, 8].includes(Object.keys(record).length) ||
+    Object.keys(record).length !== required ||
+    (record.elapsed !== undefined && elapsed === undefined) ||
     record.protocol !== 1 ||
     typeof record.windows !== "number" ||
     !Number.isSafeInteger(record.windows) ||
@@ -68,6 +79,7 @@ export function parseComputerSmokeWindowRegionSummary(line: string): ComputerSmo
     painted: Number(record.painted),
     ok: record.ok,
     ...(record.reason === undefined ? {} : { reason: record.reason as ComputerSmokeRegionFailure }),
+    ...(elapsed === undefined ? {} : { elapsed }),
   }
 }
 
@@ -110,6 +122,7 @@ export function computerSmokeWindowRegionSummary(
           matched === expected.length &&
           painted === expected.length,
         ...(!result.ok ? { reason: result.reason } : {}),
+        ...(result.elapsed === undefined ? {} : { elapsed: result.elapsed }),
       }),
   )
 }

@@ -459,6 +459,30 @@ describe("native build boundaries", () => {
       }))
   }
 
+  test("Windows CMake compiles every helper target with four bounded workers and unchanged hardening flags", async () => {
+    // Four is the hosted Windows runner's expected vCPU count (inferred; the workflow step logs NUMBER_OF_PROCESSORS);
+    // run 44759083191 hit the 300 s cmake deadline at /MP2.
+    const cmake = await readFile(path.join(directory, "native/computer-helper/windows/CMakeLists.txt"), "utf8")
+    const shared = [...cmake.matchAll(/"\$<\$<COMPILE_LANGUAGE:CXX>:([^>]*)>"/g)].map((match) => match[1]!.split(";"))
+    expect(shared).toHaveLength(1)
+    expect(shared[0]!.filter((flag) => /^\/MP/i.test(flag))).toEqual(["/MP4"])
+    expect(shared[0]).toEqual(
+      expect.arrayContaining(["/W4", "/WX", "/EHsc", "/utf-8", "/guard:cf", "/sdl", "/Brepro", "/Zc:__cplusplus"]),
+    )
+    expect(cmake.match(/\/MP\d*/g)).toEqual(["/MP4"])
+    const loop = cmake.match(/foreach\(TARGET IN LISTS VECTOR_COMPUTER_TARGETS\)([\s\S]*?)\nendforeach\(\)/)?.[1]
+    expect(loop).toContain("target_compile_options(${TARGET} PRIVATE")
+    expect(loop).toContain(shared[0]!.join(";"))
+    expect(loop).toContain('target_link_options(${TARGET} PRIVATE /guard:cf /Brepro "/PDBALTPATH:%_PDB%")')
+    const targets = cmake.match(/^set\(VECTOR_COMPUTER_TARGETS ([^)]*)\)$/m)?.[1]?.split(" ")
+    expect(cmake).toMatch(
+      /\nif\(VECTOR_COMPUTER_OVERLAY_DRIVER\)\n  list\(APPEND VECTOR_COMPUTER_TARGETS computer-overlay-driver\)\nendif\(\)\n/,
+    )
+    const declared = [...cmake.matchAll(/^\s*add_(?:library|executable)\(([^\s)]+)/gm)].map((match) => match[1]!)
+    expect(declared).toContain("computer-overlay-driver")
+    expect(declared.filter((target) => target !== "computer-overlay-driver").sort()).toEqual([...targets!].sort())
+  })
+
   test("Windows pins both compiler slices to the observed toolset and exact SDK and records those observations", () =>
     fixture(async (root) => {
       for (const item of [
@@ -475,9 +499,11 @@ describe("native build boundaries", () => {
       await writeFile(path.join(native, "CMakeLists.txt"), "# Injected native toolchain-selection fixture.\n")
       const identity = readIdentity(path.join(root, "native/computer-helper/identity.json"))
       const calls: string[][] = []
+      const callSettings: Parameters<NativeCommand>[2][] = []
       const architectures = new Map<string, string>()
-      const run: NativeCommand = async (command, args) => {
+      const run: NativeCommand = async (command, args, settings) => {
         calls.push([command, ...args])
+        callSettings.push(settings)
         if (command === "cmake" && args[0] === "--version")
           return { code: 0, stdout: "cmake version 3.31.6", stderr: "" }
         if (command === "cl")
@@ -527,11 +553,32 @@ describe("native build boundaries", () => {
         directory: root,
         host: "win32",
         hostArchitecture: "x64",
-        environment: windowsEnvironment,
+        // The workflow's MSBuild project parallelism reaches cmake only through the inherited environment.
+        environment: { ...windowsEnvironment, CMAKE_BUILD_PARALLEL_LEVEL: "2" },
         run,
       })
       expect(outputs).toHaveLength(2)
       expect(outputs[0]!.sourceDigest).toBe(outputs[1]!.sourceDigest)
+      // Each architecture's configure and compile stay under the same fixed per-command bound.
+      const compiles = calls.flatMap((call, index) =>
+        call[0] === "cmake" && (call[1] === "-S" || call[1] === "--build")
+          ? [{ call, settings: callSettings[index]! }]
+          : [],
+      )
+      expect(
+        compiles.map((entry) => [entry.call[1], entry.call[entry.call[1] === "-S" ? entry.call.indexOf("-B") + 1 : 2]]),
+      ).toEqual([
+        ["-S", path.join(root, "native/build/win32-x64")],
+        ["--build", path.join(root, "native/build/win32-x64")],
+        ["-S", path.join(root, "native/build/win32-arm64")],
+        ["--build", path.join(root, "native/build/win32-arm64")],
+      ])
+      expect(compiles.map((entry) => entry.settings.timeoutMs)).toEqual([300_000, 300_000, 300_000, 300_000])
+      expect(
+        compiles
+          .filter((entry) => entry.call[1] === "--build")
+          .map((entry) => entry.settings.env.CMAKE_BUILD_PARALLEL_LEVEL),
+      ).toEqual(["2", "2"])
       expect(outputs[0]!.toolchain).toBe(
         "cmake version 3.31.6\nmsvc:19.44.35222\nvc-tools:14.44.35207\nwindows-sdk:10.0.26100.0",
       )
