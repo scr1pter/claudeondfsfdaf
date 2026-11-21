@@ -87,7 +87,9 @@ screens and its readiness check.
 
 - The `ship-desk` readiness check and the screens (A50); the desktop merge with the person's own sign-in (A50).
 - The capture job in the workflow (Codex's V31) and the run-record reader (A59). Until A59, only App-bot pull requests
-  with the marker make cards, and no card has a verdict.
+  with the marker make cards, and no card has a verdict. (21 Nov 2026: both are built, V31 in BT12 and the reader in
+  BT11; the repository binding reader followed on `codium-api-fixes`. While the GitHub agent service is off no
+  repository is bound, so no card is made.)
 - A local try-out mode for `.vector/ship.json` (`vector ship capture` needs a ticket and a card).
 - Nothing was pushed or deployed. `bun.lock` was not touched.
 

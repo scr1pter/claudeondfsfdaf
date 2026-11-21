@@ -1370,6 +1370,9 @@ export function codiumFakes(options: { now?: number } = {}) {
 
 const ENVIRONMENT = [
   "MODEL_PLANS_ENABLED",
+  // The GitHub agent service's switch stays off unless a test turns it on, as the store and Stripe settings do, so a
+  // shell that exports it never reaches the real binding reader or the run service from a Codium fixture.
+  "VECTOR_GITHUB_BRAIN_ENABLED",
   "KV_REST_API_URL",
   "KV_REST_API_TOKEN",
   "UPSTASH_REDIS_REST_URL",
