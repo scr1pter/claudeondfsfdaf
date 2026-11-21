@@ -56,12 +56,16 @@ const recorded = {
   hold: false,
   runs: [] as Recorded[],
 }
+// What VectorScope's own owner answered: every start it refused or began, and the request of each run it began.
+const answered = { starts: 0, begun: [] as string[] }
 beforeEach(() => {
   recorded.starts.length = 0
   recorded.lists = 0
   recorded.order.length = 0
   recorded.hold = false
   recorded.runs.length = 0
+  answered.starts = 0
+  answered.begun.length = 0
 })
 afterEach(async () => {
   await disposeAllInstances()
@@ -219,7 +223,26 @@ const it = testEffect(AppNodeBuilder.build(nodes, [...replacements(), [ReviewOwn
 const connected = testEffect(
   AppNodeBuilder.build(nodes, [...replacements({ experimentalConnect: true }), [ReviewOwner.node, recording]]),
 )
-const actual = testEffect(AppNodeBuilder.build(nodes, replacements()))
+// VectorScope's own owner, noting what it answered: a case can wait for an admission to end and see what it began.
+const counted = LayerNode.make({
+  service: ReviewOwner.Service,
+  layer: Layer.effect(
+    ReviewOwner.Service,
+    Effect.gen(function* () {
+      const owner = yield* ReviewOwner.Service
+      return ReviewOwner.Service.of({
+        ...owner,
+        start: (sessionID, input) =>
+          owner.start(sessionID, input).pipe(
+            Effect.tap((run) => Effect.sync(() => answered.begun.push(run.request.requestID))),
+            Effect.ensuring(Effect.sync(() => void answered.starts++)),
+          ),
+      })
+    }),
+  ).pipe(Layer.provide(ReviewOwner.node.implementation as Layer.Layer<ReviewOwner.Service>)),
+  deps: ReviewOwner.node.dependencies as [(typeof ReviewOwner.node.dependencies)[number]],
+})
+const actual = testEffect(AppNodeBuilder.build(nodes, [...replacements(), [ReviewOwner.node, counted]]))
 // VectorScope's private Git verifier runs only on Linux, and only for a user other than root.
 const verifier = process.platform === "linux" && process.getuid?.() !== 0 ? actual.instance : actual.instance.skip
 // VectorScope's private Git admission, which creates its run, needs the pinned-directory adapter Linux has.
@@ -310,14 +333,16 @@ const setup = Effect.fn("CodeReviewFlow.setup")(function* (
 
 type Setup = Effect.Success<ReturnType<typeof setup>>
 
-// One request that writes a file and reports it, with the setting on unless the case says otherwise.
+// One request that writes a file and reports it, with the setting on unless the case says otherwise. `review` is the
+// review model's answer: the fake model answers in order, so it goes after the work's.
 const task = Effect.fn("CodeReviewFlow.task")(function* (
   f: Setup,
   sessionID: SessionID,
-  input: { file: string; text?: string; extra?: Partial<SessionPrompt.PromptInput> },
+  input: { file: string; text?: string; extra?: Partial<SessionPrompt.PromptInput>; review?: unknown },
 ) {
   yield* f.llm.tool("write", { filePath: path.join(f.directory, input.file), content: `export const value = 1\n` })
   yield* f.llm.text(`Wrote ${input.file}.`)
+  if (input.review !== undefined) yield* f.llm.push(reply().tool("StructuredOutput", input.review))
   const files = readdirSync(f.directory, { withFileTypes: true }).filter((entry) => entry.isFile())
   yield* seen(sessionID, ...files.map((entry) => path.join(f.directory, entry.name)))
   return yield* f.prompt.prompt({
@@ -624,15 +649,21 @@ describe("code review after each task", () => {
         })
         expect(next.info.role === "assistant" && next.info.error).toBeFalsy()
         yield* settled(f, chat.id)
+        // Both idles' admissions reached VectorScope and were refused. One still resolving its target and model when
+        // reviews are turned on would start a review of the work done while they were off.
+        yield* pollWithTimeout(
+          Effect.sync(() => (answered.starts === 2 ? true : undefined)),
+          "The admissions with local reviews off did not end.",
+        )
         expect(yield* f.sessions.children(chat.id)).toEqual([])
         expect(yield* f.llm.inputs).toHaveLength(3)
         // The owner turns local reviews on; the next finished task is reviewed by VectorScope's own run.
         const config = yield* Config.Service
         yield* config.updateGlobal({ experimental: { vectorscope: true } })
-        yield* f.llm.push(
-          reply().tool("StructuredOutput", { summary: "Nothing to fix.", risk: "low", files: [], findings: [] }),
-        )
-        yield* task(f, chat.id, { file: "reviewed.ts" })
+        yield* task(f, chat.id, {
+          file: "reviewed.ts",
+          review: { summary: "Nothing to fix.", risk: "low", files: [], findings: [] },
+        })
         const note = yield* pollWithTimeout(
           f.sessions.messages({ sessionID: chat.id }).pipe(Effect.map((messages) => notes(messages)[0])),
           "The review's note never arrived.",
@@ -645,6 +676,8 @@ describe("code review after each task", () => {
         yield* Effect.sleep("500 millis")
         const messages = yield* f.sessions.messages({ sessionID: chat.id })
         expect(notes(messages)).toHaveLength(1)
+        // One review began, for the task done with reviews on.
+        expect(answered.begun).toEqual([`after_${lastAssistant(messages)}`])
         // The note started no turn.
         expect(messages.at(-1)?.info.role).toBe("user")
         expect((yield* f.status.get(chat.id)).type).toBe("idle")
