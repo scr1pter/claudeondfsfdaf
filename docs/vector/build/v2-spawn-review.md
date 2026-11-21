@@ -671,3 +671,31 @@ itself. These are the ones core and the engine load, read from the installed pac
 `spawn-inventory.test.ts` "every file that loads a dependency which spawns inside itself is listed (F10)" pins the set
 of core and engine source files that load these specifiers (`DEPENDENCY_SPAWNERS`); an unlisted importer, or a listed
 file that stops loading one, makes it red (checked by emptying the arborist row).
+
+## Addendum, 21 November 2026: HF-2's Windows line, S6-2 and the S6-5 shell halves
+
+The HF-8 note above is left as written; this closes what it left open.
+
+- **HF-8's "has not run yet" (`:334`) and S6-7's "(pending)" inherited-environment variant: closed.** Main run
+  44848275007, engine (windows, shard 8/12), job 136673698450, ran `test\mcp\computer-policy-isolation.test.ts` and
+  printed `MCP_REQUIRED_ISOLATION_LAUNCH=refused childElapsedMs=2583` before "(pass) required isolation keeps the
+  computer policy first and ends launch-floor refusals as failed MCP statuses" (log read with get_job_logs). That is the
+  Windows branch, which expects the literal REFUSAL with the inherited environment.
+- **Windows background REFUSAL wins by design.** `ShellJobs.isolationRefusal` (`engine/task/shells.ts:96`, called in
+  `start` at admission) refuses a hosted Windows background command before the recheck, the lease or any row, because
+  the holder never reaches `ProcessIsolation.launch`. S6-5's "a dying beforeSpawn yields its own message, not REFUSAL"
+  therefore holds on POSIX and the PTY/MCP paths, and is inverted on purpose for Windows background shells.
+- **S6-5, Windows background shell half: added.** `packages/engine/test/task/shell-required-isolation.test.ts` gains
+  "Windows background admission refuses required isolation before the authority recheck", in its own child process
+  (`VECTOR_TEST_SHELL_REQUIRED_ISOLATION=before-recheck`, the same 25 s kill and 30 s budget as the existing case, which
+  is unchanged). The child passes a `beforeSpawn` that would die, and asserts a REFUSAL cause, that the recheck never
+  ran, `list` is `[]` and `full` is false, then prints `WINDOWS_BACKGROUND_REFUSAL_BEFORE_RECHECK`, which the parent
+  checks. Windows-only (skipped on Linux locally: 0 pass, 2 skip); the Windows engine shard is its proof.
+- **S6-2 at the spawner layer, POSIX: added.** `packages/engine/test/task/shells.test.ts` "the authority recheck runs
+  right before the spawner starts an owned command" wraps the real CrossSpawnSpawner in a recording layer. The order is
+  `["recheck", "recheck", "spawn"]` (the recheck runs once before any durable row and again immediately before the
+  spawn, `shells.ts` start and the POSIX branch of `run`), and the one spawn carries `OwnedProcess.options`. With the
+  pre-spawn recheck removed from the POSIX branch it fails. Skipped on Windows, where the ChildProcessSpawner is not
+  used; the Windows order is "allowed authority rechecks bracket durable admission before the command starts".
+- **Owed:** S6-5's foreground-shell half (the ShellTool harness under `requireIsolation()` in a child) is not added
+  here. `hands-current-state.md` is left to the Hands lane, which records HF-2 there.
