@@ -64,6 +64,8 @@ export interface Settings {
     judgeScope: "thorough" | "changes"
     // Second opinion (WP A35): while the judge is on, Vector Codium work is judged on the plan's judge from another lab.
     secondOpinion: boolean
+    // Code review after each task: a task that changed files goes to VectorScope once Vector, and the judge, are done.
+    codeReview: boolean
     // While Vector works (5.I.1, 5.I.2). Client settings, never engine config: saving that would dispose instances.
     followup: FollowupPreference
     stopScope: StopScopePreference
@@ -198,6 +200,8 @@ const defaultSettings: Settings = {
     judgeScope: "thorough",
     // Off by default: a judge from another lab spends more of the Codium month than the worker's own model would.
     secondOpinion: false,
+    // Off by default: each review costs extra model calls. Client-only like llmJudge, sent with each prompt.
+    codeReview: false,
     followup: "steer",
     stopScope: "turn",
     // Off by default: this spends the user's own BYOK budget on a model they
@@ -490,6 +494,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         secondOpinion: withFallback(() => store.general?.secondOpinion, defaultSettings.general.secondOpinion),
         setSecondOpinion(value: boolean) {
           setStore("general", "secondOpinion", value)
+        },
+        codeReview: withFallback(() => store.general?.codeReview, defaultSettings.general.codeReview),
+        setCodeReview(value: boolean) {
+          setStore("general", "codeReview", value)
         },
         followup: createMemo(() => readFollowup(store.general?.followup)),
         setFollowup(value: FollowupPreference) {

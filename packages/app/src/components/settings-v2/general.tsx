@@ -9,6 +9,8 @@ import { usePlatform } from "@/context/platform"
 import { observeTelemetryPreference, setTelemetryEnabled, telemetryEnabled } from "@/features/privacy/telemetry"
 import { onCodiumChange } from "@/vector-account"
 import { SECOND_OPINION_DESCRIPTION, SECOND_OPINION_TITLE, secondOpinionOffered } from "./second-opinion-model"
+import { CODE_REVIEW_DESCRIPTION, CODE_REVIEW_TITLE, codeReviewOffered } from "./code-review-model"
+import { useServerSync } from "@/context/server-sync"
 import { Card, Page, RangeRow, SelectRow, ToggleRow } from "./parts/page"
 import { followupDescriptionKeys } from "@/features/followup/followup-model"
 import { navigatorLocks } from "@/features/followup/followup-store"
@@ -55,6 +57,7 @@ export const SettingsGeneralV2: Component<{
   const settings = useSettings()
   const language = useLanguage()
   const platform = usePlatform()
+  const serverSync = useServerSync()
   const [status, setStatus] = createSignal("")
   const [crashDiagnostics, setCrashDiagnostics] = createSignal(telemetryEnabled())
   onCleanup(observeTelemetryPreference(setCrashDiagnostics))
@@ -220,6 +223,20 @@ export const SettingsGeneralV2: Component<{
                 onChange={settings.general.setSecondOpinion}
               />
             </Show>
+          </Show>
+          <Show
+            when={codeReviewOffered({
+              capability: serverSync().capabilities().codeReviewAfterTask,
+              vectorscope: serverSync().globalConfig()?.experimental?.vectorscope,
+              disabled: serverSync().globalConfig()?.agent?.vectorscope?.disable,
+            })}
+          >
+            <ToggleRow
+              title={CODE_REVIEW_TITLE}
+              description={CODE_REVIEW_DESCRIPTION}
+              checked={settings.general.codeReview()}
+              onChange={settings.general.setCodeReview}
+            />
           </Show>
         </Card>
         <TerminalCard />

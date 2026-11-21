@@ -176,7 +176,7 @@ describe("experimental HttpApi", () => {
       const response = yield* request("/experimental/capabilities", tmp.directory)
       expect(response.status).toBe(200)
       const capabilities = yield* response.json
-      expect(capabilities).toMatchObject({ vectorscopeReviewMemoryControls: true })
+      expect(capabilities).toMatchObject({ vectorscopeReviewMemoryControls: true, codeReviewAfterTask: true })
       expect(capabilities).not.toHaveProperty("vectorscopeReviewMemoryContext")
     }),
   )
