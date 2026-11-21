@@ -969,6 +969,15 @@ make tests that start many processes 2-4x slower, so a test at 60-100% of its bu
 `review/impact.test.ts` and `everywhere/unattended-session.test.ts` also hit their budgets today, but the
 `scope-finish` and `everywhere-finish` lanes are rewriting those files, so they are left to those lanes.
 
+21 Nov 2026 (v2-closeout-ci): `everywhere/unattended-session.test.ts` was fixed by the Everywhere lane, with no
+deadline changed: the first prompt in a fresh instance fell inside the file's two 10 s waits on slow-first-touch VMs,
+so `c2f7f537` warms a fresh instance before those waits and `5b6b6380` runs the bubblewrap self-test before the
+`offline-v1` wait. Both are ancestors of main (through PR #56). Evidence read through GitHub MCP: engine (windows,
+shard 8/12) job 136722206395 in run 44863454630 (`everywhere-finish` `b6d6b30c`), success. Main's first post-#56
+test.yml run, 44885765033 at `153f9a22`, was still in progress when this was written; its shard 8/12 job is still to
+be recorded. There is no `unattended-session-windows-budget` branch on origin. `review/impact.test.ts` stays with the
+VectorScope lane.
+
 Local times are Linux, per test, from `bun test --timeout 30000 --reporter=junit`, one file at a time through the
 Bun lock.
 
