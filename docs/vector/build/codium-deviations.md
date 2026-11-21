@@ -7336,3 +7336,23 @@ skipping the Worker silently).
   `ops:accounts` check fails the second. `ops-payment-pipeline.test.ts`'s "account deletion erases every ops record at
   once" (`:390`) and the media-down case (`:407`) still pass: their Worker is configured. File counts: account-delete
   44 pass, 1 skip.
+
+## R46-17: the ops Worker bounds its run row, codium-api-fixes lane (21 Nov 2026)
+
+- **Built.** `packages/ops-worker/src/limits.ts`: `maxRunStateBytes` 1,900,000 (Cloudflare's 2 MB per string or row
+  for SQLite-backed Durable Objects, with a 5 % margin) and `maxConcurrentWatches`, derived as
+  `floor((1,900,000 − 100,000 reserve) / 56,384)` = 31, where 56,384 bytes is a watch at its largest (five paths at
+  2,048 characters in `urls`, `streaks`, `last`, `failures` and `baseline.ok`, with JSON overhead and DNS answers).
+  `ops-account.ts` `release()`: with 31 watches running, the release is inserted as `skipped` and answered
+  `{accepted: false, reason: "daily-limit"}` with 200, like the day's cap, so the API (which already handles that
+  reason) records it as skipped and nothing answers 500. `save()`: over the bound, the cached DNS answers are dropped,
+  then the oldest watches end as `stopped`, so a wake can always write its row.
+- **Deviation.** No new answer reason: a new one would need the API's decoder first and a two-step deploy
+  (hosted-ops.md), so the cap reuses `daily-limit`. For the lead if a distinct reason is wanted.
+- **Tests.** `packages/ops-worker/test/release-watch.test.ts` "the run state's size (R46-17)" (worst case above 80 %
+  and below the bound; the 32nd release answers 200 unwatched; mutation: without the cap it is accepted and the case
+  fails); `test/ops-worker-contract.test.ts` (the API's 20 repositories fit the cap). ops-worker suites
+  release-watch 17, schedule 13, internal 23, on-call 16, check 16; contract 9; ops-worker typecheck clean.
+- **Not run here.** The miniflare smoke (`e2e/ops-smoke.mjs`) and a real Durable Object's 2 MB refusal (CI and the
+  owner's deploy).
+

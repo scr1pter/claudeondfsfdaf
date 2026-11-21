@@ -3,6 +3,21 @@
 // only refuse a plan no real one could be. test/ops-worker-contract.test.ts (repository root) keeps them in line with
 // ENTITLEMENTS.
 
+const URL_MAX_LENGTH = 2_048
+const RELEASE_PATHS = 5
+/**
+ * The run state (monitors, watches, cached DNS answers, wake counts) is one meta row, and a SQLite-backed Durable Object
+ * refuses a string or row over 2 MB (Cloudflare's limit). The row is kept under this, about 5 % below it.
+ */
+const RUN_STATE_BYTES = 1_900_000
+/**
+ * A watch at its largest: each of its paths, at the longest URL, appears in `urls`, `streaks`, `last`, `failures` and
+ * its baseline's `ok` (with room for the JSON around it), plus its fixed fields and a cached DNS answer per path.
+ */
+const WATCH_MAX_BYTES = RELEASE_PATHS * 5 * (URL_MAX_LENGTH + 64) + RELEASE_PATHS * 512 + 1_024
+/** Room for the monitors, their DNS answers and the wake counts: 10 monitors with an hour's totals each. */
+const RUN_STATE_RESERVE_BYTES = 100_000
+
 export const OPS_LIMITS = {
   /** A probe that has not answered within this is a failure (timeout). */
   probeTimeoutMs: 8_000,
@@ -33,7 +48,7 @@ export const OPS_LIMITS = {
   /** The largest any plan allows (ENTITLEMENTS Ultra); a config or plan asking more is refused. */
   maxMonitors: 10,
   maxDomains: 10,
-  maxReleasePaths: 5,
+  maxReleasePaths: RELEASE_PATHS,
   maxReleasesPerDay: 100,
   minIntervalSec: 60,
   maxIntervalSec: 3_600,
@@ -47,7 +62,13 @@ export const OPS_LIMITS = {
   dnsMaxCacheMs: 300_000,
   /** A 5xx HTML answer's first bytes are read to tell a bot challenge from an outage. */
   challengeSniffBytes: 8_192,
-  urlMaxLength: 2_048,
+  urlMaxLength: URL_MAX_LENGTH,
+  maxRunStateBytes: RUN_STATE_BYTES,
+  /**
+   * Release watches running at once, per account, so the run state fits `maxRunStateBytes` with every watch at its
+   * largest (31). A release past it is recorded and not watched, answered as over the day's limit.
+   */
+  maxConcurrentWatches: Math.floor((RUN_STATE_BYTES - RUN_STATE_RESERVE_BYTES) / WATCH_MAX_BYTES),
   /** Reports to the API: one request carries at most this many events, and gives up after the timeout. */
   callbackTimeoutMs: 10_000,
   callbackBatch: 20,
