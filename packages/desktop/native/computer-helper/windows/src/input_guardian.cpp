@@ -174,7 +174,10 @@ InputGuardianReleaser::InputGuardianReleaser(InputGuardianLedger& ledger, Releas
   : ledger_(ledger), release_(std::move(release)), callbacks_(std::move(callbacks)) {}
 uint32_t InputGuardianReleaser::drain(uint32_t milliseconds,bool retired_only) {
   const auto deadline=GetTickCount64()+std::clamp<uint32_t>(milliseconds,1,300);
-  std::unique_lock lock(drain_mutex_,std::try_to_lock); if (!lock.owns_lock()) return 0;
+  // Waits for the release lock only up to this drain's own budget, then gives up with 0. A drain that gets
+  // the lock late skips any in-flight ticket and still counts that UP if it lands within the budget.
+  std::unique_lock lock(drain_mutex_,std::defer_lock); const auto now=GetTickCount64();
+  if (now>=deadline || !lock.try_lock_for(std::chrono::milliseconds(deadline-now))) return 0;
   const auto before=ledger_.released_count();
   do {
     const auto seen=generation();
@@ -453,8 +456,9 @@ struct ChildState final : std::enable_shared_from_this<ChildState> {
         ledger.retire(ticket,request->down); releaser.notify(); reply.ok=true;
       } else {
         if (request->ticket!=0 || request->release!=InputRelease{} || request->down || request->budget==0 || request->budget>300) { stop(); return; }
-        // As before the release thread, this returns 0 at once while another drain holds the release
-        // lock. The real release bound is the parent's 300 ms close lock and one-second child wait.
+        // While another drain holds the release lock, this waits for it up to its own budget (the parent
+        // sends its remaining exchange budget), then reports the real count. It returns 0 only at that
+        // budget. The real release bound is still the parent's 300 ms close lock and one-second child wait.
         reply.count=releaser.drain(request->budget); reply.ok=!ledger.pending();
         if (request->op==Op::close) { stop(); }
       }

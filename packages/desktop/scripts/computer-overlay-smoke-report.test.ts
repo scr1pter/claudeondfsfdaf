@@ -911,7 +911,15 @@ test("the Windows guardian child sends UPs only from its hookless release thread
   // The release lock is the only lock held across the release; the ledger and wake locks never are.
   expect(drain.match(/release_\(/g)).toHaveLength(1)
   expect(drain).not.toMatch(/lock_guard|changed_mutex_|ledger_\.mutex/)
-  expect(drain).toContain("std::unique_lock lock(drain_mutex_,std::try_to_lock); if (!lock.owns_lock()) return 0;")
+  // A concurrent drain waits for the release lock only up to its own budget, computed before the wait.
+  expect(drain.indexOf("const auto deadline=GetTickCount64()+")).toBeLessThan(drain.indexOf("std::unique_lock lock("))
+  expect(drain).toContain("std::unique_lock lock(drain_mutex_,std::defer_lock); const auto now=GetTickCount64();")
+  expect(drain).toContain("if (now>=deadline || !lock.try_lock_for(std::chrono::milliseconds(deadline-now))) return 0;")
+  expect(drain).not.toContain("try_to_lock")
+  expect(drain).not.toContain("lock.lock()")
+  const header = await readFile(path.join(native, "input_guardian.h"), "utf8")
+  expect(header).toContain("std::timed_mutex drain_mutex_;")
+  expect(header).toContain("std::mutex changed_mutex_;")
   expect(drain).toContain("std::clamp<uint32_t>(milliseconds,1,300)")
 })
 
