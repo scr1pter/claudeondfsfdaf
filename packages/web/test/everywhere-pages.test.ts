@@ -2119,12 +2119,18 @@ describe("the jobs", () => {
   test("the history and audit routes: off answers 404 before any sign-in or store read, a bad bearer 401, GET only", async () => {
     env = {}
     mountAccount(createAccountApi(deps()))
-    for (const route of [EVERYWHERE_ROUTES.history, EVERYWHERE_ROUTES.audit]) {
-      expect((await harness.call("GET", route, { token: alice.token })).status).toBe(404)
-      // As every account route: the method is checked before the switch (deviations EV-23 (b)), and nothing is read.
-      expect((await harness.call("POST", route, { token: alice.token })).status).toBe(405)
-      expect((await harness.call("DELETE", route, { token: alice.token })).status).toBe(405)
-    }
+    // Off, every account route answers 404 to every method, with no allow header that would show the route exists
+    // (the spec's Switches rule; this replaces the method-first order of deviations EV-23 (b)). Nothing is read.
+    for (const route of Object.values(EVERYWHERE_ROUTES))
+      for (const method of ["GET", "POST", "PUT", "DELETE", "PATCH"]) {
+        const answer = await harness.call(method, route, { token: alice.token })
+        expect({ route, method, status: answer.status, allow: answer.headers.get("allow") }).toEqual({
+          route,
+          method,
+          status: 404,
+          allow: null,
+        })
+      }
     expect(accounts.calls).toBe(0)
     expect(fake.commands).toEqual([])
     env = everywhereEnv()

@@ -64,7 +64,7 @@ export class FakeAccounts {
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => Promise<void> | void
 
-export type RouteAnswer = { readonly status: number; readonly body: any; readonly text: string }
+export type RouteAnswer = { readonly status: number; readonly body: any; readonly text: string; readonly headers: Headers }
 
 /** A loopback server for route handlers; `use` swaps the handlers between tests. */
 export class RouteHarness {
@@ -133,7 +133,7 @@ export class RouteHarness {
     } catch {
       body = undefined
     }
-    return { status: response.status, body, text }
+    return { status: response.status, body, text, headers: response.headers }
   }
 }
 
