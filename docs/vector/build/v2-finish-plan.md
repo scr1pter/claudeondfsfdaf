@@ -1,5 +1,9 @@
 # Vector v2 finish plan
 
+**Status on 21 Nov 2026 (v2-closeout-ci).** This plan is historical; it is kept as written. Everything it plans reached
+`main` through PR #33 (`b362fdf6`) and the lane PRs after it; v2-integration.md "Merged pull requests" lists them, and
+v2-handoff.md "Where things stand" has the per-lane status. VectorScope (`scope-finish`) is the one lane still open.
+
 Checked on 2026-11-13 (US time; about 02:30 UTC on 11-14). Reviewed and re-fetched at 02:37 UTC on 11-14 (see "Review notes" at the end). `origin/main` is `0dcbb8e2d`, the PR #20 merge.
 
 **Owner's answers of 2026-11-13** (owner memory note `vector-v2-direction.md`; they postdate the surveys):

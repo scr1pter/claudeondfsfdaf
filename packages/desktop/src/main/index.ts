@@ -654,7 +654,8 @@ const main = Effect.gen(function* () {
       hands.attach({ url, password, source: engineEventSource({ url, username: "vector", password }) })
 
     yield* Effect.promise(() => vectorAccount.restore())
-    // Vector Remote (WP A41): connects only while Remote is on and a phone is paired or pairing.
+    // Vector Remote (WP A41): connects only while Remote is on and a phone is paired or pairing, or this computer takes
+    // Vector everywhere jobs (everywhere-wiring.ts).
     startRemote({
       engine: { url, password },
       packaged: app.isPackaged,

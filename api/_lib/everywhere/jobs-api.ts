@@ -20,6 +20,7 @@ import {
   type ApiResponse,
 } from "../http.js"
 import { requireUnrevokedCliToken } from "../revocation.js"
+import { codiumAccountAuthority } from "./adapters/account.js"
 import { after } from "./after.js"
 import { checkAccount, type AccountAuthorityPort } from "./authority.js"
 import { readConfig, type Env, type EverywhereConfig } from "./config.js"
@@ -118,7 +119,13 @@ function start(request: ApiRequest, deps: JobsApiDeps, method: "GET" | "POST"): 
   verifyDesktopToken(token, now)
   const config = readConfig(deps.env ?? process.env)
   if (!config.enabled) return { off: true }
-  return { off: false, token, config, store: deps.store ?? everywhereStore(deps.fetcher ?? fetch), now }
+  return {
+    off: false,
+    token,
+    config,
+    store: deps.store ?? everywhereStore(deps.fetcher ?? fetch, deps.accountAuthority ?? codiumAccountAuthority),
+    now,
+  }
 }
 
 type Session = {

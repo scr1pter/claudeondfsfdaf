@@ -61,6 +61,23 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 
 ## Where things stand (2026-11-14, about 07:30 UTC)
 
+**Status on 21 Nov 2026 (v2-closeout-ci; this section is kept as the 14 Nov record).** Every lane in the table below
+reached `main`. PR #33 (`release-finish`, merge `b362fdf6`) carried the assembly; GitHub shows #21, #25, #29, #30, #31
+and #32 as merged with it because #33 contains their heads. Later work merged in #34 to #54 (v2-integration.md "Merged
+pull requests"), then #55 (`3e90df62`), #57 (`5a5b5619`), the Everywhere PR #56 (`153f9a22`) and #59 (`4fc245b6`); each
+of those merge commits is on main's first-parent history. Per lane, now:
+
+- `v2-hands`: in #33, finished in #40 (`hands-finish`, `2f64aca2`).
+- `v2-complete`: never created as a branch; superseded by the #33 assembly plus the connect (#38, `7e440a27`),
+  brain-transport (#43, `7c7508d2`) and Everywhere (#56) lanes. VectorScope (`scope-finish`) is still open.
+- `cloud-workspaces`: in #33, finished in #34 (`workspaces-finish`, `1b1563dd`).
+- `agent-environment` and `v2-locks`: in #33.
+- `v2-codium-acceptance`: B09 to B11 were done in #36 (`codium-finish`, `b5cbad1c`; codium-deviations.md "Codium
+  finish: B10 acceptance" and the two "Codium finish: B09" entries). B08 and A59 moved to the brain-transport lane
+  (codium-deviations.md "What stays open").
+
+"Other branches still to resolve" below is superseded by v2-integration.md "Branches to delete".
+
 **In `v2` (and going to `main`):**
 - #26 process ownership (supersedes #23, closed).
 - #27 release coordination.
@@ -106,14 +123,30 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 1. **Codium:**
    - B08: job dispatch screen, live run reader, Redis/Lua upload hardening, Brain-history encryption.
    - The A59 joint check with @vector. The last two registrations (repository binding reader, ops run starter) are built on `codium-api-fixes` (2026-11-21, `api/_lib/ops-registration.ts`); the joint check on main follows its merge.
+   - _21 Nov 2026 (v2-closeout-ci):_ B08 is built in source through the brain-transport lane: BT03 `c4ec2c83`
+     (upload store against real Redis), BT07a `1d36447e` and BT07b `569d1643`, merged in #43 (`7c7508d2`); its
+     leftovers are in the B08 row of codium-track-b-checkpoint.md. A59: see the line above; its two missing registrations are now in
+     `api/_lib/ops-registration.ts` on main.
 2. **@vector:** V27 runtime (save and restore, runner attestation, desktop Brain transport, preview and import) and V30 acceptance. V31 comes after A49.
+   _21 Nov 2026 (v2-closeout-ci):_ V27 is built (BT05 `8f742520` save and attest, BT06 `a89fe7a0` restore); V30's two halves are BT09
+   `aa925ff8` and BT10 `d49acedf`; V31's opt-in Ship Desk capture job is BT12 `1b6c02d9`, with `VECTOR_SHIP_DESK`
+   unset. All are in main through #43. Still with the lead: the artifact-key thread binding, the server-side visibility
+   field and the Ship Desk mitigations (vector-at-mention-progress.md, "Still with the lead" and "Deferred, and for the
+   lead").
 3. **VectorScope:**
    - The VS-12 executor, VS-14, 15, 18, 19 and 26.
    - Wiring of VS-23/24/25/27/28/34/42/43/44, with defaults unchanged.
    - VS-05 and VS-13, plus the GitHub and Codium halves.
+   - _21 Nov 2026 (v2-closeout-ci):_ owned by the VectorScope lane (`scope-finish`), which has not merged.
 4. **Connected workspace:** CW-20 to CW-25. Turning it on by default is the owner's Q1.
+   _21 Nov 2026 (v2-closeout-ci):_ CN-01 to CN-20 merged in #38 (`7e440a27`), with Connect off. Open: the lead's PR items in
+   connected-workspace-handoff.md ("For the lead at PR review"), and the owner's Q1 and Q6.
 5. **Vector everywhere:** Phase 3 (laptop route), Phase 4 (Actions fallback) and Phase S (settings, site pages, docs).
+   _21 Nov 2026 (v2-closeout-ci):_ EV-01 to EV-33 merged in #56 (`153f9a22`), behind `VECTOR_EVERYWHERE_ENABLED`. What remains before go-live
+   is vector-everywhere-handoff.md "Lane work with no package yet".
 6. Regenerate the SDK, openapi and help snapshots once, and fix the fallout.
+   _21 Nov 2026 (v2-closeout-ci):_ items 6 and 7 are being done on the `version-regen` branch (version 1.99.120 and the one-time
+   regeneration), not yet merged.
 7. **Version 2.0.0 everywhere:**
    - desktop and CLI;
    - `MIN_AGENTS_CLI` and `MODEL_PLANS_MIN_CLIENT`;
@@ -121,6 +154,8 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
    - the live site's "Coming in desktop 1.99.113";
    - the release docs and policy names.
 8. Full CI green on `main`, plus a check of the production site.
+   _21 Nov 2026 (v2-closeout-ci):_ not yet: main's post-#56 test.yml run 44885765033 failed in computer-helper mac-test (macos-15-intel);
+   see codium-deviations.md, B01 under the open items.
 9. **Delete every remaining branch except `main`.** Verify each first with `git rev-list --count main..<b>` or `git cherry`, and record its last commit in `v2-integration.md`. Close leftover PRs.
 
 ## Owner-only items

@@ -1,6 +1,6 @@
 import { ApiError, queryValue, redirect, requireMethod, type ApiRequest, type ApiResponse } from "../../http.js"
 import { platformOn, readConfig, type EverywhereConfig, type SlackConfig } from "../config.js"
-import { installToken, OAUTH, type InstallRecord, type OAuthExchange } from "../identity.js"
+import { installToken, OAUTH, OAUTH_CODE, type InstallRecord, type OAuthExchange } from "../identity.js"
 import type { DataKey } from "../crypto.js"
 import { createSlackClient } from "./client.js"
 import { slackId, slackObject } from "./verify.js"
@@ -53,7 +53,7 @@ export function slackOAuthCallback(config: () => EverywhereConfig = readConfig) 
       if (!platformOn(config(), "slack")) { response.statusCode = 404; response.end(); return }
       const code = queryValue(request, "code")
       const state = queryValue(request, "state")
-      if (!code || code.length > 2048 || !state || !/^[A-Za-z0-9_-]{16,128}$/.test(state)) { response.statusCode = 400; response.end(); return }
+      if (!code || !OAUTH_CODE.test(code) || !state || !/^[A-Za-z0-9_-]{16,128}$/.test(state)) { response.statusCode = 400; response.end(); return }
       response.setHeader("referrer-policy", "no-referrer")
       // The fixed same-origin landing page reads the fragment and submits through the authenticated account API.
       redirect(response, 303, `/everywhere#${new URLSearchParams({ platform: "slack", code, state })}`)

@@ -2,7 +2,7 @@ import { ApiError, queryValue, redirect, requireMethod, type ApiRequest, type Ap
 import { platformOn, readConfig, type EverywhereConfig, type LinearConfig } from "../config.js"
 import type { DataKey } from "../crypto.js"
 import { PLATFORM_HOSTS, platformFetch } from "../fetch.js"
-import { installToken, OAUTH, type InstallRecord, type OAuthExchange } from "../identity.js"
+import { installToken, OAUTH, OAUTH_CODE, type InstallRecord, type OAuthExchange } from "../identity.js"
 import { linearApi } from "./client.js"
 import { linearGrant, linearOAuth, parseLinearCredentials } from "./credentials.js"
 import { linearId, linearObject } from "./verify.js"
@@ -55,7 +55,7 @@ export function linearOAuthCallback(config: () => EverywhereConfig = readConfig)
       if (!platformOn(config(), "linear")) { response.statusCode = 404; response.end(); return }
       const code = queryValue(request, "code")
       const state = queryValue(request, "state")
-      if (!code || code.length > 1024 || !state || !/^[A-Za-z0-9_-]{16,128}$/.test(state)) { response.statusCode = 400; response.end(); return }
+      if (!code || !OAUTH_CODE.test(code) || !state || !/^[A-Za-z0-9_-]{16,128}$/.test(state)) { response.statusCode = 400; response.end(); return }
       response.setHeader("referrer-policy", "no-referrer")
       redirect(response, 303, `/everywhere#${new URLSearchParams({ platform: "linear", code, state })}`)
     } catch { response.statusCode = 400; response.end() }
