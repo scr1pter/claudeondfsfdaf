@@ -1279,11 +1279,8 @@ describe("VS-44's verifyEvidence key", () => {
   })
 })
 
-// VS-28c: `depth` and `lenses` are parsed, and no runner reads them before VS-28 wiring. `lenses` acts only under
-// `depth: "auto"`, so without it the key is ignored with a note; under "auto", an explicit `security: "off"` is said,
-// since no band then adds the security pass (gap-6 G6-2: a depth that cannot run in full says so).
+// SF-24 applies automatic depth on the engine. SF-25 wires the lens sessions.
 describe("VS-28's depth and lenses keys", () => {
-  const DEPTH = '"depth": "auto" is not applied yet: every review still runs its usual passes.'
   const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
   const IGNORED =
     '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
@@ -1297,7 +1294,7 @@ describe("VS-28's depth and lenses keys", () => {
     for (const key of ["depth", "lenses"] as const) {
       expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
       expect(Object.hasOwn(config, key)).toBe(false)
-      expect(UNAPPLIED_REVIEW_KEYS).toContain(key)
+      expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes(key)).toBe(key === "lenses")
       expect(SOURCED_REVIEW_KEYS).not.toContain(key)
     }
     expect(warnings).toEqual([])
@@ -1305,11 +1302,11 @@ describe("VS-28's depth and lenses keys", () => {
     expect(OPTIONAL_REVIEW_DEFAULTS.lenses).toBe("off")
   })
 
-  test("under auto each says it is not applied; lenses without auto is ignored with a note, its value kept", () => {
-    expect(json({ depth: "auto" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto" }, warnings: [DEPTH] })
+  test("automatic depth is active while unfitted lens settings retain the appropriate warning", () => {
+    expect(json({ depth: "auto" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto" }, warnings: [] })
     expect(json({ depth: "auto", lenses: "high" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
-      warnings: [DEPTH, LENSES],
+      warnings: [LENSES],
     })
     for (const value of [{ lenses: "high" }, { depth: "fixed", lenses: "high" }] as const)
       expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
@@ -1318,26 +1315,26 @@ describe("VS-28's depth and lenses keys", () => {
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "fixed", lenses: "off" },
       warnings: [],
     })
-    expect(json({ depth: "auto", lenses: "off" }).warnings).toEqual([DEPTH])
+    expect(json({ depth: "auto", lenses: "off" }).warnings).toEqual([])
   })
 
   test("REVIEW_DEPTH and REVIEW_LENSES override review.json, read without case or surrounding space", () => {
     expect(json({ lenses: "high" }, { REVIEW_DEPTH: " Auto " })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
-      warnings: [DEPTH, LENSES],
+      warnings: [LENSES],
     })
     expect(json({ depth: "auto", lenses: "high" }, { REVIEW_DEPTH: "fixed" }).warnings).toEqual([IGNORED])
     expect(json({ depth: "auto" }, { REVIEW_LENSES: "HIGH" }).config.lenses).toBe("high")
-    expect(json({ depth: "auto", lenses: "high" }, { REVIEW_LENSES: "off" }).warnings).toEqual([DEPTH])
+    expect(json({ depth: "auto", lenses: "high" }, { REVIEW_LENSES: "off" }).warnings).toEqual([])
   })
 
   test("an explicit security off under auto is said, never silently less", () => {
     expect(json({ depth: "auto", security: "off" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", security: "off" },
-      warnings: [OFF, DEPTH],
+      warnings: [OFF],
     })
-    expect(json({ depth: "auto", lenses: "high", security: "off" }).warnings).toEqual([OFF_LENSES, DEPTH, LENSES])
-    expect(json({ depth: "auto" }, { REVIEW_SECURITY: "off" }).warnings).toEqual([OFF, DEPTH])
+    expect(json({ depth: "auto", lenses: "high", security: "off" }).warnings).toEqual([OFF_LENSES, LENSES])
+    expect(json({ depth: "auto" }, { REVIEW_SECURITY: "off" }).warnings).toEqual([OFF])
     // Without auto, or with security on, there is nothing to say.
     for (const value of [
       { security: "off" },

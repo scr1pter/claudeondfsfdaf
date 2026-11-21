@@ -1379,7 +1379,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  depth: "VS-28 wiring",
   lenses: "VS-28 wiring",
   runtime: "the VS-30 executor",
 }
@@ -1452,6 +1451,10 @@ function variantProblem(input: ReplayInput) {
     (variant.name !== "engine:impact-graph" || variant.keys.impact !== "graph" || keys.length !== 1 || variant.models)
   )
     return 'The engine:impact-graph variant sets only impact: "graph".'
+  if (variant.name === "engine:depth-auto" || Object.hasOwn(variant.keys, "depth")) {
+    if (variant.name !== "engine:depth-auto" || variant.keys.depth !== "auto" || keys.length !== 1 || variant.models)
+      return 'The engine:depth-auto variant sets only depth: "auto".'
+  }
   if (variant.name === "engine:rule-strict" || Object.hasOwn(variant.keys, "ruleCheck")) {
     if (
       variant.name !== "engine:rule-strict" ||

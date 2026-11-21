@@ -16,7 +16,7 @@ import { testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Git.node])))
 
-it.live("graph reviews distinguish committed, staged and uncommitted changes before invoking the engine", () =>
+it.live("graph and automatic depth distinguish staged, uncommitted and committed reviews", () =>
   Effect.gen(function* () {
     const repo = yield* Effect.acquireRelease(
       Effect.promise(() => tmpdir({ git: true })),
@@ -35,12 +35,12 @@ it.live("graph reviews distinguish committed, staged and uncommitted changes bef
       await $`git add sum.ts`.cwd(cwd).quiet()
       await Bun.write(path.join(cwd, "sum.ts"), "export const sum = 4\n")
     })
-    const invoke = (options: Partial<LocalReviewOptions>, graph: boolean) =>
+    const invoke = (options: Partial<LocalReviewOptions>, env: LocalReviewOptions["env"] = {}) =>
       Effect.gen(function* () {
         const received: RunInput[] = []
         const captured = new Error("Captured the input before model dispatch")
         yield* executeLocalReview(
-          { directory: cwd, env: graph ? { REVIEW_IMPACT: "graph" } : {}, ...options },
+          { directory: cwd, env, ...options },
           {
             runReview: (input) => {
               received.push(input)
@@ -62,17 +62,22 @@ it.live("graph reviews distinguish committed, staged and uncommitted changes bef
         expect(received).toHaveLength(1)
         return received[0]!
       })
-    const branch = yield* invoke({ base: "main" }, true)
-    expect(branch.config.impact).toBe("graph")
-    expect(branch.uncommittedDiff).toBeUndefined()
-    expect(branch.files[0]?.patch).toContain("+export const sum = 2")
-    const staged = yield* invoke({ staged: true }, true)
-    expect(staged.uncommittedDiff).toBe(true)
-    expect(staged.files[0]?.patch).toContain("+export const sum = 3")
-    const uncommitted = yield* invoke({ uncommitted: true }, true)
-    expect(uncommitted.uncommittedDiff).toBe(true)
-    expect(uncommitted.files[0]?.patch).toContain("+export const sum = 4")
-    const ordinary = yield* invoke({ staged: true }, false)
+    for (const policy of [
+      { env: { REVIEW_IMPACT: "graph" }, expected: { impact: "graph" } },
+      { env: { REVIEW_DEPTH: "auto" }, expected: { depth: "auto" } },
+    ]) {
+      const branch = yield* invoke({ base: "main" }, policy.env)
+      expect(branch.config).toMatchObject(policy.expected)
+      expect(branch.uncommittedDiff).toBeUndefined()
+      expect(branch.files[0]?.patch).toContain("+export const sum = 2")
+      const staged = yield* invoke({ staged: true }, policy.env)
+      expect(staged.uncommittedDiff).toBe(true)
+      expect(staged.files[0]?.patch).toContain("+export const sum = 3")
+      const uncommitted = yield* invoke({ uncommitted: true }, policy.env)
+      expect(uncommitted.uncommittedDiff).toBe(true)
+      expect(uncommitted.files[0]?.patch).toContain("+export const sum = 4")
+    }
+    const ordinary = yield* invoke({ staged: true })
     expect(ordinary.uncommittedDiff).toBeUndefined()
   }),
 )

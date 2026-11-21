@@ -5623,6 +5623,201 @@ describe("VS-34 holdback tools (SF-14)", () => {
   )
 })
 
+describe("VS-28 automatic depth (SF-24)", () => {
+  const sizedFile = (lines: number) =>
+    parseUnifiedDiff(
+      [
+        "diff --git a/src/list.ts b/src/list.ts",
+        "--- a/src/list.ts",
+        "+++ b/src/list.ts",
+        `@@ -1 +1,${lines} @@`,
+        "-const previous = 0",
+        ...Array.from({ length: lines }, (_, index) => `+const num${index} = ${index}`),
+      ].join("\n"),
+    )
+
+  it.instance(
+    "sends the selected specialists by band, explains unavailable inputs and cost limits, and preserves fixed wire bytes",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const run = (
+          files: typeof LIST,
+          settings: Partial<ReviewConfig>,
+          trigger: Review.RunInput["trigger"] = "auto",
+          extra: Partial<Review.RunInput> = {},
+        ) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+            yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report([])))
+            const outcome = yield* Review.run(
+              input(directory, { files, anchors: files, trigger, config: config(settings), ...extra }),
+            )
+            const hits = yield* modelRequests(llm)
+            const { durationMs, sessions: ids, ...stable } = outcome
+            const sessions = yield* Session.Service
+            const permissions = yield* Effect.forEach(ids, (id) =>
+              sessions.get(SessionID.make(id)).pipe(Effect.map((s) => s.permission)),
+            )
+            return {
+              outcome,
+              sent: hits
+                .map((hit) => (REVIEW({ body: hit }) ? "review" : SECURITY({ body: hit }) ? "security" : "unexpected"))
+                .sort(),
+              wire: hits.map((hit) => JSON.stringify(hit)).sort(),
+              permissions,
+              stable,
+            }
+          })
+        const fixed = yield* run(LIST, {})
+        const explicit = yield* run(LIST, { depth: "fixed" })
+        expect(explicit.wire).toEqual(fixed.wire)
+        expect(explicit.permissions).toEqual(fixed.permissions)
+        expect(explicit.stable).toEqual(fixed.stable)
+        for (const [files, band, expected] of [
+          [LIST, "low", ["review"]],
+          [sizedFile(140), "medium", ["review", "security"]],
+          [sizedFile(640), "high", ["review", "security"]],
+          [AUTH, "medium", ["review", "security"]],
+        ] as const) {
+          const actual = yield* run(files, { depth: "auto" })
+          expect(actual.sent).toEqual([...expected])
+          expect(actual.outcome.notes.join("\n")).toContain("Automatic review depth: " + band + ".")
+          expect(actual.outcome.notes.join("\n")).toContain("Unavailable depth inputs: history and impact dependents.")
+          expect(actual.outcome.notes.join("\n")).toContain("existing review time and cost limits")
+          expect(actual.outcome.selection.risk).toBe(fixed.outcome.selection.risk)
+          expect(actual.wire.join("\n")).not.toContain("Automatic review depth:")
+        }
+        const medium = sizedFile(140)
+        const ci = yield* run(medium, { depth: "auto", security: "off" }, "command")
+        const local = yield* run(medium, { depth: "auto", security: "off" }, "local", { uncommittedDiff: true })
+        expect(ci.sent).toEqual(["review"])
+        expect(local.sent).toEqual(ci.sent)
+        expect(local.outcome.notes).toEqual(ci.outcome.notes)
+        expect(ci.outcome.notes.join("\n")).toContain("could not run its security pass because security is disabled")
+        const stopped = yield* run(medium, { depth: "auto", maxInputTokens: 1 })
+        expect(stopped.sent).toEqual([])
+        expect(stopped.outcome.partial).toBe("budget-estimate")
+        expect(stopped.outcome.notes.join(" ")).toContain("Automatic depth did not finish these planned passes: review, security.")
+        const tests = medium.map((file) => ({ ...file, path: "src/list.test.ts" }))
+        const onlyTests = yield* run(tests, { depth: "auto" })
+        expect(onlyTests.sent).toEqual(["review"])
+        expect(onlyTests.outcome.notes.join("\n")).toContain("Only test files changed")
+        const someSkipped = yield* run(tests, { depth: "auto" }, "auto", {
+          skipped: [{ path: "src/generated.ts", reason: "generated" }],
+        })
+        expect(someSkipped.sent).toEqual(["review", "security"])
+      }),
+    { git: true },
+    90000,
+  )
+
+  const native = process.platform === "linux" ? it.instance : it.instance.skip
+  native(
+    "counts recent distinct commits from the pinned private base while withholding subjects, denied paths and CI history",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* useServer()
+        const git = (...args: string[]) =>
+          Effect.promise(() => $`git ${args}`.cwd(directory).quiet().text()).pipe(Effect.map((text) => text.trim()))
+        const text = (file: string, version: number) =>
+          Effect.promise(() => fs.writeFile(path.join(directory, file), `export const value = ${version}\n`))
+        yield* text("a.ts", 1)
+        yield* text("b.ts", 1)
+        yield* git("add", "a.ts", "b.ts")
+        yield* git("commit", "-qm", "fix INTERNAL_HISTORY_SENTINEL")
+        yield* text("b.ts", 2)
+        yield* git("commit", "-qam", "revert hidden path history")
+        const base = yield* git("rev-parse", "HEAD")
+        yield* text("a.ts", 3)
+        yield* text("b.ts", 3)
+        yield* git("commit", "-qam", "head change")
+        const head = yield* git("rev-parse", "HEAD")
+        const files = parseUnifiedDiff(yield* git("diff", "--no-color", "--no-ext-diff", base, head))
+        const run = (trigger: Review.RunInput["trigger"], readDenies?: string[]) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+            const outcome = yield* Review.run(
+              input(directory, {
+                trigger,
+                base,
+                head,
+                files,
+                anchors: files,
+                config: config({ depth: "auto" }),
+                readDenies,
+              }),
+            )
+            expect((yield* modelRequests(llm)).map((hit) => JSON.stringify(hit)).join("")).not.toContain(
+              "INTERNAL_HISTORY_SENTINEL",
+            )
+            expect(outcome.notes.join(" ")).not.toContain("INTERNAL_HISTORY_SENTINEL")
+            return outcome.notes.join(" ")
+          })
+        const local = yield* run("local")
+        expect(local).toContain("2 commits touched these files, 1 fix commit, 1 revert")
+        const restricted = yield* run("local", ["b.ts"])
+        expect(restricted).toContain("1 commit touched these files, 1 fix commit, 0 reverts")
+        const ci = yield* run("auto")
+        expect(ci).toContain("Unavailable depth inputs: history and impact dependents.")
+        for (const note of [local, restricted, ci]) expect(note).toContain("Automatic review depth: low.")
+      }),
+    { git: true },
+    90000,
+  )
+  native(
+    "raises the depth to high when private graph evidence finds wide reach on a sensitive change",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* useServer()
+        const filesystem = yield* FSUtil.Service
+        const git = (...args: string[]) =>
+          Effect.promise(() => $`git ${args}`.cwd(directory).quiet().text()).pipe(Effect.map((text) => text.trimEnd()))
+        const write = (name: string, text: string) => filesystem.writeWithDirs(path.join(directory, name), text)
+        const decl = (n: number) => `export function gate(n: number) {\n  return n + ${n}\n}\n`
+        yield* write("src/auth/gate.ts", decl(1))
+        for (let index = 0; index < 28; index++)
+          yield* write(`src/consumer-${index}.ts`, 'import { gate } from "./auth/gate"\nexport const value = gate(1)\n')
+        yield* git("add", "src")
+        yield* git("commit", "-qm", "base")
+        const base = yield* git("rev-parse", "HEAD")
+        yield* write("src/auth/gate.ts", decl(2))
+        yield* git("commit", "-qam", "change gate")
+        const head = yield* git("rev-parse", "HEAD")
+        const files = parseUnifiedDiff(yield* git("diff", "--no-ext-diff", "--no-color", base, head))
+        yield* git("checkout", "--detach", base)
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+        yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report([])))
+        const observations: Review.Observation[] = []
+        const outcome = yield* Review.run(
+          input(directory, {
+            base,
+            head,
+            files,
+            anchors: files,
+            trigger: "command",
+            trust: "untrusted",
+            config: config({ depth: "auto", impact: "graph" }),
+            observe: (event) => observations.push(event),
+          }),
+        )
+        const impact = observations.find((event) => event.type === "impact")
+        expect(impact?.record.stages.gated).toBe(28)
+        expect(outcome.notes.join(" ")).toContain("28 files depend on the changed code: wide reach.")
+        expect(outcome.notes.join(" ")).toContain("Automatic review depth: high.")
+        expect(
+          (yield* modelRequests(llm))
+            .map((body) => (REVIEW({ body }) ? "review" : SECURITY({ body }) ? "security" : "unexpected"))
+            .sort(),
+        ).toEqual(["review", "security"])
+      }),
+    { git: true },
+    90_000,
+  )
+})
+
 // How many findings a review lists, wherever it lists them.
 function listedCount(outcome: ReviewOutcome) {
   const selection = outcome.selection

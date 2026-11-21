@@ -1637,15 +1637,55 @@ describe("ReviewEval.replay", () => {
   )
 
   it.instance(
-    "replays a base review.json that sets VS-28's depth and lenses without them, running the usual passes",
+    "replays engine:depth-auto with recorded policy, real specialist requests and unchanged report risk",
     () =>
       Effect.gen(function* () {
-        const DEPTH = '"depth": "auto" is not applied yet: every review still runs its usual passes.'
+        const headText =
+          Array.from({ length: 140 }, (_, index) => `export const item${index} = ${index}`).join("\n") + "\n"
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": headText },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), risk: "low" }))
+        yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", { ...report(), risk: "low" }))
+        const variant = { name: "engine:depth-auto", keys: { depth: "auto" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.outcome?.report.risk).toBe("low")
+        expect(artifact.outcome?.selection.risk).toBe("low")
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value.depth).toBe("auto")
+        expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, depth: "fixed" }))
+        expect(artifact.scope.prompts).toBe(promptsDigest())
+        expect(artifact.outcome?.specialists.map((row) => [row.name, row.status])).toEqual([
+          ["review", "ok"],
+          ["security", "ok"],
+        ])
+        const texts = (yield* llm.inputs).map((body) => JSON.stringify(body))
+        expect(texts.some((text) => text.includes("You are Vector's security reviewer"))).toBe(true)
+        expect(texts.some((text) => text.includes("You are Vector's code reviewer"))).toBe(true)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "replays automatic depth from the base settings and leaves disabled lens behavior and evidence unchanged",
+    () =>
+      Effect.gen(function* () {
         const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
         const IGNORED =
           '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
         for (const [settings, warnings] of [
-          [{ depth: "auto", lenses: "high" }, [DEPTH, LENSES]],
+          [{ depth: "auto", lenses: "high" }, [LENSES]],
           [{ lenses: "high" }, [IGNORED]],
         ] as const) {
           const { directory, llm, base, head } = yield* checkout({
@@ -1661,7 +1701,8 @@ describe("ReviewEval.replay", () => {
             posting: ReviewEval.recordingPosting(),
             check: recordingCheck().check,
           })
-          for (const key of ["depth", "lenses"]) expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          expect(artifact.config.value.depth).toBe("depth" in settings ? "auto" : undefined)
+          expect(Object.hasOwn(artifact.config.value, "lenses")).toBe(false)
           expect(artifact.config.warnings).toEqual([...warnings])
           expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
           expect(artifact.scope.prompts).toBe(promptsDigest())
@@ -2018,12 +2059,19 @@ describe("ReviewEval.replay", () => {
           },
         ] as const)
           expect(yield* refused({ variant })).toContain("The engine:verify-cert variant sets only")
-        // Nor VS-28's depth and lenses, which VS-28 wiring applies, alone or together.
+        for (const variant of [
+          { name: "engine:not-depth", keys: { depth: "auto" } },
+          { name: "engine:depth-auto", keys: { depth: "fixed" } },
+          { name: "engine:depth-auto", keys: { depth: "auto", guardrail: "strict" } },
+          { name: "engine:depth-auto", keys: { depth: "auto" }, models: "triage-pair" },
+        ] as const)
+          expect(yield * refused({ variant })).toContain("The engine:depth-auto variant sets only")
+        // Raw depth settings must be carried by the named pipeline variant. Lenses are still unapplied.
         expect(yield* refused({ config: { depth: "auto" } })).toContain(
-          "config sets depth, which no runner applies yet (VS-28 wiring), so the artifact would record a setting the run did not have.",
+          "config sets depth, a pipeline variant's setting",
         )
         expect(yield* refused({ config: { depth: "fixed", lenses: "high" } })).toContain(
-          "config sets depth, lenses, which no runner applies yet (VS-28 wiring)",
+          "config sets depth, a pipeline variant's setting",
         )
         expect(yield* refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
           "config sets guardrail, a pipeline variant's setting",
@@ -2037,7 +2085,7 @@ describe("ReviewEval.replay", () => {
           "config sets runtime, which no runner applies yet (the VS-30 executor), so the artifact would record a setting the run did not have.",
         )
         expect(yield* refused({ config: { runtime: "off", depth: "auto" } })).toContain(
-          "config sets depth, runtime, which no runner applies yet (VS-28 wiring for depth; the VS-30 executor for runtime)",
+          "config sets depth, a pipeline variant's setting",
         )
         expect(yield* refused({ config: { zdrAttested: ["openrouter"], runtime: "ask" } })).toContain(
           "config sets zdrAttested, a route setting a replay cannot apply",
@@ -2051,7 +2099,7 @@ describe("ReviewEval.replay", () => {
         const HOLD =
           "config sets holdback, which a replay takes only from the case's own review.json or the engine:holdback-secrets variant."
         expect(yield* refused({ config: { holdback: "secrets" } })).toContain(HOLD)
-        expect(yield* refused({ config: { holdback: "off", depth: "auto" } })).toContain(HOLD)
+        expect(yield* refused({ config: { holdback: "off", depth: "auto" } })).toContain("config sets depth, a pipeline variant's setting")
         expect(yield* refused({ config: { holdback: "secrets", zdrAttested: ["openrouter"] } })).toContain(
           "config sets zdrAttested, a route setting a replay cannot apply",
         )

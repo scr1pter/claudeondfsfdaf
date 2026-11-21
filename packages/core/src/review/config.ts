@@ -247,10 +247,6 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  depth: {
-    applies: (config) => config.depth === "auto",
-    warning: '"depth": "auto" is not applied yet: every review still runs its usual passes.',
-  },
   // Only under "auto": without it the key is ignored (settle's note), so it is never also "not applied".
   lenses: {
     applies: (config) => config.lenses === "high" && config.depth === "auto",

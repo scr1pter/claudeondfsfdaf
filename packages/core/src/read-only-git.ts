@@ -1308,6 +1308,8 @@ export type Read =
   | { readonly kind: "grep"; readonly revision: string; readonly symbol: string; readonly excludes?: readonly string[] }
   | { readonly kind: "roots"; readonly revision: string }
   | { readonly kind: "history"; readonly revision: string; readonly file: string }
+  /** Up to five base commits for a literal changed path. Each row is a NUL-framed object ID, commit time and subject. */
+  | { readonly kind: "depth-history"; readonly revision: string; readonly file: string }
   | {
       readonly kind: "blame"
       readonly revision: string
@@ -1817,7 +1819,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         const result = await peel(oid)
         return result.code === 0 && result.bytes.equals(Buffer.from(oid + "\n"))
       }
-      const impactRead = async (query: string[], limit: number, input?: Buffer) => {
+      const boundedTextRead = async (query: string[], limit: number, input?: Buffer) => {
         try {
           // No live worktree is in this process's authority, including for Git's attribute lookups.
           const result = await commands.command(
@@ -2075,6 +2077,26 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           ])
         case "roots":
           return run(["rev-list", "--max-parents=0", revision(operation.revision)])
+        case "depth-history":
+          if (!(await isCommit(operation.revision))) return { code: 2, bytes: Buffer.alloc(0) }
+          return boundedTextRead(
+            [
+              "log",
+              "--no-ext-diff",
+              "--no-textconv",
+              "--no-show-signature",
+              "--no-decorate",
+              "--no-color",
+              "-n",
+              "5",
+              "-z",
+              "--format=%H%x00%ct%x00%s",
+              operation.revision,
+              "--",
+              literal(operation.file),
+            ],
+            64 * 1024,
+          )
         case "history":
           return run([
             "log",
@@ -2124,7 +2146,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           )
           if (!(await isCommit(commit))) return { code: 2, bytes: Buffer.alloc(0) }
           if (operation.kind === "impact-tree")
-            return impactRead(
+            return boundedTextRead(
               ["ls-tree", "-r", "-z", ...(operation.namesAndIdsOnly ? [] : ["-l"]), "--full-tree", commit],
               maxBytes,
             )
@@ -2150,7 +2172,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           switch (search.kind) {
             case "imports":
               requireValue(specs.length > 0, "an import query must name files")
-              return impactRead(
+              return boundedTextRead(
                 [
                   ...grep,
                   "-n",
@@ -2164,7 +2186,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
                 maxBytes,
               )
             case "manifests":
-              return impactRead(
+              return boundedTextRead(
                 [
                   ...grep,
                   "-n",
@@ -2195,7 +2217,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
                     (bytes += Buffer.byteLength(name) + 1) <= 1024 * 1024,
                   "invalid impact symbol",
                 )
-              return impactRead(
+              return boundedTextRead(
                 [...grep, "-l", "-w", "-F", "-f", "-", commit, "--", ":/", ...specs],
                 maxBytes,
                 Buffer.from(search.names.join("\n") + "\n"),

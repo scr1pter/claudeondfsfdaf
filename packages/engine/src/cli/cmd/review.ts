@@ -788,7 +788,7 @@ export function executeLocalReview<RunR, ModelR>(
       ...(options.context?.identity ? { identity: options.context.identity } : {}),
       trigger: "local",
       trust,
-      ...((config.impact === "graph" || config.guardrail === "strict") && range.worktree
+      ...((config.impact === "graph" || config.guardrail === "strict" || config.depth === "auto") && range.worktree
         ? { uncommittedDiff: true as const }
         : {}),
       ...(config.trivial === "skip" && forceFull ? { forceFull: true } : {}),

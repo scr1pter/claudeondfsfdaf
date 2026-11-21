@@ -134,6 +134,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/symbols.ts",
   "packages/core/src/review/impact.ts",
   "packages/engine/src/review/impact.ts",
+  "packages/engine/src/review/depth.ts",
   "packages/engine/src/agent/prompt/review.txt",
   "packages/engine/src/agent/prompt/security.txt",
   "packages/engine/src/agent/prompt/vectorscope.txt",
@@ -575,6 +576,8 @@ describe("scope", () => {
       { minConfidence: 0.5 },
       { maxComments: 3 },
       { nits: true },
+      { depth: "auto" as const },
+      { depth: "auto" as const, lenses: "high" as const },
       // VS-34's holdback, which Review.run applies since SF-13b, counts as "secrets".
       { holdback: "secrets" as const },
       { impact: "graph" as const },
@@ -603,11 +606,9 @@ describe("scope", () => {
       // Nor VS-44's verifyEvidence, with or without strict.
       { verifyEvidence: "off" as const },
       { verifyEvidence: "certificate" as const },
-      // Nor VS-28's depth and lenses, alone or together.
+      // Fixed depth and unapplied lens settings preserve the legacy policy.
       { depth: "fixed" as const },
-      { depth: "auto" as const },
       { lenses: "high" as const },
-      { depth: "auto" as const, lenses: "high" as const },
       // Nor VS-30's runtime, which no runner applies before the VS-30 executor.
       { runtime: "off" as const },
       { runtime: "ask" as const },
@@ -734,26 +735,28 @@ describe("scope", () => {
     )
   })
 
-  // VS-28c: `depth` and `lenses` are policy keys (they choose which passes look for defects) that no runner applies
-  // before VS-28 wiring, so neither the policy digest nor the prompts digest of a scope moves with them yet. Once a
-  // runner applies both, the prompts digest counts the lens prompts only under the pair, and the policy digest counts
-  // `lenses` only under `depth: "auto"` (dormant now; VS-28 wiring's test shows "fixed" with "high" equals the default).
-  test("the scope leaves out VS-28's depth and lenses until a runner applies them", () => {
+  test("automatic depth changes engine policy scope; fixed depth and the desktop keep their existing evidence", () => {
     const base = policyDigest(DEFAULT_REVIEW_CONFIG)
-    for (const key of ["depth", "lenses"] as const) {
-      expect(EVIDENCE_POLICY_KEYS).toContain(key)
-      expect(UNAPPLIED_REVIEW_KEYS).toContain(key)
+    const auto = policyDigest({ ...DEFAULT_REVIEW_CONFIG, depth: "auto" })
+    expect(auto).not.toBe(base)
+    expect(EVIDENCE_POLICY_KEYS).toContain("depth")
+    expect(EVIDENCE_POLICY_KEYS).toContain("lenses")
+    expect(UNAPPLIED_REVIEW_KEYS).not.toContain("depth")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("lenses")
+    for (const depth of ["auto", "fixed", undefined] as const) {
+      for (const lenses of ["high", "off", undefined] as const) {
+        const config = { ...DEFAULT_REVIEW_CONFIG, depth, lenses }
+        expect(policyDigest(config)).toBe(depth === "auto" ? auto : base)
+        expect(evidenceScope({ adapter: "engine", config })).toEqual({
+          ...SCOPE,
+          policy: depth === "auto" ? auto : base,
+        })
+        expect(
+          evidenceScope({ adapter: "desktop", config: { ...config, impact: "graph", guardrail: "strict" } }),
+        ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
+      }
     }
-    for (const depth of ["auto", "fixed", undefined] as const)
-      for (const lenses of ["high", "off", undefined] as const)
-        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, depth, lenses })).toBe(base)
-    const lensed: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" }
-    expect(evidenceScope({ adapter: "engine", config: lensed })).toEqual(SCOPE)
-    expect(evidenceScope({ adapter: "engine", config: lensed }).prompts).toBe(promptsDigest())
-    expect(evidenceScope({ adapter: "desktop", config: { ...lensed, impact: "graph", guardrail: "strict" } })).toEqual(
-      evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
-    )
-    expect(policyDigest({ ...lensed, nits: true })).not.toBe(policyDigest(lensed))
+    expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, depth: "auto", nits: true })).not.toBe(auto)
   })
 
   // VS-30c: `runtime` is a policy key (a runtime confirmation changes what is verified, and so what is posted) that no

@@ -87,6 +87,7 @@ import {
   NEXT_STEP_SLACK,
   OUTPUT_PER_STEP,
   nextStepCostUsd,
+  planDepth,
   planSpecialists,
   verifyCandidates,
   verifyUnanswered,
@@ -161,6 +162,8 @@ import type { ResolvedModel } from "./model"
 import { ReviewRoutes } from "./route"
 import { ReviewTrivial } from "./trivial"
 import { ReviewImpact } from "./impact"
+import { ReviewDepth } from "./depth"
+import { riskFeatures, riskOf } from "@vectordevai/core/review/risk"
 import {
   checkStrict,
   decodeStrictVerify,
@@ -1339,7 +1342,35 @@ export const run: (
     const certificateSchema = verifyCertJsonSchema(strictKeys)
     const verifySchema = certificateSchema ?? VERIFY_JSON_SCHEMA
     const reportSchema = strictReportJsonSchema(strictKeys) ?? REVIEW_REPORT_JSON_SCHEMA
-    const names = nothingToSend ? [] : planSpecialists(input.files, config)
+    const auto =
+      config.depth === "auto" && !nothingToSend && !refusedUpFront && !input.stopSignal?.aborted
+        ? yield*
+          Effect.gen(function* () {
+            const history =
+              input.trigger === "local" && !uncommitted
+                ? yield* ReviewDepth.history(
+                    { directory: input.directory, base: input.base, head: input.head, signal: input.stopSignal },
+                    files.filter((file) => !denied(file.path) && (!file.oldPath || !denied(file.oldPath))),
+                    deadline,
+                  )
+                : undefined
+            // An interrupted graph can still prove a lower bound. It cannot prove that no dependents exist.
+            const observed = impact?.slice.stages.gated
+            const incompleteReach = !!impact?.slice.incomplete?.length
+            const dependents = observed !== undefined && (observed > 0 || !incompleteReach) ? observed : undefined
+            const risk = riskOf(
+              riskFeatures(files, {
+                changed: [...input.anchors, ...input.skipped, ...input.files],
+                ...(history ? { history } : {}),
+                ...(dependents !== undefined ? { dependents } : {}),
+              }),
+            )
+            // The lens sessions are wired separately. At this stage auto depth changes only the core specialists.
+            const plan = planDepth({ depth: "auto", files: input.files, risk, config: { security: config.security } })
+            return { risk, plan, partialReach: dependents !== undefined && incompleteReach }
+          })
+        : undefined
+    const names = nothingToSend ? [] : (auto?.plan.specialists ?? planSpecialists(input.files, config))
     const primaryRequests = (payload: PromptInput) =>
       names.map((name) => ({
         name,
@@ -1644,6 +1675,7 @@ export const run: (
           notes: [
             result.decision === "unknown" ? BUDGET_ESTIMATE_UNAVAILABLE : noteBudgetEstimate(),
             ...result.notes,
+            ...(auto ? ReviewDepth.notes(auto, []) : []),
             ...holdNotes,
           ],
           ...(hold?.held.length ? { held: hold.held } : {}),
@@ -2252,6 +2284,7 @@ export const run: (
                 ]
               : []),
             ...dispatchNotes,
+            ...(auto ? ReviewDepth.notes(auto, specialists) : []),
             ...holdNotes,
             ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
             ...(strictMode ? [] : verifyNotes),

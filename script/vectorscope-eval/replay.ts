@@ -206,7 +206,8 @@ export const VARIANTS = {
   },
   "depth-auto": {
     planned: 'depth: "auto"',
-    engine: { pending: "VS-28 wiring" },
+    keys: { depth: "auto" },
+    engine: { from: "VS-28" },
     desktop: { pending: "VS-28's desktop half, after VS-10" },
   },
   // Lenses run only on the high band under depth "auto", so this variant sets both, and its ablation baseline is
