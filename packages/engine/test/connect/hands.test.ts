@@ -188,6 +188,21 @@ describe("the member list", () => {
     }),
   )
 
+  it.instance("Hands keeps its own reason when the registry does not offer computer (CW-21)", () =>
+    Effect.gen(function* () {
+      reset()
+      const hub = yield* ConnectHub.Service
+      for (const reason of REASONS) {
+        script.reason = reason
+        // The computer tool is absent because Hands is unavailable: the row says why, with nothing to reach.
+        expect(computerRow(yield* hub.members({ tools: ["read"] }))).toEqual([
+          { ...hands, state: "unavailable", reason: ComputerAvailability.message(reason), reach: "none" },
+        ])
+      }
+      expect(script.probes).toBe(REASONS.length)
+    }),
+  )
+
   it.instance("a failed probe reads unavailable as the hub's fallback, never ready", () =>
     Effect.gen(function* () {
       reset()

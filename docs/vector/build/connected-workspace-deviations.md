@@ -2217,3 +2217,18 @@ Source: `connect-finish` at `5f9fb40e`, 17 commits ahead of `origin/connect-fini
   child still resumes (CW-07)": the fix child's resume fails with that code and message, starts no prompt and no job,
   and an ordinary child in the same conversation resumes and completes. Red on the old manager (the fix child resumed
   to attempt 2). The file passes 53 of 53.
+
+## 2026-11-21 — CW-21: a non-ready tool-reached member keeps its own reason
+
+- Supersedes the CN-11 review round's "Not taken, by decision" (5) and the "`not-installed` keeps reach `none`"
+  follow-up: when the registry does not offer a tool-reached adapter's tool, `members.ts` `registered()` now keeps the
+  member's own state and reason (reach `none`, since there is nothing to reach) whenever the adapter reported it not
+  ready. Hands' `unavailable` with `ComputerAvailability.message(reason)` therefore says why `computer` is absent, for
+  example on a CLI or TUI client without the bridge variables. Only a ready member whose tool is missing reads
+  `not-installed`, "Not in this build." The "left out without tool ids" branch is unchanged. Flagged for the lead, since
+  it reverses a recorded decision; the fix plan asked for it.
+- Tests: `packages/engine/test/connect/hands.test.ts` "Hands keeps its own reason when the registry does not offer
+  computer (CW-21)" runs every reason in `REASONS` with tools `["read"]` and expects state `unavailable`, Hands' own
+  message and reach `none`, one probe per list; red on the old `registered()` (9 pass, 1 fail). The ready case still
+  reads "Not in this build." `test/connect/hub.test.ts`'s compose case adds a non-ready Hands member without its tool
+  and expects its state and reason kept (52 pass). Spec §6's Hands row says so.
