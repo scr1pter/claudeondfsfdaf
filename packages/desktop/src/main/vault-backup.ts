@@ -447,7 +447,7 @@ export function createVaultBackup(deps: VaultDeps) {
           })
           return {
             ok: true,
-            message: `Backed up ${memory.length} memory file${memory.length === 1 ? "" : "s"} to ${store.label}.`,
+            message: `Backed up ${memory.length} file${memory.length === 1 ? "" : "s"} to ${store.label}.`,
             status: status(),
             ...(code ? { code } : {}),
           }

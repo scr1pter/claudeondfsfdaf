@@ -4301,6 +4301,13 @@ below.
     20 restored was in use. With the brain's order put back, `:269` fails.
   - The spec's "restored as drafts for review" names no number. Whether a restore should take more drafts is a product
     decision (For the lead).
+  - 21 Nov 2026 (branch `engine-core-fixes`): the backup line no longer calls learned files memory. The CLI
+    (`cli/cmd/vault.ts`), the desktop (`vault-backup.ts`) and Settings → Memory → Backup's last line
+    (`memory-backup-model.ts`) say "Backed up N file(s)" / "N file(s)"; `last.files` stays the total. New cases: desktop
+    `vault-backup.test.ts` backs up one memory, one skills and one insights file and expects "Backed up 3 files to …"
+    (red on the old copy), and app `memory-backup-model.test.ts` checks a three-file last line names no memory file
+    (red on the old copy); the e2e fixture's message follows. The cap is unchanged: a restore still brings back at most
+    `LIMIT.pending` 20 skills per repository. Proposed for the lead to record as accepted; not decided here.
 - **B10-4. Confirmed: "Show versions" on a new computer could fail in git.**
   - Cause: the desktop's `versions()` reads `store.list()` and `store.readKey()` at once (`vault-backup.ts:467`). Core's
     GitHub store did not share an overlapping read (`vault/github.ts`, `sync`), so a new computer's empty copy was set

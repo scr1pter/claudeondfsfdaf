@@ -138,7 +138,11 @@ describe("Settings → Memory → Backup", () => {
     expect(lastLine(vault(), NOW)).toContain("recovery code")
     expect(lastLine(vault({ running: "backup" }), NOW)).toBe("Backing up…")
     expect(lastLine(vault({ last: { version: "v", at: NOW - 60_000, files: 2, sentBytes: 12_500 } }), NOW)).toMatch(
-      /^Last backup today at .+: 2 memory files, 12\.5 KB sent\.$/,
+      /^Last backup today at .+: 2 files, 12\.5 KB sent\.$/,
+    )
+    // A backup's count includes learned skills and insights, so it never calls them all memory files (B10-3).
+    expect(lastLine(vault({ last: { version: "v", at: NOW - 60_000, files: 3, sentBytes: 12_500 } }), NOW)).not.toContain(
+      "memory file",
     )
     expect(nextLine(vault(), NOW)).toBeUndefined()
     expect(nextLine(vault({ enabled: true }), NOW)).toBe("Nightly backups start after your first backup.")

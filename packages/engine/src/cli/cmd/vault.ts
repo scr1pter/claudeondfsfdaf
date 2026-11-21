@@ -319,7 +319,7 @@ export const VaultBackupCommand = effectCmd({
     )
     UI.println(
       UI.Style.TEXT_SUCCESS_BOLD +
-        `Backed up ${files.length} memory file${files.length === 1 ? "" : "s"} to ${store.label}` +
+        `Backed up ${files.length} file${files.length === 1 ? "" : "s"} to ${store.label}` +
         UI.Style.TEXT_NORMAL,
     )
     UI.println(

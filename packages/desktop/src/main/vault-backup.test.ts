@@ -154,6 +154,21 @@ describe("the nightly schedule", () => {
 })
 
 describe("backing up", () => {
+  test("a backup of memory with learned skills and insights counts files, never calling them all memory (B10-3)", async () => {
+    const run = harness({
+      memory: async () => [
+        memoryFile(),
+        { path: "skills/review.json", section: "skills", text: '{"skills":[]}', repository: "" },
+        { path: "insights/workflow.json", section: "insights", text: '{"insights":[]}', repository: "" },
+      ],
+    })
+    const result = await run.backup.backup()
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe("Backed up 3 files to your GitHub repository octo/brain-vault.")
+    expect(result.message).not.toContain("memory file")
+    expect(run.settings().last?.files).toBe(3)
+  })
+
   test("the first backup creates the vault and answers its code once; the key is kept sealed, never the code", async () => {
     const run = harness()
     const first = await run.backup.backup()
