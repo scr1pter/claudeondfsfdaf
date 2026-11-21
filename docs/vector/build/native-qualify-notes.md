@@ -2955,3 +2955,24 @@ shard passed.
   - `bun typecheck` in `packages/engine`: exit 0; full `bun turbo typecheck --concurrency=2`:
     27 of 27 tasks successful.
 - Both native build switches and `FLOOR` stay false.
+
+## 21 November 2026: the stock-noble reader fix, a source-level record (NQ-READER)
+
+Read on branch `engine-core-fixes` (main `4fc245b6` merged). Source only; no CI run is claimed.
+
+- `56e568f4` ("attest stock Python builtin struct profile") and `7a7a3d57` ("accept verified stock Python builtin
+  struct") are the same change: their `directory-identity.ts` diffs have one stable patch-id, `2f1da105`. Neither commit
+  is an ancestor of main, but every line the change adds is in main's `packages/core/src/directory-identity.ts`:
+  - `:36-37`: the reader refuses (`os._exit(125)`) unless `_struct` is in `sys.builtin_module_names`;
+  - `:537-542`: `extensionProfile` accepts exactly one dynamic extension, `_ctypes.cpython-312-<arch>-linux-gnu.so`
+    under `/usr/lib/python3.12/lib-dynload/`, and names `_struct` as compiled in;
+  - `:620`: the extension scan matches `_ctypes` or `_struct` shared objects;
+  - `:626`: `const extension = extensionProfile(extensions, arch)`;
+  - `:669`: the loader branch ends in `verify(interpreter)`.
+  The change's own `await verify(extension)` line was folded later into `Promise.all([verify(PYTHON),
+  verify(extension)])` (`:676`), which still verifies the extension.
+- `READER_SHA` in `packages/engine/test/fixture/native-shell-ci/common.ts:11` is
+  `33c834a9f7b10dfb0962c510db14a53ca92c5645f19d57c64ab5aac9fbc9a762`, and `sha256sum` of the file at this head gives
+  the same value, so the native-shell CI build's check (`build.ts:58`) accepts this reader.
+- Still open: the CI step-12 qualification of the stock-noble reader. This record proves presence in source, not a
+  qualified run. Both native build switches and `FLOOR` stay false.
