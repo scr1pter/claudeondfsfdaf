@@ -925,3 +925,69 @@ fresh-VM overlay smoke without this warm-up and can still hit the same deadline_
 `computer-helper-windows-units` (`computer-overlay-smoke.ts --native-stage`). Neither is changed here; if either is
 used for evidence, add the same fixed warm-up step there as its own reviewed change, with no `continue-on-error` and a
 bounded timeout.
+
+## 2026-11-20: Windows engine tests running close to their 30 s budget
+
+Branch `windows-test-budgets` from `15f3ba77`. Four test files, one commit each. No product code, test deadline,
+timeout or assertion changed. Windows engine shards run `bun test` with a 30 s default per test. About 14% of hosted
+Windows VMs are slow on first touch (setup-node "Environment details" 17-35 s instead of 3.5-5.4 s), and those VMs
+make tests that start many processes 2-4x slower, so a test at 60-100% of its budget on a normal VM fails there.
+`review/impact.test.ts` and `everywhere/unattended-session.test.ts` also hit their budgets today, but the
+`scope-finish` and `everywhere-finish` lanes are rewriting those files, so they are left to those lanes.
+
+Local times are Linux, per test, from `bun test --timeout 30000 --reporter=junit`, one file at a time through the
+Bun lock.
+
+| Target                                                                                                                                                                           | Windows evidence                                                                                                                                                                                                        | Change                                                                                                                                                                                                                                                                                                                                                                                                         | Local before               | Local after                                              |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | -------------------------------------------------------- |
+| `cli/import.test.ts` "an owner-only conversation keeps its marker on local export and refuses the portable format"                                                               | 23.2-30.0 s over 5 runs. Timed out at 30.0 s on job 136531095350, a normal VM (Environment details 5.9 s). It started 6 cold CLI processes at about 4 s each.                                                           | A file-level `beforeAll` (30 s, the owner-only test's former budget for these two processes and four more) runs `vector serve`, POST /session and `vector export` once inside `withCliFixture`, checks the export's exit code and stops the server before any test runs. The source home and its DB stay until `afterAll`. The owner-only test imports into that DB; the round trip imports into a fresh home. | 14.6 s (round trip 13.3 s) | 10.6 s (round trip 8.5 s), plus about 5.5 s for the hook |
+| `tool/task-manage.test.ts` "an agent merges and discards only its direct children: an ancestor or a caller naming another session is refused and nothing is asked"               | 13.0-20.4 s. The 20.4 s (68%) came from job 136513156060, a normal VM. It was the only test of the three that built two isolated children (about 55-60 git processes each).                                             | The six refused merges and discards all name one settled, changed child. The `dropped` child and its state check are gone.                                                                                                                                                                                                                                                                                     | 4.2-4.6 s                  | 2.4-2.5 s                                                |
+| `server/task-isolation.test.ts` "a guest whose session claim or workspace directory covers a fenced family gets only the counts; outside it, 403"                                | 17.3-20.6 s (58-69%) on every run with no VM in the 17-35 s slow band. The 20.6 s came from job 136445766690, whose Environment details took 11.4 s. It spawned 200 git processes, all product isolation and diff work. | Split into one test per family: session claim (with the outside-scope 403) and workspace directory. Both use the same `guestStack`, `base` and `isolate`, and the guest's workspace is served during both, as before. The per-family guest checks move into `guestSeesCounts`. The file's total time does not drop, because there is one more instance boot.                                                   | 9.2-9.4 s                  | claim 5.6-6.5 s, workspace 4.4-5.4 s                     |
+| `session/task-size.test.ts` "an approval or build it after a Thorough plan from Plan mode carries it out at its size, and the judge checks it" (already on the known-flake list) | 13.8-19.0 s on normal VMs (19.0 s = 63% on job 136513155982) and 25.3 s on slow VM 136445766835. Undo snapshots accounted for 218 of its 259 git processes.                                                             | `providerConfig` sets `snapshot: false` next to `formatter: false, lsp: false`. `setup` already approves the project's trust, so the setting is honoured. `{ git: true }` stays.                                                                                                                                                                                                                               | 10.4 s (file 249.9 s)      | 7.0 s (file 198.7 s)                                     |
+
+Why these keep their meaning.
+
+- import: the archive is still a real local export, made by a real CLI process, of a session a real `vector serve`
+  created. The test still adds the owner-only marker itself and reads it back through a real `vector import`. Every
+  assertion stays. The only export exit-code check is now the hook's, and if it fails, every test in the file fails,
+  including the two that do not use the archive. The import itself reads the source session: `SessionArchive.import`
+  forks a source its DB knows (`audience.knows`), which runs the lease check and records a fork lineage edge that
+  puts the source in the owner-only fence's family. So the owner-only test imports into the source's own DB, which the
+  hook keeps until `afterAll`, as it did when it served, exported and imported in one home; a local probe showed the
+  fork edge to the source. The round trip imports into a fresh home, as before, and still asserts
+  `importedID !== source.id`.
+- task-manage: the refusal comes from the caller checks in TaskManager and TaskIsolation's `by`, not from which task is
+  named. TaskManager checks the caller before any state, so a merge stays forbidden whatever the task's state. If a
+  refused discard went through, its own `Effect.flip` and `forbidden` check would fail, and the final "changed" check
+  would fail too. `asked` stays empty and merged.txt stays at base.
+- task-isolation: every expect is unchanged and sits under the family it was about (64 expect calls before and after).
+- task-size: no test in the file reads a snapshot or a patch part. As a probe, `changedFiles` was made to ignore patch
+  parts while snapshots were still on, and all 68 tests still passed. With snapshots off, all 68 pass and the judge
+  learns of tui.rs from the write input alone. That makes the test stricter: if write/edit inputs are ignored it now
+  fails on the first answer ("build it"), where the snapshot patch had covered that case before.
+
+Mutations (each red, then restored and checked against its recorded sha256):
+
+- import: the `--public` refusal in `export.ts` disabled (the `portable` exit code is 0); the owner-only
+  `fenceIsolation` in `core/src/share/archive.ts` import disabled (privacy is undefined).
+- task-manage: TaskManager's discard caller check disabled (the `[root, lead]` discard goes through); TaskManager's and
+  TaskIsolation's merge caller checks disabled (a refused merge goes through).
+- task-isolation: `guestSessionIDs` dropped in `server/auth.ts` (only the claim test fails, 403 instead of 200);
+  `guestWorkspaceDirectories` dropped (only the workspace test fails).
+- task-size: write/edit inputs ignored in `changedFiles` (judge count 0); approvals never inherit Thorough in
+  `core/src/task-size.ts` (reasoning_effort undefined).
+
+`packages/engine` `bun typecheck` passes. Expected effect on a normal Windows VM: import owner-only 15-18 s instead of
+23-30 s; the refusal test in the 11-17 s range of its one-child sibling; each guest test near 8.7-12 s (30-40%); the
+Plan mode approval test about 6-9 s. This branch has not run on Windows CI yet. A real cut to the guest tests needs a
+product change: rev-parse lookups are repeated many times in each isolation.
+
+Follow-up on this branch's first CI run (test.yml run 44829529636): `unit (windows)` job 136610691971 failed in
+`packages/core/test/config/plugin.test.ts` "ConfigExternalPlugin > imports the approved plugin bytes from a private
+snapshot after the live file changes" with `Expected: "approved"`, `Received: ""` after 187 ms. That is a race in the
+test, not a slow VM: it polled for the marker file to exist and then read it, but the plugin's `Bun.write` creates the
+file before it writes the bytes, and on Windows the reader saw the empty file in between. The test now polls for the
+marker's content (same 100 × 10 ms bound) and asserts it. Locally 9/9 pass; pointing `executablePath` at the live file
+instead of the approved snapshot still fails it with `Received: "changed"`. The same run's other two failures were
+infrastructure: Bun 1.3.14 segfaulted in `bun install` before any test ran (`engine (windows, shard 5/12)`, job
+136610692430, re-run class d), and HF-7 at stage `uia-runtime-id` in the Windows overlay Stop (job 136611151009).

@@ -320,19 +320,33 @@ const guestStack = (directory: string) =>
     ),
   )
 const guestIt = testEffect(Layer.empty)
+const owner = basic("vector", "owner-secret")
+const guest = basic("guest", "guest-secret")
+// This engine serves the guest's workspace, so that workspace's sessions are local.
+const servesGuestWorkspace = Effect.acquireRelease(
+  Effect.sync(() => {
+    const previous = Flag.VECTOR_WORKSPACE_ID
+    Flag.VECTOR_WORKSPACE_ID = guestWorkspace
+    return previous
+  }),
+  (previous) =>
+    Effect.sync(() => {
+      Flag.VECTOR_WORKSPACE_ID = previous
+    }),
+)
 
+// One family per test: each isolates and settles a child and diffs it, so two families in one test spent most of its
+// 30 s budget on git processes on a Windows runner (test.yml job 136445766690: 20.6 s).
 guestIt.instance(
-  "a guest whose session claim or workspace directory covers a fenced family gets only the counts; outside it, 403",
+  "a guest whose session claim covers a fenced family gets only the counts; outside it, 403",
   () =>
     Effect.gen(function* () {
       const { directory } = yield* TestInstance
       yield* Effect.gen(function* () {
         const sessions = yield* Session.Service
-        const owner = basic("vector", "owner-secret")
-        const guest = basic("guest", "guest-secret")
         yield* base
-        // A conversation the guest is invited to by its session ID, and one it reaches only through its workspace's
-        // directory. Each fenced family has an isolated child with saved changes.
+        // A conversation the guest is invited to by its session ID. Its fenced family has an isolated child with saved
+        // changes.
         const created = yield* requestInDirectory("/api/session", directory, {
           method: "POST",
           headers: owner,
@@ -340,51 +354,12 @@ guestIt.instance(
         })
         expect(created.status).toBe(200)
         const claimed = yield* isolate(yield* sessions.get(SessionID.make(claimedParentID)))
-        const workspace = yield* isolate(
-          yield* sessions.create({ title: "Workspace parent", workspaceID: guestWorkspace }),
-        )
         expect(claimed.parent.workspaceID).toBeUndefined()
-        expect(workspace.parent.directory).toBe(directory)
-        for (const f of [claimed, workspace])
-          expect((yield* f.isolation.settle({ taskID: f.child.id, attempt: 1 })).state).toBe("changed")
-        // This engine serves the guest's workspace, so that workspace's sessions are local.
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            const previous = Flag.VECTOR_WORKSPACE_ID
-            Flag.VECTOR_WORKSPACE_ID = guestWorkspace
-            return previous
-          }),
-          (previous) =>
-            Effect.sync(() => {
-              Flag.VECTOR_WORKSPACE_ID = previous
-            }),
-        )
+        expect((yield* claimed.isolation.settle({ taskID: claimed.child.id, attempt: 1 })).state).toBe("changed")
+        // The guest's workspace is served here too, so the claim and the refusal outside it hold while it is local.
+        yield* servesGuestWorkspace
 
-        for (const f of [claimed, workspace]) {
-          // The scoped guest asks for the patch and gets the exact counts, built from the registry alone.
-          const response = yield* changes(f, guest)
-          expect(response.status).toBe(200)
-          const text = yield* response.text
-          expect(JSON.parse(text)).toEqual(projection(f))
-          for (const secret of [f.workPath, "hostile-stored-title", "shared.txt", "child change", "vector/subagent"])
-            expect(text).not.toContain(secret)
-          // The authenticated owner still gets the full patch.
-          const full = yield* changes(f, owner)
-          expect(full.status).toBe(200)
-          expect(((yield* full.json) as { patch?: string }).patch).toContain("child change")
-          // Neither a merge nor a discard is the guest's.
-          for (const action of ["merge", "discard"])
-            expect(
-              (yield* requestInDirectory(
-                `/experimental/session/${f.parent.id}/tasks/${f.child.id}/${action}`,
-                directory,
-                {
-                  method: "POST",
-                  headers: guest,
-                },
-              )).status,
-            ).toBe(403)
-        }
+        yield* guestSeesCounts(claimed, directory)
 
         // Outside its scope: a member of the invited family the guest holds no claim to, through its own route.
         const outside = yield* requestInDirectory(
@@ -394,8 +369,59 @@ guestIt.instance(
         )
         expect(outside.status).toBe(403)
         expect(yield* outside.text).not.toContain(claimed.workPath)
-        for (const f of [claimed, workspace]) expect((yield* f.isolation.get(f.child.id)).state).toBe("changed")
+        expect((yield* claimed.isolation.get(claimed.child.id)).state).toBe("changed")
       }).pipe(Effect.provide(guestStack(directory)))
     }),
   options,
 )
+
+guestIt.instance(
+  "a guest whose workspace directory covers a fenced family gets only the counts",
+  () =>
+    Effect.gen(function* () {
+      const { directory } = yield* TestInstance
+      yield* Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        yield* base
+        // A conversation the guest reaches only through its workspace's directory. Its fenced family has an isolated
+        // child with saved changes.
+        const workspace = yield* isolate(
+          yield* sessions.create({ title: "Workspace parent", workspaceID: guestWorkspace }),
+        )
+        expect(workspace.parent.directory).toBe(directory)
+        expect((yield* workspace.isolation.settle({ taskID: workspace.child.id, attempt: 1 })).state).toBe("changed")
+        yield* servesGuestWorkspace
+
+        yield* guestSeesCounts(workspace, directory)
+
+        expect((yield* workspace.isolation.get(workspace.child.id)).state).toBe("changed")
+      }).pipe(Effect.provide(guestStack(directory)))
+    }),
+  options,
+)
+
+// What a guest whose scope covers the family of `f` may see and do: the exact counts, never the patch or a merge.
+const guestSeesCounts = Effect.fn("TaskIsolationRouteTest.guestSeesCounts")(function* (
+  f: { parent: { id: string }; child: { id: string }; home: { directory: string }; workPath: string },
+  directory: string,
+) {
+  // The scoped guest asks for the patch and gets the exact counts, built from the registry alone.
+  const response = yield* changes(f, guest)
+  expect(response.status).toBe(200)
+  const text = yield* response.text
+  expect(JSON.parse(text)).toEqual(projection(f))
+  for (const secret of [f.workPath, "hostile-stored-title", "shared.txt", "child change", "vector/subagent"])
+    expect(text).not.toContain(secret)
+  // The authenticated owner still gets the full patch.
+  const full = yield* changes(f, owner)
+  expect(full.status).toBe(200)
+  expect(((yield* full.json) as { patch?: string }).patch).toContain("child change")
+  // Neither a merge nor a discard is the guest's.
+  for (const action of ["merge", "discard"])
+    expect(
+      (yield* requestInDirectory(`/experimental/session/${f.parent.id}/tasks/${f.child.id}/${action}`, directory, {
+        method: "POST",
+        headers: guest,
+      })).status,
+    ).toBe(403)
+})
