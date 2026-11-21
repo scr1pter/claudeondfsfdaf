@@ -115,7 +115,7 @@ export interface RuleCitation {
 }
 // VS-44's verify certificate (addendum A): the verifier's verdict on one finding, with the code that shows it. Produced
 // only under `verifyEvidence: "certificate"` with `guardrail: "strict"`, by schema.ts decodeVerifyCertificates, and
-// checked by guardrail.ts certified(); nothing produces or checks one before VS-44 wiring (with VS-27c).
+// checked by the strict guardrail against the committed blobs.
 export const CERTIFICATE_VERDICTS = ["confirmed", "rejected", "unsure"] as const
 export type CertificateVerdict = (typeof CERTIFICATE_VERDICTS)[number]
 // How the failing path is reached, as the verifier says. Nothing checks the label, so it can only veto (I-2): "assumed"
@@ -137,7 +137,7 @@ export interface VerifyCertificate {
   reach?: CertificateReach // absent when it could not be read, which certified() reads as "assumed"
 }
 // What certified() leaves to attach to a certified finding's StrictFinding [GP3]: its trace and the guards that
-// matched, at the paths they were read from, and its reach. No StrictFinding carries it before VS-44 wiring.
+// matched, at the paths they were read from, and its reach.
 export interface CertificateEvidence {
   trace: Quote[]
   guards: Quote[]
@@ -154,11 +154,12 @@ export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
 // none (schema.ts), so it reads as `out-of-scope`. VS-42 added `pre-existing` (S9, the introduced-by-change check): it
 // is checked after S5 and before S6, so a finding it drops never has its patch applied or parsed, is produced only
 // under `guardrail: "strict"` with `scopeGate: "introduced"`, and joins the result schema's enum only under that key.
-// VS-44's `verdict-unsure` and `certificate-mismatch` (S1's certificate check) join after `verdict-unreadable` with VS-44
-// wiring, not before: no rule produces them yet (guardrail.ts CertificateDrop).
+// VS-44's S1 drops apply only when checking a verify certificate.
 export const STRICT_DROPS = [
   "unverified",
   "verdict-unreadable",
+  "verdict-unsure",
+  "certificate-mismatch",
   "severity-unreadable",
   "not-blocking",
   "out-of-scope",
@@ -186,6 +187,7 @@ export interface StrictFinding {
   fix: { kind: (typeof STRICT_FIX_KINDS)[number]; text: string }
   verifiedBy: VerifiedBy
   linkedRule?: { source: string; quote: string; rulesSource: "base branch" | "working tree" }
+  certificate?: CertificateEvidence
   verifier: string // the "provider/model" or the runtime check that confirmed it
 }
 export interface StrictResult {
@@ -487,8 +489,7 @@ export interface ReviewConfig {
   // its trace matches the code, touches the change or the anchor, and its reach is not assumed. It acts inside
   // strictSelect, so it is effective only with `guardrail: "strict"`; set without it, it is ignored with a parser note.
   // Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its
-  // digest stay as they were. No environment variable reads it. Parsed, and read by no runner until VS-44 wiring
-  // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "certificate" is not applied.
+  // digest stay as they were. No environment variable reads it. The engine applies it only under strict.
   verifyEvidence?: "off" | "certificate"
   // VS-28's opt-in (D3, Q15), as amended by VS-39 (Q18). Under "auto", Review.run will compute the change's risk band
   // (risk.ts riskOf) and plan its passes by band (plan.ts planDepth): low runs the review, and security only on a
@@ -624,7 +625,6 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
-  "verifyEvidence",
   "depth",
   "lenses",
   "runtime",

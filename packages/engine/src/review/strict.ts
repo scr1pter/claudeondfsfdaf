@@ -14,8 +14,8 @@ import {
   type StrictBlobs,
   type StrictInput,
 } from "@vectordevai/core/review/guardrail"
-import { decodeVerify, extractJson, type VerifyResult } from "@vectordevai/core/review/schema"
-import type { Finding, StrictFinding } from "@vectordevai/core/review/types"
+import { decodeVerify, decodeVerifyCertificates, extractJson, type VerifyResult } from "@vectordevai/core/review/schema"
+import type { Finding, StrictFinding, VerifyCertificate } from "@vectordevai/core/review/types"
 import { ReviewParse } from "./parse"
 import { ReviewStrictBlobs } from "./strict-blobs"
 
@@ -51,6 +51,42 @@ export function decodeStrictVerify(value: unknown): VerifyResult[] | undefined {
   return [...rows.values()].filter((row) => row !== undefined)
 }
 
+export type CertificateAnswer = VerifyResult & { certificate?: VerifyCertificate }
+
+// Fixed claims retain the ordinary strict verdict. For new findings, do not allow the permissive text
+// decoder to interpret an unknown verdict, repair conflicting answers, or silently truncate a malformed trace.
+export function decodeCertificateAnswers(
+  value: unknown,
+  candidates: ReadonlySet<string>,
+): CertificateAnswer[] | undefined {
+  const body =
+    typeof value === "string" ? extractJson(value, (entry) => record(entry) && Array.isArray(entry.results)) : value
+  if (!record(body) || !Array.isArray(body.results)) return undefined
+  const answers = new Map<string, CertificateAnswer | undefined>()
+  for (const row of body.results) {
+    if (!record(row) || typeof row.id !== "string") continue
+    const id = row.id.trim()
+    let answer: CertificateAnswer | undefined
+    if (id && id === row.id && !answers.has(id) && typeof row.reason === "string") {
+      if (!candidates.has(id)) {
+        answer = decodeStrictVerify({ results: [row] })?.[0]
+      } else if (row.verdict === "confirmed" || row.verdict === "rejected" || row.verdict === "unsure") {
+        const certificate = decodeVerifyCertificates({ results: [row] })?.[0]
+        if (certificate && !(certificate.verdict === "confirmed" && certificate.traceUnreadable)) {
+          answer = {
+            id,
+            verdict: certificate.verdict === "unsure" ? "rejected" : certificate.verdict,
+            reason: certificate.reason,
+            certificate,
+          }
+        }
+      }
+    }
+    answers.set(id, answer)
+  }
+  return [...answers.values()].filter((row) => row !== undefined)
+}
+
 export const checkStrict = Effect.fn("Review.checkStrict")(function* (
   input: Omit<StrictInput, "blobs" | "parses"> & {
     findings: Finding[]
@@ -72,6 +108,7 @@ export const checkStrict = Effect.fn("Review.checkStrict")(function* (
     input.findings.filter((finding) => finding.verified === true),
     input.anchors,
     input.config,
+    input.certificates,
   )
   const blobs: StrictBlobs = input.uncommitted
     ? { head: new Map(), base: new Map() }
@@ -134,7 +171,7 @@ export const checkStrict = Effect.fn("Review.checkStrict")(function* (
       const retained = new Set(strict.findings.map((finding) => finding.id))
       for (const finding of input.findings) {
         if (!finding.verified || retained.has(finding.id)) continue
-        const keys = strictBlobRequests([finding], input.anchors, input.config)
+        const keys = strictBlobRequests([finding], input.anchors, input.config, input.certificates)
         if (
           keys.head.some((key) => blobs.head.get(key) == null) ||
           keys.base.some((key) => blobs.base.get(key) == null)

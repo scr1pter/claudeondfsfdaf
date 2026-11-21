@@ -238,8 +238,7 @@ function rulesReportSchema() {
 // to a model; VS-27c checks the JSON outcome against it. A lane deviation from the contract's STRICT_RESULT_JSON_SCHEMA
 // constant (the round-two amendment names only the report schema): later keys add StrictDrop values (VS-42's
 // `pre-existing`, VS-44's `certificate-mismatch` and `verdict-unsure`) and fields, each only under its key, so a strict
-// review validates against the schema built for its own keys. VS-44's drops and its finding's certificate field join
-// with VS-44 wiring, so until then this schema is the same whatever verifyEvidence says.
+// review validates against the schema built for its own keys and its accepted certificate evidence.
 export function strictResultJsonSchema(keys: StrictSchemaKeys) {
   if (keys.guardrail !== "strict") return undefined
   return {
@@ -291,6 +290,19 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
               : {}),
             verifiedBy: { type: "string", enum: [...VERIFIED_BY] },
             verifier: { type: "string" },
+            ...(keys.verifyEvidence === "certificate"
+              ? {
+                  certificate: {
+                    type: "object",
+                    properties: {
+                      trace: { type: "array", minItems: 1, maxItems: MAX_TRACE_QUOTES, items: quoteSchema() },
+                      guards: { type: "array", maxItems: MAX_FINDING_QUOTES, items: quoteSchema() },
+                      reach: { type: "string", enum: ["caller-shown", "entry-point"] },
+                    },
+                    required: ["trace", "guards", "reach"],
+                  },
+                }
+              : {}),
           },
           required: [
             "id",
@@ -306,6 +318,7 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
             "fix",
             "verifiedBy",
             "verifier",
+            ...(keys.verifyEvidence === "certificate" ? ["certificate"] : []),
           ],
         },
       },
@@ -317,7 +330,12 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
             // VS-42's `pre-existing` only under `scopeGate: "introduced"`, the one key that produces it.
             reason: {
               type: "string",
-              enum: STRICT_DROPS.filter((reason) => reason !== "pre-existing" || keys.scopeGate === "introduced"),
+              enum: STRICT_DROPS.filter((reason) => {
+                if (reason === "pre-existing") return keys.scopeGate === "introduced"
+                if (reason === "certificate-mismatch" || reason === "verdict-unsure")
+                  return keys.verifyEvidence === "certificate"
+                return true
+              }),
             },
             count: { type: "integer", minimum: 1 },
           },
@@ -337,7 +355,7 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
 // results and a rejected verdict needs no trace, so certified() enforces the rest. The caps are in the descriptions,
 // not in minItems or maxItems, so a provider sees only the keywords the legacy schemas already send; the decoder and
 // certified() enforce them. The text is untuned (tuning waits for the held-out freeze, I-13). It enters promptsDigest
-// only under both keys, and no runner sends it before VS-44 wiring (with VS-27c's blind candidate).
+// only under both keys, beside the blind verifier prompt.
 export function verifyCertJsonSchema(keys: StrictSchemaKeys) {
   if (keys.guardrail !== "strict" || keys.verifyEvidence !== "certificate") return undefined
   const legacy = structuredClone(VERIFY_JSON_SCHEMA)

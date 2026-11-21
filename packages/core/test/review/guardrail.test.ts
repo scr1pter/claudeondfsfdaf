@@ -1529,6 +1529,35 @@ describe("strictSelect: properties", () => {
       )
       if (pass.preExistingUnchecked) seen.add("pre-existing-unchecked")
 
+      const certConfig = { ...options.config, guardrail: "strict", verifyEvidence: "certificate" } as const
+      const certs = new Map(
+        findings.map((entry, position) => [
+          entry.id,
+          certificate({
+            id: entry.id,
+            verdict: (seed + position) % 5 === 0 ? "unsure" : "confirmed",
+            reach: (seed + position) % 7 === 0 ? "assumed" : "caller-shown",
+          }),
+        ]),
+      )
+      const evidenceHead = new Recording(source.head)
+      const evidenceBase = new Recording(source.base)
+      const withCertificates = strictSelect(findings, {
+        ...options,
+        config: certConfig,
+        certificates: certs,
+        blobs: { head: evidenceHead, base: evidenceBase },
+      })
+      for (const drop of withCertificates.dropped) seen.add(drop.reason)
+      expect(violations(strictResultJsonSchema(certConfig)!, withCertificates)).toEqual([])
+      for (const kept of withCertificates.findings) {
+        expect(kept.certificate?.trace).toEqual([RETURN_QUOTE])
+        expect(certs.get(kept.id)?.verdict).toBe("confirmed")
+      }
+      const needed = strictBlobRequests(findings, anchors, certConfig, certs)
+      expect([...evidenceHead.asked].filter((key) => !needed.head.includes(key))).toEqual([])
+      expect([...evidenceBase.asked].filter((key) => !needed.base.includes(key))).toEqual([])
+
       function satisfies(origin: Finding, kept: StrictFinding) {
         const resolved = resolveAnchor(index, origin)
         if (!resolved.ok) return false
@@ -2202,4 +2231,57 @@ describe("certified: properties (VS-44a)", () => {
       ].toSorted(),
     )
   })
+})
+
+test("certificate mode admits only matched traces, requests both immutable sides, and preserves unreadable evidence", () => {
+  const row = finding({ id: "c1" })
+  const config = { ...input().config, guardrail: "strict", verifyEvidence: "certificate" } as const
+  const cert = certificate({ trace: [RETURN_QUOTE, GUARD_QUOTE, STORE_QUOTE] })
+  const certificates = new Map([[row.id, cert]])
+  const source = input({ config, certificates })
+  expect(strictBlobRequests([row], anchors, config, certificates)).toEqual({
+    head: [SESSION, "src/auth/store.ts"],
+    base: [SESSION],
+  })
+  expect(strictSelect([row], source).findings[0]?.certificate).toEqual({
+    trace: cert.trace!,
+    guards: [],
+    reach: "caller-shown",
+  })
+  const unread = strictSelect([row], { ...source, blobs: blobs({ "src/auth/store.ts": null }) })
+  expect(unread).toMatchObject({
+    complete: false,
+    findings: [],
+    dropped: [{ reason: "certificate-mismatch", count: 1 }],
+  })
+  expect(unread.incomplete).toContain("blob-unreadable")
+  expect(strictSelect([row], { ...source, certificates: undefined })).toMatchObject({
+    complete: false,
+    findings: [],
+    dropped: [{ reason: "verdict-unreadable", count: 1 }],
+  })
+  const mistaken = certificate({ trace: [{ ...RETURN_QUOTE, code: "fabricated" }] })
+  expect(strictSelect([row], { ...source, certificates: new Map([[row.id, mistaken]]) })).toMatchObject({
+    complete: true,
+    findings: [],
+    dropped: [{ reason: "certificate-mismatch", count: 1 }],
+  })
+  expect(strictBlobRequests([row], anchors, { ...config, verifyEvidence: "off" }, certificates)).toEqual({
+    head: [SESSION],
+    base: [],
+  })
+})
+
+test("a matched certificate trace supplies the base location of an introduced-scope omission", () => {
+  const row = onFlush({ id: "c1", scope: "pre-existing", quotes: [FLUSH_QUOTE] })
+  const cert = certificate({ id: row.id, trace: [FLUSH_QUOTE, GUARD_QUOTE] })
+  const config = { ...GATE, verifyEvidence: "certificate" as const }
+  const certificates = new Map([[row.id, cert]])
+  const source = input(gated({ config, certificates }))
+  const result = strictSelection([row], source, true)
+  expect(result.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+  expect(result.scopeDrops).toEqual([
+    { path: SESSION, start: 3, end: 3, class: row.category, fingerprint: row.id },
+  ])
+  expect(strictBlobRequests([row], anchors, config, certificates).base).toContain(SESSION)
 })

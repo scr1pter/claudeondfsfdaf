@@ -707,3 +707,140 @@ native(
   { git: true },
   90_000,
 )
+
+native(
+  "certificate verification reads a fork's pinned blobs, hides the reviewer's prose and admits one batched checker",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* checkout
+      const opts = { ...config, ...strict, verifyEvidence: "certificate" } as const
+      const events: Review.Observation[] = []
+      const trace = [
+        { path: file, side: "LEFT" as const, line: 2, code: original },
+        { path: file, side: "RIGHT" as const, line: 2, code: changed },
+      ]
+      const candidate = {
+        ...finding,
+        body: "ONLY_REVIEWER_BODY",
+        suggestion: "ONLY_REVIEWER_SUGGESTION",
+        evidence: ["src/context.ts:91"],
+      }
+      const result = yield* run([candidate], { config: opts, observe: (event) => events.push(event) }, (prompt) =>
+        projectionVerdicts(prompt).map((row) => ({
+          ...row,
+          trace,
+          guards: [
+            { path: file, side: "RIGHT", line: 1, code: "export function last(values: string[]) {" },
+            { path: file, side: "RIGHT", line: 2, code: dirty },
+          ],
+          reach: "caller-shown",
+        })),
+      )
+      expect(result.hits).toHaveLength(2)
+      const verify = result.hits[1]!
+      const prompt = firstUserText(verify.body)
+      for (const field of [candidate.body, candidate.suggestion, finding.title, changed, original])
+        expect(prompt).not.toContain(field)
+      for (const field of [
+        candidate.failure!.trigger,
+        candidate.failure!.impact,
+        "src/context.ts:91",
+        `LEFT ${file}:2`,
+      ])
+        expect(prompt).toContain(field)
+      const output = (verify.body.tools as { function?: { name?: string; parameters?: unknown } }[]).find(
+        (tool) => tool.function?.name === "StructuredOutput",
+      )
+      expect(output?.function?.parameters).toMatchObject({
+        properties: {
+          results: {
+            items: {
+              properties: {
+                verdict: { enum: ["confirmed", "rejected", "unsure"] },
+                trace: { type: "array" },
+                guards: { type: "array" },
+                reach: { enum: ["caller-shown", "entry-point", "assumed"] },
+              },
+            },
+          },
+        },
+      })
+      expect(events.filter((event) => event.type === "attempt" && event.pass === "verify")).toMatchObject([
+        { admitted: true, phase: "turn" },
+      ])
+      expect(result.outcome.strict?.complete).toBe(true)
+      expect(result.outcome.strict?.findings.map((row) => row.certificate)).toEqual([
+        {
+          trace,
+          guards: [{ path: file, side: "RIGHT", line: 1, code: "export function last(values: string[]) {" }],
+          reach: "caller-shown",
+        },
+      ])
+      expect(violations(strictResultJsonSchema(opts)!, result.outcome.strict)).toEqual([])
+      expect(listed(result.outcome)).toEqual([finding.title])
+      // The checkout is detached at base and the working file differs from both commits.
+      for (const [why, fields] of [
+        ["worktree", { trace: [{ ...trace[1], code: dirty }], reach: "entry-point" }],
+        ["wrong side", { trace: [{ ...trace[1], code: original }], reach: "entry-point" }],
+        ["assumed", { trace, reach: "assumed" }],
+        ["unsure", { verdict: "unsure" }],
+      ] as const) {
+        const dropped = yield* run([candidate], { config: opts }, (text) =>
+          projectionVerdicts(text).map((row) => ({ ...row, ...fields })),
+        )
+        expect(dropped.outcome.strict, why).toMatchObject({
+          complete: true,
+          findings: [],
+          dropped: [{ reason: why === "unsure" ? "verdict-unsure" : "certificate-mismatch", count: 1 }],
+        })
+        expect(listed(dropped.outcome)).toEqual([])
+      }
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "missing, malformed and duplicate certificates leave paths unreviewed; an explicit off key preserves the full wire",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* checkout
+      const opts = { ...config, ...strict, verifyEvidence: "certificate" } as const
+      for (const [why, answers] of [
+        ["missing", () => []],
+        [
+          "malformed",
+          (prompt: string) =>
+            projectionVerdicts(prompt).map((row) => ({
+              ...row,
+              trace: [{ path: "../private", line: 1, side: "RIGHT", code: "line" }],
+              reach: "entry-point",
+            })),
+        ],
+        [
+          "conflicting",
+          (prompt: string) => projectionVerdicts(prompt).flatMap((row) => [row, { ...row, verdict: "unsure" }]),
+        ],
+        ["failed", "unavailable"],
+      ] as const) {
+        const result = yield* run([finding], { config: opts }, answers)
+        expect(result.outcome.strict, why).toMatchObject({
+          complete: false,
+          findings: [],
+          dropped: [{ reason: "verdict-unreadable", count: 1 }],
+        })
+        expect(result.outcome.strict?.incomplete).toContain("verdict-unreadable")
+        expect(result.outcome.unreviewed).toContain(file)
+      }
+      for (const settings of [config, { ...config, ...strict }]) {
+        const unset = yield* run([finding], { config: settings })
+        const ignored = yield* run([finding], {
+          config: { ...settings, verifyEvidence: settings.guardrail === "strict" ? "off" : "certificate" },
+        })
+        expect(ignored.parity).toEqual(unset.parity)
+        expect(ignored.hits.at(-1)?.text).not.toContain("from the trigger to the failure, in that order")
+      }
+    }),
+  { git: true },
+  90_000,
+)

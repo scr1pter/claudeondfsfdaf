@@ -520,7 +520,7 @@ function reselectSource(reselections: readonly StrictReselection[]) {
   return [
     `strict re-selection of ${reselections.length} engine replay(s), offline`,
     "applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8",
-    "left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), and S9 (no base blobs are recorded)",
+    "left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), S9 (no base blobs are recorded), and S1's certificate check (private trace blobs are not recorded)",
     `kept ${sum((item) => item.kept.length)} of ${sum((item) => item.candidates)} posted finding(s), ${sum((item) => item.unposted)} selected but never posted left out`,
     `dropped: ${dropped.length ? dropped.join(", ") : "none"}`,
     `${sum((item) => item.fixUnchecked)} fix(es) unchecked`,

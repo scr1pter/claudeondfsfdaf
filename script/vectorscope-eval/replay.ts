@@ -266,11 +266,12 @@ export const VARIANTS = {
     engine: { from: "VS-43" },
     desktop: { from: "VS-43" },
   },
-  // As scope-introduced: verifyEvidence acts only under guardrail "strict". VS-44 wiring may revise it before it flips.
+  // The blind verifier uses certificates only in strict reviews.
   "verify-cert": {
     planned: 'guardrail: "strict" and verifyEvidence: "certificate"',
-    engine: { pending: "VS-44 wiring" },
-    desktop: { pending: "VS-44 wiring, after VS-27c" },
+    keys: { guardrail: "strict", verifyEvidence: "certificate" },
+    engine: { from: "VS-44" },
+    desktop: { pending: "blind verification with immutable desktop blobs" },
   },
   "explore-slice": {
     planned: 'explore: "slice"',

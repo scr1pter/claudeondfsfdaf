@@ -62,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "aee429852eb9e6fe"
+export const REVIEW_PIPELINE_SOURCES = "d3bab7a2b2bd1aa3"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -453,12 +453,27 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // every input set and their inputs marked redacted, for both trusts. The verify and judge prompts carry no sentence.
 export function canonicalPrompts(
   keys: Partial<
-    Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime" | "holdback" | "guardrail" | "scopeGate" | "ruleCheck">
+    Pick<
+      ReviewConfig,
+      | "impact"
+      | "depth"
+      | "lenses"
+      | "runtime"
+      | "holdback"
+      | "guardrail"
+      | "scopeGate"
+      | "ruleCheck"
+      | "verifyEvidence"
+    >
   > = {},
 ): string[] {
   const gate =
     keys.guardrail === "strict" && keys.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}
   const finding = gate.scopeGate ? { ...STRICT_FINDING, scope: "introduced" as const } : STRICT_FINDING
+  const certificate =
+    keys.guardrail === "strict" && keys.verifyEvidence === "certificate"
+      ? { verifyEvidence: "certificate" as const }
+      : {}
   const reviewers = (input: PromptInput) => {
     const effective: PromptInput = {
       ...input,
@@ -495,15 +510,24 @@ export function canonicalPrompts(
       ...(keys.guardrail === "strict"
         ? [
             buildVerifyPrompt({
+              ...certificate,
+              ...gate,
               trust,
               guardrail: "strict",
-              ...gate,
               head: CANONICAL_INPUT.head,
               candidates: [finding],
             }),
-            buildVerifyPrompt({ ...POPULATED_VERIFY, trust, guardrail: "strict", ...gate, candidates: [finding] }),
+            buildVerifyPrompt({
+              ...POPULATED_VERIFY,
+              ...certificate,
+              ...gate,
+              trust,
+              guardrail: "strict",
+              candidates: [finding],
+            }),
             buildJudgePrompt({
               ...POPULATED_VERIFY,
+              ...certificate,
               trust,
               guardrail: "strict",
               ...gate,
@@ -663,8 +687,7 @@ export function evidenceScope(input: {
         : {}),
       ...(input.adapter === "engine" &&
       input.config.guardrail === "strict" &&
-      input.config.verifyEvidence === "certificate" &&
-      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "verifyEvidence")
+      input.config.verifyEvidence === "certificate"
         ? { verifyEvidence: "certificate" as const }
         : {}),
       // VS-28's lens prompts, only once a runner applies both keys.

@@ -509,6 +509,7 @@ describe("the variant registry", () => {
       "engine:scope-introduced",
       "engine:rule-strict",
       "desktop:rule-strict",
+      "engine:verify-cert",
     ])
     for (const item of built) {
       const keys = Object.keys(item.entry.keys ?? {})
@@ -522,7 +523,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 12)
+    expect(pending).toHaveLength(2 * entries.length - built.length)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -541,18 +542,21 @@ describe("the variant registry", () => {
       "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
       "engine:team-guarded": "VS-35 wiring",
-      "engine:verify-cert": "VS-44 wiring",
       "engine:explore-slice": "VS-49 wiring",
       "engine:receipt-json": "VS-47 runner wiring",
       "engine:verify-isolated": "VS-44c wiring (R3)",
     })
     // Addendum A's and B's entries but holdback-secrets are pending on both runners and set no key yet, and an addendum
     // name whose package has not begun here is still unknown.
-    for (const suffix of ["team-guarded", "verify-cert", "explore-slice", "receipt-json", "verify-isolated"] as const) {
+    for (const suffix of ["team-guarded", "explore-slice", "receipt-json", "verify-isolated"] as const) {
       const entry: VariantEntry = VARIANTS[suffix]
       expect(Object.hasOwn(entry, "keys") || Object.hasOwn(entry, "models")).toBe(false)
       expect(resolveVariant(`desktop:${suffix}`)).toMatchObject({ ok: false, reason: "pending" })
     }
+    expect(resolveVariant("desktop:verify-cert")).toMatchObject({ ok: false, reason: "pending" })
+    expect(variantRecord("engine:verify-cert")).toMatchObject({
+      record: { name: "engine:verify-cert", keys: { guardrail: "strict", verifyEvidence: "certificate" } },
+    })
     expect(variantRecord("engine:scope-introduced")).toMatchObject({
       record: { name: "engine:scope-introduced", keys: { guardrail: "strict", scopeGate: "introduced" } },
     })

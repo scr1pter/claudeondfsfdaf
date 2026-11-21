@@ -27,7 +27,7 @@
 //
 // VS-44's certificate check (certified(), with certificateBlobRequests) is S1's under `guardrail: "strict"` with
 // `verifyEvidence: "certificate"`: a confirmed verdict counts as verified only when its certificate holds. It is pure
-// and exported, and no rule in strictSelect calls it before VS-44 wiring, which adds its drops (CertificateDrop).
+// and exported; strictCandidates runs it against the same versioned reader as the primary quotes.
 
 import {
   anchorText,
@@ -96,7 +96,8 @@ export interface StrictInput {
   // S6 reads `suggestions`, S8 `maxComments`, and S9 runs only when `guardrail` is "strict" and `scopeGate` is
   // "introduced" (scopeGateApplies). VS-27c passes the review's whole ReviewConfig here and to strictBlobRequests: a
   // config without both keys leaves S9 out, and a base S9 cannot read keeps its finding, so neither shows as a drop.
-  config: Pick<ReviewConfig, "maxComments" | "suggestions" | "guardrail" | "scopeGate">
+  config: Pick<ReviewConfig, "maxComments" | "suggestions" | "guardrail" | "scopeGate" | "verifyEvidence">
+  certificates?: ReadonlyMap<string, VerifyCertificate>
   trust: Trust
   verifier: string // the "provider/model" of the verify pass
   // The ids sent to verify that came back with no readable verdict (plan.ts's verifyUnanswered). Required, so a caller
@@ -123,7 +124,8 @@ export interface StrictInput {
 export function strictBlobRequests(
   findings: readonly Finding[],
   anchors: DiffFile[],
-  config: Pick<ReviewConfig, "guardrail" | "scopeGate">,
+  config: Pick<ReviewConfig, "guardrail" | "scopeGate" | "verifyEvidence">,
+  certificates?: ReadonlyMap<string, VerifyCertificate>,
 ): { head: string[]; base: string[] } {
   const index = buildAnchorIndex(anchors)
   const gate = scopeGateApplies(config)
@@ -140,8 +142,30 @@ export function strictBlobRequests(
         : []),
     ])
     .filter((entry) => !ESCAPING_PATH.test(entry.path))
+  const evidence =
+    config.guardrail === "strict" && config.verifyEvidence === "certificate" && certificates
+      ? certificateBlobRequests(findings, [...certificates.values()], anchors)
+      : { head: [], base: [] }
+  if (gate && certificates && config.verifyEvidence === "certificate") {
+    for (const finding of findings) {
+      const certificate = certificates.get(finding.id)
+      if (!certificate) continue
+      for (const quote of usableTrace(certificate) ?? []) {
+        if (quote.side !== "RIGHT") continue
+        const path = quote.path || finding.path
+        const status = lookupFile(index, path)?.file.status
+        const target = blobKey(index, path, "LEFT").path
+        if (status !== "added" && status !== "deleted" && !ESCAPING_PATH.test(target)) evidence.base.push(target)
+      }
+    }
+  }
   const keys = (side: Side) =>
-    [...new Set(wanted.filter((entry) => entry.side === side).map((entry) => entry.path))].toSorted()
+    [
+      ...new Set([
+        ...wanted.filter((entry) => entry.side === side).map((entry) => entry.path),
+        ...(side === "RIGHT" ? evidence.head : evidence.base),
+      ]),
+    ].toSorted()
   return { head: keys("RIGHT"), base: keys("LEFT") }
 }
 
@@ -185,8 +209,7 @@ export function preExistingSuspect(
 }
 
 // VS-44's certificate check (addendum A item 3): whether a verify certificate makes its finding verified, and if not,
-// why. S1's under `guardrail: "strict"` with `verifyEvidence: "certificate"`; no rule in strictSelect calls it before
-// VS-44 wiring. "rejected" is S1's `unverified` and "unsure" is `verdict-unsure`, and neither reads a file. A confirmed
+// why. S1 uses it under `guardrail: "strict"` with `verifyEvidence: "certificate"`. "rejected" is S1's `unverified` and "unsure" is `verdict-unsure`, and neither reads a file. A confirmed
 // certificate is certified only when all of these hold (CERTIFICATE_MISMATCHES names each failure):
 // - it answers this finding: the same id;
 // - its trace holds 1 to MAX_TRACE_QUOTES quotes, and each is its file's text at its line as S4 reads a quote
@@ -333,14 +356,31 @@ export function strictCandidates(findings: readonly Finding[], input: StrictInpu
     const matched = quotes.flatMap((entry) =>
       Array.isArray(entry.file) && matchAt(entry.file, entry.quote) ? [entry.quote] : [],
     )
+    const checkedCertificate =
+      input.config.guardrail === "strict" && input.config.verifyEvidence === "certificate"
+        ? input.certificates?.get(finding.id)
+        : undefined
+    const certificate = checkedCertificate
+      ? certify(finding, checkedCertificate, { index, anchors: input.anchors, read })
+      : undefined
+    const scopeQuotes = certificate?.certified ? [...matched, ...certificate.trace] : matched
     return {
       finding,
+      ...(input.config.guardrail === "strict" && input.config.verifyEvidence === "certificate"
+        ? {
+            certificate:
+              certificate ??
+              (finding.verified === true || input.unanswered.includes(finding.id)
+                ? ("unreadable" as const)
+                : undefined),
+          }
+        : {}),
       scoped: finding.failure !== undefined,
       anchored: anchor !== undefined && onChangedLine(input.anchors, finding, anchor),
       quotes: { matched, unreadable: quotes.some((entry) => entry.file === "unreadable") },
       ...(gate
         ? {
-            preExisting: () => finding.scope === "pre-existing" || suspect(finding, anchor, matched, context),
+            preExisting: () => finding.scope === "pre-existing" || suspect(finding, anchor, scopeQuotes, context),
             baseSpan: () => {
               const own = lookupFile(index, finding.path)?.file
               const inFinding = (quote: Quote) =>
@@ -351,12 +391,12 @@ export function strictCandidates(findings: readonly Finding[], input: StrictInpu
                   if (typeof span === "object") return span
                 }
               }
-              const span = firstSpan(matched.filter(inFinding))
+              const span = firstSpan(scopeQuotes.filter(inFinding))
               if (span) return span
               // An old helper line is evidence for a cross-file drop only when the deterministic
               // check establishes it. A model's label alone cannot attach a later fix to that helper.
-              if (suspect(finding, anchor, matched, context) === true)
-                return firstSpan(matched.filter((quote) => !inFinding(quote)))
+              if (suspect(finding, anchor, scopeQuotes, context) === true)
+                return firstSpan(scopeQuotes.filter((quote) => !inFinding(quote)))
             },
           }
         : {}),
@@ -432,6 +472,7 @@ export function strictSelection(findings: readonly Finding[], input: StrictInput
         trigger: failure.trigger,
         impact: failure.impact,
         quotes: entry.quotes,
+        ...(entry.certificate ? { certificate: entry.certificate } : {}),
         fix: entry.fix,
         verifiedBy: entry.finding.verifiedBy ?? "model",
         // A runtime confirmation names no model; VS-30 widens the input with its check.
@@ -458,6 +499,7 @@ export function strictSelection(findings: readonly Finding[], input: StrictInput
 export interface StrictCandidate {
   finding: Finding // S1, S2's severity half, S7 and S8 read it directly
   scoped?: boolean // S2's class half: a failure block in one of the five classes
+  certificate?: CertificateCheck | "unreadable" // S1, only under certificate-backed strict verification
   anchored: boolean // S3
   quotes?: { matched: Quote[]; unreadable: boolean } // S4: the quotes that match, and whether a file was unreadable
   impact?: boolean // S5
@@ -473,7 +515,7 @@ export interface StrictCandidate {
 }
 
 export interface StrictPass {
-  kept: { finding: Finding; fix: StrictFinding["fix"]; quotes?: Quote[] }[] // in strength order
+  kept: { finding: Finding; fix: StrictFinding["fix"]; quotes?: Quote[]; certificate?: CertificateEvidence }[] // in strength order
   dropped: StrictResult["dropped"] // in STRICT_DROPS order, only reasons with a count of 1 or more
   // S1 and S4 met something they could not read. `verdict` also holds when an unanswered id has no candidate that
   // confirms it, so a verdict lost with a finding the caller left out still reads as unread (I-7).
@@ -514,6 +556,17 @@ export function strictRules(
     kept: judged.accepted.slice(0, cap).map((entry) => ({
       finding: entry.candidate.finding,
       fix: entry.fix,
+      ...(entry.candidate.certificate &&
+      entry.candidate.certificate !== "unreadable" &&
+      entry.candidate.certificate.certified
+        ? {
+            certificate: {
+              trace: entry.candidate.certificate.trace,
+              guards: entry.candidate.certificate.guards,
+              reach: entry.candidate.certificate.reach,
+            },
+          }
+        : {}),
       ...(entry.candidate.quotes ? { quotes: entry.candidate.quotes.matched } : {}),
     })),
     dropped: STRICT_DROPS.flatMap((reason) => {
@@ -553,6 +606,16 @@ function judge(
   context: { unanswered: ReadonlySet<string>; accepted: readonly Accepted[]; code: (finding: Finding) => string },
 ): Judged | Omit<Accepted, "candidate"> {
   const finding = candidate.finding
+  if (candidate.certificate !== undefined) {
+    if (context.unanswered.has(finding.id) || candidate.certificate === "unreadable")
+      return { drop: "verdict-unreadable", unreadable: "verdict" }
+    const check = candidate.certificate
+    if (!check.certified)
+      return {
+        drop: check.drop,
+        ...(check.drop === "certificate-mismatch" && check.blobUnreadable ? { unreadable: "blob" as const } : {}),
+      }
+  }
   if (finding.verified !== true)
     return context.unanswered.has(finding.id)
       ? { drop: "verdict-unreadable", unreadable: "verdict" }

@@ -787,7 +787,7 @@ word, so only the registry keeps model ids out.
 | `team-guarded`     | `teamMemory: "guarded"`                                                                 | pending VS-35 wiring        | pending, documented difference                                                |
 | `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                     | built, VS-42                | pending, desktop lacks immutable base and head evidence                        |
 | `rule-strict`      | `ruleCheck: "strict"`                                                                   | built, VS-43                | built, VS-43                                                                  |
-| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                               | pending VS-44 wiring        | pending VS-44 wiring, after VS-27c                                            |
+| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                               | built, VS-44                | pending, desktop lacks immutable base/head evidence                            |
 | `explore-slice`    | `explore: "slice"`                                                                      | pending VS-49 wiring        | pending, documented difference                                                |
 | `receipt-json`     | `receipt: "json"`, built only from recorded execution facts                             | pending VS-47 runner wiring | pending VS-47 desktop wiring                                                  |
 | `verify-isolated`  | no key: the top 3 blocking candidates verified blind, one call each, the rest batched   | pending VS-44c wiring (R3)  | pending, documented difference until VS-27's desktop guardrail (after VS-27c) |
@@ -1346,8 +1346,8 @@ How it works:
   context-line anchor passes offline, which strict would refuse), S6 from the
   recorded suggestion rule, S7 by id or `sameFinding`, and S8 at the
   artifact's `maxComments`; it leaves out S2's class half, S4's quotes and S5,
-  and VS-42's S9 (`scopeGate: "introduced"`), since an artifact records no base
-  blobs.
+  VS-42's S9 (`scopeGate: "introduced"`), and S1's certificate check. The artifact has no private base or head
+  blobs to verify the trace independently.
   Strict engine replays record the verified and unverified candidates the runner passed
   into strict selection, their diff anchors and suggestion eligibility, and the IDs
   whose verdicts it could not read. Re-selection

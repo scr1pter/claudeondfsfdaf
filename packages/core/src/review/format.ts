@@ -43,6 +43,8 @@ const STRICT_DROP_LABELS: Record<StrictDrop, string> = {
   "not-blocking": "non-blocking",
   unverified: "unverified",
   "verdict-unreadable": "without a readable verdict",
+  "verdict-unsure": "with an unsure verdict",
+  "certificate-mismatch": "without matching verification evidence",
   "severity-unreadable": "without a readable severity",
   "out-of-scope": "outside the five failure classes",
   anchor: "without a changed-line anchor",

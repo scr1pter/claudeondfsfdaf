@@ -400,7 +400,7 @@ export function executeLocalReview<RunR, ModelR>(
         strictPolicy = createHash("sha256").update(JSON.stringify(applied)).digest("hex")
       }
     }
-    const stored = statePath ? yield* readLocalState(statePath, !options.full || !!strictPolicy) : undefined
+    const stored = statePath ? yield* readLocalState(statePath, !options.full || !!strictPolicy, config.verifyEvidence) : undefined
     const retryFull = stored?.state.retryFullAfterBudget === true
     // A strict result certifies one immutable pair and one policy. Even an unchanged patch on a new
     // commit must get its own strict result. Preserve the previous findings and spend when requesting that full run.
@@ -1538,7 +1538,7 @@ interface LocalReviewRecord {
   outcome?: ReviewOutcome
 }
 
-function readLocalState(file: string, includeOutcome: boolean) {
+function readLocalState(file: string, includeOutcome: boolean, evidence?: ReviewConfig["verifyEvidence"]) {
   return Effect.promise(async (): Promise<LocalReviewRecord | undefined> => {
     const text = await fsp.readFile(file, "utf8").catch(() => undefined)
     if (!text) return undefined
@@ -1561,7 +1561,7 @@ function readLocalState(file: string, includeOutcome: boolean) {
     if (
       !includeOutcome ||
       !isOutcome(data.outcome) ||
-      (strict && !completeStrictReview(data.outcome, state.head ?? ""))
+      (strict && !completeStrictReview(data.outcome, state.head ?? "", evidence))
     )
       return record
     // Serialized caches are useful history, but cannot certify that old mixed token aggregates were partitioned.

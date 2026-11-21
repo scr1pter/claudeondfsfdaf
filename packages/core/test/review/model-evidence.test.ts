@@ -388,9 +388,9 @@ describe("scope", () => {
     expect(strict).toBe("3d07943f9c1aeb14")
     expect(both).toBe("c0fc3483470e13a6")
     expect(gated).toBe("7f163aa259a0af52")
-    expect(cert).toBe("bfd9c07657fc81b6")
-    expect(certGraph).toBe("20ec52ed6149078c")
-    expect(certGated).toBe("df4706892ce9eb38")
+    expect(cert).toBe("162314cd774bdba0")
+    expect(certGraph).toBe("9c058cf4aa603afa")
+    expect(certGated).toBe("9a1d91fa6585f7c4")
   })
 
   // VS-28c: the four lens prompts render only under `depth: "auto"` with `lenses: "high"`, so they move the digest only
@@ -466,7 +466,7 @@ describe("scope", () => {
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
     expect(promptsDigest({ guardrail: "strict" })).toBe("3d07943f9c1aeb14")
     expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("7f163aa259a0af52")
-    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("bfd9c07657fc81b6")
+    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("162314cd774bdba0")
     expect(lenses).toBe("dd09332295a99649")
     expect(lensesGraph).toBe("31c1a0612c0f9541")
     expect(lensesStrict).toBe("1d42617b9e9fe246")
@@ -534,12 +534,12 @@ describe("scope", () => {
     expect(promptsDigest({ impact: "graph", guardrail: "strict" })).toBe("c0fc3483470e13a6")
     expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("7f163aa259a0af52")
     expect(promptsDigest({ impact: "graph", guardrail: "strict", scopeGate: "introduced" })).toBe("0ded12711f48abb0")
-    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("bfd9c07657fc81b6")
+    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("162314cd774bdba0")
     expect(promptsDigest({ impact: "graph", guardrail: "strict", verifyEvidence: "certificate" })).toBe(
-      "20ec52ed6149078c",
+      "9c058cf4aa603afa",
     )
     expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" })).toBe(
-      "df4706892ce9eb38",
+      "9a1d91fa6585f7c4",
     )
     expect(promptsDigest({ depth: "auto", lenses: "high" })).toBe("dd09332295a99649")
     expect(promptsDigest({ impact: "graph", depth: "auto", lenses: "high" })).toBe("31c1a0612c0f9541")
@@ -711,27 +711,27 @@ describe("scope", () => {
     expect(policyDigest({ ...gated, maxComments: 3 })).not.toBe(applied.policy)
   })
 
-  // VS-44a: `verifyEvidence` is a policy key (S1's certificate check drops what would be posted) that no runner applies
-  // before VS-44 wiring, so neither the policy digest nor the prompts digest of a scope moves with it yet. Once a runner
-  // applies it and the guardrail, the prompts digest counts it only as "certificate" under "strict", and the policy
-  // digest only under "strict" (dormant now; VS-44 wiring's test shows `guardrail: "off"` with "certificate" equals the
-  // default).
-  test("the scope leaves out VS-44's verifyEvidence until a runner applies it", () => {
+  test("only a strict engine review records certificate verification in its evidence", () => {
+    const strict: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" }
+    const cert: ReviewConfig = { ...strict, verifyEvidence: "certificate" }
+    const scope = (config: ReviewConfig) => evidenceScope({ adapter: "engine", config })
     expect(EVIDENCE_POLICY_KEYS).toContain("verifyEvidence")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("verifyEvidence")
-    for (const verifyEvidence of ["certificate", "off", undefined] as const)
-      for (const guardrail of ["strict", "off", undefined] as const)
-        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail, verifyEvidence })).toBe(
-          policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail }),
-        )
-    const cert: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", verifyEvidence: "certificate" }
-    expect(evidenceScope({ adapter: "engine", config: cert })).toEqual(
-      evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" } }),
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("verifyEvidence")).toBe(false)
+    expect(scope({ ...cert, guardrail: "off" })).toEqual(SCOPE)
+    expect(scope({ ...strict, verifyEvidence: "off" })).toEqual(scope(strict))
+    expect(scope(cert).prompts).toBe(promptsDigest(cert))
+    expect(scope(cert).prompts).not.toBe(scope(strict).prompts)
+    expect(scope(cert).policy).not.toBe(scope(strict).policy)
+    const combined: ReviewConfig = { ...cert, scopeGate: "introduced", ruleCheck: "strict" }
+    expect(scope(combined).prompts).toBe(promptsDigest(combined))
+    for (const change of [{ ruleCheck: "off" }, { scopeGate: "off" }, { verifyEvidence: "off" }] as const) {
+      const partial = scope({ ...combined, ...change })
+      expect(partial.prompts).not.toBe(scope(combined).prompts)
+      expect(partial.policy).not.toBe(scope(combined).policy)
+    }
+    expect(evidenceScope({ adapter: "desktop", config: combined })).toEqual(
+      evidenceScope({ adapter: "desktop", config: { ...DEFAULT_REVIEW_CONFIG, ruleCheck: "strict" } }),
     )
-    expect(
-      evidenceScope({ adapter: "desktop", config: { ...cert, scopeGate: "introduced", impact: "graph" } }),
-    ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
-    expect(policyDigest({ ...cert, maxComments: 3 })).not.toBe(policyDigest(cert))
   })
 
   // VS-28c: `depth` and `lenses` are policy keys (they choose which passes look for defects) that no runner applies

@@ -10,6 +10,7 @@ import {
   type LocalResult,
 } from "../../src/review/local-result"
 import { selectFindings } from "../../src/review/select"
+import { MAX_FINDING_QUOTES, MAX_TRACE_QUOTES } from "../../src/review/schema"
 import { DEFAULT_REVIEW_CONFIG, type Finding, type ReviewOutcome, type StrictFinding } from "../../src/review/types"
 import { reviewVerdict } from "../../src/review/verdict"
 
@@ -186,6 +187,19 @@ describe("retained local review result decoding", () => {
       expect(completeStrictReview(value, head)).toBe(true)
       const check = (changed: Partial<typeof row>) =>
         completeStrictReview({ ...value, selection: { ...value.selection, inline: [{ ...row, ...changed }] } }, head)
+      expect(completeStrictReview(value, head, "certificate")).toBe(false)
+      const certificate = { trace: kept.quotes, guards: [], reach: "entry-point" as const }
+      value.strict.findings[0] = { ...kept, certificate }
+      expect(completeStrictReview(value, head, "certificate")).toBe(true)
+      for (const invalid of [
+        { trace: [] },
+        { trace: Array(MAX_TRACE_QUOTES + 1).fill(kept.quotes[0]) },
+        { guards: Array(MAX_FINDING_QUOTES + 1).fill(kept.quotes[0]) },
+      ]) {
+        value.strict.findings[0] = { ...kept, certificate: { ...certificate, ...invalid } }
+        expect(completeStrictReview(value, head, "certificate")).toBe(false)
+      }
+      value.strict.findings[0] = kept
       expect(check({ id: kept.id })).toBe(true)
       expect(check({ id: "unrelated-comment" })).toBe(false)
       for (const changed of [

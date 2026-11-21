@@ -1204,12 +1204,7 @@ describe("VS-42's scopeGate key", () => {
   })
 })
 
-// VS-44a: `verifyEvidence` is parsed as scopeGate is, and no runner reads it before VS-44 wiring. It acts inside the
-// strict guardrail (S1's certificate check), so it is effective only with `guardrail: "strict"`: with it, the value says
-// it is not applied yet; without it, it is ignored with a note. A plain key with no environment variable.
 describe("VS-44's verifyEvidence key", () => {
-  const UNAPPLIED =
-    '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
   const IGNORED =
     '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
   const GATE_IGNORED =
@@ -1221,7 +1216,7 @@ describe("VS-44's verifyEvidence key", () => {
     expect(Object.hasOwn(config, "verifyEvidence")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.verifyEvidence).toBe("off")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("verifyEvidence")
+    expect(UNAPPLIED_REVIEW_KEYS).not.toContain("verifyEvidence")
     expect(SOURCED_REVIEW_KEYS).not.toContain("verifyEvidence")
   })
 
@@ -1229,7 +1224,7 @@ describe("VS-44's verifyEvidence key", () => {
     const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
     expect(json({ guardrail: "strict", verifyEvidence: "certificate" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", verifyEvidence: "certificate" },
-      warnings: [UNAPPLIED],
+      warnings: [],
     })
     for (const value of [
       { verifyEvidence: "certificate" },
@@ -1247,17 +1242,15 @@ describe("VS-44's verifyEvidence key", () => {
         json: JSON.stringify({ verifyEvidence: "certificate" }),
         env: { REVIEW_GUARDRAIL: "strict" },
       }).warnings,
-    ).toEqual([UNAPPLIED])
+    ).toEqual([])
     expect(
       parseReviewConfig({
         json: JSON.stringify({ guardrail: "strict", verifyEvidence: "certificate" }),
         env: { REVIEW_GUARDRAIL: "off" },
       }).warnings,
     ).toEqual([IGNORED])
-    // Beside VS-42's key, each gets its own warning, in the keys' order.
-    expect(json({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([
-      UNAPPLIED,
-    ])
+    // Both checks run under strict. Without strict, each inactive key has a warning.
+    expect(json({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([])
     expect(json({ scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([GATE_IGNORED, IGNORED])
   })
 

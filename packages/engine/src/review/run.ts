@@ -109,7 +109,11 @@ import {
   decodeReport,
   decodeVerify,
   ESCAPING_PATH,
+  MAX_QUOTE_CHARS,
+  MAX_TRACE_QUOTES,
+  MAX_FINDING_QUOTES,
   strictReportJsonSchema,
+  verifyCertJsonSchema,
   REVIEW_REPORT_JSON_SCHEMA,
   VERIFY_JSON_SCHEMA,
 } from "@vectordevai/core/review/schema"
@@ -157,7 +161,13 @@ import type { ResolvedModel } from "./model"
 import { ReviewRoutes } from "./route"
 import { ReviewTrivial } from "./trivial"
 import { ReviewImpact } from "./impact"
-import { checkStrict, decodeStrictVerify, containsHeldValue } from "./strict"
+import {
+  checkStrict,
+  decodeStrictVerify,
+  decodeCertificateAnswers,
+  containsHeldValue,
+  type CertificateAnswer,
+} from "./strict"
 
 export interface RunInput {
   parentID?: SessionID
@@ -1275,6 +1285,7 @@ export const run: (
       ...(strictMode
         ? {
             guardrail: "strict" as const,
+            ...(config.verifyEvidence === "certificate" ? { verifyEvidence: "certificate" as const } : {}),
             ...(config.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}),
           }
         : {}),
@@ -1325,6 +1336,8 @@ export const run: (
           locations: sent ? [...activeImpact.locations] : [],
         })
     }
+    const certificateSchema = verifyCertJsonSchema(strictKeys)
+    const verifySchema = certificateSchema ?? VERIFY_JSON_SCHEMA
     const reportSchema = strictReportJsonSchema(strictKeys) ?? REVIEW_REPORT_JSON_SCHEMA
     const names = nothingToSend ? [] : planSpecialists(input.files, config)
     const primaryRequests = (payload: PromptInput) =>
@@ -1434,7 +1447,7 @@ export const run: (
         }
         return [
           ...initial,
-          { name: "verify", model, text: buildVerifyPrompt(check), cap: VERIFY_STEPS, schema: VERIFY_JSON_SCHEMA },
+          { name: "verify", model, text: buildVerifyPrompt(check), cap: VERIFY_STEPS, schema: verifySchema },
           ...(judgeModel
             ? [
                 {
@@ -1507,6 +1520,14 @@ export const run: (
               model: nameOf(draft.model),
               maxSteps: draft.cap,
               promptTokens: accounting.promptTokens,
+              // Up to six trace and six guard excerpts per future answer, emitted once by the verifier.
+              ...(certificateSchema && draft.name === "verify"
+                ? {
+                    extraOutputTokens: Math.ceil(
+                      (candidateLimit * (MAX_TRACE_QUOTES + MAX_FINDING_QUOTES) * MAX_QUOTE_CHARS) / 3.5,
+                    ),
+                  }
+                : {}),
               ...(price ? { price } : {}),
               ...(draft.model.variant ? { effort: draft.model.variant } : {}),
               ...(accounting.cached === undefined ? {} : { cached: accounting.cached }),
@@ -1656,7 +1677,7 @@ export const run: (
                   model: target,
                   cap: caps.get(pass) ?? VERIFY_STEPS,
                   text,
-                  schema: VERIFY_JSON_SCHEMA,
+                  schema: pass === "verify" ? verifySchema : VERIFY_JSON_SCHEMA,
                 })
               : undefined
             if (previewTimedOut || input.stopSignal?.aborted) {
@@ -1799,10 +1820,11 @@ export const run: (
     }
     // A verifier can introduce secret-shaped text into its reason. Exclude such a row before a panel can
     // relay it; the ordinary strict unanswered bookkeeping keeps the claim open for another review.
+    const candidateIds = new Set(candidates.map((finding) => finding.id))
     const verifyDecoder = strictMode
       ? (value: unknown) => decodeStrictVerify(value)?.filter((row) => !hold || !containsHeldValue(row))
       : decodeVerify
-    const verify: Asked<ReturnType<typeof decodeVerify>> | undefined = !verifyText
+    const verify: Asked<CertificateAnswer[]> | undefined = !verifyText
       ? undefined
       : unaffordable || late
         ? {
@@ -1817,8 +1839,11 @@ export const run: (
             model,
             cap: verifySteps,
             text: verifyText,
-            schema: VERIFY_JSON_SCHEMA,
-            decode: verifyDecoder,
+            schema: verifySchema,
+            decode: certificateSchema
+              ? (value: unknown) =>
+                  decodeCertificateAnswers(value, candidateIds)?.filter((row) => !hold || !containsHeldValue(row))
+              : verifyDecoder,
           })
     // 7b. The panel's judge (WP A35): a model from a third lab makes the final call on each candidate the check looked
     // at, with the first pass's claim and the check's verdict in front of it. It runs only once the check finished, with
@@ -1830,7 +1855,10 @@ export const run: (
             head: input.head,
             candidates,
             ...(strictMode ? { ...strictKeys, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
-            checks: verify.value ?? [],
+            checks: (verify.value ?? []).map((entry) => ({
+              ...entry,
+              verdict: entry.certificate?.verdict ?? entry.verdict,
+            })),
             headFiles: verifyHeadFiles(files, checkHeadFiles, candidates),
           })
         : ""
@@ -1885,7 +1913,6 @@ export const run: (
               schema: VERIFY_JSON_SCHEMA,
               decode: verifyDecoder,
             })
-    const candidateIds = new Set(candidates.map((finding) => finding.id))
     // The judge's verdict stands where it gave one; the check's stands for the rest, and for earlier fixed claims.
     const finalCall = judged?.status === "ok" ? (judged.value ?? []).filter((entry) => candidateIds.has(entry.id)) : []
     const verdicts = new Map([...(verify?.value ?? []), ...finalCall].map((entry) => [entry.id, entry.verdict]))
@@ -1995,6 +2022,15 @@ export const run: (
             findings: pool,
             recordScope: !!input.observe && !refused && !uncommitted,
             ...(trusted ? { trustedRules: trusted } : {}),
+            ...(certificateSchema
+              ? {
+                  certificates: new Map(
+                    (verify?.status === "ok" ? (verify.value ?? []) : []).flatMap((row) =>
+                      row.certificate && candidateIds.has(row.id) ? [[row.id, row.certificate] as const] : [],
+                    ),
+                  ),
+                }
+              : {}),
             anchors: input.anchors,
             directory: input.directory,
             head: input.head,

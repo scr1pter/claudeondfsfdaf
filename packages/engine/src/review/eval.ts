@@ -1379,7 +1379,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  verifyEvidence: "VS-44 wiring",
   depth: "VS-28 wiring",
   lenses: "VS-28 wiring",
   runtime: "the VS-30 executor",
@@ -1461,6 +1460,17 @@ function variantProblem(input: ReplayInput) {
       variant.models
     )
       return 'The engine:rule-strict variant sets only ruleCheck: "strict".'
+    return undefined
+  }
+  if (variant.name === "engine:verify-cert" || variant.keys.verifyEvidence !== undefined) {
+    if (
+      variant.name !== "engine:verify-cert" ||
+      variant.keys.guardrail !== "strict" ||
+      variant.keys.verifyEvidence !== "certificate" ||
+      keys.length !== 2 ||
+      variant.models
+    )
+      return 'The engine:verify-cert variant sets only guardrail: "strict" and verifyEvidence: "certificate".'
     return undefined
   }
   if (variant.name === "engine:scope-introduced" || variant.keys.scopeGate !== undefined) {

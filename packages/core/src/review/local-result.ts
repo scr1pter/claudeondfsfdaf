@@ -6,6 +6,7 @@ import { NonNegativeInt, optional, PositiveInt } from "@vectordevai/schema/schem
 import { hash } from "../util/encode"
 import { BUDGET_REQUEST_CHANGED, strictFindingBody } from "./format"
 import { withAlso } from "./select"
+import { MAX_FINDING_QUOTES, MAX_TRACE_QUOTES } from "./schema"
 import {
   CATEGORIES,
   FAILURE_CLASSES,
@@ -19,6 +20,7 @@ import {
   STRICT_FIX_KINDS,
   VERIFIED_BY,
   type Finding,
+  type ReviewConfig,
   type ReviewOutcome,
   type StrictFinding,
 } from "./types"
@@ -32,7 +34,7 @@ const risk = Schema.Literals(["low", "medium", "high"])
 const kind = Schema.Literals(["free", "priced", "plan", "local", "unknown", "codium"])
 const pass = Schema.Literals(["review", "security", "verify", "judge", "lens", "repro"])
 const many = <S extends Schema.Top>(schema: S) =>
-  Schema.mutable(Schema.Array(schema).check(Schema.isMaxLength(100_000)))
+  Schema.mutable(Schema.Array(schema)).check(Schema.isMaxLength(100_000))
 const strictDrops = many(Schema.Struct({ reason: Schema.Literals(STRICT_DROPS), count: NonNegativeInt }))
 const quote = Schema.Struct({ path: text, line: PositiveInt, side, code: text })
 const rulesSource = Schema.Literals(["base branch", "working tree"])
@@ -248,6 +250,16 @@ const Outcome = Schema.Struct({
           verifiedBy: Schema.Literals(VERIFIED_BY),
           verifier: text,
           linkedRule: optional(Schema.Struct({ source: text, quote: text, rulesSource })),
+          certificate: optional(
+            Schema.Struct({
+              trace: Schema.mutable(Schema.Array(quote)).check(
+                Schema.isMinLength(1),
+                Schema.isMaxLength(MAX_TRACE_QUOTES),
+              ),
+              guards: Schema.mutable(Schema.Array(quote)).check(Schema.isMaxLength(MAX_FINDING_QUOTES)),
+              reach: Schema.Literals(["caller-shown", "entry-point"]),
+            }),
+          ),
         }),
       ),
       dropped: strictDrops,
@@ -351,13 +363,13 @@ function sameStrictEvidence(finding: Finding, kept: StrictFinding) {
 }
 
 /** A branch cache may serve a completed strict result only for the head and coverage that produced it. */
-export function completeStrictReview(input: unknown, head: string): boolean {
+export function completeStrictReview(input: unknown, head: string, evidence?: ReviewConfig["verifyEvidence"]): boolean {
   const decoded = Schema.decodeUnknownOption(Outcome, { onExcessProperty: "error" })(input)
   if (Option.isNone(decoded)) return false
   const outcome = decoded.value
   const strict = outcome.strict
   const summary = outcome.selection.strict
-  if (!strict) return false
+  if (!strict || (evidence === "certificate" && strict.findings.some((finding) => !finding.certificate))) return false
   const selected = [
     ...outcome.selection.inline,
     ...outcome.selection.outsideDiff,

@@ -1565,79 +1565,77 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-44a: the same for `verifyEvidence`. A base review.json that sets it, with or without strict, is replayed and
-  // recorded without the pending certificate check. The verify pass is asked with the
-  // legacy verify schema and its answer read by the legacy decoder, so a certificate sent anyway changes nothing, and the
-  // scope claims neither the policy nor the certificate schema.
   it.instance(
-    "replays a base review.json that sets VS-44's verifyEvidence without it, verifying as before",
+    "replays engine:verify-cert through the blind verifier and keeps certificate-only base settings inert without strict",
     () =>
       Effect.gen(function* () {
-        const UNAPPLIED =
-          '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
-        const IGNORED =
-          '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
-        for (const [settings, warnings] of [
-          [{ guardrail: "strict", verifyEvidence: "certificate" }, [UNAPPLIED]],
-          [{ verifyEvidence: "certificate" }, [IGNORED]],
-        ] as const) {
+        const keys = { guardrail: "strict", verifyEvidence: "certificate" } as const
+        const quote = { path: listBug.path, side: "RIGHT" as const, line: 3, code: "  return items[index]" }
+        const candidate = {
+          ...listBug,
+          failure: {
+            class: "crash" as const,
+            mechanism: "logic" as const,
+            trigger: "Call last with a nonempty array.",
+            impact: "The returned value is undefined.",
+          },
+          quotes: [quote],
+          suggestion: "  return items[index - 1]",
+        }
+        for (const source of ["variant", "base", "without-strict"] as const) {
+          const strict = source !== "without-strict"
+          const settings = source === "variant" ? {} : strict ? keys : { verifyEvidence: "certificate" }
           const { directory, llm, base, head } = yield* checkout({
             base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify(settings) },
             head: { "src/list.ts": LIST_HEAD },
             price: PRICE,
           })
           const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
-          const [bugID] = Review.normalizeFindings([listBug], "review", anchors).map((item) => item.id)
-          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([listBug])))
-          // A certificate that certified() would refuse (an invented trace, an assumed reach) is not read.
+          const id = Review.normalizeFindings([candidate], "review", anchors)[0]!.id
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([candidate])))
+          // The typed unsure verdict settles the candidate through the real verifier without authorizing a post.
+          // The legacy verifier still reads its ordinary confirmed verdict into the non-strict selection.
           yield* llm.pushMatch(
             VERIFY,
             reply().tool("StructuredOutput", {
-              results: [
-                {
-                  id: bugID,
-                  verdict: "confirmed",
-                  reason: "Reproduced.",
-                  trace: [{ path: "src/list.ts", line: 1, side: "RIGHT", code: "invented()" }],
-                  reach: "assumed",
-                },
-              ],
+              results: [{ id, verdict: strict ? "unsure" : "confirmed", reason: "Checked the caller." }],
             }),
           )
           const artifact = yield* ReviewEval.replay({
             case: replayCase(directory, base, head),
             model: MODEL,
             config: { maxCostUsd: 2, minConfidence: 0.5 },
+            ...(source === "variant" ? { variant: { name: "engine:verify-cert", keys } } : {}),
             posting: ReviewEval.recordingPosting(),
             check: recordingCheck().check,
           })
-          const strict = "guardrail" in settings
-          expect(artifact.config.value.guardrail).toBe(strict ? "strict" : undefined)
-          expect(artifact.config.value.verifyEvidence).toBeUndefined()
-          expect(artifact.config.warnings).toEqual([...warnings])
-          expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest(strict ? { guardrail: "strict" } : {}))
-          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" }))
-          // The verify request carries the legacy verify schema, with no certificate field and no unsure verdict. The
-          // fake provider is shared across the loop, so this case's request is the last one.
-          const body = JSON.stringify((yield* llm.hits).filter(VERIFY).at(-1)!.body)
-          expect(body).toContain('"confirmed","rejected"')
-          for (const field of ['"trace"', '"guards"', '"noGuards"', '"reach"', '"unsure"'])
-            expect(body).not.toContain(field)
-          const placed = artifact.outcome?.selection.inline ?? []
-          expect(placed.map((finding) => [finding.title, finding.verified])).toEqual(
-            strict ? [] : [[listBug.title, true]],
-          )
-          expect(artifact.outcome?.strict !== undefined).toBe(strict)
+          expect(artifact.config.value.verifyEvidence).toBe("certificate")
+          expect(artifact.scope.prompts).toBe(promptsDigest(strict ? keys : {}))
+          expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+          const verify = (yield* llm.hits).filter(VERIFY).at(-1)!
+          const sent = JSON.stringify(verify.body)
+          if (strict) {
+            expect(artifact.config.warnings).toEqual([])
+            expect(sent).toContain('"confirmed","rejected","unsure"')
+            expect(lastUserText(verify.body)).toContain(candidate.failure.trigger)
+            expect(lastUserText(verify.body)).not.toContain(candidate.body)
+            expect(artifact.outcome?.strict?.dropped).toContainEqual({ reason: "verdict-unsure", count: 1 })
+            expect(artifact.outcome?.selection.inline).toEqual([])
+          } else {
+            expect(artifact.config.warnings).toContain(
+              '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.',
+            )
+            expect(sent).not.toContain('"noGuards"')
+            expect(artifact.outcome?.selection.inline.map((item) => [item.title, item.verified])).toEqual([
+              [candidate.title, true],
+            ])
+          }
         }
       }),
     GIT,
     TIMEOUT,
   )
 
-  // VS-28c: the same for `depth` and `lenses`. A base review.json that sets them is replayed and recorded without them,
-  // keeping the parser's warnings: the review runs its usual passes, with no security pass or lens it would not have run
-  // anyway, and the scope claims neither the policy nor the lens prompts.
   it.instance(
     "replays a base review.json that sets VS-28's depth and lenses without them, running the usual passes",
     () =>
@@ -2007,13 +2005,19 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { guardrail: "strict", scopeGate: "off" } })).toContain(
           "config sets guardrail, scopeGate, a pipeline variant's setting",
         )
-        // Nor VS-44's verifyEvidence, which VS-44 wiring applies, alone or beside the guardrail and VS-42's key.
         expect(yield* refused({ config: { verifyEvidence: "certificate" } })).toContain(
-          "config sets verifyEvidence, which no runner applies yet (VS-44 wiring), so the artifact would record a setting the run did not have.",
+          "config sets verifyEvidence, a pipeline variant's setting",
         )
-        expect(
-          yield* refused({ config: { guardrail: "strict", scopeGate: "introduced", verifyEvidence: "off" } }),
-        ).toContain("config sets guardrail, scopeGate, a pipeline variant's setting")
+        for (const variant of [
+          { name: "engine:verify-cert", keys: { verifyEvidence: "certificate" } },
+          { name: "engine:wrong", keys: { guardrail: "strict", verifyEvidence: "certificate" } },
+          { name: "engine:verify-cert", keys: { guardrail: "strict", verifyEvidence: "off" } },
+          {
+            name: "engine:verify-cert",
+            keys: { guardrail: "strict", verifyEvidence: "certificate", scopeGate: "introduced" },
+          },
+        ] as const)
+          expect(yield* refused({ variant })).toContain("The engine:verify-cert variant sets only")
         // Nor VS-28's depth and lenses, which VS-28 wiring applies, alone or together.
         expect(yield* refused({ config: { depth: "auto" } })).toContain(
           "config sets depth, which no runner applies yet (VS-28 wiring), so the artifact would record a setting the run did not have.",

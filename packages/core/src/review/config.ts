@@ -247,12 +247,6 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  // Only under strict, where the certificate rule applies.
-  verifyEvidence: {
-    applies: (config) => config.verifyEvidence === "certificate" && config.guardrail === "strict",
-    warning:
-      '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.',
-  },
   depth: {
     applies: (config) => config.depth === "auto",
     warning: '"depth": "auto" is not applied yet: every review still runs its usual passes.',

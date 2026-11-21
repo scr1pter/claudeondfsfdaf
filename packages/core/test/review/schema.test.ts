@@ -371,7 +371,7 @@ function keywords(schema: unknown): string[] {
 }
 
 // Every field set, so a field added to the type without the schema, or the other way round, fails below.
-const STRICT_FINDING: Required<Omit<StrictFinding, "linkedRule">> = {
+const STRICT_FINDING: Required<Omit<StrictFinding, "linkedRule" | "certificate">> = {
   id: "3f9a1c07be21",
   class: "crash",
   mechanism: "logic",
@@ -400,7 +400,7 @@ const STRICT_RESULT: Required<StrictResult> = {
 describe("the strict schemas (VS-27a)", () => {
   test("the ruleCheck result carries a checked rule only under its own key", () => {
     const linkedRule = { source: "paths[0]", quote: "Preserve FIFO order.", rulesSource: "working tree" } as const
-    const withRule: Required<StrictFinding> = { ...STRICT_FINDING, linkedRule }
+    const withRule: Required<Omit<StrictFinding, "certificate">> = { ...STRICT_FINDING, linkedRule }
     const schema = strictResultJsonSchema({ guardrail: "strict", ruleCheck: "strict" })!
     expect(schema.properties.findings.items.properties.linkedRule?.required).toEqual(Object.keys(withRule.linkedRule))
     expect(strictResultJsonSchema(STRICT)!.properties.findings.items.properties).not.toHaveProperty("linkedRule")
@@ -432,6 +432,8 @@ describe("the strict schemas (VS-27a)", () => {
     expect([...STRICT_DROPS]).toEqual([
       "unverified",
       "verdict-unreadable",
+      "verdict-unsure",
+      "certificate-mismatch",
       "severity-unreadable",
       "not-blocking",
       "out-of-scope",
@@ -531,7 +533,7 @@ describe("the strict schemas (VS-27a)", () => {
     expect(finding.properties.quotes).toMatchObject({ minItems: 1, maxItems: MAX_FINDING_QUOTES })
     // VS-42's pre-existing joins the enum only under scopeGate (below).
     expect(result.properties.dropped.items.properties.reason.enum).toEqual(
-      STRICT_DROPS.filter((reason) => reason !== "pre-existing"),
+      STRICT_DROPS.filter((reason) => !["pre-existing", "certificate-mismatch", "verdict-unsure"].includes(reason)),
     )
     expect(result.properties.dropped.items.properties.count.minimum).toBe(1)
     expect(result.properties.fixUnchecked.minimum).toBe(0)
@@ -581,7 +583,9 @@ describe("the strict schemas (VS-27a)", () => {
     const GATE = { guardrail: "strict", scopeGate: "introduced" } as const
     const gated = strictResultJsonSchema(GATE)!
     const plain = strictResultJsonSchema(STRICT)!
-    expect(gated.properties.dropped.items.properties.reason.enum).toEqual([...STRICT_DROPS])
+    expect(gated.properties.dropped.items.properties.reason.enum).toEqual(
+      STRICT_DROPS.filter((reason) => reason !== "certificate-mismatch" && reason !== "verdict-unsure"),
+    )
     expect({
       ...gated,
       properties: {
@@ -1094,6 +1098,17 @@ describe("decodeRuleCitation (VS-43a)", () => {
 // wiring, with VS-27c.
 describe("the certificate verify schema (VS-44a)", () => {
   const CERT = { guardrail: "strict", verifyEvidence: "certificate" } as const
+
+  test("only the dual-key result schema requires accepted verification evidence", () => {
+    const kept: Required<Omit<StrictFinding, "linkedRule">> = {
+      ...STRICT_FINDING,
+      certificate: { trace: STRICT_FINDING.quotes, guards: [], reach: "entry-point" },
+    }
+    const schema = strictResultJsonSchema(CERT)!
+    expect(violations(schema, { ...STRICT_RESULT, findings: [kept] })).toEqual([])
+    expect(violations(schema, STRICT_RESULT)).toEqual(["$.findings[0] lacks certificate"])
+    expect(violations(strictResultJsonSchema(STRICT)!, STRICT_RESULT)).toEqual([])
+  })
 
   test("exists only under guardrail: strict with verifyEvidence: certificate", () => {
     for (const keys of [
