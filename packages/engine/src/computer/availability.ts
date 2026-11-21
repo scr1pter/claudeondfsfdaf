@@ -23,6 +23,7 @@ export type Reason =
   | "may-train"
   | "unattended"
   | "disabled"
+  | "cloud-workspace"
 
 const MESSAGES: Record<Reason, string> = {
   desktop: `${Hands.NAME} works in the Vector desktop app on macOS and Windows, where it can see and use your apps. Open this conversation there to continue.`,
@@ -36,6 +37,7 @@ const MESSAGES: Record<Reason, string> = {
   "may-train": `${Hands.NAME} can't send your screen to a model that may train on it.`,
   unattended: `${Hands.NAME} is only available in a conversation you're in.`,
   disabled: `${Hands.NAME} is turned off for this conversation.`,
+  "cloud-workspace": `${Hands.NAME} isn't available in a Vector cloud workspace. Open this conversation in the Vector desktop app on your computer to use it.`,
 }
 
 export function message(reason: Reason) {
@@ -108,9 +110,12 @@ const layer = Layer.effect(
     const client = HttpClient.filterStatusOk(http)
     const state = yield* InstanceState.make(
       Effect.fnUntraced(function* () {
-        const bridge = endpoint()
-        const host: Reason =
-          process.platform === "linux" && (process.env.WSL_DISTRO_NAME || /microsoft/i.test(os.release()))
+        // A cloud workspace container has no desktop to drive (CW-24): it never probes a bridge, even if the bridge
+        // variables leak in, and says so ahead of the WSL and platform readings. Company policy still wins.
+        const bridge = flags.cloudWorkspace ? undefined : endpoint()
+        const host: Reason = flags.cloudWorkspace
+          ? "cloud-workspace"
+          : process.platform === "linux" && (process.env.WSL_DISTRO_NAME || /microsoft/i.test(os.release()))
             ? "wsl"
             : flags.client === "desktop" && process.platform === "darwin" && Number(os.release().split(".")[0]) < 23
               ? "macos-version"

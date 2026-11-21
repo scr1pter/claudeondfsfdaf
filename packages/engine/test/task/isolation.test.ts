@@ -1175,6 +1175,65 @@ it.instance(
 )
 
 it.instance(
+  "an isolated child merges, then its sibling of the same parent is discarded: the discard keeps its reason and patch and leaves the merged parent files untouched",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* write(f.home.directory, "merged.txt", "base\n")
+      yield* write(f.home.directory, "discarded.txt", "base\n")
+      yield* git(f.home.directory, ["add", "merged.txt", "discarded.txt"])
+      yield* git(f.home.directory, ["commit", "-m", "sibling baseline"])
+      const sibling = yield* f.sessions.create({ parentID: f.parent.id })
+      const siblingRecord = path.join(Global.Path.data, "task-isolation", f.home.project.id, sibling.id)
+      const siblingWork = path.join(Global.Path.data, "task-worktree", f.home.project.id, sibling.id)
+      // The fixture's finalizer, for the sibling.
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          const store = yield* InstanceStore.Service
+          yield* store.disposeDirectory(siblingWork)
+          const service = yield* Git.Service
+          yield* service.run(["worktree", "remove", "--force", siblingWork], { cwd: f.home.directory })
+          yield* service.run(["branch", "-D", `vector/subagent/${sibling.id}`], { cwd: f.home.directory })
+          yield* Effect.promise(async () => {
+            await fs.rm(siblingWork, { recursive: true, force: true })
+            await fs.rm(siblingRecord, { recursive: true, force: true })
+          })
+          TaskClaims.unprotect(sibling.id)
+          TaskPlace.drop(sibling.id)
+        }).pipe(Effect.orDie),
+      )
+      yield* f.start
+      yield* f.isolation.reserve({ taskID: sibling.id, parentSessionID: f.parent.id, title: "Sibling", agent: f.agent })
+      yield* f.isolation.start(sibling.id)
+      yield* write(f.workPath, "merged.txt", "child change\n")
+      yield* write(siblingWork, "discarded.txt", "sibling change\n")
+      expect((yield* f.settle()).state).toBe("changed")
+      expect((yield* f.isolation.settle({ taskID: sibling.id, attempt: 1 })).state).toBe("changed")
+
+      expect((yield* f.isolation.merge({ taskID: f.child.id, by: { kind: "owner" } })).record.state).toBe("merged")
+      expect(yield* contents(f.home.directory, "merged.txt")).toBe("child change\n")
+
+      const reason = "The merged sibling already covers this."
+      const discarded = yield* f.isolation.discard({ taskID: sibling.id, by: { kind: "owner" }, reason })
+      expect(discarded.record.state).toBe("discarded")
+      expect(discarded.record.discardReason).toBe(reason)
+      expect((yield* f.isolation.get(sibling.id)).discardReason).toBe(reason)
+      expect(discarded.saved).toBeDefined()
+      const patch = yield* Effect.promise(() => fs.readFile(discarded.saved!, "utf8"))
+      expect(patch).toContain("+sibling change")
+      expect(patch).not.toContain("child change")
+      // The discard touched no parent file the merge wrote, and the sibling's checkout is gone.
+      expect(yield* contents(f.home.directory, "merged.txt")).toBe("child change\n")
+      expect(yield* contents(f.home.directory, "discarded.txt")).toBe("base\n")
+      expect(yield* exists(siblingWork)).toBe(false)
+      expect((yield* f.isolation.get(f.child.id)).state).toBe("merged")
+    }),
+  { git: true },
+  // Two isolated lifecycles, a merge and a discard, as the neighbours above: over 30 s on a slow hosted Windows runner.
+  60_000,
+)
+
+it.instance(
   "sweep removes only queued registered tasks and retains their recovery patches",
   () =>
     Effect.gen(function* () {
@@ -2023,6 +2082,50 @@ test("a merge's link that cannot be made leaves the parent's file in place", asy
   await TaskIsolation.place(target, { symlink: "other.txt" })
   expect(await fs.readlink(target)).toBe("other.txt")
   await fs.rm(dir, { recursive: true, force: true })
+})
+
+// A merge writes into the parent project, where an editor, an indexer or an antivirus scan may hold the file open.
+// Windows refuses the rename while that handle is open and retries for its 2 s window, as the record saves above do;
+// elsewhere the rename replaces the open file at once. Every OS runs these.
+test("a merge write over a parent file another handle holds open waits for the handle and then replaces it", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vector-isolation-place-"))
+  const target = path.join(dir, "held.txt")
+  await fs.writeFile(target, "parent\n")
+  const handle = await fs.open(target, "r")
+  try {
+    const placing = TaskIsolation.place(target, { bytes: Buffer.from("merged\n"), mode: 0o644 })
+    await Bun.sleep(100)
+    // While the handle is open Windows keeps the parent's file; nothing can have replaced it.
+    if (process.platform === "win32") expect(await fs.readFile(target, "utf8")).toBe("parent\n")
+    await handle.close()
+    await placing
+    expect(await fs.readFile(target, "utf8")).toBe("merged\n")
+    expect((await fs.readdir(dir)).filter((name) => name.startsWith(".vector-merge-"))).toEqual([])
+  } finally {
+    await handle.close().catch(() => undefined)
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("a merge write held open past the retry window fails on Windows, keeping the parent file and no temp file", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vector-isolation-place-"))
+  const target = path.join(dir, "held.txt")
+  await fs.writeFile(target, "parent\n")
+  const handle = await fs.open(target, "r")
+  try {
+    // The retry window is 2 s; the handle stays open past it.
+    const placed = await TaskIsolation.place(target, { bytes: Buffer.from("merged\n"), mode: 0o644 }).then(
+      () => undefined,
+      (cause: NodeJS.ErrnoException) => cause.code,
+    )
+    expect(placed).toBe(process.platform === "win32" ? "EPERM" : undefined)
+    await handle.close()
+    expect(await fs.readFile(target, "utf8")).toBe(process.platform === "win32" ? "parent\n" : "merged\n")
+    expect((await fs.readdir(dir)).filter((name) => name.startsWith(".vector-merge-"))).toEqual([])
+  } finally {
+    await handle.close().catch(() => undefined)
+    await fs.rm(dir, { recursive: true, force: true })
+  }
 })
 
 for (const via of ["settle", "reconcile"] as const)

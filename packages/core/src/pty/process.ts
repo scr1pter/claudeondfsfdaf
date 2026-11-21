@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process"
 import { Effect } from "effect"
+import { untrustedChildEnvironment } from "../child-environment"
 
 export * as PtyProcess from "./process"
 
@@ -46,13 +47,22 @@ export function signal(pid: number, name: "SIGINT" | "SIGTERM" | "SIGKILL") {
 
 /**
  * The terminal's foreground process group: the job an interactive shell runs right now (its own group, apart from the
- * shell's), or the program's own group when nothing else holds the terminal. Read with `ps -o tpgid=`, on macOS and
- * Linux alike; the program's pid when that cannot be read. Never on Windows.
+ * shell's), or the program's own group when nothing else holds the terminal. Read with `/bin/ps -o tpgid=`, on macOS
+ * and Linux alike, with the untrusted-child environment: never a `ps` found on PATH, which a repository's folder may
+ * lead with (F8). The program's pid when that cannot be read. Never on Windows.
  */
 export function foreground(pid: number) {
   if (process.platform === "win32" || !usable(pid)) return pid
   try {
-    const group = Number(execFileSync("ps", ["-o", "tpgid=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 }).trim())
+    const group = Number(
+      execFileSync("/bin/ps", ["-o", "tpgid=", "-p", String(pid)], {
+        encoding: "utf8",
+        timeout: 2000,
+        env: untrustedChildEnvironment(),
+        killSignal: "SIGKILL",
+        maxBuffer: 4096,
+      }).trim(),
+    )
     return usable(group) ? group : pid
   } catch {
     return pid
