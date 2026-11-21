@@ -981,7 +981,17 @@ describe("Codium CI lane", () => {
     // entries are separated by ';' and Bun and git may need Windows' own system and temp folders. Those few pass through
     // by name, never a CODIUM_CI_* variable.
     const tests = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
-      jobs: { unit: { steps: Array<{ name?: string; if?: string; "working-directory"?: string; run?: string }> } }
+      jobs: {
+        unit: {
+          steps: Array<{
+            name?: string
+            if?: string
+            "timeout-minutes"?: number
+            "working-directory"?: string
+            run?: string
+          }>
+        }
+      }
     }
     expect(tests.jobs.unit.steps.find((item) => item.name === "Run the Codium dispatch-input compliance case")).toEqual(
       {
@@ -1331,7 +1341,7 @@ describe("Hosted deploy workflows", () => {
     }
   }
 
-  // A scratch repository with a bare origin: main holds one commit, a side branch one more that main does not.
+  // A scratch repository with a bare origin: main holds two commits, a side branch one more that main does not.
   const scratchRepository = async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "vector-hosted-git-"))
     const env = {
@@ -1354,6 +1364,8 @@ describe("Hosted deploy workflows", () => {
     git(directory, "init", "--quiet", "--bare", "--initial-branch=main", origin)
     git(directory, "init", "--quiet", "--initial-branch=main", work)
     git(work, "remote", "add", "origin", origin)
+    git(work, "commit", "--quiet", "--allow-empty", "-m", "earlier on main")
+    const olderMain = git(work, "rev-parse", "HEAD")
     git(work, "commit", "--quiet", "--allow-empty", "-m", "on main")
     const onMain = git(work, "rev-parse", "HEAD")
     git(work, "push", "--quiet", "origin", "main")
@@ -1363,6 +1375,7 @@ describe("Hosted deploy workflows", () => {
     return {
       work,
       env,
+      olderMain,
       onMain,
       offMain,
       checkout: (sha: string) => git(work, "checkout", "--quiet", "--detach", sha),
@@ -1783,6 +1796,9 @@ describe("Hosted deploy workflows", () => {
         deploy.on.workflow_dispatch as { inputs: { target: { type: string; options: string[]; required: boolean } } }
       ).inputs.target
       expect(target).toMatchObject({ type: "choice", options: ["relay", "ops", "all"], required: true })
+      const inputs = (deploy.on.workflow_dispatch as { inputs: Record<string, unknown> }).inputs
+      expect(Object.keys(inputs).sort()).toEqual(["commit", "target"])
+      expect(inputs.commit).toMatchObject({ type: "string", required: false, default: "" })
       expect(Object.keys(deploy.jobs).sort()).toEqual(["ops", "preflight", "relay"])
       expect(deploy.jobs.relay?.if).toBe("inputs.target == 'relay' || inputs.target == 'all'")
       expect(deploy.jobs.ops?.if).toBe("inputs.target == 'ops' || inputs.target == 'all'")
@@ -1835,6 +1851,57 @@ describe("Hosted deploy workflows", () => {
         expect(manifest.scripts.deploy).toBe("wrangler deploy")
         expect(manifest.scripts["secret-names"]).toBe("wrangler secret list --format json")
       }
+    })
+
+    test("rolls back only to a full SHA on main, passed to the preflight only as step environment", async () => {
+      const text = await read(".github/workflows/vector-hosted-deploy.yml")
+      expect(text.match(/inputs\.commit/g)).toHaveLength(1)
+      const preflight = (await workflow("vector-hosted-deploy.yml")).jobs.preflight
+      const source = step(preflight, "Require a commit on protected main")
+      expect(source?.env?.VECTOR_DEPLOY_COMMIT).toBe("${{ inputs.commit }}")
+      expect(source?.run).not.toContain("inputs.")
+      await using repository = await scratchRepository()
+      repository.checkout(repository.onMain)
+      const marker = path.join(repository.work, "pwned")
+      const run = (commit: string) =>
+        shell(
+          `gh() {
+            test "$1" = api && test "$2" = repos/fixture/repo/branches/main || return 99
+            printf 'true\\n'
+          }
+          ${source?.run}`,
+          {
+            ...repository.env,
+            GITHUB_REPOSITORY: "fixture/repo",
+            GITHUB_SHA: repository.onMain,
+            VECTOR_DEPLOY_COMMIT: commit,
+          },
+          repository.work,
+        )
+      for (const [commit, sha] of [
+        ["", repository.onMain],
+        [repository.olderMain, repository.olderMain],
+      ] as const) {
+        const passed = await run(commit)
+        expect({ commit, status: passed.status, output: passed.output.trim() }).toEqual({
+          commit,
+          status: 0,
+          output: `sha=${sha}`,
+        })
+      }
+      for (const commit of [
+        repository.olderMain.slice(0, 12),
+        repository.olderMain.toUpperCase(),
+        repository.offMain,
+        "0".repeat(40),
+        `$(touch ${marker})`,
+        `${repository.olderMain}; touch ${marker}`,
+        `${repository.olderMain}\nsha=${repository.offMain}`,
+      ]) {
+        const refused = await run(commit)
+        expect({ commit, status: refused.status, wrote: refused.output }).toEqual({ commit, status: 1, wrote: "" })
+      }
+      expect(existsSync(marker)).toBe(false)
     })
 
     test("never sets, changes or deletes a Worker secret, and reads only CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID", async () => {
