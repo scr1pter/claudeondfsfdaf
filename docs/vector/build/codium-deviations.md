@@ -7265,6 +7265,12 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   same 10 tests fail on `34def03b`'s `isolation.ts`): `ReadOnlyGit.inspect` reports "this host has no supported
   unprivileged Git verifier", a limit of this container, not of the code. The Windows and Linux engine shards in CI
   still have to confirm the change.
+  21 Nov 2026 (v2-closeout-ci): confirmed on main. test.yml run 44848275007 at `f3d7ac74`, conclusion success:
+  engine (windows, shard 5/12) job 136673698347 and engine (linux, shard 5/6) job 136673698352 both succeeded, with
+  `isolation.test.ts` at 87/0/0 on Windows and 94/0/0 on Linux as read from their logs (three earlier main runs'
+  Windows shard 5/12 jobs are listed in ci-harness-repairs.md). The uncaptured failure belonged only to the removed
+  stress test and has no successor test; if the new deterministic tests ever go red, their log carries the full
+  `Cause.pretty` text. The item is closed with no root cause found for that one failure.
 
 ## Codium finish: TUI runtime plugin port for spawn-inventory, codium-finish lane (16 Nov 2026)
 

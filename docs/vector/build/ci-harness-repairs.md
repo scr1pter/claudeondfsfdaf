@@ -462,6 +462,17 @@ Windows, look first at its one timing gap: once the poll sees the .tmp file, the
 the test does one more `find` and closes the handle, and the test's own deadline does not cover that gap. Do not
 lengthen any deadline for it.
 
+Recorded (21 Nov 2026, v2-closeout-ci): both Windows-only branches have now run green on Windows CI, in engine (windows,
+shard 5/12) of four test.yml runs on main, each read through GitHub MCP: run 44704085046 attempt 2 at `481973c9` (the
+#48 merge), job 136223992080; run 44800897274 at `15f3ba77`, job 136513156116; run 44822880542 at `3670461a`, job
+136588453580; and run 44848275007 at `f3d7ac74`, job 136673698347. All four jobs succeeded, which includes "stopping
+the parent while a foreground isolated child's normal save runs does not wait on Git". In the last of them, as read
+from its log by the 21 Nov sweep, `isolation.test.ts` gave 87 pass, 0 fail, 0 skip, the old record stayed while the
+handle was open (3462 ms) and the EPERM failure came after the 2 s retry window (5578 ms); Linux shard 5/6 of the same
+run, job 136673698352, gave 94 pass, 0 fail, 0 skip. This shows the fix's two Windows branches work. It does not show
+the named cause: the original rename-versus-`find` collision was never reproduced as a failure without the fix, so
+that cause remains an inference. The timing-gap advice above still holds, and no deadline is to be lengthened.
+
 ## 2026-11-20: Bun 1.3.14 crash in scrollback.surface (Worker terminated while loading)
 
 Branch `scrollback-bun-crash` from `6a771354`. Changes: `patches/@opentui%2Fcore@0.3.4.patch` (registered in the root
