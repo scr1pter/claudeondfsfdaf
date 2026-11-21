@@ -225,6 +225,8 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       controller.abort()
       if (session && engine) await engine.abort(session).catch(() => undefined)
     }
+    /** Read through a function: `abort` sets `outcome` from callbacks, which the inline narrowing cannot see. */
+    const abortedFor = (reason: Outcome) => controller.signal.aborted && outcome === reason
     try {
       const claimed = decodeJob(await deps.jobs.claim(jid))
       if (!claimed.ok || claimed.value.jid !== jid) throw new Error("Invalid Everywhere claim")
@@ -397,7 +399,8 @@ export function createEverywhereRunner(deps: RunnerDeps) {
             } else {
               publication = { jid, lease: job.lease.id, outcome: "changes", summary, branch, headSha, files: staged.files, checks: "skipped" }
               await deps.ledger.remember(publication)
-              const prUrl = await deps.openPr({ job: { ...job, task }, branch, base: project.base, summary, held: staged.held.length }).catch(() => undefined)
+              // EV-03: a cancel heard during the push (stop, lost, a switch turned off) opens no draft PR; a deadline still does.
+              const prUrl = abortedFor("cancelled") ? undefined : await deps.openPr({ job: { ...job, task }, branch, base: project.base, summary, held: staged.held.length }).catch(() => undefined)
               if (prUrl) {
                 publication = { ...publication, prUrl }
                 await deps.ledger.remember(publication)

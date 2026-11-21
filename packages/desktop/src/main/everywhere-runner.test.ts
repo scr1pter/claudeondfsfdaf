@@ -157,6 +157,29 @@ test("deadline expiry during an admitted push cannot abort the publishing git si
   expect(signals).toHaveLength(2)
   expect(f.results).toHaveLength(1)
   expect(f.results[0]?.outcome).toBe("changes")
+  // EV-03 suppresses the draft PR only after a cancel; a deadline (over-budget) still opens it.
+  expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(1)
+  expect(f.results[0]?.prUrl).toBe("https://github.com/acme/app/pull/4")
+})
+
+test("a lease that runs out during an admitted push still opens the draft PR, since only a cancel suppresses it (EV-03)", async () => {
+  const f = fixture()
+  // A job longer than the lease, so the lease (interrupted), not the deadline, ends it.
+  f.settings({ minutes: 30 })
+  const signals: AbortSignal[] = []
+  f.git.push = async (_, __, branch) => {
+    f.calls.push({ kind: "push", value: branch })
+    await f.tick(TIMING.leaseMs)
+    return true
+  }
+  await createEverywhereRunner({ ...f.deps, git: (_, __, signal) => { signals.push(signal); return f.git } }).offer("fixture-offer")
+  expect(signals.map((signal) => signal.aborted)).toEqual([true, false])
+  expect(f.calls.some((call) => call.kind === "abort")).toBe(true)
+  expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(1)
+  expect(f.results).toEqual([{
+    jid: f.job.jid, lease: f.job.lease.id, outcome: "changes", summary: "Fixed retry handling.", branch: branchFor(f.job.jid),
+    headSha: "c".repeat(40), files: 1, checks: "skipped", prUrl: "https://github.com/acme/app/pull/4",
+  }])
 })
 
 test("a deadline reached while journaling still prevents admission of the remote push", async () => {
@@ -978,7 +1001,6 @@ for (const push of ["confirmed", "ambiguous"] as const) {
             ...published,
             outcome: "changes",
             summary: "Fixed retry handling.",
-            prUrl: "https://github.com/acme/app/pull/4",
           }
         : {
             ...published,
@@ -986,8 +1008,9 @@ for (const push of ["confirmed", "ambiguous"] as const) {
             summary: "Publication was not confirmed. Check the remote branch before retrying this task.",
           },
     )
-    // Pinned current behaviour, an open question for the lead: the draft PR still opens after the stop.
-    expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(push === "confirmed" ? 1 : 0)
+    // EV-03 (lead ruling): the admitted push finishes, but no draft PR opens after the stop, so the result names the
+    // branch and carries no PR link.
+    expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(0)
     expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
     await createEverywhereRunner(deps).recover()
     expect(server.requests).toHaveLength(4)
@@ -1035,13 +1058,14 @@ for (const answer of ["stop", "lost", 404, 409] as const) {
         files: 1,
         checks: "skipped",
       }
+      // EV-03: the job was cancelled during the push (a stop, a lost answer, or the server disowning the lease), so the
+      // confirmed receipt carries no PR link.
       const receipt =
         push === "confirmed"
           ? {
               ...published,
               outcome: "changes",
               summary: "Fixed retry handling.",
-              prUrl: "https://github.com/acme/app/pull/4",
             }
           : {
               ...published,
@@ -1056,7 +1080,7 @@ for (const answer of ["stop", "lost", 404, 409] as const) {
         ...settles.map(() => ["settle", undefined, refused]),
       ])
       expect(server.requests.slice(3)).toEqual(settles)
-      expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(push === "confirmed" ? 1 : 0)
+      expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(0)
       expect(logged).toEqual(["Vector everywhere could not acknowledge a job result."])
       // The slot is free, but the refused receipt stays pending: it is never replaced by "nothing published".
       expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [receipt] })
