@@ -67,6 +67,7 @@ Nothing in the contract was wrong about the code except one type rule (the last 
 - **The data key and sealing.** `VECTOR_EVERYWHERE_DATA_KEY` must decode to exactly 32 bytes (standard or URL-safe base64, padded or not). A shorter, longer or malformed value, or a placeholder whose bytes barely vary (fewer than 8 distinct values, such as all zeros), turns the feature off. The key id is the first 12 base64url characters of a SHA-256 of the key, so no extra variable is needed, and a later rotation only adds a second key to the ring (`open` already takes a ring; `seal` uses its first key). A sealed value is `ves1.<key id>.<iv>.<ciphertext and tag>`, all base64url, and is bound to a context (its store key) passed as associated data, so a sealed token copied into another record does not open there. `open` tells `unknown-key` from `tampered` and `malformed`, and refuses non-canonical base64url.
 - **Env reading.** `VECTOR_EVERYWHERE_ENABLED` is trimmed before it is compared with `true` (env editors add line ends). A secret shorter than 16 characters or with spaces in it counts as missing, which turns its platform off; the HMAC helpers also refuse such a secret themselves. Ids (`VECTOR_SLACK_APP_ID`, client ids, `VECTOR_JIRA_FORGE_APP_ID`) must be printable with no spaces, at most 200 characters. GitHub needs none of our secrets (the handoff's OIDC verifier is injected, VE-10 and VE-31), so listing it is enough. The offer key must be an Ed25519 PKCS#8 private key (`\n` escapes accepted) with a key id matching `OFFER_KEY_ID_PATTERN`; without both there are no offers, but the rest of the feature can run. `readConfig` also answers `problems`: the names of variables that are set but unusable or needed and missing, never their values. An explicit `false` is not a problem.
 - **The switch.** The environment gives only `on` or `stop`; `no-new` comes from Codium's switch once R-C6 adds it. The seam calls Codium's `readSwitch` only when Codium's `SWITCH_NAMES` lists `everywhere`, so it starts working with no change here. Codium's value can only make the switch stricter; Codium's `off`, an unknown value and an unreadable store all read `stop`. Codium's `remote` switch reads `on` or `stop` the same way, and `stop` when it cannot be read. `admits(state, "new" | "running")` is the one rule: `new` is a new trigger at the intake; `running` covers a claim of an offered or waiting job, reports, heartbeats, settles, the dispatch of an accepted job and the re-offer of a waiting one, which matches the phase P1a rule that a claim is final.
+  *2026-11-15 note (EV-07):* Codium's SWITCH_NAMES now lists `everywhere` with `on`, `no-new` and `stop` (R-C6), so the seam reads Codium's own record; switch.ts changed in comments only. See "2026-11-15, EV-07".
 - **The store guard.** `everywhereStore` refuses, before `persistentStore` sees it, any command outside a fixed list or touching a key that is not under `vector:everywhere:`, so this code can never read or write Codium's or anyone else's records. Every write names its TTL except the records 3.13 keeps until changed.
 - **Keys.** Every part is checked against its id's shape and account ids are written lowercase. Ids whose shape a platform or peer chooses (delivery ids, Forge token ids, A2A task ids) are kept when they match `[A-Za-z0-9._-]{1,128}` and otherwise replaced by `~` and their SHA-256, which no plain id contains. Platform user ids have one pattern per platform (Slack `[A-Z0-9]`, Linear UUIDs, Jira account ids with at most one colon, GitHub numbers), so `link:<installation>:<user>` stays unambiguous.
 - **The audit log is a sorted set by time**, not a list, so entries older than 90 days can be dropped by age. One Lua script adds the entry, drops entries older than 90 days, keeps the newest 1,000 and moves the log's expiry. An entry has exactly `id`, `at`, `event`, `platform`, `installation`, `jid`, `code`, `device`, `actor` and `userId`; any other field is refused. `code` comes from a closed list (refusal, decline, outcome, route, job state and ending codes, erase reasons, and `admin` for a re-install by a platform admin), so no free text can travel in it. Events add `uninstall` and `disconnect` to the contract's list.
@@ -100,6 +101,7 @@ Nothing in the contract was wrong about the code. These are the choices api/\_li
 - **How the fence works.** A job record is JSON whose first two fields are always `version` and `state`. The server computes the next record in TypeScript from the record it read, and one `EVAL` writes it only while the stored record still starts with that version and state (read with a fixed Lua pattern, so no JSON library is needed in the script). The same script moves the job in `jobs:due`, takes it out of the live sets when it ends and deletes its body then. A change that lost the race reads again and decides again, up to 8 times, then answers 503 `EVERYWHERE_BUSY`.
 - **Keys beyond 3.13.** `livejobs:<installation>` (live jobs on an installation, so erasing it needs no scan) and `history:<account>` (every job the account sponsored in the last 30 days, for the job list and for account erase). `seen:<account>` holds `{at, device}` and `ready:<device>` holds `{account, at, …booleans}`, so the router reads "Wait for my computer" from the last computer seen.
 - **Edges the diagram does not draw.** (The release after a claim was replaced by the phase P1b review entry below: a decline after a claim always refuses.) A decline after a claim (with its lease) refuses the job when the reason is lasting, and otherwise releases it: `claimed → offered`, so the intake (still in its window) or the sweep moves it on. A late claim of a job that just went back to the queue is allowed (`waiting → claimed`). Safety nets for a dead intake: `received` for 2 minutes ends `expired`, and an `offered` job past its 30-second offer goes back to `waiting` when it has a queue (`queueUntil`, kept on the record while claimed so a release can return to it), otherwise `expired`. An Actions run still `running` 135 minutes after it started (@vector's longest run of 120 minutes plus its publish step) ends `failed` until VE-30 settles it from `listCloudRuns`. A laptop job past its deadline is answered `stop`.
+  *2026-11-20 annotation (EV-30):* the overdue line is built. The cron reads @vector's run record (`listCloudRuns`) for an Actions run still `running` 135 minutes after it started and settles it with the recorded outcome once it ended; an open or unknown run ends `failed` with outcome `failed` (before, it had no outcome and its post said "was cancelled"). A failed read, and an account's own sweep, wait 10 minutes first. See "2026-11-20, EV-30", (i).
 - **Endings.** A waiting Jira job ends with Jira's own text (`jira-waiting`), others with `expired`; `lost` and `not-started` as the contract says. Endings are audited as `settle` with the job's end state as the code.
 - **The device on report, settle and pending** comes from the header `x-vector-device`, because Report and Settle refuse every field outside their shapes. A report or settle whose header or lease differs from the claim's is 409 `LEASE_MISMATCH`; a missing or malformed header is 400.
 - **Answers.** claim: 200 `{job}`, or 409 `JOB_TAKEN`, `JOB_EXPIRED` or `EVERYWHERE_STOPPED` (`action: "stop"`). report and heartbeat: 200 `{action: "continue", leaseExpiresAt}`, `{action: "stop"}` (switch, cancelled job, deadline) or `{action: "lost"}`; 409 `JOB_ENDED` for a job that ended otherwise. settle: 200 `{settled: true}`; the same settle again answers the same and tells nobody twice. decline: 200 `{recorded}`. pending: 200 `{offers, waiting}`.
@@ -269,3 +271,4475 @@ The final native review also found that two cleanup callers could let one finish
 Root batches078/079 now qualify the final affected runtime source and API/web types. The progress journal contains exact file counts, intentional actual-Redis skips and repaired earlier failures. Two read-only production reviews closed the storage/deletion/actor boundary and native revocation/owner recovery boundary. The default eraser no longer silently depends on an optional jobs port: it uses the same exact-closing facade for foreign-sponsored cancellation/body erasure. Canonical counter checks reject leading zeros in both `readCounts` and Lua before any earlier quota increment. Native revocation requires an exact original closing proof and an explicit outcome, while uncertain local cleanup scrubs private data and holds minimal closure metadata without requiring active-account authority.
 
 Fresh exact-P2-head hosted Redis/general CI remains owed. Earlier P1c/VE-11/12/13 receipts cannot substitute for the new scripts or final source. No real native registration, credential/settings mutation, paid model, owner computer or deployment was used. P4 process-death/native uncertainty reconciliation and the provider's execution of already delivered work remain real gates; final preflight is not claimed to undo external effects.
+
+## 2026-11-15, EV-01: the engine behaviour test imports the desktop client (F5)
+
+- **Accepted cross-package test.**
+  - packages/engine/test/everywhere/unattended-session.test.ts:9 imports `createEverywhereEngine` and `unattendedRules` from `../../../desktop/src/main/everywhere-engine`. It is the only engine test that imports desktop source (runtime-build-config.test.ts only names desktop paths, and the engine source files that mention desktop do so in comments), and engine does not depend on desktop.
+  - It stays: VE-08 (spec §8) must drive the exact desktop client the runner uses against the real authenticated loopback listener. A copy, or a re-export through core, would test a different client.
+  - Moving the client into `@vectordevai/core/everywhere`, the review's other option, would put desktop runtime code into core for a test's sake.
+  - That desktop file imports only `@vectordevai/core` and `@vectordevai/schema`, which engine already depends on, plus a type from everywhere-scan.ts (which imports only `@vectordevai/schema`). So engine's compiler settings check exactly two desktop files.
+  *2026-11-21 (phase review, everywhere-finish lane):* "accepted" here is the test dependency only. F5 itself stays open, the one status the handoff, this log (EV-18 (s)) and the plan table now use; EV-18 and EV-19/EV-20 widened the import (see "2026-11-21, everywhere-finish lane").
+- **Turbo-cache caveat.**
+  - The root `bun typecheck` (`bun turbo typecheck`) is what the pre-push hook and the lane's pre-push rule run. Turbo hashes engine's typecheck from engine's own package files, and desktop is not an engine dependency.
+  - So after a desktop-only edit to everywhere-engine.ts or everywhere-scan.ts, turbo can serve engine's earlier pass from cache and hide a break that engine's settings would catch. Desktop's own typecheck still checks both files under desktop's settings.
+- **Mitigation.**
+  - vector-everywhere.yml runs uncached `bun typecheck` in packages/engine (its `engine` matrix entry, :139-141) on every lane run, and manual runs always run (its scope job). Its picker also runs unattended-session.test.ts on every lane run, because the file sits under `engine/test/everywhere/`.
+  - Its pull_request paths include `packages/desktop/src/main/everywhere-*` (:29), so a pull request that edits the client runs both.
+  - typecheck.yml's engine job (`bun typecheck` in packages/engine) is also uncached.
+  - On everywhere-finish every lane run is a workflow_dispatch until a pull request from the branch is open (then the `pull_request` paths above also start it), so a package that edits either desktop file dispatches vector-everywhere.yml, and runs `bun typecheck` in packages/engine directly as well as the turbo typecheck.
+
+### EV-01 decisions
+
+- **The base moved first.** `release-finish` had moved from `0ee486e3` to `cf2373c4` (13 commits, none touching a lane file or a file the Tier B table cites, and no package.json or bun.lock change). The lane rule says to merge it before a package, so EV-01 starts with merge commit `5733ceea` (`chore(everywhere): merge release-finish into everywhere-finish`, Vector identity and the session trailers). EV-01 is that merge commit plus one docs commit; the turbo typecheck and the CI dispatches run with the push, and their run ids go in the next progress entry.
+- **No head SHA for PR #33.** The docs name PR #33 by its head branch (`release-finish`) and say separately that `everywhere-finish` was cut from it at `0ee486e3`, so they do not go stale as `release-finish` moves.
+- **`oauth-finish` answers (correcting the plan's critique).** The critique said a platform listed without its settings gets 501. It does not: `readConfig` adds a platform to `config.platforms` only when it is listed, its settings are complete and the feature is on (config.ts:159-163), so such a platform is not on (`platformOn`, config.ts:222) and gets 404 (identity.ts:1455). 501 `EVERYWHERE_UNAVAILABLE` is only for a platform that is on with no exchange for the purpose: Slack's sign-in link, GitHub and Jira (identity.ts:1456-1458). The critique is right that `platformExchanges` does not read `config.enabled` itself; the comment names `config.platforms`, which is empty while the feature is off (config.ts:46).
+- **The owner's rules are annotated, not changed.** handoff "Rules" keeps the owner's text; the 2026-11-15 note sits after the last owner bullet, marked as the lane's annotation, and keeps "with the owner's yes".
+- **Branches.** `build-everywhere` is still on origin (`5053d490`), as are `vector-everywhere` (`890bb072`) and `v2-everywhere` (`40e70861`), and all three are merged into this branch. Only the worktree path was gone, so the handoff calls them merged history rather than missing.
+- **Left for other owners.** spec :879 (review-fixes FIT-5) and the lane workflow's push trigger and its test (review-fixes FIT-4) are untouched; review-fixes is not on origin, so the table cites those by finding id, not by commit. v2-notes/v2-complete-plan.md (the lead's record) is not edited; the progress table supersedes its C3 to C6 rows.
+- **No test added.** No behaviour changed: the only code edit is the `AccountApiDeps.exchanges` JSDoc.
+
+## 2026-11-15, EV-02: GitHub status lock and issue body hash (C7, C8)
+
+Review-findings correctness-security items 7 and 8. Both were dormant: the handoff still answers 501 without an injected verifier and binding (github/adapter.ts:57), and no production `GithubStatusPort` exists, so `post` returns at once.
+
+### C7: the status lock only excludes; a separate key throttles
+
+- **The lock.** api/_lib/everywhere/github/status.ts now takes `job:<jid>:status` with a `randomUUID` token, 120 s and `onlyNew`, as Slack's (slack/adapter.ts:88-97), and releases it with `swapValue` in `finally`. A terminal post that meets the lock throws the unchanged "Github status delivery is still locked", so the outbox retries it in 60 s (events.ts:39-41); a progress post that meets it is dropped.
+- **The throttle.** A new key, `everywhereKeys.jobStatusEdited(jid)` (`vector:everywhere:job:<jid>:status:edited`, under `EVERYWHERE_PREFIX`, the id validated by `jid()`), holds `"1"` for 30 s. A non-terminal post returns while it exists. A terminal post ignores it.
+- **When the throttle is set (critique accepted).** It is set after a successful non-terminal platform write (an edit, or a create that returned a valid id) and before `updateJobReply`. The plan set it after the reference write; the critique showed that a lost reference write (the :164 case) would then let the next progress post edit the same comment straight away, found by its marker, which breaks VE-10's "at most every 30 s". A failed platform write, or a create with an invalid id, sets none. It is set after a create too, so "laptop" followed straight away by "editing" still makes one comment and no edit (the existing :137 case).
+- **The job is read under the lock.** Releasing the lock opens a race the old, never-released lock hid: a progress post that read `running` before a terminal post took and released the lock would then overwrite the result. The read, the state checks and the throttle check now all happen while the lock is held. The cost is one lock write and release for a post that then finds nothing to do (a refused or unstarted job, or a stale progress post after the result).
+- **Supersedes VE-10's lock sentence.** The 2026-11-12 VE-10 entry above ("Persistent status identity") says "A thirty-second lock bounds progress; terminal posts retry through the existing outbox when locked". That entry is left as written. From EV-02 the lock only excludes, the throttle bounds progress, and terminal posts still retry through the outbox when locked.
+- **A stranded lock now holds a result back for up to 120 s instead of 30 s.** If a post crashes or its invocation is killed while it holds the lock, the `finally` never runs, and the result waits for the lock to expire: up to two outbox retries at 60 s. That is accepted: it matches Slack's lock on the same key, the lock has to outlast a whole serverless invocation (a shorter one could expire under a slow post and let a terminal post interleave with it), and the outbox keeps retrying until the lock is gone.
+- **No erase entry, no KEEP_MS entry, no 3.13 row.** Both keys expire by themselves, the throttle within 30 s and the lock within 120 s, and neither holds personal data (`"1"` and a random token). The other lock keys (`jobPostLock`, `jobStatusLock`) have no KEEP_MS entry either; their TTLs sit at the call site.
+
+### C8: an `issues` reference requires its body hash
+
+- **Schema.** `githubReference()` in packages/schema/src/everywhere.ts refuses an `issues` reference without `bodySha256` (`github.bodySha256: required`). The one helper feeds `decodeGithubReference`, `decodeInboundTrigger`, `decodeJob` (which the desktop uses) and the server's `decodeJobRecord` (jobs.ts), so all four get the rule. The type stays `bodySha256?: string`, with a JSDoc saying when it is required, so there is no API shape change. A legacy reference (no `actorId`, `event` or hash) cannot be `issues` and still decodes; the desktop refuses it anyway.
+- **Handoff.** github/adapter.ts is unchanged: it already passes `bodySha256` through to `decodeGithubReference` (:79-80) and throws `HANDOFF_INVALID` (400) when that fails (:82), before `useOnce` on the handoff key, the counts, `createJob` and the offer. So a missing hash gets 400 with nothing written.
+- **Stored records.** A stored `issues` record without the hash would no longer decode, but none exist: the production handoff has always answered 501. If one did exist, it would be skipped as record-unreadable under the existing policy.
+- **Desktop.** packages/desktop/src/main/everywhere-github.ts decides an `issues` trigger from the body hash alone. An issue's `updated_at` moves on every label, assignment or comment, so the old "unedited timestamps" proof refused a correctly labelled issue and could not tell a body edit from a label. A comment trigger keeps the old rule: it is unedited, or it carries the hash of the body that triggered it.
+- **A hash on a comment trigger is an alternative proof, not an authoritative one.** The brief says comment triggers keep "the updated_at/created_at check, or the hash when present". EV-02 keeps the narrower reading, with behaviour for comments unchanged: a comment whose timestamps are equal is accepted even if it carries a hash that does not match. This is spec §4.1's rule for comments ("`updated_at === created_at`, or its body's SHA-256 equals `bodySha256`"), so it is kept, and a desktop case now pins it (everywhere-github.test.ts:82): equal timestamps with a mismatched hash are accepted, and the same hash with an edited comment is refused. Review of EV-02 offered making a present hash authoritative instead (a mismatch would refuse even with equal timestamps); that changes the spec's comment rule and has no sender yet (R-A6 is owner-gated and sends hashes only for `issues`), so it is left for the package that makes R-A6 send comment hashes. That package turns the pinning case red and records the change.
+- **Supersedes spec §4.1 item 1 for issues.** §4.1 gives the body as `bodySha256?` and the laptop check as "`updated_at === created_at`, or its body's SHA-256 equals `bodySha256`". For `issues` events the hash is now required and is the only proof. Dated notes in the spec point here (§4.1 item 1, the VE-10 row and R-A6).
+- **What R-A6 must send (owner-gated, Q13, not built).** For `issues` events, the route job sends `bodySha256`: the lowercase hex SHA-256 of the UTF-8 issue body exactly as it appears in the event payload.
+- **Deferred verification.** In VE-50 live acceptance, on a private test repository, check that the REST `GET /repos/{owner}/{repo}/issues/{n}` body is byte-equal to the `issues` event payload's body (line endings included), since the laptop hashes the REST body and the route job hashes the payload body.
+
+### EV-02 decisions
+
+- **Critique points taken.** The throttle is set before the reference write (above), with its own test. The read-before-lock test (Case E) posts "laptop" through a plain adapter, advances 31 s so the throttle has expired, and only then starts the gated adapter, whose store alone holds its first lock write; so the read-before-lock mutation can only be caught by the read order. The issues handoff test mounts the handoff and calls it directly, because `fixture().request()` posts a body whose `commentId` cannot be deleted under the web typecheck. The key shape assertions are a separate test, because neither key has a 3.13 row. VE-10's lock sentence and the 120 s worst case are recorded above. The spec gets a third note, after the VE-10 row.
+- **The lock release keeps Slack's shape (review finding, not changed).** If the store is down when `finally` runs `swapValue`, that throw replaces the error from the `try` (a platform error, or "Github status reference was not retained"). It is left as it is for parity with Slack's `locked` (slack/adapter.ts:96), which releases the same key the same way. Nothing is lost: the outbox retries a terminal post either way and the lock expires by its 120 s TTL; only the reported cause can be the store error rather than the first one. Catching the release on every path would also hide a failed release after a successful post. A change, if wanted, belongs to both adapters together.
+- **The token in the release is pinned (review finding, fixed).** A case (everywhere-github.test.ts:282) holds a progress post inside the lock, lets the 120 s lock expire, takes it with another token, then lets the first post finish: the other token is still at the lock key. An unconditional delete in place of `swapValue` turns that case red, and only that case.
+- **One commit, CI after the push.** The changes were checked in the working tree first and then committed as one package commit; the dispatches (vector-everywhere.yml, vector-hosted-ci.yml, typecheck.yml, and the commit gate's vector-at-mention.yml and vector-codium.yml) follow the push, and their run ids go in the next progress entry.
+
+## 2026-11-15, EV-03: the runner abort matrix at the push boundary
+
+The rest of the review's test gap and spec §5 E8 ("everywhere-runner.test.ts (each abort case)"). Line numbers are after this package: the test file gained one import at :3, so every existing case moved down by one (the existing matrix is now :297, :306, :325-359, :361-417, :420, :462, :489, :506), and the new block is appended at :515-817.
+
+### One runner fix: the held and no-changes settle replays its exact result
+
+- **The defect.** At packages/desktop/src/main/everywhere-runner.ts:319-320 the runner settled a `held` or `no-changes` result once (`await deps.jobs.settle(...)`, then `settled = true`). When that settle threw, the catch (:322-329) delivered a different result, `{outcome, summary: "The unattended job ended without publishing changes."}`, with no branch and without the checked summary. That breaks `deliver`'s own rule (:119-120: an acknowledgement loss must replay this exact result). It happened on any lost acknowledgement (a 503, the 10 s timeout), not only on 404/409: a `held` job whose first settle was lost was then recorded without the name of the branch kept on the computer. The plan's critique found it in the 404/409-on-`pushing` case, where settle 1 differed from settles 2-4.
+- **The fix.** :320 is now `settled = await deliver({ jid, lease, outcome, summary, branch, checks: "skipped" })`, with a one-line comment at :319. The payload is unchanged; `deliver` makes its three bounded attempts of that one payload and never throws, so the catch no longer substitutes anything after this point. If all three attempts fail, the runner logs "could not acknowledge a job result" as before; nothing is journaled, since nothing was published. The fix gives up the old generic fallback for a payload that can never be valid: if `decodeSettle` ever refused this `held` or `no-changes` payload ("Invalid Everywhere result", for example a summary over `LIMITS.summaryChars` or one that looks like code), all three attempts would fail, nothing would be sent, and the server would see the job `lost` rather than `held`. That relies on `checkedSummary` staying within `decodeSettle`'s summary rules: the server caps `reply.maxChars` at `LIMITS.summaryChars` (api/_lib/everywhere/jobs.ts:510), and `checkedSummary` passes every summary through `sanitizeReply` with that cap (everywhere-scan.ts:42, :46). The publication path (:313) already has the same property.
+- **Regression.** "a lost acknowledgement of a held result replays that exact result with its local branch" (everywhere-runner.test.ts:538) loses the first settle of a public repository's `held` result and requires two identical attempts with the branch. It and the two 404/409-on-`pushing` cases (:611) fail on the old source (3 of 49, mutation M0 below) and pass with the fix.
+- **Same class, left open.** The no-safe-worktree settle (:166, `held`) and the needs-approval settle (:272) are still single settles. If either throws, the catch delivers `outcome: "failed"` (the initial value) with the fixed summary, which contradicts the result the runner meant to send. Both are outside the push boundary, so EV-03 does not change them. The follow-up routes both through `deliver`, each with a case that loses the first acknowledgement.
+
+### Decisions
+
+- **`held`, not `cancelled`, for a refusal of `pushing`.** A `stop`, `lost`, 404 or 409 answered to the `pushing` report (:286) settles `held` with the branch and `checks: "skipped"`, and no `headSha` or `prUrl`. The work finished and was committed locally before the report, and :286 gives `held` for every refused push (the report's `abort("cancelled")` is overwritten by :286's `outcome = "held"`). The brief allows `held` or `cancelled`. The `pushing` report comes before the uncertainty receipt and the visibility read, so neither happens (pinned at :566).
+- **Brief versus existing behaviour, decision pending: "no settle after 404/409".** The brief asks for no settle after a 404 or 409. The runner still sends one settle after a 404/409 on `pushing` (now three identical bounded attempts), because the jobs client turns 404/409 into `stop` (:40, :56) and the runner cannot tell it from a 200 `stop` (a passed deadline, where the server does record the `held` settle). The existing `started` and `heartbeat` cases (:361-417) also send a `cancelled` settle after 404/409, to the fake settle. EV-03 pins, through the real client, what the server sees: every settle is answered 404/409 and none is recorded (:611). This is recorded as a conflict for the lead, not decided here, and the package commit's body says that the brief's literal "no settle after 404/409" is not met yet. The options: (a) keep it; (b) `deliver` stops replaying when the settle itself throws the client's "Everywhere job stopped" (JobsClient's type unchanged; one settle); (c) the client gives 404/409 its own answer and the runner sends no settle after it (changes JobsClient and tightens :361-417). (b) was first set aside because it would change delivery for journaled receipts too, which the publication finding below depends on; review round one pointed out that (b) can be limited to non-journaled results (stop retrying only when `!journaled` and the error is "Everywhere job stopped"), which leaves journaled receipts unchanged and gives one settle. Zero settles still needs (c). If the lead picks (b) or (c), :611 expects one settle or none instead of `Array.from({ length: 3 })`.
+  *2026-11-21 (phase review, everywhere-finish lane):* still open at the lane's close. It is now listed under the handoff's "Lane work with no package yet", and the handoff's EV-03 row names the gap, so "Current state" does not read as the whole brief met. (b) and (c) stay the lead's choice.
+- **The draft PR after a stop heard during the push: pinned current behaviour, an open question.** In the confirmed variants of :690 and :747 the draft PR still opens after the abort, and the delivered `changes` result carries its URL. The contract does not decide this. C3 (everywhere-runner-delivery.md) protects the admitted push and the delivery of its result; spec §3.2 item 3 (:151) and E8 (:560) say that on `stop` the runner aborts and pushes nothing, which the push already did; E10 (:562) says switches fail closed and reach running work. Opening the PR is a new GitHub write with the user's token after a kill switch, or after the server disowned the job (a `lost`, 404 or 409 heartbeat). It predates EV-03, so this is not an EV-03 regression. Whether a stop should also suppress the PR is for the lead and the owner. Suppressing it is a one-line change at :308, `const prUrl = controller.signal.aborted && outcome === "cancelled" ? undefined : await deps.openPr(...).catch(() => undefined)`; the `outcome === "cancelled"` part keeps the deadline case (:129, `over-budget`) unchanged. It turns the confirmed variants of :690 and :747 red until their pinned `open-pr` counts become 0 and they expect `changes` without `prUrl`; no new run, push or retry follows either way.
+- **A 200 `{action: "stop"}` answer to a settle counts as delivered.** `settle()` treats any 2xx as settled (:60-64). Under the stop switch the jobs API answers every settle that way without recording it (jobs-api.ts:301), so `deliver(publication, true)` clears the journaled C3 receipt (pinned at :690: pending is empty and recovery sends nothing). The receipt does not pile up, but the result is lost: see the finding left open below. EV-03 does not change it without a server-side change; counting only `{settled: true}` on the desktop alone would just leave these receipts pending (the 32-receipt starvation below).
+- **Test helper and import.** `jobsServer` (:516) wraps the real `createEverywhereJobsClient` with a loopback fetcher (the shape of :370-387), records each request and answers by route and milestone; it is placed with the new block and relies on inference for its return type. `branchFor` is imported from `@vectordevai/core/everywhere/publish`, the runner's own branch function, so no case copies the branch rule.
+
+### Finding left open (server and runner, not built): a publication result after a stop or cancel
+
+- **Under the stop switch.** A publication settle (`changes`, or `failed` with `headSha`) is answered 200 `{action: "stop"}` without being recorded (jobs-api.ts:301), after the sweep cancelled the job (jobs.ts:1331-1334). events.ts:32 then posts `job.outcome ?? "cancelled"` with no branch or PR. The desktop sends the C3 payload and clears its receipt on that 200, while a pushed branch, and possibly a draft PR, exist; end to end the user is told the run was cancelled with nothing published, which is what C3 is meant to prevent.
+- **After a platform or user cancel, a lost job or a sponsor 404 during the push.** The publication settle is answered 409 `JOB_ENDED` (jobs.ts:1286) or 404, so `deliver` fails and the receipt stays pending with the C3 payload (pinned at :747 for `stop`, `lost`, 404 and 409 heartbeats, each with a confirmed and an ambiguous push). Every start's `recover()` re-sends it three times, and the server refuses it every time. The ledger refuses a new reservation once 32 receipts are pending (everywhere-ledger.ts:39; `remember` refuses a 33rd at :57), so 32 such receipts would silently stop the computer from taking any job.
+- **Follow-up (EV-04's switch and sweep order, or a new package).** Either settleJob and the jobs-api settle accept a publication result from the lease holder of a job stopped, cancelled or lost after its last accepted report, the platform reply shows the branch or PR, and the desktop client counts only `{settled: true}` as delivered for journaled receipts; or the runner retires a receipt the server refuses permanently (404/409), with a fixed local log line, never replacing it with "nothing published". The second needs the lead's answer on option (b) above.
+
+### Critique points
+
+- Taken: the exact settle bodies in the 404/409-on-`pushing` case, which exposed the defect above, now fixed with a regression case; the brief conflict recorded as pending rather than decided; the after-admission `lost`, 404 and 409 variants with a refused publication settle, plus the platform-cancel `stop` (eight cases at :747), and the 32-receipt starvation in the finding; the draft PR worded as pinned behaviour and listed in the handoff; mutations only in a scratch harness (the worktree runner's SHA-256 was checked after every run); `jobsServer` without a return-type annotation, and a one-off typecheck of the test file with a scratch tsconfig (desktop's tsconfig excludes `src/**/*.test.ts`); the vector-codium dispatcher recorded in progress.md, and the hosted-ci re-run left as an EV-02 item.
+- Not taken: option (b), for the reason given above.
+
+### Review round one
+
+- **Taken.** The abort check inside the fake `push` of :690 and :747 proved nothing in the ambiguous variants: a failed `expect` there throws, the fake throws anyway, and the runner's catch takes the same path. Each fake now records `abortedDuringPush`, asserted after `offer()` resolves (two findings, one fix). Mutation M6 (progress.md, EV-03) drops the abort on a non-continue heartbeat: with the pre-review cases the ambiguous variants stayed green; with these they are red. Also taken: the fallback sentence under "The fix", the narrower option (b) and the commit-body note under the brief conflict, the PR-suppression shape and E10 under the draft PR, the receipt-clearing consequence under the 200 `stop` settle, and the progress entry's wording (the EV-02 receipts now under their own heading).
+- **Not changed, for the lead.** The three held settles after a 404/409 on `pushing` (:611; options (a)-(c) above); the draft PR after a stop heard during the push (:308); a 200 `stop` settle counting as delivered (:63; needs the server change in the finding left open).
+- **Not changed, follow-up.** The no-safe-worktree (:166) and needs-approval (:272) single settles, as recorded under "Same class, left open": the review places them in a follow-up, each routed through `settled = await deliver({...})` with a case that loses the first acknowledgement and expects two identical attempts.
+
+## 2026-11-15, EV-04: the sweep cron, store-free while off (R-C11)
+
+Spec §11 R-C11, the cron half of review-findings fit item 4 (F4), and v2-complete-plan §4.2's F4 row ("owner activation note"). Line numbers are after this package.
+
+### The cron
+
+- **The entry.** vercel.json `crons` gains one object, `{"path": "/api/everywhere/sweep", "schedule": "* * * * *"}`, at :559-562, right after `/api/hosted/reaper` (:555-558). No other key changed (`git diff -U0 vercel.json` is four added lines). `functions` holds only api/design-lab/serve.ts and needs no entry: api/everywhere/sweep.ts already exports `maxDuration = 60` and `default createSweep()`, and is unchanged.
+- **A Codium-area file.** Spec §6.4 (:650) lists vercel.json under Codium, and R-C11 is a request to Codium. EV-04 builds it in this lane under the brief, as one object inserted after `/api/hosted/reaper`, so a conflict can only arise if codium-finish (or review-fixes) also adds a cron at that spot. At EV-04's working-tree check, `git diff --stat origin/release-finish...origin/codium-finish -- vercel.json` and the same for `origin/review-fixes` were both empty; the commit step repeats both checks right before the push.
+- **When it runs.** Only once the owner deploys a commit that contains it (main deploys on merge). Until then the lazy sweeps of spec 3.4 are the only sweeps.
+- **Known gap: nothing outside this lane's tests pins the cron.** vercel.json is not in vector-everywhere.yml's `pull_request` paths, and packages/web/test/codium-configuration.test.ts filters crons by prefix (:59 model-plans, :70 vault, :73 hosted and ops, :82 account), so it ignores `/api/everywhere/` and only checks that `api/everywhere/sweep.ts` exists (:85-88). A later PR that edits only vercel.json and drops the cron would not run everywhere-sweep.test.ts's vercel.json case. The workflow's paths belong to review-fixes (FIT-4), so EV-04 does not edit the workflow; adding `vercel.json` to the lane's paths is a request to the FIT-4 owner.
+
+### Store-free while off (the contract is silent; this is a deviation)
+
+- **Before EV-04.** switch.ts:59 reads the flag off as `stop`. An authorised call to the sweep while off would have swept every live job with `stop` (a store read per minute), and `configuredPlatforms` (runtime.ts:24-31) builds no adapter while off, so no reply could post. The cron never existed, so this never ran. With every production default and no KV settings, an off call answered 503 `PERSISTENT_STORE_UNAVAILABLE` (observed with mutation M1 below).
+- **Now.** api/_lib/everywhere/sweep.ts keeps `requireMethod` (405) and the exact CRON_SECRET bearer check (401 `CRON_UNAUTHORIZED`) first, then answers 200 `{enabled: false}` when `config.enabled` is false (:29), before `readEverywhereSwitch`, `deps.stopped`, `productionContext()` (store construction), `sweepDue`, `postPending` and `productionPlatforms`. The comment at :27-28 says the sweep deliberately skips the flag-off `stop` that readEverywhereSwitch would read. The on path is unchanged and still answers `{ended, posted}`.
+- **The bearer is checked even while off.** With CRON_SECRET unset the answer is always 401, so an unauthenticated caller never learns whether the feature is on.
+- **Supersedes, while off, spec 3.2 step 3** ("waiting jobs expired" under `stop`) for the cron only: with the flag off, the cron expires nothing. switch.ts's header says so (:13-14). The jobs API still answers `stop` (below), so no laptop work goes on.
+
+### What turning the flag off does now
+
+- **Laptops.** The jobs API answers before any store read (jobs-api.ts:127): report and heartbeat get `{action: "stop"}` (:277), settle and decline get `{action: "stop"}` (:296, :258), claim gets 409 (:241), pending gets `action: "stop"` (:311). Laptops abort without pushing (E10).
+- **Bodies** expire by `TIMING.bodyTtlMs` (2 h; `KEEP_MS.jobBody`).
+- **Records** stay in their state (`claimed`, `running`, `waiting`, ...) until the next enabled sweep ends them and posts the reply, or until `KEEP_MS.job` (30 days) removes them. A laptop told `stop` aborts, but its record stays `claimed` or `running`; the next enabled sweep then ends it as `lost` and posts the "stopped answering" reply, possibly days later. That reply is misleading, since the server stopped the work. If 30 days pass first, no reply ever posts.
+- **Index entries** of records that vanished go at a later enabled sweep (jobs.ts:1406-1410).
+- **Replies** still queued in `jobs:posts` wait for the next enabled sweep.
+- **The data key.** config.ts keeps one data key (`dataKeys` is `[key]`, :195). Rotating VECTOR_EVERYWHERE_DATA_KEY while records or queued replies are live (also while off) leaves them unreadable to the next enabled sweep. Do not rotate it while records are live.
+
+### The safe turn-off and turn-on orders (activation note; EV-24 copies it into the owner docs)
+
+Turning off:
+
+1. Set Codium's `everywhere` runtime switch to `stop` (EV-07, R-C6).
+2. Let the sweep run under `stop`. Wait at least 2 minutes: `SWITCH_CACHE_MS` is 30 s per instance (codium-switches.ts:24) and the cron runs each minute. Each sweep ends at most 200 jobs (jobs.ts:1468), so wait one more minute per further 200 live jobs. Under `stop` the sweep ends live jobs at once (waiting ones expire, the rest are cancelled, jobs.ts:1331-1334) and posts their replies in the same run; platform errors retry each minute.
+3. Unset VECTOR_EVERYWHERE_ENABLED.
+
+- **Graceful variant.** `no-new` until live jobs end, then `stop`, then unset the flag.
+- **Flag first.** Unsetting the flag first also stops all work, but the replies wait until the flag is on again, and they then say `lost` (above), or never post after 30 days.
+- **Until EV-07 lands** Codium has no `everywhere` switch (SWITCH_NAMES, codium-switches.ts:7), so the only way to turn off is to unset the flag, with the flag-first consequences. R-C6 is a G2-G4 prerequisite (spec :703); G1 (GitHub) does not list it, so for G1 the safe order does not exist until EV-07.
+  *2026-11-15 note (EV-07):* the switch now exists on everywhere-finish (`on`, `no-new`, `stop`), so the safe order above is available once the owner deploys a commit that contains EV-07. See "2026-11-15, EV-07".
+- **Both orders meet EV-03's open finding.** A publication settle answered 200 `stop` is not recorded (jobs-api.ts:296, :301) and the desktop clears its receipt, so the reply names no branch or PR. EV-04 does not build that follow-up; it stays open (deviations log, EV-03, "Finding left open").
+
+Turning back on:
+
+1. Set VECTOR_EVERYWHERE_ENABLED (the same data key as before).
+2. Set Codium's `everywhere` switch back to `on`. After the safe order it is still `stop`, so setting the flag alone takes no work.
+
+*2026-11-20 note (EV-24):* both orders are copied into the owner guides, docs/vector/owner-actions/vector-everywhere-{github,slack,linear,jira}.md, "Turning it off" (byte-identical in all four and pinned by packages/web/test/everywhere-docs.test.ts). The first activation also starts from the `stop` switch, beyond this re-activation order: "Turning it on" sets the switch to `stop`, then the settings and the flag, checks the sweep's cron log, and only then sets `on` (see "2026-11-20, EV-24", (e)).
+
+### Decisions
+
+- **The off body is `{enabled: false}`, not `{ended: 0, posted: 0}`,** so a cron log tells "off" from "nothing due" (mutation M4 pins it).
+- **Tests use the real `readConfig` for each off reading** (no settings; the flag without a data key; the flag `false`; a placeholder data key that `parseDataKey` refuses), not a hand-built config. The off case also mounts the real FakeStore and adapter with the production switch reader, so the unchanged `FakeStore.commands` count and job record are evidence alongside the throwing stubs.
+- **The production switch reader case is a deliberate tripwire for EV-07** (everywhere-sweep.test.ts:231). With the feature on it reads `on` with no I/O, under the fetch guard, only because Codium's SWITCH_NAMES has no `everywhere` (R-C6). Its first assertion is that SWITCH_NAMES lacks `everywhere`, so EV-07 fails on that named precondition, not on a cancelled job, and updates the case.
+  *2026-11-15 note (EV-07):* the tripwire fired as intended and is replaced: the case now asserts that the production reader reads Codium's switch and, with no store settings, reads `stop` and ends the live job. See "2026-11-15, EV-07".
+- **codium-configuration.test.ts is not edited** (brief, scope 4). It passes alone (11 pass) and stays green when the cron is removed (mutation M8).
+- **switch.ts gains one comment clause** (:13-14): while the flag is off the sweep answers `{enabled: false}` before reading the switch, so the cron expires no waiting job. switch.ts is outside the brief's file list; the change is a comment only, so a reader of switch.ts alone sees the EV-04 behaviour.
+
+### Deferred verification
+
+- After the owner's deploy, Vercel's cron log shows 200 `{enabled: false}` every minute while off. That needs CRON_SECRET set in production (an owner action); without it every invocation answers 401.
+- At go-live (VE-50), a laptop that dies mid-job gets `lost` within about 6 minutes (`TIMING.leaseMs` 5 minutes plus one cron minute).
+
+## 2026-11-15, EV-05: relay presence honours the kill flag and the suspension (R-C4)
+
+Spec §11 R-C4 (:844) and §5 E10 (:564). The prerequisite for VE-20's presence port. Line numbers are after this package.
+
+### What changed
+
+- **presence() is async** (packages/relay/src/account-relay.ts:729-746). It answers `{online: false, computers: [], viewers, reason: "killed"}` while REMOTE_FLAGS `kill` is `"1"` or cannot be read (`killed()` at :929 already fails closed), and `reason: "suspended"` while meta `suspended` exists. The flag is read first, as connect and refresh read it. `viewers` stays the live phone count. With no flag and no suspension the answer is byte-identical to before: `{online, computers, viewers}` with no `reason` key.
+- **The internal case awaits it** (:668-669, `return answer(await this.presence())`), still inside the try/finally that runs `settle(now)`.
+- Nothing else in the relay changed: index.ts, protocol.ts, the e2e smoke, sweep, alarm, refresh, `devices` and the exports are as they were. api/_lib/remote-relay.ts is untouched: `relayPresence` (:151-164) reads only `online`, `computers` and `viewers` and rebuilds the object, so it drops `reason`, and `isComputerOnline` (:171-178) is unchanged.
+
+### Why it matters
+
+An idle computer with no viewer stays connected while the Durable Object hibernates. No alarm runs (the alarm is armed only while a phone is attached), and refresh() checks the flag only when the computer refreshes. So after the owner's `remote` switch set the kill flag, presence still reported that computer online. The first test reproduces exactly that state (an open socket, no alarm) and now answers offline.
+
+### Deviations
+
+- **Object only, not "the Worker and the object".** R-C4 says "`presence` in the Worker and the object checks `killed()`". EV-05 checks in the object only: the object reads the same REMOTE_FLAGS binding, and the Worker forwards presence unchanged, so one check answers both the routed call and a direct one. A Worker check would add a second KV read without changing any answer, and the brief says to change nothing else in the relay. The tests send the API's signed call through the real Worker (`handleRequest`), so the routed path is what they pin; the second case also pins that the whole call makes exactly one KV read.
+- **The `reason` field is optional and outside the contract.** `relayPresence` drops it, so VE-20 must map offline to its port's own `remote-off` and not rely on it. It exists so the tests (and a relay log reader) can tell the explicit checks apart from sweep's closes.
+- **The brief's "suspended: offline even with a connected computer socket" cannot be reached.** suspend() closes every live socket (:724-725), internal() runs `sweep(now)` before the switch (:661), and sweep closes every socket while the suspension is stored (:479-481); connect refuses while suspended (standing(), :230). So no entry point lets a live computer meet a stored suspension, and the explicit suspended check is defence in depth that changes only `reason`, never `online`. The suspension case asserts the computer's close code `REMOTE_PAUSED` right after the suspend call to make that visible, then proves the check by its `reason` (mutation M2).
+
+### Not changed (recorded, not fixed)
+
+- **Presence closes nothing.** An idle computer connected before the kill keeps its socket until its next refresh, a phone arriving (which arms the alarm), a reconnect (the Worker refuses it) or `computerTicketMaxAgeMs`. That is existing behaviour. Mutation M4 (presence closes sockets when killed) turns the first two cases red, so the tests pin the current behaviour, which is the hibernating idle case R-C4 is about. It is not a contract: closing sockets on the flag may be added later on purpose (by Codium or EV-06), and that change would update those assertions.
+- **EV-06 must check the flag itself before it delivers an offer.** Because presence closes nothing, that still-open socket is a live path to the computer while Remote is killed (or, should a socket ever outlive a suspension, suspended). The Worker's internal() route never reads the kill flag for internal actions; only connect() does (index.ts:61). So EV-06's job-offer path, in the Worker or the object, must call `killed()` (failing closed) and check the `suspended` meta before it delivers an offer, and must not rely on presence alone.
+- **Two other relay answers still follow open sockets while the flag is set.** The internal `devices` action (deviceList, :748-749) sets each device's `online` from live sockets without reading the flag; Settings shows it through `relayDevices` (api/_lib/remote-ticket.ts, remote-meter.ts). The phone's control message `t: "presence"` (:357-361) and the peers announce (:533) still list a connected computer to a connected phone. VE-20 must use `presence` only, never `devices[].online` or the phone's peers list, as a presence source.
+- **E10 still stands.** The router keeps its own `readSwitch("remote")` and `remoteConfigured()` checks, because the flag is a copy of the switch that can lag it: `syncRelayKillFlag` answers `"failed"` without undoing the switch (api/_lib/remote-relay.ts:271-281, codium-owner-api.ts:151), and the owner can set the flag directly. Presence still does not read the switch itself.
+
+### Coordination
+
+- **A Codium-area file.** packages/relay/\*\* is in spec §6.4's Codium row (:652), and R-C4 is a request to Codium. The spec's binding rule (:10, never edit a file on the "Do not touch" list) and the handoff's owner rule (:156) are not edited; EV-05 builds R-C4 in this lane under the lead's brief, as EV-04 did vercel.json (this log, EV-04, "A Codium-area file"). At EV-05's working-tree check, `git diff --stat origin/release-finish...origin/codium-finish -- packages/relay` and the same for `origin/review-fixes` and `origin/main` (also for api/_lib/remote-relay.ts) were all empty; the commit step repeats both lane checks right before the push.
+- **Request to Codium (or the lead).** Codium's relay notes (docs/vector/build/codium-a39-remote-relay-notes.md:11, the Internal API row) and §4.17's presence entry point describe `presence {account}` without the kill and suspension behaviour or the optional `reason`. Those documents are Codium's, so EV-05 does not edit them; they should be annotated with R-C4's behaviour.
+- **The Worker deploy is owner-gated.** Production is unchanged until the owner deploys the relay Worker. Even then nothing consumes presence until VE-20, and `isComputerOnline` already treats offline as "not available".
+
+### Decisions
+
+- **The check order (flag before suspension) is deliberately not pinned.** Both answer offline; only `reason` differs when both hold, and no caller reads it.
+- **One KV read per presence call** (the second and fourth cases pin it). Presence is called once per routing decision.
+- **One `reason` computation** (account-relay.ts:738-739): the flag is read first and on every call, then the suspension, and a single offline return carries whichever holds.
+- **presence() awaits inside internal().** The KV read opens the Durable Object's input gate between `sweep(now)` (:661) and `settle(now)`, so other events can interleave there. That follows the pattern `flags()` already uses in the same block (`return await this.flags(body)`); `settle` uses the `now` captured before the switch, and nothing between sweep and settle depends on presence() being atomic.
+- **Critique points taken:** the unreachable suspended case stated here and asserted by its close code; M4 and the first case worded as current behaviour, not a promise; the `devices` and phone peers gap above; both owner-rule citations; the request to annotate Codium's notes; prettier run through `vector-serial`; a fresh `Harness` per case, imported as a value. None was rejected.
+- **Review findings taken (round one, all non-blocking):** the single `reason` computation above; the standing() citation; the EV-06 delivery check under "Not changed"; the await note above; and, in the suspension case, an unreadable flag on top of a stored suspension asserted offline without pinning which `reason` wins. The finding that the suspended branch is proven only by `reason` (no live socket can meet a stored suspension) needed no change and is kept as recorded under "Deviations": the brief's "suspended: offline even with a connected computer socket" case is replaced by the `REMOTE_PAUSED` close-code assertion plus the `reason` check. None was rejected. The six mutations were rebuilt against the new code and re-run with the same results (progress log, EV-05).
+
+### Deferred verification
+
+- The CI relay smoke's "presence sees the computer online" (e2e/relay-smoke.ts:219) now runs through `killed()`'s KV read inside the object on Cloudflare's local runtime, so a broken read there would turn it red. vector-hosted-ci.yml's relay job runs it with the wrangler dry run.
+- A smoke check of presence while the flag is set is left for EV-06, which edits the smoke for job-offer anyway.
+- After the owner deploys the Worker, VE-50 should confirm that presence answers offline while the `remote` switch is off.
+
+## 2026-11-15, EV-06: the relay forwards signed job offers to computers (R-C1, relay side)
+
+Spec §11 R-C1 (:843), §3.4 (the 20-second offer window), §5 E9 (:564) and E10, codium-build-spec.md §4.17. Relay package only: the API's `RelayAction` is EV-09's. Line numbers are after this package.
+
+### What changed
+
+- **The Worker forwards `job-offer`** (packages/relay/src/index.ts). The special case and the 501 `RELAY_JOB_OFFER_RESERVED` branch are gone; :78 checks `INTERNAL_ACTIONS` only. `job-offer` takes the same checks as every internal action, in the same order: 405 (method), 503 (no secret), 413 (declared and actual length), 401 (signature, 300 s skew), 400 (JSON and `account`). The account handle (`accountHandle(ACCOUNT_KEY, account)`) names the object, which gets the parsed body and the nonce. The Worker reads no kill flag for internal calls, as before. The header comment (:5-6, :9-10) lists `job-offer` and says the relay never logs an offer.
+- **The object delivers it** (packages/relay/src/account-relay.ts). `INTERNAL_ACTIONS` gains `"job-offer"` (:47-56); `OFFER` (:85) is the form check; the internal switch gains `case "job-offer": return await this.jobOffer(body, now)` (:689-690), after the nonce is recorded and `sweep(now)` has run, and inside the try/finally that runs `settle(now)`. `jobOffer()` (:763-791) answers, in this order:
+  - 400 `INTERNAL_BAD_REQUEST` unless `offer` is a string of at most `internalBodyBytes` characters matching `^vef1\.[\x21-\x7e]+$`;
+  - 200 `{delivered: 0, reason: "killed"}` while REMOTE_FLAGS `kill` is `"1"` or cannot be read (`killed()` fails closed);
+  - 200 `{delivered: 0, reason: "suspended"}` while meta `suspended` exists;
+  - 200 `{delivered: 0}`, with nothing written, while the object knows no account (meta `account` is unset: no ticket for it has stood, or it was erased), review round one (:779-780);
+  - 429 `RELAY_OFFER_LIMIT` once 30 offers were accepted in the last hour;
+  - otherwise 200 `{delivered: n}`, after sending the frame below to each of the n live computer sockets.
+  The 401 for an unsigned, forged or replayed call is the shared signature and nonce check.
+- **Limits** (packages/relay/src/limits.ts:60-62): `offersPerHour: 30`, `offerWindowMs: 3_600_000`. The root test/remote-relay-contract.test.ts compares named fields only, so it is unaffected (7 pass).
+- **Protocol docs** (packages/relay/src/protocol.ts:13, :21-33): the kind byte line and a "Job offers (R-C1)" paragraph. No code or export changed; protocol.ts still imports nothing (source.test.ts).
+- **The CI smoke** (packages/relay/e2e/relay-smoke.ts): the "job.offer is reserved" 501 check is gone; two checks take its place, "a signed job offer reaches the computer, never the phone" (:231) and "the kill flag stops presence and offers while an idle computer stays connected" (:267).
+- **The account-relay.ts comment at :376** now says only the relay sends job offers. A client-sent `0x02` frame (:411) and the control message `{t:"job.offer"}` (:377) still get the `reserved` notice and are never passed on.
+
+### The offer frame (EV-11 must decode it identically)
+
+- Byte 0 is `0x02` (`FRAME.JOB_OFFER`). Bytes 1-16 are zero (`DEVICE_BYTES`; no device sent it). Bytes 17 onward are the offer string's UTF-8 bytes, unchanged; the form check allows only 0x21-0x7e, so those bytes are its characters.
+- At most 17 + 16,384 bytes, inside the 64-KiB `frameBytes`. A real offer (`OFFER_PATTERN`) is at most 2,140 characters.
+- A binary message, sent only to sockets tagged `computer` (`this.live("computer")`), never to a phone.
+- The desktop must decode it with `decodeFrame`, require kind `FRAME.JOB_OFFER` and an all-zero device (otherwise drop the frame), read the text with `fromUtf8`, and verify it with `verifyOffer` against the pinned `OFFER_KEYS` (E9) before any HTTPS call. It must never treat those bytes as a peer or a device id.
+- Today's desktop drops every frame that is not `DATA` (packages/desktop/src/main/remote-link.ts:678), so delivering offers to current desktops is harmless.
+
+### Deviations
+
+- **The smoke file changed although the brief does not list it.** It pinned the 501 (old :267-270), and vector-hosted-ci.yml's relay job runs it, so it would have failed. The second new check also takes EV-05's deferred item: presence answers `reason: "killed"` on workerd while an idle computer is still connected.
+- **`INTERNAL_BAD_REQUEST` is reused for a malformed offer,** as every other internal action's bad body answers.
+- **The form check stays loose** (critique point 5, partly rejected). The brief sets the bound: printable ASCII, the `vef1.` prefix, at most the internal body limit. The relay imports nothing outside its folder, so it cannot share schema's `OFFER_PATTERN` (`^vef1\.[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{86}$`, at most 2,140 characters). A mirrored copy would need its own root contract test and would have to move with schema's 2,048-character claim bound. The relay checks only form either way; E9 is the desktop's check. Space (0x20) is excluded, which is tighter than "printable ASCII": an offer is base64url and dots, so a real one never holds a space, and the Worker's `ACCOUNT` check uses the same range. **Suggestion for EV-09:** add a root contract test, beside test/remote-relay-contract.test.ts, that `signOffer`'s output passes the relay's check (a `job-offer` through `handleRequest` answering 200).
+- **`delivered` counts the live computer sockets the frame was handed to.** `send()` swallows the error from a socket that closed in the same instant, so the count can include one that never received it. EV-09 reads it as "may have reached", never as a claim.
+- **Order:** form (400), then the kill flag, then the suspension, then the account, then the cap, then delivery. Only accepted offers take a place in the hour, including one to a known account with no computer online (`{delivered: 0}` with no `reason`). A refused offer (400, killed, suspended, 429) takes none, and neither does one to an object that knows no account. The places are a sliding hour of times in meta `offers`: at most 30 integers, never the offer, the account or a job id. They survive hibernation (the cap case calls `h.wake()`; mutation M13), and erase() clears them with the rest of storage (`deleteAll`).
+- **An object that knows no account stores no offer** (review round one, findings 1 and 3, taken). Meta `account` is written only when a ticket stands (connect) and `erase` deletes it, so with it unset no computer can be live. The offer then answers `{delivered: 0}`, the same answer delivery would give, before the cap is read, and meta `offers` is not written. Without this, a signed offer to an erased account's object wrote a timestamp row there: no personal data, but storage the relay did not need after P5's erase. What such a call still leaves is what every signed internal call leaves: its nonce in `seen`, which erase() keeps anyway. Mutation M16 (no guard) turns :566 red. The 200 stays a 200 with no `reason`: the API cannot tell an unknown account from one with no computer online, and should not need to.
+- **The cap is per account,** because the object is per account. An account whose offers are capped is not otherwise affected.
+- **No ticket-expiry check on the receiving computer** (R-C2): a computer whose ticket lapsed while idle still receives offers until sweep closes it after `computerTicketMaxAgeMs` (24 h).
+- **No fair-use check.** Offers are delivered and metered even when `fairUse(now)` is `"awake"`: internal() never calls `dropForFairUse`, so an account over its awake-hours still gets an offer on a socket that is already open, until its next message or alarm closes it. Each offer also books up to `idleTailMs` of awake time (fetch's `touch`), which pushes such an account further over, by at most 30 × 10 s = 5 minutes an hour. Adding a `fair-use` reason later is EV-09's or Codium's choice (critique point 9, recorded). Review round one (findings 2 and 4, both non-blocking) kept this: the brief lists no fair-use reason, it is not an E10 invariant, and refusing an offer for fair use is a product rule for Codium. If it is wanted, the change is `if (this.fairUse(now) !== "ok") return answer({ delivered: 0, reason: "fair-use" })` after the suspension check, with a test, and spec §11 R-C1's answer list gains the reason.
+- **The kill flag is read in the object only, and nothing is closed on it,** as EV-05 did for presence. An idle computer connected before the kill keeps its socket; it gets no offer.
+- **No attachment-role filter after `live("computer")`** (critique point 3, taken). Tags come from the ticket's role at accept, refresh refuses a role change, and `sweep(now)` has already closed any socket without a valid attachment, so the filter was dead code that no test or mutation could tell apart.
+- **The offer is signed, not encrypted.** Its payload is base64url JSON with the account id (`sub`), the job id, the key id, the times and a `jti` (api/_lib/everywhere/offer.ts), nothing else (spec 3.3). The relay never decodes, stores or logs it; index.ts's header now says the relay forwards ciphertext "and the API's signed job offers".
+
+### Not changed
+
+- A client-sent `0x02` frame and `{t:"job.offer"}` still answer `reserved` and are not a close (account-relay.ts:377, :411; packages/relay/test/relay.test.ts:73, whose header comment, :7-8, now says so). internal.test.ts adds the computer-sent case (:582): a `0x02` frame from one computer, aimed at another computer, at a phone, or with sixteen zero device bytes, reaches nobody.
+- The API's `RelayAction` and `relayCall` (api/_lib/remote-relay.ts, EV-09), the desktop decode (EV-11), presence, devices, sweep, alarm and refresh.
+
+### Coordination
+
+- **A Codium-area file.** packages/relay/\*\* is in spec §6.4's Codium row, and R-C1 is a request to Codium; EV-06 builds it in this lane under the lead's brief, as EV-05 did R-C4. At EV-06's working-tree check, `git diff --stat origin/release-finish...origin/<b> -- packages/relay api/_lib/remote-relay.ts docs/vector/MODEL-PLANS.md docs/vector/build/codium-a39-remote-relay-notes.md` was empty for codium-finish `2924d94b`, review-fixes `1433d105` and main `58f85edc`. The commit step repeats it before the commit and the push.
+- **Request to Codium (or the lead):** annotate the documents that still say job-offer is reserved or answers 501. They are Codium's, so EV-06 does not edit them: docs/vector/MODEL-PLANS.md:127; codium-a39-remote-relay-notes.md :11, :49, :54, :67; codium-deviations.md :882-883; codium-build-spec.md :539, :801. The form (review round one, finding 5): once the lead routes it, a dated one-line annotation at each anchor pointing to vector-everywhere-deviations.md, "2026-11-15, EV-06"; nothing is rewritten.
+- **Optional request to Codium:** refuse offers once awake-hours are used up (a `fair-use` reason), see "Deviations".
+- **The Worker deploy is owner-gated.** Production is unchanged until the owner deploys the relay Worker. Even then nothing calls `job-offer`: `RelayAction` has none until EV-09, the ports' offer defaults to `"unavailable"`, and VECTOR_EVERYWHERE_ENABLED is off.
+
+### Decisions
+
+- **Critique points taken:** (1) the cap case calls `h.wake()` after the 30th offer and before the last hour's last millisecond, and mutation M13 (times in a private field) turns it red; (2) the computer-sent `0x02` case and mutation M14; (3) no role filter; (4) the storage check reads the rows of every table, and M11 turns it red; (6) the awake-time assertion takes `before` after a known flush and says it pins fetch's existing `touch`, not offer code; (7) one file-level `viaWorker(h, action, body)` helper, with R-C4's `presence(h)` now a one-line wrapper; (8) internal.test.ts's header lists job offers, and the limits.ts insertion is anchored by its text. Point 5 is partly rejected and point 9 recorded, both under "Deviations".
+- **The cap case goes straight to the object** (`h.internal`): the Harness's fake namespace keeps the first `AccountRelay` instance, so a Worker-path call after `h.wake()` would reach the old one. The Worker path's cap is covered by "the hourly offer cap is per account" in "internal routes" (:298), which uses real per-name objects; since review round one each account has a computer connected through the Worker's `/v1/connect` (`worker()`'s `computer(sub)`, :199), because an object that knows no account takes no place.
+- **Mutations** (progress log, EV-06): 16 patches, each red on the intended cases; M9 (the 501 restored) leaves the two object-only cases green, as expected. After review round one all were re-run with M16 (no no-account guard) added: 17 patches, each red on the intended cases.
+
+### Deferred verification
+
+- The CI smoke on workerd: binary delivery to the computer and not the phone, and presence and offers while the flag is set (vector-hosted-ci.yml's relay job, with the wrangler dry run).
+- A real desktop decode (EV-11), the API's call (EV-09), and VE-50 live after the owner deploys the Worker.
+
+## 2026-11-15, EV-07: Codium's `everywhere` runtime switch (R-C6)
+
+Spec §11 R-C6 (:850), §3.2 step 3 (:153) and §5 E10. Line numbers are after this package.
+
+### What changed
+
+- **Codium lists `everywhere`** (api/_lib/codium-switches.ts). `SWITCH_NAMES` gains `"everywhere"` last (:7-17; prettier now wraps the tuple). `VALUES.everywhere` is `["on", "no-new", "stop"]` (:30-31), mirroring `hosted`, with a one-line comment: `stop` also reaches running work, and Codium's `off` is not an `everywhere` value. The `SwitchValue` doc comment (:19) names both three-value switches. `SWITCH_VALUES` (:33-34) exports `VALUES` read-only for the owner API. `VALUES` stays private, and its two uses (writeSwitch, decode) are unchanged. Nothing else in the file changed: the absent default (`{value: "on", changedAt: 0, generation: "default"}`), `SWITCH_CACHE_MS` (30 s), the Lua scripts, `escalateHostedSwitch` (hosted only) and every other switch's values.
+- **The owner dashboard schema** (packages/schema/src/codium-owner.ts:41): `RuntimeSwitch.name` gains `"everywhere"`. `value` already had all four values. codium-owner-dashboard.ts maps SWITCH_NAMES (:46) and returns `CodiumOwner.Dashboard`, so the compiler keeps the two lists in step; it needed no edit.
+- **The owner API's value check** (api/_lib/codium-owner-api.ts:8-15, :102). `prepare()` now accepts exactly `SWITCH_VALUES[name]`, in place of the hand-coded `hosted ? [on, no-new, stop] : [on, off]`. The effect:
+  - `everywhere` takes `no-new` and `stop` from the owner page;
+  - `everywhere` `off` answers 400 `CODIUM_OWNER_REQUEST` before any audit row or write (test/codium-owner.test.ts:181 pins the owner audit at 4 rows and the switch audit at 2 after the refused calls);
+  - `hosted` and the on/off switches answer exactly as before.
+  `run()` needs nothing: `everywhere` has no relay or worker flag, so it returns `{}`.
+- **The owner page** (packages/web/src/components/marketing/owner/CodiumOwner.tsx). `SWITCHES.everywhere` (:37-40) is "Everywhere", with "Applies only while the Everywhere flag is set. No new refuses new jobs; Stop also ends running and waiting ones." The select offers On, No new and Stop for `hosted` and `everywhere` (:895-898), and On and Off for the rest; a comment (:894) points at SWITCH_VALUES.
+- **The seam, comments only** (api/_lib/everywhere/switch.ts):
+  - the header (:11-14) says Codium lists `everywhere` since EV-07 and an absent record reads `on`;
+  - `CodiumSwitches` (:22) says undefined is only for a name Codium omits;
+  - readEverywhereSwitch's comment (:54) drops "once it exists";
+  - readRemoteSwitch's comment (:63-66) is corrected: an absent record reads `on` (Codium's default, as the seam test already asserted), while an unreadable switch or an unlisted name reads `stop`.
+  `codiumSwitches`, `fromCodium`, `strictest`, `readEverywhereSwitch` and `readRemoteSwitch` are unchanged.
+
+### Behaviour
+
+- **The env flag still governs.** readEverywhereSwitch answers `stop` before any read while `config.enabled` is false (no flag, or the flag without a usable data key), whatever Codium holds. everywhere-switch.test.ts:150 checks that the store saw no command.
+- **Codium only makes it stricter.** With the flag on, the answer is `strictest("on", Codium's value)`: `on`, `no-new` or `stop`.
+- **Absent reads `on`.** With no stored record nothing changes until the owner writes one (:118: one GET of `vector:codium:<mode>:switch:everywhere`).
+- **Fail closed (E10).** Each of these makes Codium's `readSwitch` throw `CODIUM_SWITCH_UNAVAILABLE`, which the seam reads as `stop`: a stored `off` (bare or as a JSON record), an unknown value, a corrupt record, a store outage, and no store settings at all (:134, :171; everywhere-sweep.test.ts:231).
+- **The 30-second cache.** Codium caches each read for 30 s per fetcher and instance, so a change reaches every reader within about 30 s. EV-04's safe turn-off order now exists once the owner deploys a commit that contains EV-07: Codium's `everywhere` switch to `stop`, at least 2 minutes for a sweep under `stop`, then unset the flag.
+- **New reads in production.** These production readers now make one cached GET of Codium's `everywhere` key, and only while the flag is on: the intake and the GitHub handoff through safePorts (ports.ts:63), the jobs API (jobs-api.ts:150) and the sweep (sweep.ts:31). The router already read Codium's `remote` switch the same way. While the flag is off, as in production today, nothing new is read.
+
+### Deviations
+
+- **`VALUES` is exported as `SWITCH_VALUES`, not renamed** (critique, taken). The private `VALUES` and its two uses stay as they were, with one aliasing export next to it. The diff in this Codium-owned file is the roster, the values, the comment and the export.
+- **codium-owner-api.ts is edited, although the brief says it follows SWITCH_NAMES.** It follows SWITCH_NAMES for names only. Its value check was hand-coded to `hosted`, so without the edit the owner page would answer 400 to `everywhere` `no-new` and `stop`. It would also accept `off`, which writeSwitch then refuses with `CODIUM_SWITCH_INVALID`, after the "requested" owner audit row. The check now reads SWITCH_VALUES with one cast after the name check (`||` short-circuits once the name is unknown).
+- **switch.ts changes in comments only, and the seam is not simplified.** Dropping the SWITCH_NAMES guard in `codiumSwitches` (and its aliased import) was considered and rejected, because the brief says the seam needs no change. With the guard, a name Codium stops listing would read `on` for `everywhere` (and `stop` for `remote`). That is why three test files pin that SWITCH_NAMES contains `everywhere`: everywhere-switch.test.ts:113, everywhere-sweep.test.ts:231 and test/codium-switches.test.ts:166. The guard's `undefined` branch is now unreachable for both names in production; only the stub tests use it.
+- **EV-04's sweep tripwire is replaced.** everywhere-sweep.test.ts:231 was a deliberate tripwire for EV-07: it asserted that SWITCH_NAMES lacked `everywhere` and that the production reader read `on` with no I/O. The case now asserts that the production reader reads Codium's switch:
+  - it deletes the four KV variables, and restores them in `finally`, so persistentStore throws before any fetch;
+  - the switch reads `stop`;
+  - the sweep cancels the claimed job and posts its reply (`{ended: 1, posted: 1}`).
+  Deleting the variables makes the case independent of a developer's local KV settings (packages/web runs without `--no-env-file`), and the fetch guard stays clean.
+- **The roster is not pinned whole** (critique, taken). The tests pin only what R-C6 promises:
+  - SWITCH_NAMES contains `everywhere`;
+  - `SWITCH_VALUES.everywhere` is `["on", "no-new", "stop"]`, and `hosted` still is;
+  - every other listed name is still `["on", "off"]`, computed over SWITCH_NAMES minus those two;
+  - SWITCH_VALUES has a key for each listed name.
+  A switch Codium adds later breaks none of these, and no test compares `everywhere` with `hosted`.
+- **The owner label says the switch applies only with the flag** (critique, taken). While VECTOR_EVERYWHERE_ENABLED is off, the dashboard shows "Everywhere" as On ("Default setting.") although the effective state is `stop`, so the detail text says the switch applies only while the flag is set. This is owner-only text in the owner bundle, rendered only after the owner's Google sign-in on the noindex /owner/codium shell. It is not linked, listed or indexed, and it is not a public claim.
+- **A local real-Redis run, beyond the listed checks.** test/codium-switches.test.ts was also run once against a disposable loopback redis-server 7.0.15 (`VECTOR_TEST_REDIS_URL`, no persistence, stopped afterwards), so the new Valkey case ran locally too. That run is informational only, not the Valkey evidence: vector-hosted-ci's Valkey 7.2.14 job is the receipt, recorded with the push receipts.
+
+### Not changed (recorded)
+
+- **A corrupt record of any switch empties the dashboard's runtime controls.** codium-owner-dashboard.ts:46 reads every switch in one `Promise.all`, so one unreadable record (now `everywhere`'s too) leaves no switch rows. This is existing behaviour for every switch; the fix (settling each switch separately) is Codium's.
+- No other switch's names or values, `escalateHostedSwitch`, the perk map (codium-perks.ts:89) or the dashboard file.
+
+### Coordination
+
+- **Codium-area files.** Spec §6.4's Codium row lists api/_lib/codium-\*.ts and packages/schema/src/codium-\*.ts; CodiumOwner.tsx (A12), its test and test/codium-\*.test.ts are Codium's own. EV-07 builds R-C6 in this lane under the lead's brief, as EV-04 to EV-06 built R-C11, R-C4 and R-C1. Spec :10 and the handoff's owner rule are not edited. At EV-07's working-tree check, `git diff --stat origin/release-finish...origin/<b>` over the ten code and test paths, codium-owner-dashboard.ts and everywhere/switch.ts was empty for codium-finish `2924d94b`, review-fixes `1433d105` and main `58f85edc`. A second fetch at the end of the package found codium-finish at `265f4ea7`, and the diff was still empty. The commit step repeats it.
+- **No regeneration.** `git grep codium-owner` finds no importer in packages/engine, packages/client, packages/sdk, packages/core, packages/app or packages/desktop. The codium-owner schema is the hosted API's, not the engine HttpApi, so no generated file changes.
+- **Request to Codium (or the lead).** These switch lists still name `hosted` as the only three-value switch: docs/vector/MODEL-PLANS.md:244, codium-build-spec.md:138 and :526, and owner-actions/codium-owner-guards.md:36 (the `hosted` row; `everywhere` needs a row of its own). Each should get a dated one-line annotation pointing here ("2026-11-15, EV-07"): `everywhere` (`on`, `no-new`, `stop`) can only make VECTOR_EVERYWHERE_ENABLED stricter. The files are Codium's, so EV-07 does not edit them.
+- **Request to Codium: settle each switch on the dashboard separately** (review round one). codium-owner-dashboard.ts:46 reads every switch in one `Promise.all` inside `allSettled`, so one unreadable record (a corrupt or stored-`off` `everywhere` record makes decode throw `CODIUM_SWITCH_UNAVAILABLE`) empties the whole "Runtime controls" list. EV-07 widens that by one record, and an emergency could then hide the `hosted`, `sales` and `remote` controls with it. Codium's fix: settle each name in SWITCH_NAMES on its own (for example `Promise.allSettled` over SWITCH_NAMES), keep the readable rows and mark the unreadable ones. The file is Codium's, so EV-07 does not edit it.
+
+### Decisions
+
+- **Critique points taken:**
+  - the hosted-ci concurrency claim is dropped: vector-hosted-ci.yml:46 and vector-codium.yml:22 use different groups. Re-dispatching vector-hosted-ci on the same ref cancels the run in progress, so its run id is recorded before any re-dispatch;
+  - the sweep case controls the KV variables;
+  - the roster pins are narrowed;
+  - the owner label;
+  - the other stale comments in switch.ts (:22, :54, :63) are fixed, with dated notes on spec :606 and :696 and on this log's :69;
+  - root test/ code stays cast-free, because no listed typecheck covers root test/;
+  - VALUES stays private, with an export alias and one cast in the owner API;
+  - the handoff bullet gets its run ids after CI, with the push receipts;
+  - the EV-08 note below.
+  One point is partly rejected, under "Deferred verification".
+- **Tests read through Codium's real `readSwitch`**, over FakeStore (everywhere-switch.test.ts) and the Codium fakes (test/codium-\*.test.ts). Each read uses a fresh store, because Codium caches per fetcher for 30 s.
+
+### Deferred verification
+
+- The owner deploys a commit with EV-07 and sets the production `everywhere` switch (owner actions).
+- VE-50: `stop` set on the owner page reaches a running laptop within about 2 minutes (the 30-s cache, then a report or heartbeat answered `stop`), and waiting jobs end at the next sweep.
+- The new Valkey case runs in vector-hosted-ci.yml (the root test/ suite, with Valkey).
+- CodiumOwner.test.ts runs in no lane workflow until vector-codium.yml is used after PR #33 merges, so its receipt is local.
+- **A note for EV-08 (R-C7).** If the `everywhere` perk is mapped to the `everywhere` switch in codium-perks.ts `switches` (:89), listedPerks lists it only while that switch reads `on`, so under `no-new` the perk would drop out of the listing. EV-08 should either not map it or decide that `no-new` hides it on purpose, as `hosted`'s `no-new` hides `computer`. The critique's further claim, that running jobs could then fail their perk check, is rejected: listedPerks is display-only (codium-perks.ts:107), and requireEntitlement reads only the `codium` switch (codium-entitlements.ts:47).
+  *2026-11-15 (EV-08):* mapped on purpose: `no-new` and `stop` hide the perk, and a stored `off` or a corrupt record empties the whole listing while `everywhere` is a candidate. See "2026-11-15, EV-08" below.
+
+### Review findings (round one)
+
+- **Taken:**
+  - the refused `off` call is pinned not to audit: test/codium-owner.test.ts:181 checks that the owner audit holds 4 rows (requested and completed for each accepted call) both before and after the three refused calls. Auditing before validating turns it red (progress, EV-07 M9);
+  - the env restore in everywhere-sweep.test.ts:231 uses an early `continue` in place of `else`. useKv in test/lib/everywhere-store.ts keeps the same pre-existing pattern; it is not EV-07's;
+  - the local redis-server row in the progress receipts is marked informational only;
+  - the dashboard request above is added.
+- **The page keeps its own value list, now pinned to SWITCH_VALUES** (the two findings at CodiumOwner.tsx:894). A shared `RUNTIME_SWITCH_VALUES` map in packages/schema/src/codium-owner.ts, read by both the page and codium-switches.ts, was considered and not built. It would move Codium's write rules out of codium-switches.ts, against the decision above to keep `VALUES` private and the Codium diff small, in a file the codium-finish lane also edits. Returning each switch's values on the dashboard wire was rejected because it changes the owner contract. Instead:
+  - a comment at :894 points at SWITCH_VALUES;
+  - a new page case, CodiumOwner.test.ts:264, renders every name in SWITCH_NAMES and expects each select to offer exactly `SWITCH_VALUES[name]`, in order. A future three-value switch, or any other value change that the page misses, turns it red (progress, EV-07 M8).
+  A shared map remains open to Codium, as a follow-up to the requests above.
+- **SWITCH_VALUES is not frozen** (rejected). The export is typed `Readonly<Record<SwitchName, readonly SwitchValue[]>>`, so the compiler refuses any write, and a runtime write would need a cast. The only caller, the owner API, reads it. Freezing the record and each array would rewrite the `VALUES` block in Codium's file for a risk the types already block.
+- **The handoff bullet stays "CI pending" for now.** The push and the dispatches come after this step. The run ids replace "CI pending" in the docs commit with "## EV-07 push receipts", as Deferred in the progress entry plans.
+
+## 2026-11-15, EV-08: Codium's `everywhere` perk for every paid plan, unlisted (R-C7, Q11)
+
+Spec §11 R-C7 (:862), §10 Q11 (:832) and the owner action "Codium listing" (:845). Line numbers are after this package.
+
+### What changed
+
+- **The vocabulary** (packages/schema/src/codium-entitlements.ts:39). `PERK_IDS` gains `"everywhere"` last, so no existing listing, status or comparison row changes order. `Entitlements`, `ENTITLEMENTS` and `publicEntitlements` are unchanged: no new public field and no amount.
+- **The copy** (packages/schema/src/codium-copy.ts). `requires.everywhere = ["remote"]` (:15), because the laptop route needs Remote. `PERK_COPY.everywhere` (:142-149) is last, with `applies: every` (all four plans, vector-10/50/100/200, are paid). Label "Vector everywhere"; text "Ask Vector from an issue or a chat, and the job runs on your own paired computer through Vector Remote while that computer is online." The wording waits for the owner's approval. TAGLINES, HEADLINE_ORDER, COMING, FREE_WORKSPACE, EVERY_PLAN and tierView are unchanged.
+- **The readiness** (api/_lib/everywhere/config.ts, lane-owned). `LAPTOP_ROUTE_WIRED = false` (:244) and `everywhereReady(config?, wired = LAPTOP_ROUTE_WIRED)` (:253-263): `wired`, checked first so the configuration is read only once it is true, then the offer signing key with its key id, CRON_SECRET, and Slack, Linear or Jira open through `platformOn` (which also needs the flag with a usable data key). Comments only: `allowAccounts` (:48-51) and `sponsorListed` (:229-232) now say the allowlist is the router's only sponsor check until a plan check is wired.
+- **ports.ts, comment only** (api/_lib/everywhere/ports.ts:55-58): the allowlist is also the only grant. safePorts is unchanged.
+- **Codium's listing** (api/_lib/codium-perks.ts): imports `everywhereReady` (:18); `perkServices.everywhere = () => everywhereReady()` with a WP comment (:88-93); `switches.everywhere = "everywhere"` (:110). Not added to `trackB` or `app`. listedPerks itself is unchanged.
+
+### Behaviour
+
+listedPerks lists `everywhere` only when every one of these holds, in this order:
+
+1. `MODEL_PLANS_ENABLED` is true. It is off by default, and while it is off no store read happens.
+2. `CODIUM_LISTED_PERKS` names `everywhere` (owner only). While it is unset there are no candidates and no reads.
+3. Codium's `codium` switch is `on`.
+4. `everywhere` is not in perks-off.
+5. `everywhereReady()` is true. It is false today in every configuration, because `LAPTOP_ROUTE_WIRED` is false. Once that is true it also needs VECTOR_EVERYWHERE_ENABLED=true with a usable data key, the offer signing key and its key id, CRON_SECRET, and Slack, Linear or Jira open.
+6. Codium's `everywhere` switch reads `on`. `no-new` and `stop` hide the perk. A stored `off` or a corrupt record makes readSwitch throw, which empties the whole listing.
+7. `remote` is listed, with its own readiness and switch, through the requires fixpoint.
+
+Prerenders (`runtime: false`) list nothing. No admission changes: requireEntitlement, the router and `ports.perk` (ports.ts:65, still the VECTOR_EVERYWHERE_ALLOW_ACCOUNTS allowlist) are not touched, so listing can never let anyone start a job.
+
+### Deviations
+
+- **Readiness has a wiring conjunct that is false today** (critique, taken). A check on configuration alone could pass while no job can run in production: productionPorts (runtime.ts:16-18) is still safePorts, so presence answers offline, the offer answers unavailable and `perk("remote")` is false (ports.ts:59-68); api/_lib/everywhere/adapters/ holds only account.ts (no VE-20 adapter); the desktop's OFFER_KEYS is empty; the Actions fallback stays reserved (R-C8). With every variable set the perk would then list on every paid plan while every job is refused or queued, the purchase promise perkServices' own comment forbids (codium-perks.ts:23-27). `LAPTOP_ROUTE_WIRED` is a code fact, not configuration: the package that wires VE-20 and VE-21 and the plan check sets it true and updates the cases that pin readiness false with the default `wired` (everywhere-config.test.ts:291, codium-public.test.ts:132).
+- **The wiring constant lives in config.ts, not runtime.ts** (critique's placement, rejected). runtime.ts builds productionJobEvents and the Slack, Linear and Jira routes when it loads (runtime.ts:50-54) and imports the store, adapters and jobs modules, so importing it into codium-perks.ts would load all of that into every model-plans config, status and phone read. ports.ts imports authority.ts, which imports store.ts. config.ts imports only schema/everywhere.ts, crypto.ts (and http.ts through it) and signature.ts. A check on productionPorts' stubs by identity was not possible either: safePorts builds fresh closures on every call. The constant sits next to readConfig, and its comment names what flips it.
+- **R-C7's runtime half is not built, and listing waits for it** (critique, taken). Entitlements gains no `everywhere` field, so `requireEntitlement(account, "everywhere")` does not exist. Reasons: the brief scopes the perk to listing vocabulary; a new field would touch Codium's NO_CAPS (codium-snapshot.ts:190) and publicEntitlements; stored snapshots without the field would read "not included" until reconcile rewrote them. Router step 3 still reads VECTOR_EVERYWHERE_ALLOW_ACCOUNTS (empty means nobody), so a paying customer outside it would be refused `not-in-plan`. That is why the plan check is part of `LAPTOP_ROUTE_WIRED`'s meaning, why the owner action says not to list the perk yet, and why the follow-up is in the handoff's "Left open by the repairs". Recommendation for it: treat a sponsor as holding `everywhere` when `requireEntitlement(account, "remote")` passes and `PERK_COPY.everywhere.applies(snapshot.caps)` holds. Whether a plan check replaces or joins the allowlist at go-live is the owner's call; EV-08 stays neutral. No §8 package owns the check yet; VE-20, which wires the `remote` perk, is the natural place.
+- **GitHub alone does not count** (critique, taken). readConfig marks GitHub ready with no settings (config.ts:156-161), but in production the GitHub handoff answers handled:false until Q13/R-A6 (github/adapter.ts:68-70 needs `binding.laptopFirst`, which the @vector RepoBinding does not have). everywhereReady checks `platformOn` over Slack, Linear and Jira only. Pinned: GitHub alone is false, and so is GitHub with Slack listed but missing a setting (everywhere-config.test.ts:316).
+- **CRON_SECRET is not what keeps the perk off** (critique, taken; the plan's claim is corrected). It is shared with the existing crons (vercel.json:526+: free-models, shares, model-plans and others) and very likely already set in production, and EV-04's cron entry exists (vercel.json:560). The conjunct stays, because a perk whose jobs are never swept is also a purchase promise, but the real off-switches are `LAPTOP_ROUTE_WIRED`, VECTOR_EVERYWHERE_ENABLED with its data key, and CODIUM_LISTED_PERKS.
+- **The switch mapping is on purpose.** It answers EV-07's note (above). `no-new` and `stop` take the perk out of the listing, as `hosted`'s `no-new` hides `computer`. A running job is unaffected: listedPerks is display only, and requireEntitlement reads only `codium`. Side effect (critique, taken): a stored `off` or a corrupt `everywhere` record makes readSwitch throw, and that empties the whole listing, including `remote`, `github-agents` and `computer`, whenever `everywhere` is a candidate. It is the same blast radius EV-07 recorded for the owner dashboard. Pinned (codium-public.test.ts:132: `off` and `garbage` list nothing) and added to the request to Codium below.
+- **Requiring Remote also requires the phone app's origin** (critique, taken). perkServices.remote (codium-perks.ts:61) needs `remoteConfigured()` and VECTOR_PHONE_APP_ORIGIN, so `everywhere` lists only where Remote lists, although the laptop route needs no phone. Accepted: Remote is the route, and Codium does not list Remote without its phone app. A laptop-only requirement would need a perk of its own.
+- **The copy states its condition** (critique, taken in part). The text says the job runs "while that computer is online". "An issue" covers Linear and Jira issues; GitHub issues come only with laptop-first. The text names no platform. Platform coverage at listing time, and that macOS and Windows laptop jobs edit but run no checks (no unattended shell there), are for the owner to decide when approving the copy. Pinned: no digit, `%`, `$`, credit or token; no hosted, cloud, Actions or platform name; not COMPUTER_LABEL (codium-copy.test.ts:149).
+  *2026-11-21 (phase review, everywhere-finish lane):* the text describes the laptop-only route. Making Slack, Linear or Jira a run source (ENABLED_SOURCES, R-C8/R-A8) lets a private repository's job run in GitHub Actions (spec 3.6), so that owner step needs the text approved again. Handoff activation step 7 says so, as does a comment beside the text, and packages/schema/test/codium-copy.test.ts has a new case that fails while any of the three is an enabled run source.
+- **How "an account with no plan does not have it" is shown.** No per-account check exists for this perk, so the brief's case has two proxies. Structurally, ENTITLEMENTS' keys are exactly the four paid plans (codium-copy.test.ts:125). Through the status API (model-plan-status-api.test.ts:611), an account with no plan and the perk listed gets `listed` but no `plan` and no `entitlements`, while a paid account's entitlements equal `publicEntitlements(plan, {remote})` and the perk `applies` to its caps. The planned `publicEntitlements("none" as PlanId)` case was dropped: it exercises only the `!caps` guard and needs a cast (critique, taken).
+- **The pricing case asserts on text, not the label** (critique, taken). Cards render headline texts only (CodiumPricing.tsx:284), so the case checks that the perk's text is on no card and appears exactly four times on the page, all in the comparison row.
+- **Placement.** `everywhere` is appended last in PERK_IDS, PERK_COPY and `switches`.
+- **A wider import graph.** codium-perks.ts now also imports everywhere/config.ts, which brings in schema/everywhere.ts, everywhere/crypto.ts (with http.ts) and signature.ts. There is no cycle; test/api-module-loading.test.ts covers the graph.
+- **Readers of `listed`.** packages/web/src/lib/model-plans.ts:93 refuses unknown `listed` ids, so a stale browser tab could fail once the perk is listed; listing is a later env change, long after the deploy. The core status reader (packages/core/src/model-plan-status.ts:280) and the phone (packages/app/src/phone/status.ts:42) drop unknown ids, and the released 1.99.111 and 1.99.112 status decoders do not read `listed`.
+- **One added line over 120 columns.** The PERK_COPY text is a string literal prettier leaves whole, like the other texts in the same object (:29, :71, :77, :83).
+
+### Not changed
+
+- requireEntitlement, the router, ports.ts behaviour, `Entitlements`, `ENTITLEMENTS`, NO_CAPS.
+- TAGLINES, HEADLINE_ORDER, `trackB`, `app` and listedPerks itself.
+- The desktop settings tab, which stays hidden until the perk is listed (Phase S).
+- Tokenomics and benchmark files.
+- No env var, flag, route, dependency, install or generated file. No perk id appears in packages/client, packages/sdk, engine src or config.json.
+- Nothing new is reachable on vectordev.ai: the label and text ship in the existing pricing and docs bundles and render only when listed, which needs the owner's env change.
+
+### Coordination
+
+- **Codium-area files.** These are Codium's files built in this lane under the lead's brief, as EV-04 to EV-07 were. At the package's working-tree check, `git diff --stat origin/release-finish...origin/<b>` over the twelve paths (the five code files and seven test files) was empty for codium-finish `ab784e44`, review-fixes `1433d105` and main `58f85edc`. The commit step repeats it.
+- **Request to Codium.** Annotate codium-build-spec.md:507 (the `PerkId` list) with `everywhere`: requires `remote`, mapped to the `everywhere` switch, readiness false until the laptop route and a plan check are wired ("2026-11-15, EV-08"). Extend the existing request to settle each switch separately (EV-07) to listedPerks: one unreadable switch record empties the whole listing. EV-08 edits neither.
+
+### Owner actions
+
+1. Approve the label and text (`PERK_COPY.everywhere`), including the platforms it may name, the macOS and Windows limit, and E2 (only the sponsor's own linked account can start a job; Q2, no teammate allowlist), which the draft does not state. Alternatives to offer at that review, none applied without the owner: name Slack, Linear and Jira once their go-lives are known, instead of "an issue or a chat" (GitHub issues start no laptop job until Q13/R-A6); "Ask Vector from an issue or a chat with your linked account, …"; and a note that on macOS and Windows a job edits but runs no checks.
+2. Do not set CODIUM_LISTED_PERKS for `everywhere` until the plan check and the laptop route land. Until then its readiness is false and listing it shows nothing.
+3. Then list it, with MODEL_PLANS_ENABLED, and add any plan copy (Q11).
+
+### Decisions (critique)
+
+All eleven points are taken, except the placement of the wiring check in runtime.ts (rejected above, with the check placed in config.ts instead). The two spec notes sit after the §3.4 routing table and after §6.1's code block, each naming the row or field it refers to. The path count is twelve: five code files and seven test files, with model-plan-status-api.test.ts added for the no-plan proxy. The readiness function has no return annotation; `LAPTOP_ROUTE_WIRED` is annotated `boolean` so the parameter it defaults reads as a switch, not the literal `false`.
+
+### Review findings (round one)
+
+- **`everywhereReady` read the configuration before checking `wired`** (two findings, fixed). The default parameter `config = readConfig()` ran before the body, so every listing read with `everywhere` as a candidate parsed the whole environment, including `createPrivateKey` on the offer signing key, although `wired` is false and decides the result. The config parameter is now optional and the body returns false on `!wired` before `config ?? readConfig()` (config.ts:253-263). The test signatures are unchanged. The short-circuit itself is not pinned by a test: it changes no result, and observing that readConfig is not called would need a spy on a module function.
+- **The `LAPTOP_ROUTE_WIRED` assertion** (fixed). `expect(LAPTOP_ROUTE_WIRED).toBe(false)` repeated the source literal. It is dropped, with its import; the behavioural cases (fully configured readiness with the default `wired` is false, everywhere-config.test.ts:291; the real perkServices entry is false, codium-public.test.ts:156) still pin it. Mutation M7 (`LAPTOP_ROUTE_WIRED = true`) re-run after the change: everywhere-config 23/1 (:291) and codium-public 13/1 (:132).
+- **The service check took the global `fetch`** (fixed). codium-public.test.ts:156 now passes `codiumFakes().fetcher`, so a later readiness probe that fetches would hit the fake store, not a real host.
+- **`current.fetcher` leaked out of the EV-08 describe** (fixed). The top-level beforeEach in model-plan-status-api.test.ts (:63-72) now resets `current.fetcher = fetch` before each case; describe-level beforeEach hooks (:198) still run after it and set their own.
+- **The copy does not state GitHub's or macOS and Windows' limits, nor E2** (two findings, no code change). The wording is the owner's to approve, so it is unchanged. Owner action 1 now names E2 and offers the narrower phrasings (Slack, Linear and Jira by name once their go-lives are known; "with your linked account").
+- **One bad `everywhere` switch record empties the whole listing** (no change). Recorded above under "The switch mapping is on purpose" and pinned; the request to settle each switch separately in listedPerks is in "Coordination" and is now also in the handoff's "Left open by the repairs", so it is not lost before the owner lists `everywhere`.
+
+### Deferred verification
+
+- The packages/web codium files (codium-public, codium-docs, CodiumPricing) and model-plan-status-api.test.ts run in vector-codium.yml only after PR #33 is merged here; until then their receipts are local. everywhere-config.test.ts runs in vector-everywhere.yml, and the schema tests in vector-hosted-ci.yml.
+- VE-50: the live listing, after the owner approves the copy and lists the perk.
+
+## 2026-11-15, EV-09: the relay adapter (VE-20): presence, offers and the plan check
+
+Spec §8 VE-20, §3.4 steps 3, 5 and 5a, §6.1 (`presence`, `offer`, `perk`), §5 E9, E10 and E18, and §11 R-C1 (the API half) and R-C7 (the runtime half). Line numbers are after this package.
+
+### What changed
+
+- **`RelayAction` gains `job-offer`** (api/_lib/remote-relay.ts:31-39, a Codium-area file; additive only). Prettier wraps the union into one member per line. The header list gains `job-offer {account, offer}` (:16). Nothing else in the file changes: relayCall's body stays `Readonly<Record<string, unknown>>`, a 429 `RELAY_OFFER_LIMIT` and every other non-2xx answer already throw 503 `REMOTE_UNAVAILABLE`, and the account check already applies.
+- **The relay adapter** (new api/_lib/everywhere/adapters/remote.ts). `createRemotePorts({config, fetcher?, now?, wired?})` returns `presence`, `offer` and `perk` (:27-80); `planListsEverywhere(wired, fetcher)` (:90-100) is the gate on the plan's half of the `everywhere` perk. It imports `PERK_COPY` (schema codium-copy.ts), `ACCOUNT_ID_PATTERN`, `renewalGraceMinutes` (codium-limits.ts), `readSnapshot` and `requireUsableSnapshot` (codium-snapshot.ts), `readDisabledSet` and `readSwitch` (codium-switches.ts, already in the workflow paths through switch.ts), `remoteConfigured` (remote-config.ts), `relayCall` and `relayPresence`, `LAPTOP_ROUTE_WIRED` and `sponsorListed`, and the switch seam. It does not import api/_lib/codium-entitlements.ts.
+- **productionPorts** (api/_lib/everywhere/runtime.ts:16-25): safePorts plus `codiumAccountAuthority` as before, and the adapter's three ports on top only when `config.enabled` (VECTOR_EVERYWHERE_ENABLED=true with a usable data key) and `config.offer` (the offer signing key with its key id) are both set. It gains an optional `fetcher` for tests and has no return annotation, so `accountAuthority` stays required where productionContext reads it.
+- **Comments only**: safePorts (ports.ts:55-60), `allowAccounts` (config.ts:48-52), `sponsorListed` (:230-234) and `LAPTOP_ROUTE_WIRED` (:239-246). The constant stays `false`.
+- **CI paths**: vector-everywhere.yml's `pull_request.paths` (:55-59) and the lane test's `helpers` (everywhere-lane.test.ts:300-304) gain api/_lib/codium-limits.ts, codium-snapshot.ts, remote-config.ts, remote-relay.ts and packages/schema/src/codium-copy.ts. The lane test derives every relative import of the everywhere server code and requires each one in the paths, so without them it turns red (mutation M13).
+
+### Behaviour
+
+- **Presence**, checked in this order:
+  1. Codium's `remote` switch is not `on`: `remote-off`. A corrupt record or an unreadable store reads `stop` (switch.ts), so it is `remote-off` too.
+  2. `remoteConfigured()` is false (VECTOR_REMOTE_ENABLED, the ticket signing key, the relay address or the internal secret missing): `not-configured`.
+  3. The sponsor's plan does not include Remote now: `not-in-plan`. That covers a non-UUID account (no read at all); no snapshot; `none`; `paused`; `frozen`; `ended` (closing included); `renewing` past its grace; `active` with its period over by more than the renewal grace (below); a snapshot stored for another account; one written in the other Stripe mode; caps without `remote` or with 0 computers; and a failed store read.
+  4. Any relay error, refusal (401 included), malformed answer, refused connection or the 10-second internal timeout: `unreachable`.
+  5. Otherwise `{online, computers}` from the relay, with no reason. The relay's own `killed` and `suspended` reasons are dropped by relayPresence, so a killed or suspended relay reads as an ordinary offline answer.
+- **Offer**: `unavailable` without a relay call while Remote is not configured; otherwise exactly one `relayCall("job-offer", {account, offer})`, `sent` only when `delivered` is a safe integer of at least 1. Delivered 0 (no computer, or the relay killed or suspended), 429, 400, 401, an unreachable relay or a malformed answer are all `unavailable`. Nothing is retried, and the offer string is passed through unchanged (E9 stays at the desktop).
+- **Perk**:
+  - `perk("remote")` is the plan read (step 3 above).
+  - A non-UUID account is false for either perk before any read.
+  - `perk("everywhere")` is true with no I/O for an account in VECTOR_EVERYWHERE_ALLOW_ACCOUNTS (case-insensitive). Otherwise it is false with no I/O unless `LAPTOP_ROUTE_WIRED` (or the `wired` dependency in tests) is true, MODEL_PLANS_ENABLED is `true` and CODIUM_LISTED_PERKS names `everywhere`. Then `planListsEverywhere` reads Codium's `codium` switch and its `perks-off` set in parallel (one store GET each, Codium's 30-second cache per fetcher): the switch must be `on` and `everywhere` must not be in the set, and a failed read is false. Only then does the plan read decide, followed by `PERK_COPY.everywhere.applies(caps)` (every paid plan today, Q11).
+- **When productionPorts switches over**: only with the flag, its data key and the offer key. Production today has none of them, so it is exactly safePorts with the deletion key, and no new read happens (pinned in three variants: flag off, flag without the offer key, offer key without the flag).
+- **Today, even with everything set**: `LAPTOP_ROUTE_WIRED` is false, so the allowlist is the only `everywhere` grant; the desktop drops `0x02` frames (remote-link.ts `onData`) and `OFFER_KEYS` is empty (EV-11); Codium's readiness stays false.
+- **Safe in either deploy order**: an old Worker answers 501 to `job-offer`, which reads `unavailable`, and the router then queues or refuses without waiting out the 20-second window.
+
+### Deviations
+
+- **(a) A read-only plan read, not `requireEntitlement`.** `requireEntitlement` can reconcile against Stripe, write the snapshot and wait up to 2 s for a missing one, and importing it brings codium-entitlements.ts and model-plan-account.ts (Stripe, and codium-provisioners' side-effect import) into every intake route. The adapter reads the stored snapshot and applies `requireUsableSnapshot`, the pattern ops-incidents.ts and ship-desk.ts use. Consequence: a stale snapshot is used as stored. Bound (critique, taken in its first form): an `active` snapshot whose period ended more than the renewal grace (CODIUM_RENEWAL_GRACE_MINUTES, 120 by default) ago is refused as Codium refuses a `renewing` one past its grace, so a missed renewal or cancellation webhook cannot keep admitting jobs indefinitely (mutation M17). Inside that window the stored state is used for admission at router step 3, for `perk("remote")` and for queueing. Execution is also bounded by the computer's own ticket, which only `requireRemotePlan` (reconciling) mints: the relay closes a computer whose ticket expired more than 24 hours ago (`computerTicketMaxAgeMs`).
+- **(b) Codium's `includes(caps, "remote")` is inlined** as `caps.remote?.computers > 0`, with a parity test over every plan against Codium's own `includes` (imported only in the test). The optional chain makes a malformed snapshot fail closed by intent rather than through a caught TypeError (critique, taken).
+- **(c) `perk("everywhere")` is the allowlist OR the plan, and the plan joins only once the laptop route is wired and the owner lists the perk** (critique, major, taken). The brief's plain OR would admit every paying Remote account as soon as the flag and the offer key were set. That would remove the owner's choice to run with the allowlist alone (for example VE-50 on the owner's own workspaces), contradict EV-08's neutrality on "replaces or joins", admit paying customers while the perk is unlisted and the desktop tab hidden, and widen the Slack `repo` word's `maySponsor` (slack/adapter.ts:194). The critique offered two gates; both are applied, because each covers a different case: `LAPTOP_ROUTE_WIRED` keeps the plan out until a laptop can act on an offer (EV-11), and the listing keeps it out until the owner has approved the copy and listed the perk. Both owner answers stay possible: list the perk to join, leave it unlisted to keep the allowlist alone, or empty the allowlist to make the plan the only grant. The listing is read as listedPerks reads it, inlined for the same import reason as (b): MODEL_PLANS_ENABLED and CODIUM_LISTED_PERKS, then (review, taken) the `codium` master switch `on` and `everywhere` not in `perks-off`, so hiding the perk through either also takes the plan's half away again, as it hides the desktop tab. Three of listedPerks' checks are not repeated: the `everywhere` switch, because the router reads it itself and its `no-new` and `stop` refuse new jobs anyway; the service readiness (`everywhereReady`), because the wiring is the gate itself, the offer key is productionPorts' condition and a job reaches the router only through an open platform (its CRON_SECRET part is for the sweep, which admission does not need); and `CodiumCopy.requires` (Remote listed), because the plan read checks the Remote caps directly. Pinned: gate closed, an unlisted paying account is false with no store read; gate open, it is true; `perks-off` with `everywhere`, the `codium` switch `off` and either read failing make it false again, and neither touches the allowlist or `perk("remote")`; the Slack `repo` word follows the same rule (M7, M8, M14, M15, M18 to M20).
+  *2026-11-21 (phase review, everywhere-finish lane):* superseded in part. `planListsEverywhere` now asks Codium's own `listedPerks` (codium-perks.ts, loaded by a dynamic import only once the wiring, MODEL_PLANS_ENABLED and CODIUM_LISTED_PERKS hold), with `everywhere`'s readiness read from this configuration and wiring (`everywhereReady(config, wired)`). So the three checks this item left out apply too: `everywhereReady()`, the `everywhere` switch `on` and Remote listed beside it. Each reason above holds for admission, but not for the rule that a paying account joins only while vectordev.ai lists the perk. packages/web/test/everywhere-remote-adapter.test.ts has a new case that compares the plan's answer with the listing's in every case where the listing leaves `everywhere` out.
+- **(d) The adapter is active only with the flag and the offer key** (the brief). Without an offer key no job can be offered, so presence and the plan read would only cost reads.
+- **(e) The relay's `killed` and `suspended` reasons are not passed on**: relayPresence drops them, and the router has no use for them beyond offline.
+- **(f) The offer does not re-check the switch or the perk.** The router has just read both, and the relay checks its own kill flag and suspension (EV-05, EV-06). It does check `remoteConfigured()` (an env read): relayCall alone checks only the relay address and the internal secret, so with VECTOR_REMOTE_ENABLED off or no ticket key an offer would otherwise still go out (M16; the plan assumed relayCall refused first). `delivered` is read as "may have reached a computer"; the router always reconciles the real winner.
+- **(g) No `fair-use` reason.** An account over its awake-hours still receives offers (EV-06); the option to add a reason stays open.
+- **(h) The fetcher is resolved on each call**, not when the ports are built, because runtime.ts builds production's ports when it loads; capturing `fetch` then would bypass anything that replaces it later, such as a test's fetch guard. productionPorts takes an optional fetcher for tests.
+- **(i) Five CI paths, not the plan's four**: codium-limits.ts is also imported, for the renewal grace in (a).
+- **(j) The web test serves the relay Worker itself** (packages/relay/src/index.ts `handleRequest` over the relay's own fakes) on 127.0.0.1 behind the fetch guard. The web typecheck accepts the relay sources and fakes, so the planned fallback stub was not needed. A refused connection is a fetcher that throws Bun's connection error for loopback (`refusing()`), not a stopped server's port, which another process could take between the stop and the call (review, taken). The 429 case seeds the relay's `offers` meta with 30 recent times and makes one call, instead of 30 round trips (critique, taken). The case for productionPorts with the flag and the offer key moves the relay's clock to the real clock, because productionPorts signs relay calls with `Date.now()`.
+- **(k) No cache for the plan read.** With the gate closed (today) routeFacts reads the snapshot twice (`perk("remote")` and presence); with it open, three times, plus the `codium` switch and `perks-off` for `perk("everywhere")`. Each is one store GET; the switch and set reads are Codium's 30-second cache per fetcher.
+- **(l) Latency** (critique, taken). Worst case per routed job: presence runs the switch read (3-s store timeout), the snapshot read (3 s) and relay presence (10 s) in sequence, about 16 s, in parallel with the two perk reads (with the gate open, `perk("everywhere")` is the listing reads, 3 s in parallel, then the snapshot, 3 s); then the offer call (10 s at most) runs inside the 20-second window, whose deadline is set before the call, and the polling never sleeps past it. That is about 36 to 40 s plus the store transitions, under the 60-s maxDuration of api/slack/events.ts, api/linear/webhook.ts and api/jira/a2a.ts (the GitHub handoff keeps safePorts).
+- **(m) Test placement.** The Slack `repo` word case is in the new adapter test (with the router fixture's store), not in everywhere-identity or everywhere-slack-events, so Codium's environment stays out of those files. The plan's test 13 expectation (an unlisted paying account has `everywhere`) is reversed by (c).
+
+### Not changed (recorded)
+
+- **The router.** routeFacts counts `unreachable` as not configured (router.ts:48), so during a relay outage a job that would queue is refused `no-remote` with the "not set up" text. EV-09 makes this reachable in production for the first time (safePorts always answered `not-configured`). Proposed follow-up: treat `unreachable` as configured for the queue rule, because waiting jobs are re-offered over the HTTPS `pending` call. It is an open item in the handoff's "Left open by the repairs".
+- The GitHub handoff keeps safePorts (github/adapter.ts; it answers 501 without a verifier).
+- `LAPTOP_ROUTE_WIRED`, everywhereReady and Codium's listing.
+- The relay package, the policy, and every Codium module except remote-relay.ts's `RelayAction` and header comment.
+- No environment variable, flag, route, dependency, install or generated file.
+
+### Coordination
+
+- **Cross-lane check.** `git diff --stat origin/release-finish...origin/<b>` over the EV-09 paths and the modules the adapter and its tests import (api/_lib/remote-relay.ts, api/_lib/everywhere/{runtime,ports,config,switch}.ts, api/_lib/everywhere/adapters/, api/_lib/codium-snapshot.ts, codium-limits.ts, remote-config.ts, codium-switches.ts, hosted-internal.ts, packages/schema/src/codium-copy.ts, codium-entitlements.ts, everywhere.ts, packages/relay/**, packages/web/test/fixture/codium-fakes.ts, test/remote-relay-contract.test.ts, vector-everywhere.yml, everywhere-lane.test.ts) was empty for codium-finish `420e729f`, main `58f85edc` and brain-transport (`8f742520`, and again at `a89fe7a0` at the end). review-fixes `1433d105` touches only vector-everywhere.yml (the header, the push trigger and the concurrency comment, FIT-4) and everywhere-lane.test.ts (:150-160, :238-245, :323-350); EV-09's hunks (:55-59 and :300-304) are separate. review-fixes also edits api/_lib/everywhere/erase.ts (DP-1) and spec.md:879 (FIT-5), which EV-09 does not touch. A `git merge-tree` of the working tree, lane documents included (as a scratch commit; no ref moved), with review-fixes and with brain-transport is clean. With codium-finish it conflicts in vector-codium.yml, packages/cloud/src/codium-ci-tests.ts and workflow-compliance.test.ts, exactly as HEAD already does; EV-09 touches none of them. The commit step repeats the check.
+- **Request to Codium.** Annotate codium-a39-remote-relay-notes.md (its internal API row says `job-offer` answers 501) and codium-a40-remote-api-notes.md, whose action lists do not have `job-offer` ("2026-11-15, EV-06 and EV-09"). EV-09 edits neither.
+
+### Owner notes
+
+- Set VECTOR_EVERYWHERE_OFFER_SIGNING_KEY (and its key id) only at go-live, after the Worker deploy with EV-05 and EV-06 and a desktop release with EV-11 and the pinned key. Before that, offers reach computers that drop them (remote-link.ts drops every frame that is not DATA, and OFFER_KEYS is empty), so jobs only queue and then expire.
+- Paying Remote accounts are admitted as sponsors only once the laptop route is wired and `everywhere` is listed. Leaving the perk unlisted keeps VECTOR_EVERYWHERE_ALLOW_ACCOUNTS the only grant; emptying the allowlist after listing makes the plan the only grant.
+- After listing, `everywhere` in `perks-off` or the `codium` switch `off` takes the plan's grant away again (and hides the tab), but leaves the allowlist's accounts admitted. To stop every new job, allowlisted ones included, set Codium's `everywhere` switch to `no-new` (running jobs finish) or `stop` (running jobs stop too); turning off follows EV-04's order.
+
+### Review findings (2026-11-15)
+
+- **The plan gate skipped listedPerks' store half** (two findings, the same point): taken in code, not as an owner note only. `planListsEverywhere` now also requires the `codium` switch `on` and `everywhere` not in `perks-off` (deviation (c)). It reads them only once the wiring and the environment listing hold, so production today still makes no read.
+- **`else` in the contract test's environment restore** (test/remote-relay-contract.test.ts:131-137): taken; `continue` after the `delete`.
+- **Closed-port cases could reach a process that took the port**: taken; both use `refusing()` (deviation (j)).
+- **A suspended account had no adapter-level case** (E10): taken; two cases, one through the API's own `relaySuspend` (the relay closes the computer's socket) and one with the relay's `suspended` row written while the computer is still connected (R-C4's check). Each asserts presence `offline()` with no reason, the offer `unavailable`, no frame on the computer and exactly the expected relay actions.
+- **vector-everywhere.yml is also edited by FIT-4 on review-fixes**: the merge-tree probe is repeated against the current review-fixes tip (receipt in the progress file); the commit step repeats it again.
+- **routeFacts counts `unreachable` as not configured** (router.ts:48): no change in EV-09, as recorded under "Not changed"; it stays an open item for a later package.
+
+### Deferred verification
+
+- After the push: vector-everywhere.yml (the adapter and lane tests, the API, schema and web typechecks), vector-hosted-ci.yml (root test/, including remote-relay-contract, remote-ticket-api and api-module-loading) and typecheck.yml, each a workflow_dispatch on everywhere-finish.
+- Real Worker presence and offers after the owner's deploy; the 10-second internal timeout on a real network; the desktop decode (EV-11); VE-50.
+
+## 2026-11-15, EV-10: the user config key `everywhere` (VE-40)
+
+Spec §8 VE-40, §6.5 rows 1, 2 and the generated row, §3.12 (desktop settings fields), §3.4 step 5a and §3.5 steps 2, 3 and 6. Line numbers are after this package. Built on 2026-11-15; finished on 2026-11-16 on top of the merge of origin/release-finish `0f034957` (merge commit `5d8c5c8c`), which brought in ce91a261 (see (k)).
+
+### What changed
+
+- **New packages/core/src/v1/config/everywhere.ts** (79 lines, self-export `ConfigEverywhereV1` on line 1). `Info` (:37) has `enabled`, `max_usd`, `minutes`, `at_once`, `per_day`, `model`, `wait_for_computer`, `push`, `stay_awake` and `projects`, every key optional. Bounds come from `COMPUTER_CAPS` (packages/schema/src/everywhere.ts:393), the same values the runner's `settingsValid` checks: `max_usd` above 0 and at most 50, `minutes` 1-120, `at_once` 1-3, `per_day` 1-100, integers through core's `PositiveInt`. `Defaults` (:69) holds what an omitted key means.
+- **packages/core/src/v1/config/config.ts**: the import at the end of the import block (:25); `everywhere: Schema.optional(ConfigEverywhereV1.Info)` right after `watcher:` (:131-134). The description starts with ce91a261's sentence, "Not available in Vector 1.99.112 or earlier, which rejects this key."
+- **packages/engine/src/config/config.ts**:
+  - `projectExecutableConfig`: a comment and `delete next.everywhere` after `delete next.computer` (:96-98). This is §6.5 row 2.
+  - merge(): `userSources` and `userOnly` (:2125-2128), and one entry in `dropped` (:2146) beside the `computer` line.
+  - The company policy loop (the MDM profile and the Windows policy key), which merges outside merge(): `omit(next, ["local", ...userOnly])` (:2377).
+  - The last two are not §6.5 anchors; see (e) and (n).
+- **packages/core/src/config/managed.ts** (a test hook, not a §6.5 anchor; see (n)): `useTestPolicies` (:151-157) and its use in read() (:189). While a test directory is set, read() returns these policies in place of none, so a test can merge MDM or policy-key text without reading the machine's own.
+- **Engine routes** (not §6.5 anchors; see (g) and (h)):
+  - handlers/global.ts:129-132: GET /global/config leaves out `everywhere` for a guest, as it does `local`.
+  - handlers/config.ts: GET /config leaves it out for a guest (:36-41). PATCH /config answers 400 for a payload with `everywhere` (:44-48).
+- **Regenerated, never hand-edited**:
+  - packages/web/public/config.json (packages/engine/script/schema.ts): `$defs.EverywhereProject`, `$defs.EverywhereConfig` (`additionalProperties: false`) and `Config.properties.everywhere`; 117 lines added and none removed.
+  - packages/sdk/openapi.json, packages/sdk/js/src/gen/types.gen.ts and packages/sdk/js/src/v2/gen/types.gen.ts (./packages/sdk/js/script/build.ts): `EverywhereProject`, `EverywhereConfig` and `everywhere?:` on `Config` and `ConfigWithLocks`; additions only. A second run changed nothing.
+  - Unchanged: tui.json, workflow.json (packages/core/script/workflow-schema.ts) and packages/client/src/generated* (`bun run check:generated` exits 0, because the client does not embed the config schema).
+- **Tests**:
+  - New packages/core/test/everywhere/config.test.ts.
+  - New packages/engine/test/everywhere/config.test.ts. It does not import packages/desktop (F5).
+  - packages/engine/test/config/subagent-config.test.ts, "version skew": now "connect, computer and everywhere are the intentional top-level additions", and it also checks that the released schema refuses `everywhere`.
+  - packages/web/test/docs-config-reference.test.ts (review-fixes' rewritten version, :51): "the published schema says which top-level keys released Vector does not accept" now also requires `everywhere`'s description to start with "Not available in Vector 1.99.112 or earlier, which rejects this key." See (l).
+
+### Deviations
+
+- **(a) Unknown keys are refused** (the brief; the critique's lenient alternative is not taken). `Info` and each project entry carry `parseOptions: {onExcessProperty: "error"}` on the struct's own annotation, which Effect applies over the caller's options. No other v1 config block does this: the engine refuses only unknown top-level keys (parse.ts `topLevelExtraKeys`).
+  - Why not lenient: the reader EV-17 will use (GET /global/config) receives the config after decoding, with unknown keys already stripped. So a reader-side check could never see a misspelled `pushh: false`, and pushing would stay on.
+  - Effects, pinned by tests:
+    1. The engine fails the whole load, naming the file. Both `getGlobal()` and `get()` exit with ConfigInvalidError, as for an out-of-range value in any block. The critique expected `getGlobal` to fall back to `{}`, but its `orElseSucceed` catches failures only, and the parser's throw is a defect. So nothing runs with the user's other settings dropped.
+    2. Core's loader (core/src/config.ts, V1 files) skips that file, its permission rules included. It already does this for any invalid value.
+  - Forward rule: a sub-key added after 2.0.0 is rejected by older engines that share the user's config folder. It therefore needs its own "Not available in Vector X or earlier" note, and the settings page (EV-21) must write only keys the running engine's schema has.
+- **(b) Defaults live in `ConfigEverywhereV1.Defaults`, not in the schema**, so a file stays as written (the ComputerConfig pattern).
+  - The values: `wait_for_computer` true (§3.4 row 7 and jobs-api.ts:215), `push` true (Q8: private repositories only), `stay_awake` false, `enabled` false, no projects. `model` has no default: absent means the user's default model.
+  - It has no reader yet. It is kept because the core test pins it against COMPUTER_CAPS and against `Info`'s keys, and because EV-17 (`RunnerSettings` from `{...Defaults, ...info}`) and EV-21 read it.
+- **(c) `model` is the string `provider/model`** (the split `parseModel` does). EV-17 turns it into `RunnerSettings.model {providerID, modelID}`.
+- **(d) `projects` entries are `{directory, repository}`, not bare folders** (critique, major, taken; the brief said "absolute directories").
+  - Why: the runner matches a job by `project.repository` (everywhere-runner.ts:151), checks the folder's remote against it (:157) and re-checks the mapping before the push (:285). If `repository` were read from the same remote, those checks could never fail. A remote rewritten after the user ticked the folder would then silently move the consent to another repository. With both recorded when the user ticks the folder, the checks compare against what the user chose (spec §3.4 step 5a names an allowed project by repository).
+  - The fields:
+    - `repository` uses REPOSITORY_PATTERN.
+    - `directory` is an absolute POSIX, drive-letter or UNC path on one line, at most 4096 characters. It refuses `.` and `..` segments, repeated or trailing separators, a bare root, and (since the 2026-11-16 review) a drive-letter path that mixes `\` and `/`.
+    - It does not fold case or resolve links. `C:\Repo` and `c:\repo`, a folder and a link to it, or two spellings of one folder on a case-insensitive disk still decode as two entries. So the schema makes each spelling unique, not each folder, and whatever matches a job to a folder canonicalizes both first (Coordination, EV-17).
+    - A spelling may appear once in a file, and a file lists at most 64 entries. The merged config can hold more (Coordination, EV-17).
+  - The 4096 and 64 limits are new numbers the contract does not give. The same repository in two folders is allowed, and the runner takes the first.
+  - `base` (the branch to start from, `RunnerSettings.projects[].base`) is not stored. EV-17 derives it from the repository's default branch at job time.
+- **(e) Only the user's own config files set it** (critique, major, option (a) taken). merge() and the company policy loop leave `everywhere` out of every source except `Global.Path.config` and `localConfig.user` (the desktop's own folder under VECTOR_CLIENT=desktop). That covers:
+  - the company's managed files, MDM and Windows policy;
+  - the well-known organization config and the Teams org config;
+  - VECTOR_CONFIG_CONTENT;
+  - a VECTOR_AGENT_CONFIG file, and a VECTOR_AGENT_CONFIG_DIR that is not the desktop's;
+  - the machine-local integration store;
+  - the user's home `.vector/` files, which GET /global/config does not read either;
+  - every repository file.
+  This holds even under a company lock, so no remote organization or company can turn on job intake or list folders on someone's computer (spec §3.12, "each one ticked by the user"). The plan's "no new trust" reasoning is withdrawn. The line sits beside the `computer` line (its mirror image) and is outside the §6.5 anchors.
+  - The policy loop merges the MDM profile and the Windows policy key after every other source, outside merge(). Before the 2026-11-16 review fix (blocking) it omitted only `local`, so those two could set the block, even under a lock. Both places now take the keys from one list, `userOnly` (:2128).
+  - Tests: one engine case per source above, plus the policy loop through `ConfigManaged.useTestPolicies` (without and beside a user block) and the desktop's own folder as a user source (VECTOR_CLIENT=desktop with VECTOR_AGENT_CONFIG_DIR outside the repository).
+- **(f) A company lock is not an off switch for the reader** (critique, major, taken: the claim is dropped).
+  - What a lock does: `locked_keys: ["everywhere"]` refuses writes (Config.lockedIn, global and repository) and keeps every source's copy out of the merged config, the company's included by (e).
+  - What it does not do: GET /global/config still returns the user's files as written, with `locked` listing `everywhere`.
+  - Rule for EV-17: treat `locked` containing `everywhere` as off. Recorded here and in the handoff, not built.
+  - Pinned by the engine case "a company lock on everywhere empties the merged block, not the global config": under a managed `{local: {lock: true, locked_keys: ["everywhere"]}}`, Config.get() has no `everywhere`, getGlobal() returns the user's block, and Config.lockedKeys() lists the key.
+- **(g) A guest never reads it.** GET /global/config and GET /config leave `everywhere` out unless the caller is the owner (RequestOwner.owner, so a forwarded guest request counts as a guest). `projects` holds absolute paths that show the user's folder layout, and the block holds the consent switch and the caps. The critique also allowed recording this as a later gate; the code was preferred.
+- **(h) PATCH /config refuses `everywhere` with 400** (critique, minor, taken). That route writes the repository's vector.json, where the block never applies and absolute folder paths do not belong. Writes go only through PATCH /global/config, which EV-21 uses.
+  - The 400 has no body, as approveTrust's has none on the same route group (review, non-blocking: the comment option was taken, not a typed error). No app, desktop or TUI code calls config.update; a typed refusal would need its own error schema and a regenerated SDK. The handler's comment says so.
+- **(i) Neutral descriptions** (critique, major, taken, under the website rule). The top-level description is the required version sentence plus where the key is read from. Field descriptions give only ranges, defaults and the path rule. They make no promise about behaviour that EV-17 has not wired (stopping jobs, limits lowering, a closed lid). config.json deploys with main, so these are the words that become public.
+- **(j) VE-40 lands ahead of the rest of Phase S**, because EV-17 and EV-21 read it. Spec §7 and handoff:96 said "one landing".
+- **(k) Built before its precondition reached this branch, finished after it did.**
+  - 2026-11-15: ce91a261 (PUB-2) was on origin/review-fixes `1433d105` only, not on origin/release-finish `cf2373c4`. The package was built in the working tree, uncommitted, at the user's request to finish quickly. A `git merge-tree` probe with review-fixes was clean, because the description uses ce91a261's exact sentence.
+  - 2026-11-16 (lead ruling): ce91a261 is on origin/release-finish `0f034957`. The uncommitted work was saved first (a binary diff and copies of the untracked files under /tmp/vector-v2/everywhere/). Only the three files the merge also touches (core config.ts, config.json, spec.md) were restored to HEAD. origin/release-finish was then merged with a merge commit, `5d8c5c8c` "chore(everywhere): merge PR #33 head 0f034957", with no conflicts, and their hunks were re-applied with `git apply --3way`, also cleanly. `git merge-base --is-ancestor ce91a261 HEAD` now succeeds.
+  - packages/engine/script/schema.ts re-run on the merged tree writes config.json byte-identical to the working tree's, and tui.json is unchanged. ./packages/sdk/js/script/build.ts re-run writes the same three SDK files, because the SDK does not embed top-level config descriptions.
+- **(l) docs-config-reference.test.ts gains `everywhere` in its rewritten form.** Before the merge, the HEAD version of the file failed independently of EV-10, and review-fixes rewrote it. On the merged tree, the loop in "the published schema says which top-level keys released Vector does not accept" is `for (const key of ["computer", "connect", "everywhere"])` (:51). `unreleasedKeys()` picks up `everywhere` from the published description with no edit, so the other two cases keep the key out of every public docs sample and both company-policy samples.
+- **(m) The version-skew test lists `everywhere` as an intentional addition.** That is a stricter check, not a looser one.
+- **(n) Extra hunks in shared files, outside the §6.5 anchors** (review, non-blocking; kept). §6.5 gives VE-40 two anchors: core config.ts's import and field, and `delete next.everywhere`. This package also touches:
+  - packages/engine/src/config/config.ts: merge() (`userSources`, `userOnly` and the `dropped` entry) and the company policy loop, so only the user's own files set the block (e);
+  - packages/engine/src/server/routes/instance/httpapi/handlers/config.ts and handlers/global.ts, so a guest never reads the block and PATCH /config refuses it (g), (h);
+  - packages/core/src/config/managed.ts: the test-only `useTestPolicies` beside `useTestDirectory`.
+  - Why: without the merge() and policy-loop rules, a company managed file, an MDM profile, a Windows policy key, an organization's well-known or Teams config, or VECTOR_CONFIG_CONTENT could set `enabled: true` and list folders.
+  - The commit body names these four files and the reason. The lead confirms the §6.5 exception before the push, so connect, hands and other lanes expect hunks beside their own `computer` and `local` lines. No other lane's branch changes engine config.ts or core config/managed.ts against origin/release-finish (checked 2026-11-16).
+- **(o) Review round one, 2026-11-16** (ten findings, one blocking): all taken. Two took the finding's cheaper option, recorded in (h) (a comment, not a typed error) and in Coordination (EV-17 dedupes and caps `projects`, rather than merge() replacing the block whole, which would add another rule to the shared merge path for a value EV-17 never reads). For the path spelling findings, both halves were taken: the separator rule in the schema, and the softened comment and (d) for case and links.
+
+### Not changed
+
+- The runner, the wiring (EV-17), the settings page (EV-21), `LAPTOP_ROUTE_WIRED`, flags, docs pages, nav, routes added and httpapi-exercise.ts (no route was added; config.get, config.update and global.config get and update spread ConfigV1.Info).
+- vector-everywhere.yml: core/src/v1/config/everywhere.ts (:25) and both test folders (:38-39) are already in its pull_request paths (line numbers after FIT-4, which came in with the merge).
+- No warning is logged when a non-user copy is dropped, as for `computer`.
+- The Teams org source has no case of its own. It goes through the same `merge(source, …)` with an `https://vectordev.ai/api/org/config` source, which is not a user source. The well-known org case covers the rule.
+
+### Coordination
+
+- **EV-17**: read GET /global/config (the user's files only). Treat `locked` containing `everywhere` as off. Build `RunnerSettings` from `{...Defaults, ...info}`. Derive `base` per project. Keep the runner's own `settingsValid`.
+  - Never read `everywhere` from core's Config.entries() (packages/core/src/config.ts loads repository and team documents and drops no `everywhere` key) or from the merged instance config (Config.get(), GET /config). Read only GET /global/config, or a reader limited to the user sources merge() uses.
+  - The merged config concatenates `projects` across the user sources (the global block and the desktop's own folder, through mergeConfigConcatArrays), so it can hold duplicates and more than 64 entries. GET /global/config reads only Global.Path.config, so a block in the desktop's own folder never reaches EV-17, and EV-21 writes none there. Dedupe and cap `projects` after reading anyway.
+  - Canonicalize each listed folder and the job's checkout (realpath, then a case-folded compare on win32 and darwin) before matching them, and do not rely on the list holding each folder once (d).
+- **EV-21**:
+  - Write only through PATCH /global/config, and only keys the engine's schema has (a).
+  - desktop config-skew.test.ts:103-170 refuses app and desktop config writes outside the 1.99.99 key baseline, so the page's write of `everywhere` needs its own skew decision.
+  - The page records `repository` when the user ticks a folder, and writes the folder picker's spelling as `directory` (d).
+- **PUB-2 interim (lead)**: if flagged keys are left out of the public schema build, `everywhere` follows `computer` and `connect`.
+- **SDK**: other lanes regenerate the same openapi.json and types.gen.ts, and v2-complete-plan §2 reserves one regeneration after all merges. Expect conflicts there, resolved by regenerating, never by hand. The commit body names every regenerated file.
+- **Cross-lane probe** (re-run on 2026-11-16 on the merged tree; see the progress receipt): clean with review-fixes, connect-finish, hands-finish, brain-transport, scope-finish, workspaces-finish and native-qualify. codium-finish conflicts in .env.example, vector-codium.yml, packages/cloud/src/codium-ci-tests.ts and workflow-compliance.test.ts. HEAD alone (without EV-10) conflicts in exactly the same four files, so none of them is EV-10's.
+
+### Deferred verification
+
+- CI after the commit and push: vector-everywhere.yml and typecheck.yml as workflow_dispatch on everywhere-finish.
+- Files no lane workflow runs: subagent-config, generated-artifacts, company-lock, local-policy, company-certificates, managed-trust, auth-guest, config.test.ts, core config/managed and local-mode/startup, docs-config-reference, deployed-schemas, config-skew, and the SDK v1-schema and wire-compat tests. They are local receipts now, and test.yml re-runs those it owns at the lane end. managed-trust and core local-mode/startup fail locally only because this container runs as root, with or without EV-10's managed.ts (progress, "EV-10, 2026-11-16: review fixes").
+- Real reads in EV-17 and EV-21.
+- The real MDM and policy-key readers (systemPolicies) are unchanged. The policy case reaches the loader's policy loop through the test hook only.
+
+## 2026-11-16, EV-11: the Remote link carries job offers for a jobs subscriber (R-C2)
+
+Spec §11 R-C2, §5 E9, §6.3 (the Codium Remote row), §8 VE-21, and EV-06's "The offer frame" above. Built at HEAD `7146a98f` (origin/everywhere-finish), which already holds origin/release-finish `0f034957` and main `58f85edc`; nothing needed merging. EV-06's frame (`411317d8`) and EV-09's `RelayAction` are ancestors. Line numbers are after this package and its review round one ((l)).
+
+### What changed
+
+- **packages/desktop/src/main/remote-link.ts** (a Codium-area file; additive except where noted):
+  - Header comment (:38-43): the connection is also kept while a jobs subscriber wants it, and a bullet on the job-only connection.
+  - Constants (:57-63): `JOBS_REFRESH_MS` (12 h), `OFFER_BYTES` (16 KiB), `OFFER_PREFIX` (`vef1.`) and `OFFERS_IN_FLIGHT` (8, see (j)). Local values, not imports from the relay; see (e).
+  - `LinkDependencies.jobs?: { want(): boolean; offer(text: string): unknown }` (:143-150) and `timing.jobsRefreshMs` (:162). The timing default gains `jobsRefreshMs` (:169-176); prettier now wraps that object. The state gains `jobsRefresher` (:190) and `offering` (:202, :216).
+  - `wanted()` (:631-652) is split into `phonesWanted()` (today's rule), `jobsWanted()` (`deps.jobs?.want() === true`, and false when `want()` throws, see (h)) and `jobsOnly()`. `wanted()` still needs the link not stopped, `deps.enabled.get()` and `state.identity`, and is then `phonesWanted() || jobsWanted()`.
+  - `control()` (:543-546): a `peers` message with `refresh` refreshes only when the connection is not job-only, and tells `syncRefresher` whether it just did.
+  - `syncRefresher(refreshed)` (:551-573), rewritten: the phone cadence (`refreshMs`, today's 4 minutes) runs while `viewers > 0` and the connection is not job-only; the jobs cadence (`jobsRefreshMs`) runs while the connection is online, jobs want it and the phone cadence does not run. When the phone cadence takes over from the jobs cadence and control() did not just refresh, one refresh goes at once (see "The cadence").
+  - `onData` (:737): a frame of kind `FRAME.JOB_OFFER` goes to the new `offered()` (:742-762), which hands at most `OFFERS_IN_FLIGHT` unsettled offers to the subscriber (j); every other non-`DATA` frame is dropped as before.
+  - `teardown()` (:769, :773) also clears the jobs refresher. `evaluate()` (:845-846) calls `syncRefresher()` after `open()`, so a pairing that opens or ends, a phone paired or removed, and `jobsChanged()` re-pick the cadence on an open connection.
+  - The returned link gains `jobsChanged: () => evaluate()` (:869-870).
+- **packages/desktop/src/main/remote-relay.fixture.ts** (additive): imports `DEVICE_BYTES`, the header comment mentions offers, and `offer(text)` sends one `0x02` frame with sixteen zero device bytes to each connected computer and returns their count (the API's job-offer call). remote-phone-app.test.ts, the fixture's other user, is unaffected (15 pass, 79 expects, as at the planning baseline).
+- **packages/desktop/src/main/remote-link.test.ts** (additive): imports (`jest`, `RELAY_LIMITS`, `DEVICE_BYTES`, `LinkDependencies`, the memory relay); `setup()` takes optional `jobs`, `log` and `timing` (unset, it builds exactly today's link); and a new `describe("jobs (R-C2)")` (:326-867) with thirteen tests (nine, then four from review round one, (l)), between "connection" and "pairing". The 19 existing tests are unchanged: `git diff` shows no removed line inside them, and codium-finish's B09 hunk (a test inside "paired phones") lands after the "marks a turn the phone started" test (:1069 here), about 200 lines below the new block.
+
+### The decode
+
+It matches EV-06's "The offer frame", with one stated substitution:
+
+- `decodeFrame`, then kind `FRAME.JOB_OFFER` and sixteen zero device bytes; otherwise the frame is dropped. The device bytes are never read as a device or peer id.
+- The body is checked on its bytes: longer than `vef1.`, at most `OFFER_BYTES` (16,384, the relay's `internalBodyBytes`), starting with the bytes of `vef1.`, and every byte in 0x21-0x7e. That is the relay's `OFFER` check (`^vef1\.[\x21-\x7e]+$`, at most `internalBodyBytes` characters) applied to bytes. Only then is it decoded to text (`TextDecoder`, which for these bytes is plain ASCII).
+- EV-06 said to read the text with `fromUtf8`. That helper is in packages/relay/src/bytes.ts, which the relay package does not export, and it strips a leading byte-order mark. The byte check is stricter: a BOM, any non-ASCII byte (valid UTF-8 or not), space, control bytes and DEL are refused, and nothing the relay forwards is refused. See (e).
+- The text goes to `jobs.offer(text)` unverified. E9 stays the subscriber's: everywhere-offer.ts `createOfferVerifier` against the pinned `OFFER_KEYS`, which EV-21 wires.
+
+### The cadence
+
+- **Without a `jobs` dependency nothing changes.** `jobsWanted()` and `jobsOnly()` are false, so `wanted()` is today's rule, the phone cadence runs exactly while `viewers > 0`, the jobs timer never starts, the takeover refresh never fires, and `control()` refreshes on every `peers.refresh` as before. The new `syncRefresher()` call in `evaluate()` is a no-op there, because control() already keeps the phone timer in step with `viewers`.
+- **Job-only** (jobs want it, no phone paired, no pairing open): no data frame, the 25-s ping, one refresh every 12 hours (half of `computerTicketMaxAgeMs`), and no refresh when another computer's phone arrives, either for the relay's `peers.refresh` or as a 4-minute cadence. A day costs two refreshes, each waking the Durable Object and booking up to `idleTailMs` (10 s) of awake time: about 20 s a day, against about 30 awake-hours a month for the 4-minute cadence (spec R-C2).
+- **Jobs on with a phone paired but not attached:** the jobs cadence also runs (the phone cadence needs a viewer). Today such a computer is closed `TICKET_EXPIRED` a day after its ticket lapsed and reconnects; now it refreshes every 12 hours and stays connected. See (d).
+- **The takeover refresh** (critique, major, taken). A job-only connection lets its 5-minute ticket lapse between its refreshes, and the relay sends `peers` with `refresh` only when its peer list changes. So when the connection stops being job-only while a phone is already attached (a pairing opened with the scanning phone already attached for another computer, or a paired identity loaded later), the phone cadence's first refresh would come up to 4 minutes later, and meanwhile the relay answers every pairing frame with a `ticket-expired` notice the link ignores. `syncRefresher` therefore refreshes once at once when the phone cadence starts while the jobs timer was running, unless control() refreshed in the same step (a phone arriving with `refresh`), so that case refreshes once, not twice.
+
+### Deviations
+
+- **(a) The desktop contract is `jobs {want(), offer(text)}` plus `jobsChanged()`,** not §6.3's `OfferSource {subscribe(handler), want(on)}`. The link reads `want()` on every connection decision (`wanted()`, `jobsOnly()`, the cadence), so the caller owns the state and calls `jobsChanged()` when it changes; there is no subscription to undo. `offer` returns `unknown` (critique, minor, taken), so EV-21 can pass the runner's `offer(offer: unknown): Promise<boolean>` (everywhere-runner.ts:341) as it is.
+- **(b) Offers go to the subscriber whatever `want()` says.** A phone's connection that receives an offer hands it on (pinned by the J9 test). The runner re-reads its settings and declines `off` (spec 3.5 step 2, everywhere-runner.ts:345-346), so the router hears a refusal at once instead of waiting out its 20 s. *Review round one (kept, and written into the handoff for EV-21):* this leaves the link with no fail-closed layer for a computer that takes no jobs. That rule rests on the subscriber alone: the runner's `off` decline, the verifier and the pinned `OFFER_KEYS`, which is empty today. The alternative, `offered()` dropping the frame while `want()` is false, would add that layer but make the router wait out its 20 s for each such offer. The brief's "without a subscriber, the frame is dropped" names the case with no `jobs` dependency, and that frame is dropped (J6). EV-21 relies on this choice, so its everywhere-wiring.test.ts must pin the `off` decline through remote-runtime.ts: with the setting off, a signed offer that arrives on the link is answered `decline(jid, "off")` and nothing is claimed.
+- **(c) A job-only computer ignores another computer's phone:** no refresh for its `peers.refresh` and no 4-minute cadence. It sends nothing a phone reads.
+- **(d) Jobs on, a phone paired but not attached:** a refresh every 12 hours instead of a `TICKET_EXPIRED` close and reconnect once a day. The relay's view is the same live computer either way.
+- **(d2) The relay re-checks a job-only computer only at its 12-hour refresh** (review round one, recorded; no code). The relay checks standing and revocation (`standing(claims)`, `applyPlan`) and the kill flag when a computer connects or refreshes (account-relay.ts:198-202, :391-394), and the API checks the plan when it mints a ticket. Before, only a phone's connection refreshed, every 4 minutes. So a job-only computer whose account loses Remote, or whose plan drops its computer places, stays connected until its next refresh, up to 12 hours. When the API refuses that refresh's mint, `refresh()` sends nothing, and the relay closes the computer `TICKET_EXPIRED` on a wake more than `computerTicketMaxAgeMs` after its last ticket expired, as it closes today's idle computer with a phone paired and none attached. This is not a security break: the API's perk, plan and switch checks gate every offer before `job-offer` is called (EV-09), the relay sends no offer while the kill flag is set or the account is suspended, the account's `kill` ("Disconnect all") still closes the socket at once, and the desktop verifies every offer (E9).
+- **(e) The form check is the relay's, on bytes, with local constants** (critique, minor, both points taken). `OFFER_BYTES` and `JOBS_REFRESH_MS` are written in remote-link.ts rather than imported from `@vectordevai/relay/limits`, which no bundled desktop file imports today and whose header keeps §4.2's server-only values. The test file (not bundled) pins both against `RELAY_LIMITS`: the longest offer the relay forwards (`internalBodyBytes` bytes) arrives and one byte more is dropped, and over the simulated day the first refresh lands at `computerTicketMaxAgeMs / 2` and no ticket gap reaches `computerTicketMaxAgeMs`. The check replaces EV-06's `fromUtf8` (not exported, and it strips a BOM) with the stricter byte check above; schema's `OFFER_PATTERN` and the signature stay the subscriber's.
+- **(f) Hand-off, not await, with a fixed log line.** `offered()` calls `offer()` in a microtask and never waits for it, because the runner's `offer()` resolves only when its whole job ends. A synchronous throw or a rejection is caught and logged as "remote: a job offer was not taken", with no offer text, error text or meta, and never reaches the connection or onData's "remote: frame failed".
+- **(g) Refresh failures** (critique, minor, recorded; no code). A failed mint is skipped (`refresh()` sends nothing), and so is a refresh the relay rejects (`ticket-invalid` or `ticket-expired` notices are ignored by control(), as today). One failure is covered by the next refresh, 12 hours later and still inside the 24-hour window. Two in a row let the relay close the computer `TICKET_EXPIRED` on its next wake, which may be an offer's own (`internal()` runs `sweep(now)` before `jobOffer`, account-relay.ts:674), so that offer is lost for this computer; the link then reconnects with backoff, and EV-21's pending call on reconnect picks up waiting jobs. No retry timer is added.
+- **(h) `want()` must be synchronous; one that throws counts as false** (the second half from review round one). It is read inside `wanted()`, `jobsOnly()` and `syncRefresher()`, which also run in `closed()` and `control()`, so a throw would break reconnects and the phone's cadence, not only jobs. `jobsWanted()` (:636-644) catches it and answers false. That closes a job-only connection and leaves the phone path as it is without jobs (E10's fail-closed rule; pinned by J12). It is the one try/catch this package adds, at the boundary where the link calls code it does not own on every connection decision.
+- **(i) The simulated day uses Bun's fake timers, stepped** (critique, major, taken). `jest.advanceTimersByTime` is synchronous, so a refresh's API call (after `await deps.token()`) runs only after the advance returns. The test therefore advances 24 one-hour steps and drains microtasks after each, so each mint reads the fake clock at the hour it was made; it asserts the first refresh lands in [12 h, 12 h + one step), 3,456 pings (`86_400_000 / heartbeatEveryMs`) and one or two refreshes. The second 12-hour tick falls exactly on the 24-hour boundary and is counted; a cadence shorter than 12 hours would make three. The identity is made under real timers first; under fake timers the test waits only on microtask turns (`turns()`, `flush()`), never on `until()`.
+- **(j) At most eight offers in flight** (critique, minor, first recorded with no limit; review round one, now a cap). The relay caps the API's job-offer calls at 30 an hour per account, but a compromised relay (E9's threat) could send any number of well-formed frames, each starting one signature verification. `offered()` (:742-762) now counts the offers handed to the subscriber and not yet settled (`state.offering`, released in a `finally` whether `offer()` resolves, rejects or throws) and drops a frame while eight are unsettled. A serial chain is still not used: it would hold the second job until the first ends, because the runner's `offer()` runs the job. Eight is above what the runner can hold. Its `offer()` stays unsettled for a running job's whole length, and it runs at most `COMPUTER_CAPS.atOnce.max` (3, packages/schema/src/everywhere.ts:396) jobs, so at least five places stay free for verifications and declines, which settle at once. A genuine offer is dropped only while eight are unsettled, that is under a flood; the router then waits out its 20 s, as for a computer that is not there. This answers the first critique's objection (a cap would count running jobs and swallow the decline the router waits for) in every case short of a flood. The count belongs to the link, not the connection: offers still settling keep their places across a reconnect, because the runner owns them, not the socket. A dropped frame is not logged, so a flood does not flood the log. There is no dedupe by text: the runner's `active.has(jid)` and the verifier's replay ledger (`useOnce`) already refuse a replay, and J7 hands the same text three times on purpose. **For EV-21:** if replays of one genuine offer should not each reach `useOnce`, drop a text already in flight before verifying.
+- **(k) How the runner learns of a (re)connect** (critique, minor, recorded; no hook added). EV-21 uses the existing `changed(status)` callback: `status.state` becoming `online` follows each relay `hello`, so the pending call ("a reconnect pulls waiting jobs", VE-21) runs then. A `jobs.online()` hook would duplicate it.
+- **(l) Review round one (2026-11-16): seven findings, none blocking; all taken, (b) as a record only.** Receipts: progress, "EV-11, 2026-11-16: review fixes (round one)". J1-J9 keep their names; the four new tests are J10-J13 (J10 and J11 sit after J4, J12 and J13 before J9, which stays last).
+  - M14 and M15 no longer survive. J10, "the jobs cadence counts from each connection, and a close, want(false) or stop() ends it" (production timing, fake timers), closes a job-only connection 11 hours in and checks that the next refresh comes 12 hours after the new connection's mint, not at the first connection's 12 hours. It does the same after `want(false)` then `want(true)`. After `stop()` it checks that no timer of the link is left (`jest.getTimerCount()`, a minute after the last mint so its 15-s `AbortSignal.timeout` has lapsed) and that nothing is minted or sent over another day. J11, "the jobs cadence starts only once the relay's hello arrives", holds a FakeSocket unopened for several 40-ms jobs periods and checks that only the connect ticket was minted.
+  - The simulated day (J4) now stops the link in its `finally`, so a failed assertion leaves no ping or refresh timer running under real timers for the tests after it. J10 does the same.
+  - (d2) records that the relay re-checks a job-only computer only at its 12-hour refresh.
+  - (b) is kept, and the handoff now states it with the `off` decline that EV-21's wiring test must pin.
+  - The hardening, both taken: a throwing `want()` counts as false (h), pinned by J12, "a want() that throws counts as not wanted, and the phone's path keeps working"; and at most eight offers are in flight (j), pinned by J13, "at most eight offers wait on the subscriber at once; more are dropped until one settles".
+
+### Not changed
+
+- Encryption, pairing, phone frames, the routes, the event stream, the frame budget, close codes and their retries, `RemoteStatus` and `RemoteState`. A job-only connection reports `online` with no phones; see the handoff's "Left open".
+- remote-runtime.ts passes no `jobs` (R-C3, EV-21), so production behaves as before: a `0x02` frame is still dropped, now by the explicit branch, since `offered()` returns at once without a subscriber.
+- The link never creates an identity for jobs. Only `setEnabled(true)` and `startPairing()` do, as today; EV-21 calls one of them after the person's consent (spec R-C2's first option, and VE-21's "turns Remote on (creating its identity) with the user's consent").
+- `OFFER_KEYS` stays empty and `LAPTOP_ROUTE_WIRED` false. The relay, the API and the schema are untouched. A job-only computer takes one of the plan's computer places, like any computer.
+- No new env var, flag, route, dependency, install or generated file.
+
+### Mutations
+
+Each applied to remote-link.ts alone, remote-link.test.ts run alone, then the file restored from a copy and its sha256 checked. First run: /tmp/vector-v2/everywhere/ev11-mut/, against J1-J9 (named in the progress receipt). Review round one re-ran every mutation against all thirteen tests (/tmp/vector-v2/everywhere/ev11-fix/mut/); this table is that run's:
+
+| Mutation | Result | Red tests |
+| --- | --- | --- |
+| M1 `wanted()` ignores jobs | 11 fail | J1-J8, J10, J11, J13 (J9 and J12 connect for a pairing and stay green) |
+| M2 no zero-device check | 1 fail | J6 |
+| M3a no `vef1.` prefix check | 1 fail | J6 |
+| M3b no visible-ASCII check | 1 fail | J6 |
+| M4 no length bound | 1 fail | J6 |
+| M5 the phone cadence ignores `jobsOnly()` | 2 fail | J4, J5 |
+| M6 `peers.refresh` refreshes a job-only link | 2 fail | J4, J5 |
+| M7 no jobs refresher | 4 fail | J4, J5, J10, J11 (no jobs timer, so no takeover refresh either) |
+| M8 `evaluate()` does not call `syncRefresher()` | 1 fail | J5 (startPairing and unpair change the cadence with no server message) |
+| M9 `offer()` called inline, no hand-off | 2 fail | J7, J13 |
+| M9b hand-off without the catch | 2 fail | J7, J13 (the rejection escapes the `finally`) |
+| M10 offers only while `want()` | 1 fail | J9 |
+| M11 `jobsChanged()` makes an identity | 1 fail | J8 |
+| M12 no takeover refresh | 1 fail | J5 |
+| M13 the takeover refresh ignores control()'s | 1 fail | J5 (two refreshes for one `peers.refresh`) |
+| M14 teardown does not clear the jobs refresher (the line `clearInterval(state.jobsRefresher)` removed) | 1 fail | J10. Survived the first run. The leaked timer keeps its first connection's schedule beside the new one, so a refresh comes at the first connection's 12 hours |
+| M14b teardown neither clears nor forgets it | 1 fail | J10. The old timer is reused after the reconnect, so the cadence counts from the first connection |
+| M15 the jobs cadence ignores `online` | 1 fail | J11. Survived the first run. The timer starts while the socket is still opening and mints a ticket it cannot send |
+| M16 a throwing `want()` is not caught | 1 fail | J12 |
+| M17 no in-flight cap | 1 fail | J13 |
+| M18 a settled offer keeps its place (no `finally`) | 1 fail | J13 |
+| M19 the cap admits one more (`>` for `>=`) | 1 fail | J13 |
+
+No mutation survives. The first run's M14 note said the old timer is reused on reconnect; that is M14b. With the `clearInterval` line alone removed (M14), the leaked timer runs beside a new one.
+
+### Coordination
+
+- **Codium-area files** (spec §6.4's Codium row), built under the lead's brief as EV-05 and EV-06 were. Spec :10 and the handoff's owner rules are not edited.
+- **codium-finish B09** adds one test inside `describe("paired phones")` of remote-link.test.ts; this package's hunks are the imports, `setup()` and a new describe block before "pairing". The cross-lane probe (progress receipt) merges cleanly.
+- **A request to Codium:** annotate codium-a41-desktop-remote-notes.md:18 ("Connected only while Remote is on and a phone is paired or a pairing is open", and its refresh cadence) with the jobs case and the 12-hour cadence.
+- **Noticed in today's phone path, not changed (a request to Codium):** the relay asks a computer to refresh only when its ticket has already lapsed (account-relay.ts `announce`, `now >= exp`). A computer that connected less than five minutes before a phone arrives gets no `refresh`, and its 4-minute cadence starts then, so its first refresh can come after the 5-minute ticket expired, and its frames are refused `ticket-expired` for up to four minutes. With jobs on, the takeover refresh covers this only when the jobs cadence was running.
+- **EV-21:** pass `jobs: {want: () => <the "takes jobs" setting>, offer: runner.offer}` from remote-runtime.ts (R-C3), call `link.jobsChanged()` when the setting changes, turn Remote on through `setEnabled(true)` after consent, run the pending call when `changed(status)` reports `online` (k), and consider the in-flight dedupe in (j). After "Disconnect all phones" the computer reconnects for jobs under its new device id, so whatever EV-21 registers by device id follows `phones()`'s identity, not the old one.
+
+### Deferred verification
+
+- CI: vector-hosted-ci.yml (desktop remote-*.test.ts with --no-env-file, the relay tests, the dry run and the smoke) and typecheck.yml, as workflow_dispatch on everywhere-finish after the commit and push.
+- A job-only computer idle for a day against the real relay's sweep and awake meter on workerd; Electron's real WebSocket.
+- EV-21's everywhere-wiring.test.ts: the runner registered through remote-runtime.ts, and "a reconnect pulls waiting jobs".
+- VE-50 live acceptance.
+
+## 2026-11-16, EV-12: the safe unattended worktree, engine service (no route)
+
+vector-everywhere-main-requests.md, "Safe unattended worktree creation" (every requirement); spec §5 E5 and E7; §3.5 step 4. Built at HEAD `d31d418f` (origin/everywhere-finish), which holds origin/release-finish `67ec3a60`; nothing needed merging. No review-fixes or brain-transport precondition. docs/vector/build/v2-spawn-review.md was read first: this package adds no spawn site of its own kind. Every git it runs goes through `AppProcess.run`, so through the standard CrossSpawnSpawner, which consults ProcessIsolation and owns and kills the process group (one owner, one signaler). There is no beforeSpawn hook, PTY, MCP server or background shell. Line numbers below are after the change. Committed at the lane's commit gate (2026-11-16) as `feat(engine): add a safe unattended worktree creator`; the gate's re-run checks are in vector-everywhere-progress.md.
+
+### What changed
+
+- **packages/core/src/everywhere/git.ts** (new, 89 lines; spec 6.6's `everywhere` name): `export * as EverywhereGit from "./git"`. The runner's repository-config allowlist (`SAFE_CONFIG`, private), `safeRepositoryConfig`, `GIT_HARDENING` and `runnerGitEnvironment` moved here from desktop everywhere-git.ts with the same strings, keys and order (prettier reflowed them), plus a new `fetchRef(jid)` (`refs/vector-everywhere/<jid>`, the runner's fetch ref; it throws on an id that is not a job id, as `branchFor` does).
+- **packages/desktop/src/main/everywhere-git.ts** (+4/-39): the moved definitions and the `node:os` import are gone; it imports the four names from core, re-exports the three it exported (`export { … } from`), and `fetch()` uses `fetchRef(jid)`. Callers and everywhere-git.test.ts still import from `./everywhere-git`; behaviour is unchanged (the test file passes 8/88 at HEAD and after).
+- **packages/engine/src/worktree/index.ts** (additive; +195/-1):
+  - imports (:22-25): `BRANCH_PATTERN`, `HEAD_SHA_PATTERN`, `JOB_ID_PATTERN` from schema; `GIT_HARDENING`, `fetchRef`, `runnerGitEnvironment`, `safeRepositoryConfig` from core everywhere/git; `UntrustedGit`; `lstatSync`.
+  - `UnattendedInput` and `Unattended` schemas (:55-69), for EV-13's route payload and success.
+  - `UNATTENDED_FLAGS`, `UNATTENDED_TIMEOUT` (60 s) and `UNATTENDED_OUTPUT_BYTES` (8 MiB) (:123-142).
+  - `Interface.createUnattended` with a doc comment (:171-178).
+  - The implementation, a new block after `canonical` (:431-565): `unattendedGit`, `unattendedPrints`, `absent`, `unattendedConfig`, `createUnattended`.
+  - `Service.of({...})` (:933-943) gains `createUnattended`; prettier now wraps it, one name per line (see "Coordination").
+  - `create`, `createFromInfo`, `createForTask`, `list`, `remove`, `removeForTask`, `reset`, the private `git` helper and the `Error` union are unchanged, so groups/experimental.ts's `WorktreeErrorName` needs no new literal and no route or generated file changes.
+- **packages/engine/test/everywhere/worktree.test.ts** (new, 537 lines, eight tests; it imports no desktop file, F5). vector-everywhere.yml picks it (a folder named `everywhere`).
+- Lane documents: this entry; vector-everywhere-progress.md (receipt); vector-everywhere-main-requests.md (a dated status line); vector-everywhere-handoff.md (an annotation on the "Current gates" safe-worktree bullet, an EV-12 bullet and a "Left open" item); vector-everywhere-spec.md (dated notes on §3.5 step 4 and §6.4).
+
+### The sequence
+
+`createUnattended({directory, base, branch, jid})` (:474-565), with fixed messages that carry no git output, path or repository text:
+
+1. The instance's project must be Git (`NotGitError`, the existing message).
+2. Shape (:478-484): `Schema.is(UnattendedInput)`, an absolute `directory`, and the job's own branch: `vector/ve-<last 12 of jid>` or a branch ending `-<last 8 of jid>` (core `branchFor`'s two forms). Otherwise "Invalid unattended worktree request."
+3. Binding (:488-495): `canonical(directory)` must equal `canonical(ctx.directory)` and `canonical(ctx.worktree)` and must not be inside `canonical(Global.Path.data)`. Otherwise "An unattended worktree starts only from the loaded project's own checkout."
+4. `rev-parse --git-common-dir` (the lock key, as createForTask takes it), then everything else under `FileLock.forTree(<common dir>)` (:507):
+   1. **Config, the authoritative check** (:509-513): `config --null --list --local --no-includes`, `rev-parse --git-path config.worktree` and, when that file exists, `config --null --list --file <it> --no-includes` must each succeed and pass `safeRepositoryConfig`. Otherwise "The repository's git configuration can run programs. No unattended worktree was created."
+   2. Toplevel (:514-516): `rev-parse --show-toplevel` must canonicalize to the checkout, which defeats a `core.worktree` redirect (the allowlist keeps `core.worktree`).
+   3. **Base** (:517-529): `rev-parse --verify --quiet --end-of-options refs/vector-everywhere/<jid>` must print exactly `base`, and `rev-parse --verify --quiet --end-of-options <base>^{commit}` must print exactly `base`. Otherwise "The base is not this job's fetched commit."
+   4. **Reservation** (:530-543): nothing at `<data>/everywhere-worktree/<project id>/<jid>` (`lstatSync` with `throwIfNoEntry: false`, so a link or a file counts), the path inside the data folder (`FSUtil.writableInside`), then `show-ref --verify --quiet refs/heads/<branch>` must exit exactly 1. Then `mkdir -p` of the project's root and an exclusive (non-recursive) mkdir of the job's folder. Any of these fails with "This job's branch or folder is already reserved."
+   5. **Creation** (:544-557): `worktree add --no-checkout --no-track -b <branch> -- <folder> <base>` from the checkout, `reset --hard --quiet --no-recurse-submodules` in the folder, then `rev-parse --verify HEAD` must print `base` and `symbolic-ref HEAD` must print `refs/heads/<branch>`. A failure here gives "The unattended worktree could not be created. Its reservation is kept, so this job id is not reused." Nothing is rolled back.
+   6. **Registration** (:558-562): `FSUtil.realpath(folder)` (native case), `project.addSandbox(project, it)` with a defect mapped to the same failure, and only then `{directory, branch, base}` is returned.
+- Every git call (`unattendedGit`, :435-452) runs `UntrustedGit.program()` (on Windows the first git.com or git.exe in an absolute PATH entry, never one in the repository) with `UNATTENDED_FLAGS` first: `GIT_HARDENING` (`core.hooksPath=<null device>`, `core.fsmonitor=false`, `core.sshCommand=`, `protocol.ext.allow=never`, `protocol.file.allow=never`, both gpgSign off, `credential.helper=`, `core.pager=cat`) plus `core.useBuiltinFSMonitor=false`, `protocol.allow=never`, `protocol.{git,http,https,ssh}.allow=never`, `gc.auto=0`, `maintenance.auto=false`, `submodule.recurse=false` and, on Windows, `core.longpaths=true`. It runs with `extendEnv: false`, `stdin: "ignore"` and the env `runnerGitEnvironment()` plus `GIT_NO_LAZY_FETCH=1` (no system or global config, no inherited `GIT_*`), 60 s and 8 MiB of stdout at most. A spawn failure, a timeout or cut-off output answer `-1`, never one of git's own exit codes, so `show-ref`'s "absent" (exactly 1) cannot be faked by a failure to run.
+- It never calls `setup`, `boot`, `store.load`, `runStartScripts`, `GlobalBus` Ready or Failed, `config.inheritTrust`, the Local `refusal` or `gitEnvironment`, or any program but git. `addSandbox` emits only `Project.Updated`.
+
+### Deviations
+
+- **(a) Engine source.** Spec 6.4 said this lane adds no engine source but one config line. The brief adds one function beside `createForTask` (now noted in spec 6.4 and §3.5 step 4). It changes no existing function; scope-finish's SF-07, which also edits this file, was checked (see "Coordination").
+- **(b) The allowlist, the flags, the environment and the fetch ref moved to core everywhere/git.ts and are shared with the runner.** This widens the brief's two-file list, and the critique asked for the lead's yes or the plan's fallback (constants copied into index.ts with a note naming the desktop copy). That yes could not be asked for inside this step, so the move was built and is left uncommitted for the lead to accept or send back before the commit. Why the move: E5's allowlist is a security boundary and two copies would drift; the engine may not import desktop, and both may import core; with the same environment the checkout and the runner's later commit see the same `core.autocrlf` on Windows; and `fetchRef` gives the runner's private ref name one definition, so EV-21 cannot rename it without the engine following (the critique's point, taken). The fallback, if the lead prefers it: put `SAFE_CONFIG`, `GIT_HARDENING`, `runnerGitEnvironment` and the ref prefix in index.ts, revert the desktop file, and record the drift risk as a follow-up. *Review round one (non-blocking):* the review agrees that both paths are spec 6.6 safe zones and that behaviour is unchanged, and asks that the lead accept (b) before the commit and that the commit body name all four code files (packages/core/src/everywhere/git.ts, packages/desktop/src/main/everywhere-git.ts, packages/engine/src/worktree/index.ts, packages/engine/test/everywhere/worktree.test.ts); otherwise the fallback above. The move stays in the working tree for that decision. *Commit gate (2026-11-16):* the move was committed as built, and the commit body names all four code files; if the lead sends (b) back, the fallback above is the follow-up. The core module's header now says it is Node-only (node:os, process.env), for desktop main and the engine, never browser code, instead of "pure and runtime-neutral".
+- **(c) Branch: `BRANCH_PATTERN` plus the jid's suffix, not the brief's `vector/ve-[a-z0-9-]+`.** Jira keys keep their case (§3.5 step 4; `branchFor(jid, {key: "ABC-12", platform: "jira"})` is `vector/ve-ABC-12-<8>`), which the brief's pattern refuses. The suffix binds the branch to this job, so another job's branch is refused.
+- **(d) Base: `HEAD_SHA_PATTERN` (40 or 64 hex) and two checks.** The fetch ref must name `base` as it is (no peel: the runner reads `rev-parse <ref>` the same way), and `base^{commit}` must resolve to `base`. "Moved" therefore means the fetch ref names another commit, "unknown" that the object is not here, and a tag object is refused because it only peels to a commit. Each check is needed on its own (M3, M4).
+- **(e) Reservation and its order.** The folder is `<data>/everywhere-worktree/<project id>/<jid>`, beside `worktree` and `task-worktree`. The critique's major point was taken: the absence check is an explicit `lstat`, `writableInside` is kept only for containment, and the absence check runs *before* `show-ref`, so a folder another process makes after the check is refused by the exclusive mkdir, which a test now reaches (M5 red; the first build put `show-ref` first, which let M5 survive). `FileLock.forTree` serializes this process only; across processes the exclusive mkdir reserves the folder and git's ref lock the branch (argued; no two-process test). Nothing is given back after the mkdir: a jid is used once, so a failed reservation is never retried (fail closed). *Review round one:* U8 now pins this: `worktree add` failing after the mkdir (another writer takes the branch as the command starts) gives the "reservation is kept" message and leaves the folder empty and unregistered, and a second create with the same jid, with the branch gone again, is refused as reserved without running `worktree` (M23 red). U6 now also asserts that the race's loser fails with the reservation message and that `.git/worktrees` holds one entry, so the reservation, not git's own refusal in `worktree add`, decides the race.
+- **(f) No transport at all.** `protocol.allow=never` and `GIT_NO_LAZY_FETCH=1`, so a partial clone missing a blob of the base is refused at `reset`, not fetched. No command here connects, which is why the Local refusal (`refusal()`) is not consulted: it would only ever allow less than "never". *Review round one:* a per-protocol `protocol.<name>.allow` beats `protocol.allow`, so `UNATTENDED_FLAGS` now also pins `protocol.{git,http,https,ssh}.allow=never` (GIT_HARDENING pins ext and file), as core untrusted-git.ts does. Today the allowlist refuses every `protocol.*` key and system and global config are off, so no behaviour changes; it keeps "no transport" from depending on the allowlist if that is ever widened. U1 asserts all six pins on every marked command, which is the only way a test can see them (M22 is red there, not through behaviour).
+- **(g) Windows.** git comes from `UntrustedGit.program()`, and the returned folder is `FSUtil.realpath`'s native-cased path, not `canonical()`'s lowercased one, which the runner's toplevel comparison would not match.
+- **(h) Trust, the allowlist and owner-only access are EV-13's** (the critique's major point, stated). The Worktree layer has no Config, and adding it would change the layer graph that `createForTask` and SF-07 share. EV-13's handler must refuse a guest (403), a folder not in `everywhere.projects` (canonicalized as EV-10 says), and a project `config.trust()` does not report trusted, with a test for each. Workspace trust is neither consulted nor inherited here (`inheritTrust` is not called), so the new sandbox's own project config stays untrusted; EV-21 must confirm that the unattended session still runs in an untrusted sandbox, since its rules come from the session's `permission` (`unattendedRules`), not from project config. *Review round one:* EV-13's brief lists owner auth, the guest 403, 400 on bad input and the probe, but not trust or the allowlist, so this invariant could fall through both packages; nothing calls the service yet, so nothing is exposed today. The lead is asked to add "refuse an untrusted project (`config.trust()`) and a folder outside `everywhere.projects`, with a test for each" to EV-13's scope and Done-when list. The review's alternative, a required trust predicate on `createUnattended`, was not built: a predicate the caller supplies is only as strong as the caller's own check (it can pass a constant `true`), and it would run after the instance is loaded, which is already too late for the allowlist. Because `createUnattended` reads `InstanceState.context`, EV-13's route is instance-scoped, and the instance middleware (server/routes/instance/httpapi/middleware/instance-context.ts) runs `store.load({directory})` before any handler, which boots the instance (InstanceBootstrap: `config.get()`, `plugin.init()`, LSP and the rest). EV-13 must therefore run the allowlist and trust checks before instance resolution, or accept only an already loaded instance, and its test must show that a directory outside the allowlist never gets an instance loaded. The interface's doc comment now says the caller must not load an instance for a folder outside the allowlist.
+- **(i) Fixed messages.** No git output, path, branch or repository text reaches an error, as in desktop everywhere-git.ts.
+- **(j) Registration is required.** Unlike `setup` (which swallows an `addSandbox` failure), a failed registration fails the call. `Project.Updated` is emitted; `Worktree.Event.Ready` is not.
+- **(k) Where the config check sits** (the critique's point, taken). It runs inside the lock immediately before the base check and the reservation, and git's own `worktree add` and `reset` follow with nothing else awaited in between; that check is the authoritative one. Only `rev-parse --git-common-dir` runs before it, with the hardening flags, as createForTask does (it needs the lock key); it reads no filter, hook or helper. A local writer of `.git/config` can already run programs as the user, so the milliseconds between the check and `reset` are not defended further.
+- **(l) Limits** (the critique's point, taken). Each git call has the runner's 60-s bound, so a stuck git cannot hold the per-repository lock that `createForTask` and SF-07's task worktrees also take; the worst case for one call is about twelve minutes (twelve git calls). stdout is capped at 8 MiB (the runner's `maxBuffer`), and a cut-off config listing refuses rather than passing on the part read.
+- **(m) Test observation** (the critique's major point, taken). The test's AppProcess decorator records every `run` (not only `git`), and a fiber-local `Context.Reference` set only around `createUnattended` marks its own commands, so the instance's background git cannot pollute the check and the filter assumes nothing about the property under test. The test asserts that the marked set includes `worktree add` and `reset`, that every marked command's basename is git, git.exe or git.com with the full hardening prefix, `protocol.allow=never` and each `protocol.<name>.allow=never`, `extendEnv: false` and exactly the runner's environment keys plus `GIT_NO_LAZY_FETCH`, and that no unmarked command ran in the new folder. `runStream` and the raw spawner are not wrapped; `createUnattended` uses neither.
+- **(n) Critique points not taken:** none outright. Two were taken in the form the critique offered as an alternative: the cleanup sweep is recorded for VE-21 rather than registering the sandbox right after `worktree add` (registering a half-made checkout would show it in the app, where opening it loads an instance), and the cross-process race is argued, not tested.
+
+### Left open
+
+- **Removing and resetting an unattended worktree.** `Worktree.remove` runs plain git (repository hooks), and `Worktree.reset` runs plain git and then the project's start scripts; `Project.Updated` puts the sandbox in the app's list, where both are a click away and opening it loads an instance. The hooks that would run are the sandbox's own `.husky` files, which the unattended session may have edited (E7 only keeps them out of the commit). EV-21 (with VE-21's cleanup) must refuse or harden both for `<data>/everywhere-worktree/**`, as `removeForTask` does for task worktrees.
+- **Cleanup must sweep the folder, not only sandboxes.** A failure at `worktree add` keeps the job's empty folder (U8), and one after it (at `reset` or the HEAD checks) also leaves the `vector/ve-…` branch and git's `.git/worktrees/<jid>` registration, with no sandbox either way. VE-21's 7-day cleanup must sweep `<data>/everywhere-worktree/<project id>/*` against `git worktree list` and the `vector/ve-*` branches.
+- POSIX checkouts keep symlinks; the session's `external_directory` rules apply to them.
+- The cross-process race is argued (exclusive mkdir, git's ref lock), not tested; M11 shows the mkdir alone still gives one winner in-process.
+- The 60-s limit, the output cap and the Windows program lookup have no test (M17-M19 below).
+
+### Mutations
+
+Each applied to packages/engine/src/worktree/index.ts alone, test/everywhere/worktree.test.ts run alone, then the file restored from a copy with its sha256 checked (/tmp/vector-v2/everywhere/ev12-mut/: mutations.py, run.py, results.txt, a log per mutation). A first run against an earlier build, which ran `show-ref` before the absence check, found M5 surviving (first-run/); the order was fixed ((e)) and all 22 were re-run (results.txt). That second run predates two edits the first version of this paragraph undercounted: the interface's doc comment was rewrapped, and U1's title was renamed from "…registers it as a sandbox and runs no hook, start script or other program" to "…registers its sandbox, running no hook, start script or other program", its assertions unchanged. After review round one (the per-protocol pins, the doc comment's EV-13 sentence, U1's pin assertions, U6's message and `.git/worktrees` assertions and the new U8), all 24 mutations, M22 and M23 new, were run a third time against the final index.ts and test file (round3/). A round2/ run was stopped at M18 to rewrap one new comment line that was over 120 columns; its M1-M17 agree with the third run except M11b (below). The table is the third run, under the file's current test names.
+
+| Mutation | Result | Red test (first failing case) |
+| --- | --- | --- |
+| M1 drop the `core.hooksPath` override | 1 fail | U1: the committed `.husky` hook writes its marker |
+| M2 skip the repository config check | 1 fail | U5: the smudge-filter repository gets a worktree |
+| M3 skip the fetch-ref equality | 1 fail | U3: a job with no fetch ref gets a worktree |
+| M4 skip the base's self-resolution | 1 fail | U3: a fetch ref naming a missing commit reaches `worktree add` (wrong message, folder left) |
+| M5 recursive mkdir of the job's folder | 1 fail | U2: the folder another process made after the check is used |
+| M6 skip the `show-ref` pre-check | 1 fail | U2: an existing branch reaches `worktree add` (wrong message, folder left) |
+| M7 skip the jid-branch binding | 1 fail | U4: another job's `vector/ve-<12>` gets a worktree |
+| M8 skip `addSandbox` | 1 fail | U1: the sandbox is not listed |
+| M9 run the project's start scripts | 1 fail | U1: the start marker appears |
+| M10 `extendEnv: true` | 1 fail | U1: the environment assertion |
+| M11 drop the FileLock | survives | U6 still has one winner: the exclusive mkdir decides (by design, (e)) |
+| M11b drop the FileLock and make the mkdir recursive | 1 fail | U2's race case. U6 depends on the interleaving under this mutation: still one winner, and in this run the loser was refused as reserved before `worktree add` (green); in round2/ it reached `worktree add` and failed there, which U6's new message assertion caught (red) |
+| M12 drop `--no-track` | survives | by design: a SHA start point never tracks, so `.git/config` stays unwritten either way (U1 checks its hash) |
+| M13 skip the toplevel check | 1 fail | U4: the `core.worktree` redirect gets a worktree |
+| M14 skip the data-folder check on the checkout | 1 fail | U4: an unattended worktree seeds another |
+| M15 skip `writableInside` | 1 fail | U2: a project job folder linked out of the data folder gets a worktree outside it |
+| M16 skip the absence check | survives | defense in depth: `writableInside` refuses an existing non-file and the exclusive mkdir refuses anything else |
+| M17 no time limit | survives | untested: no test makes git hang (argued, (l)) |
+| M18 ignore cut-off output | survives | untested: no test writes 8 MiB of config (argued, (l)) |
+| M19 skip the post-creation HEAD check | survives | a post-condition that holds whenever both base checks pass |
+| M20 skip the config.worktree scope | 1 fail | U5: `url.<x>.insteadOf` in config.worktree gets a worktree |
+| M21 `existsSync` (follows links) instead of `lstat` | survives | a link at the path is still refused by `writableInside` |
+| M22 drop the per-protocol pins (review round one) | 1 fail | U1: the argument assertion (no behaviour shows them, (f)) |
+| M23 give the reservation back after a failed `worktree add` (review round one) | 1 fail | U8: the folder is gone after the failure |
+
+The plan's table predicted M5 red through U2's empty-folder case and M4 red through the tag case. Both were wrong for the reasons the critique gave: `writableInside` refuses an existing folder before the mkdir, and with the fetch ref also compared, a tag fails the fetch-ref check first. U2 now reaches the mkdir through the race case, and U3's loose fetch ref naming a missing commit isolates the self-resolution check.
+
+### Coordination
+
+- **SF-07 (scope-finish).** origin/scope-finish `1f5d62ad` changes nothing in packages/engine/src/worktree/index.ts since its merge base (checked at build time and again at the end of the package). This package's one shared hunk is `Service.of({...})`, which prettier wraps once a ninth name is added; a later SF commit that adds a Worktree method would meet it there. Re-check `git diff $(git merge-base HEAD origin/scope-finish) origin/scope-finish -- packages/engine/src/worktree/index.ts` before the push.
+- The other lanes' tips (review-fixes `1433d105`, codium-finish `c8696605`, connect-finish `34cf53cd`, hands-finish `ef9f809d`, brain-transport `569d1643`, workspaces-finish `e37ec1b5`, native-qualify `47db73cd`) touch none of the files this package changes since their merge bases.
+- **For EV-13:** the route takes `UnattendedInput` and answers `Unattended`, owner only, advertises `unattended-v1`, and checks the guest, the allowlist and trust (h) before calling, the allowlist and trust before an instance is loaded for the folder (h). A new HttpApi route also needs packages/engine/script/httpapi-exercise.ts and the client regeneration.
+- **For EV-21:** the desktop adapter maps `base` to SafeWorktree's `from` and passes the project folder the runner mapped; the runner's fetch must stay on `fetchRef(jid)`.
+
+### Deferred verification
+
+- CI: vector-everywhere.yml (this test file, the desktop everywhere-git and runner tests, the core, engine and desktop typechecks) and typecheck.yml, as workflow_dispatch on everywhere-finish after the lead's commit and push.
+- Windows and macOS runs of worktree.test.ts, in test.yml's engine shards at the lane end (vector-everywhere.yml is Linux-only): the Windows git lookup, the junction case and the native-cased return.
+- The HTTP path and the guest 403 (EV-13); a real two-process reservation race; the runner end to end on a laptop (EV-21, VE-50).
+
+## 2026-11-16, EV-13: the owner-only unattended worktree route and the `unattended-v1` probe
+
+vector-everywhere-main-requests.md, "Safe unattended worktree creation" (capability advertisement, no fallback); VE-07's SafeWorktree port (packages/desktop/src/main/everywhere-runner.ts:70-79); EV-12 (h). Built at HEAD `46471914` (EV-12's commit), which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`. origin/main `b362fdf6` (PR #33's merge) has a tree identical to `67ec3a60` and is not merged here: the lead merges main into this branch (the critique's point, taken; the plan had offered to do it). No review-fixes or brain-transport precondition. docs/vector/build/v2-spawn-review.md was read first: this package adds no spawn site, and its only processes are `createUnattended`'s existing git runs. Line numbers below are after the change, review round one included. Committed at the lane's commit gate as `feat(engine): expose the unattended worktree capability to the owner` (vector-everywhere-progress.md, "EV-13, 2026-11-16: commit gate"); the CI run ids go in the next lane-docs commit.
+
+### What changed
+
+- **packages/engine/src/server/routes/instance/httpapi/groups/experimental.ts** (+50): `ExperimentalPaths.worktreeUnattended` (:208); `UnattendedWorktreePolicy` (:230-232, identifier `WorktreeUnattendedPolicy`); a new `UnattendedWorktreeApi` (:666-706) with one group, `unattended-worktree`, whose only middleware is `Authorization`, OpenAPI tag `worktree-unattended`. Endpoints: `GET` `worktree.unattended.policy` (success `UnattendedWorktreePolicy`) and `POST` `worktree.unattended.create` (payload `Worktree.UnattendedInput`, success `Worktree.Unattended`, error `WorktreeApiError`), both on `/experimental/worktree/unattended`. `ExperimentalApi` is unchanged.
+- **api.ts**: the import (:15) and `.addHttpApi(UnattendedWorktreeApi)` (:73), before `.middleware(SchemaErrorMiddleware)`, so a malformed payload gets the same 400 shape as every instance route.
+- **server.ts**: the import (:120) and `unattendedWorktreeHandlers` in `instanceApiRoutes` (:203). Outside the brief's file list, but it is where handler layers are assembled.
+- **handlers/experimental.ts**: imports (:25-30: `Config`, `InstanceRef`, `InstanceStore`, `FSUtil`, `node:path`, `Exit`); the fixed messages (:585-590); `unattendedWorktreeHandlers` (:592-658: `policy` :599, `create` :607, `owner` :629, `allowed` :637, `loaded` :649); `refused` (:660-662).
+- **packages/engine/src/worktree/index.ts** (review round one): the exported `canonicalPath` (:949-954, the rule's comment :942-948) and `folded` (:956-959), with a `normalize` import (:26); the service's `canonical` (:420-424) is now `canonicalPath` with its old fallback (the resolved path, folded), the same in behaviour.
+- **packages/engine/src/config/config.ts** (review round one, additive lines only): `readGlobal` in `Interface` (:556-560), its implementation after `getGlobal` (:1829-1837) and its entry in `Service.of` (:2779). packages/engine/test/fixture/config.ts's fake gains `readGlobal: () => Effect.succeed({})`.
+- **packages/engine/test/server/httpapi-exercise/index.ts** (packages/engine/script/httpapi-exercise.ts only imports it): `worktree.unattended.policy` (200 `unattended-v1`), `worktree.unattended.create` (403 ForbiddenError: the exerciser's global config has no `everywhere` block) and `worktree.unattended.create.invalid` (400), after `worktree.reset` (:1420-1449).
+- **packages/engine/test/everywhere/worktree.test.ts**: a second describe, "POST /experimental/worktree/unattended (EV-13)" (:553-944), ten tests through the real in-process HTTP API. EV-12's eight tests are untouched apart from the shared import block.
+- **Regenerated, never hand-edited** (./packages/sdk/js/script/build.ts): packages/sdk/openapi.json (+161: the two operations, the `worktree-unattended` tag and the components `WorktreeUnattendedInput`, `WorktreeUnattended` and `WorktreeUnattendedPolicy`), packages/sdk/js/src/gen/sdk.gen.ts (+46), packages/sdk/js/src/gen/types.gen.ts (+77), packages/sdk/js/src/v2/gen/sdk.gen.ts (+53, a `worktree.unattended` client with `policy` and `create`) and packages/sdk/js/src/v2/gen/types.gen.ts (+77); additions only, and a second run changed nothing. packages/client is unchanged (`bun run generate` then `bun run check:generated` exit 0 with no diff), because the client compiles only protocol's `makeDefaultApi` (packages/client/src/contract.ts), never the engine instance API, as EV-10 also found. No config.json, workflow.json or help snapshot change.
+- Lane documents: this entry; vector-everywhere-progress.md (receipt); vector-everywhere-main-requests.md (an annotation on EV-12's status line and the "delivered" paragraph); vector-everywhere-handoff.md (annotations on the "Current gates" bullet, the EV-12 bullet and the EV-12 "Left open" item, and a new EV-13 bullet); vector-everywhere-spec.md (dated notes on §3.5 step 4, §6.4 and §6.5's generated row).
+
+### The sequence
+
+`POST /experimental/worktree/unattended` (`create`, :607-626). Each check runs only once those above it pass, and no refusal creates anything:
+
+0. **Authentication and the guest gate** (Authorization middleware): 401 without credentials. packages/server/src/auth.ts `isOwnerOnlyRoute` already refuses every non-GET `/experimental/worktree*` route with 403, for a guest identity and for owner credentials carrying `x-vector-guest-request: 1`; that file is on spec §6.4's avoided list and is not edited. Then the payload decodes against `Worktree.UnattendedInput`; a malformed field gets SchemaErrorMiddleware's 400.
+1. **Owner** (`owner()`, :629-631): `RequestOwner.owner`, so a forwarded guest counts as a guest. 403 "Unattended worktrees require the authenticated server owner."
+2. **Absolute** `directory`, before anything resolves a relative path against the process's folder: 400 `WorktreeCreateFailedError` "Invalid unattended worktree request."
+3. **The allowlist** (`allowed()`, :637-644), before anything looks for an instance. `create` takes the folder's canonical path once (`Worktree.canonicalPath`); a folder with none (a link loop) is off. Then `Effect.exit(config.readGlobal())`: the user's own files read afresh, merged as GET /global/config merges them (never the merged instance config), with nothing written and the engine's cached copy untouched; a failure of any kind, the parser's defect for an invalid file included, counts as off. Then `Config.lockedKeys()` must not name `everywhere` (EV-10 (f)), `everywhere.enabled` must be `true`, and some `everywhere.projects[].directory` must have that canonical path. 403 "Vector everywhere is off for this folder."
+4. **The folder exists** as a directory (the FSUtil service's `isDir`; a failed stat is false): 400 "The allowed folder is not available."
+5. **Already loaded** (`loaded()`, :649-654): an instance in `store.loaded()` whose canonical directory is the folder's. Any authenticated request that selects the folder loads one (InstanceContextMiddleware, a guest's GET included), so this means "already loaded in this engine, by any authenticated request", not "opened by the owner" (c). The route never calls `store.load` or `store.provide`. 403 "This project is not open in Vector. No unattended worktree was created."
+6. **Trusted**, on that instance (`Effect.provideService(InstanceRef, instance)`): `config.trust()` must report `trusted === true`. 403 "This project is not trusted. No unattended worktree was created."
+7. `mapWorktreeError(worktree.createUnattended(payload))`: its own refusals keep their fixed messages and come back as `WorktreeApiError` 400 with the existing `WorktreeErrorName` literals.
+
+The success body is exactly `{directory, branch, base}`. A stray body key such as `task` is dropped by the decode and never reaches a response.
+
+`GET /experimental/worktree/unattended` (`policy`, :599-602) runs the same `owner()` check and answers `{policy: "unattended-v1"}`. It is static: no instance, no config read. isOwnerOnlyRoute lets a GET through, so the handler's check is what refuses a guest there.
+
+### Deviations
+
+- **(a) A separate HttpApi without the instance middleware.** Every instance group declares `InstanceContextMiddleware`, which calls `store.load({directory})` (InstanceBootstrap: `config.get()`, `plugin.init()`, LSP and the rest) before any handler runs, and EV-12 (h) requires the allowlist to run before an instance exists for the folder. A second group inside `ExperimentalApi` was not an option: session-stop.test.ts, auth-guest.test.ts and task-batch-promotion.test.ts build `HttpApi.make(...).addHttpApi(ExperimentalApi)` with only `experimentalHandlers`. So `UnattendedWorktreeApi` stands alone, and the handler provides `InstanceRef` itself, which packages/engine/src/server/routes/instance/httpapi/AGENTS.md otherwise leaves to middleware. It has no `WorkspaceRoutingMiddleware` either: a workspace selector is never read or proxied, so the route acts only on this computer (spec §3.5).
+- **(b) The allowlist is the user's own files, read fresh, failing closed** (two critique points, major, both taken).
+  - The plan read the cached global config. Its cache never expires (`Duration.infinity`) and is refreshed only by PATCH /global/config, `config.invalidate()` or the Teams handler, so a consent the user withdrew by editing the file would keep admitting jobs. The first build called `config.invalidate()` before each `getGlobal()`. *Review round one:* that refreshed the cache the whole engine shares, which keeps whatever exit the reload gives, defects included, so a hand edit into an invalid file followed by a job left every later `getGlobal()` (GET /global/config, new instance loads) failing, with an error naming the config path, until a PATCH or a restart; each request also re-ran the settings import, which writes in the user's config folder, and made other hand-edited global keys live for new instance loads. The route now calls `config.readGlobal()`, a new Config method beside `loadGlobal` (additive lines, as §6.5 asks of config.ts): the same three files, each withheld and merged as `loadGlobal` does, with no settings import, no seeded file, no schema rewrite and no cache. Three small files per create. Pinned by "turning it off by hand applies to the next request" (M11: read the cached `getGlobal` instead) and by the allowlist test's GET /global/config, which answers 200 before the cases and still 200 after the invalid-file refusal (M14: the first build's invalidate, then `getGlobal`).
+  - The plan counted only typed failures of `getGlobal()` as "not allowed". An invalid user config (an unknown `everywhere` key, an out-of-range value) makes the parser throw a defect, which `loadGlobal`'s `orElseSucceed` does not catch (EV-10 (a)), and the error middleware (middleware/error.ts:29-35) would answer 400 with `ConfigErrorV1.InvalidError.toObject()`, which names the config file's path. `Effect.exit` captures every cause, so any failure is the fixed 403. Pinned by the `pushh: true` case (M12).
+  - `enabled === true` goes beyond the brief and is the safe default (EV-10 (b): `enabled` defaults to false).
+  - Correction to the plan: reading the global config (`getGlobal()`, and now `readGlobal()`) does not refresh the local policy. `Config.lockedKeys()` reads the policy in effect, which `refreshLocal()` sets when the config module loads, after a global update that changed something, and from the policy watcher. The route does not call `refreshLocal()` itself: it reconfigures egress and can raise the held-change toast.
+  - Found while testing, not changed: on a load where the global folder has no Vector file with settings, `ConfigMigration.run` imports other settings files there, the seeded `config.json` among them, into `vector.jsonc`, which is merged last. A later hand edit of `config.json` is then shadowed by that copy, for every reader of the global config. The tests write `vector.json`, the file a user edits; PATCH /global/config writes the first existing of vector.jsonc, vector.json and config.json, so EV-21's writes are not affected. `readGlobal()` runs no import itself, but it reads the same three files, so a copy another reader's import made shadows the route's read too.
+- **(c) Only an instance already loaded in this engine, and trust checked on it** (critique, major, option (1) taken; the plan's (c) is withdrawn). The plan loaded the instance for any listed folder before checking trust. For a trusted project that starts its plugins and can install their dependencies (Config.waitForDependencies), which main-requests.md forbids ("never ... package installation, and never bootstrap unrelated code as a creation side effect") and which EV-12 (h) allowed only as "trust before resolution, or accept only an already loaded instance". The critique asked for a lead ruling first; that could not be asked inside this step, so the stricter option was built, and the looser one stays a one-line change if the lead prefers it (replace `loaded()` with `store.provide`, record the boot in main-requests.md, and drop "delivered" there).
+  - *Review round one, reworded:* the first build and its documents said "an instance the owner already has open". InstanceContextMiddleware loads an instance for any authenticated principal's `x-vector-directory`, a guest's GET included, so the guarantee is "an instance already loaded in this engine (by any authenticated request)". Nothing is exploitable through that: the allowlist and trust checks still apply, and the route itself still never loads anything. Tightening it to owner-opened instances would need InstanceStore to record who loaded an instance, which is out of scope here. The user-facing refusal ("This project is not open in Vector.") and the create operation's OpenAPI description ("already open") keep the user's word: the app opening a project is what loads it, and rewording the description would only regenerate the SDK.
+  - Consequence: a job for a project no request has loaded since the engine started, or since the last global reload disposed its instance, is refused with 403 until it is opened. EV-21 holds such a job (its result says to open the project); it must not load the instance just to satisfy the route without an owner ruling.
+  - Trust is strict: `trusted === true`. The alternative `trusted || !settings` was not taken, so a project with no settings of its own is refused until trusted too (pinned; M13). ProjectTrustPrompt never asks about a project without settings, so EV-21's settings page must show trust for a ticked folder and offer the existing trust dialog.
+  - Residual window, argued: an instance disposed between `loaded()` and `config.trust()` would make Config's per-instance state re-read that folder's config files lazily for the trust answer. That reads files only; InstanceBootstrap (plugins, LSP, dependency installs) does not run.
+- **(d) Status codes.** 401 no credentials; 403 a guest or guest-marked request, a folder that is off, not open or untrusted; 400 a malformed payload, a relative directory, a missing folder, and every `createUnattended` refusal. 403 means "not allowed now" and 400 "this request is wrong", which is how EV-21 maps them.
+- **(e) A dedicated probe, owner-only in its handler**, not a field of `/experimental/capabilities` (that route is not owner only, and a guest need not learn whether the owner's computer takes jobs). packages/server/src/auth.ts is not edited (spec §6.4).
+- **(f) The guest gate is the existing rule plus the handler's check.** For POST, isOwnerOnlyRoute refuses a guest before the handler runs, so dropping the handler's check (M1) is caught only through the probe. The POST check stays as a second barrier.
+- **(g) Extra payload keys are stripped, not refused.** A schema error may name the rejected field's value; a test pins that it never brings the request's other fields (a `task` key) back in the 400. Refusing unknown keys would add a strict-decode exception to this one route for no gain, since the success body is built from `createUnattended`'s result, never from the request.
+- **(h) The legacy SDK is regenerated**, which goes beyond §6.5's VE-40/VE-43 row (noted there). The client is unchanged.
+- **(i) Canonical paths** (critique, minor, taken): realpath, `path.normalize`, and a case fold on Windows only, the rule `Worktree.createUnattended`'s binding check uses. *Review round one:* the handler had its own copy, so the allowlist and loaded-instance checks could drift from the service's; there is now one exported helper, `Worktree.canonicalPath`, which both use. The service's `canonical` is `canonicalPath` with its old fallback (the resolved path when there is no real path); the route keeps "no real path matches nothing". EV-10's Coordination also folded case on darwin; on a case-sensitive APFS volume that would admit a sibling folder whose name differs only in case. Without the fold, a darwin spelling that differs in case fails closed. A path that does not resolve (a link loop) matches nothing. EV-17 must use `Worktree.canonicalPath` (or, outside the engine, this rule), not EV-10's.
+- **(j) The route binds consent to the folder, not to the repository** (critique, minor, recorded). EV-10 (d) stores `{directory, repository}`, but `UnattendedInput` has no repository field, as EV-12's input requires. The binding to the repository rests on the runner's own remote check (everywhere-runner.ts :157 and :285), which EV-21 must keep before it calls the route. Matching the listed repository here is a possible later stricter-only check.
+- **(k) Test harness** (critique points, minor, taken): the server credentials come from `ConfigProvider.layer` on `HttpApiApp.routes` (as httpapi-exercise/backend.ts does), not process.env; job ids come from `createJobId`. The global config is restored file by file after each case, then the cache is invalidated, every instance disposed and the database reset. The company-lock case unsets `VECTOR_AGENT_SESSION` for its duration, as EV-10's does.
+- **(l) Exercise coverage** lives in test/server/httpapi-exercise/index.ts, which the script imports.
+- **(m) The new OpenAPI tag is `worktree-unattended`** (critique, minor, taken), not a second `experimental` with another description.
+- **Scope.** EV-13's brief listed owner auth, the guest 403, the probe and 400 on bad input. EV-12 (h), handoff "Left open" and main-requests.md assign the allowlist and the trust check here as well, so both were built, as stricter-only checks, with tests.
+
+### Not changed
+
+`Worktree.createUnattended` and the rest of packages/engine/src/worktree/index.ts, apart from review round one's `canonical`, which now uses the exported `canonicalPath` and behaves as before; the rest of packages/engine/src/config/config.ts (`readGlobal` is additive; `getGlobal`, `loadGlobal` and the cache are untouched); `POST /experimental/worktree` (`Worktree.create`) and the other worktree routes; `/experimental/capabilities`; packages/server (auth.ts and request-owner.ts); packages/client; the desktop runner (`safeWorktree` stays unset, so jobs settle `held`); flags, env vars, dependencies, lockfile and workflows.
+
+### Coordination
+
+- **EV-21** (the desktop adapter for `SafeWorktree`):
+  - GET the probe first; anything but 200 with `{policy: "unattended-v1"}` means no `safeWorktree`, and the job settles `held`.
+  - POST `{directory: the listed folder, base: from, branch, jid}`; map 403 to a hold or decline (off, not open, untrusted), 400 to failed, and read only `{directory, branch, base}` back.
+  - Keep the runner's remote check before the call (j). Do not load the project's instance to get past "not open" without an owner ruling (c).
+  - Still EV-21's and VE-21's (EV-12 "Left open"): harden or refuse `Worktree.remove` and `Worktree.reset` for `<data>/everywhere-worktree/**`, and the cleanup sweep.
+- **EV-17**: canonicalize folders with (i)'s rule.
+- **SF-07 (scope-finish)**: review round one touches packages/engine/src/worktree/index.ts (the `canonical` body, the new `canonicalPath` and `folded`, the `normalize` import) and packages/engine/src/config/config.ts (`readGlobal`, additive). origin/scope-finish and every other lane tip change neither file, nor test/fixture/config.ts, since their merge bases (checked 2026-11-16).
+- **connect-finish**: origin/connect-finish `a320bdbe` changes packages/sdk/openapi.json, packages/sdk/js/src/gen/types.gen.ts and packages/sdk/js/src/v2/gen/types.gen.ts (and groups/connect.ts) since its merge base. Expect conflicts in those three generated files, resolved only by re-running ./packages/sdk/js/script/build.ts. review-fixes, hands-finish, brain-transport, codium-finish, workspaces-finish and native-qualify touch none of this package's files (checked 2026-11-16).
+
+### Mutations
+
+Each was applied to handlers/experimental.ts alone, test/everywhere/worktree.test.ts was run alone, and the file was restored from a copy with its sha256 checked after every run (/tmp/vector-v2/everywhere/ev13-mut/: mutations.py, run.py, a folder per run with results.txt and one log per mutation). The first run (round1/) survived M9: with the route's `isAbsolute` check gone, a relative path naming the open, listed repository still reached `createUnattended`, whose own check gives the same 400. The malformed-input test now also sends a relative path naming a listed folder that is not open, which without the route's check is resolved against the engine's folder and answered 403 "not open"; M9 is red against it (round2-m9/). All thirteen were then run again against the final handler and test file (round3/): every one is red, as in the table.
+
+| Mutation | Result | Red test (first failing case) |
+| --- | --- | --- |
+| M1 drop the handler's owner check | red | the probe answers a guest 200. For POST the guest is still refused by isOwnerOnlyRoute (f) |
+| M2 always allowed | red | the allowlist cases, the hand edit and the company lock |
+| M3 skip `enabled` | red | `enabled: false` with the folder listed; the hand edit |
+| M4 skip the company lock | red | the company lock |
+| M5 compare the raw strings | red | the listed link |
+| M6 load the instance instead of requiring an open one | red | the project the owner has not opened |
+| M7 skip trust | red | untrusted, with and without settings |
+| M8 skip the folder check | red | a listed folder that is gone answers 403 "not open", not 400 |
+| M9 skip `isAbsolute` | red (round2-m9, round3) | a relative path naming a listed folder that is not open |
+| M10 call `worktree.create` instead | red | the owner's create (four tests in all) |
+| M11 drop the per-request `invalidate` | red | the hand edit |
+| M12 let a `getGlobal` failure propagate | red | the invalid user config (`pushh`) |
+| M13 lenient trust (`trusted` or no settings) | red | the untrusted project with no settings |
+
+The plan's table predicted M1 through the probe, M6 through `loaded()` and M8 through the missing folder, all as found; M6 changed meaning with (c) (the plan's "load before the allowlist" no longer exists, since nothing loads). M9 was predicted red and was not, until the closed-folder case was added. Not mutated: the darwin case fold (i), which no Linux run can tell apart.
+
+*Review round one (round4/, mutations_r4.py and run_r4.py, against the fixed handler and test file):* all fourteen are red, each restore's sha256 checked. The anchors follow the new code (M2 drops `|| !(yield* allowed(folder))`, M5 compares `project.directory === folder`, M6 replaces `loaded(folder)`, M8 drops the `fs.isDir` line), and two mutations are new or changed:
+
+| Mutation | Result | Red test (first failing case) |
+| --- | --- | --- |
+| M11 read the cached `getGlobal()` instead of `readGlobal()` | red | the hand edit |
+| M12 let a `readGlobal` failure propagate | red | the invalid user config (`pushh`): 400 from the error middleware, not the fixed 403 |
+| M14 the first build's read: `config.invalidate()`, then `getGlobal()` | red | the allowlist test's last GET /global/config: 400, not 200 (the parser's defect, cached) |
+
+M1 to M10 and M13 are red on the same cases as round3. M9 is red on the closed folder's relative path (403 "not open" instead of 400).
+
+### Review round one (2026-11-16)
+
+One blocking and nine non-blocking findings; all are fixed in code or documents, none is disputed.
+
+- **Blocking, the relative-path case across drives (fixed).** On a Windows runner whose checkout is on D: and whose temp folder (the fixture's repositories) is on C:, `path.relative(process.cwd(), repo)` answers the absolute C: path, so the case's own `isAbsolute` guard failed in test.yml's Windows engine shards. The case now sends `path.join("..", path.basename(repo))` when `path.relative` answers an absolute path: still relative, so the route still answers 400 "Invalid unattended worktree request.", and the guard checks the value actually sent. On Linux, macOS and a same-drive Windows runner the relative path still names the listed folders, so M9 is still caught as a listed, unopened folder answered 403 "not open". On a cross-drive Windows runner the path names a folder beside the engine's that is not listed, so M9 is still red there, but as 403 "off": that M9 kill shows a relative spelling of a listed folder refused on Linux and macOS (and same-drive Windows) only.
+- **"Already open" means "already loaded" (reworded).** The handler's comments, (c), the sequence's step 5, main-requests.md's annotation and status paragraph, the handoff's EV-12 annotation and EV-13 bullet and spec §3.5 step 4's note now say "an instance already loaded in this engine (by any authenticated request)". The handler's `opened` is renamed `loaded`. Owner-opened instances only would need InstanceStore to record who loaded an instance; not done here ((c)).
+- **One canonical rule (fixed).** `Worktree.canonicalPath` is exported from packages/engine/src/worktree/index.ts and used by the service's `canonical` (with its fallback) and by the route (i). `create` computes the folder's canonical path once and passes it to `allowed` and `loaded`. The single-use `isDirectory` is gone: the check is the FSUtil service's `isDir` inline, which also replaces `node:fs/promises` `stat` and keeps a failed stat as false.
+- **Leak assertions that mean something on Windows (fixed).** The allowlist test asserts that neither the config folder nor the repository path appears in the 403's text as written or JSON-escaped (`JSON.stringify(value).slice(1, -1)`).
+- **No lane package ids in production comments (fixed).** The `allowed` comment states the constraints themselves (only the user's own config files may enable this; a company lock counts as off). The cross-references stay here.
+- **The engine-wide global cache (fixed in code, (b)).** `allowed` no longer calls `config.invalidate()` and `getGlobal()`; it reads `config.readGlobal()`, a new additive Config method that reads the same files without the settings import, the seeded file, the schema rewrite or the cache. The allowlist test pins that GET /global/config answers 200 after the invalid-file refusal (M14 red).
+- **Line numbers re-taken** from the final files in "What changed", "The sequence" and the progress receipt's "Files" list.
+- **"Delivered" while CI is pending (fixed).** main-requests.md's status now says "delivered, CI pending". The sentences saying the work is not committed stay true until the lead commits; the lead's commit replaces them (this entry's opening paragraph and the progress receipt) with the commit and the vector-everywhere.yml and typecheck.yml run ids. *Commit gate 2026-11-16:* both now name the commit; the run ids follow in the next lane-docs commit, and "CI pending" stays until they are green.
+
+### Deferred verification
+
+- CI after the commit gate's commit and push: vector-everywhere.yml (this test file, the engine typecheck) and typecheck.yml, as workflow_dispatch on everywhere-finish; test.yml re-runs check:generated and test:httpapi at the lane end.
+- Windows and macOS runs of the HTTP cases (test.yml's engine shards at the lane end): the junction case, the Windows case fold and, on a cross-drive runner, the relative-path case's fallback (review round one).
+- test.yml's run of the other Config and Worktree tests against review round one's `readGlobal` and `canonicalPath` (run locally once, below in the progress receipt).
+- The real desktop adapter (EV-21); the two-process reservation race (EV-12); VE-50 live.
+
+## 2026-11-16, EV-14: unattended sessions hear the outward audience (R-M3)
+
+Spec §11 R-M3; §3.11 "Laptop runs need no snapshot"; §5 E6; handoff "R-M3's screened outward Brain audience remains a separate prerequisite". Built at HEAD `0d9f852c` (EV-13's commit), which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`. PR #33 has merged: origin/release-finish is an ancestor of origin/main `33fc9fbc`, which is 16 commits (19 files: cloud workspaces, test.yml, .env.example, api/_lib/codium-erase.ts, account deletion) ahead of the merge base `67ec3a60`. The lane notes disagree on who merges main now ("once PR #33 is merged, merge origin/main instead" against "the lead merges main into this branch"). This package was asked to leave its work uncommitted, so it cannot make a merge commit, and it proceeds on HEAD without main, as EV-13's commit gate did: the lead owns that merge. None of main's 19 files is one of this package's files or one its tests rely on (Coordination). No review-fixes or brain-transport precondition. docs/vector/build/v2-spawn-review.md was read: this package adds no spawn site. Line numbers below are after the change. Left in the working tree, not committed (the task said so).
+
+### What changed
+
+- **packages/engine/src/session/prompt.ts** (the brief's file):
+  - one import, `UNATTENDED_KEY` from `@vectordevai/core/everywhere/frame` (:96), the constant's single home, so the engine cannot drift from what the runner writes;
+  - `audienceOf` (:160-180): the Pick gains `metadata`, and a session whose metadata has `vector.unattended` (any value) is `outward`. The docblock says why. Its three callers (the fork's `inherit.audience`, the main loop and `briefFor`) pass a full `Session.Info` and are unchanged;
+  - the Tier 1 recall gate (:2851-2871): the existing `const audience = audienceOf(session, agent.name)` line and its comment move up from after `reviewFor` to just after `const personal`, and the recall condition gains `audience === "owner"` (b). The gate's comment says it covers every outward role and points here (review round one). Every later use of `audience` is unchanged.
+- **packages/engine/src/session/instruction.ts** (beyond the brief, (h)): `Asking` gains `outward?: boolean` (:65-66), and `resolve` skips `brain.attach` when it is set (:414-433). Nearby instruction files and the document pointer line are unchanged.
+- **packages/engine/src/tool/read.ts** (beyond the brief, (h)): passes `outward: ctx.extra?.outward === true` with `SessionMemory.linking(ctx)` (:342-349). `SessionTools` already puts `outward: audience === "outward"` in every tool's `extra`, so session/tools.ts and session/memory.ts (both avoided) are not edited.
+- **packages/engine/test/everywhere/unattended-session.test.ts**: imports (`mkdir`, `BrainPrivate`, `frameTask`, `UNATTENDED_KEY`, `SessionMemory`); helpers `plain` (:109-119), `system` (:121-126), the fixture constants (:128-135), `memories` (:137-169) and `heard` (:171-180); T1's control is now `plain(h, "Owner control")` (:193, (c)); two new tests:
+  - T4 (:265-293) "a session without the unattended mark still hears the owner's particular entries and recall, guest-marked or not";
+  - T5 (:295-323) "an unattended session hears only the screened digest, with no recall and no memory beside a file it reads".
+  T2 and T3 are unchanged; the desktop import (F5, accepted in EV-01) stays.
+- **packages/engine/test/session/instruction.test.ts** (review round one): one case, "an outward role's read brings the nearby instructions and no memory about the file" (:471-513), which calls `Instruction.resolve` directly on a seeded path-anchored lesson: with `outward: true` it returns only the nearby AGENTS.md, with no "Vector's memory for" item; the same call in another message without `outward` returns AGENTS.md and the `memory:` item. 17 tests to 18.
+- Lane documents: this entry; vector-everywhere-progress.md (receipt); vector-everywhere-spec.md (dated notes on §2's guest-mark bullet, §3.11, §5 E6, §6.4 and §11 R-M3); vector-everywhere-handoff.md (an annotation on the "Component tests" gate's R-M3 sentence, a new "Current gates" bullet and a "Left open" item).
+
+### What an unattended session hears now
+
+A session marked `vector.unattended` (the runner marks it at creation and prompts it with the guest header, so it is also guest-marked):
+
+- **System digest:** the screened outward digest (core brain.ts `digest`): no MEMORY.md, no fact, no entry learned beside a private document, no decision, lesson, failure or term with anything particular in it (`BrainPrivate.screened`), and of the owner's own entries only their rules, because the guest mark already makes `visible()` hide the rest. Pinned screened entries are listed; the "Vector also remembers N notes" line needs the memory tool, which the runner denies.
+- **Tier 1 recall:** none (b).
+- **A file it reads:** the file and nearby instruction files, with no memory attached (h).
+- **Still reaching it, by design:** the repository's instruction files in the system prompt (`files` stays `!OUTWARD_AGENTS.has(agent)`, (g)), and the pointer line of a read and the guard line of an edit for the repository's non-private documents, under the rule the outward digest already uses for documents (`personal && audience === "owner"` is false, so private documents stay out).
+- **Not offered:** the memory tool, learned skills (the guest mark) and subagents (`task` denied), so no brief.
+
+### Deviations
+
+- **(a) "An owner rule that fails the outward screen" is read as the owner's pinned how-you-work entries the screen tells apart, seeded at repository scope.** The owner's RULES.md and the repository's rules files reach both audiences as their synced, secret-redacted source digests (core brain.ts `digest` builds `rules` from `sources.get(file)?.digest`, which `sync` stores redacted), and the outward row screen (`BrainPrivate.screened`, applied to brain rows) never applies to them, so no rules-file rule can be made to fail it; RULES.md reaches both audiences by design. A rule entry kept as a row is screened, but `rule` is not one of `PARTICULAR`'s kinds, so the screen's particular-content test, the part that tells the outward audience apart, never applies to it either; only its private flag and credential check do. (Corrected in review round one: this said a rule passes the screen "on the secret check alone", which left out the private flag and that rules files are never row-screened.) And with `personal` false the guest mark already hides every personal entry except rules. What R-M3 changes for a runner session is therefore the repository's decisions, lessons, failures and terms, and the tests seed those instead: a pinned repository decision that fails the screen (PARTICULAR: "Move the Initech billing retry to the new queue before Q3."), one that passes (SCREENED), an unpinned particular lesson for recall (RECALLED) and a path-anchored particular lesson for the read (ATTACHED), each checked against the real `BrainPrivate.screened` first, plus the pinned personal fact for the personal-fact exclusion. Spec §2's guest-mark bullet is corrected in a dated note.
+- **(b) The Tier 1 recall gate goes beyond "callers change only as types require".** Recall (`recallFor`, gated only on size and root-ness) takes no audience: `BrainKnowledge.recall` has no audience option, and what it brings is saved on the user message. An unattended root build session is sized, so without the gate it would get the repository's unpinned decisions, lessons, facts and failures unscreened, plus document cards. The gate withholds all of it from every outward role, document cards included, which is stricter than screening. Today no other outward role reaches `recallFor`: only build, plan and research-lead root sessions are sized, a research lead the build agent started has a parent, and Vectorscope sessions are internal. Screened recall instead would need an audience option on core `BrainKnowledge.recall` (screened brain rows and audience-aware document cards), in core brain/\*\*, which this lane avoids; it is recorded as a request (Left open). The gate is one condition, so a revert is one line.
+- **(c) T1's control is now a plain session.** It was created with `h.client.create`, which writes `vector.unattended`, so after R-M3 it would be outward and lose the pinned personal fact it asserts. It is now the same rules and agent with no mark (`plain`), which is what it was written to be; its assertions are unchanged.
+- **(d) The mark counts if present, whatever its value** (`!== undefined`). A malformed mark still narrows; only the runner writes it.
+- **(e) Children and forks.** An unattended session has no children: the runner's rules deny `task`, `workflow` and `research*` (desktop everywhere-engine.ts `DENIED`). `briefFor` reads only the child's own metadata, so if that ever changes it needs lineage. `Session.fork` copies metadata, so a fork keeps the mark.
+  *2026-11-21 (phase review, everywhere-finish lane):* UnattendedShell.marked (EV-16) walks the parent chain for the shell mark, while audienceOf reads only the session's own `vector.unattended`. The two agree only while an unattended session starts no child. prompt.ts is not changed, because the change would add a lineage read to every step of every session, the cost the same review raises against `marked`. Instead packages/desktop/src/main/everywhere-engine.test.ts pins that the runner's rules deny `task`, `workflow`, `research`, `research_plan`, `research_run` and `teammate`, whatever the user allows. Allowing any of them needs audienceOf to take the parent-chain rule first.
+- **(f) An avoided shared file.** packages/engine/src/session/prompt.ts is on spec §6.4's avoided row, and R-M3 was a request to main's owners. It was built here under the lead's brief, as EV-04 to EV-07 built Codium-area files and EV-12/EV-13 built engine files; §6.4 has a dated note. Spec :10 ("never edit a file on the Do not touch list") and the handoff's owner rules are not edited.
+- **(g) The repository's instruction files still reach a build-agent unattended session.** `files` stays `!OUTWARD_AGENTS.has(agent)`: AGENTS.md and the rest are the repository's own text, which the run can read anyway, and the run needs them to work the way the repository expects.
+- **(h) No memory comes with a file an outward role reads** (critique, major, taken: gate rather than record). `read` calls `Instruction.resolve`, which called `brain.attach(place, {file, personal: false})`; `attach` uses `recallable`, which takes no audience and applies no screen, so any active, unpinned repository decision, lesson, failure or fact whose paths cover the file reached the session as "Vector's memory for <file>". The runner allows `read`, so this was the main way repository memory reached a laptop run. `resolve` now skips `attach` when `Asking.outward` is set, and read.ts sets it from the tool context. This changes every outward role that can read files, stricter only: besides unattended sessions, `vectorscope.*` sessions other than bound reviews (a bound review skips `resolve` entirely already) and a research lead the build agent started. Research workers and the judge have no read tool. The pointer line for documents and the nearby instruction files are unchanged. The gate is pinned two ways: end to end through T5 (M5, M6) and, since review round one, directly in test/session/instruction.test.ts (M7, M8), so a refactor of read.ts or `resolve` cannot keep T5 green while dropping the nearby instructions. The two non-everywhere roles are named to their lanes under Coordination. Screened attachment would need an audience option on core `Brain.attach` (avoided); recorded with (b)'s request. instruction.ts and read.ts are not on §6.4's avoided list.
+- **(i) The import's load cost** (critique, minor, recorded). frame.ts brings `@vectordevai/schema/everywhere-policy` (1279 lines of pure TypeScript that imports only schema/everywhere.ts) onto prompt.ts's load path; schema/everywhere.ts was already there through worktree/index.ts and core/everywhere/git.ts. test/server/startup-imports.test.ts passes (it checks node_modules packages only). If a bundle or startup budget objects, move `UNATTENDED_KEY` to schema/everywhere.ts and re-export it from frame.ts.
+- **(j) Test fixtures go through the owner's HTTP routes.** Each entry is read back with GET /memory/:id and must be `active`, with the expected kind, scope, text and pin (critique, minor, taken), so a held or proposed entry fails as a fixture problem, not as a false audience result. POST /memory takes no paths, so ATTACHED is imported as Markdown (`## Lessons`, a `paths:` bullet) and approved with PATCH `{action: "approve"}`, then read back with its path.
+- **(k) The planned single T4 is two tests** (critique, minor, taken): T4 holds the owner and guest controls, T5 the unattended session and the owner's later prompt. Each keeps the file's 30-second timeout and took about 4.6 s locally.
+- **(l) Recall is proven by the saved recall part** (critique, minor, taken). Unpinned rows also count toward the owner digest's index line, so "RECALLED is in the bodies" proves nothing. The controls assert a part with `SessionMemory.recall(part)` defined whose text holds RECALLED; T5 asserts there is no such part, before it checks the bodies, so M3 and M4 are red on that assertion. The read is proven the same way: T4's owner read output holds "Vector's memory for src/billing/retry.ts" and ATTACHED, and T5's read output holds the file's text and no such line.
+
+### Not changed
+
+core brain/\*\* (`digest`, `attach`, `recallable`, `BrainPrivate`), core brain/knowledge.ts, core everywhere/frame.ts, session/tools.ts, session/memory.ts, subagent-lifecycle.ts, `habitsOf` (a root build session gets kinds preference, decision, lesson and term, which the outward digest applies to personal rows only), the instruction snapshot key (it already includes the audience, so nothing stale is reused), packages/server, packages/desktop, schema, config, routes, generated files, flags, env vars, dependencies, the lockfile and workflows.
+
+### Safe by default
+
+Only sessions carrying `vector.unattended` change audience, and only the everywhere desktop runner writes it, which is unwired until EV-21. For every other session, @vector GitHub sessions and guests included, `audienceOf` returns what it did. Owner-audience sessions keep recall and read-attached memory exactly as before. The two new gates change only outward roles: the recall gate no outward role reached before (b), and the read gate for the outward roles that read files (h), which now get no path-anchored memory with a file. Adding the mark can only narrow what a session hears; removing it (Left open) leaves at most what any guest-marked root session already gets.
+
+### Left open
+
+- **PATCH /session/:id can drop the mark.** It replaces a session's metadata (SubagentLifecycle.setPublicMetadata keeps only the subagent key), so an owner- or guest-credentialed HTTP caller, never the model, can remove `vector.unattended`; the session then hears what any guest-marked root session hears (the repository's decisions and lessons unscreened, personal memory still off through the guest mark). E6's "outward only" therefore rests, until this is closed, on nobody editing the session's metadata: the model cannot reach the route (the runner denies the shell and web tools). Proposed follow-up for main's owners: `SubagentLifecycle.setPublicMetadata` keeps `UNATTENDED_KEY` from the current metadata as it keeps the subagent key, with a test that PATCHes an unattended session's metadata without the key and then asserts the session is still outward (`audienceOf` returns `outward`, or the next request's system text holds no PARTICULAR entry).
+- **A precondition for EV-21 (review round one; the lead is asked to add it to EV-21's brief and Done-when list).** Before the runner is wired, either `vector.unattended` survives PATCH /session/:id (the follow-up above) or the runner refuses to prompt a session whose GET /session/:id metadata lacks the mark, checked before each prompt; either way with a test that a PATCH without the key leaves the session outward (or, for the runner check, that the runner then sends no prompt and pushes nothing).
+- **Screened recall and screened read-attached memory in place of none** ((b), (h)): an audience option on core `BrainKnowledge.recall` (screened brain rows and audience-aware document cards) and on `Brain.attach`. Until then outward roles get neither, document cards from recall included.
+
+### Mutations
+
+Each was applied to one source file alone, packages/engine/test/everywhere/unattended-session.test.ts was run alone, and the file was restored with its sha256 checked after every run (/tmp/vector-v2/everywhere/ev14-mut/: mutations.py, run.py, round1/ with results.txt and one log per mutation). M1 ran in round1 before a whitespace-only reflow of two fixture lines in the test file and was run again against the final file (round2-m1/): red on the same assertion. M2 to M6 ran against the final file. All six are red, each on the predicted assertion. prompt.ts then changed once more, formatting only (prettier puts the recall condition on one line), so all six ran again against the final sources (round3/, M3 and M4 anchored on the one-line condition): all six red, on the same assertions as below.
+
+| Mutation | File | Result | First failing assertion |
+| --- | --- | --- | --- |
+| M1 `audienceOf` ignores `vector.unattended` | prompt.ts | red | T5 :305, the unattended session has a recall part (it is `owner` again, so recall runs) |
+| M2 every root session without `internal` is outward | prompt.ts | red | T1 :197, the owner control lacks the personal fact; T4 :277, the owner's system text lacks PARTICULAR |
+| M3 drop `audience === "owner"` from the recall gate | prompt.ts | red | T5 :305, a recall part holding RECALLED and ATTACHED |
+| M4 gate recall on `!guest` instead | prompt.ts | red | T4 :292, the guest control has no recall part |
+| M5 `resolve` ignores `Asking.outward` | instruction.ts | red | T5 :308, the read output holds "Vector's memory for src/billing/retry.ts" |
+| M6 read.ts passes `outward: false` | read.ts | red | T5 :308, the same |
+
+The plan predicted M1 red on PARTICULAR in the body; T5 now checks the recall part first (l), so M1 is red there, earlier.
+
+Review round one added two mutations of instruction.ts against the new unit case, packages/engine/test/session/instruction.test.ts run alone, the file restored and its sha256 checked after each (/tmp/vector-v2/everywhere/ev14-mut/round4/):
+
+| Mutation | File | Result | First failing assertion |
+| --- | --- | --- | --- |
+| M7 `resolve` attaches memory whatever `Asking.outward` says (M5 against the unit case) | instruction.ts | red | instruction.test.ts :502, the outward result holds a `memory:` item beside AGENTS.md |
+| M8 `resolve` returns nothing at all for `outward` (drops the nearby instructions too) | instruction.ts | red | instruction.test.ts :502, the outward result lacks AGENTS.md |
+
+### Coordination
+
+Re-checked after `git fetch` of every lane tip (2026-11-16): `git diff --stat $(git merge-base HEAD origin/<lane>) origin/<lane>` over packages/engine/src/session/prompt.ts, packages/engine/test/everywhere/unattended-session.test.ts, packages/core/src/everywhere/frame.ts, packages/core/src/brain/brain.ts, packages/core/src/brain/private.ts, packages/core/src/brain/knowledge.ts, packages/engine/src/session/instruction.ts, packages/engine/src/session/memory.ts and packages/engine/src/tool/read.ts is empty for main `33fc9fbc`, scope-finish `a6fd38d3`, review-fixes `1433d105`, brain-transport `aa925ff8`, hands-finish `d9d5afaf`, connect-finish `a320bdbe`, codium-finish `b2537951`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c` and native-finish `f141ef16`. origin/codium-track `c262f74b` changes prompt.ts and brain.ts since its merge base `eed4bc45` (Codium helpers and bounded distillation), but those hunks are already in HEAD (`SessionBrainHelper`, `brainHelper.privateInput`) and touch neither `audienceOf` nor the recall gate. A lane that edits prompt.ts near `recallFor` or `audienceOf` will meet this package's hunks: the import, `audienceOf`, and the moved `const audience` line with the recall condition.
+
+Review round one re-checked after another fetch (2026-11-16), adding packages/engine/test/session/instruction.test.ts and the four lane documents to the paths: still empty for main `2034e1da`, scope-finish `1b6df982`, review-fixes `1433d105`, brain-transport `aa925ff8`, hands-finish `a0e2128f`, connect-finish `ec51507b`, codium-finish `0b9f8337`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c` and native-finish `f141ef16`; codium-track `c262f74b` is unchanged (prompt.ts only, as above); origin/everywhere-finish is still HEAD `0d9f852c`.
+
+That check covers files, not behaviour. (h) is a behaviour change outside this lane, stricter only, for two roles. The lead is asked to forward this notice to both lanes, so that neither reads a change in review or research quality as a regression:
+
+- **scope-finish:** Vectorscope (`vectorscope.*`) sessions other than bound reviews no longer get path-anchored repository memory ("Vector's memory for <file>") with a file they read; nearby instruction files and document pointer lines still come. Bound reviews are unchanged (they skipped `resolve` already).
+- **brain-transport:** a research lead the build agent started gets the same: no read-attached memory, nearby instructions unchanged. A root Deep research lead the user started is `owner` and unchanged.
+
+### Deferred verification
+
+- vector-everywhere.yml (this test file and the engine typecheck) and typecheck.yml, as workflow_dispatch on everywhere-finish after the lead's commit and push. With PR #33 on main and its head in this branch, vector-codium.yml's "changed since main" picker now sees this branch's own files (84 at HEAD) rather than about 570, so it can be dispatched too once the lead has merged main.
+- test.yml's engine shards (Linux, Windows and macOS) at the lane end for unattended-session.test.ts, memory-every-agent.test.ts, instruction.test.ts, the read tool tests and prompt.test.ts. No lane workflow picks test/session/instruction.test.ts (vector-everywhere.yml takes only test/everywhere/\*\*), so until then its new case rests on the local single-file run in the progress receipt.
+- A real laptop run (VE-50).
+
+### Review round one (2026-11-16)
+
+Eight findings, all non-blocking. Each is taken or recorded; none is disputed outright.
+
+- **The read gate changes two roles outside this lane, with no direct test** (three findings: instruction.ts :418 and :419, unattended-session.test.ts :295). Taken: the unit case in test/session/instruction.test.ts (What changed), red under M7 and M8, and the notices to scope-finish and brain-transport (Coordination; the handoff's EV-14 bullet repeats them).
+- **The recall gate covers every outward role, document cards included, with no test of that claim** (prompt.ts :2862). Taken as suggested, comment only: the gate's comment now says it covers every outward role and points to (b). No test is added: today no other outward role reaches `recallFor` ((b) gives why), so there is nothing else to exercise.
+- **`memories` uses `for...of` and the added test lines pass 120 columns** (unattended-session.test.ts :146). Kept, as the finding allows. Each entry's writes (POST, then PATCH to pin, then the GET read-back) run one entry after another, so the fixture writes brain.db in a fixed order (`created_at`, and the pinned rows' digest order with it) and a failing read-back names one entry; `Promise.all` would interleave four write chains on one database, and a sequential `reduce` over promises would only restate the loop. The formatting matches the file's style at HEAD (428 lines of prettier diff before this package); a whole-file reformat is left to a separate change. The new instruction.test.ts case is prettier-clean apart from what that file already had at HEAD (progress receipt).
+- **PATCH /session/:id can drop the mark** (two findings, prompt.ts :174). Kept as recorded (Left open), with the follow-up for main's owners now naming the setPublicMetadata change and its test, and a new Left open item asking the lead to make it a precondition in EV-21's brief: the mark survives PATCH, or the runner refuses a session whose mark is missing before each prompt.
+- **(a)'s reason was imprecise** (deviations :1290). Taken: (a) is reworded (rules files are never row-screened; the screen's particular-content test never applies to the rule kind), and spec §2's dated EV-14 note, which repeated the same wording, is corrected the same way.
+
+### CI follow-up (2026-11-16): the review pipeline pin, revision 4 to 5
+
+vector-at-mention.yml run 43910529519 (at `cb2a73ba`, EV-14's commit), job "engine and core", step "Run core GitHub tests", failed packages/core/test/review/model-evidence.test.ts "scope > the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION": prompt.ts and read.ts are two of that test's `REVIEW_PIPELINE_FILES`, so EV-14 moved the digest (643ad6c25830b2b7 to 58a3650e0bb3f9e2). EV-15 changes none of the pinned files. The pin asks whether the change alters what a review finds or posts. It does, for one runner path: `vector review` without `--context` runs its passes as `vectorscope.<pass>` sessions (engine review/run.ts), which are outward, and since (h) a file such a pass reads no longer brings "Vector's memory for <file>". Bound reviews (`vectorscope.bound.*`) skip `resolve` already, and `audienceOf` and the recall gate change nothing for a review session (they are internal, so recall never ran for them). The review model's input therefore changes, so `REVIEW_PIPELINE_REVISION` goes from 4 to 5 in packages/core/src/review/model-evidence.ts, beside the new `REVIEW_PIPELINE_SOURCES`. No certificate is lost: `MODEL_EVIDENCE` is empty, and every test reads the constant, not a literal. Notice for scope-finish: its branch also moves `REVIEW_PIPELINE_SOURCES` (to b49b61aed2d6b707 at `b6eaf122`, revision still 4), so the two lanes meet on both lines; whoever merges keeps revision 5 or higher and sets the digest the pin test prints on the merged tree. Receipts: vector-everywhere-progress.md, "EV-14, 2026-11-16: CI follow-up".
+
+## 2026-11-16, EV-15: Vector Local's `everywhere` source and the runner's E15 decision (R-M1)
+
+Spec §11 R-M1; §5 E15; §3.5 step 2 ("Vector Local is off (until R-M1 declares the egress)"). Built at HEAD `cb2a73ba` (EV-14's commit), which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main is `2034e1da`; it is not merged here (the lead merges main into this branch, as EV-14 recorded), and none of its files is one of this package's. No review-fixes or brain-transport precondition. No spawn site changes: everywhere-git.ts gains a decision before its existing `execFile`, which is unchanged. Line numbers below are after the change. Left in the working tree, not committed (the task said so).
+
+### What changed
+
+- **packages/core/src/local-mode/sources.ts** (on spec §6.4's avoided row; built here under the brief, as EV-14 built prompt.ts):
+  - a new source `everywhere` right after `remote` (:397-408): purpose `account`, hosts `vectordev.ai`, `local: "blocked"` (as `remote`), where `desktop`, call site packages/desktop/src/main/everywhere-runner.ts. `sends` lists what the jobs client sends, checked field by field against claim `{jid, device}`, decline `{jid, device, reason, lease}`, report `{jid, lease, seq, milestone, files}` and settle (`Settle`: outcome, summary, needs, branch, headSha, files, checks, prUrl), each with the desktop token and `x-vector-device`. `why` and `note` are in (h) and (i);
+  - packages/desktop/src/main/everywhere-git.ts added to `git-remote`'s call sites (:660), beside vault-github.ts.
+- **packages/desktop/src/main/everywhere-runner.ts** (the brief's file):
+  - imports `Egress`, `LocalPolicy`, `LocalSources` and the `LocalMode` type (:9-12);
+  - `RunnerSettings.localMode` is removed ((d)); `RunnerDeps.localPolicy?: () => LocalMode.Policy`, default this process's `Egress.policy` (:93-94);
+  - `LOCAL_NEEDS` (:112-119) and the exported pure `localAllows(policy)` (:121-138): true only when `LocalPolicy.decide` allows each of `everywhere` (on vectordev.ai), `git-remote` (on github.com) and `github` (on api.github.com) under the policy; a source missing from the registry or a pending policy refuses ((a), (e)). Until EV-21 labels desktop github-api.ts, the `github` need refuses whenever Vector Local is on (:128-131, with a dated comment naming EV-21; review round one), so under Vector Local `localAllows` is false whatever is allowed ((a));
+  - `localAllowed()` (:153) replaces the three blanket `settings.localMode` checks in place, in the same positions: the one-second timer (:247, abort `cancelled`), the push gate (:323, `held` before the `pushing` report and before the uncertainty receipt) and the offer (:382-384, decline `local-mode`, after `off` and before `model-not-allowed`, with a comment on what happens while the jobs service itself is blocked, (c));
+  - the jobs client sends each request through `Egress.fetch("everywhere", …, input.fetcher)` (:38-45): decided and logged under Vector Local first, refused with `EgressGuard.EgressBlocked` before anything is sent, and with Vector Local off handed to the fetcher unchanged (desktop main runs under Node, where `LocalCA.request` returns the init as given).
+- **packages/desktop/src/main/everywhere-git.ts** (beyond the plan, critique major taken, (b)): `localBlocks(remote, method)` (:37-47) makes a logged `Egress.decide({source: "git-remote", url: "https://github.com/", method})` while Vector Local is on, with `GET` for a fetch and `POST` for a push, the request that carries the commits, so the network log tells the two apart (review round one); `fetch` throws before git and its credentials start when it is not `allow` (:143), and `push` answers `false` (:173), so the runner acknowledges its uncertainty receipt and settles `held` rather than "Publication was not confirmed".
+- **packages/app/src/features/local/local-model.ts** (beyond the brief, required, (g)): `everywhere: "Jobs for this computer"` in `NAMES` (:110); and (review round one, (h)) an `everywhere` entry in `KEPT_OFF` (:148-149, with two comment lines at :145-146) with a fixed reason, so the pane lists the row as "Off in Vector Local" with no Allow….
+- **Tests:**
+  - packages/desktop/src/main/everywhere-runner.test.ts (49 to 52 tests): helpers `LOCAL_ON`, `JOB_SOURCES`, `entries`, `allowing` (:16-21); the fixture drops `localMode` and gains `localPolicy: () => local` and `f.local()` (:74, :87, :91); `afterEach` puts this process's policy back to off (:99); R1 replaces the old Local and model case (:225-234: each declines with its own reason, `lease` undefined, before any claim or engine start); R2 (:236-267: ten refusing policies, the last two with all three allowed by the user and by the company, which the `github` guard refuses (review round one); each `localAllows` false, offer false, one `local-mode` decline and no claim, create, prompt or push; then with Vector Local off the same runner claims, runs and pushes once); R4 (:269-283: Vector Local turned on after the commit settles `held` with the job's branch, no push or draft PR, only the `started` report and no publication receipt left); R5 (:285-334: the real jobs client under Vector Local refuses a decline with `EgressBlocked` and sends nothing, and the network log's last line is `everywhere`, `account`, `https://vectordev.ai`, POST, block, `vector-service`; a runner on the real client with this process's own policy rejects the offer the same way before any claim; with Vector Local off the same decline reaches the fetcher with only its URL, method, two headers and body asserted); R3 adds cause `local` to the abort loop (:606-624), and the loop now asserts each timer-driven abort right after its tick ((k)). 52 tests, 420 expects.
+  - packages/desktop/src/main/everywhere-git.test.ts (8 to 9 tests): "Vector Local decides each fetch and push as git-remote on github.com before git or its credentials start" (:120-190): under Vector Local with nothing allowed the fetch rejects, the push answers false, neither git nor `authenticate` runs, and the last two log lines are `git-remote` blocks (`not-listed`) for `https://github.com`, the fetch's `GET` and the push's `POST`; with `git-remote` allowed both run and log `allowed-source` with the same methods. Review round one split the case's `execute` fake into a named `answer` with one early return per git call it answers (:125-135), and the case is prettier-clean.
+  - packages/app/src/features/local/local-model.test.ts (39 tests, unchanged count; review round one): `everywhere` joins the "never offers to allow" list (:238), and the Off in Vector Local "says why" case checks its row: the neutral name, state `never`, not allowable and the fixed reason (:292-300).
+  - packages/core/test/local-mode/sources.test.ts (15 to 16 tests): `blocked("everywhere")` in the cheap-gate test (:104), and "declares the desktop's laptop-job requests as an account source that Vector Local blocks like Vector Remote" (:257-275). The existing registry tests cover the new entry too: unique id, call sites exist, plain hosts, `sends` and `why`, the decision per `local` setting, and an allow entry opening it.
+- Lane documents: this entry; vector-everywhere-progress.md (receipt); vector-everywhere-spec.md (dated EV-15 notes under §3.5 step 2, §5 E15, §6.4 and §11 R-M1); vector-everywhere-handoff.md (a "Current gates" bullet and a "Left open" item).
+
+### Deviations
+
+- **(a) The decision covers three sources, not `everywhere` alone.** An allow entry for `everywhere` alone would let a job's git, a child process the backstop guard never sees, reach github.com with no `git-remote` decision, and the job's GitHub API calls (visibility, the GitHub thread, the draft pull request) need `github`. Spec §3.5 step 2 ("until R-M1 declares the egress") makes the registry the contract, so the runner asks it for each source a job needs. With Vector Local on, a job runs only with allow entries for all three (the user's, with a reason, or the company's), Web access other than None (and, for git, other than your network unless github.com is on the allowed web domains), and a lock that leaves `allow` to the user; R2 pins each of these. The alternative for the lead: `local: "not-allowable"` keeps laptop jobs off under Vector Local whatever the user allows.
+  *Review round one (2026-11-16):* desktop github-api.ts is still unlabelled, so with all three allowed a job was claimed, its worktree made and its model run, and then held at the push gate, its budget spent on a result that could never publish (and a GitHub-platform job declined `trigger-changed`). Of the finding's two options, the one that needs no confirmation first is taken: until EV-21 labels those calls `github`, the `github` need in `localAllows` refuses whenever `policy.enabled` (a one-line guard with a dated comment naming EV-21). Under Vector Local every job is therefore declined `local-mode` before any claim, whatever is allowed, exactly as before this package; only the source of truth moved, as the brief asked. The registry still decides `everywhere` and `git-remote`, but under Vector Local their decisions change no outcome until the guard goes, so R2 pins the guard (all three allowed by the user, and by the company, still decline) and the success case runs with Vector Local off. The other option (keep the reachable held path and have the lead confirm (a)) stays open to the lead: it is the guard's one line and R2's last two policies.
+- **(b) everywhere-git.ts is a `git-remote` call site that decides for itself** (critique, major, taken: the first option). The plan only listed the file; `git-remote`'s note ("Decided on the remote's host before git starts") and the registry's promise that every decision under Vector Local is logged would then have been false for it, and a fetch could start in the sub-second window after Vector Local is turned on. Each fetch and push now makes a logged `Egress.decide` on github.com before git, and before `authenticate`, as vault-github.ts `remoteRefusal` does. The runner keeps its pure check at the offer, the tick and the push gate ((e)). A refused push answers `false`, never throws: it never started, so the runner's held path, not its "Publication was not confirmed" path, is the true one. A refused fetch throws and the job ends `failed` with "The unattended job ended without publishing changes."
+- **(c) The jobs client is labelled, and under a blocked `everywhere` the decline is refused locally** (critique, minor: the second option taken). The brief asks that Vector Local on still declines `local-mode`, so the runner still calls `decline(jid, "local-mode")`. While `everywhere` is blocked, Vector Local's default, the labelled client refuses that request before sending it: one `everywhere` block line in the network log per offer, and `offer()` rejects with `EgressBlocked`, which remote-link.ts catches (:757-758, "remote: a job offer was not taken"). Before this package the same request was unlabelled and the desktop's backstop guard refused it (`unlabelled`), so what reaches vectordev.ai is unchanged: nothing. The server hears "Vector Local is on." only when `everywhere` is allowed and `git-remote` or `github` is not (until EV-21, whenever `everywhere` is allowed: the `github` guard, (a)). Skipping the decline silently when `everywhere` is blocked was the other option; it was not taken because it departs from the brief's decline, it leaves no line in the network log for a job the computer turned away, and the server sees the same silence either way. R5 runs the production path: the real client and this process's own policy.
+- **(d) `RunnerSettings.localMode` is removed and `RunnerDeps.localPolicy` added.** Its only users were the runner and its test. EV-17 no longer derives a `localMode` setting; EV-21 passes nothing (the default reads the desktop main process's policy, which desktop local-mode.ts configures).
+- **(e) The runner's checks are pure.** `localAllows` uses `LocalPolicy.decide`, not the logging `Egress.decide`, so the one-second timer writes no log line each second. The requests themselves are decided and logged where they are made: the jobs client through `Egress.fetch`, git through everywhere-git.ts.
+- **(f) An avoided shared file, and an avoided test that needs no edit.** sources.ts is on spec §6.4's avoided row and is edited here under the brief; §6.4 has a dated note. engine test/compliance/egress-inventory.test.ts is unchanged and passes: it scans only packages/{core,engine,llm}/src, so desktop call sites never enter it. core test/local-mode/sources.test.ts's "points every call site at a file in the repository" is what checks that they exist.
+- **(g) The app's `NAMES` line is required** (critique, minor, taken: the plan's reason was wrong). The app test "every source in the registry has a name of its own" calls `sourceName(item.id)` with no registry (local-model.test.ts :306), so there is no `why` fallback: without the line it fails. It and the "Off in Vector Local" list test (:252), which now includes the new row, pass.
+- **(h) The source is visible to every desktop user with Vector Local on, before the owner approves the feature's label** (critique, major, taken). GET /local serves the whole registry (engine config/local-settings.ts :177), and the app's Vector Local pane lists every restricted source as "Off in Vector Local", with Allow… offering Always allow. This is the first place the feature shows in the desktop app before EV-08's label is approved. So its text is neutral and names no feature: the row reads "Jobs for this computer", with `why` "Takes the jobs vectordev.ai offers this computer and reports how each one went" (also the Allow dialog's default reason). The id `everywhere` itself appears in GET /local, in an allow entry and in network log lines (the CLI's `vector local` lists log lines by source id; it does not list the registry, engine cli/cmd/local.ts). **Owner question, for the lead:** is this neutral row acceptable before 2.0.0, or should the pane hide the source, or keep it off with no Allow…, as it does the help assistant (app `KEPT_OFF`), until the label is approved? Either is one change in packages/app; nothing here is on vectordev.ai.
+  *Review round one (2026-11-16), two findings:* the more hidden of the two options the findings give is taken until the owner answers: `everywhere` is in the app's `KEPT_OFF` (local-model.ts :148-149) with the fixed reason "Jobs for this computer come from vectordev.ai and report back to it, so this computer takes none while Vector Local is on.", so the pane lists the row as "Off in Vector Local" with no Allow…, as it does the help assistant, which matches the hidden settings tab. The reason is true at HEAD: under Vector Local the runner declines every job ((a)), and it is unwired. The `NAMES` entry stays, so "every source in the registry has a name of its own" still passes. Filtering the row out of the pane was not taken: "lists every source Vector Local restricts" would have to change, and an allow entry a user or company wrote by hand would then show nowhere. The id `everywhere` still appears in GET /local, as before. The owner question is now the reverse one: once EV-08's label is approved and EV-21 labels the GitHub calls, should the `KEPT_OFF` line go, so the row offers Allow…?
+- **(i) The note says only what is true at HEAD** (critique, major, taken). It reads "Offers come over Vector Remote's link (remote); a job's git fetch and push to GitHub are git-remote, decided before git starts". The plan's note also called the job's GitHub requests `github` and promised the computer takes a job while all three are allowed. Neither holds yet: desktop github-api.ts sends with a plain `fetch` (`githubFetch`, :35), so under Vector Local the backstop refuses those requests as `unlabelled` whatever the user allows, and with all three allowed a job is held (the visibility read fails). *Review round one:* with the `github` guard ((a)) such a job is now declined `local-mode` before any claim instead. There is no `pending` call in the desktop's jobs client yet, so the note names only the relay.
+- **(j) The mutations name the case that actually goes red** (critique, major, taken; *review round one:* with the `github` guard, M1 and M4 change no outcome and are green, see round three below). `localAllows` returning `!policy.enabled` still refuses every enabled policy, so only R2's success case goes red; removing the `everywhere` entry fails closed in the runner, so R2's success case, R5's log line (purpose `unknown`, rule `unlabelled`) and the sources tests go red, and with them almost every other runner test, since `localAllows` also refuses a missing source with Vector Local off. The table below records each run.
+- **(k) R3's red is an assertion, not a timeout** (critique, minor, taken). The loop holds the engine, so a runner that missed a timer-driven abort would leave `await running` waiting until the file's 30-second timeout. The abort is recorded by the time its tick returns, so the loop asserts it right after the tick for `toggle`, `local` and `deadline`.
+- **(l) R5 asserts only what the fetcher received** (critique, minor, taken): the URL, the method, the authorization and device headers and the body, never deep equality of the init, which under Bun can carry a company's certificate authorities (`LocalCA.request`) in one environment and not another.
+
+### Not changed
+
+core local-mode policy.ts, egress.ts and guard.ts; engine test/compliance/egress-inventory.test.ts; desktop github-api.ts (still unlabelled), remote-link.ts, local-mode.ts and index.ts; the engine; the server's jobs routes and the `pending` contract; schema, config, routes, generated files, flags, env vars, dependencies, the lockfile and workflows. No website page or doc changed.
+
+### Safe by default
+
+- Vector Local off: every verdict is `local-off` allow, so the runner and the jobs client behave as before, and the git check returns at once.
+- Vector Local on with nothing allowed (the default): the runner declines `local-mode` before any claim, the jobs client refuses that decline before sending it, and git refuses any fetch or push. Nothing reaches vectordev.ai or github.com from the runner.
+- Vector Local on with all three allowed: until EV-21 the runner still declines `local-mode` before any claim (the `github` guard); only that decline reaches vectordev.ai, as `everywhere` is allowed.
+- A pending policy and a source missing from the registry refuse.
+- The runner is unwired until EV-21, `OFFER_KEYS` is empty and VECTOR_EVERYWHERE_ENABLED is off, so no production path reaches it.
+
+### Left open
+
+- **EV-21, the `pending` readiness `local` flag.** It should be `!localAllows(policy)`. That changes what the server's `local` flag means, from "has Vector Local on" (this log, VE-05 "pending", :108) to "Vector Local blocks laptop jobs", and the `status` checklist item "Vector Local off" (spec §3.1 :148) with it; both need a dated annotation when EV-21 builds it. While `everywhere` itself is blocked the `pending` call is refused too, so the server keeps the computer's last readiness until it is allowed.
+- **EV-21, labelled GitHub calls.** Send the runner's GitHub calls (visibility, the GitHub thread, the draft pull request) labelled `github`; desktop github-api.ts is unlabelled today. Then revise this source's `note`, and its `sends` once `pending` exists. Until then the `github` guard in `localAllows` declines every job under Vector Local (review round one, (a)). In the same change EV-21 removes the guard and its dated comment, puts R2's success case back under Vector Local (all three allowed: the job runs and publishes; M1 and M4 are then red again), and asks the owner whether the app's `KEPT_OFF` line goes ((h)).
+- **EV-21, `remote` and the `pending` call** (review round one, recorded). `LOCAL_NEEDS` has no `remote`. Today offers arrive only over Vector Remote's link, which is decided as `remote`, so a blocked `remote` already keeps offers away. EV-21's `pending` call reaches jobs through `everywhere` alone, so a computer with `everywhere`, `git-remote` and `github` allowed and `remote` blocked could then take jobs, though this source's note says it follows `remote`. EV-21 must decide whether `localAllows` also requires `remote`, or say why `pending` may bypass it, and add a runner case for that decision when it builds `pending`.
+- **Routing under Vector Local, for the lead.** With `everywhere` blocked the server hears no answer from the computer, so spec §3.4 step 5a moves on to step 6 (Actions) or step 7 (queue) instead of refusing "Vector Local is on.". Once R-C8 is lifted and R-A4 exists, a job from someone who keeps Vector Local on can therefore reach the Actions fallback. Whether that is wanted is the owner's call; it is not built here.
+- **The model under Vector Local** (critique, minor, recorded). With all three sources allowed (once EV-21 removes the `github` guard), `localAllows` passes even when the chosen model is not a listed server, so the job is claimed and then fails when the engine refuses the model call. EV-17 or EV-21 should fold Vector Local's model decision into `modelAllowed`, or decline `model-not-allowed` up front.
+- **Results under Vector Local.** A `held` settle after Vector Local is turned on (R4's path) and recovery's stored results are refused while `everywhere` is blocked: three attempts, then the fixed log line; the branch stays on this computer and the server's lease expiry ends the job. This is the behaviour before this package too.
+
+### Mutations
+
+Each was applied to one source file alone, the named test file was run alone from its package, and the file was restored with its sha256 checked after every run (/tmp/vector-v2/everywhere/ev15-mut/: mutations.py; round1/ holds M1 to M10, round2/ M11 to M13, one log per run). Round one was stopped by the 30-minute background limit during M11, whose restore had not run; sources.ts was restored by hand to the recorded sha256 (checked) and M11 to M13 ran again in round two. All thirteen are red.
+
+| Mutation | File | Test file | Result | First failing assertion |
+| --- | --- | --- | --- | --- |
+| M1 `localAllows` refuses whenever Vector Local is on (`!policy.enabled && …`) | runner | everywhere-runner.test.ts | red, 1 of 52 | R2 :261, the all-three, Web access Ask case is declined (the plan predicted R2's first case; the critique was right) |
+| M2 `LOCAL_NEEDS` holds only `everywhere` | runner | everywhere-runner.test.ts | red, 1 | R2 :252, index 2 (`everywhere` alone) allows |
+| M3 `LOCAL_NEEDS` drops `github` | runner | everywhere-runner.test.ts | red, 1 | R2 :252, index 3 (`everywhere` and `git-remote`) allows |
+| M4 `LOCAL_NEEDS` drops `git-remote` | runner | everywhere-runner.test.ts | red, 1 | R2 :252, index 4 (`everywhere` and `github`) allows |
+| M5 the one-second timer ignores Vector Local | runner | everywhere-runner.test.ts | red, 1 | R3 :615, cause `local` has no abort after its tick: an assertion, not the 30-s timeout ((k)) |
+| M6 the push gate ignores Vector Local | runner | everywhere-runner.test.ts | red, 1 | R4 :275, the result is `changes` with a head and a pull request instead of `held` |
+| M7 the jobs client is unlabelled again (`(input.fetcher ?? fetch)`) | runner | everywhere-runner.test.ts | red, 1 | R5 :304, the decline resolves instead of rejecting with `EgressBlocked` |
+| M8 the offer ignores Vector Local | runner | everywhere-runner.test.ts | red, 3 | R1 :230 (the offer is taken), R2 :253 (index 0 offered), R5 :318 (the offer resolves) |
+| M9 the `everywhere` entry is removed | sources.ts | everywhere-runner.test.ts | red, 50 of 52 | every offer declines `local-mode`, Vector Local off included, since `localAllows` refuses a source the registry lacks; among them R2's success case and R5 :306 (the log line reads purpose `unknown`, rule `unlabelled`) |
+| M9 (the same) | sources.ts | sources.test.ts | red, 2 of 16 | S1 :104 (no source to gate), S2 :258 |
+| M10 the `everywhere` entry is `local: "allowed"` | sources.ts | sources.test.ts | red, 3 | "decides each source's own hosts…" :73, S1 :104, S2 :258 |
+| M11 `git-remote` no longer lists everywhere-git.ts | sources.ts | sources.test.ts | red, 1 | S2 :267 |
+| M12 git `fetch` skips the `git-remote` decision | everywhere-git.ts | everywhere-git.test.ts | red, 1 of 9 | :132, the fetch resolves under Vector Local |
+| M13 git `push` skips the `git-remote` decision | everywhere-git.ts | everywhere-git.test.ts | red, 1 | :134, the push answers true under Vector Local |
+
+M9 shows `localAllows` failing closed on a missing source even with Vector Local off. That is deliberate: the registry and the runner ship in one build, so a missing source is a build error, and refusing is the safe reading of it.
+
+**Round three (review round one, 2026-11-16).** The same method, after the round's fixes (/tmp/vector-v2/everywhere/ev15-mut/: round3.py, round3/ with one log per run, results.txt for all nine and results-M12-M13-M15-M16.txt for the four git mutations run again after the git case was put in prettier's form, so their logs carry the lines below); each restore's sha256 was checked and both files matched round3/before.sha afterwards. M12 and M13 are M12 and M13 above with the call's new `method` argument.
+
+| Mutation | File | Test file | Result | First failing assertion |
+| --- | --- | --- | --- | --- |
+| M14 the `github` guard is removed | runner | everywhere-runner.test.ts | red, 1 of 52 | R2 :256, index 8 (all three allowed by the user) allows |
+| M1 `localAllows` refuses whenever Vector Local is on | runner | everywhere-runner.test.ts | green, 52 | none: with the guard it is the behaviour, so it is no longer a mutation; red again once EV-21 removes the guard and restores R2's success case |
+| M2 `LOCAL_NEEDS` holds only `everywhere` | runner | everywhere-runner.test.ts | red, 1 | R2 :256, index 2 allows (the guard goes with the `github` need) |
+| M3 `LOCAL_NEEDS` drops `github` | runner | everywhere-runner.test.ts | red, 1 | R2 :256, index 3 allows |
+| M4 `LOCAL_NEEDS` drops `git-remote` | runner | everywhere-runner.test.ts | green, 52 | none: under Vector Local the guard refuses first, and with it off every source allows; git's own decision still holds (M12, M13). Red again once the guard goes |
+| M12 git `fetch` skips the `git-remote` decision | everywhere-git.ts | everywhere-git.test.ts | red, 1 of 9 | :173, the fetch resolves under Vector Local |
+| M13 git `push` skips the `git-remote` decision | everywhere-git.ts | everywhere-git.test.ts | red, 1 | :175, the push answers true under Vector Local |
+| M15 git `push` is decided as `GET` | everywhere-git.ts | everywhere-git.test.ts | red, 1 | :177, the push's block line has method `GET` |
+| M16 `localBlocks` drops the method (both logged `GET`) | everywhere-git.ts | everywhere-git.test.ts | red, 1 | :177, the push's block line has method `GET` |
+
+### Coordination
+
+Re-checked after `git fetch` of every lane tip (2026-11-16): `git diff --stat $(git merge-base HEAD origin/<lane>) origin/<lane>` over packages/core/src/local-mode/sources.ts, packages/core/test/local-mode/sources.test.ts, packages/desktop/src/main/everywhere-{runner,git}.ts and their tests, packages/app/src/features/local/local-model.ts, packages/engine/test/compliance/egress-inventory.test.ts and the four lane documents is empty for main `2034e1da`, review-fixes `1433d105`, brain-transport `d49acedf`, hands-finish `7078232f`, connect-finish `1d944dd9`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, native-finish `f141ef16` and codium-track `c262f74b`. Two lanes touch these files:
+
+- **codium-finish `0b9f8337`** rewrites brain-vault's `sends` and `why` (sources.ts :402-403 at the merge base `67ec3a60`, which equals HEAD for this file) and adds a test after "says what each source sends and why" (sources.test.ts :53). This package's insertion sits between the base's :396 and :397, five unchanged lines above that hunk, and its test lines are at :104 and the file's end. `git merge-file` of each file (this package's version, the merge base, codium-finish's) merges with no conflict.
+- **scope-finish `1b6df982`** changes one line of egress-inventory.test.ts (:157), which this package does not edit.
+
+A lane that edits the desktop runner's three Vector Local checks, its jobs client or everywhere-git.ts's `fetch` and `push` will meet this package's hunks; none does today.
+
+### Deferred verification
+
+- vector-everywhere.yml (everywhere-runner.test.ts, everywhere-git.test.ts and the core, engine, desktop and app typechecks) and typecheck.yml, as workflow_dispatch on everywhere-finish after the lead's commit and push.
+- No lane workflow runs core test/local-mode/sources.test.ts, engine test/compliance/egress-inventory.test.ts or the app's two local-model tests: their counts are local receipts (progress), and test.yml re-runs those it owns at the lane end. Review round one adds four expects to app src/features/local/local-model.test.ts and one list entry, so its local receipt is the only evidence for the `KEPT_OFF` row until then.
+- A real desktop with Vector Local on (VE-50).
+
+### Review round one (2026-11-16)
+
+Eight findings, all non-blocking; several repeat one another. Each is taken or recorded; none is disputed. Left in the working tree, not committed (the task said so).
+
+- **`github` in `LOCAL_NEEDS` makes a new reachable state** (everywhere-runner.ts :115). Taken, the finding's second option: the `github` need refuses whenever Vector Local is on until EV-21 labels desktop github-api.ts (runner :128-131), so behaviour under Vector Local is unchanged from before this package, whatever is allowed. R2 pins it (its last two policies, :248-251), and its success case now runs with Vector Local off. (a), (c), (i), Safe by default, Left open and the round-three mutations say what this changes; the first option stays open to the lead in (a).
+- **The git push is logged as GET** (two findings, everywhere-git.ts :45). Taken: `localBlocks(remote, method)` forwards the method to `Egress.decide`, `GET` from `fetch` and `POST` from `push`, and the git test asserts each line's method (M15, M16 red).
+- **The registry row shows in the app before EV-08** (two findings, sources.ts :397 and app local-model.ts :110). Taken, the more hidden option, until the owner answers: `everywhere` is in the app's `KEPT_OFF` with a fixed reason (no Allow…), and the app test pins the row. (h) records the choice, why filtering it out was not taken, and the owner question that remains.
+- **The git test's fake is hard to read** (two findings, everywhere-git.test.ts :120 and :124). Taken: the `execute` fake answers through a named `answer` with one early return per git call, commented, and the case is in prettier's form. The rest of the file keeps its hand-packed style; reformatting it is left to a separate change.
+- **`LOCAL_NEEDS` has no `remote`** (everywhere-runner.ts :115). Recorded, as the finding asks: a Left open item here and in the handoff's EV-15 Left open item says EV-21 must decide whether `localAllows` also requires `remote` or say why `pending` may bypass it, and add a runner case for that decision. Nothing reaches jobs except over `remote` until then.
+
+## 2026-11-16, EV-16: the session-scoped offline shell for unattended sessions (R-M2)
+
+Spec §11 R-M2 ("required before the laptop route runs any command"); vector-everywhere-main-requests.md, "R-M2: session-scoped offline shell"; §5 E7; §3.5 step 5's bash bullet. Built at HEAD `12b3ad09`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main `3ab7858e` is not merged here: PR #33 has merged, so the lane notes disagree on who merges main ("once PR #33 is merged, merge origin/main instead" against "the lead merges main into this branch"); this package was asked to leave its work uncommitted, so it cannot make a merge commit, and it follows EV-14's and EV-15's precedent (the lead merges main). `git diff --stat 67ec3a60 origin/main` over this package's files is empty. No review-fixes or brain-transport precondition. docs/vector/build/v2-spawn-review.md was read first: this package adds one fixed system helper spawn (the bubblewrap self-test, (h)) and no other spawn site. Line numbers below are after the change. Left in the working tree, not committed (the task said so).
+
+### What changed
+
+- **packages/core/src/everywhere/frame.ts** (:32-35): `UNATTENDED_SHELL_KEY = "vector.unattended.shell"` and `UNATTENDED_SHELL_OFFLINE = "offline"`, beside `UNATTENDED_KEY`, the single home for the engine and, from EV-18, the runner. `unattendedMetadata` is unchanged (EV-18 adds the key). core test/everywhere/frame.test.ts pins both.
+- **packages/engine/src/session/unattended-shell.ts** (new, `export * as UnattendedShell`): the marks (`MARKS`), six fixed messages (`OWNER_ONLY`, `INVALID`, `FIXED`, `KEPT`, `USER_SHELL`, `TERMINAL`), the self-test's argument list `SELF_TEST` (:41), and:
+  - `admission(metadata, owner)` (:70): undefined without the shell key, `"owner"` when the request is not the owner's, `"invalid"` unless the value is `"offline"` beside a `vector.unattended` that is neither missing nor null;
+  - `changes(current, next)` (:83): a PATCH names a mark with a value not deep-equal (`isDeepStrictEqual` from node:util; `Bun.deepEquals`, strict, until the 2026-11-17 CI follow-up) to the current one;
+  - `differs(current, next)` (:91): a whole-metadata replacement (a replayed update) adds, changes or removes a mark;
+  - `marked(sessions, sessionID, parentID?)` (:103) with `lineage` (:133): the session or a stored session above it carries the shell mark (any value). A missing ancestor ends the lineage (the session below runs as any session does); a loop or more than 64 levels is refused (dies); an unstored session is judged by the tool context's `parentID` and what is stored above it, and with neither stored it has no mark ((g));
+  - `policy(spawner, platform?)` (:156), `selfTest(spawner, binary)` (:168) and `refusal(spawner, platform?)` (:186): `"offline-v1"` only where `Sandbox.unattendedBinary(platform)` finds a root-only bubblewrap and its one-time self-test exits 0 ((h)), `"none"` otherwise; the platform defaults to this one;
+  - `replayRefusal(sessions, events, owner)` (:217): each event's `sessionID`, `info.parentID` and `info.metadata` are decoded with a small Schema (`Schema.decodeUnknownOption`, :197); a replayed `session.created` is a creation (`admission`); a replayed `session.updated` must not differ in the marks from the session as the replay leaves it before that event, nor move a session of a marked lineage to another parent; a replayed `session.deleted` must not delete a session of a marked lineage ((d)).
+- **packages/engine/src/tool/shell/sandbox.ts** (on §6.4's avoided row, (k)):
+  - scope-finish `a6fd38d3`'s `writes?: "workspace"` ported byte for byte, comments included: the input field and docblock (:439-447), the cwd check and writable block (:499-519), the seatbelt `writable` (:532-534), the bwrap `hidden` and args (`--cap-drop ALL`, `runtimeMounts`, the private data folder, the RESOLVER line, `--remount-ro`, :552-593), and the helpers `containsOrSame`, `runtimeMounts`, `privateData`, `searchFolders` and `readOnly` (:652-686). Its `reason` field on `Offline` is not ported ((a));
+  - new, between `refusal()` and `wrapCommand` (:287-428): `UNATTENDED_NOTICE` (:289, (q)), `UNATTENDED_REFUSAL`, the environment allowlist and cache folders ((b), (c)), `UNATTENDED_SECRETS` (:325, (o)), `unattendedBinary(platform)` (:344, Linux and a root-only bwrap, (i)), `unattended(input)` (:358: `offline` with `writes: "workspace"`, the scrubbed environment and HOME, refused unless the result is `sandboxed` with mechanism bubblewrap and the same binary, then the checkout's `.git` bound read-only and the stores hidden, inserted before `--remount-ro` or `--chdir`), `gitMetadata` (:392, (n)), `hiddenStores` (:399), `unattendedEnvironment` and `rootOnly`. A two-line comment above them and a one-line NOTE above `wrapCommand` (:428) say the shell tool passes `writes` for these sessions; scope-finish's docblock clause "the shell tool never passes it" is left as it is (Coordination).
+- **packages/engine/src/tool/shell.ts** (avoided, (k)): `sessions` bound at init (:1905); `run` and `background` take `unattended` (:1930, :2161) and pick `Sandbox.unattended(input)` for it (:1976, :2168); `execute` asks `UnattendedShell.marked` and, for a marked session, `UnattendedShell.refusal(spawner)` before anything is asked (:2235-2244), whatever Vector Local and VECTOR_SHELL_SANDBOX say; both input literals pass it. `cmd()`'s logic is unchanged (one comment sentence): a `refused` plan dies there and a `sandboxed` one returns the bwrap command before the `unsandboxed_shell` branch, so that ask is never reached.
+- **packages/engine/src/tool/terminal.ts** (avoided, (f)): `sessions` at init (:261); `run` refuses every action for a marked lineage with `UnattendedShell.TERMINAL` (:679-682).
+- **packages/engine/src/server/routes/instance/httpapi/handlers/session.ts**: `create` refuses the shell mark from a non-owner (403 `OWNER_ONLY`) or with any other value or without `vector.unattended` (400 `INVALID`, field `metadata`) before anything is admitted or created (:226-231); `update` refuses a PATCH that would change a mark (403 `FIXED`) before the title, metadata or permission is touched (:301-303); `shell` (POST /session/:id/shell, which spawns outside the shell tool) answers 403 `USER_SHELL` for a marked lineage (:531-533).
+- **packages/engine/src/server/routes/instance/httpapi/handlers/sync.ts** (:57-61, critique, (d)): POST /sync/replay runs `replayRefusal` before any projector or listener sees the replay, owner or not.
+- **packages/engine/src/tool/subagent-lifecycle.ts** `setPublicMetadata` (:391-407): the marks are engine-owned like `subagent`: a public replacement keeps them from the current metadata and drops any the payload names.
+- **The probe** (critique, (e)): `GET /experimental/shell/unattended` in its own `UnattendedShellApi` (groups/experimental.ts: the path :209, `UnattendedShellPolicy` :235-239, `UnattendedShellApi` :715-746 after `UnattendedWorktreeApi`), its handler group `unattendedShellHandlers` (handlers/experimental.ts :667-680, at the file's end), `.addHttpApi(UnattendedShellApi)` (api.ts :74) and the handler in server.ts (:120, :204). Owner only; it answers `{shell: "offline-v1" | "none"}` from `UnattendedShell.policy` and loads no instance. EV-13's `owner()` closure moved to module level as `requireOwner(message)` so both unattended probes refuse the same way, each with its own fixed text.
+- **packages/engine/test/server/httpapi-exercise/index.ts**: `shell.unattended.policy` (200, either answer) and `session.create.unattended-shell.invalid` (400).
+- **.github/workflows/vector-everywhere.yml** ((j)): an "Install bubblewrap" step after ripgrep (apt-get with the ripgrep step's retry options, the AppArmor sysctl verify.yml uses, and `bwrap --unshare-net --ro-bind / / true`), and `VECTOR_TEST_REQUIRE_BWRAP: "1"` on the test step.
+- **packages/engine/test/everywhere/offline-shell.test.ts** (new; imports nothing from desktop, F5): sixteen tests, listed in the progress receipt.
+- Regenerated with ./packages/sdk/js/script/build.ts: listed in the progress receipt. packages/client: unchanged (it compiles only the protocol API).
+
+### The sequence
+
+A marked session's command: `execute` resolves the working folder and the background refusals as before; then `UnattendedShell.marked` (one session read, and its ancestors'); for a marked lineage `UnattendedShell.refusal`, which is `UNATTENDED_REFUSAL` unless the policy is `offline-v1` (the self-test runs once per process and binary); a refusal dies before any ask, any `ShellJobs.start` and any process. Otherwise the permission asks and admission run as for any command, then `run` or `background` builds `Sandbox.unattended(input)`, which refuses (dies in `cmd()`) unless bubblewrap wraps it: no network namespace exit, `--cap-drop ALL`, private /tmp and /run, Vector's data folder hidden, only the checkout writable (the working folder must be inside it) and its `.git` read-only, the home-directory secrets and the unattended stores covered, and the allowlisted environment with HOME and the caches set. The first command's output starts with `UNATTENDED_NOTICE`, and its metadata carries it as `sandbox`. Hands' `beforeSpawn` runs after `cmd()` and before the spawn, as before. One component signals each process, and the owner is the outermost layer (spawn review): the spawner's scope for a foreground command and `OwnedProcess.command` (the POSIX process group) for a background one own the bwrap process and are its only signalers; bwrap sits inside them with `--die-with-parent`, `--unshare-pid` and `--cap-drop ALL` and no `--new-session`, so its namespace init stays in the owner's process group. Windows never gets that far: the refusal comes before `ShellJobs.start`, so no holder process and no job row exist.
+
+### Deviations
+
+- **(a) Workspace mode is ported from scope-finish rather than written here, byte for byte.** The plan's own probe showed why it is needed: a network namespace does not stop filesystem Unix sockets, and with Web None's bubblewrap arguments (`--tmpfs /tmp`, then os.tmpdir() bound back) a host socket still answered, and so do the D-Bus session bus under /run/user/<uid>, /run/docker.sock and ssh-agent sockets in /tmp; the host /tmp and the caches on PATH stay writable. `writes: "workspace"` makes /tmp and /run private, hides Vector's data folder and drops capabilities. The hunks are copied exactly from `git show a6fd38d3:packages/engine/src/tool/shell/sandbox.ts`, comments included (critique, minor, taken: the plan's two reworded comment lines are not reworded), so the merge with scope-finish meets identical hunks. Two consequences are recorded rather than edited: scope-finish's docblock says "the shell tool never passes it", which is no longer true (a separate comment above `unattended` and a one-line NOTE above `wrapCommand`, both outside the ported hunks, say so, and Coordination asks scope-finish to change the clause), and its `--cap-drop` comment names "fix.ts `execute`", which exists only on scope-finish. Its `reason` field on `Offline` is not ported: nothing here reads it, and its hunks merge cleanly beside these. A third consequence is behaviour: workspace mode drops `git.writable`, so a linked worktree's own gitdir (index, HEAD, their locks) is read-only to the command, and (n) makes a plain checkout's `.git` read-only too. Inside an unattended session `git add`, `git stash`, `git checkout -b`, `git commit` and an index refresh fail; `git status`, `git diff` and `git log` work. Nothing in the run needs them: the runner stages, commits and pushes from outside the sandbox (desktop everywhere-git.ts `stage`, `commit`, `push`, each with core `GIT_HARDENING`, which sets `core.hooksPath` to the null device and `core.fsmonitor=false`, after `unchanged` re-hashes the repository's config files), and the work policy tells the agent that Vector does that after it finishes. A check that writes the index (a pre-commit framework run by hand, say) fails in the sandbox and says so.
+- **(b) The environment is an allowlist, not a denylist** (critique, minor, taken). The plan's denylist (GithubAgents.SECRET_NAME_PATTERN plus a withheld set) missed lower-case names and names like `*_PAT`, `*_CREDENTIALS` or `DATABASE_URL`. An unattended command keeps only PATH, HOME, USER, LOGNAME, SHELL, LANG, LANGUAGE, TERM, TZ, COLORTERM, NO_COLOR, every `LC_*`, every `*_HOME` and `*_ROOT` (toolchain folders such as JAVA_HOME and GOROOT) and Vector's child markers (VECTOR_AGENT_SESSION, VECTOR_LOCAL, VECTOR_LOCAL_WEB), and of those never a name SECRET_NAME_PATTERN matches, compared upper-cased. Everything else stays out: tokens, keys, proxies, SSH_AUTH_SOCK, DBUS_SESSION_BUS_ADDRESS, DOCKER_HOST, LD_* and the rest. HOME is set to the home folder whose secrets the profile hides (Bun reads `os.homedir()` once at start, so a later change to HOME in the engine's environment would otherwise point the command at an unprotected folder). The cost: a toolchain configured only through another variable (GOFLAGS, NODE_OPTIONS, JAVA_OPTS, VIRTUAL_ENV) does not see it; EV-18 can pass named extras if a check needs one. The spawner still adds its floor (the agent marker and Vector Local's variables).
+- **(c) Caches go to the sandbox's private /tmp** (critique, major, taken). Workspace mode makes the home folder read-only, so `go test` could not create GOCACHE and npm, bun and others could not write caches or logs. The command gets TMPDIR=/tmp, XDG_CACHE_HOME=/tmp/.cache, GOCACHE=/tmp/.cache/go-build, npm_config_cache=/tmp/.npm and BUN_INSTALL_CACHE_DIR=/tmp/.bun-cache, all writable in bubblewrap's tmpfs and gone with the command. A cache that only reads (Go's module cache, ~/.cargo's registry) is still read in place; an install that needs the network fails anyway, since there is none. The end-to-end test writes under $XDG_CACHE_HOME (M19 red).
+- **(d) The marks are fixed after creation everywhere a client can write session metadata** (critique, major, taken). Besides PATCH /session/:id, POST /sync/replay projects `session.created` and `session.updated`, and the updated projector replaces the whole metadata (core session/projector.ts), so an owner replay could drop the marks and a non-owner replay could set them. `replayRefusal` runs before `replayAll`, for the owner too: a replayed creation follows `admission` (403 `OWNER_ONLY` or `INVALID`), a replayed update that adds, changes or removes a mark against the session as the replay leaves it gets 403 `FIXED`. The route itself is the owner's (a guest-marked replay is refused by the middleware first), so the non-owner rule is defence in depth. Other paths were checked: archive import builds the session's info without metadata (core share/archive.ts), `Session.fork` copies metadata (both marks, which only narrows), and the engine's own writers (subagent-lifecycle `write`, `claim`, `releaseNotifications`, review local-run.ts) spread the current metadata. With PATCH, `setPublicMetadata` and replay closed, EV-14's "PATCH can drop the mark" item is closed too. Review round one added two replay rules: a replayed `session.deleted` of a session of a marked lineage (marked itself, or below a marked session) is refused with 403 `KEPT`, so no replay can delete a marked session and then create its ID again without the marks (the created projector inserts with `onConflictDoNothing`, so only a deletion first makes that possible) and none can cut the sessions below a marked one off from it; and a replayed update that changes such a session's `parentID` (the updated projector writes `parent_id` too) is refused the same way. A session outside every marked lineage is deleted and moved by a replay as before. Workspace sync replays (control-plane workspace.ts :422 and :473, `events.replay` from a remote workspace's event stream) do not go through `replayRefusal`: the remote workspace is the owner's own engine, which keeps the same rules on its own routes, and experimental workspaces stay off; running the check there with `owner = true` is left to the workspaces lane if it is wanted.
+- **(e) A probe of its own, not the create response or a capabilities field** (critique, major, weighed). The session create response is the SDK's `Session` shape and would need a field every client sees. scope-finish adds `vectorscopeLocalFixes` to `CapabilitiesResponse` (groups/experimental.ts :140-145 there) and its handler (:367-371 there); a field beside it would meet scope-finish's hunk in both files, and capabilities is not owner-only and is answered per workspace, while the answer here is the engine's own and owner-only like EV-13's `unattended-v1` probe. The new API sits after `UnattendedWorktreeApi` and the handler group at the end of handlers/experimental.ts, away from every scope-finish hunk (Coordination has the merge-tree result). An older engine answers 404, which a client reads as "none".
+- **(f) The terminal tool refuses every action for a marked lineage** (critique, minor, taken: the simpler, fail-closed option). Refusing only open, type, keys and signal would still let an unattended session read and close the owner's terminals. E7's ruleset (EV-18) also denies `terminal` and `terminal_input`; this is the engine's own floor under it. terminal.ts is on §6.4's avoided row ((k)). POST /session/:id/shell (prompt.ts `shellImpl`) spawns outside the shell tool, so it answers 403 for a marked lineage; slash-command `!` snippets go through the shell tool's `execute` with the session's id and are covered there.
+- **(g) Which sessions count.** A session is offline-only when it or a stored session above it carries the shell mark, whatever its value (as EV-14 (d)). A missing ancestor ends the lineage (review round one; the first build refused it, which refused every shell and terminal command of an orphaned session that was never offline-only, an import or a replayed child, and answered 500 on its shell route). That is safe because no session of a marked lineage goes while one below it stays: the marks never change, Session.remove removes a session's children before it, and a sync replay may neither delete nor move a session of a marked lineage ((d); the workspace sync replays it leaves unchecked, and edits to the store outside the engine, aside). A loop or more than 64 levels is still refused (a loop needs a replayed move of a session outside every marked lineage). "a sync replay cannot change the marks, set them without the owner, or cut a session off from them" pins the orphan: a replayed session whose parent is not stored runs its POST /session/:id/shell (N1 red when a missing ancestor dies again). A session that is not stored is judged by the tool context's `parentID` and what is stored above that; with neither stored the command runs under the normal policy. That is a deliberate exception (critique, minor, partly taken): the shell and terminal tools' own tests run with unstored ids (terminal.test.ts's subagent cases pass an unstored `parentID`, and refusing them failed two of its tests in the first build), and a tool call always comes from a stored session in a running engine. The marks are flat keys, `"offline"` is the only accepted value at creation, and any value counts at run time.
+- **(h) The capability is honest where bubblewrap cannot start** (critique, major, taken: the self-test). `UnattendedShell.policy` runs `bwrap --die-with-parent --unshare-ipc --unshare-uts --unshare-pid --unshare-net --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp /bin/sh -c :` once per process and binary (the first build ran `true` with PATH /usr/bin:/bin, which NixOS does not have, so its bubblewrap would never have qualified; /bin/sh is there on every system bubblewrap runs on), through the spawner (the probe handler gets it as the app's `AppProcess` service, which is the spawner; the shell tool uses its own), with a fixed environment, no input from anyone and a 10-second bound. Only exit 0 gives `offline-v1`; anything else, a timeout included, gives `none`, and the shell tool then refuses every command of a marked session before anything is asked. The answer is kept for the process, so a start that failed once (a loaded machine hitting the bound, say) leaves jobs edit-only until the engine restarts; that errs on the closed side. For the spawn review this is a fixed system helper with one owner: the spawner's scope starts it detached and kills its group when the bound interrupts it. `selfTest(spawner, binary)` is the uncached start alone, so the test can run it on a fake bubblewrap past the root-ownership check: "comes from a self-test that runs the fixed arguments and counts only exit 0" records the arguments the fake receives (exactly `SELF_TEST`) and pins exit 1 to `false` and exit 0 to `true` on any runner, root or not (N7 red). `policy` and `refusal` take the platform (default: this one), and "is none on Windows and macOS" asserts `none` and `UNATTENDED_REFUSAL` for win32 and darwin on this Linux runner, which has a bubblewrap that qualifies (N8 red).
+- **(i) Only a root-only bubblewrap qualifies** (critique, minor, taken). `which("bwrap")` searches PATH and Vector's own bin folder, either of which another user's files can reach. `unattendedBinary` accepts the binary only when its real path is a regular file and both it and its folder belong to root and nobody else may write them, as ProcessIsolation asks of /usr/bin/bwrap (without requiring that path, so NixOS's store path qualifies). `unattended` also refuses a plan whose command is not that same binary.
+- **(j) The lane workflow installs bubblewrap and must not skip quietly.** vector-everywhere.yml's tests job had no bubblewrap and Ubuntu 24.04 restricts unprivileged user namespaces, so the Linux cases would skip there. The new step installs it and lifts the limit as verify.yml does. One test-only variable, VECTOR_TEST_REQUIRE_BWRAP (set only on that step), makes "bubblewrap works on this runner" fail unless bubblewrap starts and the engine would advertise `offline-v1`. There is no runtime flag or environment variable, and no config key.
+- **(k) Avoided files.** packages/engine/src/tool/shell.ts, tool/terminal.ts and tool/shell/** are on §6.4's avoided row; R-M2 was a request to main's owners. They were built here under the lead's brief, as EV-14 built prompt.ts, with small hunks (shell.ts +17/-5, terminal.ts +6); §6.4 has a dated note. Spec :10 and the handoff's owner rules are not edited.
+- **(l) The home secrets are proven by running bubblewrap directly, not through a session.** The plan put HOME inside the checkout for the end-to-end case, but Bun reads `os.homedir()` once at start, so changing HOME inside the test process changes the command's $HOME and not the folder the profile protects. "a command it wraps cannot read the home folder's secrets, which a command outside it can" builds `Sandbox.unattended` with a fake home inside a checkout (.ssh/ and .netrc with a random secret, and a readable notes.txt), runs the wrapped bubblewrap command with `Bun.spawnSync`, and compares it with the same command outside: inside only notes.txt is read. The end-to-end case keeps the network, socket, /run, environment, cache and write checks.
+- **(m) The brief's "refuse it on any update" lets an equal value through** (critique, minor, recorded). A PATCH or replay that repeats a mark exactly passes, so a client that writes back the metadata it read keeps working; any different value, a removal (PATCH `null`, or a replayed update without it) or an addition is refused. This departs from the brief's wording and weakens nothing. The comparison is `Bun.deepEquals(a, b, true)`. *2026-11-17 (CI follow-up):* the comparison is now `isDeepStrictEqual(a, b)` from node:util, because the desktop runs the engine on Node.
+- **(n) The checkout's `.git` is read-only, and a `.git` link is refused** (review round one). Workspace mode makes the whole checkout writable, and in a plain checkout `.git` is a folder inside it (linkedWorktreeMetadata pins only a linked worktree's `.git` file), so a command could write `.git/hooks/*` or `.git/config` (`core.fsmonitor`, `core.hooksPath`, a filter driver) and the next git outside the sandbox, with the network, would run it. `unattended` binds `<checkout>/.git` read-only, file or folder, after the checkout's own bind, a mount point no command can move or replace; a `.git` that is a symbolic link cannot be pinned that way, so the command is refused. The runner's own git already runs with `GIT_HARDENING` ((a)); EV-21 must keep it on every git call it adds. The end-to-end case writes `.git/hooks/post-checkout`: refused in the marked session and its child, written in the plain one (N4 red); the argument case pins the bind's order and the link refusal (N9 red). The cost is (a)'s third consequence.
+- **(o) More of the home folder is hidden from unattended commands** (review round one, partly). SECRETS (the shell tool's list) leaves common plaintext credential stores readable, and there is no network but a private repository's run pushes a draft pull request (Q8), so a prompted command could copy one into the checkout. `UNATTENDED_SECRETS` hides, for unattended commands only, ~/.git-credentials and ~/.config/git/credentials (git's store), ~/.azure, ~/.terraform.d, ~/.local/share/keyrings, ~/.docker (its config and Docker Desktop's socket), ~/.pgpass, ~/.vault-token, ~/.config/op, ~/.config/hub and ~/.s3cfg, a folder under a tmpfs and a file under /dev/null as SECRETS does. "a command it wraps cannot read the home folder's secrets" reads ~/.git-credentials (N5 red). Not taken: a tmpfs over the whole home folder with only the toolchain folders bound back, which would also hide every other project's `.env`; that changes which tools a check finds and needs EV-18's runner to say which folders a job uses. Left open has the precondition this leaves for EV-21.
+- **(p) A null `vector.unattended` is no value** (review round one). `admission` refused only a missing `vector.unattended` beside the shell mark, so `{"vector.unattended": null, "vector.unattended.shell": "offline"}` was created. Harmless at run time (any shell-mark value marks the session, and EV-14 counts null as unattended), but INVALID promises a `vector.unattended` beside the mark; it now answers 400 `INVALID` (N6 red).
+- **(q) The notice says what the sandbox does, no more** (review round one). The first notice said the commands "reach no network, not even servers on this computer", but a filesystem Unix socket outside /tmp and /run that no mount covers stays reachable (connect() needs only write permission on the socket file, which a read-only bind does not take away). `UNATTENDED_NOTICE` now says the commands reach no TCP or UDP network, not even servers on this computer, and no socket under /tmp or /run, and that they write only in the repository's files, not its Git metadata ((n)). main-requests.md, the handoff and the spec say the same.
+
+### Not changed
+
+`Sandbox.offline`, `offlineRefusal`, `wrapCommand` with `writes` undefined (byte-for-byte today's path, so Web None and VECTOR_SHELL_SANDBOX are unchanged; "Web access None's own sandbox is unchanged" pins that it still binds the host's temporary folder), `cmd()`'s logic, ShellJobs, the spawner, ProcessIsolation, the desktop (the runner and its `unattendedRules` ruleset are EV-18's), `unattendedMetadata`, the session create and update schemas, `/experimental/capabilities`, config.json, workflow.json, help snapshots, flags, runtime environment variables, dependencies and the lockfile.
+
+### Safe by default
+
+No session carries the shell mark today, and nothing writes it until EV-18 creates the runner's session with it and EV-21 wires the runner; until then every session's commands run exactly as before, an orphaned session's included (a missing ancestor ends the lineage, (g)). The one exception is a lineage with a loop or deeper than 64 sessions, whose commands are refused because its ancestry cannot be read; only a replayed move of sessions outside every marked lineage can make a loop. The new refusals touch only the two marks and the sessions they cover: a PATCH or replay that leaves them alone behaves as before (a replay that deletes or moves a session outside every marked lineage included), and setPublicMetadata keeps them as it keeps `subagent`. The probe is read-only and owner-only. Workspace mode is opt-in.
+
+### Left open
+
+- **Unix sockets elsewhere on disk** stay reachable from inside the sandbox: a socket the repository's own checkout holds, /var/snap/lxd/common/lxd/unix.socket, sockets under /var/lib, any socket file in a folder no mount covers (connect() needs only write permission on the socket file). Review round one hid ~/.docker, which holds Docker Desktop's socket ((o)), and narrowed the notice and the R-M2 status to what holds ((q)). Closing the rest needs a seccomp filter on AF_UNIX `connect`, or tmpfs over more folders; a request to the sandbox's owners.
+- **Web None's own bubblewrap plan has the gap (a) describes** (host sockets under /tmp and /run, the host /tmp writable). Unchanged here; a request to Vector Local's owners, who could adopt workspace mode's private /tmp and /run.
+- **Project configuration is an escape path that EV-18 or EV-21 must close** (review round one; the first build called it "the project's config, not the session's commands", which was wrong). The checkout is writable from inside the sandbox, so a sandboxed command can write a formatter config (prettier.config.js), package.json scripts or a .vector/ config into it, and the engine's next edit-triggered formatter run, LSP server start or config reload then runs that code outside the sandbox, with the network. That bypasses R-M2 without any shell access to the host. Before the runner prompts an unattended session, EV-18 or EV-21 must turn formatters, LSP servers and config reloads off for it (or for the instance the runner's worktree opens), or bind the project's config paths inside the checkout read-only in unattended mode, and test that a config written by a command runs nothing outside the sandbox. EV-18's ruleset already denies MCP tools, and EV-13's worktree route never loads the instance, but the session's own instance does.
+- **Plaintext stores and other projects' files in the home folder** stay readable beyond (o)'s list: every other project's `.env`, a credential file under a name no list knows. There is no network, but a private repository's run pushes a draft pull request (Q8), so a command could copy such a file into the checkout and it would leave with the pull request. A precondition for EV-21's push: either mount the home folder as a tmpfs with only the toolchain folders bound back for unattended commands, or scan the staged diff for secrets (core's VS-34a holdback is a candidate) before the push, with a test.
+- **Control-plane workspace sync replays** (workspace.ts :422 and :473) are not checked by `replayRefusal` ((d)).
+- **EV-18 and EV-21:** create the runner's session with `vector.unattended.shell: "offline"`, allow `bash` only when the probe answers `offline-v1` (else deny it and say checks did not run, spec §3.5 step 5), and wire the runner.
+
+### Not built
+
+- **macOS:** seatbelt's offline profile allows loopback and every Unix socket by design (sandbox.ts `OFFLINE_NETWORK`), so it does not qualify and an unattended session's commands are refused there. Qualifying macOS needs a loopback- and socket-denying seatbelt profile and a macOS CI runner to prove it, which this lane does not have. Until then macOS laptop jobs edit but run no checks.
+- **Windows** has no sandbox; an unattended session's commands are refused there (Web None's `unfiltered` path is never taken for them).
+
+### Mutations
+
+Each was applied to one source file alone, packages/engine/test/everywhere/offline-shell.test.ts was run alone with `VECTOR_TEST_REQUIRE_BWRAP=1`, and the file was restored with its sha256 checked after every run (/tmp/vector-v2/everywhere/ev16-mut/: mutations.py, run.py, round1/ with results.txt and one log per mutation; before.sha matched afterwards). M7's anchor was rewritten after the lineage change ((g)) and run against the final sources; M19 ran on its own after an anchor fix. All nineteen are red. Line numbers are the test file's at the first build.
+
+| Mutation | File | Result | First failing assertion |
+| --- | --- | --- | --- |
+| M1 the shell tool ignores the mark | shell.ts | red | :483, the marked session's output lacks the notice (also the background case and the tool-level refusal) |
+| M2 a marked session gets `Sandbox.offline` | shell.ts | red | :483, Web None's notice in place of the unattended one (and the background case) |
+| M3 `unattended` drops `writes: "workspace"` | sandbox.ts | red | :487, `run=present` (/run is the host's); T10's `--cap-drop` and `--tmpfs /run` |
+| M4 the environment is passed unscrubbed | sandbox.ts | red | :488, the secret variables reach the command; T10's environment |
+| M5 any bubblewrap on PATH qualifies | sandbox.ts | red | :680, a bubblewrap anyone may write is accepted |
+| M6 the ownership check ignores the mode | sandbox.ts | red | :680, the same (as root here; on a non-root runner the owner check alone already refuses it) |
+| M7 a stored session's ancestors are not read | unattended-shell.ts | red | :483's loop on the child session, and the terminal case's child |
+| M8 the create check accepts a guest-marked request | handlers/session.ts | red | :220, the forwarded create answers 200 |
+| M9 `setPublicMetadata` stops keeping the marks | subagent-lifecycle.ts | red | :267, a PATCH without the marks leaves `{note}` alone |
+| M10 the PATCH check is removed | handlers/session.ts | red | :251, adding the marks to a plain session answers 200 |
+| M11 the POST /session/:id/shell check is removed | handlers/session.ts | red | :567, the marked session's shell route answers 200 |
+| M12 the terminal refusal is removed | terminal.ts | red | :198 (`failed`), the terminal part completes |
+| M13 the probe always answers `offline-v1` | handlers/experimental.ts | red | :396, with no bubblewrap on PATH it still says `offline-v1` |
+| M14 the self-test's exit is ignored | unattended-shell.ts | red | :396, a bubblewrap that exits 1 is advertised (as root here; a non-root runner refuses that file by owner first) |
+| M15 the replay check is removed | handlers/sync.ts | red | :328, a replayed update without the marks answers 200 |
+| M16 a replayed update may remove a mark (only named keys compared) | unattended-shell.ts | red | :328, the same |
+| M17 an equal value no longer passes PATCH | unattended-shell.ts | red | :280, writing back the marks as read answers 403 |
+| M18 the command's HOME is the engine's, not the protected home | sandbox.ts | red | :790, the wrapped command's `home=` is `/elsewhere` |
+| M19 XDG_CACHE_HOME is not pointed at the private /tmp | sandbox.ts | red | :739, T10's environment |
+
+Review round one added nine more (/tmp/vector-v2/everywhere/ev16-mut2/: run.py, results.txt, one log each; both source files' sha256 matched before.sha afterwards). All nine are red. Line numbers are the test file's after the round.
+
+| Mutation | File | Result | First failing assertion |
+| --- | --- | --- | --- |
+| N1 a missing ancestor dies again | unattended-shell.ts | red | :411, the orphan's shell route answers 500 |
+| N2 a replayed deletion of a marked lineage passes | unattended-shell.ts | red | :364, deleting the marked session answers 200 |
+| N3 a replayed move passes | unattended-shell.ts | red | :376, moving the child to the plain session answers 200 |
+| N4 the checkout's `.git` stays writable | sandbox.ts | red | :542, `hook=written` in the marked session |
+| N5 the unattended stores are not hidden | sandbox.ts | red | :831, no `--tmpfs` over ~/.docker; also :901, ~/.git-credentials is read |
+| N6 a null `vector.unattended` is accepted | unattended-shell.ts | red | :243, the creation answers 200 |
+| N7 the self-test ignores the exit code | unattended-shell.ts | red | :445 (as root here) and the self-test case, a fake that exits 1 counts |
+| N8 `policy` ignores the platform | unattended-shell.ts | red | :701, win32 answers `offline-v1` on this Linux runner |
+| N9 a `.git` link is not refused | sandbox.ts | red | :860, the linked checkout is sandboxed |
+
+Not run as mutations, because they cannot change an outcome on this computer: `unattendedBinary`'s `platform !== "linux"` test and `unattended`'s mechanism test are both behind `sandboxAvailability`, which already answers `seatbelt` or `none` for darwin and win32, so removing either leaves every Linux case as it is. They stay as the layers a refactor of `sandboxAvailability` would still meet.
+
+### Coordination
+
+Re-checked after `git fetch` (2026-11-16), with a temporary commit of the working tree (`git commit-tree` from a temporary index; objects only, no ref) and `git merge-tree --write-tree` against each lane tip. After review round one the same check ran again against every lane tip below; scope-finish had moved to `4ca3ce5f`, main to `2f64aca2` and brain-transport to `a5280117`, with the same results (sandbox.ts still auto-merges with scope-finish: the round's additions sit in this package's own block and the NOTE line above `wrapCommand`, outside the ported hunks).
+
+- **scope-finish `b6eaf122`:** clean for every file of this package: sandbox.ts (the ported hunks are identical, its `reason` hunks merge beside them), groups/experimental.ts, handlers/experimental.ts, server.ts and the five SDK files auto-merge. The one conflict, packages/core/src/review/model-evidence.ts, is EV-14's pipeline pin and conflicts the same way from HEAD alone. scope-finish also changes src/tool/shell/sandbox.test.ts, shell-sandbox-local.test.ts and httpapi-public-openapi.test.ts, none edited here; whichever lands second reruns offline-shell.test.ts and those files. **Notice for scope-finish:** its `writes` docblock says "the shell tool never passes it", which is no longer true once this lands; the clause should name the unattended session too (this package left the hunk byte-identical so the merge stays clean).
+- **codium-finish `c703cdf9`:** subagent-lifecycle.ts merges cleanly (its change is in `read`, this one in `setPublicMetadata`).
+- **connect-finish `19c48b89`:** the SDK files auto-merge; its only conflict is the same pre-existing model-evidence.ts one. The lead regenerates the SDK once after the lanes merge.
+- **main `3ab7858e`, hands-finish `8139e5fc`, native-qualify `2677c32c`, brain-transport `79ad20c3`, review-fixes `1433d105`, workspaces-finish `e37ec1b5`:** clean.
+
+A lane that edits shell.ts's `execute`, `run` or `background`, terminal.ts's `run`, or the session `create`, `update` and `shell` handlers will meet this package's hunks.
+
+**Land order (review round one).** The lead is asked to land scope-finish before this package or together with it, and to re-run packages/engine/test/everywhere/offline-shell.test.ts and src/tool/shell/sandbox.test.ts alone after whichever of the two merges second, since both carry workspace mode and a later change to it on scope-finish would otherwise conflict here or quietly diverge. Once both have landed, the `writes` docblock's "the shell tool never passes it" should name the unattended session (and the NOTE above `wrapCommand` can go), and the `--cap-drop` comment's "fix.ts `execute`" is right again. The PR body for this branch should carry the same request.
+
+*2026-11-21 (phase review, everywhere-finish lane):* still unmerged, and still two lanes carrying the same security-critical sandbox code. The request now also sits in the handoff's "Decisions waiting for the lead": SF-08 (`a6fd38d3`) is a precondition for a clean sandbox merge, the lane's PR body must carry the land order, whichever lane merges second re-runs the two files alone, and once both have landed the `writes` docblock clause ("the shell tool never passes it") and the NOTE line naming fix.ts `execute` are corrected. sandbox.ts is not edited now, because an edit to the ported hunks is what would make the merge meet different text.
+
+### Deferred verification
+
+- vector-everywhere.yml (offline-shell.test.ts with the new bubblewrap step, frame.test.ts, the engine typecheck) and typecheck.yml, as workflow_dispatch on everywhere-finish after the lead's commit and push.
+- test.yml's engine shards at the lane end: on its Linux shards (no bubblewrap) the "where the offline sandbox is missing" case runs and the bubblewrap cases skip; on Windows the same, plus the platform cases; the regression files listed in the progress receipt; and its re-runs of `check:generated` and `test:httpapi`.
+- A real Mac (the macOS case would be the "missing" one) and VE-50 live.
+
+### Review round one (2026-11-16)
+
+Eighteen findings, all non-blocking; several repeat one another. Each is taken or recorded; none is disputed. Left in the working tree, not committed (the task said so).
+
+- **The self-test's `true` is missing on NixOS** (unattended-shell.ts :49). Taken: `SELF_TEST` ends with `/bin/sh -c :`, and the self-test case asserts the whole argument list a fake bubblewrap receives ((h)).
+- **A missing ancestor refuses an orphan's commands** (two findings, unattended-shell.ts :128 and :131). Taken, the second finding's option 2: a missing ancestor ends the lineage, and only a loop or more than 64 levels is refused. Copying the mark onto children at creation was weighed and not taken: every creation path (the task tool, reviews, Connect, ACP, imports, replays) would need it, and a replayed child created before its marked parent would escape it. To keep option 2 sound, a sync replay may no longer delete or move a session of a marked lineage ((d), (g)). The replay case pins the orphan's shell route (N1).
+- **A replay can delete a marked session and create it again without the marks** (unattended-shell.ts :174). Taken: a replayed `session.deleted` of a marked lineage is refused with 403 `KEPT`, and so is a replayed move of one; the replay case covers deletion, deletion then creation, deletion and move of the child, and the plain session's deletion as the control (N2, N3).
+- **The notice overstates the network cut** (sandbox.ts :290). Taken: the notice and the R-M2 status say no TCP or UDP network and no socket under /tmp or /run ((q)), and ~/.docker is hidden ((o)). A seccomp AF_UNIX filter or more tmpfs mounts stay in Left open.
+- **Project config written by a command runs outside the sandbox** (deviations :1550). Recorded as an escape path EV-18 or EV-21 must close (Left open, and the handoff's EV-16 item).
+- **Workspace mode makes the gitdir read-only** (sandbox.ts :467). Recorded in (a), with the runner's own staging, commit and push outside the sandbox under `GIT_HARDENING`; not widened, since (n) makes `.git` read-only on purpose.
+- **The capability is not asserted for win32 and darwin, and the exit-1 case needs root** (two findings, offline-shell.test.ts :652 and unattended-shell.ts :142). Taken: `policy` and `refusal` take the platform, and `selfTest` runs a fake bubblewrap past `rootOnly` ((h); N7, N8).
+- **Two ported comments are wrong on this branch** (two findings, sandbox.ts :388). Partly taken: a one-line NOTE above `wrapCommand`, outside the ported hunk, points at `unattended`; the docblock and the `--cap-drop` comment stay byte-identical with scope-finish, and Coordination's land-order paragraph and the handoff's merge notes ask for the clause to be fixed after both land.
+- **The spec says shell.ts +22/-4** (spec :697). Taken: +17/-5, which `git diff --numstat` still gives.
+- **Casts and hand-parsing in the replay check** (unattended-shell.ts :209). Taken: `decodeReplayed` (`Schema.decodeUnknownOption` over `sessionID`, `info.parentID` and `info.metadata`) replaces `metadataOf` and both casts. The replay decodes each event with SessionV1's schema, which requires these fields at least as strictly, so an event the check cannot read is never projected.
+- **A plain checkout's `.git` is writable** (sandbox.ts :341). Taken, the second option: `.git` bound read-only, a `.git` link refused ((n); N4, N9). The runner's git already runs with `-c core.hooksPath=<null device> -c core.fsmonitor=false` (core `GIT_HARDENING`); the handoff asks EV-21 to keep that on every git call it adds.
+- **The secret list misses plaintext credential stores** (sandbox.ts :43). Partly taken: `UNATTENDED_SECRETS` for unattended commands only, and the home-secrets case reads ~/.git-credentials ((o); N5). The rest (other projects' `.env`, unknown stores) is a dated Left open item and a handoff precondition for EV-21's push.
+- **(d) leaves out workspace sync** (deviations :1530). Taken: (d) names workspace.ts :422 and :473 and why they are not checked.
+- **The commit plan's counts are wrong** (progress :2698). Taken: the receipt lists every path to stage.
+- **`vector.unattended: null` passes admission** (unattended-shell.ts :65). Taken: null counts as none, and the creation case gets the 400 ((p); N6).
+
+### CI follow-up (2026-11-17): the Node bundle and the review pipeline pin
+
+vector-at-mention.yml run 43968518358 (at `b0240ba2`, EV-16's commit) failed two jobs; main's newest completed at-mention run, 43974310184 at `dabc4821`, passed, and EV-17 (`c9275df0`) touches neither file.
+
+- **"desktop engine bundle (node)", step "Build the desktop engine bundle".** packages/engine/script/build-node.ts's guard refused dist/node/node.js: `src/session/unattended-shell.ts: Bun.deepEquals` (twice). The desktop runs that bundle in Electron's utility process, where `Bun` is undefined, and `changes` and `differs` run on every PATCH /session/:id that carries metadata and every POST /sync/replay of a session update, so the first such request would throw there. They now use `isDeepStrictEqual` from node:util, as handlers/session.ts and core event.ts already do. For metadata, which is JSON, it is the same strict comparison: own keys, so `{a: undefined}` is not `{}`, and no type coercion. Line references in this entry's unattended-shell.ts bullet are one higher than before (the import).
+- **"engine and core", step "Run core GitHub tests".** packages/core/test/review/model-evidence.test.ts "scope > the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION": handlers/session.ts is one of `REVIEW_PIPELINE_FILES`, so the digest moved (58a3650e0bb3f9e2 to adbd991bd9da14e1). `REVIEW_PIPELINE_REVISION` stays 5: the three additions refuse only a request that carries or changes the `vector.unattended` marks, or a POST /session/:id/shell for a marked lineage. No review runner sets the marks (engine review/run.ts, local-run.ts through the session service, the app's ai-review.ts) or calls that route, so no review finds or posts anything different. unattended-shell.ts is not a pinned file. scope-finish's merge still keeps revision 5 or higher and re-pins the digest on the merged tree.
+
+Receipts: vector-everywhere-progress.md, "EV-16, 2026-11-17: CI follow-up".
+
+## 2026-11-16, EV-17: the desktop wiring: the jobs module, the `pending` client and the Remote registration (VE-21, R-C2, R-C3)
+
+Spec §8 VE-21; §11 R-C2, R-C3; §3.4 `waiting`; §3.5 steps 1 to 3; §5 E8, E9, E10, E15. Built at HEAD `b0240ba2`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. EV-10 (`7146a98f`), EV-11 (`901d9e4b`) and EV-15 (`bc254e85`) are ancestors. origin/main (`dabc4821` at the end of the package) holds PR #33 and touches none of this package's files; merging main stays the lead's. Line numbers are after the change.
+
+Lane numbering: the older notes (EV-11 to EV-16) say "EV-21" for all of the desktop wiring. In the lead's list the wiring is EV-17 (this package) and EV-18 (the adapters: safe worktree, offline shell, keep-awake/F6), and EV-21 is the settings page. EV-17 takes, of those "EV-21" items: the registration (R-C3), the `jobs` subscriber, the `pending` call and its `local` flag, the `remote` decision, the `off` decline pin, the verifier against `OFFER_KEYS`, and reading RunnerSettings (EV-10's Coordination). What it leaves is listed under Left open.
+
+### What changed
+
+- **New packages/desktop/src/main/everywhere-wiring.ts** (530 lines, Electron-free, so Bun tests import it):
+  - `createEverywhereJobs(deps)` (:109) returns `{want, state, offer, changed, refresh, start, stop}`. `want()` (:382) is `state() === "on"`; `state()` (:256) is `off` unless the setting is on, `needs-remote` unless Remote is on with an identity (`link.status().enabled` and `link.device()`), else `on`. It never creates an identity or turns Remote on.
+  - `jobsForLink(jobs, changed)` (:96): the link's `jobs` field and its `changed` callback, which hands each status to `changed` (the renderer's broadcast) and then to the jobs. startRemote spreads it into createRemoteLink's dependencies, and the tests compose the link through the same function.
+  - `everywhereSettings(global, folder)` (:440) and `projectFolder(git, log)` (:468): RunnerSettings from GET /global/config (Coordination of EV-10).
+  - Settings reads (`read`, :183) are one in flight plus at most one after it. The runner's `settings` dependency (:224) waits for the first run's recovery before it answers.
+  - The ask for waiting jobs (`askOnce` :298, `requestPending` :330) is also one in flight plus one after it. `room` (:287) counts the caps left.
+  - The engine's event stream is read only while Remote is on (`syncEvents` :369, `listen` :346).
+  - The verifier's account is the sign-in's `sub`, read with vector-account.ts `tokenClaims` (:230).
+- **packages/desktop/src/main/everywhere-runner.ts**:
+  - `JobsClient.pending(readiness)` (:37), implemented at :89: GET /api/everywhere/jobs/pending with each readiness boolean as `1` or `0` under the schema's `READINESS_QUERY` names. It uses the same `everywhere` label, sign-in, device header and ten-second bound as the POST routes.
+    - A 404 of any kind, and 200 `action: "stop"`, are no jobs.
+    - Another non-ok status is "Everywhere service unavailable".
+    - The body is read with a 128 KiB bound (`PENDING_BYTES` :43) and decoded with one schema (`PendingAnswer` :46, `Schema.fromJsonString` through `Schema.decodeUnknownOption`). Anything else is "Invalid Everywhere pending answer".
+    - Only `OFFER_PATTERN` strings are kept, at most 32 (`PENDING_OFFERS` :41).
+  - `RunnerDeps.jobs` is `Omit<JobsClient, "pending">` (:129).
+  - `LOCAL_NEEDS` is unchanged (three needs; see (f)).
+- **packages/desktop/src/main/vector-account.ts**: `tokenClient` becomes the exported `tokenClaims(token)` (:655), returning the unverified `{client?, sub?}` of a `vct_` token. The sign-in's desktop check reads `.client` (:578) and the wiring's verifier `.sub`, so the token-format rules live in one place.
+- **packages/desktop/src/main/everywhere-engine.ts**: `responseText` (:39) is exported, so `pending` reuses the bounded reader.
+- **packages/desktop/src/main/remote-link.ts**: one additive accessor, `device()` (:875).
+- **packages/desktop/src/main/remote-runtime.ts** (R-C3), all additive:
+  - `createEverywhereJobs(...)` (:43) beside the link, with the ledger at `<userData>/everywhere/runner.json`;
+  - `...jobsForLink(jobs, broadcast)` (:87) in place of `changed: broadcast`;
+  - `state.jobs` (:91);
+  - `jobs.start(link)` after `link.start()` (:103);
+  - `state.jobs?.stop()` in stopRemote (:109).
+- **packages/schema/src/everywhere.ts**: `Readiness`, `READINESS_FIELDS` and `READINESS_QUERY` (:404-444) moved here from api/_lib/everywhere/jobs.ts and jobs-api.ts. Those two files re-export them (jobs.ts :1484, jobs-api.ts :70), so every server import is unchanged.
+- **packages/core/src/local-mode/sources.ts**: the `everywhere` source's `sends` names the readiness answers, and its `note` names the `pending` route.
+- **api/_lib/everywhere/config.ts**: the comment on `LAPTOP_ROUTE_WIRED` (:239-248) now names what keeps it false. The value is unchanged (`false`).
+- **Tests**: new packages/desktop/src/main/everywhere-wiring.test.ts (24 cases, W1 to W22 in the progress receipt), and two new cases in everywhere-runner.test.ts (C1, C2).
+
+### Deviations
+
+- **(a) R-C3 is more than one line.** remote-runtime.ts gains an import, the `createEverywhereJobs` call, one spread in place of `changed: broadcast`, the `jobs` slot and the start and stop calls. The glue itself is `jobsForLink` in the wiring module, so the tests run it; startRemote itself needs Electron and is covered by the typecheck and the bundle proxy only (Deferred verification).
+- **(b) remote-link.ts gains `device()`.** The brief's file list does not name the file. The alternative, reading the sealed identity from the vault in remote-runtime, would repeat the link's own identity handling and could disagree with it during "Disconnect all".
+- **(c) pending's off answer is 200 `action: "stop"`** (jobs-api.ts pending), not 404 `EVERYWHERE_OFF`, which only the platform routes answer. Both, and every 404, map to no jobs.
+- **(d) The readiness vocabulary lives in the schema** (critique, taken as the primary path). The plan's desktop copy pinned by importing api jobs-api.ts into a desktop test is not used: jobs-api loads the store, switches and adapters at import time.
+- **(e) `local` is `!localAllows(policy)`.** The server's flag now means "Vector Local blocks laptop jobs", not "Vector Local is on". Until the runner's GitHub calls are labelled the two agree whenever Vector Local is on. The schema's `Readiness.localMode` doc comment and the spec (§3.1 `status`, §3.4) carry dated notes.
+- **(f) `localAllows` does not require `remote`; `pending` follows the link instead** (review round one, 2026-11-17). EV-15's review asked whoever builds `pending` to decide whether it may bypass Vector Remote, since it reaches jobs through `everywhere` alone. It does not bypass it. The ask goes only while the link is online or connecting ((z)). A link whose `remote` source Vector Local blocks reads `local-off`: startRemote decides its ticket request and its relay address as `remote`. So no ask goes (W18), and relay offers are gated by the link's own `allowed(url)`. The first draft added `remote` to `LOCAL_NEEDS` instead. That is dropped, with its pin case and R2's extra policy: it was outside the brief, and once the `github` guard goes it would also make the runner's one-second check cancel a running job when `remote` is blocked mid-job. Left open names the decision for EV-21.
+- **(g) `modelAllowed` is true.** An up-front check needs the model's free-model data policy, which only the instance-scoped provider routes give, and they load an instance (EV-13 refused that for unattended work). A guest prompt to a model that may train is refused by the engine (handlers/session.ts `refuseTrainingFreeModels`), so such a job fails at the prompt instead of declining `model-not-allowed`. Vector Local's model decision is the same and is moot under the `github` guard.
+- **(h) Settings, folders and the base.**
+  - Only GET /global/config is read (the user's own files). Its `everywhere` block is decoded with `ConfigEverywhereV1.Info`, which refuses unknown keys. `locked` naming `everywhere`, or an answer with no `locked` list, is off.
+  - Fields map one by one: `max_usd`→`maxUsd`, `at_once`→`atOnce`, `per_day`→`perDay`, `wait_for_computer`→`waitForComputer`, `stay_awake`→`stayAwake`, and `minutes` and `push` as they are. `model` splits at the first `/` into `{providerID, modelID}`.
+  - An off, locked or undecodable block resolves no folder at all: no realpath and no git (critique, taken).
+  - Each listed folder is realpath'd, then put through the runner's own hardened `mapping()`. Only a mapped folder has its branch read: `git symbolic-ref --short refs/remotes/origin/HEAD`, accepted only as `origin/<name>` under the runner's base rule (critique, taken).
+  - A folder that fails any step is dropped, with a fixed log line, so its jobs decline `not-mapped`. That includes a clone with no origin/HEAD (`git remote set-head origin -a` makes one).
+  - A wrong-remote origin/HEAD only fails the fetch, which goes to `https://github.com/<repository>.git`.
+  - The same canonical folder (case-folded on win32 and darwin) is kept once. The 64 cap after the dedupe is belt and braces: the schema already refuses more than 64 entries or a repeated spelling, which turns the block off (critique, taken; the 70-folder case pins that).
+  - Each folder's answer is cached, so the runner's one-second check spawns no git. A changed list, `global.disposed`, `server.connected` and `refresh()` start a new cache (review round one: the map is replaced, never cleared). A read keeps the cache that was current when its answer came in, so a resolution that began before a change never lands in the cache after it, and the read every change asks for resolves the folder again (W22).
+  - Folders are resolved whenever the block is on, `needs-remote` included (review round one, recorded rather than gated). That is git's read-only mapping check and `symbolic-ref` in each listed folder, once per cache, and nothing fetched (W9 pins it). Gating it on Remote would leave `projects` empty whenever Remote is off, and the runner's push-time mapping check would then hold a running job's push when Remote is turned off mid-job, while the job itself keeps running. That is a new, inconsistent rule. The folders are the user's own list, read only by git's local commands.
+- **(i) How settings changes are heard** (critique, taken: the plan's wording was wrong).
+  - A write through PATCH /global/config is heard through `global.disposed`, and a new event stream through `server.connected`. Both are heard only while Remote is on (see (v)).
+  - GET /global/config answers the engine's cached global config: Config.getGlobal is `cachedInvalidateWithTTL(..., Duration.infinity)`. So a hand edit to the global file takes effect only after the engine reloads it (a changing PATCH, a dispose or a restart), not at the next read.
+- **(j) What a computer sends.**
+  - Jobs off: nothing but the `off` decline of a verified offer that arrived on a phone's or pairing's connection, after its single-use id is recorded (a ledger write). While `OFFER_KEYS` is empty no offer verifies, so not even that.
+  - Jobs on with no pinned key: `pending` says `jobs=0` (critique, taken: the plan sent `jobs=1`, which would make the server re-offer and re-sign every waiting job every five minutes only to be refused here). The server then offers nothing (jobs-api.ts pending).
+  - `want()` still follows the setting, so the job-only connection is kept and the relay path is exercised as specified. Review round one proposed `want()` false while no key is pinned, to save the relay's awake meter (R-C2). Not taken: the brief defines `want()` without the key. Before the handoff only a hand-edited config can turn the setting on, since the tab stays hidden (EV-21) until the owner approves the perk. `jobs=0` already stops the server's re-offers. A `state()` that read `off` with the setting on would also mislead the settings page.
+- **(k) The same offer text twice at once is verified once** (`offering`). The ledger's replay record would refuse the second anyway; this saves the second signature check and ledger read (pinned by the `useOnce` attempt count).
+- **(l) Recovery.**
+  - `runner.recover()` runs once per process, at the first `on`, not at start, so a computer with jobs off sends nothing for a stored lease.
+  - Until it ends, the runner's `settings` dependency and the ask for waiting jobs wait for it. So an offer that arrives at the same moment is not declined `busy` by a stale reservation (critique, taken).
+  - recover() releases every reservation, so it never runs again while a job may be active. A publication receipt whose delivery fails stays in the ledger until the next process start.
+- **(m) Push-path stand-ins.** `privateRepository` answers false, `openPr` answers nothing and there is no `githubThread`. git has a blank identity, so `commit` refuses, and no authentication. With no safe worktree none of them is reached. Once EV-18 supplies one, a committed branch is held, and a GitHub job declines `trigger-changed`, until the push path is wired.
+- **(n) Test seams**: `keys`, `ledger`, `service`, `fetcher`, `git`, `runnerEngine`, `safeWorktree`, `localPolicy` and `now`. remote-runtime.ts passes none of them.
+- **(o) `RunnerSettings.rules` is left undefined**, for EV-18.
+- **(p) The device id is the Remote identity's.** After "Disconnect all phones" the jobs client follows the new device. A job claimed under the old one stops at its next report (409), and recovery's settles for it fail and are logged.
+- **(q) The `sends` and `note` text** of the `everywhere` source (critique, taken for `note` too). `callSites` stays everywhere-runner.ts: the wiring itself only talks to the loopback engine.
+- **(r) Waiting jobs are asked for:**
+  - when the link comes online;
+  - after each job the runner ran: after its settle and its reservation release (`offer()` resolving true);
+  - after the first run's recovery;
+  - every five minutes while on.
+
+  The brief's "after every settle" is read as "after every job that ended". A settle-time trigger is not used (critique, taken): the runner's `offer()` resolves only when its job ends, and a trigger inside `settle` would run before the reservation is released, so `room` would read false and a returned offer would be declined `busy`. A declined offer starts no ask, so an offer cannot loop.
+- **(s) Offers are handed on and never awaited by the ask** (critique, taken). One answer hands at most as many offers as there is room for: the least of `atOnce` minus the reservations, `perDay` minus today's count, and 32 minus the stored receipts, each less the offers already handed on and not yet reserved (review round one, `room` :287). Every reservation is one of the offers in `offering` until its job ends, so the unreserved ones are `offering.size` less the reservations. Without that, a reconnect or a second job's end landing while an offer is still being verified saw too much room, and the runner declined the extra offer `busy` (W20, W21). The room is counted for `capsRoom` and again once the answer is in, so a relay offer that arrived meanwhile counts too. The rest expire back to waiting on the server after 30 s and come again at the next ask. The server records `capsRoom` but does not limit its answer by it.
+- **(t) A failed settings read is off** (fail closed, logged once per streak). It is read again at the next event, ask, offer or `refresh()`, not on a timer of its own.
+- **(u) Vector Local.** The ask is skipped quietly while Vector Local blocks the `everywhere` source itself; otherwise it would be refused and logged every five minutes (critique, taken). The critique proposed `Egress.decide` for the check, but that function records an event while Vector Local is on (egress.ts `decide` calls `record`). The pure `LocalPolicy.decide` is used, as `localAllows` does. With `everywhere` allowed the ask goes and says `local=1`.
+- **(v) The engine's event stream is kept open only while Remote is on** (critique, taken). It carries every session event and is needed only for `global.disposed`, and without Remote no job can run. `refresh()` reads the settings on request, for the settings page while Remote is off.
+- **(w) A sign-in that cannot be read counts as none** (critique, taken): `deps.token()` is wrapped with `.catch(() => undefined)` for the verifier, the ask and the jobs client.
+- **(x) `LAPTOP_ROUTE_WIRED` stays false** (critique, taken). The desktop now decodes and verifies offers, but no customer job can finish on a laptop: `OFFER_KEYS` is empty and there is no safe worktree. The comment names that condition. The spec's VE-20 and VE-21 notes say so.
+- **(y) EV-14's precondition** (critique, partly rejected). The critique asked to gate EV-18 on it. It is already met: EV-16 made PATCH /session/:id and POST /sync/replay refuse to add, change or remove `vector.unattended` (handoff, EV-14 bullet, EV-16 annotation). The `safeWorktree` doc comment says so and names EV-16's three preconditions, which are not met. The handoff's EV-14 bullet is annotated.
+- **(z) The ask follows the link's refused states** (review round one, E10). `askOnce` sends nothing unless the link's state is `online` or `connecting`. So a Remote the relay paused (`CLOSE.REMOTE_PAUSED`), revoked, replaced or capped, or one that is out of plan, signed out, `unavailable` or `local-off`, takes no job over HTTP either, until the link connects again (W17, W18). `connecting` still asks: a relay that drops must not stop the HTTP fallback (W19). The `remote` flag is `enabled && state === "online"`, so it says 0 while connecting. `want()` and `state()` do not change: the link decides its own retries.
+
+### Not changed
+
+- `OFFER_KEYS` (empty) and `LAPTOP_ROUTE_WIRED` (false).
+- No flag, env var, route, generated file, dependency, lockfile, workflow or config key.
+- Not changed in index.ts: startRemote's signature is unchanged.
+- The link's behaviour for phones. Its tests pass unchanged (32).
+- The runner's flow. Its existing 52 cases pass unchanged.
+- The server's `pending` contract. Only the names moved.
+
+### Safe by default
+
+- `everywhere.enabled` defaults false and the settings tab stays hidden (EV-21). Off means no connection kept for jobs, no ask, no recovery and no git (W7). A verified offer that still arrives over a phone's or pairing's connection records its single-use id and is declined `off` (W8); none verifies while `OFFER_KEYS` is empty.
+- `OFFER_KEYS` is empty, so every relay or `pending` offer is refused before any request or replay write (W6, and the guard case W6g on the module's default), and `pending` says `jobs=0`.
+- No safe worktree, so a claimed job settles `held` before any session, fetch, commit or push (W1).
+- The push path is stand-ins that fail closed (m).
+- Under Vector Local, `localAllows` refuses (the `github` guard), and `everywhere` is blocked by default, so nothing is sent (W16). `remote` is blocked by default too, and a link Vector Local blocks reads `local-off`, so no ask goes even with `everywhere` allowed (W18).
+- A paused, revoked or otherwise refused Remote takes no job over `pending` (W17).
+- The wiring never creates a Remote identity or turns Remote on (W9, M15).
+- The server is off (VECTOR_EVERYWHERE_ENABLED), so `pending` answers `stop`.
+
+### Left open
+
+- **No brief yet covers the push path.** EV-18 covers the safe worktree, the shell and keep-awake, and EV-21 the settings page. Unassigned, for the lead before VE-50:
+  - git identity and authentication with the user's GitHub sign-in (resolveGithubAccess, Electron);
+  - `githubThread`, `privateRepository` and `openPr` over the existing everywhere-github.ts and everywhere-pr.ts;
+  - labelling desktop github-api.ts calls `github` and removing the `localAllows` guard.
+- **For EV-18:**
+  - fill `RunnerSettings.rules` with the user's own rules for the editing ids before any session;
+  - send `sandbox` from the engine's `offline-v1` probe;
+  - meet EV-16's three preconditions before passing `safeWorktree` (named in its doc comment);
+  - harden or refuse Worktree.remove and Worktree.reset for unattended worktrees, and the 7-day cleanup sweep (EV-12);
+  - stay awake (`stayAwake` is read and unused) and F6.
+- **For EV-21:**
+  - consent and Remote on through `setEnabled(true)`, show `needs-remote`, call `refresh()` after a write while Remote is off, the config-skew decision for writing `everywhere`, and the job-only link that reads `online` (VE-41);
+  - when it labels the GitHub calls and removes the `github` guard, decide whether `localAllows` should require `remote` too ((f)). Today `pending` follows the link, which Vector Local's `remote` decision already stops, and a running job does not stop if `remote` is blocked mid-job. Requiring it would add that stop;
+  - update index.ts's comment above `startRemote`, which still says Remote "connects only while Remote is on and a phone is paired or pairing". It should add "or this computer takes Vector everywhere jobs (everywhere-wiring.ts)". index.ts is outside EV-17's file list, so this waits for EV-21 or the final docs sweep.
+- **For the lead (R-C4, R-C6):** the server's `pending` route checks only the everywhere switch (jobs-api.ts), not Codium's `remote` switch. The desktop's gate ((z)) covers an honest client only. Making the route also honour the `remote` switch belongs with R-C4's presence fix and R-C6's switch.
+- **Not yet built:**
+  - an up-front `modelAllowed` check (g);
+  - a project whose clone has no origin/HEAD is dropped (h): a GitHub default-branch read belongs with the push path;
+  - background residency (§3.5 step 10, R-M4).
+- **Owner action:** the offer public key for `OFFER_KEYS` (the build stays neutral). `LAPTOP_ROUTE_WIRED` then waits for EV-18 too. The wiring test's guard case W6g ("guard: OFFER_KEYS ships empty …") is meant to go red at that handoff. Whoever pins the key updates that one case, which is not a loosened test: W6 keeps testing an empty key set through `keys: {}`.
+
+### Mutations
+
+Twenty-eight in the first pass, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev17-mut/: mutate.py, one log per mutation, final-run.txt). All 28 were red on those sources. M5b survived the first round (the interval kept running while off, but sent nothing); the five-minute case now checks that no timer is left while off, before `stop()`, and it is red. The plan's M14 had nothing to mutate and is replaced by the hand-off, settle-trigger, read and resolution mutations (critique, taken).
+
+Review round one re-ran the set on the final sources (/tmp/vector-v2/everywhere/ev17-fix/mut/: mutate.py, one log per mutation, run.txt): 27 of the first pass (M17 went with the `remote` need, and M10's anchor follows the schema decode) and eight new ones, N1 to N8. The table is in the progress receipt.
+
+### Coordination
+
+- Cross-lane, over this package's files: only codium-finish (`a078c20b`) touches one, core local-mode/sources.ts (brain-vault's `sends`). `git merge-file` of the working tree's file with codium-finish's, over their merge base `67ec3a60`, is clean.
+- review-fixes, connect-finish, hands-finish, brain-transport, scope-finish, workspaces-finish, native-qualify and main touch none of these files.
+- The schema move touches api/_lib/everywhere/jobs.ts and jobs-api.ts, which no other lane edits.
+
+### Deferred verification
+
+- startRemote under Electron, and electron-vite's main build. Both need Electron or the CLI server dist. A Bun bundler proxy resolves remote-runtime.ts's graph (389 modules, 2.0 MB, Electron external) without launching anything.
+- A packaged app against the real relay and engine.
+- VE-50.
+- CI after the commit and push: vector-everywhere.yml, vector-hosted-ci.yml (remote-runtime.ts changed) and typecheck.yml as workflow_dispatch on everywhere-finish.
+
+### Review round one (2026-11-17)
+
+Twelve findings, all non-blocking; two repeat one another. Eleven are taken or recorded, and one optional proposal is not taken ((j)). Left in the working tree, not committed (the task said so).
+
+- **The room ignores offers still being verified** (two findings, everywhere-wiring.ts `slots`, at the first `askOnce` line and at `askAgain`). Taken. `room` subtracts the offers handed on and not yet reserved from all three caps, and is counted again once the answer is in ((s)). W20: a reconnect while an offer's verification is held asks with `room=0` and hands on nothing. W21: two jobs that end together hand on at most the two the caps allow. No `busy` decline in either.
+- **A clear does not stop a running resolution** (`folders.clear()`). Taken, the second option: the cache map is replaced, and each read keeps its own ((h)). The described path did not occur in this code, because `folders.set` stores the promise in the same turn it is made, never after the result arrives. And every clear is followed by a read that replaces the in-flight read's settings. Taken anyway, since it makes the rule hold by construction. W22 holds a branch read open across a change and checks that a job claimed afterwards fetches the new base.
+- **`pending` hand-parses its body.** Already so in the working tree when the round began: one `Schema.fromJsonString` struct through `Schema.decodeUnknownOption` (`PendingAnswer`), with the `action: "stop"` short-circuit and the `OFFER_PATTERN` filter kept (C1).
+- **Two copies of the `vct_` claim parsing.** Taken. vector-account.ts imports no Electron (its dependencies are injected), so it exports `tokenClaims` (`{client?, sub?}`), and both the sign-in check and the verifier use it. `accountOf` is gone.
+- **`remote` in `LOCAL_NEEDS` is outside the brief.** Taken, the "otherwise" branch. Dropped with its pin case and R2's extra policy. The pending path instead follows the link ((f), (z)), and Left open names the decision for EV-21.
+- **The job-only connection is kept while no key is pinned.** Not taken (optional); the reasons are in (j).
+- **Folders resolve, and git starts, in `needs-remote`.** Recorded, the second option ((h)). W9 pins the calls: git's mapping check and one `symbolic-ref`, in the listed folder, and nothing fetched, committed or pushed. It also pins that a second `refresh()` resolves the folder again (N7).
+- **The `pending` path ignores the link's refused states** (E10-adjacent). Taken ((z)). W17: a relay pause, then no ask at the five-minute mark; asks resume once the link is online. W18: Vector Local blocking `remote` gives `local-off`, then no ask in eleven minutes. W19: while connecting the ask still goes with `remote=0`. The test fixture's ticket request now goes through `Egress.fetch("remote", …)` as startRemote's does. W16's first half therefore allows `remote` (the jobs service stays blocked), and its second half allows both. W16 also reads only the network-log events it caused. The server-side half, the route honouring Codium's `remote` switch, is a Left open request on R-C4 and R-C6.
+- **W6 pins the owner-gated constant.** Taken, the better option. W6 passes `keys: {}`. A separate, labelled guard case (W6g) asserts the shipped default and says it is meant to go red at the key handoff, and the Owner action line says so too.
+- **"Off means no ledger read or write" is true only while no offer verifies.** Taken: Safe by default is reworded as proposed.
+- **index.ts's comment above `startRemote` is stale.** Recorded: a Left open line for EV-21 or the final docs sweep. index.ts is untouched.
+
+## 2026-11-17, EV-18: the desktop adapters: the safe worktree, the offline shell and the shared keep-awake (VE-21, F6)
+
+Spec §8 VE-21; §3.5 steps 4, 5 and 10; §5 E5, E7; review findings "review:everywhere:fit" item 6 (F6); vector-everywhere-main-requests.md ("Safe unattended worktree creation", "R-M2"). Built at HEAD `dcb93939`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. EV-13 (`46471914`, `0d9f852c`), EV-16 (`b0240ba2`, with the node:util fix in `dcb93939`) and EV-17 (`c9275df0`) are ancestors. origin/main `dabc4821` holds PR #33 and touches none of this package's files; merging main stays the lead's, as in EV-15 to EV-17. docs/vector/build/v2-spawn-review.md was read first: this package adds no spawn site. Line numbers are after the change and after review round one (below). One package commit; a commit cannot name itself, so its SHA and the CI run ids go in the next progress receipt. The plan was corrected by its critique; where a point was not taken, the reason is in the item.
+
+This entry closes F6.
+
+### What changed
+
+- **packages/desktop/src/main/keep-awake.ts** (additive): `holdDesktopWork()` (:471), next to `whileDesktopWorks`, adds a holder to the same `desktopWork` set and returns its release. The set's comment (:388-389) now names this holder, the only one with no time limit, released by its caller. Nothing else in the file changed.
+- **packages/desktop/src/main/everywhere-awake.ts** (rewritten, F6): `createEverywhereAwake({onBattery, changed})` holds `holdDesktopWork()` while jobs are on, `stay_awake` is on and the computer is not on battery, and releases it otherwise. It has no `start`/`stop` and takes no blocker id, so the machine's sleep state has one owner, the blocker index.ts sets with `setDesktopWorkBlocker` (index.ts:640-651, untouched). `changed` (power events) is subscribed only while jobs and the option are on.
+- **packages/desktop/src/main/everywhere-engine.ts**:
+  - `UnattendedShellPolicy` (:12) and `unattendedRules(user, shell = "none")` (:31). The allowlist is unchanged, then, only on `offline-v1`, `bash` is allowed again after the denies, followed by the user's own `bash` rules. See (g) for how the user's rules are copied.
+  - `UnattendedCapabilities` (:49) and `unattendedCapabilities({url, authorization, fetcher})` (:64): the two owner-only probes (c). `responseText`'s over-limit refusal is now a `ResponseTooLarge` error (:111, same message), which the probes read as a definite no (:77).
+  - `localEngineOrigin(url)` (:88): the loopback check, moved out of `createEverywhereEngine` unchanged.
+  - `create()` (:163) puts `vector.unattended.shell: "offline"` (core everywhere/frame.ts `UNATTENDED_SHELL_KEY`) beside `vector.unattended` on every unattended session (b).
+- **packages/desktop/src/main/everywhere-settings.ts** (new, 176 lines; review round one, (s)): the settings and rules functions, moved out of the wiring. It imports only core, schema, effect, node:os and a type from everywhere-engine.ts.
+  - `RunnerSettings` (:13, moved from everywhere-runner.ts, with the new `shell` field :23), `EverywhereSettings` (:28, with `worktree`) and `ProjectFolder` (:35), moved from the wiring.
+  - `everywhereSettings` (:50) fills `rules` through `unlocked` (:77, exported for the wiring's lock check), `userRules` (:90), `agentPermission` (:111), `decodePermission` (:117), `permissionRules` (:126) and `expand` (:135) (f), (h).
+  - `resolveProjects` (:144) and `offSettings` (:161), moved unchanged.
+- **packages/desktop/src/main/everywhere-runner.ts** (a):
+  - `RunnerSettings` now comes from everywhere-settings.ts (:7), and the runner's unused `PermissionV1` import is gone;
+  - the `SafeWorktree` doc comment (:105-109) names EV-13's route and the probe;
+  - `WorktreeUnavailable` (:116) and the fixed summary `UNAVAILABLE_HERE` (:122);
+  - `deps.safeWorktree` is read once per job (:248);
+  - a `WorktreeUnavailable` from `create` settles `held` with that summary (:303-311) (l);
+  - the session is created with `unattendedRules(settings.rules, settings.shell)` (:316).
+- **packages/desktop/src/main/everywhere-wiring.ts** (620 lines):
+  - the header bullets; `EverywhereJobsDeps.power`; the `safeWorktree` and `fetcher` doc comments;
+  - `RULE_KEYS` (:116) and `DELIVERING` (:118);
+  - the probe cache (`Probes` :121, `capabilities` :207), read in `fetchSettings` while the block is on (:250-254), reset on `server.connected` (:437) and `refresh()` (:494) (c);
+  - the shell answer counts only with no company lock on a `RULE_KEYS` key (:252-253) (i);
+  - the runner's `safeWorktree` is a getter over the probe-gated adapter (:327) (d);
+  - `askOnce` sends `sandbox` from the shell answer (:400);
+  - the stay-awake hook (`awake` :194, `keepAwake` :197, called first in `evaluate` :345, `awake?.dispose()` in `stop` :512) (k);
+  - the new export `unattendedWorktree` (:535), the adapter over EV-13's route (e), (l), (m).
+- **packages/desktop/src/main/remote-runtime.ts** (additive, Codium-owned; Coordination): `powerMonitor` imported (:2) and passed as `power` (:49-63). `on-ac` fires on macOS and Windows and `on-battery` on macOS only, so a one-minute check runs beside them, and only while subscribed. The R-C3 spread (`...jobsForLink(jobs, broadcast)`) is untouched.
+- **Tests:** packages/desktop/src/main/everywhere-awake.test.ts (rewritten, five cases), everywhere-engine.test.ts (one assertion added to the client case, five new cases), everywhere-wiring.test.ts (seven new cases, and the fixture's engine fetcher answers named routes), everywhere-runner.test.ts (two new cases; `RunnerSettings` imported from everywhere-settings.ts), engine test/everywhere/worktree.test.ts (one new case, G1) and test/everywhere/unattended-session.test.ts (two new cases, G2 and G3; `everywhereSettings` imported from everywhere-settings.ts). The cases are listed in the progress receipt.
+
+### The sequence
+
+A job on this computer now goes:
+
+1. The offer is verified (still refused: `OFFER_KEYS` is empty).
+2. The settings come from GET /global/config. While the block is on, they also carry the engine's two answers and the user's rules.
+3. The claim, then the folder's mapping check.
+4. The runner reads `safeWorktree` once: the adapter only while the worktree probe answered `unattended-v1`, otherwise `held` with the existing text.
+5. A GitHub job still declines `trigger-changed` (no `githubThread` yet).
+6. `started` is reported, and the runner's hardened `git fetch` writes `refs/vector-everywhere/<jid>`.
+7. POST /experimental/worktree/unattended `{directory, base, branch, jid}` as the owner, with no guest header and no `directory` query. A 403 is `held`; anything but an exact `{directory, branch, base}` with an absolute directory fails the job.
+8. GET /config/trust?directory=<checkout>: only `trusted: false` goes on.
+9. The runner's own checks (same branch and base, the project folder unchanged, the checkout's HEAD).
+10. POST /session in the checkout with both marks and `unattendedRules(rules, shell)`.
+11. The guest-marked `prompt_async`, the watch, and the finish. The push path is still stand-ins, so a committed branch is held.
+
+### Deviations
+
+- **(a) Files outside the brief.** The brief names the wiring, engine and awake modules, keep-awake.ts and three test files.
+  - everywhere-runner.ts: a settings field, the typed hold (l), the single read (d) and the ruleset argument. Without them the brief's own scope cannot be met: the runner builds the session's ruleset.
+  - remote-runtime.ts: the `power` dependency (k). The awake module and the wiring are Electron-free, and remote-runtime.ts is where startRemote builds the jobs module.
+  - everywhere-runner.test.ts (two cases) and the engine's worktree.test.ts and unattended-session.test.ts (G1 to G3), asked for by the critique.
+  - everywhere-settings.ts (new; review round one): the settings and rules functions moved out of the wiring, so the engine's test does not compile the rest of the desktop (s).
+  - Not edited: api/_lib/everywhere/config.ts. The plan's comment on `LAPTOP_ROUTE_WIRED` is dropped (critique, taken); the spec's VE-21 note and the handoff say what keeps it false.
+- **(b) The shell mark is set in `create()`, not in core `unattendedMetadata`.** core test/everywhere/frame.test.ts pins that function's exact output, and @vector shares frame.ts. Every unattended session carries the mark, whatever the probe said. That is the engine's floor: its commands run only in the offline sandbox and are refused where it is missing, and its terminals and POST /session/:id/shell are refused.
+- **(c) The probes** (critique, major, taken):
+  - Scope: both are engine-wide. They go as the owner, with `accept: application/json`, `redirect: "error"`, no guest header and no `directory`, so no instance is loaded. They run only while the `everywhere` block is on, as two parallel GETs.
+  - Exact answers only: `{policy: "unattended-v1"}` and `{shell: "offline-v1" | "none"}`, with excess keys refused.
+  - Definite answers: a decoded answer, a 4xx (404 from an engine without the route, 401, 403), any other 2xx body, and a body over 4 KiB (a no).
+  - No answer: a refused connection, a timeout (also one that cuts the body off), a body that breaks off for any other reason (an engine restarting; review round one), a redirect and a 5xx. That field then counts as none for this read and is asked again at most once a minute. Only a cache's first ask is waited for, so no later settings read, the runner's one-second check among them, waits on a slow probe. The shell probe waits 20 s, above the engine's own 10-s bubblewrap self-test (unattended-shell.ts:168-184).
+  - The cache: a definite answer is kept until `server.connected` (a new event stream, which may be a restarted engine) or `refresh()`. A 404 therefore stays a no even if the route answers later, until one of those. Not reset by `global.disposed` (a change from the plan's D4): a config change does not change what the engine can do.
+- **(d) The getter.** `deps.safeWorktree` stays a test seam that replaces the probe-gated adapter, so the three existing tests that pass `WORKTREE` keep their meaning. The runner reads the dependency once per job, so the probe changing mid-job cannot make the second read fail (critique, minor; the plan accepted a `failed` settle there).
+- **(e) EV-16's first precondition: the job's checkout is never trusted** (plan D1, with a run-time check).
+  - `Worktree.createUnattended` never inherits trust (engine worktree/index.ts:173-178). Only task isolation calls `Config.inheritTrust` (task/isolation.ts:1342). Workspace trust is keyed by the canonical folder and a content fingerprint (core workspace-trust.ts:185-195), so a new `<data>/everywhere-worktree/<project>/<jid>` folder is untrusted.
+  - In an untrusted folder, formatters stay off (format/index.ts:128-137), language servers stay off (lsp/lsp.ts:236-241), and `projectExecutableConfig` drops the folder's `formatter`, `lsp`, `plugin`, `mcp`, `command`, `agent`, `shell`, `instructions` and the rest (config.ts:120-141). A rewritten config changes the fingerprint, so a reload keeps it untrusted.
+  - The adapter goes on only when GET /config/trust reports `trusted: false`.
+  - G1 (engine worktree.test.ts:950) pins the property through the real route. The trusted source project's committed vector.json loads there (`formatter: false` wins over the user's formatter), while the same file in the job's checkout does not. Neither formatters nor language servers are listed, and a vector.json and .vector folder written over the checkout stay unloaded after a reload, and their marker command never runs.
+  - The language-server check is weak: GET /lsp lists only started clients. The gate itself is the same `config.trust()` call the formatter check reads.
+  - Found while writing G1: a vector.json created in a folder after its instance first loaded was not discovered on the next reload (GET /config/trust kept `settings: false`), so G1 writes over the committed file instead. Engine behaviour, not investigated here; it does not weaken the property, since nothing in an untrusted folder loads.
+- **(f) The user's rules** (RunnerSettings.rules, EV-17 (o); everywhere-settings.ts `userRules`).
+  - Read from GET /global/config only, lowest first: the switched-off tools of the legacy top-level `tools` map, the top-level `permission` block, then the asks and denies of the default agent (`default_agent`, else `build`) from its `agent` block and its legacy `mode` block (h).
+  - The two legacy blocks were added in review round one. GET /global/config answers the user's files as they are, and the engine folds them in only when it loads the config (config.ts: `toolPermissions` under `permission`, `write` and `patch` as `edit`; `mode.<name>` merged into `agent.<name>`). Without them a user's `tools: {bash: false}` was outranked by the session's `bash` allow on `offline-v1`. A switched-on tool is not copied: it allows nothing the session does not allow already.
+  - Each permission block is decoded with core `ConfigPermissionV1.Info` and `propertyOrder: "original"`, and the `tools` map as a record of booleans. A block that does not decode, at any of the four places, turns the `everywhere` block off and resolves no folder (fail closed).
+  - `permissionRules` copies the engine's permission/index.ts `fromConfig`, which the desktop cannot import: a bare action becomes pattern `*`, and each key's patterns keep their order. `expand` is copied exactly, so any `$HOME` prefix is expanded, not only `$HOME/` (critique, taken).
+  - An agent's legacy `tools` map arrives inside that agent's `permission`: core v1/config/agent.ts `normalize` folds it in, and the encoding keeps it (checked with a script).
+- **(g) No rule depends on the order of the block's keys** (critique, major, taken).
+  - GET /global/config re-encodes `permission` with the named keys first: `{"*": "allow", edit: "deny", bash: {…}}` arrives as `{edit, bash, "*"}`. A script checked this, and G2 pins it through the real route. Only the order of patterns inside one key survives.
+  - So `unattendedRules` copies, for each id, the rules written under that id itself, in their own order. Of the rules under a wildcard key (`*`, `b*`) it then copies the asks, and after them the denies. A wildcard allow is never copied.
+  - No allow can outrank an ask or a deny whose position is unknown, and no wildcard deny is outranked at all: `{"*": "allow", "bash": "deny"}` denies bash, `{"*": "allow", "edit": "deny"}` denies edit, and `{"*": "ask", "edit": "allow"}` asks for edit, whatever the key order (E2, E2b, G2).
+  - The cost is stricter, never looser, than both the user's own config in any order of its keys and HEAD's copy (every matching rule in the answer's order). A wildcard deny outranks an exact allow wherever either was written, so a user whose config reads `{"*": "deny", "read": "allow"}` gets no reads in a job. A wildcard ask outranks an exact rule, a deny included, so `{"*": "ask", "edit": "allow"}` asks for every edit, and the runner refuses the ask (the job settles `needs-approval`, (j)). An exact deny under a wildcard ask becomes a refused ask: the call does not run either way.
+  - *Review round one:* the first build copied only the wildcard denies, so `{"*": "ask"}` gave edits, and on `offline-v1` commands, with no ask. That was looser than the user's config and than HEAD, which copied the wildcard ask in the answer's order, after the exact keys. The asks are now copied (E2b).
+  - The critique's second option (every deny after every allow and ask, per id) is not taken: it reorders the patterns inside one key, so `bash: {"*": "deny", "git status": "allow"}` would deny `git status`.
+- **(h) The default agent's asks and denies** (critique, minor, taken: the first option; widened in review round one). The session's `bash` allow would otherwise outrank an agent-level deny or ask, because session rules come last. That agent's asks and denies are copied, from its `agent` block and then its `mode` block, after the top-level rules. Its allows are not, since where they sit against the top-level rules is not known here. An ask copied there can only turn an allow into a refused ask, or a deny into one, so it is never looser. The first build copied only the denies, so `agent.build.permission.bash: "ask"` ran the command unasked.
+- **(i) A company lock on any key that can carry permission rules keeps the shell off** (plan (h); widened in review round one). The keys are `permission`, `tools`, `agent`, `mode` and `default_agent` (wiring `RULE_KEYS`). A locked key's values come only from company policy, and GET /global/config answers only the user's files, so the company's rules are not in the answer and the session's `bash` allow would outrank them. Under such a lock `shell` is `none` and `pending` says `sandbox=0` (W25, one case per key). The first build checked `permission` alone, so a company that locked `agent` with `agent.build.permission.bash: deny` was overridden on a Linux computer with a working bubblewrap. Config.lockedKeys locks `mode` with `agent` and `tools` with `permission`, and a company may name either alone. Still not seen (Left open): a company's managed config that sets rules without locking the key, and the engine's `VECTOR_PERMISSION` environment rules. Under a lock on `agent`, `mode` or `default_agent` the editing ids still copy the user's own default agent's rules, which may not be the agent or the rules the company set (the pre-existing class in Left open).
+- **(j) The user's shell rules follow the `bash` allow.** Their denies hold. Their asks stay asks, which the runner refuses at run time, so such a job settles `needs-approval`. The same holds for the asks copied from a wildcard key (g) and from the default agent (h).
+- **(k) Stay awake** (critique, minor, taken; narrowed in review round one).
+  - The computer stays awake "to take jobs" (spec §3.5 step 10): while the takes-jobs state is `on` and the link can deliver offers, that is while it is `online` or `connecting` (wiring `DELIVERING`). The brief's "idle" is read as "jobs not on, or no offer can arrive". The first build held it whenever the state was `on`, so a signed-out, revoked, replaced, paused, out-of-plan, fair-use, device-limit, unavailable or Local-off link kept the computer awake on AC indefinitely, though neither the relay nor `pending` would bring it a job. `evaluate` runs on every link status, so the hold follows the link at once (W29).
+  - The hold is released on battery, when the option goes off (no state change needed), when jobs go off (the setting, a lock, Remote off), when the link stops delivering, and at `stop()`.
+  - "One owner" means keep-awake.ts. The stay-awake hold joins the desktop-work set behind the one blocker index.ts sets (`setDesktopWorkBlocker`, index.ts:640-651), shared with `whileDesktopWorks` (A3). Engine-session keep-awake (`startKeepAwake`, which also keeps an unattended job's own session awake) keeps its own `powerSaveBlocker` id through the same `blocker` object, unchanged. So while a job runs two ids can be held, and each is released by its own holder.
+  - Power is Electron's `powerMonitor` (`on-ac`, `on-battery`) plus a one-minute check. Since electron.d.ts gives `on-battery` on macOS only, the check covers Windows and Linux. All of it is subscribed only while the hold is armed (jobs on with a link that delivers, and the option on), so with Vector everywhere off nothing watches power and no interval runs.
+- **(l) A project the engine refuses is held** (critique, minor, taken; spec §3.5 step 4's EV-13 note and main-requests.md say so). A 403 from the create route (not listed, not open in Vector, not trusted, or not the owner) is `WorktreeUnavailable`, and the runner settles `held` with fixed text: "This computer could not take the job: its project must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed." The engine's message is not parsed. There is no pre-check with `?directory=<project>`, which would load the project's instance and defeat EV-13's never-load rule. EV-13's 403s come before `createUnattended`, so nothing is reserved.
+- **(m) Other refusals fail the job**, with the generic summary: a checkout the engine reports trusted, a trust answer that cannot be read, an answer with an extra key or a relative folder, and a 5xx. A checkout that was created and then refused stays a registered sandbox with its branch (Left open).
+- **(n) `takesJobs` does not require the worktree** (critique, minor: its second option). With the worktree probe's no, `pending` still says `jobs=1`, and a claimed job settles `held` with the existing text (W23). The readiness answer has no worktree field, the spec keeps `held`, and a held reply tells the requester why. Requiring it would route those jobs elsewhere silently.
+- **(o) "The result says checks did not run"** (spec §3.5 step 5; critique, minor: its second option). No new text is added. Every laptop result carries `checks: "skipped"`, and the draft pull request's body says "Checks have not run: …" (core everywhere/publish.ts:199), with or without the shell. Step 5 carries a dated note.
+- **(p) The old awake test** is rewritten to the new API with the same sequence (A1), and four cases are added.
+- **(q) `localEngineOrigin`** is extracted because three callers use it: the engine client, the probes and the adapter.
+- **(r) `holdDesktopWork`'s release** deletes and syncs. Calling it twice does nothing, because `syncDesktopWork` is idempotent. The plan's early return was an equivalent mutant (M20's first form survived), so it is not used.
+- **(s) F5.** G2 and G3 import the desktop's everywhere-engine.ts and, since review round one, everywhere-settings.ts into an engine test. The first build imported `everywhereSettings` from everywhere-wiring.ts, which pulled keep-awake.ts (hands-finish edits it), everywhere-awake, -git, -ledger, -offer and -runner, remote-link.ts with remote-crypto and remote-passkey (codium-finish), vector-account.ts and github-api.ts into the engine's test and typecheck program, well beyond EV-01's accepted two files. The settings and rules functions now live in everywhere-settings.ts, which imports only core, schema, effect, node:os and a type from everywhere-engine.ts. `tsgo --listFiles` in packages/engine lists exactly three desktop files: everywhere-engine.ts, everywhere-scan.ts and everywhere-settings.ts. All three match vector-everywhere.yml's `packages/desktop/src/main/everywhere-*` path filter, so EV-01's mitigation still covers them. F5 stays open: a later fix moves the pure settings and rules functions, or the client, into core/everywhere.
+
+### Not changed
+
+- `OFFER_KEYS` (empty), `LAPTOP_ROUTE_WIRED` (false) and the push-path stand-ins.
+- index.ts, engine and core sources, api/, and keep-awake.ts's other functions.
+- No flag, env var, route, config key, generated file, dependency, lockfile or workflow.
+
+### Safe by default
+
+- `OFFER_KEYS` is empty, so no offer verifies: no claim, worktree or session.
+- `everywhere.enabled` defaults to false, so no probe runs, nothing is held and the settings tab stays hidden (EV-21).
+- `stay_awake` defaults to false, so nothing is held or watched.
+- Without the exact `offline-v1` answer (macOS, Windows, Linux without a root-only bubblewrap that starts, a probe that failed), or under a company lock on `permission`, `tools`, `agent`, `mode` or `default_agent`, bash is denied. The engine refuses a marked session's commands anyway where the sandbox is missing.
+- A trusted, malformed or unreadable checkout runs no session. The push stand-ins hold every committed branch, and the server flag is off.
+
+### Left open
+
+- Hardening or refusing `Worktree.remove` and `Worktree.reset` for `<data>/everywhere-worktree/**`, and the 7-day sweep (EV-12 (h)). Add to the sweep: a checkout the trust check refused stays registered with its branch (m).
+- A held job whose project is not open is not retried: the requester asks again once it is open.
+- Before the push path: other projects' `.env` files and credential stores in the home folder stay readable to a sandboxed command and could reach the summary or the pull request (EV-16's second precondition).
+- Company rules: a managed config's permission rules are not seen unless the key is locked, for the editing ids (pre-existing) and now for `bash`; nor are the engine's `VECTOR_PERMISSION` environment rules. Under a lock on `agent`, `mode` or `default_agent` the editing ids copy the user's own default agent's rules, not the company's (the shell is off then). The engine's own read defaults (asks for `.env` and `.ssh` files) are outranked by the session's `read` allow (pre-existing since VE-08).
+- The `testing` milestone (§3.5 step 7) is not built.
+- The macOS and Windows shell (not built; EV-16).
+- The owner can still trust a job's checkout by hand in the app. The adapter then refuses new checkouts for that folder only if the engine reports it trusted.
+
+### Mutations
+
+Thirty-nine, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev18-mut/: mutate.py, one log per mutation, run.txt). Three survived the first pass:
+- M18b (a later answer replaced a kept one): W26 now also runs a job after the kept 404 and sees it held.
+- M20 (the release's early return dropped): an equivalent mutant, so the guard is gone (r) and M20 is now "a release clears every hold".
+- M23 (stop() without the awake's dispose): the link's own stop had hidden it, so W28 now calls the jobs module's stop alone first.
+
+All three are red on the final sources. The table is in the progress receipt.
+
+### Coordination
+
+- remote-runtime.ts is in spec §6.4's Codium row ("desktop main {remote-*,…}.ts"): the change is one import name and one dependency, beside EV-17's R-C3 lines, and the R-C3 spread is untouched.
+- keep-awake.ts may also be edited by hands-finish (createComputerKeepAwake): the hunk is a comment and one function next to `whileDesktopWorks`. For hands-finish: the shared desktop-work set now has one holder with no time limit.
+- everywhere-settings.ts is new and matches the lane's `everywhere-*` names; the engine's typecheck and unattended-session.test.ts now compile it (s).
+- At the time of writing, no lane tip touches any of this package's files since its merge base: hands-finish `8139e5fc`, codium-finish `732229c3`, connect-finish `19c48b89`, scope-finish `fb441eae`, brain-transport `0d18f750`, review-fixes `1433d105`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c` and main `dabc4821`.
+
+### Deferred verification
+
+- The Electron side of `power` (powerMonitor's events and the interval) is covered by the typecheck and the main-process bundle proxy only.
+- macOS and Windows runs (test.yml at the lane end), and VE-50.
+- CI after the commit: workflow_dispatch runs of vector-everywhere.yml, typecheck.yml and vector-hosted-ci.yml (remote-runtime.ts changed) on everywhere-finish. test.yml (desktop) is the workflow that runs keep-awake.test.ts and computer-keep-awake.test.ts; vector-everywhere.yml does not.
+
+### Review round one (2026-11-17)
+
+Eleven findings, one blocking. All are taken; three pairs repeat one another. Line numbers above are after this round.
+
+- **Blocking: a company lock on `agent` (or `mode`, `tools`, `default_agent`) did not turn the shell off.** Taken and widened: `RULE_KEYS` (wiring :116) lists every key that can carry permission rules, and the shell counts only while all are unlocked (:252-253). W25 has one case per key and one with unrelated locks only (sandbox stays 1). (i) is extended.
+- **The default agent's asks were dropped, so `agent.build.permission.bash: "ask"` ran unasked.** Taken: everything but its allows is copied (`.filter((rule) => rule.action !== "allow")`). W27 now has agent asks on `bash` and `edit`. (h) is updated.
+  - Found while fixing it, and fixed the same way: GET /global/config answers the legacy top-level `tools` map and the `mode` block as written, and the engine folds them in only when it loads the config. So `tools: {bash: false}` was outranked by the session's `bash` allow on `offline-v1`, and a `mode.build` deny or ask was dropped. `userRules` now copies the switched-off tools first (as the engine's `toolPermissions` reads them) and the default agent's `mode` block after its `agent` block; an undecodable `tools` map or `mode` block is off (W27). (f) says so.
+- **A wildcard key's ask was dropped (`{"*": "ask"}` edited, and ran commands, unasked), and (g) called that a tightening** (two findings). Taken with the second finding's ordering: per id, the exact key's rules, then the wildcard asks, then the wildcard denies (everywhere-engine.ts :32-39). The first finding's "every non-allow wildcard rule in its written order, last" would let a wildcard ask outrank a wildcard deny written before it; this order keeps every wildcard deny last, and is never looser than HEAD or the user's config. E2b (everywhere-engine.test.ts:179) covers `{"*": "ask"}` on every editing id and `bash`, `{"*": "ask", "edit": "allow"}` in both orders, and a wildcard deny beside a wildcard ask in both orders. (g) is rewritten.
+- **Stay awake held while the link could deliver nothing.** Taken: the hold needs the link `online` or `connecting` (`DELIVERING`, wiring :118, :197-201). W29 (everywhere-wiring.test.ts:1794): held while online; paused releases with jobs still on and stops watching power; Remote off and on holds again; a reconnect in `connecting` keeps it; revoked releases. (k) is updated.
+- **A probe body that broke off counted as a definite no.** Taken, with a typed error rather than a message comparison: `responseText` throws `ResponseTooLarge` (everywhere-engine.ts :111, same message, so the existing size test is unchanged), and only that is a definite no (:77). E3 adds a body that errors after its first chunk: no answer.
+- **"One blocker for jobs plus engine work" was not explained** (two findings). Taken as docs: (k) and the progress F6 row say what "one owner" means, and that engine-session keep-awake keeps its own id on the same blocker object. The optional `startKeepAwake` case is not added: that code is unchanged, and it needs an engine event-source fake that this lane's tests do not have.
+- **"Not yet committed" goes stale at the commit.** Taken: removed from the plan's F6 row and the handoff bullet. A commit cannot name itself, so the SHA goes in the next progress receipt.
+- **The engine test's import of the wiring widened F5** (two findings). Taken, the first option: everywhere-settings.ts (s). F5 stays open in the plan table, with the note.
+
+Mutations for this round (/tmp/vector-v2/everywhere/ev18-mut/round1/: mutate.py, one log per mutation, run.txt), each red: N1 (only `permission` checked), N1b (`tools` and `mode` left out of `RULE_KEYS`), N2 (only the agent's denies), N3 (`mode` ignored), N4 (`tools` ignored), N4b (`write` not read as `edit`), N4c (an undecodable `tools` map kept), N5 (wildcard asks dropped), N5b (wildcard asks after the denies), N5c (wildcard allows copied as well), N6 (a broken body a definite no), N6b (an over-long body no answer), N7 (the link state ignored) and N7b (`connecting` left out). N7b survived the first pass, because W29 had no `connecting` step; the step was added.
+
+### CI follow-up (2026-11-17): the repository wording check (EV-17 and EV-18)
+
+vector-codium.yml run 43992205101 (at `dcb93939`) failed one job, "Codium tests (shard 1/4)" (133735383740), step "Run the Codium test files": root test/no-project-wording.test.ts "no user-facing English text calls Vector's own concept a project" (1 pass, 1 fail) found two log lines EV-17 added to everywhere-wiring.ts `projectFolder`. The owner's rule (17 Oct 2026) is that what a user reads says repository; packages/desktop/src/main is one of the scanned sources, and its log lines count. main has no everywhere-wiring.ts, and EV-18 (`cf9195d0`) did not touch the lines. Run at `cf9195d0`, the same test also found three strings EV-18 added, so all five are reworded and no test assertion is weakened:
+
+- everywhere-wiring.ts `projectFolder`: "left out a project folder git does not map to its repository" is now "left out a listed folder git does not map to its repository", and "could not read a project's default branch" is now "could not read a listed repository's default branch".
+- everywhere-wiring.ts `unattendedWorktree` (the 403 log line) and everywhere-runner.ts `UNAVAILABLE_HERE` (the held job's fixed summary) say "its repository must be listed" for "its project must be listed"; `WorktreeUnavailable`'s message and doc comment say "this repository here".
+- everywhere-runner.test.ts and everywhere-wiring.test.ts pin the held summary as a literal, so both literals follow the new text; each still asserts the exact string.
+
+The config key `everywhere.projects` and the identifiers (`projectFolder`, `ProjectFolder`) are code, which the check allows, and stay. Receipts: vector-everywhere-progress.md, "EV-17 and EV-18, 2026-11-17: CI follow-up".
+
+## 2026-11-20, EV-19: the laptop journey harness and the Slack journey (VE-22a)
+
+Spec §8 VE-22; §9 (fakes, FakeRelay into the desktop's offer source, the forged offer); §5 E4, E8, E12, E17. Depends on EV-09 (`735d592b`) and EV-17 (`c9275df0`), both ancestors, as is EV-18 (`cf9195d0`). Built at HEAD `503bab3b`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main `7c7508d2` holds PR #33 (release-finish is its ancestor) and is 144 commits ahead; the brief says to merge main once #33 is merged, but its later note and the EV-14 precedent (progress, EV-14: "The lead also owns merging origin/main") leave that merge to the lead, so it is not merged here. Among the 148 repository files the journey compiles, main changed only packages/core/src/github-agents.ts (reached through core child-environment.ts; 20 lines added). The plan was corrected by its critique; where a point was not taken, the item says why. One package commit; a commit cannot name itself, so its SHA, the push and the CI run ids go in the next progress receipt. Line numbers are after review round one (below).
+
+*2026-11-20 (EV-20):* the platform-neutral half of this harness (the hooks, the relay, `bounded`, `gate`, the Codium fetcher, `seedPlan`, the slow store, the ports, the jobs routes and the sweep, the desktop half, `turn`, the teardown, `onlyJob`, the settle checks and the E8 checks) moved to packages/web/test/lib/everywhere-journey.ts, and this file runs on it with the same assertions in the same order (211 expects locally, 329 with a loopback Redis). The line numbers in this entry are from before that move; the current ones are in the EV-20 entry, (a). Committed as `6d5c1afc`; its CI is in the progress log, EV-20's receipt.
+
+### What changed
+
+- **New packages/web/test/everywhere-journey-laptop.test.ts** (894 lines): five cases that run locally (J1 to J5) and two against a real Redis (R1, R2). The Slack event route, the intake, the router, the relay adapter (against the relay Worker on 127.0.0.1), the jobs routes, the result outbox and the sweep are the real API code on in-process loopback servers; on the computer, the desktop's own `createEverywhereJobsClient`, `createOfferVerifier`, `createLedger` and `createEverywhereRunner`. The engine, git, the worktree, the visibility check and the pull request are the journey's stand-ins, with gates.
+- **api/_lib/everywhere/slack/adapter.ts** `SlackDeps.sleep?` (:26) and **slack/routes.ts** (:18) passes it to `createIntake`: the only production edit, additive. See (b).
+- **packages/web/test/lib/everywhere-router.ts** `routerFixture(options: {store?} = {})` (:17) uses the given store instead of the FakeStore and also returns `env` (:20, :71); **lib/everywhere-slack.ts** `slackFixture(options)` (:44-45) passes it on. No existing caller changes (the 16 web test files that use either fixture, directly or through lib/everywhere-linear.ts and -jira.ts).
+
+### The journey
+
+`world({place, computer, pinned?, store?})` (:207) seeds a linked requester (U0ALICE01) in a mapped place (C123, or D123 for a direct message) for acme/app (id 101), records the computer as seen, writes a paid plan with Remote (vector-50) into the Codium fakes' store and, with `computer`, connects one computer to the relay. `laptopJourney` (:582) then walks the brief's nine steps, asserting at each:
+
+1. A signed Slack event is answered 200 `{received: true}` while every store command on its path still waits: no store command and no Slack call has happened yet.
+2. The first signal, `agents.sessions.setStatus processing`, is within `ackMs` (2,500 ms) of receipt on the server's clock, with 100 ms per store command before it (g), and is the first Slack call.
+3. Routing: one presence and one job-offer call reach the relay (`actions`), the router sleeps once (2,000 ms).
+4. The relay sent the computer one JOB_OFFER frame (sixteen zero device bytes, an offer matching OFFER_PATTERN), the runner verified it with the test key passed through `createOfferVerifier`'s `keys` parameter, and the ledger consumed its jti once.
+5. One claim; the job is `claimed`, route `laptop`, by this computer, within the 20-second window. One plan `chat.postMessage`, unfurling off.
+6. The runner fetched `main` for the job, asked the safe worktree for `{directory, repository, jid, from, branch: expectedBranch(job)}`, made the engine in the returned checkout and created the session with `unattendedRules()` (no `bash` allow, since no offline shell is offered).
+7. Milestones, each on its own: `started` (setStatus processing, `agents.sessions.rename`, the plan update), `editing` (setStatus, the plan) after the first edit tool, with the prompt's `maxUsd` the lower of the job's and the computer's caps, and `pushing` (setStatus, the plan), acknowledged before anything is pushed or settled; the commit message carries `[skip ci]`.
+8. Settle `changes`: one push to the job's branch, `openPr` with the summary, and the record's result `{branch, prUrl, headSha, files: 1, checks: "skipped"}` with the PR in the job's repository. The body and then the summary are erased once posted (E4), the outbox entry is gone, the ledger is empty, nothing was logged, refused or asked.
+9. The result: in a shared channel only the outcome and the link are posted in the thread, and the summary with the checks line goes to the requester alone (`chat.postEphemeral`, E17); in a direct message the reply carries the summary, the link and the checks line. Then setStatus `active`. E8: a claim of the settled job from another device and from the same device both answer 409 `JOB_TAKEN`, and the desktop client's own claim rejects.
+
+| Case | Line | What it pins |
+| --- | --- | --- |
+| J1 | :781 | the journey in a shared channel: the job record is `shared`; the session title is "Vector task"; every post and plan update in the thread (text and blocks) has no summary, no checks line and no repository name outside the PR link; the ephemeral carries both; the device id is in no Slack call; the FakeStore's command log never holds the diff, the summary or the task in plaintext (E4, E8, E12, E17) |
+| J2 | :798 | a direct message: `shared` false, the title "acme/app: Fix the login button", the summary, link and checks line in the reply, no ephemeral |
+| J3 | :818 | no computer online: one presence call and no offer or claim; the job waits, route `queue`, until `receivedAt + queueMs`, which is before its body expires; a sweep 1 ms before ends nothing and the body still opens; the sweep at the limit ends it `expired`, erases the body and posts `renderEnd("expired", "slack")` ("did not pick this up in time") in the thread, unfurling off, then setStatus `active` |
+| J4 | :826 | spec §9's forged offer: an offer the computer's pinned key does not verify is dropped with no claim, no decline and no jti consumed; the router polls ten times through the window, then the job waits, with one plan post and no result |
+| J5 | :849 | the fetch guard is the fetch in place: a probe to `guard-probe.invalid` (a reserved name that never resolves) is stopped and recorded, and its violation is taken from the guard, so the guard's afterEach stays empty, which every other case also passes; no case in the file aims a request at a real host (n) |
+| R1 | :869 | J1's journey with `testEverywhereStore` over VECTOR_TEST_REDIS_URL (the create and transition Lua scripts on Valkey); the job is settled and `shared` in Redis and the fixture's FakeStore saw no command |
+| R2 | :883 | J3's wait and expiry on the same store, the job `expired` in Redis, the FakeStore untouched |
+
+### Deviations
+
+- **(a) The test imports eight desktop sources from packages/web (F5-style).** The brief's first choice holds: run from packages/web, the desktop's everywhere-runner, -offer, -ledger, -engine, -git, -settings, -scan and github-api resolve their own `@vectordevai/core` and `@vectordevai/schema` imports, all to `src/` paths (25 core and 17 schema files, none under `dist/`, so no build is needed), and no electron file is in the graph (`tsgo --listFiles` on a scratch tsconfig that extends packages/web's; exit 0). packages/web/test/desktop-account.test.ts already imports a desktop source. Web's `astro check` now compiles those eight files. As EV-01 recorded for the engine, turbo hashes web's typecheck from web's own files, and desktop is not a web dependency, so after a desktop-only edit the pre-push turbo typecheck can serve web's earlier pass from cache. The uncached `web` entry in vector-everywhere.yml's typecheck matrix runs `astro check` on every lane run, and desktop's own typecheck (vector-everywhere.yml and typecheck.yml) checks the eight files under desktop's settings; typecheck.yml has no web job. The fallback (a desktop test against the API handlers) was not needed.
+- **(b) `SlackDeps.sleep`.** The Slack route built its intake without `sleep`, unlike Linear (linear/routes.ts:62) and Jira (jira/a2a.ts), so the router's 2-second offer poll used a real timer against the test's clock and never ended. `sleep` is optional and only forwarded; productionPlatformDeps passes none, so production keeps createIntake's timer, and `configuredPlatforms`' `SlackDeps & Partial<Pick<LinearDeps, "privateResult" | "sleep">>` (runtime.ts:31) still checks (the two `sleep` types are the same). Mutation M1 (the route drops it) turns J1 and J2 red by their 15-second timeout.
+- **(c) The fixtures take an optional `store` and return `env`.** `createJobsApi` reads its configuration from `env`, which must carry the same data key the intake seals with. The store option is what lets R1 and R2 run the same journey on Valkey; R1 and R2 assert that the fixture's FakeStore saw no command, so a fixture that ignored the option goes red (M12, run against a loopback redis-server locally).
+- **(d) The fake relay is the relay Worker, under the real `createRemotePorts`, with the Codium fakes.** As in EV-09, packages/relay's `handleRequest` with `Harness` from packages/relay/test/fakes.ts is served on 127.0.0.1, so presence and the offer are signed by the API's code and checked and answered by the relay's own Durable Object. The computer's side is that object's FakeSocket frames, handed to `runner.offer` during the server's poll, which is what the Remote link's `jobs.offer(text)` does (EV-11). The link's frame handling (remote-link.test.ts) and the wiring (everywhere-wiring.test.ts W1) are not repeated. packages/web/test/fixture/codium-fakes.ts is not in the brief's fake list; it is used because the relay adapter's plan check reads Codium's snapshot and switches through `persistentStore`, which follows the KV environment that `codiumTestEnvironment` sets, and the desktop token's revocation check reads the same store. lib/everywhere-store's FakeStore answers the everywhere keys only and sets no Codium environment.
+- **(e) The engine and git stand-ins are the journey's own.** everywhere-runner.test.ts's fixture is not exported, so the journey writes the same port objects (`RunnerEngine`, `RunnerGit`), with gates; there is no new fake server. The diff is one the desktop's own scan accepts (`@@ -0,0 +1 @@`), so `mayPushDiff` runs for real. The cost is that the two files' stand-ins can drift apart; a later package can move the runner test's engine and git into an exported desktop test helper (for example packages/desktop/src/main/everywhere-runner.fixture.ts, as remote-relay.fixture.ts is) that both files use (Left open; review round one).
+- **(f) Gates and `drainAfter` between steps.** The Slack status lock skips a progress post that overlaps another, by design (slack/adapter.ts `locked`), so without gates a milestone post could be lost to timing and the sequence of calls would not be fixed. Each milestone's calls are asserted as an exact sequence (setStatus processing, then the rename for `started`, then the plan update). The `laptop` step is the exception: the claim's event and the router both post it and one may be skipped, so only its latest plan is asserted.
+- **(g) How E12 is measured** (critique, taken). Every store command on the Slack path waits for a gate, then costs `STORE_LATENCY_MS` on the server's clock until the first `setStatus` reaches the fake Slack. Measured at HEAD: 19 commands before it (1,900 ms at 100 ms each, inside `ackMs` with 600 ms to spare); with the acknowledgement moved after `routeFacts` (M2), 50 commands (5,000 ms). So 100 ms passes the honest path with margin and breaks the time bound itself under M2 (all four journeys go red at :573, before the order check), not only the order of calls. The time bound is checked first, then the commands count, then that setStatus is the first call.
+- **(h) The push path is stand-ins.** `privateRepository` and `openPr` are the journey's; `LAPTOP_ROUTE_WIRED` stays false.
+- **(i) Production has no `repository` port, and the journey does not cover production repository resolution** (critique, major, taken). safePorts and productionPorts (ports.ts, runtime.ts) set none, so intake.ts `repository()` (:48) resolves nothing and every production Slack, Linear or Jira trigger gets the repository prompt, and Slack's `repo owner/name` answers "That repository cannot be verified" (slack/adapter.ts:194). The journey admits a job only because the router fixture's stand-in `repository` port answers. It is not fixed here: it needs a real lookup (the GitHub App or the account's linked repositories) and a decision about which identity checks it, so it is a separate package for the lead. It is now in the handoff's "Current gates", as a condition for `LAPTOP_ROUTE_WIRED` and for go-live, and in "Left open by the repairs". The comment on `LAPTOP_ROUTE_WIRED` (config.ts) is not edited, so this package's one production change stays the optional `sleep`; the handoff gate and the spec note carry the condition.
+- **(j) VE-22 is split.** This is VE-22a, Slack only; the Linear and Jira journeys are VE-22b. The runner never reports `testing` (EV-18, Left open), so the milestones are `started`, `editing` and `pushing`.
+- **(k) The real-Redis cases** use the existing VECTOR_TEST_REDIS_URL skip pattern (`describe.skipIf`) and run in vector-everywhere.yml's Valkey job. Codium's store stays the in-process fake. Locally: 5 pass and 2 skip; with a disposable loopback redis-server 7.0.15 (informational, not the Valkey receipt), 7 pass.
+- **(l) No workflow path change, and a known gap** (critique, taken). Everything the journey runs on the everywhere side is in vector-everywhere.yml's pull_request paths (api/_lib/everywhere/**, the schema everywhere files, core everywhere/**, desktop everywhere-* and github-api.ts, packages/web/test/**/everywhere*). Checked against the 148 repository files the journey compiles, 59 are outside them, so a pull request that changes only those does not start the lane: the relay Worker (packages/relay/src/** and test/fakes.ts), the Codium fakes (packages/web/test/fixture/codium-fakes.ts and codium-spend-emulation.ts) and the Codium API helpers behind them (api/_lib/codium-* other than the listed ones, model-plan-*, hosted-internal.ts; schema codium-plan.ts and codium-entitlements.ts), core local-mode (egress, policy, sources, guard, ca, attribution, log-store, startup, forward-proxy), core util/wildcard.ts and v1/config/local.ts and permission.ts, and schema permission-v1, local-mode and the id schemas. vector-hosted-ci.yml runs the relay's own tests and typecheck.yml (app, cloud, desktop, engine) typechecks core through those packages, but nothing outside this lane runs this journey; the workflow is not edited here (its paths are FIT-4's, review-fixes'). Recorded for the lead.
+- **(m) Critique points taken as written:** the J3 and R2 deadline is read from the job (`queueUntil === receivedAt + queueMs`, with `receivedAt` within `ackMs` of the send) and the sweeps run at `queueUntil - 1` and `queueUntil`; teardown on failure (every gate and deferred opened, the runner stopped, no further frame handed to it, `drainAfter` and the runner's offers each bounded to 5 s) and a 15-second limit per journey case; the E8 claims through the route with status and code, plus the client's own rejection; the E17 checks on text and blocks of every post and update in the thread; M13 and M14 added; `{socket, dev}` kept from `h.computer()`, `settings: async () => settings`, `native.user` reset per test; the setStatus before each milestone's plan update; the cross-package and `src/` receipts in (a); the gap list in (l).
+- **(n) Critique point corrected, then review round one:** J5's slack.com half is dropped (everywhere-fetch.test.ts already proves the guard stops slack.com). The jobs client's default-origin half is dropped too (review round one): it aimed a request with a bearer header at vectordev.ai and relied on the order of J5's checks to stop it, and no test may call vectordev.ai. The client cannot be pointed at a reserved name instead, since `createEverywhereJobsClient` refuses every origin but `https://vectordev.ai` and loopback http (everywhere-runner.ts:41), and its default origin is already pinned without a request: everywhere-runner.test.ts's recording fetcher sees `https://vectordev.ai/api/everywhere/jobs/decline` (:328-334). The journey's own client is given no fetcher, so `Egress.fetch` sends through `globalThis.fetch` at call time (core local-mode/egress.ts:337), which is the guarded fetch, and the guard lets loopback through. J5 keeps the probe to `guard-probe.invalid` (a reserved name that never resolves) and the check that the guard is the fetch in place.
+
+### Not changed
+
+`OFFER_KEYS` (empty; W6g still pins it), `LAPTOP_ROUTE_WIRED` (false), any workflow, env var, flag, route, config key, dependency or lockfile, and any generated file. Nothing becomes reachable on vectordev.ai.
+
+### Safe by default
+
+The one production edit is an optional dependency production never sets, so the Slack intake's timing is unchanged. The journey's offer key is generated in the test and reaches only the verifier's `keys` parameter. VECTOR_EVERYWHERE_ENABLED and the Remote settings exist only in the test's own env objects and in `process.env` between `codiumTestEnvironment` and its restore; VECTOR_CLI_TOKEN_SECRET is generated and put back after the file. Every request stays on loopback: the fetch guard is armed for the file and J5 proves it, and J5's probe, the file's only other request, aims at a reserved `.invalid` name.
+
+### Left open
+
+- No production `repository` port (i): a separate package, for the lead.
+- VE-22b: the Linear and Jira journeys on the same harness (`world()` is Slack-shaped; the jobs, relay and desktop halves carry over). *Built by EV-20 (2026-11-20).*
+- The lane's path filter misses the relay, the Codium fakes and core local-mode (l).
+- A shared, exported runner fixture (for example packages/desktop/src/main/everywhere-runner.fixture.ts), so the journey and everywhere-runner.test.ts use one pair of engine and git stand-ins (e).
+
+### Mutations
+
+Each applied in /tmp/vector-v2/everywhere/ev19-mut/mutate.py, the journey file run alone under `timeout`, then restored by sha256 (all restored). After review round one each was run again the same way (/tmp/vector-v2/everywhere/ev19-fix/mutate.py, a log per mutation in ev19-fix/mut/; M12 against a disposable loopback redis-server): each is red in the same cases, first at the same assertion. The lines below are after the round.
+
+| Mutation | Red | First failing line |
+| --- | --- | --- |
+| M1 slack/routes.ts drops `sleep: deps.sleep` | J1, J2 by the 15-s timeout (J3 and J4 then wait on their leaked polls) | timeout |
+| M2 intake.ts moves the acknowledgement after `routeFacts` | J1 to J4 | :573, the E12 time bound (5,000 ms) |
+| M3 router.ts poll ignores `claimedAt` | J1, J2 | :588 `slept` |
+| M4 slack/adapter.ts finish posts the private text in the thread | J1 | :755, the summary in the thread |
+| M5 events.ts renders the result with `shared: false` | J1 | :755 |
+| M6 desktop everywhere-offer.ts ignores `input.keys` | J1, J2 | :588 |
+| M7 runner reports `pushing` only after the push | J1, J2 | :658, milestone at the pushing step |
+| M8 jobs.ts settleJob drops `prUrl` | J1, J2 | :678 |
+| M9 jobs.ts `dueOf` waiting uses only `bodyExpiresAt` | J3 | :730, the sweep at the limit |
+| M10 events.ts skips `clearSummary` | J1, J2 | :679 |
+| M11 slack/adapter.ts rename always names the repository | J1 | :787 |
+| M12 everywhere-router.ts ignores `options.store` | R1, R2 (loopback redis-server; CI's Valkey job is the receipt) | :877, :889 |
+| M13 jobs.ts keeps the body of a settled job | J1, J2 | :680 |
+| M14 jobs.ts claimJob gives a settled job back to the same device | J1, J2 | :696, the E8 claim |
+
+### Coordination
+
+The cross-lane probe at HEAD: review-fixes `1433d105` and connect-finish `19c48b89` touch none of this package's paths; codium-finish `58663f5b`, brain-transport `0d18f750` and main `7c7508d2` each change docs/vector/build/v2-notes/v2-complete-plan.md at :219-221 only, and this package annotates the F5 row at :197, so the hunks do not meet. Repeat the probe at the commit. *Review round one (2026-11-20):* origin/main is now `b5cbad1c`; its commits after `7c7508d2` change three of the journey's 148 compiled files (api/_lib/codium-pool.ts, core local-mode/sources.ts, web test/fixture/codium-spend-emulation.ts) and none of this package's own paths or the lane documents, so the journey is run again after the lead merges main.
+
+### Deferred verification
+
+The Valkey job of vector-everywhere.yml (R1, R2) and the CI runs; VE-50's live acceptance with a real relay, desktop, link and workspace; macOS and Windows (the journey is platform-neutral, but the desktop runs it only where it is built).
+
+### Review round one (2026-11-20)
+
+Eight findings, none blocking; two repeat each other (J5's request to vectordev.ai). Seven are taken; the eighth (a shared runner fixture) is optional and left for a later package, as the finding allows. Line numbers above are after this round.
+
+- **The "not committed" sentences would go stale at the commit.** Taken: this entry's opening paragraph and the progress receipt use the lane's form (a commit cannot name itself, so its SHA, the push and the CI run ids go in the next receipt), and the receipt keeps the follow-ups for the lead.
+- **J1 checked E17 only by what it did not find.** Taken: J1 asserts that the job record is `shared` (:786), and R1 does the same on Valkey (:877), so a parse that took C123 for a private place fails on a named assertion rather than on the order of calls.
+- **A missing plan update crashed instead of failing an assertion.** Taken: the routing step asserts that a `chat.update` was posted before it reads the last one (:609-611). The prompt check's `editing!.limits!.maxUsd` gets the same guard (`toBeNumber`, :644); every other `!` read was already preceded by a length or sequence check. A `toMatchObject` with `expect.any(Number)` was tried first and dropped: under Bun 1.3.14 it left the matcher in the received record, so the later `Math.min` read NaN.
+- **J5 aimed a request at vectordev.ai** (two findings). Taken, as the second finding's first option: the default-origin half is dropped, and J5 keeps the `.invalid` probe and the check that the guard is the fetch in place. The other option, a client on a reserved name, is not possible; (n) says why and where the default origin is pinned without a request.
+- **(b) quoted `configuredPlatforms`' parameter type without `privateResult`.** Taken: (b) quotes runtime.ts:31 exactly.
+- **The Codium fakes were called an addition to the brief's list of fakes only in (d).** Taken as docs: the handoff's EV-19 bullet and the spec's EV-19 note now say so and point at (d).
+- **The journey's engine and git stand-ins can drift from the runner test's** (optional). Not done here: the finding leaves it to a later package; (e) and Left open name it.
+
+Receipts: vector-everywhere-progress.md, "EV-19 review round one".
+
+## 2026-11-20, EV-20: the Linear and Jira laptop journeys (VE-22b)
+
+Spec §8 VE-22; §9 (fakes, FakeRelay into the desktop's offer source); §5 E1, E4, E5, E8, E12, E17; §3.2 step 6; §4.2 (Linear) and §4.4 (Jira). Depends on EV-19 (`6d5c1afc`, HEAD). Built at HEAD `6d5c1afc`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60` (the brief's base `0ee486e3` is older; `67ec3a60` is what was checked), so nothing was merged. origin/main `56b2862b` holds PR #33 and is 188 commits ahead. The brief says both "once PR #33 is merged, merge origin/main" and "the lead merges main into this branch; until then never merge main yourself"; the second rule is followed, as in EV-14 and EV-19, so main is not merged here. Main's commits after `b5cbad1c` change only engine installation files, none of the 152 repository files the two journeys compile. No review-fixes or brain-transport precondition applies. A test-only package: no production file changed. The plan was corrected by its critique; where a point was not taken, the item says why. The package's build step leaves it uncommitted; the commit, the push and the CI run ids go in the next receipt. Line numbers are after review round one (below).
+
+### What changed
+
+- **New packages/web/test/lib/everywhere-journey.ts** (556 lines), the platform-neutral half of EV-19's harness, behaviour unchanged: the constants (:47-56), `installJourney(natives)` (:64: the fetch guard, the RouteHarness, the relay Worker on 127.0.0.1 and the hooks; `relay()` :81 throws a named error outside a test instead of a module-level Harness), `bounded` (:178), `gate` (:185), `slowStore` (:202), `journeyPorts` (:218), `mountJourney` (:240: the platform's routes, the five jobs routes and the sweep), `journeyComputer` (:289: the desktop half, `turn` :455, `close` :476), `onlyJob` (:494), `expectSettled` (:508) and `expectNoReclaim` (:538).
+- **packages/web/test/everywhere-journey-laptop.test.ts** (EV-19's, 894 to 495 lines) runs on the lib: `world()` (:70) keeps only the Slack parts, and the settle and E8 blocks call `expectSettled` (:300) and `expectNoReclaim` (:304). Same assertions in the same order (a).
+- **New packages/web/test/everywhere-journey-laptop-tracker.test.ts** (1,022 lines): `linearWorld` (:80), `jiraWorld` (:186), the Linear journey (`linearAdmit` :331, `linearJourney` :410, `linearOfflineJourney` :596), the Jira journey (`jiraAdmit` :694, `jiraJourney` :713, `jiraOfflineJourney` :851), the E17, activity and E4/E5 checks (`expectLinearShared` :355, `expectLinearActivities` :369, `expectLinearKept` :390, `expectJiraShared` :659, `expectJiraKept` :673) and nine cases.
+- **packages/web/test/lib/everywhere-linear.ts** `linearFixture(native, options: {store?} = {})` (:109) and **lib/everywhere-jira.ts** `jiraFixture(native, {installed?, linked?, store?})` (:90) pass the store to `routerFixture`. Both keep their hand-packed style; no caller changes (everywhere-control, -jira-a2a, -jira-render, -linear-oauth, -linear-render, -linear-webhook).
+
+### The journeys
+
+**Linear (L1).** The creator is linked; the team is mapped to acme/app (101) and acme/tools (102); one computer is on the relay.
+
+1. The signed `created` webhook is answered 200 `{received: true}` before any store command or Linear call.
+2. The first Linear call is the ephemeral `thought` "Received your request. Checking the connection and workspace.", within Linear's first-activity budget on the server's clock with 100 ms per store command (e). A thought the adapter gives up on fails a named check (`firstThought`), not the case timeout.
+3. The repository choice: `create`, `user`, `create`, the last a `select` elicitation listing exactly the two mapped repositories with opaque `ve1:` values that name no repository (E17); no job yet, one presence call.
+4. The creator answers with the first option (`prompted`): `user`, `history`, then the `finding` thought ("Working on your request.") and plan. The job is `claimed`, route `laptop`, kind `followup`, issue ENG-123, `shared`, repository 101, inside the offer window. Its task is the creator's earlier prompt "Fix the login button" (E1), and the edited issue description is context, never the task.
+5. Presence twice, one job-offer, one 2-second poll, one JOB_OFFER frame verified with the test key, one jti, one claim; the latest plan is `laptop`'s (k).
+6. `started`: `issue`, `states`, `start` (the issue moves to the team's first started state), the thought ("Working on your request.") and the plan ("Read the workspace" in progress, the other two steps pending); the runner fetched `main`, asked for the worktree with `expectedBranch` (`vector/ve-eng-123-…`), and created the session with `unattendedRules()`.
+7. `editing` and `pushing`, each a thought ("Working on the requested changes.", "Preparing the result.") and a plan. The prompt is the creator's task with the issue's context and the lower `maxUsd`. The commit is "ENG-123 Vector: …" with `[skip ci]`, and nothing is pushed before the `pushing` acknowledgement.
+8. Settle `changes` (`expectSettled`).
+9. The session gets the completed plan with the job page and the draft PR (`addedExternalUrls`), then one `response` that is exactly "Done on your computer." and `[Draft pull request](…)`. The summary and the checks line go to `privateResult` alone (E17). No call after the question carries the summary, the checks line, the repository name outside the PR link or the device id. Vector posted only thoughts, the one elicitation and the response: no `error` activity, also in the `laptop` window of (k). E8 holds.
+
+E4 and E5: the FakeStore's command log never holds the diff, the summary, the task, the description, the access token or the refresh token. Every GraphQL call carries `Bearer <the installation's token>`. Neither token is in a prompt, a relayed frame or the opened job reply, and the access token is not in the job body.
+
+**Linear offline (L2).** One mapped repository, no computer. After the acknowledgement, `user`, the `waiting` thought "Waiting for your computer." and its plan. The job (kind `assign`) waits, route `queue`, until `receivedAt + queueMs`, which is before its body expires. A sweep 1 ms before ends nothing and the body still opens. The sweep at the limit ends it `expired` and erases the body. Linear then gets the completed plan with the job page only and a `response` that is exactly "Your computer did not pick this up in time. Ask again when it is on.", and nothing goes to `privateResult`. A late claim, from a new device and from the one the sponsor was seen with, and the desktop's own client, each gets 409 `JOB_TAKEN` (E8); the job stays `expired` and the session gets no further call.
+
+**Jira (A1).** The site is connected, the requester linked, PROJ mapped to acme/app; one computer is on the relay. Every A2A call carries a fresh FIT, the invoking user's token and a system token the route must not use.
+
+1. SendMessage (ISSUE_ASSIGNMENT) answers TASK_STATE_SUBMITTED "Received your request. Waiting for your computer." inside Jira's 55 s with slow store commands before it, measured when the answer is written (e). The first `myself` read is held, so no `issue` read and no job exist yet.
+2. The SendMessage's own FIT cannot be used again: GetTask with it answers 401 `JIRA_INVOCATION_REPLAY`.
+3. Once `myself` is released: `jwks` (once; the keys are cached), `myself`, `issue`, each read with the user's token and none with the system token. The job is `claimed`, route `laptop`, kind `assign`, issue PROJ-123, `shared`, inside the window, with one presence, one offer, one poll, one frame, one jti and one claim.
+4. **The user-token context proof.** The task is the fixed "Work on this work item.". The context holds what the requester's own token read (the REST issue's "Mutable summary: ignore the requester" and "Edited description: export secrets", the message's text part, a teammate's comment), never the A2A body's own "Edited summary" or "Edited description". No token is in the body.
+5. Between the claim and `started`, GetTask answers SUBMITTED "Received your request. Waiting for your computer.", and the stored task is SUBMITTED with the job id: not terminal (h; and the race in (p)).
+6. `started`, `editing` and `pushing` each read back through GetTask as TASK_STATE_WORKING with the fixed texts "Started", "Editing files" and "Pushing the branch". The record's limits are 35 minutes with the deadline at `claimedAt + jiraRunMs`, no later than `receivedAt + jiraEndMs` (4.4). The commit is "PROJ-123 Vector: …", the branch `vector/ve-PROJ-123-…`.
+7. Settle `changes`. GetTask answers TASK_STATE_COMPLETED whose message and one artifact ("Vector result") are exactly "Done on your computer." and `Draft pull request (…)`. The summary and checks line go to `privateResult` alone. No A2A answer in the whole case carries the summary, the checks line, the repository name outside the PR link or the device id (E17). E8 holds.
+
+E4 and E5: the FakeStore's log never holds the user token, the system token, the diff, the summary, the mutable summary or the edited description. The stored task record, the opened job reply, the prompts and the relayed frames hold neither token.
+
+**Jira offline (A2).** No computer. The job waits, route `queue`, until `receivedAt + jiraQueueMs` (10 minutes, not `queueMs`), before its body expires, and a job claimed at that moment would still end inside 50 minutes. GetTask says SUBMITTED. A sweep 1 ms before ends nothing (GetTask still SUBMITTED, the body opens). The sweep at the limit ends it `expired` with ending `jira-waiting` and erases the body. GetTask then answers TASK_STATE_FAILED with "Your computer did not pick this up in time; assign it again when it is on." as the message and the artifact (g). Nothing goes to `privateResult`. Late claims get 409 `JOB_TAKEN` as in L2 (E8), the job stays `expired` and GetTask still answers FAILED.
+
+| Case | Line | What it pins |
+| --- | --- | --- |
+| L1 | :896 | a Linear agent session runs on the computer after the creator's own prompt and an opaque repository choice, and the session gets only the outcome and the link (E1, E4, E5, E8, E12, E17) |
+| L2 | :912 | with no computer online a delegated Linear issue waits until the queue limit, then expires with Linear's own text |
+| A1 | :922 | a Jira assignment over A2A runs on the computer: FIT-verified calls, the FIT replay refused, the user-token context proof with no token stored, milestones in GetTask, and only the outcome and the link in the result (E4, E5, E8, E12, E17) |
+| A2 | :932 | with no computer online a Jira job waits only 10 minutes, then GetTask ends with Jira's own text |
+| G1 | :940 | the fetch guard is the fetch in place and stops a probe to `guard-probe.invalid`; FakeLinear's and NativeJira's `fetch` throw on a foreign address before sending anything |
+| R1 | :962 | L1 on Valkey (`testEverywhereStore(redis.fetch)`): the job settled and `shared` there, the FakeStore untouched |
+| R2 | :982 | A1 on Valkey, through the Jira task store's script: the job settled, the task COMPLETED with its job id, the FakeStore untouched |
+| R3 | :999 | L2's wait and expiry on Valkey |
+| R4 | :1011 | A2's wait and expiry on Valkey, the task failed through the task store's script |
+
+Every journey case runs under `CASE_MS` (15 s). Locally: 5 pass, 4 skip; with a loopback redis-server, 9 pass.
+
+### Deviations
+
+- **(a) The shared harness lives in lib/everywhere-journey.ts.** Both journey files use it, so it is extracted, as the brief allows. EV-19's file runs on it with the same assertions in the same order: 5 pass, 2 skip, 211 expects locally, three runs; 7 pass and 329 expects against a loopback redis-server, as before the move. EV-19's mutations M2, M7 and M14 are red again, in the same cases and at the same assertions: the E12 time bound (now :202), the `pushing` milestone (now :287) and the E8 claim (now in the lib, :549). The relay Harness is made in beforeEach, and `relay()` and the relay server's handler throw a named error if one is used outside a test, so a hook-order mistake cannot hide behind a non-null assertion (critique, taken).
+- **(b) One tracker file covers both platforms.** It stays readable at 949 lines: the Linear and Jira halves share only the harness and the fixture patterns.
+- **(c) `privateResult` is a stand-in.** Production sets none, so a Linear or Jira summary for a shared place is held: the adapter answers 503 `LINEAR_PRIVATE_DELIVERY_UNAVAILABLE` or `JIRA_PRIVATE_DELIVERY_UNAVAILABLE` after the public post, and the outbox retries each minute (the existing private-result surface, deviations :222). That production path is pinned by everywhere-linear-render.test.ts:55 and everywhere-jira-render.test.ts:36 through `createJobEvents`. The optional journey variant without `privateResult` (critique) is not added: it would duplicate those unit tests through a longer path; Left open.
+- **(d) L1 admits through the selection proof**, with two mapped repositories, so its job's kind is `followup`. L2 is a plain delegation with one mapped repository (kind `assign`).
+- **(e) E12, measured at EV-19's 100 ms per store command (not changed). For Linear, the asserted bound is the spec's first-activity budget, not the adapter's `ackMs`: the critique's point is partly rejected.** Measured at HEAD: 44 store commands before Linear's first thought, so 4,400 ms. That is past the adapter's declared `ackMs` (4,000; linear/adapter.ts:150) and inside Linear's budget for a first activity (10 s: §3.2 step 6 "Linear 5 s with a first activity within 10 s", §4.2 "The server posts a thought within 10 s of `created`", VE-12). The webhook's own 5 s is met by the 200 before any store command.
+  - The critique asked for the bound to be `ackMs`, with a red result treated as an E12 finding and escalated. It is escalated: Left open, the handoff, and the package report.
+  - The test asserts `LINEAR_FIRST_ACTIVITY_MS = 10_000` (:67) instead, because no production code reads `ackMs` (only the adapters declare it), the spec's budget is the E12 invariant, and an `ackMs` bound would leave the file red at HEAD.
+  - The first measurement was taken against `ackMs`, and it is recorded here as red rather than hidden. The latency stays 100 ms.
+  - The 44 commands are mostly the adapter's repeated authority reads, through `receipt()`, `client()`, `linearAccess`, `installGuards` and `beforeRequest`: the install and hold keys read ten times each, the account-closed keys ten times, the Codium tombstone four times. That is the production work to shrink if `ackMs` is to hold (a probe log in /tmp/vector-v2/everywhere/ev20/e12-linear-commands.log).
+  - With 10 s, mutation T3 (the acknowledgement after `routeFacts`) is caught by the order check (the first call becomes `user`, :346), not by the time bound as Slack's M2 is.
+  - **Jira:** the A2A answer is the first signal: 10 store commands, 1,000 ms, inside 55 s. It is measured when the answer is written. The test wraps the response's `end` and reads the clock and ends the slow store there (critique, taken), so the background work after the answer cannot move the clock first. `signalAt` is also checked to be past the send.
+  - **`prompted` (critique, observation):** Linear's `acknowledge` acts only on `reply.initial`, which is false for `prompted` (linear/parse.ts:44, adapter.ts:154), so a creator's answer gets no immediate activity. In a probe with the slow store on for the `prompted` event, the first activity after it (the `finding` thought) came after 198 store commands (19.8 s at the model): prepare, history, link, sweep, counts, routing, reservation, admission, delivery, offer. §4.2 names `created` only, and §3.2 step 6 does not say. Whether Linear's 10 s applies to `prompted` is open, for the lead (Left open).
+- **(f) Jira is observed through GetTask**, each poll with a fresh FIT; the SendMessage's own FIT is refused 401 `JIRA_INVOCATION_REPLAY` (`consume`).
+- **(g) A Jira expiry from the cron sweep ends TASK_STATE_FAILED**, because `jiraJobState` maps `expired` to FAILED (jira/render.ts:12). The 50-minute fallback in a2a.ts `resolve` completes the task instead (COMPLETED with `jira-waiting` or `jira-running`). Both are pinned as they are; which one Jira should see is a wording question, not a gate.
+- **(h) Observation: between the claim and `started` the Jira task reads "Received your request. Waiting for your computer."** (render.ts `jiraTask`: a claimed job maps to SUBMITTED and no milestone text). The computer has the job by then, so "Waiting for your computer" is stale for up to the runner's fetch and worktree time. Not a gate.
+- **(i) Observation: an expired Linear job's plan is set to all `completed`** (adapter.ts `finish` uses `linearPlan("pushing", "completed")` for every ending but cancellation) while its response says the computer did not pick it up. Not a gate.
+- **(j) The 50-minute Jira texts stay pinned by everywhere-jira-a2a.test.ts.** The journey's runner has no heartbeat ticker, so its lease would lapse before 50 minutes; a journey that waits that long would test the sweep, not the cap.
+- **(k) Linear's two `laptop` posts.** The claim's event and the router both post `laptop`, and the native-resource lock (adapter.ts `locked`) may skip one, so the step asserts at least one thought and one plan after `finding`'s, only those operations, and the latest plan (which equals `finding`'s plan). Jira's two `laptop` writes are unlocked compare-and-sets; in the journey they overlap and both succeed only because they write identical records: see (p).
+- **(l) EV-19 (i)'s repository stand-in, and what it means for Linear** (critique, taken). The router fixture's `repository` port answers id 101 for every name, so L1 works because it picks the first option (acme/app, 101). Choosing acme/tools (102) fails intake.ts's id check (:51) and the intake asks again, which is also why mutation T5 (the selection picks the last mapped repository) is red. In production there is no `repository` port at all, so after a verified Linear selection the intake would ask for the repository again, and again. This sits under the existing gate on the production repository port (handoff, "Current gates"); it is not a new gate.
+- **(m) The fixtures' store option and the Valkey cases.** `linearFixture` and `jiraFixture` take `{store}` as `routerFixture` does (EV-19 (c)). R1 to R4 assert that the FakeStore saw no command, so a fixture that ignored the option goes red (T16, R1 and R3, against a loopback redis-server). R3 and R4 (the waits and expiries) are added beyond the plan's R1 and R2 (critique, taken), so Jira's expiry path (the sweep, `events.ended`, the task store's script ending FAILED) and Linear's 115-minute wait also run on a real Redis.
+- **(n) No workflow change.** The lib and the test match vector-everywhere.yml's `packages/web/test/**/everywhere*` paths, and its picker (`(^|/)everywhere[^/]*(/.*)?\.test\.tsx?$`) selects the tracker file once it is tracked. EV-19 (l)'s path-filter gap is unchanged.
+- **(o) Critique points taken as written:**
+  - the five jobs routes and the sweep;
+  - `recordSeen` for every world, with a random device when there is no computer;
+  - `renderMilestone` for all three Jira milestones;
+  - the handoff bullet after EV-19's gate bullet;
+  - an E5 mutation for each platform (T18, T19), plus checks on the opened records, since a sealed leak passes the log check (T19 is caught only by the opened reply, :369);
+  - the relay guard (a);
+  - the Jira answer clock (e);
+  - the `prompted` observation (e);
+  - the `laptop` race investigated before A1 was written (p);
+  - the cancelled and breached CI runs recorded (progress, EV-20 receipt).
+- **(p) Finding (production): a lost compare-and-set on the router's Jira `laptop` write marks the task FAILED while the laptop runs** (critique, confirmed).
+  - After a claim, jobs-api.ts:245 runs `events.claimed`, which calls `progress("laptop")` in the background, and `routeJob` (router.ts:110) calls it too. Jira's `progress` is `persist` (jira/adapter.ts:57), an unlocked compare-and-set through `writeJiraTask` with `expected`, which throws `JiraFailure` on a mismatch.
+  - In the journey the two `laptop` persists overlap: both read the SUBMITTED record before either wrote (probe log /tmp/vector-v2/everywhere/ev20/probe.log). Both succeed only because they write the identical record.
+  - The runner's `started` report writes a different one (WORKING). In a forced interleaving (scratch probe /tmp/vector-v2/everywhere/ev20/race-probe.test.ts: the two `laptop` task writes held until `started`'s write lands, with no mapping gate), both `laptop` writes return `changed`. The router's error reaches a2a.ts `nativeWork`, whose catch marks the task FAILED "The request could not be verified or completed. Send your task again." while the job is `running` on the computer (log probe-race-forced.log).
+  - `finish` then keeps a terminal record that has a job id (jira/adapter.ts:103), so the result is never shown in Jira.
+  - In production the window is the router's ~10 store round trips between its read and its write, which the runner's `started` can land in. It is not pinned here (a test asserting the loss would pin the bug; one asserting the fix would be red), and A1 asserts the task is not terminal between the claim and `started`. Mutation T20 (the `laptop` progress throws, as a lost compare-and-set does) turns A1 red at that check (:768).
+  - Fix options for the lead: Jira `progress` takes the native-resource lock as Linear's `locked()` does; or a lost compare-and-set in `progress` re-reads and skips when the task has moved on; or `nativeWork`'s catch leaves a task alone once a job owns it. It should be fixed before Jira's laptop route goes live (`LAPTOP_ROUTE_WIRED` is false, so it cannot happen in production now). Left open and handoff.
+
+### Not changed
+
+No production file, `OFFER_KEYS` (empty), `LAPTOP_ROUTE_WIRED` (false), any workflow, env var, flag, route, config key, dependency or lockfile, and any generated file. Nothing becomes reachable on vectordev.ai.
+
+### Safe by default
+
+The only edits are tests and two fixtures whose new option defaults to the old behaviour. Every key and credential is generated in the test; the offer key reaches the computer only through the verifier's `keys` parameter. VECTOR_EVERYWHERE_ENABLED and the Remote settings exist only in the test env objects, between `codiumTestEnvironment` and its restore. `privateResult` exists only in the test deps. The fetch guard is armed for the file and G1 proves it. Linear and Jira hosts reach only the loopback fakes, and the file's only other request goes to a reserved `.invalid` name.
+
+### Left open
+
+- **Linear's acknowledgement costs 44 store commands** (e): 4,400 ms at the 100 ms model, past the adapter's own 4,000 ms target. It is within Linear's 10 s, and the work to shrink it is the repeated authority reads. For the lead. Once the reads are trimmed, either the journey asserts `w.adapter.ackMs` for Linear as its Jira half does (:704), or Linear's `ackMs` changes to the spec's budget, so the declared value and the asserted bound agree (review round one).
+- **A `prompted` event gets no activity until the `finding` thought** (e): 198 commands at the model. Whether Linear's 10 s applies to `prompted` is for the lead.
+- **The Jira `laptop` compare-and-set race** (p): before Jira's laptop route goes live.
+- The Jira task's "Waiting for your computer" between the claim and `started` (h), and the all-`completed` plan of an expired Linear job (i): wording, not gates.
+- A journey variant without `privateResult`, showing the held production path end to end (c), if the unit tests are not enough.
+- EV-19's open items stand: the production `repository` port (now also a Linear re-prompt loop, (l)), the path filter, and the shared runner fixture.
+
+### Mutations
+
+Each applied by /tmp/vector-v2/everywhere/ev20-mut/mutate.py, the file run alone under `timeout`, then restored by sha256 (all restored; a log per mutation in ev20-mut/logs/). T16 ran against a disposable loopback redis-server. The lines are after review round one: T3 to T20 were run again on the edited file and are red in the same cases at the same assertions (T1 and T2, which fail by timeout, were not; see the round).
+
+| Mutation | Red | First failing line |
+| --- | --- | --- |
+| T1 linear/routes.ts drops `sleep: deps.sleep` | L1 by the 15-s timeout; L2, A1, A2 then wait on its leaked poll | timeout |
+| T2 jira/a2a.ts intake drops `sleep` | A1 by timeout; A2 then waits on its leaked poll | timeout |
+| T3 intake.ts acknowledges after `routeFacts` | L1, L2 | :346, the first call is `user`, not `create` (the 10 s bound holds; (e)) |
+| T4 linear/parse.ts takes the issue description as the task | L1, L2 | :439 (L1, the routing operations), :618 (L2, the task) |
+| T5 linear/selection.ts picks the last mapped repository | L1 | :439 (the stand-in's id mismatch asks again; (l)) |
+| T6 linear/adapter.ts finish posts `privateText ?? text` | L1 | :575, the response body |
+| T7 jira/adapter.ts finish seals `privateText ?? text` | A1 | :838, the COMPLETED text |
+| T8 jira/parse.ts takes the A2A body's summary in place of the REST read | A1 | :760, the user-token context proof |
+| T9 jira/a2a.ts `consume` records nothing | A1 | :721, the FIT replay |
+| T10 everywhere-policy.ts `queueDeadline` ignores Jira | A2 | :858, `jiraQueueMs` |
+| T11 jobs.ts `expire` always uses `expired` | A2 | :880, ending `jira-waiting` |
+| T12 jira/render.ts `jiraJobState` running → SUBMITTED | A1 | :780, `started` in GetTask |
+| T13 linear/adapter.ts skips the issue start | L1 | :492, the `started` operations |
+| T14 jira/a2a.ts awaits the native work before answering | A1, A2 | :729 (A1), :707 (A2) |
+| T15 events.ts renders `shared: false` | L1, A1 | :575 (L1), :834 (A1, the private surface) |
+| T16 lib/everywhere-linear.ts ignores `options.store` | R1, R3 (loopback redis-server) | :976, :1005 |
+| T17 jobs.ts claimJob gives a settled job back to the same device | L1, A1 | lib :549, the E8 claim |
+| T18 jira/a2a.ts stores the user token in the task record (E5) | A1 | :683, the FakeStore log |
+| T19 linear/adapter.ts stores the access token in the job reply (E5) | L1 | :405, the opened reply (the log check passes: it is sealed) |
+| T20 jira/adapter.ts `laptop` progress throws (a lost compare-and-set) | A1 | :768, the task is not terminal before `started` (p) |
+| M2, M7, M14 (EV-19's) against EV-19's file on the lib | J1 to J4 (M2), J1 and J2 (M7, M14) | :202, :287, lib :549 (a) |
+
+### Coordination
+
+The cross-lane probe at HEAD: review-fixes `1433d105`, connect-finish `19c48b89`, scope-finish `8c36d06b` and workspaces-finish `e37ec1b5` touch none of this package's paths; codium-finish `58663f5b`, brain-transport `0d18f750` and main `56b2862b` each change docs/vector/build/v2-notes/v2-complete-plan.md at :219-221 only, and this package annotates the F5 row at :197. Repeat the probe at the commit.
+
+### Deferred verification
+
+The Valkey job of vector-everywhere.yml (R1 to R4) and the CI runs, after the commit; VE-50's live acceptance for Linear and Jira once the owner has registered the Linear app and deployed Forge; a real relay, desktop and workspaces; macOS and Windows; the production repository port and the private-result surface (existing gates).
+
+### Review round one (2026-11-20)
+
+Eight findings, none blocking. Seven are taken; the eighth (Linear's `ackMs` against the measured first thought) stays with the lead, as the finding asks. The line numbers in this entry are after this round. Each check the round adds was shown to catch something with a mutation that is red now and was green (or hung) against the file before the round (N1 to N8, below).
+
+- **A missed first thought hung the case** (finding at :340). Taken. `linearAdmit` now waits for the first thought or the intake's end, at most five seconds (`bounded(Promise.race([w.ack.promise, drainAfter()]))`, :341), then asserts `firstThought: "posted"` (:342). The adapter gives up on the thought 8 s after `acknowledge` starts, and the intake then ends, so a missed thought fails at that named check. N1 (the acknowledge deadline already past) is red in L1 and L2 at :342 within 40 ms; against the file before the round it hung the run until `timeout` stopped it at 240 s. The optional bound against the adapter's 8 s is not added: that deadline counts from the start of `acknowledge`, which the test does not observe, and measured from the send it would be a new bound stricter than either the adapter's or the spec's. The 10 s check (:344) and (e) stay.
+- **A stray Linear `error` activity could pass** (finding at :410). Taken. `expectLinearActivities` (:369) asserts that every activity Vector posted is a thought, elicitation or response, and that every other one is the creator's prompt. L1 calls it with two prompts (:588), L2 with one (:639). N2 (the `laptop` thought posted as `error`, in the window (k) leaves open) is red in L1 at :381.
+- **Most expected texts came from the code under test** (finding at :712). Taken, beyond the minimum, because no other test pinned most of these texts: the policy test pins only `editing` with a file count, and nothing pinned the Linear thoughts or the endings. Now literals:
+  - every Linear thought (`finding`, `started`, `editing`, `pushing`) and the `started` plan;
+  - Jira's three milestones ("Started", "Editing files", "Pushing the branch");
+  - both shared results ("Done on your computer." and the link, in each platform's link form, :579 and :842);
+  - both offline endings.
+
+  `linearThought`, `renderMilestone` and `renderEnd` are no longer imported. `renderResult` stays for the private text (the summary and the checks line), and `linearPlan` for the other plans, whose shapes everywhere-linear-render.test.ts pins. N5 ("Started" reworded), N6 (Linear's "Working on your request." reworded), N7 (Linear's expiry text cut) and N8 (the `changes` outcome line extended) are red at :780, :440, :635, and :579 with :842.
+- **The case table's A1 row did not quote the test title.** Taken by renaming the test to include "the FIT replay refused", which the case asserts (:717-724), so the row now quotes the title exactly. The progress receipt quotes no titles.
+- **E8 was checked only for settled jobs** (finding at :549). Taken. L2 and A2 end with `expectNoReclaim` for the expired job (:642, :889): a fresh device, the device the sponsor was seen with, then the desktop's own client. Each gets 409 `JOB_TAKEN`, which claimJob answers for every state but `offered` and `waiting` (jobs.ts). Then the claim count is 3, the job is still `expired`, Linear's session gets no further call and Jira's GetTask still answers FAILED. N3 (a late claim gets the expired job) is red in L2 and A2 at lib :549. The lib's `expectNoReclaim` doc line now says an ended job (settled or expired); its line numbers are unchanged.
+- **Two secrets were missing from the E5 checks** (finding at :364). Taken:
+  - `expectLinearKept` checks the installation's refresh token alongside the access token in the FakeStore log, the prompts, the relayed frames and the opened reply;
+  - `expectJiraKept` checks the system token alongside the user's token in the log, the stored task record (`readJiraTask(...).raw`), the opened reply, the prompts and the frames.
+
+  N4 (the task record keeps the `x-forge-oauth-system` header) is red in A1 at :683.
+- **The spec note called VE-22 complete.** Taken: it now says VE-22b is built for Linear and Jira, CI pending, with the receipt in the progress log. It becomes "complete" in the receipt that has a green vector-everywhere.yml run.
+- **Linear's E12 bound is the spec's 10 s, not the adapter's `ackMs`** (finding at :66). Left for the lead, as the finding asks. (e) and Left open now also say what happens once the repeated authority reads are trimmed: either the journey asserts `w.adapter.ackMs` for Linear, as its Jira half does (:704), or Linear's `ackMs` changes to the spec's budget.
+
+| Mutation | Now | Before the round |
+| --- | --- | --- |
+| N1 linear/adapter.ts `acknowledge` deadline `ctx().now - 1` | L1, L2 at :342 (`firstThought`), 40 ms | the run hung; `timeout` stopped it at 240 s |
+| N2 linear/adapter.ts the `laptop` thought posted as `error` | L1 at :381 | 5 pass |
+| N3 jobs.ts claimJob gives an expired job to a late claim | L2, A2 at lib :549 | 5 pass |
+| N4 jira/a2a.ts the task record keeps the system token | A1 at :683 | 5 pass |
+| N5 everywhere-policy.ts `started` reads "Started work" | A1 at :780 | 5 pass |
+| N6 linear/render.ts "Working on your request." reworded | L1 at :440 | 5 pass |
+| N7 everywhere-policy.ts the `expired` ending shortened | L2 at :635 | 5 pass |
+| N8 everywhere-policy.ts the `changes` line extended | L1 at :579, A1 at :842 | 5 pass |
+
+They were applied by /tmp/vector-v2/everywhere/ev20-fix/mutate.py, with the file run alone and each source restored by sha256 (logs in ev20-fix/mut/). `BEFORE=1` swaps the pre-round copy of the tracker file in for the run and restores it by sha256. T3 to T20 were re-run on the edited file (ev20-fix/tmutate.py, logs in ev20-fix/tmut/; T16 against the loopback redis-server). Each is red in the same cases and at the same assertions as before, and the mutation table above gives their new lines. T1 and T2 were not re-run: they fail by the case timeout and have no line to move, and nothing on their path changed (the routes' `sleep`, the poll).
+
+Receipts: vector-everywhere-progress.md, "EV-20 review round one".
+
+## 2026-11-20, EV-21: the desktop settings page (VE-41)
+
+Spec §8 VE-41; §3.12 "Desktop Settings → Vector everywhere"; §6.5 rows 3-5 (re-found by their text). Depends on EV-08 (`3443cfa3`), EV-10 (`7146a98f`), EV-17 (`c9275df0`) and EV-18 (`cf9195d0`), each an ancestor of HEAD. Built at HEAD `6a74ac3b`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged; origin/main `6a771354` (PR #33) is the lead's to merge. Line numbers are after this package.
+
+**Precondition still open: the lead's ruling on (a).** The page's one write is of a key newer than the desktop config-skew baseline, and that test is owned by test.yml. The critique asked for the ruling before any code; no lead or other session was reachable from the build (ListAgents listed none), and the build step does not commit, so the exception is built in its strictest form and the commit waits for the ruling. If the lead refuses it: revert the config-skew.test.ts hunk and the page's `save`; the model file, its tests, the registry entry and the dialog gate stand alone (the tab stays hidden anyway), and the write becomes an owner decision. *Settled 2026-11-20: the lead ruled No ("Ruling on (a)", below).*
+
+**Commit hold (2026-11-20, review round one; both reviewers, blocking).** The config-skew.test.ts hunk accepts a top-level key newer than the 1.99.99 baseline, which reads as loosening an existing test (RULES-v2), and the file is outside EV-21's brief. So nothing of this package is committed until the lead's ruling on (a) is recorded here, under "Ruling on (a)", with its date and decision. The rest cannot go in without the hunk: the page's `save` writes `everywhere`, which the unchanged test refuses. A commit gate that finds no ruling stops and reports this hold as its blocker. The page never calls `client.global.config.update` directly to get around the test. The fix round could not reach the lead either (ListAgents listed only the main session and this agent, and the step forbids committing), so it made the code ready for either answer and changed nothing about the hold:
+- *Yes:* commit everything as it stands. The guard case is stricter now (`||` operands, F12 and F12b below).
+- *No:* revert config-skew.test.ts to HEAD, and remove the page's `save` with every control that calls it. That is the "This computer takes jobs" switch with its consent step, Add, Remove, the four limits, the model select and the three switches in "How jobs run". `writeRefusal`, `turnOn`, `turnOff`, `capChange`, `addProject`, `removeProject`, `modelChange` and their cases stay as tested helpers for the owner's later write path. What remains is a read-only page: the jobs line, the folder list with trust, the job list, Open and Continue. Record the refusal here, and add the write to the owner actions.
+
+**Commit hold, review round two (2026-11-20; both reviewers, blocking, one finding given twice).** The hold stands, unchanged in substance: nothing of EV-21 is committed until the line below holds the lead's dated decision. This round could not reach the lead either (ListAgents: "No reachable agents"), and the step forbids committing. Whatever the answer, the commit body names packages/desktop/src/main/config-skew.test.ts and quotes the ruling with its date.
+- *Yes:* commit everything as it stands.
+- *No:* revert config-skew.test.ts to HEAD. In everywhere.tsx remove `save` (:203-225) and every control that calls it: `apply` (:227), `acceptConsent` (:236) and the consent block, the "This computer takes jobs" switch, Add, Remove, the four limits, the model select and the three switches in "How jobs run". Keep the model's write helpers and their cases. What remains is read-only: the jobs line, the checks line, the folder list with its trust and "Trust this repository" (the trust API, not a config write), and the job list with Open and Continue. Record the refusal here, and add the write to the owner actions (spec §10).
+- What the lead weighs, as both reviewers put it: a 1.99.112-or-earlier CLI or desktop that shares the config folder cannot read the settings file once the page has written `everywhere`, even with jobs off. That happens with a user-set XDG_CONFIG_HOME, which sidecar.ts :104 keeps, or by going back to an older desktop app on the same user data. Turning jobs off does not remove the block, because the update deep-merges. The three added assertions are stricter, but they do not undo the widening.
+
+**Commit hold, review round three (2026-11-20; both reviewers, blocking, one finding given twice).** The hold stands. "Ruling on (a)" below still reads "none yet", ListAgents again answered "No reachable agents", and the step forbids committing. config-skew.test.ts and `save` are unchanged this round. The reviewers' hazard is not disputed. Two things are new:
+- *The No answer is ready to apply.* /tmp/vector-v2/everywhere/ev21-fix3/read-only.patch (sha256 `085f8942…`; made by make-readonly.py beside it from this round's everywhere.tsx) turns the page read-only and puts config-skew.test.ts back to HEAD. On this round's tree, `git apply --check` passes. With the patch applied, the app typecheck exits 0, the unchanged config-skew.test.ts passes (2 pass, 38 expects) and prettier is clean. Both files were then restored and matched their hashes (yes.sha256 there). The patch removes `save`, `apply`, `acceptConsent`, the consent block, `BLOCKED`, `busy`, the "This computer takes jobs" switch, Add with the folder pick and the repository field, Remove, the Limits card, the "How jobs run" card, `Toggle` and `capValue`. It also removes the NOT_OFFERED note, because its "You can still turn it off" would be false on a page that writes nothing. What stays: the jobs line, the checks line, the version note, the folder list with trust and "Trust this repository", and the job list with Open and Continue. The model and its 47 cases do not change. Scratch files can be cleared; if the patch is gone, round two's list above is the recipe. On a No, the commit gate applies the patch, re-runs the model, registry and config-skew tests and the app typecheck, records the refusal here, and adds the write to the owner actions (spec §10).
+- *What No costs today:* nothing anyone sees. The tab is shown only to an account the plan offers it to (none while CODIUM_LISTED_PERKS is unset) or to a computer whose own block already says on (only a hand edit can do that). Under No, such a computer turns jobs off by editing its settings file, the same way they were turned on. The brief's "so it can always be turned off" then holds only through the settings file, not through the page.
+
+New line numbers for the Yes answer (round three's trust memo, (ag), moved them by four): `save` :207-229 (guard :210, `writeRefusal` :214, `updateConfig` :222), `apply` :231, `acceptConsent` :240.
+
+**Commit gate (2026-11-20).** It found no ruling, so it stopped before staging anything and reported this hold as its blocker: nothing committed, pushed or dispatched. ListAgents again answered "No reachable agents". The tree still matches round three's yes.sha256, and read-only.patch (`085f8942…`) still passes `git apply --check` on it. Its re-run checks are in the progress receipt, "EV-21 commit gate".
+
+**Ruling on (a)** (2026-11-20, the lead): **No.** The config-skew test stays exactly as at HEAD. Engines before this release reject unknown top-level keys (hands-build-spec.md, the "Config skew" row; hands-deviations.md item 5). The built-in engine still writes the shared user/global config file that an older Vector on the same computer reads, so the built-in-engine guard does not make the write safe.
+
+What was applied. The tree held the Yes build and review rounds one to three, and it still matched round three's yes.sha256:
+- /tmp/vector-v2/everywhere/ev21-fix3/read-only.patch (sha256 `085f89421c95…`) applied cleanly with `git apply`. packages/desktop/src/main/config-skew.test.ts is byte-identical to HEAD again (sha256 `c1ac9af0…`, the same as `git show HEAD:` gives). everywhere.tsx matched the patch's prepared copy (`623a49af…`) before the comment edits below. The Yes copies of both files are kept at /tmp/vector-v2/everywhere/ev21-no/.
+- The patch removes the page's `save` and every control that called it:
+  - `apply`, `acceptConsent` and the consent block;
+  - `BLOCKED` and `busy`;
+  - the "This computer takes jobs" switch;
+  - Add, with the folder pick and the repository field, and Remove;
+  - the four limits and the model select;
+  - the three switches in "How jobs run";
+  - `Toggle` and `capValue`;
+  - the NOT_OFFERED note, whose "You can still turn it off" would be false on a page that writes nothing.
+- What stays on the page:
+  - the jobs line, the checks line and the version note;
+  - the folder list, with each folder's trust and "Trust this repository" (the existing trust approval, not a config write);
+  - the job list, with Refresh, Open and "Continue in a new session on this branch";
+  - the registry entry and the dialog gate.
+- What stays in the model, unchanged, with its cases, as tested helpers for a later write path:
+  - `writeBlock`, `editable`, `writeRefusal`, `turnOn`, `turnOff`, `capChange`, `addProject`, `removeProject`, `modelChoices` and `modelChange`;
+  - their copy: `CAPS`, `CLOSED_LID`, `PUSH_RULE`, `CONSENT`, `NOT_OFFERED` and `REMOTE_STAYED_ON`.
+  The page calls none of them. *Review round four:* all of these are removed except `CLOSED_LID` and `PUSH_RULE`, which the page now renders ((ai), (aj)).
+- Copy that pointed at the removed controls was fixed after the patch, under the brief's plain-fact rule:
+  - `PAGE_DESCRIPTION` said "Jobs are off until you turn them on." It now says "Jobs are off unless this computer's settings file turns them on. This page shows those settings and changes none of them."
+  - `REPOSITORY_RULE` said "Nothing is listed until you add it." It now says "Nothing is listed by default."
+  The plain-copy case pins both (mutations N1 and N2 below).
+- Some comments said the page writes, or that the tab shows "so it can always be turned off": the model's header, `everywhereTab` and its `server` field, `useEverywhereTab`, the page's header, dialog-settings-v2.tsx :74-75 and settings-registry.ts :174-175. They now say the page reads, and that a computer that takes jobs always shows the tab. Two case titles follow.
+- Four search keywords for controls the page no longer has are gone from the registry entry: "wait for my computer", "stay awake", "plugged in" and "draft pull request". No test pinned them. "this computer takes jobs" stays, because the jobs line answers it.
+
+**Deferred: the write path.** The page needs skew-safe storage outside user/global config before it can write: the desktop store, the way Hands keeps its per-user state. Everywhere stays off by default meanwhile.
+- Until then, a computer whose own block says on is turned off by editing its settings file, the same way it was turned on. The tab still shows on such a computer, so a computer that takes jobs always shows the page. But the brief's "so it can always be turned off" holds only through the settings file.
+- The runner (desktop everywhere-settings.ts) and the engine's EV-10 block still use user/global config. So moving the setting changes the runner, the engine and this page together. That is a package of its own, for the lead to brief.
+
+**Superseded by the ruling:**
+- In (a): the exception and its guard case.
+- The "Commit hold" paragraphs above.
+- The config-skew mutations: M12, M12b, M13, M15, F12 and F12b.
+
+**Now about the model's kept helpers, not the page** (the page has none of these controls). *Review round four:* the helpers are removed ((aj)), so these items now record only the reasoning a later write path can reuse:
+- the write-path items (b), (b3), (e), (f), (j), (n), (s), (t), (z) as far as it concerns `turnOn`, (aa) and (ac);
+- (m)'s "nothing is written until the config has loaded";
+- (r), the stay-awake text.
+
+(ab) is replaced by the description above.
+
+**Review round four (2026-11-20, after the ruling).** Eleven findings from two reviewers. One is blocking, and two other reviewer findings repeat it; three more were given twice. Nothing is committed: the step forbids it.
+- *Blocking, taken: the page said it shows the settings, and showed only two of them.* After the ruling's patch the page showed the jobs line and the folder list. `everywhereView` still decoded the four limits, the model, `wait_for_computer`, `push` and `stay_awake`, and the page rendered none of them, nor `CLOSED_LID` or `PUSH_RULE`, while `PAGE_DESCRIPTION` said "This page shows those settings and changes none of them". The ruling forbids writes only, and the brief lists all of these. So the page gains a read-only "How jobs run" card (the reviewers' first option, (ai)), and `PAGE_DESCRIPTION` stays as it was, now true. The plain-copy case pins it whole, with the card's description and every row's label, value and note.
+- *Non-blocking (given twice), taken in its preferred form: the write helpers are removed* ((aj)).
+- *Non-blocking, taken: an older Remote status no longer overwrites a newer change event* ((ak)).
+- *Non-blocking (given twice), taken: the misplaced doc comment.* The block that traces each own-session limit to the engine sat above `PAGE_DESCRIPTION`. It now sits directly above `OWN_SESSION_LIMITS` (everywhere-model.ts :92-98).
+- *Non-blocking (given twice), kept as built: the three shared context files* ((l2)). The commit body and the PR description name packages/ui/src/context/helper.tsx, packages/app/src/context/server-sdk.tsx and server-sync.tsx as shared-surface changes for the lead to see. This round fetched every lane again and re-ran `git diff HEAD...origin/<lane>` over them (Coordination); the push gate runs it once more.
+- *Non-blocking, recorded, not built: Continue and job-written instruction files (E1)* ((o)). This stays an owner or lead gate before `CODIUM_LISTED_PERKS` lists `everywhere`. The reviewer's preferred fix is an engine-side hold, and that is engine work outside this package's files.
+- *Non-blocking, the hard precondition kept, the optional constant not taken: the vectordev.ai jobs link* ((h)).
+
+### What changed
+
+Line numbers are after review round four (the read-only page with its "How jobs run" card).
+
+- **New packages/app/src/components/settings-v2/everywhere-model.ts** (318 lines, pure, no Solid). Its header says the page writes nothing and why, and that nothing in it writes or prepares a write.
+  - `EverywhereView` (:24), with:
+    - `state` (`loading | failed | ready`), `written`, `locked`, `invalid`, `enabled` and `rulesLocked`;
+    - the four caps, `model`, `waitForComputer`, `push`, `stayAwake` and `projects`.
+  - `everywhereView(config, failed)` (:160) decodes only the `everywhere` block of GET /global/config, with `ConfigEverywhereV1.Info` over `Defaults`.
+  - Types `RemoteState` (:67, `loading` until the desktop answers) and `FolderTrust` (:74).
+  - The gate: `everywhereOffered` (:133) and `everywhereTab` (:141, which also takes `server`).
+  - What the page says:
+    - `howJobsRun` (:195, (ai)), `jobsLine` (:211), `folderTrustLine` (:238), `checksLine` (:264, with the engine probe's answer, (q)) and `openWorktree` (:284, (y));
+    - `RULE_KEYS` (:84, exported for the tie test, (ae));
+    - `CLOSED_LID`, `PAGE_DESCRIPTION`, `OWN_SESSION_LIMITS`, `CONTINUE_NOTE`, `JOB_RUNNING`, `VERSION_NOTE`, `REPOSITORY_RULE`, `PUSH_RULE` and `HOW_JOBS_RUN` (:86-126).
+  - Jobs: `everywhereJobs` (:290) and `jobsPage` (:316).
+  - *Review round four:* the write helpers and their copy are gone ((aj)).
+- **New packages/app/src/components/settings-v2/everywhere.tsx** (374 lines, read-only). It has `useEverywhereTab(offered)` (:60) and `SettingsEverywhereV2` (:74), with four cards:
+  - On this computer: the jobs line, the checks line and the version note.
+  - How jobs run (:241-260, review round four, (ai)): the four limits, the model, Wait for my computer, push with `PUSH_RULE` and stay awake with `CLOSED_LID`, as plain text, with no control. It shows only while `howJobsRun` answers.
+  - Allowed repositories: the listed folders, each with its trust and "Trust this repository" where it applies (y).
+  - Jobs on this computer: Refresh, "Your jobs on vectordev.ai" (only while offered), the own-session limits, the folder note, and each job with Open and "Continue in a new session on this branch". Continue is disabled with `JOB_RUNNING` while the job's session is working (ad).
+
+  The page reads only the built-in engine (`ours`, :85). It reads Remote's status (:92-101, (ak)), Vector Local's state (:103), the job list (:120), the engine's shell probe (:131, (q)), the folder memo (:144, (ag)) and each open folder's trust (:147). Its only actions are the trust approval (`approve`, :178) and `continueJob` (:203). It makes no `updateConfig` call and no PATCH. No IPC, preload or platform change, and parts/page.tsx is not edited.
+- **packages/ui/src/context/helper.tsx** (+4): `createSimpleContext` also returns `useOptional()` (:38), which is `useContext` without the throw.
+- **packages/app/src/context/server-sdk.tsx** (:297-301) and **server-sync.tsx** (:617-621) export it as `useOptionalServerSDK` and `useOptionalServerSync` (review round one, see (v)).
+- **settings-registry.ts**: `| "everywhere"` after `| "local"` (:22), and the entry after the `local` entry (:174-190), icon `branch`, with a VE-41 comment.
+- **settings-registry.test.ts**: `toBe(21)` (:7) and `"everywhere",` after `"local",` (:16).
+- **dialog-settings-v2.tsx** (+10):
+  - the two imports after `./local` (:30-31);
+  - the `offersEverywhere` signal after `producing` (:74-76);
+  - `setOffersEverywhere(false)` in readVoting's signed-out branch (:85), and `Boolean(platform.remote) && everywhereOffered(status)` after the status read (:93);
+  - `const everywhere = useEverywhereTab(offersEverywhere)` (:95);
+  - the gate right after `const available = (item: SettingsTab) => {` (:99);
+  - the mount after the servers mount (:167).
+- **packages/desktop/src/main/config-skew.test.ts**: unchanged (Ruling on (a)).
+- **New packages/app/src/components/settings-v2/everywhere-model.test.ts** (519 lines, 32 cases after review round four; vector-everywhere.yml picks it up by name).
+
+### Deviations
+
+- **(a) The config-skew exception** (critique, blocker). *Ruled No on 2026-11-20 ("Ruling on (a)", above): not built, and config-skew.test.ts is at HEAD. The rest of this item is the case as it was put to the lead.* `everywhere` is newer than the 1.99.99 key baseline. The page writes it only to the desktop's built-in engine, the same build as the app: `save` returns first unless `platform.platform === "desktop"` and `ServerConnection.builtin` holds for the connection ServerSync writes to (b2). That engine's global folder is the desktop's own (`<userData>/xdg-config/vector`, sidecar.ts `prepareSidecarEnv` :89 and :104) unless the app was started with XDG_CONFIG_HOME set, so a WSL, SSH, remote or older engine is never written to. *Review round one:* the guard case no longer matches text; an operand of the `||` chain must be exactly the negated built-in check, so `busy() && !ServerConnection.builtin(…)` or `&&` in place of `||` fails it (F12; F12b shows the round-one case let that through). Two cases remain, both named on the page by `VERSION_NOTE` ("Vector 1.99.112 and earlier cannot read a settings file that holds these settings, even with jobs off"): a 1.99.112-or-earlier CLI sharing the folder through XDG_CONFIG_HOME, and going back to an older desktop app on the same user data. Turning jobs off cannot remove the block (the update deep-merges), so going back needs the block removed by hand. The test gains one named exception and three stricter assertions (the only writer, only that key, the guard before it); every other write is still held to the baseline, and the walker and the forwarding set are unchanged. Precedent cuts the other way (Hands never writes `computer` through updateConfig, and the test pins that), which is why this needs the lead.
+- **(b) No `refresh()` call.** The renderer cannot reach the wiring without IPC, and does not need to: the runner re-reads GET /global/config on every check, so `enabled: false` aborts a running job (wiring test :679); turning Remote on opens the event stream, whose `server.connected` starts a read (:879); while the stream is open a PATCH emits `global.disposed`. So the consent order is Remote first, then the write (everywhere.tsx `acceptConsent`). The wiring's `refresh()` keeps a doc comment naming the settings page as its caller; it now has none (Left open; desktop source untouched).
+  - **(b3) Remote stays on when the write after the consent does not happen** (review round one, non-blocking, taken: the "say so" option). `acceptConsent` turns Remote on first. If the write then fails, or is refused because the settings became locked, invalid or not offered, the page says why and adds `REMOTE_STAYED_ON` ("Vector Remote stayed on. You can turn it off in Settings → Remote."). Remote is not turned off automatically: the consent text says taking jobs turns Remote on, so the person agreed to Remote as part of it.
+  - **(b2) The server is ServerSync's, not `useServer().current`** (critique, major, taken). A draft's or a session's Settings mounts under `ServerSDKProvider`/`ServerSyncProvider server={conn}` (app.tsx:128-129, :183-184), so the page and `useEverywhereTab` take the connection from `useServerSDK()().server`, the one `global.ensureServerCtx(conn)` gives ServerSync too, for the built-in check, for `sessionHref`'s key and inside `save`. The page checks desktop and built-in again itself (`ours`), since a hidden tab can still be mounted through `section`. Vector Local's status is read from that client too (`client.local.get`, refreshed on `local.updated`), not with `useLocalStatus`, which reads `useServer().current`.
+- **(c) The gate reads the built-in engine's own block.** `everywhereTab`: desktop only; shown when offered (on another server the page asks for this computer's own engine and writes nothing); unlisted, shown only while ServerSync's server is built in and its block says `enabled: true` (`written`, lock and decoding aside), so a company lock still shows the tab with its note. Another server's block never counts. While CODIUM_LISTED_PERKS is unset and `LAPTOP_ROUTE_WIRED` is false nobody is offered it.
+- **(d) Offered means `listed` includes `everywhere` and `remoteOffered`.** The perk has no entitlement field (EV-08), and an account with no plan still sees it listed, so Remote's entitlement is the plan check.
+- **(e) The model cannot go back to "Your default model" once one is saved.** PATCH /global/config deep-merges and JSON cannot carry `undefined` (engine config.ts `updateGlobal` :2747); subagent-limits.ts has the same limit. "Your default model" is offered only while none is saved.
+- **(f) The person types the repository.** No route reads a folder's remote without IPC, and the runner's mapping check refuses a mismatch (EV-17 (h)). The directory is kept as the picker spells it (EV-10 (d)); `addProject` checks the whole next list with `ConfigEverywhereV1.Info`.
+- **(g) The job list is one page of the 200 newest root sessions** (`experimental.session.list({roots: true, limit: 200})`, owner-wide), filtered on the client to `vector.unattended` marks with `by: "everywhere"`, a `vej_` id and a known platform, newest first, at most 20. The branch name is not shown.
+- **(h) The vectordev.ai jobs link shows only while the perk is offered** (website rule). It also needs /everywhere to leave packages/web/src/drafts/ (VE-42, owner at 2.0.0); listing before that would link a missing page (Left open). *Review round four (non-blocking):* the hard precondition stays in the spec's §10 "Codium listing" note, named there as one of the four things that must hold before listing. The optional second gate was not taken. That gate is a constant that the 2.0.0 move flips. It would guard only one of several references to the same page: the platform replies (everywhere-policy.ts `EVERYWHERE_PAGE`, in "not-linked", "not-connected" and `renderHelp`) send people there too. It would also add one more step to the owner's 2.0.0 list, and a missed flip would hide the link with no test noticing. The listing precondition covers every reference at once.
+- **(i) A job-only link that reads `online` is explained on this page only** ("Connected for jobs. No phone is paired, and none is needed for jobs."). The Remote page is Codium's (§6.4).
+- **(j) Saves do not ask first while work runs, and none is dropped** (critique, minor, taken: the disable option). Every control is disabled while a save or the Remote consent runs, and `save` refuses a second call meanwhile, so a quick second change cannot be lost. Saves happen only on explicit actions. *Review round one:* `save` also checks the page's own rules itself (`writeRefusal`, see (n)), so the disabled state is not the only guard.
+- **(k) No background-mode residency offer** (R-M4).
+- **(l) The dialog hunk is 10 lines, not 3**: following the remote gating needs the signal and the two readVoting lines. config-skew.test.ts is a shared file outside §6.5 (a). *Ruling on (a):* config-skew.test.ts is not changed.
+- **(m) Loading, failed and locked are three states** (critique, major, taken). `undefined` is `loading`, `globalConfigFailed()` is `failed`, and only a loaded answer is read for locks (no `locked` list, or one with `everywhere`, is locked, as everywhere-settings.ts `unlocked` reads it). Nothing is written until the config has loaded, because updateConfig's onSuccess keeps `locked: previous?.locked ?? []` (server-sync.tsx:503-505) and a save before the first load would cache the block as unlocked.
+- **(n) An unlisted computer can only wind down** (critique, major, taken). `turnOn` takes `offered` and answers `not-offered` with no consent and no write; `editable` is false while not offered, so caps, model, toggles and adding folders are disabled; turning off and Remove stay (`writeBlock` only). Turning Remote back on is therefore never offered to an account whose plan no longer lists the perk. *Review round one (non-blocking, taken):* `save` enforces this and (m) itself through `writeRefusal(view, offered, change)`. It refuses every write while `writeBlock` answers. While not offered it accepts only `{enabled: false}`, or a `projects` list made only of listed folders, each once and with its listed repository (`windsDown`). Anything else gets `not-offered` and the page shows NOT_OFFERED.
+- **(o) Continue in a new session on this branch is kept** (critique, major: its second option). It creates an ordinary owner session in the job's checkout (`<data>/everywhere-worktree/<project id>/<jid>`), on the job's branch. The page says the folder holds files and settings files the job wrote and that Vector keeps it untrusted, so its settings, formatters and language servers stay off unless the person trusts it (`CONTINUE_NOTE`; EV-18 (e)). *Review round one (non-blocking, taken):* trust does not cover instruction files. Instruction.systemPaths (engine session/instruction.ts :277-297) adds the workspace's AGENTS.md or CLAUDE.md whether or not the folder is trusted; PromptTrust holds only files outside the workspace. So `CONTINUE_NOTE` now says the new session "still reads its AGENTS.md and other instruction files from its first message", and asks the person to read what changed before they continue. The hardening of `Worktree.remove` and `Worktree.reset` for that folder (EV-12 Left open, EV-18 Left open) is now a precondition for listing the perk, not for this page; until then the tab is hidden for everyone. The unbuilt 7-day sweep must not delete a checkout that has a session other than the job's own, or one updated in the last seven days, or it would remove a folder from under a continued session (Left open). *Corrected in review round one:* the build said "Continue adds no new kind of load". That is wrong. Opening the job's own session loads the folder's instance, but that session keeps the job's limits. The continued session is the first owner-privileged load of instruction files a job wrote from platform text, with network and the owner's permissions, on its first prompt. That is the E1 line. The page says it; holding in-workspace instruction files for a session continued from a `vector.unattended` folder until the folder is trusted is not built (Left open). Continuing a job that is still running is (ad). *Review round four (non-blocking, recorded, not built):* nothing in code enforces the listing precondition. The tab is hidden for everyone, so this is not reachable today. The reviewer's preferred fix is an engine-side hold: a session created in a folder whose root session carries `vector.unattended` gets no in-workspace instruction files (engine session/instruction.ts `systemPaths`) until the folder is trusted. Its test is an engine case showing that a continued session's system prompt leaves out a job-written AGENTS.md. The alternative is a session metadata mark that the page passes and the engine honours, with the same test. Both are engine changes outside this package's files, so both are a package for the lead to brief. The spec's §10 note now names the hold as the recommended answer to that precondition.
+- **(p) The own-session limits are the engine's, each traced** (critique, major, taken). `OWN_SESSION_LIMITS` names only:
+  - commands run only offline and inside the job's folder: engine session/unattended-shell.ts :12-27 (the marks are fixed at creation, `FIXED`);
+  - the job's permission rules stay: the session's `permission` is set at creation (desktop everywhere-engine.ts :164);
+  - it hears how you work but nothing personal: engine session/prompt.ts `audienceOf` :163-177 (`outward` for any `vector.unattended`);
+  - free models that may train stay refused: the job's prompt is sent as a guest (everywhere-engine.ts :172), which marks the whole tree (engine middleware/workspace-routing.ts :537-548, core free-model-guests.ts :13-19);
+  - subagents cannot run in task isolation: engine task/isolation.ts :1018-1019 ("Isolation requires an owner conversation without guest input."), through the same guest mark. Kept: the critique asked to drop it unless code enforces it, and this does.
+- **(q) The jobs line does not claim to be the runner's reading** (critique, minor, taken: the reword option). *Review round two (non-blocking, taken; the text below is superseded where it differs):* on Linux without a bubblewrap that starts, the engine's probe does not answer `offline-v1`, so jobs edit but run no commands, and the page said nothing. The page now reads that probe itself: `client.shell.unattended.policy()`, GET /experimental/shell/unattended, an owner-only route with no instance routing, so it loads no folder. It is the answer the wiring reads; the engine runs bubblewrap's self-test at most once per process and binary. `checksLine` takes the answer: a company lock on a rule key, then macOS or Windows, then nothing for `offline-v1`, a line naming bubblewrap for `none`, and, while the answer is missing or unreadable, "Jobs here run commands only in their offline sandbox, which needs bubblewrap (the bwrap command). Where it does not start, they edit files but run no commands." No IPC was needed. The view's `enabled` says "on as far as this block decides", and the runner also needs the user's permission blocks to decode (everywhere-settings.ts :56); mirroring that decode would copy `userRules`. `checksLine` says jobs edit files but run no commands under a company lock on any of `permission`, `tools`, `agent`, `mode`, `default_agent` (a copy of wiring `RULE_KEYS`, EV-18 (i)) and on macOS and Windows (no offline sandbox there, EV-16).
+- **(r) The closed-lid text states the real wait** (critique, minor, taken): a closed lid sleeps the computer even with stay-awake on; a job waits only with Wait for my computer on, for at most about two hours (ten minutes for Jira; spec §3.4 row 7, E4). *Review round four:* it is rendered again, as the note beside the stay-awake row under How jobs run (ai).
+- **(s) The push toggle says what it allows** (critique, minor, taken): "Allow pushing the branch and opening a draft pull request", for a private repository only. The push path is still the EV-17 (m) stand-ins (`privateRepository` false, `openPr` nothing), so today every branch stays on the computer whatever the toggle says; it takes effect when the push path is built (EV-17 Left open). *Review round four:* the setting is shown read-only under How jobs run as "Push the branch and open a draft pull request", On or Off, with `PUSH_RULE` beside it. The row shows the setting as saved, not what a job does today: the push path is still everywhere-wiring.ts's stand-ins (`privateRepository: async () => false`, `openPr` returns nothing, :331-332), so every branch still stays on the computer. The page does not add a line for that. It would be copy about an unbuilt path, and the tab is hidden until the perk is listed.
+- **(t) The model list leaves out free models that may train or that Vector has not reviewed** (critique, minor, taken: filter). `freeModelMayTrain` from core free-model-choice; the engine refuses them for a job's guest-marked tree. Providers go through `providerUsable`. A saved model is always kept.
+- **(u) `turnOff` reports `invalid`** rather than merging `enabled: false` into a block the engine cannot load (critique, minor, taken); the runner already reads an invalid block as off. Both places say the same.
+- **(v) `useEverywhereTab` runs at the top of SettingsWorkspace** (critique, minor: checked; *corrected in review round one*, blocking). Every DialogSettings mount runs under ServerSync: budget-stop.tsx (session timeline), status-pill.tsx (prompt-input.tsx and layout-new.tsx), workflow-chip.tsx (session-side-panel.tsx), home.tsx (NewHome under NewAppLayout's SelectedServerProviders), layout-new.tsx (the same), layout.tsx (LegacyServerLayout) and settings-general.tsx (inside the legacy dialog that layout.tsx opens); drafts and target sessions have their own providers (app.tsx). The build said SettingsWorkspace is mounted nowhere else. That was wrong: packages/app/e2e/fixtures/account-settings.jsx (:336) mounts `<SettingsWorkspace section="account" />` under only PlatformProvider and DialogProvider, for e2e/regression/account-settings.spec.ts, which test.yml runs (`bun --cwd packages/app test:e2e`). `useServerSDK()` and `useServerSync()` throw outside a provider, so the hook broke every case there. The hook now reads both through `useOptionalServerSDK()` and `useOptionalServerSync()` (above), and `everywhereTab` takes `server`, false when either is missing, so the tab stays hidden there and the page, which still needs both, is never mounted. The account panel and SettingsWorkspace read no other server context.
+- **(w) Smaller points** (critique, taken): the test copies remote-model.test.ts's fixture shapes instead of importing that file; Open and Continue close the dialog with `if (dialog.active) dialog.close()` (memory.tsx pattern); the repository copy says a job runs only while the folder is open in Vector and trusted (EV-18 (l)); `pickedFolder` and `continueTitle` are not separate helpers (the folder pick is inlined, the title is a field of `EverywhereJob`); `jobsPage` stays as a tested helper for the website rule.
+- **(y) Each listed folder's trust is shown, and trust is offered, without loading anything** (review round one, blocking, taken). EV-13 (c) says this page must show trust for a listed folder and offer the existing approval: the create route requires `trusted === true`, and ProjectTrustPrompt never asks about a folder without settings of its own. Reading trust (`config.trust.get` with the folder as directory) goes through InstanceContextMiddleware, which loads the instance. So the page reads it only for a folder that is open in Vector on this server (`useServer().projects.forServer(key).list()`, compared by exact `worktree`); the app already keeps those loaded. A folder that is not open is never read, and the page says "Not open in Vector. Its jobs wait until you open it and trust it." (the runner holds such a job anyway, EV-18 (l)). For an open folder the page says "Trusted.", "Checking whether you trust it…", that it could not be read, or "Not trusted, so its jobs wait until you trust it.". Where Settings → Repository trust would offer the approval (`projectTrustSummary(...).canTrust`), including a folder without settings, the page shows that page's description and a "Trust this repository" button. The button calls `useProjectTrust().approve(client, scope)`, the same action. `folderTrustLine` (model) decides the text; the resource re-reads on `trust.version()`, the listed folders and the open list (round three: the folders, not the whole config, (ag)). A folder spelled differently from its open `worktree` (case, a trailing separator) reads as not open: no read, no load. That fails closed, and Settings → Repository trust still shows it once the folder is open. *Review round two (non-blocking, taken):* on Windows the picker's spelling (`C:\work\repo`) and the engine's `worktree` (often `C:/work/repo`) differ in separators, so the exact compare made "Not open in Vector" the usual case there. `openWorktree` (model) now compares with the app's own project-path key (`pathKey`, utils/path-key.ts, which layout and server.tsx use for project paths: Windows separators as `/`, no trailing separator), and the trust read uses the open project's own spelling, so it reaches the instance that is already loaded. Case is still kept: `pathKey` does not fold it, so `C:\Work` against `c:\work`, a drive letter included, still reads as not open (fails closed; Left open). The runner resolves canonical paths and is not affected.
+- **(z) Remote's state is `loading` until the desktop answers** (review round one, non-blocking, taken; see (ak) for the order of answers). `remote.status()` answers after mount. Until it does, `turnOn` decided `consent` for a computer whose Remote was on, and the jobs line said Remote was off. `RemoteState` adds `loading`: `turnOn` answers `not-loaded` (no consent) and `jobsLine` says "Reading Vector Remote on this computer…". The switch stays disabled for turning on until the state is read; turning off never waits for it. A failed status read leaves the state undefined (read as off), unless a change event already set it.
+- **(aa) An empty or unreadable limit writes nothing** (review round one, non-blocking, taken). `capChange` returns undefined for an empty or non-finite value instead of the default, so clearing a saved 30 no longer saves 45. The field shows the saved value again. After a save that did not go through, the field is reset to the saved value too, since the reactive `value` did not change.
+- **(ab) The description says jobs are off by default** (review round one, non-blocking, taken). The build's "Everything here is off until you turn it on" was false: `wait_for_computer` and `push` default to on. It now reads "Jobs are off until you turn them on."
+- **(ac) The consent is checked again before Remote is turned on** (review round two, non-blocking, taken). The consent panel stayed open after `turnOn` answered `consent`; if the plan was read again and no longer offered the perk, or the block became locked or invalid, the click still turned Remote on and only then refused the write (REMOTE_STAYED_ON). `acceptConsent` now returns first, closing the panel and saying why (`BLOCKED`), unless `writeRefusal(view(), props.offered, {enabled: true})` is undefined, and the panel renders only while that holds. The model case is "an open consent is accepted only while turning jobs on could still be written".
+- **(ad) Continue is for a finished job** (review round two, non-blocking, taken: both options, in part). Continuing a running job starts an owner session, with network and the owner's permissions, in the checkout the unattended session is still writing to: the job's later commit or push can pick up the owner session's edits, and the owner session reads files the job writes mid-run. The page cannot read a job's status from the engine without loading its folder: `session.status` is instance-scoped, and GlobalSession carries none. So it uses what the app already has: ServerSync's session store, which takes `session.status` events from every folder on this server's event stream (`session.data.session_working`). While that says working, the button is disabled, `JOB_RUNNING` ("Still running. You can continue it in a new session once it has finished.") shows in its place, and `continueJob` refuses too. `CONTINUE_NOTE` now opens with "Continue a job in a new session only once it has finished". A job whose status this window has not heard since it opened, for example after a reload while the job runs, reads as finished (Left open).
+- **(ae) The hand copies are tied to their sources by tests** (review round two, non-blocking, taken: the test option). Moving the values into packages/schema would also change desktop everywhere-wiring.ts and everywhere-settings.ts and core v1/config/everywhere.ts, three files outside this brief. So the model test ties each copy to a source it can reach:
+  - `RULE_KEYS` (now exported) equals the list read from desktop everywhere-wiring.ts's source, since the app may not import desktop main.
+  - The folder cap: `ConfigEverywhereV1.Info` decodes 64 folders and refuses 65, and the page adds a 64th.
+  - Each limit's range: its `min` and `max` decode, and one step below `min` or above `max` does not.
+  The desktop's own `MAX_PROJECTS` (everywhere-settings.ts :40) is the runner's, not the page's, and stays as it is. One shared constant in packages/schema is the cleaner follow-up (Left open). *Review round four:* the folder cap and the limits' ranges belonged to the write helpers and went with them (aj). Only the `RULE_KEYS` tie stays, because `everywhereView` reads `rulesLocked` from it.
+- **(af) Style** (review round two, nit, taken): `capValue` takes `EverywhereView` and `CapKey`. The plain-copy test also covers `PAGE_DESCRIPTION` (moved into the model from the page), `CONSENT`, `NOT_OFFERED`, `JOB_RUNNING` and both new checks lines. *Review round four:* `capValue` went with the ruling's patch, and `CONSENT` and `NOT_OFFERED` with (aj). The plain-copy case now covers `HOW_JOBS_RUN` and every row of How jobs run in their place.
+- **(ag) Trust is read again only when the folder list changes** (review round three, non-blocking, taken). The trust resource's source read `view().projects`. `view()` is a new object after every save: updateConfig's onSuccess sets the query data, then the refetch lands. So changing a limit sent one `config.trust.get` for every listed folder open in Vector, usually twice. The source now reads `folders` (everywhere.tsx :173), a memo of `view().projects` that stays equal while the same directories are listed in the same order. Trust is per folder, so a changed repository beside an unchanged folder needs no new read. `trust.version()` and the open list still trigger one. No app test renders the page, so this is covered by the typecheck only.
+- **(ah) `offered`, not `listed`** (review round three, non-blocking, taken). `everywhereTab`'s input field and `useEverywhereTab`'s parameter receive `everywhereOffered()`: the perk listed and Remote in the plan, not the raw `status.listed` check that (d) says is not enough. Both are now `offered`, matching the page's prop and the dialog's `offersEverywhere`. `jobsPage`'s parameter is renamed too, since it also receives `props.offered`. The tests' object literals and three case titles follow; behaviour is unchanged (H1 below).
+- **(ai) "How jobs run" shows the settings read-only** (review round four, blocking, taken). `howJobsRun(view)` (model :195) returns eight rows, in this order:
+  - "US dollars per job", with `maxUsd` in cents (`toFixed(2)`);
+  - "Minutes per job", "Jobs at once" and "Jobs a day";
+  - "Model", or "Your default model" when none is saved;
+  - "Wait for my computer", On or Off;
+  - "Push the branch and open a draft pull request", On or Off, with `PUSH_RULE`;
+  - "Stay awake to take jobs while plugged in", On or Off, with `CLOSED_LID`.
+
+  It returns undefined until the settings are read, and also while a company lock or a block that does not decode keeps jobs off, so the page never shows defaults in place of a block it could not use. The jobs line already says which of those applies, and the card is then not rendered. Above the rows, `HOW_JOBS_RUN` says "From this computer's settings file. A job stops at its own limit for dollars or minutes when that is lower." That matches the runner, which takes the lower of the two (everywhere-runner.ts :267 and :359); jobs at once and a day count this computer's jobs. The card has no control and no `updateConfig`. The labels are the removed controls' own words, so the write path can reuse them. The brief's "caps clamped" test now reads as follows: a limit at the runner's cap shows as saved; one step past it, or a 0, makes the block invalid and off, and nothing is shown. The runner's own clamp is tested in the desktop runner tests.
+- **(aj) The unused write helpers are removed** (review round four, non-blocking, given twice: the preferred option). After the ruling, about 130 lines of exports had no production caller: `writeBlock`, `editable`, `writeRefusal` with `windsDown`, `turnOn`, `turnOff`, `capChange`, `addProject`, `removeProject`, `modelChoices` and `modelChange`, the `WriteBlock`, `TurnOn` and `CapKey` types, `CAPS`, `DEFAULTS` and `MAX_PROJECTS`, and the copy `CONSENT`, `NOT_OFFERED` and `REMOTE_STAYED_ON`. They went against AGENTS.md (no preemptive helpers), and their rules describe a user/global config write that the lead refused. `NOT_OFFERED`'s "You can still turn it off" was false for this build. The later write path moves to other storage, so these rules may not fit it, and it is rebuilt against that storage.
+  - `everywhereView` now reads `ConfigEverywhereV1.Defaults` directly. The four limits' defaults were the only thing `DEFAULTS` held.
+  - 19 cases went with the helpers. They are four of the five folder cases (adding, the refusals, the folder cap and removing), the four limit cases, the five turning-on cases, three of the four turning-off cases and the three model cases. The remaining turning-off case now reads a settings file that says `enabled: false`. The remote-loading line moved into "about jobs on this computer". Four "how jobs run" cases are new, so 47 − 19 + 4 = 32. Each mutation that targeted a removed helper no longer applies (Mutations).
+  - A reference copy is kept: /tmp/vector-v2/everywhere/ev21-fix4/write-helpers.patch (sha256 `1abc0f78…`). `git apply` on this round's tree puts back the model and its test as they were before this round, and `git apply --check` passes. The pre-round files are beside it in before/ (before.sha256). Scratch can be cleared. Nothing is committed yet, so no commit range holds them, and the write-path package rebuilds its rules from (b) to (ac) above if the patch is gone.
+- **(ak) Remote's first status answer never replaces a newer change event** (review round four, non-blocking, taken). `onMount` subscribed to `remote.onChange` and also set the result of `remote.status()` when it arrived. A change event that came first was then overwritten by the older answer, so the jobs line could say Remote is off when it is on, or the reverse. The answer is now used only while the state is still `loading` (everywhere.tsx :92-101), as the failure path already did. No app test renders the page, so this is covered by the typecheck only.
+- **(l2) Three shared files outside the brief** (review round one): ui context/helper.tsx gains `useOptional` (4 lines), and server-sdk.tsx and server-sync.tsx add it to their export destructuring. This is the smallest way to read the two contexts without throwing; the reviewer's other option (compute "already on" in a child under ServerSync) cannot tell from SettingsWorkspace whether a provider exists. `git diff HEAD...origin/<lane>` over the three files is empty for every lane (Coordination). *Review round two (non-blocking, taken: kept as built):* the change is additive, but it widens the shared UI context API for every package. The commit body and the PR description name the three files as shared-surface changes, and `git diff HEAD...origin/<lane>` over them is run again just before the push, since the connect and codium lanes import `createSimpleContext` widely. *Review round four (non-blocking, given twice, kept as built):* the commit body and the PR description list all three files under "Shared-surface changes", and the push gate re-runs the diff (Coordination has this round's run).
+- **(x) Search keywords** leave out words the registry tests pin exact results for (queue, github, actions, at once, budget, rules, sources, reports, update, memory, shell, terminal, push, project, trust, backup, restore) and "chat", the old Chat page's word. *Ruling on (a):* "wait for my computer", "stay awake", "plugged in" and "draft pull request" went with their controls.
+
+### Not changed
+
+- packages/desktop/src/main/config-skew.test.ts is at HEAD (Ruling on (a)).
+- No IPC, preload, platform or desktop source; parts/page.tsx, remote-model.ts and remote.tsx (Codium's), project-trust.tsx and context/project-trust.tsx are untouched. The shared context files changed only by the `useOptional` export (l2).
+- No flag, env var, route, config key, generated file, SDK, dependency, lockfile or workflow. `LAPTOP_ROUTE_WIRED` and `OFFER_KEYS` are unchanged.
+
+### Safe by default
+
+Line numbers and wording are after the ruling on (a).
+
+- **Where the tab shows:**
+  - It never shows on the web.
+  - Nobody is offered it while CODIUM_LISTED_PERKS is unset and readiness is false.
+  - Not offered, it is hidden on any server but the built-in one, and only a computer whose own block already says on sees it there.
+  - While offered, it shows on any desktop server, but the page reads only the built-in engine (the page's `ours` check).
+- **The page writes no config.** There is no `updateConfig` call and no PATCH /global/config. It never turns Remote on or off, and it adds or removes no folder. config-skew.test.ts is unchanged and passes. How jobs run is plain text with no control (ai), and the model has no write helper (aj).
+- **Off by default.** Everything is off by default, and nothing is listed by default.
+- **The page's only two actions** are ones the app already has:
+  - the trust approval for an open folder, the same as Settings → Repository trust;
+  - "Continue in a new session on this branch", which creates an ordinary session (o, ad).
+- **No trust read loads a folder.** Only folders already open in Vector are read (y).
+
+### Left open
+
+- The write path (Ruling on (a), deferred). The page writes nothing until there is skew-safe storage outside user/global config: the desktop store, as Hands keeps its per-user state. That storage moves the runner's, the engine's and this page's reading of the setting together. Everywhere stays off by default meanwhile, and a computer whose block says on is turned off in its settings file. *Review round four:* the model's write rules were removed; they are rebuilt against the new storage, with (aj)'s patch as a reference.
+- The continued session loads job-written instruction files (AGENTS.md, CLAUDE.md) with the owner's permissions and network from its first prompt (o). Optional hardening: hold in-workspace instruction files for a session continued from a `vector.unattended` folder until it is trusted. Not built; decide before listing the perk. *Review round four:* the reviewer recommends that engine-side hold, with an engine test that a continued session's system prompt omits a job-written AGENTS.md. Nothing in code enforces the precondition, so it stays an owner or lead gate before `CODIUM_LISTED_PERKS` lists `everywhere` (spec §10).
+- Trust for a listed folder that is not open is not shown (y). The page says jobs wait until it is open and trusted. Settings → Repository trust shows it once it is open. A folder listed with a different case from its open project, a Windows drive letter included, also reads as not open (y, round two).
+- Continue while a job runs (ad): a job whose session status this window never heard reads as finished, so Continue is offered. A global status read that loads no folder, or a settle mark in the job's session metadata, would close it. Next to (o).
+- One shared definition of `RULE_KEYS` in packages/schema, imported by the app, the desktop and core, in place of the tested copy (ae). The app's copy of the 64-folder cap went with the write helpers (aj).
+- Before listing the perk: harden or refuse `Worktree.remove` and `Worktree.reset` for `<data>/everywhere-worktree/**`, and the 7-day sweep, which must skip a checkout with another session or recent activity (o).
+- The wiring's `refresh()` has no caller; its doc comment still names the settings page (b). index.ts's comment above `startRemote` (EV-17 Left open) is still stale. Both for the final docs sweep.
+- The Remote page's job-only wording (Codium); the push path, the GitHub labels and the `localAllows` `remote` decision (EV-17 Left open); R-M4.
+- The vectordev.ai jobs link waits for /everywhere to leave drafts (h).
+
+### Mutations
+
+Twenty-three, one source change at a time (two for M12b), the named test file run alone, each restore checked by sha256 (/tmp/vector-v2/everywhere/ev21-mut/: mutate.py, one log per mutation, run.txt, before.sha256). All red:
+
+| Mutation | Test file | Result |
+| --- | --- | --- |
+| M1 the gate ignores `desktop` | everywhere-model | 34 pass, 1 fail |
+| M2 the gate ignores `written` | everywhere-model | 33 pass, 2 fail |
+| M3 the gate ignores `builtin` | everywhere-model | 34 pass, 1 fail |
+| M4 `everywhereOffered` without `remoteOffered` | everywhere-model | 34 pass, 1 fail |
+| M5 `enabled` ignores the lock | everywhere-model | 34 pass, 1 fail |
+| M6 the clamp removed | everywhere-model | 32 pass, 3 fail |
+| M7 `turnOn` ignores Remote | everywhere-model | 34 pass, 1 fail |
+| M8 `turnOff` adds a key | everywhere-model | 34 pass, 1 fail |
+| M9 the jobs filter ignores `by` | everywhere-model | 34 pass, 1 fail |
+| M10 `addProject` allows a repeated folder | everywhere-model | 34 pass, 1 fail |
+| M11 the registry entry removed | settings-registry | 20 pass, 1 fail |
+| M11b the same, the model test | everywhere-model | 34 pass, 1 fail |
+| M12 a second app file writes `everywhere` | config-skew | 2 pass, 1 fail |
+| M12b the exception widened to any file, plus that second writer | config-skew | 2 pass, 1 fail |
+| M13 the page writes a second key | config-skew | 2 pass, 1 fail |
+| M14 `turnOn` ignores the plan | everywhere-model | 34 pass, 1 fail |
+| M15 the page's built-in guard removed | config-skew | 2 pass, 1 fail |
+| M16 loading reads as locked | everywhere-model | 34 pass, 1 fail |
+| M17 free models that may train offered | everywhere-model | 33 pass, 2 fail |
+| M18 the jobs list uncapped | everywhere-model | 34 pass, 1 fail |
+| M19 the jobs page always linked | everywhere-model | 34 pass, 1 fail |
+| M20 a saved model dropped from the choices | everywhere-model | 34 pass, 1 fail |
+| M21 the untrusted-folder note dropped | everywhere-model | 34 pass, 1 fail |
+
+The plan's M12 (the exception widened alone) is an equivalent change while only the page writes the key, so it became M12 and M12b. The dialog's gate and mount lines have no test (no app test renders SettingsWorkspace); they are covered by the typecheck only.
+
+*Review round one* (/tmp/vector-v2/everywhere/ev21-fix/: mutate.py, mut/ with one log per mutation, run.txt and before.sha256). Thirteen new mutations, one source change each (two for F12b), every restore matched by sha256. All are red except F12b, which is meant to survive:
+
+| Mutation | Test file | Result |
+| --- | --- | --- |
+| F1 the tab ignores a missing server | everywhere-model | 40 pass, 1 fail |
+| F2 `turnOn` decides while Remote loads | everywhere-model | 40 pass, 1 fail |
+| F3 the jobs line reads loading as off | everywhere-model | 40 pass, 1 fail |
+| F4 an unreadable limit writes the default | everywhere-model | 38 pass, 3 fail |
+| F5 the write ignores `writeBlock` | everywhere-model | 40 pass, 1 fail |
+| F6 an unlisted computer may write anything | everywhere-model | 40 pass, 1 fail |
+| F7 a wind-down list may repeat a folder | everywhere-model | 40 pass, 1 fail |
+| F8 a wind-down list may change a repository | everywhere-model | 40 pass, 1 fail |
+| F9 no trust offered for a folder without settings | everywhere-model | 40 pass, 1 fail |
+| F10 a folder that is not open reads as fine | everywhere-model | 40 pass, 1 fail |
+| F11 Continue copy drops the instruction files | everywhere-model | 40 pass, 1 fail |
+| F12 the page's guard joined with `&&` in place of `||` | config-skew | 2 pass, 1 fail |
+| F12b the same, against the round-one config-skew case | config-skew | 3 pass, 0 fail (survives: why the case changed) |
+| F13 the tab ignores `desktop` (M1, re-anchored to the new line) | everywhere-model | 40 pass, 1 fail |
+
+M2 to M21 were re-run on the fixed files with the round-one script (copy at ev21-fix/mutate-again.py, logs in ev21-fix/mut-again/). All are still red, every restore matched, and M1's old anchor is gone (F13 replaces it). The page's other round-one changes have no app renderer test and are covered by the typecheck only: the optional contexts, the `writeRefusal` call in `save`, the cap field reset, the Remote-stayed-on note and the trust reads limited to open folders.
+
+*Review round two* (/tmp/vector-v2/everywhere/ev21-fix2/: mutate.py, mut/ with one log per mutation, run.txt and before.sha256). Ten new mutations, one source change each, against everywhere-model.test.ts run alone; every restore matched by sha256. All red:
+
+| Mutation | Result |
+| --- | --- |
+| G1 Linux with no probe answer says nothing | 45 pass, 2 fail |
+| G2 a probe that answers `none` reads as fine | 45 pass, 2 fail |
+| G3 folders compared by raw spelling | 46 pass, 1 fail |
+| G4 the page's folder cap one below the engine's | 46 pass, 1 fail |
+| G5 a rule key dropped from the copy | 46 pass, 1 fail |
+| G6 the minutes minimum below the engine's | 44 pass, 3 fail |
+| G7 the dollars minimum above the engine's | 45 pass, 2 fail |
+| G8 Continue copy drops the finished-job rule | 46 pass, 1 fail |
+| G9 NOT_OFFERED says "projects" | 46 pass, 1 fail |
+| G10 CONSENT names a token | 46 pass, 1 fail |
+
+The page's round-two changes have no app renderer test and are covered by the typecheck only: the consent re-check and the panel's condition (ac), Continue's disabled state and refusal (ad), the probe resource (q) and the trust read through `openWorktree` (y). config-skew.test.ts still finds exactly one `updateConfig` call, behind the guard (3 pass).
+
+*Review round three* (/tmp/vector-v2/everywhere/ev21-fix3/: H1.log, before.sha256). One new mutation against everywhere-model.test.ts run alone, restored and matched by sha256. Red:
+
+| Mutation | Result |
+| --- | --- |
+| H1 the tab ignores `offered` (`if (input.offered) return true` made `if (false)`) | 46 pass, 1 fail ("is hidden without the perk and shown when the plan offers it") |
+
+The trust memo (ag) has no app renderer test and is covered by the typecheck only.
+
+*Ruling on (a)* (/tmp/vector-v2/everywhere/ev21-no/: mutate.py, mut/ with one log per mutation). Two new mutations against everywhere-model.test.ts run alone, each restored and matched by sha256. Both red:
+
+| Mutation | Result |
+| --- | --- |
+| N1 `PAGE_DESCRIPTION` back to "Jobs are off until you turn them on." | 46 pass, 1 fail ("copy is plain: no price, token, claim or the word project") |
+| N2 `REPOSITORY_RULE` back to "Nothing is listed until you add it." | 46 pass, 1 fail (the same case) |
+
+M12, M12b, M13, M15, F12 and F12b tested the config-skew exception, which the ruling removed. They no longer apply. Every other mutation targets the model, which the ruling changed only in two texts and some comments.
+
+*Review round four* (/tmp/vector-v2/everywhere/ev21-fix4/: mutate.py, mut/ with one log per mutation, model.before-mut.sha256). There are seven new mutations against everywhere-model.test.ts run alone, one source change each. Every restore matched by sha256, and all are red:
+
+| Mutation | Result |
+| --- | --- |
+| K1 How jobs run ignores a company lock | 30 pass, 2 fail |
+| K2 How jobs run ignores a block that does not decode | 30 pass, 2 fail |
+| K3 the push row reads `stayAwake` | 30 pass, 2 fail |
+| K4 the model row always says "Your default model" | 31 pass, 1 fail |
+| K5 dollars shown without cents | 29 pass, 3 fail |
+| K6 the closed-lid note dropped from the stay-awake row | 30 pass, 2 fail |
+| K7 Wait for my computer always On | 31 pass, 1 fail |
+
+Some earlier mutations targeted helpers that this round removed (aj), and those no longer apply: M6, M7, M8, M10, M14, M17, M20, F2, F4 to F8, G4, G6, G7, G9 and G10. The rest still target code that exists. The Remote order fix (ak) has no app renderer test and is covered by the typecheck only.
+
+### Coordination
+
+- `git diff HEAD...origin/<lane>` over the seven files is empty for main `6a771354`, connect-finish `19c48b89`, hands-finish `8139e5fc`, codium-finish `58663f5b`, scope-finish `defd141b`, workspaces-finish `e37ec1b5`, review-fixes `1433d105`, brain-transport `0d18f750` and native-qualify `2677c32c` (2026-11-20), so the merged tree's registry total is 21. Re-check before the push.
+- connect-finish may edit the same registry: the hunks are one union line and one entry after `local`.
+- *Review round one* (2026-11-20, after `git fetch origin`): `git diff HEAD...origin/<lane>` over ui context/helper.tsx, app context/server-sdk.tsx and server-sync.tsx, the whole settings-v2 folder and config-skew.test.ts is empty for release-finish `67ec3a60`, everywhere-finish `6a74ac3b`, connect-finish, hands-finish, scope-finish, workspaces-finish, review-fixes, brain-transport and native-qualify. For main `6a771354` and codium-finish `58663f5b` it touches only memory-backup.tsx, memory-backup-model.ts and their tests, none of this package's files.
+- config-skew.test.ts is run by test.yml's desktop job (test.yml :625), not by a lane workflow.
+- *Review round two* (2026-11-20, after `git fetch origin` of every lane): no lane tip moved since round one (release-finish `67ec3a60`, main `6a771354`, connect-finish `19c48b89`, hands-finish `8139e5fc`, codium-finish `58663f5b`, scope-finish `defd141b`, workspaces-finish `e37ec1b5`, review-fixes `1433d105`, brain-transport `0d18f750`, native-qualify `2677c32c`). `git diff HEAD...origin/<lane>` over the three shared context files, the settings-v2 folder, config-skew.test.ts, utils/path-key.ts and desktop everywhere-wiring.ts (which the new tie test reads) touches only memory-backup.tsx, memory-backup-model.ts and their tests, for main and codium-finish. Run it again just before the push (l2).
+- *Review round three* (2026-11-20, after `git fetch origin`): no lane tip moved since round two, and the same diff over the same files again touches only main's and codium-finish's memory-backup files.
+- *Review round four* (2026-11-20, after `git fetch origin`): no lane tip moved since the ruling (release-finish `67ec3a60`, main `6a771354`, everywhere-finish `6a74ac3b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, codium-finish `58663f5b`, scope-finish `defd141b`, workspaces-finish `e37ec1b5`, review-fixes `1433d105`, brain-transport `0d18f750`, native-qualify `2677c32c`). `git diff HEAD...origin/<lane>` over the three shared context files, the settings-v2 folder, config-skew.test.ts, utils/path-key.ts and desktop everywhere-wiring.ts again touches only main's and codium-finish's memory-backup files. The registry total is still 21. Re-run it at the push gate (l2).
+- *Ruling on (a)* (2026-11-20, after `git fetch origin` of release-finish, main, everywhere-finish and the eight other lanes): no lane tip moved since round three. HEAD `6a74ac3b` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`. The same diff again touches only main's and codium-finish's memory-backup files, so the merged registry total is still 21.
+
+### Deferred verification
+
+- The page under Electron (the rules forbid starting the app). *Ruling on (a):* the Remote consent over IPC and an engine write reaching the wiring no longer apply to this page, because it writes nothing.
+- e2e/regression/account-settings.spec.ts (Playwright; the rules forbid running it locally). The fix for (v) is checked by reading the mount: with no provider, `useOptional` returns undefined and nothing else in SettingsWorkspace reads server context. test.yml's e2e step runs the spec.
+- The trust row against a real engine, open and not open (y).
+- CI after the commit: vector-everywhere.yml (it runs everywhere-model.test.ts) and typecheck.yml as workflow_dispatch on everywhere-finish; test.yml runs config-skew.test.ts and settings-registry.test.ts at the lane end.
+- VE-50.
+
+Receipts: vector-everywhere-progress.md, "EV-21".
+
+## 2026-11-20, EV-22: the vectordev.ai account components (VE-42a)
+
+Spec §8 VE-42; §3.8; §3.12 "vectordev.ai/everywhere"; §6.6. Built at HEAD `8aff3462`, which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged from it. PR #33 is on main: release-finish is an ancestor of origin/main `481973c9`, which is 257 commits ahead of HEAD (re-counted at build time; the plan's 197 was stale). The lane notes say both "once PR #33 is merged, merge origin/main instead" and "the lead merges main into this branch; until then never merge main yourself". EV-19 and EV-20 recorded the same contradiction and followed the EV-14 precedent (progress, EV-14: "The lead also owns merging origin/main"), and so does this package: main is not merged here. This package does not need main: `git diff HEAD...origin/main` over web src/lib, components/marketing/account, astro.config.mjs, script/prune-vector-site.mjs, src/pages, docs-nav.ts, api/_lib/everywhere/account-api.ts, api/everywhere, packages/web/test/lib, test/no-project-wording.test.ts and packages/schema/src/everywhere.ts touches only src/lib/cloud-workspaces-client{,.test}.ts, which nothing here imports. The precondition d7e4aa54 (PUB-4, src/drafts) is an ancestor; EV-22 does not use it. The plan was corrected by its critique; where a point was taken only in part, the item says how. Committed at the package's commit gate as `feat(web): add unreleased Vector everywhere account components`; a commit cannot name its own sha, so the sha, the push and the CI run ids are in the next package's receipt.
+
+### What changed
+
+All new; no existing file changes except the lane documents.
+
+- **packages/web/src/components/marketing/everywhere/everywhere-model.ts** (751 lines): no React, Supabase or DOM import; it imports only `{ Everywhere } from "@vectordevai/schema/everywhere"`.
+  - Fixed values: `EVERYWHERE_ROUTES` :16 (installs, links, link, repos; no oauth-finish, which is EV-23's), `EVERYWHERE_AUTHORIZE` :24, `LINK_CODE_PATTERN` :30, `LINK_CODE_MS` :32, `LINK_USER_ID_PATTERNS` :38, `PLACE_ID_PATTERN` :44, and `EVERYWHERE_COPY` :58, every text the page shows.
+  - `createEverywhereAccountModel(deps)` :204: `send` :256 (the only fetch), `refresh` :290, `act` :348 (one write at a time), `run` :388 (the confirmed actions), `setSession` :432, `issueCode` :463, `signInAgain` :520, `close` :527, plus `forgetCode`, `startLink`, `startInstall`, `connectJira`, `unlink`, `ask`, `cancel`, `confirm` and `accountsUnavailable`.
+  - `connectAccountSession(model, auth)` :550: follows the browser's sign-in (o).
+  - Decoders `readInstalls` :579, `readLinks` :609, `readMappings` :625, `readLinkCode` :653, `readAuthorize` :660; `problemOf` :671, `signInPath` :683, `installationLabel` :691, `placeLabel`, `formatDay`, and the private `parses` :728 (`URL.canParse` where the browser has it, review round one).
+- **packages/web/src/components/marketing/everywhere/EverywhereView.tsx** (418 lines, `/** @jsxImportSource react */`): `EverywhereAccountView` :25 renders the model's state: loading, the sign-in prompt, the session-expired prompt, accounts unavailable, off, and the ready page with `InstallsSection` :81 (`InstallRow` :119, `JiraConnect` :160), `LinksSection` :191 and `MappingsSection` :269 (`MappingRow` :307), and `Confirm` :399.
+- **packages/web/src/components/marketing/everywhere/EverywhereAccount.tsx** (39 lines, React): the root EV-23's draft pages will mount with `client:only="react"`. It builds the model with a `signOut` that calls Supabase's `signOut({scope: "local"})`, reads it with `useSyncExternalStore`, connects it to `vectorAccountClient()`'s auth, forgets the code on `pagehide`, and closes the model on unmount. It never calls `exchangeCodeForSession`, and the account client keeps `detectSessionInUrl: false`, so EV-23's OAuth fragment is never read as a sign-in.
+- **packages/web/src/components/marketing/everywhere/everywhere.css** (112 lines): list, row and field styles; the section and button classes come from ../account/account.css.
+- **packages/web/test/everywhere-pages.test.ts** (1,355 lines, 36 cases; 29 before review round one): model level, against the real account routes (`createAccountApi`) on 127.0.0.1 with the real bearer check (`FakeAccounts`), `FakeJira`, `FakeStore` and the fetch guard; views rendered with `renderToStaticMarkup`.
+
+### The cases
+
+| Case | Line | What it pins |
+| --- | --- | --- |
+| signed out | :291 | loading before a session; signed out, only the prompt with `href="/login?returnTo=%2Feverywhere"`, no button, no code, and no request, even when every action is called |
+| the root | :309 | `EverywhereAccount` renders loading and the account service is not called |
+| sign-in link | :315 | the pathname only: a search, an OAuth fragment, `//host`, `/\host` and other origins give `/everywhere` |
+| session expired | :323 | a token the server refuses shows "Sign in again" as a button, not a link; it calls the local sign-out, then goes to `/login?returnTo=%2Feverywhere` (the search dropped); the same account with a new valid token recovers |
+| auth events | :372 | INITIAL_SESSION loads; TOKEN_REFRESHED swaps the token; a late `getSession` with the older token is ignored; SIGNED_OUT signs out; the disconnect unsubscribes and later events do nothing |
+| getSession and failures | :392 | with no event, `getSession` is used; a `getSession` error and a rejected client both give accounts unavailable, with no request |
+| Try again (review round one) | :415 | the first GET installs answers 503: the page shows the `unavailable` text and Try again; the retry loads the lists, the problem is cleared, and neither the text nor Try again is rendered |
+| refused-token answer after recovery (review round one) | :439 | a held link-code request and an unlink both sent with a token the server stopped accepting; the unlink's 401 gives session-expired; the same account with a new token recovers; the held 401 then arrives and is dropped; the next code request carries the new token and gets a code |
+| feature off | :480 | `env = {}`: the state is off, the page says so with no button, only the two GETs went (each with the bearer), the account service was not called and the store saw no command |
+| routes and URLs | :500 | a full scenario (refresh, both codes, the Linear link, the Slack install, the Jira connect, a drop, a removal, an unlink, a disconnect): every call goes to an `EVERYWHERE_ROUTES` path with its allowed methods (all eight used), `Bearer` plus the current token, `accept`, `credentials: "omit"`, `cache: "no-store"`, `redirect: "error"`, a JSON content type exactly when there is a body, and an empty query except GET repos, whose only parameter is an installation the account listed; nothing to oauth-finish; both navigations go to the two authorize endpoints; no request URL, navigation or rendered `href` holds the account id (either case), the email (plain or encoded), the token, the connect code or a link code (formatted or compact); no `<form` |
+| token refresh | :607 | the same account with a new token keeps the code, the lists and the expiry timer; later calls carry the new token |
+| the account's code | :621 | the pattern; shown exactly once, as `link XXXX-XXXX`, with the Slack note and the expiry line; it links to alice through `redeemLinkCode`; a Jira code shows the Rovo note only |
+| another account's code | :649 | a shown code goes on a switch to bob (and its timer is cancelled), and is not back after sign-out and sign-in; a held answer to alice's request is dropped after a switch to bob, after a sign-out, and after alice → bob → alice; alice's held installs list does not fill bob's page; bob's own code shows |
+| what clears a code | :711 | a newer request wins over a held older one; Hide; the timer at `LINK_CODE_MS` from local receipt, with the route's clock 5 minutes ahead or behind |
+| connect | :740 | `EVERYWHERE_AUTHORIZE` equals identity.ts `OAUTH`; Connect Slack and Link with Linear navigate once each to their endpoint with the stored state of alice's account (`actor=user` for the link); nine rewritten answers (another host, path, `http:`, a hash, a changed, missing or doubled state, credentials in the URL, the wrong platform) give no navigation and `unavailable`; with only Jira on, Connect Slack gives `not-found` |
+| Jira connect code | :792 | connects `jira:<cloud>` (trimmed, any case), the code only in the body; bob reusing it gets `code-invalid` with the fixed text; a blank code sends nothing |
+| installations | :814 | only alice's are listed, by id, with scopes; the E13 text shows on Disconnect and goes on Keep; Confirm erases the installation, its links (bob's too) and its mappings through the routes, and the jobs eraser got it |
+| unconfirmed revoke | :845 | 202: the `closing` notice, the review text, and no Disconnect button |
+| stopped part way | :863 | a disconnect that failed after closing shows the retry text and keeps Disconnect, which finishes it |
+| malformed entry | :900 | one bad installation in the answer: the note shows and the good one keeps its Disconnect |
+| links | :918 | the platform user id and the workspace id show; Unlink removes only that link, bob's stays |
+| already removed | :938 | unlinking a link removed with the `unlink` word: `not-found`, the list reloads, and the state stays ready, not off (m) |
+| mappings | :954 | "Channel C0123", "Team …", "Key ENG"; the private line only for Linear and Jira, read-only; "by you" with the session's id in capitals; dropping a repository keeps the rest with their ids and the private mark; dropping the last removes the mapping; Remove mapping removes it |
+| an unknown id | :1019 | a stored `null` id: the mapping is listed with "(not verified yet)", only the repository whose removal leaves verified ids offers Remove, a forced drop sends nothing, and Remove mapping works |
+| unread repositories (review round one) | :1060 | GET repos for the Slack workspace answers 503, 429, no answer (status 0), or another installation's 200: `unread` names it, `partial` stays false, the page shows its heading with "The repositories set for this connection could not be read." once and never "No place has a repository yet."; another connection's mapping still shows beside it; with every read answered the note goes |
+| 401 on GET repos (review round one) | :1097 | session-expired, as on the two list GETs |
+| empty mapping (review round one) | :1109 | a mapping PUT with `repositories: []`: listed with "No repository is set for this place.", no partial note, no repository Remove, Remove mapping removes it |
+| fixed values | :1133 | `LINK_CODE_PATTERN` against `CODE_ALPHABET` letter by letter and `LINK_CODE_CHARS`; `LINK_CODE_MS` = `KEEP_MS.linkCode`; `PLACE_ID_PATTERN` = identity.ts `PLACE_PATTERN`; `LINK_USER_ID_PATTERNS` = keys.ts `USER_ID_PATTERNS` (source and flags) |
+| decoders | :1147-:1273 | `readLinkCode` (no clock), `readInstalls` (GitHub left out, five malformed skipped, the three Slack key forms, the 200 cap), `readLinks` (a 129-character Jira id, GitHub skipped), `readMappings` (another installation's answer refused; an empty mapping kept; only the bad mappings skipped; 21 repositories skipped; `setByYou`), `readAuthorize`, `problemOf` |
+| no AbortSignal.any (review round one) | :1295 | with `AbortSignal.any` removed the page loads and every request carries the page's signal; a `request` that throws synchronously gives `unavailable` and Try again, not a stuck page |
+| no URL.canParse (review round one) | :1316 | with `URL.canParse` removed `signInPath("/everywhere/link")` gives `/everywhere`, `readAuthorize` refuses, and Connect Slack navigates nowhere and shows `unavailable` |
+| nothing routed | :1339 | no src/pages path matches /everywhere/i; docs-nav.ts has no path or id `everywhere`; script/prune-vector-site.mjs, read as text, has `account` and `docs` in `keep` and no `everywhere` |
+
+### Deviations
+
+- **(a) React, not Solid.** §3.12 says Solid; §6.6 and the brief allow React under components/marketing/everywhere/** when the component needs the account sign-in. The sign-in is the Supabase client in src/lib/account-client.ts, and every bearer-token account section on the site is React (AccountPage, GithubAgents, ModelPlans, CloudWorkspaces). astro.config.mjs already routes `**/components/marketing/**/*.tsx` to React, and vector-everywhere.yml's paths already cover the folder. *Critique taken:* both .tsx files carry `/** @jsxImportSource react */`, and the test registers the same "react islands" `Bun.plugin` (a `Bun.Transpiler` with `react-jsx`) that account-page.test.ts, sign-in-page.test.ts and cloud-workspaces-page.test.ts use, then imports the two .tsx files with a top-level `await import`. So React also needs a test transform here; the difference from Solid is that this one already exists in the package and Solid's would be new (babel-preset-solid).
+- **(b) A framework-free model.** All request, decode, account-binding and ordering logic is in everywhere-model.ts; the views only render it and call its methods. The test drives the real routes through it.
+- **(c) Connect is built here.** §3.12's first item, "connect each platform": Connect Slack and Connect Linear (POST installs), and the Jira connect code (POST installs `{platform: "jira", code}`), with the routes this package covers; EV-23's OAuth landing finishes the two OAuth starts. The Linear sign-in link start (`startLink`, POST link `{platform: "linear"}`) is here too. *Critique taken:* the plan said no other package names it, which is wrong; the EV-23 brief names drafts/everywhere/link.astro, the Linear sign-in that binds `viewer.id`. The /everywhere page keeps a "Link with Linear sign-in" button, and EV-23's link page should mount this model and call the same `startLink`, so there is one start, not two.
+- **(d) Authorize URLs are checked before navigating** (`readAuthorize`): `https:`, no user name or password, no hash, origin plus path equal to the platform's fixed endpoint (identity.ts `OAUTH`), and exactly one `state` equal to the answer's. Anything else: no navigation, `unavailable`.
+- **(e) Adding a repository is not built, and Linear and Jira places cannot be mapped at all.** setMapping refuses a repository without a verified id (identity.ts setMapping, "with their verified ids"), no account route resolves owner/name to an id, the components may call only their routes, and there is no production `repository` port (EV-19 (i)). Slack channels can still be mapped with `@Vector repo owner/name` (setMappingByWord) once that port exists, but setMappingByWord is Slack-only (identity.ts :1328), so for a Linear team or a Jira key the only way in is the connector on vectordev.ai. *Critique taken:* this is a go-live blocker for Linear and Jira, not only a loose end. It is in the handoff's "Current gates", and the empty-state copy says so ("Linear teams and Jira keys cannot be given repositories from this page yet."). The request for the lead: the repos PUT (or a new authenticated GET lookup beside it) resolves owner/name to `{fullName, id}` through the production repository port (api/_lib/everywhere/ports.ts `repository`), checks that the connector may use it, and stores the verified id; it lands with or after the package that closes EV-19 (i)'s gate. The page lists mappings, drops a repository (sending the remaining ones with their stored ids), and removes a mapping.
+- **(f) The private mark is shown, read-only.** It is shown only for Linear teams and Jira keys (RepoMapping's `private`, spec §1), as "Marked private." or "Not marked private." with "Vector does not use this mark yet. It treats every Linear team and Jira key as a shared place." That is the code today: linear/parse.ts and jira/parse.ts set `shared: true`, and Slack's parse.ts treats every place but a DM as shared. *Critique taken, read-only option:* a toggle would let people set marks that do nothing now and would silently widen what is posted on the day a later package wires `private` into Linear and Jira parsing. The model has no `setPrivate`; the repos PUT route can still take `private` from any authenticated connector, so marks can exist. Left open and handoff: the package that wires `private` into parsing must not honour a mark set before it lands without asking the connector again. *Reworded in review round one:* the mapping's `setAt` cannot tell when the mark was set. setMapping (api/_lib/everywhere/identity.ts:1311-1313) writes `setAt: ctx.now` on every PUT but keeps `private: input.private ?? existing?.private`, and this page's own drop-repository action is such a PUT (everywhere-model.ts `run`, the PUT after "setMapping refuses a repository without a verified id"), so narrowing a mapping marked private before the wiring package would make the old mark look freshly set, and honouring it would widen what is posted to a place the platform treats as shared (E17). The wiring package needs a timestamp of the mark itself, for example a `privateSetAt` that setMapping writes only when `input.private` is present, or it clears or ignores every `private` mark that existed before it lands.
+- **(g) Codes are bound to the account, not the token, and timed on this computer's clock.** `generation` changes when the account changes, on sign-out, on accounts unavailable, on close, and (review round one) when the same account recovers from session-expired with a new token, so a request sent with the refused token cannot answer 401 into the renewed session; `send` drops any answer from an older generation, so a code or a list is only applied to the account that asked. A token refresh for the same account (account ids compared lowercased) swaps the token and keeps everything. A newer code request (`codeSeq`), Hide, `pagehide` (the root) and the timer clear a code. *Critique taken:* `readLinkCode` no longer compares the server's `expiresAt` with the browser's clock (a browser more than a minute behind would have refused every code); it checks only that `expiresAt` is a positive integer, and the page clears the code `LINK_CODE_MS` (10 minutes, pinned to `KEEP_MS.linkCode`) after it arrived. The model has no clock dependency. Codes and the connect code travel only in JSON bodies; the only query parameter is `installation` on GET repos (account-api.ts `repos`).
+- **(h) Copy avoids "project"** (test/no-project-wording.test.ts scans packages/web/src). Jira places are "Key ENG"; the hint says "Jira keys".
+- **(i) Fixed copy; server messages are never shown.** Only the status and the error code are read (`problemOf`). Facts only: "Vector everywhere is off." (*critique taken*: not "not available yet").
+- **(j) No `<form>`.** The Jira connect code is a plain input with a `type="button"`, cleared after each submit, so no browser fallback can send it as a query string.
+- **(k) The sign-in link carries the pathname only.** `signInPath` checks the same origin inline (*critique taken*: the model does not import account-client.ts, which would load Supabase) and drops the search and hash, so EV-23's `#…code…state` fragment never reaches /login.
+- **(l) Each entry is decoded on its own** (*critique taken*). A malformed installation, link or mapping is skipped and "Some entries could not be shown." appears; the rest keep their controls. Installs are capped at 200, links and mappings at 500, the rest counted as skipped. A repository with a stored `null` id (identity.ts decodeMapping) is listed as "(not verified yet)"; its mapping can be removed; a mapping with no repository (the repos PUT accepts `repositories: []`, review round one) is listed with "No repository is set for this place." and offers only Remove mapping; a repository is offered for removal only when every other repository in the mapping has a verified id, since the PUT sends them back. Links use each platform's user id pattern (pinned to keys.ts). `installationLabel` covers `slack:E…:T…` and `slack:E…`. GitHub entries are left out without counting as malformed.
+- **(m) A 404 means "off" only on the refresh GETs** (*critique taken*). account-api.ts answers 404 before any sign-in while the feature is off, so the two list GETs map 404 to the off state. On a write, 404 also means "not there or not yours" (unlink with no such link, DELETE installs by a non-connector, setMapping or removeMapping refused, `oauthUrl` undefined), so it maps to `not-found` ("Vector could not find that, or it is not available to this account."), and the lists reload; if the feature was turned off meanwhile, the reload moves the page to off.
+- **(n) A refused session is its own state** (*critique taken*). A 401 shows "Your session expired. Sign in again to continue." with a button that calls Supabase's `signOut({scope: "local"})` and then goes to `signInPath`. A plain link to /login would loop: AuthPage.tsx replaces the page with `returnTo` whenever Supabase still has a local session. `signed-out` stays for "no session in this browser". A refreshed token for the same account brings the page back.
+- **(o) The root's session wiring is a tested function** (*critique taken*). `connectAccountSession(model, auth)` takes the two auth calls as a parameter (the root passes `vectorAccountClient().then((client) => client.auth)`); the test drives it with a small object. Any auth event wins over `getSession()`, whose answer is used only if no event came first, so a late `getSession` cannot put back an older token after TOKEN_REFRESHED. `close()` returns the model to loading, so React's development double mount reconnects cleanly.
+- **(p) Disconnect on a closing installation.** `retry-disconnect` keeps Disconnect (the route finishes the cleanup on a second DELETE); `review-native-revocation` hides it, because a retry never re-sends the revoke and only answers 202 again, and shows what to check instead.
+- **(q) The Slack mapping hint** ("In a Slack channel, send @Vector repo owner/name to set its repository.") describes setMappingByWord. Until EV-19 (i)'s repository port exists that word answers that the repository cannot be verified; the page is unreachable until go-live, and go-live needs that port, so the hint is true whenever it can be read.
+- **(r) Mutation M14 and the docs-nav check** (*critique taken*). M14 edits script/prune-vector-site.mjs in place inside a `finally` that restores it and checks its sha256 against the copy taken before; `git diff --quiet script/prune-vector-site.mjs` passed afterwards. The docs-nav check looks for a path or an `id`/`slug` named everywhere, not the bare word.
+- Plan items dropped: the `now` dependency (g), `setPrivate` (f), the `platform-off` problem (m; the plan's case 10 expectation became `not-found`), and the plan's `EverywhereLinkCode.expiresAt` (g).
+
+### Not changed
+
+Every route and api/ file, src/pages, src/drafts, the prune script, docs-nav.ts, astro.config.mjs, every workflow, env var, flag, dependency, lockfile and generated file. No page imports the components.
+
+### Safe by default
+
+- **Nothing is reachable.** Astro builds only src/pages, and nothing imports the components; the prune keep set, docs-nav and the sitemap are unchanged, and the test pins all three.
+- **The server is unchanged.** VECTOR_EVERYWHERE_ENABLED stays unset, so every route answers 404 before any sign-in or store read and the page says "Vector everywhere is off.". Every authority check (connector-only mappings and disconnects, own links, E2, E13) stays on the server.
+- **The browser keeps nothing.** No localStorage, sessionStorage or cookie; requests use `credentials: "omit"` with only the bearer token.
+- **Codes stay in memory**, bound to the account and the generation, cleared on sign-out, an account switch, `pagehide`, Hide, a newer request or 10 local minutes, and never in a URL.
+- **Navigation is fixed**: the two authorize endpoints only, with the answer's own state.
+- **No new control.** No allowlist (Q2), no private toggle (f), no add form (e); copy is fact only.
+
+### Left open
+
+- **Linear and Jira mappings (go-live gate, for the lead).** A repository lookup on the repos route through the production repository port, as in (e). Until then no Linear team or Jira key can be mapped, so Linear and Jira jobs cannot route to a repository.
+- **The private mark (for the package that wires it).** Do not honour marks set before that package without asking the connector again; `setAt` cannot show when a mark was set, so the package needs a mark timestamp of its own (for example `privateSetAt`, written only when `input.private` is present) or clears or ignores every earlier mark (f).
+- **EV-23:** the draft pages that mount `EverywhereAccount` (src/drafts, after review-fixes' PUB-4 pattern), the OAuth landing, the Linear link page (reusing `startLink`, (c)), and the jobs and audit views. Note for EV-23: on HEAD the callback redirect lines are api/_lib/everywhere/slack/install.ts:59 and api/_lib/everywhere/linear/install.ts:60, not :63 and :67 (api/slack/ and api/linear/ hold oauth.ts and others but no install.ts).
+- **For the lead, confirm (c):** EV-23 builds on this model's `startLink` and `startInstall` and adds no second start; otherwise the connect controls move to EV-23 (review round one, finding 5).
+- **The loopback harness's close (test fakes, for the lead).** packages/web/test/lib/everywhere-account.ts `RouteHarness.stop()` waits forever once a route has answered a request with a body that it refused after the account check without reading the body (found in review round one: `harness.call("POST", link, {token: "session-unknown", body})` alone left the file's afterAll hook timing out at 30 s). The refused-token case therefore answers its writes' 401 in the test's request wrapper. The fake is shared, so it is not changed here; a fix would close idle connections in `stop()`.
+- **Last write wins on mapping PUT.** The route takes no expected revision; the page reloads after every write, so a second tab's change is shown, not merged.
+- **The lane's path filter** does not list packages/web/src/lib/account-client.ts, which the root imports; a change there on main would not start vector-everywhere.yml. No workflow is changed here; for the lead.
+
+### Mutations
+
+/tmp/vector-v2/everywhere/ev22-mut/mutate.py edits one file in place, runs only everywhere-pages.test.ts through vector-serial, restores the file in `finally` and checks every file's sha256 against before.sha256.json. Each mutation turned its named case red; every restore matched.
+
+| Mutation | Red case(s) | Result |
+| --- | --- | --- |
+| M1 drop the generation check in `send` | another account's code | 28 pass, 1 fail |
+| M2 bind the code to the token | token refresh | 28/1 |
+| M3 carry the code into the next session | another account's code | 28/1 |
+| M4 drop the `codeSeq` check | what clears a code | 28/1 |
+| M5 skip `readAuthorize`'s origin and path check | connect | 28/1 |
+| M6a `credentials: "include"` | routes and URLs | 28/1 |
+| M6b no authorization header | 19 cases | 10/19 |
+| M7 `signInPath` keeps search and hash | sign-in link, session expired | 27/2 |
+| M8 drop-repository sends names without ids | mappings | 28/1 |
+| M9 the private line for Slack too | mappings | 28/1 |
+| M10 the link platform also in the query | routes and URLs (and another account's code) | 27/2 |
+| M11 no expiry timer | what clears a code (and another account's code) | 27/2 |
+| M12 GitHub ids read as Vector everywhere ones | readLinks | 28/1 |
+| M12b GitHub installs counted as malformed | readInstalls | 28/1 |
+| M13 a `<form>` around the Jira connect code | routes and URLs | 28/1 |
+| M14 `"everywhere"` in the prune keep set (restored by sha256) | nothing routed | 28/1 |
+| M15 a 404 on a write reads as off | already removed (and connect) | 27/2 |
+| M16 a refused session reads as signed out | session expired | 28/1 |
+| M17 a late `getSession` overrides the events | auth events | 28/1 |
+| M18 a repository without an id hides its mapping | an unknown id, readMappings | 27/2 |
+| M19 `setByYou` compares case | mappings | 28/1 |
+| M20 Disconnect offered after an unconfirmed revoke | unconfirmed revoke | 28/1 |
+| M21 Disconnect hidden for `retry-disconnect` | stopped part way | 28/1 |
+| M22 `readLinkCode` compares the server's expiry with this clock | readLinkCode and four others | 24/5 |
+| M23 one malformed install hides the whole list | malformed entry, readInstalls | 27/2 |
+
+The first run of M12 (only `platformOf` accepting GitHub) survived, because `readInstalls` drops GitHub entries before `platformOf` and no case had a GitHub link. The readLinks case gained a GitHub link, M12 then went red, and M12b (dropping the GitHub filter in `readInstalls`) was added.
+
+### Coordination
+
+- `git fetch origin` of main and every lane, then `git diff HEAD...origin/<lane>` over the new files, src/pages, script/prune-vector-site.mjs, docs-nav.ts, astro.config.mjs, account-api.ts, api/everywhere, src/lib/account-client.ts, components/marketing/account, packages/web/test/lib, test/no-project-wording.test.ts and packages/schema/src/everywhere.ts: empty for main `481973c9`, connect-finish `19c48b89`, hands-finish `8139e5fc`, codium-finish `58663f5b`, scope-finish `86294f80`, workspaces-finish `e37ec1b5`, review-fixes `1433d105`, brain-transport `0d18f750` and native-qualify `2677c32c`.
+- review-fixes owns PUB-4 (src/drafts, `d7e4aa54`, already an ancestor) and PUB-8 goes to EV-23 here; nothing in this package touches either.
+
+### Deferred verification
+
+- A real browser, real Supabase sessions and the platforms' authorize pages: the rules allow none. The root's own lines (the Supabase adapter, `pagehide`, `useSyncExternalStore`) are covered by the web typecheck and the root case only; its session logic is `connectAccountSession`, which is tested.
+- CI: vector-everywhere.yml runs the new file once it is tracked; typecheck.yml has no web job, and vector-everywhere.yml's typecheck matrix runs web's `astro check`. Both are dispatched after the commit, with vector-hosted-ci.yml and vector-at-mention.yml, and the run ids go in the next receipt. vector-codium.yml is not dispatched: main is not merged here yet (lane rule), and its nested call of vector-hosted-ci.yml on the same ref cancels the standalone run (progress, EV-20).
+- VE-50.
+
+### Review round one (2026-11-20)
+
+Eight findings, one blocking. All are fixed or answered here; nothing was committed in that round. Each fix was undone in turn with /tmp/vector-v2/everywhere/ev22-fix/revert/revert.py (restore checked by sha256), and its new case went red; the 25 earlier mutations were re-run against the fixed files and are all still red on their named cases (/tmp/vector-v2/everywhere/ev22-fix/mut/results.json).
+
+| # | Finding | What changed | Undone, red case |
+| --- | --- | --- | --- |
+| 1 (blocking) | After a failed first load, a successful Try again kept "Vector everywhere could not be reached. Try again." above the loaded lists | `refresh`'s final `set` takes `problem: current.loaded ? current.problem : undefined`: a write's problem stays beside the reloaded lists, a failed first load's goes once they load | R1: Try again |
+| 2 | Recovering from session-expired with a new token for the same account let a request sent with the refused token answer 401 into the renewed session | the same-account branch of `setSession`, when the state is session-expired, bumps `generation` and renews the `AbortController` before `set(empty())` | R2: refused-token answer after recovery |
+| 3 | `readMappings` skipped a mapping with no repository, which the repos PUT accepts, so the page showed the partial note and no Remove mapping | an empty `repositories` list is kept; the row says "No repository is set for this place." and offers only Remove mapping (the empty `<ul>` is not rendered) | R3: empty mapping, readMappings |
+| 4 | A failed GET repos counted as one malformed entry, so the page said "No place has a repository yet." beside it, and a 401 there was not session-expired | a 401 on any GET repos is session-expired; a GET repos that answers anything but 200 or 404, or a 200 `readMappings` refuses, puts the installation in the new `unread` list (not `partial`); MappingsSection shows that connection's heading with "The repositories set for this connection could not be read." and shows "No place has a repository yet." only when `unread` is empty | R4a: 401 on GET repos; R4b: unread repositories |
+| 5 | Scope: Connect Slack, Connect Linear, the Jira connect code and the Linear link start reach into EV-23's area | no code change: deviation (c) already records it, and Left open now asks the lead to confirm that EV-23 builds on `startLink` and `startInstall` | none |
+| 6 | (f) and the handoff suggested comparing the mapping's `setAt` with the wiring package's date, which does not work | (f), Left open and the handoff's "The private mark" now say why (`setAt` is rewritten on every PUT, this page's drop-repository is a PUT, the mark is kept) and ask for a mark timestamp of its own (`privateSetAt`) or clearing earlier marks | none (docs) |
+| 7 | `send` called `AbortSignal.any` before the promise chain, and `signInPath` and `readAuthorize` called `URL.canParse`: in a browser without either, the page stuck on Loading or with every button disabled | `send` builds the request inside `Promise.resolve().then(...)`, so a synchronous throw becomes `status: 0` (`unavailable`, Try again); it uses `AbortSignal.any` with the 10-second limit only where the browser has it, and the page's own signal alone otherwise; the private `parses` uses `URL.canParse` only where it exists, and without it nothing parses: `signInPath` falls back to `/everywhere` and `readAuthorize` refuses (Connect shows `unavailable`). The two older-browser cases remove the API from `AbortSignal` or `URL` and put it back in `finally`, the only way to stand in for such a browser | R7a and R7b: no AbortSignal.any; R7c: no URL.canParse |
+| 8 | The handoff and Left open cited `slack/install.ts:59` and `linear/install.ts:60`, ambiguous beside api/slack/ and api/linear/ | both now say api/_lib/everywhere/slack/install.ts:59 and api/_lib/everywhere/linear/install.ts:60 (re-checked on HEAD) | none (docs) |
+
+Disagreements: none. Not taken: the alternative in finding 2 (recording the token each answer was sent with) also covers a 401 during an ordinary TOKEN_REFRESHED, but a dropped write answer would leave `busy` set with no state change; Supabase refreshes a token before it expires, so the generation bump on recovery is the reviewer's first option and enough. The alternative in finding 1 (a separate `retry()`) is not needed once the load itself clears the problem.
+
+Receipts: vector-everywhere-progress.md, "EV-22".
+
+## 2026-11-20, EV-23: the vectordev.ai draft pages, the OAuth landing, the jobs and the audit log (VE-42b)
+
+Spec §8 VE-42; §3.12; §3.7; §3.8; §6.5; §6.6; pre-merge PUB-8. Built at HEAD `f11330ef` (EV-22), which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60` (it has not moved, so nothing was merged). PR #33 is on main: release-finish is an ancestor of origin/main `14cb9720`, which is 261 commits ahead of HEAD. The lane notes say both "once PR #33 is merged, merge origin/main instead" and "the lead merges main into this branch; until then never merge main yourself"; EV-19 to EV-22 followed the EV-14 precedent (the lead merges main), and so does this package. It does not need main: `git diff HEAD...origin/main` over every path this package touches changes only docs/vector/build/v2-notes/v2-complete-plan.md, at its §4.4 lines 216-224, well away from the §4.5 PUB-8 row annotated here. The precondition `d7e4aa54` (PUB-4, src/drafts and its unreleased-draft comment) is an ancestor. EV-22's CI at `f11330ef` was green before building on it (progress, EV-23). The plan was corrected by its critique; where a point was not taken, or taken only in part, the item says why. Nothing was committed in this step: the changes are in the working tree for the lane's commit gate.
+
+### What changed
+
+- **api/_lib/everywhere/jobs.ts:** `readJobHistory` :399, beside `readJob`: the sponsor's history (`ZREVRANGE`, newest first, at most `limit`), one `MGET` of the records, only records whose `sponsor` is the account (E18) and whose `receivedAt` is within 30 days; `capped` from one `ZRANGEBYSCORE … LIMIT limit 1` over the 30 days; `skipped` counts records that do not decode. A store that cannot answer throws 503. `parseRecord` :422 is the one JSON parse both reads use: `readJob` lost its own try/catch in review round one and still throws 503 on a record that does not parse.
+- **api/_lib/everywhere/account-api.ts:** `HISTORY_LIMIT` and `AUDIT_PAGE` (100 each) :80, the `AccountJob` and `AccountAuditEntry` answer types, and two GET-only routes: `history` :386 and `audit` :417, each `begin()` first (404 while off, before any sign-in or store read) and `checkAccount` again after the reads, as GET repos does. `accountJob` :434 copies ids, fixed codes, times and the PR link only; `privateSummary` :462 opens a summary only on the four conditions in (c) and (j) (`summaryHeld` :475 holds the three about the job) and passes it through `sanitizeReply`; the route reads each installation once, before the jobs are mapped; `accountAuditEntry` :479 drops `device` and `actor` and adds `byOther`. The header comment names the two reads. The file is not prettier-formatted at HEAD, so it was not reformatted.
+- **api/everywhere/history.ts and api/everywhere/audit.ts** (new, 5 lines each): the oauth-finish.ts shape.
+- **packages/web/src/components/marketing/everywhere/everywhere-model.ts:** `EVERYWHERE_ROUTES` gains oauthFinish, history and audit :20; the pinned vocabularies (`JOBS_LIMIT`, `AUDIT_LIMIT`, `JOB_ENDINGS`, `EVERYWHERE_AUDIT_EVENTS`, `AUDIT_EXTRA_CODES`, `EVERYWHERE_AUDIT_CODES`, `GITHUB_USER_ID_PATTERN`, `STATE_PATTERN`, `OAUTH_CODE_PATTERN`) :58; `PLATFORM_NAMES` with GitHub; the copy for jobs, the audit log, the landing and the link page :193; the landing, job and audit types :391; in the model, `landing`, `pending` and `pendingFor` :478, `finish` :692, `changeAccount` :728, `finishOAuth` :834, the activity reads in `refresh` :577; and the exported pure functions `readOAuthReturn` :1096, `takeOAuthReturn` :1115, `readFinish` :1124, `landingProblemOf` :1147, `readJobs` :1164, `readAuditEntries` :1223, `focusJob` :1266, `formatTime` :1273, and `installationLabel` for GitHub. Its only import is still `{ Everywhere }`. 1,358 lines (751 before).
+- **packages/web/src/components/marketing/everywhere/EverywhereView.tsx:** `EverywhereAccountView` takes `focus`, shows `LandingNotice` :178 and, with activity, `JobsSection` :205 and `AuditSection` :289; the states before the lists are one `Gate` :122, shared with the new `EverywhereLinkView` :67. Still no `<form>`. 684 lines (418 before).
+- **packages/web/src/components/marketing/everywhere/EverywhereAccount.tsx:** activity on; `takeOAuthReturn` then `finishOAuth` before the session is followed; `focus={focusJob(location.search)}`. **EverywhereLink.tsx** (new): the link page's root, no activity. **everywhere.css:** `.everywhere-job`, `.everywhere-focus`, `.everywhere-summary` (`white-space: pre-wrap`), `.everywhere-audit`.
+- **packages/web/src/drafts/everywhere.astro and packages/web/src/drafts/everywhere/link.astro** (new): the unreleased-draft comment on the first frontmatter line, the 2.0.0 move and keep line named on the next, `prerender = true`, `MarketingLayout … noindex`, the root with `client:only="react"`.
+- **packages/web/test/everywhere-pages.test.ts:** 66 cases (36 before; 65 before review round one): every account path mounted through `harness.mount` (`mountAccount`, a superset, so EV-22's cases are unchanged), FakeSlack and FakeLinear started, jobs seeded through the real `createJob`, `offerJob`, `claimJob`, `settleJob` and `refuseJob`.
+
+### The cases
+
+| Case | What it pins |
+| --- | --- |
+| takeOAuthReturn strips the fragment | a return is taken out with one `replaceState` to the path and query, the history entry's state kept; `#links`, no hash and `#` are left alone; twelve malformed fragments (no state, a doubled code or platform, an extra key, Jira or GitHub, a 15- or 129-character state, a code with a space, an empty or 1,025-character code, a code alone) are stripped all the same and give "invalid" |
+| the OAuth landing posts {code, state} | Alice's real Slack start, the real callback's 303, a stand-in place: before the session nothing is sent and the page says it is finishing; one POST, body keys exactly `code` and `state`, Bearer, accept, JSON, `credentials: "omit"`, `cache: "no-store"`, `redirect: "error"`, no query; every control off while it is on its way (Connect and Link send nothing); then the four reads and GET repos with the new connection; landing installed, "Connected Slack workspace T0123ABCD."; FakeSlack saw `oauth.v2.access` and `users.info`; a token refresh, a reload and Bob's sign-in send no second POST; the code and the state are in no later URL, navigation, href, page or `JSON.stringify(state())`, and in one body only |
+| signed out at the landing | no request; the landing says to sign in first under the sign-in prompt; a later sign-in sends nothing and clears it; the same when already signed out |
+| another account's return | Bob's session gets 403, the landing says another account started it, FakeSlack is not called and nothing is installed; switching to Alice clears it and sends nothing |
+| a 401 comes before the state is read | the return waits (the session-expired prompt says signing in again ends it); the same account's renewed token sends it once more and it installs; a later refresh sends nothing; a return kept for Dave is dropped when Bob signs in |
+| a malformed return | nothing is sent; the landing survives the first sign-in (`landingAtOpen`) and goes on the next action |
+| readFinish and landingProblemOf | three installs and two links read; twelve answers refused (another platform's installation, platform mismatch, unknown change, a link on Slack, a Slack id, an unmasked email, a non-boolean `already`, another purpose, a string, null); fifteen statuses and codes mapped |
+| React's double mount | `finishOAuth`, `close()`, the fragment gone on the second mount, then one POST |
+| the link page signed out | the sign-in link carries `/everywhere/link`; no button, no request |
+| the link page binds viewer.id | `startLink` goes to Linear's authorize page with `actor=user`, `scope=read` and the state; the real Linear callback lands on `/everywhere#…`; the person grant's viewer is linked to Alice (`findLink`), listed, and named in the landing with Alice's masked hint, never her email; FakeLinear saw `oauth` then `viewer` with the person token, which no store command holds; the link page lists it and never read the jobs or the audit log |
+| a guest or app viewer | `LINEAR_GRANT_INVALID` gives "not-verified", no link; a workspace nobody connected gives "not-connected", no link |
+| the link page's root | renders loading, no account call |
+| the history and audit routes | off: 404 for GET and 405 for POST and DELETE ((b)), no account call, no store command; on: 401 without a bearer or with an unknown one, 405 for POST and DELETE, no store command |
+| GET history lists only the account's own jobs | three jobs newest first; Bob's id and a 31-day-old id put into Alice's history are absent; the exact answer for a refused job; only the fifteen fields; no requester, sponsor, device, lease, reply, sealed summary, limits, kind, declines, task or channel id; the activity reads carry the bearer, no body and no query |
+| GET history counts what it could not read | an undecodable record is `skipped: 1`, the rest listed; 100 more ids in the 30 days give `capped: true` and the page says only the newest are shown |
+| the jobs view hides summaries for shared places | a Slack DM, a Slack channel, a Linear issue and a private job another account asked for, each settled with a summary: only the DM's is answered and shown, once, as plain text; the two shared rows say this page does not show them; after `clearSummary` (posted) the DM's is gone too |
+| a held summary is cleaned on the server | four Slack DM jobs settled through the real `settleJob` with a token-shaped secret, a diff that passes the settle decoder (`&#100;iff --git …`, a diff once the post's cleaning decodes it), a link to another host, and a link alone: GET history answers WITHHELD.secret, WITHHELD.code, the sentence without the link, and no summary for the fourth; neither the answer nor the page holds the token, `ghp_`, the file name, the entity or the host; the installation key is read once for the four jobs (review round one) |
+| a held summary after a disconnect | the real jobs eraser; after Disconnect the job stays listed with no summary; after a re-install a minute later it is still hidden |
+| readJobs on a forged answer | a shared job's summary is dropped and the job kept |
+| each job's labels | a running Actions job reads "Running · Route: GitHub Actions" and never "your computer"; reason, ending, end time, outcome, PR link with `rel="noopener noreferrer"`, issue key, job id, GitHub's name and installation; every state, route, outcome and platform has its text |
+| readJobs skips malformed entries | nineteen malformed entries (an unknown field, a bad id, a mismatched installation, unknown words, a bad repository, issue or time, a PR into another repository or host, a too-long or empty summary, a duplicate, a string, null); a PR URL matched case-insensitively; the 100 cap; five malformed answers; the page's partial note |
+| a refused or failing jobs read | a 401 is session-expired; a 503, 404 or no answer, or an answer the decoder refuses, names the jobs as unread once while the lists and the audit log show |
+| a job link | `focusJob` takes one well-formed `job`; the row is marked (`everywhere-focus`, `aria-current`); a missing job says so; a malformed one is ignored |
+| without activity | EV-22's page and the link page send no history or audit read and show neither section |
+| GET audit | newest first; Bob's admin re-install is in Alice's log as `connector-change` with `byOther: true`, `code: "admin"`, his Slack user id and no `actor`; the settle entry has no `device`; an entry from 91 days ago is absent; only the nine fields; the page shows "by another Vector account" once and never Bob's id or email, Alice's id or email, or the device |
+| the vocabularies | events, codes, endings, both limits and the GitHub user id pattern equal the server's |
+| readAuditEntries | eleven malformed entries and a duplicate skipped; a GitHub entry; the 100 cap |
+| the keep set lacks everywhere | EV-22's check, renamed to say so |
+| the drafts exist and nothing is routed | both drafts' first frontmatter line is the comment, `prerender`, the title, `noindex` and the root; nothing at their future src/pages paths; every import resolves into components/marketing from both places; the layout keeps the robots tag on and the visit counter off for `noindex` |
+| nothing imports or links the drafts | no import of `drafts/` in src; no `/everywhere` href or vectordev.ai/everywhere outside the everywhere components and drafts; astro.config.mjs names neither |
+| against a real Redis | GET history over Valkey: two jobs newest first, the DM's summary only, nothing cut or skipped, no task (skips without VECTOR_TEST_REDIS_URL; runs in vector-everywhere.yml) |
+
+### Deviations
+
+- **(a) PUB-8: the landing is a draft, and it is /everywhere itself.** Both callbacks redirect to `/everywhere#platform=…&code=…&state=…` (api/_lib/everywhere/slack/install.ts:59, linear/install.ts:60), and the callback cannot know whether the state is an install or a link before oauth-finish takes it, so there is no third page: the account page is the landing. It exists as packages/web/src/drafts/everywhere.astro. Moving it, with drafts/everywhere/link.astro, to src/pages and adding the `"everywhere"` keep line is the owner's activation step at 2.0.0 (spec §6.5); until then the callbacks answer 404 while the feature is off, so nothing lands on the missing page.
+- **(b) Two read routes beyond VE-04's list.** No account route read jobs or the audit log, so GET api/everywhere/history and GET api/everywhere/audit are new, in the safe zone (§6.6). Each is GET only, off by default (404 before any sign-in or store read), capped at 100, newest first, and checks the account again after its reads. The history read lives in jobs.ts beside `readJob` (critique taken), not in the route. Off means 404 for GET only: a POST or DELETE answers 405 with `allow: GET`, because `methods()` checks the method before `begin()`, as on every account route, so the answer shows that the route exists; no sign-in or store read happens either way, and the off case pins both (review round one, finding 7). Checking the switch before the method lookup is a change for every account route at once, for the lead; it was not made here.
+- **(c) Summaries follow the brief, not spec §3.12 and §3.7.** The brief says summaries only for private-place jobs; the spec makes the job page the private delivery surface for shared places' summaries. The critique asked to put this to the lead before building; it was built per the brief, the safe default, and is put to the lead here, in the handoff and in the report. What it means in practice: a summary is erased once posted (`clearSummary`), and only a verified Slack DM is a private place, so the page shows a DM's summary only while its post has not gone out (pending or failed). The held Linear, Jira and GitHub summaries (kept because their private delivery answers 503) reach no one under either rule until the private result surface exists: the adapters' `privateResult`, then `privateDelivered` and `clearSummary`; to open it, `privateSummary` and `readJobs` would drop their `shared` conditions. The plan's "no new decryption path" was wrong (critique taken): `openSummary` now runs in an account route. It runs only when all hold: the job is not shared, the signed-in account is `requester.account`, `summaryEnc` is present, and the installation's current record exists and was installed no later than the job was received ((j)). `sharedSummary` says only that this page does not show them, not that they went elsewhere (critique taken). The summary is passed through `sanitizeReply` (with the secret, code and URL rules, at the 1,500-character summary limit) before it is answered, as the post path does through `renderResult` (3.7, E4, E6): a secret-like summary answers WITHHELD.secret, code or a diff WITHHELD.code, a link to another host is removed, and a summary left empty is not answered. The computer cleans the text before settle (everywhere-scan.ts), but the server does not rely on it (review round one, findings 1 and 6). The lead should rule on this item before Linear or Jira goes live; if the spec's rule is chosen, the change is to drop the `shared` conditions in `summaryHeld` and `readJobs` once the adapters' `privateResult` path exists (review round one, finding 4).
+- **(d) Links are the PR link only**, into the job's own repository (checked again in `readJobs`), plus the `?job=vej_…` marker (`focusJob`). The desktop's `jobsPage` links the page without `?job=` today. Platform thread links are not built (Left open).
+- **(e) The link page reuses `startLink`**, one start for both pages (EV-22 (c), confirmed). Its return lands on /everywhere. It says the Linear workspace must be connected first, and a `not-connected` refusal has its own text (critique taken); every other `EVERYWHERE_LINK_REFUSED` reason has one text.
+- **(f) The OAuth return.** The fragment is taken out of the address bar (`replaceState`, path and query kept) before anything reads or sends the code; the code lives only in the model's memory, never in a rendered state; it is sent once, in a JSON body with exactly `code` and `state`, while every control is off (critique taken: `busy` from the POST to its answer, so nothing can navigate away after the server used the state). A 401 comes before the state is read (account-api.ts `begin`), so the return is kept for the same account's renewed token and sent once more (critique taken); it is dropped on a sign-out, another account's sign-in or accounts unavailable. Every other answer ends it. `close()` keeps an unsent return, so React's development double mount sends it once; an answer dropped by an account change says "interrupted".
+- **(g) Loading the jobs and the audit log is opt-in** (`activity`): EV-22's "routes and URLs" and "feature off" cases pin exactly the routes they call, and the link page needs neither.
+- **(h) The audit log withholds the computer's id and other accounts' ids.** `device` and `actor` are dropped; `byOther: true` says another account acted (an admin's re-install).
+- **(i) The vocabularies are copied into the client and pinned** to the server's (the model imports only the schema), as EV-22 did for its patterns.
+- **(j) A disconnected installation's jobs stay listed, ids only, and their summary stays hidden after any later install.** jobs.ts `eraseInstallationJobs` cancels live jobs but leaves ended records and their sealed summaries for the rest of their 30 days (Left open, for the lead). The critique showed that checking only that the installation exists would bring a summary back after a re-install; `privateSummary` therefore also requires `installedAt` (rewritten by every install, kept by a token refresh) to be no later than the job's `receivedAt`. Not taken: requiring the current connector to be the signed-in account, which would hide summaries in every workspace someone else connected, the usual team case.
+- **(k) Times are UTC to the minute** (`formatTime`), the same on every computer, like EV-22's days.
+- **(l) Route-neutral state labels** (critique taken): `running` reads "Running" and the route says where (an Actions run is `running` too); only `offered`, `claimed` and `lost`, which are laptop-only states, name your computer, and `dispatched` names GitHub Actions.
+- **(m) Landing problems.** `SLACK_GRANT_INVALID` and `LINEAR_GRANT_INVALID` (a guest, an app, a restricted installer) read "not-verified" (critique taken). Every problem after the state was used says to start again from Connect or Link; `installed-elsewhere`, `link-refused`, `not-connected` and `not-found` say what is true instead.
+- **(n) The history read skips an undecodable record**, unlike `readJob`'s 503: one record a newer deployment wrote must not hide the account's whole list. It is counted in `skipped`, and the page shows its partial note. `capped` comes from the server (critique taken), not from the client counting 100.
+- **(o) The route checks are in this file, not in everywhere-link-api.test.ts** (critique offered both): that file mounts with `RouteHarness.use`, which knows five paths, and changing the shared fake was out of scope. The case covers off (404, no account call, no store command), 401 and 405, and mutation M25 turns it red.
+- **(p) Copy.** Facts only, no "project", no privacy, legal, price or comparative claim. The plan's "vectordev.ai/everywhere" in the link page's copy became "the Vector everywhere page", so no copy names a URL the site does not serve yet.
+- Plan items dropped or changed: the sitemap check (`public/sitemap*.xml` does not exist; the sitemap is generated and pruned at build time, so its check waits for 2.0.0, critique taken); vector-mention-copy ran from packages/web, where it lives (critique taken); the plan's `?job=` was kept with `focusJob`.
+
+### Not changed
+
+The OAuth callbacks, every other route and api/ file, src/pages, the prune script, docs-nav.ts, astro.config.mjs, MarketingLayout.astro, every workflow, env var, flag, dependency, lockfile and generated file, and the shared test fakes (packages/web/test/lib). EV-22's 36 cases pass unchanged.
+
+### Safe by default
+
+- **Nothing is reachable.** The drafts are under src/drafts, which Astro does not route; nothing imports or links them; the keep set, docs-nav and astro.config.mjs are unchanged, and the test pins all of them.
+- **The server stays off.** With VECTOR_EVERYWHERE_ENABLED unset both new routes answer 404 before any sign-in or store read, and both callbacks answer 404 before redirecting, so no landing receives a code. The routes are read-only, sponsor-checked and capped, and never answer task text, context, reply references, a device, a lease, another account's id or a shared place's summary. The one summary they answer is cleaned on the server by `sanitizeReply`, as the post is, so a secret, code or a link to another host never reaches the page.
+- **The browser keeps nothing.** No storage and no cookie; requests use `credentials: "omit"` with the bearer token only. The code is stripped from the URL first, held in memory only, sent once in a JSON body and dropped on any sign-out, account change or refusal.
+- **No new control.** No allowlist, no toggle, no form; the copy states only what the code does.
+
+### Left open
+
+- **The summary rule against spec §3.12 and §3.7, for the lead** ((c)), to be ruled on before Linear or Jira goes live. Either way the held Linear, Jira and GitHub summaries reach no one until `privateResult` is built.
+- **The OAuth code limits differ** (review round one, finding 5): the Slack callback (api/_lib/everywhere/slack/install.ts:56) redirects codes of up to 2,048 characters, but identity.ts `OAUTH_CODE` and the landing's `OAUTH_CODE_PATTERN` (everywhere-model.ts:56) take at most 1,024, as the Linear callback does, so a Slack code of 1,025 to 2,048 characters lands and reads as `invalid-return` instead of a server problem. The callback and identity should use one limit, so a callback never redirects a code the landing refuses. Not changed here: the callbacks are outside this package.
+- **An ended job's sealed summary outlives its installation** (E13, for the lead): `eraseInstallationJobs` could clear `summaryEnc` on the installation's ended jobs; the history index has them.
+- **Cancelled and directory OAuth returns** (for the lead and the owner): `?error=access_denied&state=…` gets a blank 400 from both callbacks rather than a landing with a fixed problem, and spec §3.8's directory install (sign in first, then finish) is not built: a signed-out landing drops the return. Both matter for the listings (L2 Slack, L3 Linear).
+- **The lane's path filter** (vector-everywhere.yml, FIT-4, review-fixes) does not cover packages/web/src/drafts/everywhere*.
+- **`?job=` is dropped by the sign-in round trip** (`signInPath` keeps the path only), and the desktop's link has none yet.
+- **No platform thread links**; the link page also reads each installation's repositories; the fragment stays in the address bar until the page's script runs.
+
+### Mutations
+
+/tmp/vector-v2/everywhere/ev23-mut/mutate.py edits one file in place (or, for M22, copies the draft into src/pages), runs only everywhere-pages.test.ts through vector-serial, and restores in `finally`, checking every file's sha256 against before.sha256.json; src/pages/everywhere.astro is removed after M22. Each mutation turned its named case red, and every restore matched. The counts below are from review round one's re-run of all 37 against the fixed files (/tmp/vector-v2/everywhere/ev23-fix/mutate.py, a copy with M1, M5, M6, M6b and M7 re-anchored to the new code and M35 and M36 added; results in ev23-fix/mut/results.json): each is red on its named case, and every restore matched.
+
+| Mutation | Red case(s) | Result |
+| --- | --- | --- |
+| M1 the route answers shared-place summaries | the jobs view hides summaries for shared places | 64 pass, 1 fail |
+| M2 the client keeps shared-place summaries | readJobs drops a summary on a shared job | 64 pass, 1 fail |
+| M3 no sponsor check | GET history lists only the account's own jobs | 64 pass, 1 fail |
+| M4 no 30-day filter | GET history lists only the account's own jobs | 64 pass, 1 fail |
+| M5 the device returned | GET history lists only the account's own jobs | 61 pass, 4 fail |
+| M6 no installation check on a summary | a held summary is gone once its installation is disconnected | 64 pass, 1 fail |
+| M6b no install-epoch check (a re-install brings a summary back) | a held summary is gone once its installation is disconnected | 64 pass, 1 fail |
+| M7 no requester check | the jobs view hides summaries for shared places | 64 pass, 1 fail |
+| M8 the audit actor returned | GET audit: newest first | 64 pass, 1 fail |
+| M9 the device in the audit | GET audit: newest first | 64 pass, 1 fail |
+| M10 no 90-day filter | GET audit: newest first | 64 pass, 1 fail |
+| M11 no replaceState | takeOAuthReturn strips the fragment | 63 pass, 2 fail |
+| M12 the hash kept | takeOAuthReturn strips the fragment | 63 pass, 2 fail |
+| M13 the platform also in the body | the OAuth landing posts {code, state} | 63 pass, 2 fail |
+| M14 the pending return not cleared when sent | the OAuth landing posts {code, state}; another account's return is refused | 63 pass, 2 fail |
+| M15 the return kept when signed out | signed out at the landing | 64 pass, 1 fail |
+| M16 the landing kept on an account switch | another account's return is refused | 63 pass, 2 fail |
+| M17 close() drops the return | a return held through React's double mount | 64 pass, 1 fail |
+| M18 the link page's sign-in returns to /everywhere | signed out, the link page offers only a sign-in | 64 pass, 1 fail |
+| M19 a 401 on an activity read reads as unread | a refused session on a jobs read | 64 pass, 1 fail |
+| M20 everywhere in the prune keep set | the keep set lacks everywhere | 64 pass, 1 fail |
+| M21 the draft comment removed | the drafts exist and nothing is routed | 64 pass, 1 fail |
+| M22 a draft copied into src/pages | the keep set lacks everywhere; the drafts exist and nothing is routed | 63 pass, 2 fail |
+| M23 focusJob accepts anything | a vectordev.ai job link marks its job | 64 pass, 1 fail |
+| M24 readFinish accepts another platform's installation | readFinish and landingProblemOf | 64 pass, 1 fail |
+| M25 the history route reads the store before begin | the history and audit routes | 64 pass, 1 fail |
+| M26 running is said to be on your computer | each job's platform, route, state | 64 pass, 1 fail |
+| M27 a 401 drops the return | a 401 comes before the state is read | 64 pass, 1 fail |
+| M28 the finish POST does not hold the controls | the OAuth landing posts {code, state} | 64 pass, 1 fail |
+| M29 a platform's unverified grant reads as unavailable | a guest or app viewer is not linked; readFinish and landingProblemOf | 63 pass, 2 fail |
+| M30 capped never set | GET history counts a record it could not read | 64 pass, 1 fail |
+| M31 an unreadable record not counted | GET history counts a record it could not read | 64 pass, 1 fail |
+| M32 a 401 kept return sent for another account | a 401 comes before the state is read | 64 pass, 1 fail |
+| M33 a malformed return's landing cleared by the first sign-in | a malformed return posts nothing | 64 pass, 1 fail |
+| M34 the link refusal's reason ignored | a guest or app viewer is not linked; readFinish and landingProblemOf | 63 pass, 2 fail |
+| M35 the server does not clean a held summary (`sanitizeReply` removed) | a held summary is cleaned on the server | 64 pass, 1 fail |
+| M36 the installation read once for each job (no `Set`) | a held summary is cleaned on the server | 64 pass, 1 fail |
+
+In the first run, M19 was re-run alone after prettier re-indented its anchor line (whitespace only); the other 34 anchors still matched exactly once after formatting. The plan's M1 to M24 are here with the critique's additions: M6b (a re-install brings a summary back), M25 (the history route reads the store before `begin`), M26 (running said to be on your computer), M27 (a 401 drops the return), M28 (the finish POST does not hold the controls), M29 (an unverified grant reads as unavailable), M30 and M31 (`capped` and `skipped`), M32 (a kept return sent for another account), M33 (a malformed return's landing cleared by the first sign-in) and M34 (the link refusal's reason ignored). Review round one added M35 (no server-side `sanitizeReply`) and M36 (an installation read for each job).
+
+### Coordination
+
+`git fetch origin` of main and every lane, then `git diff HEAD...origin/<lane>` over every touched path (the two api files and the two routes, the everywhere components, MarketingLayout.astro, src/drafts, src/pages, the pages test and packages/web/test/lib, the prune script, docs-nav.ts, astro.config.mjs, the schema's everywhere files, audit.ts, keys.ts, identity.ts, both install.ts files and the five lane documents): empty for connect-finish `19c48b89`, hands-finish `8139e5fc`, scope-finish `86294f80`, workspaces-finish `e37ec1b5`, review-fixes `1433d105` and native-qualify `2677c32c`. main `14cb9720`, codium-finish `58663f5b` and brain-transport `0d18f750` change only v2-complete-plan.md lines 216-224 (§4.4); this package adds a note after the §4.5 table, about twenty lines below.
+
+### Deferred verification
+
+- A real browser's `replaceState`, React StrictMode and hydration timing, real Supabase sessions, Slack's and Linear's authorize pages: the rules allow none here. The root's own lines are covered by the web typecheck and the two root cases.
+- The pruned build (everywhere/index.html and everywhere/link/index.html kept, the sitemap) at 2.0.0, with the move.
+- The real-Redis case and CI: vector-everywhere.yml (green is the package's Done-when), typecheck.yml and vector-at-mention.yml (api/ changed; it runs the root api-module-loading test) are dispatched after the commit. vector-codium.yml is not (lane rule).
+- VE-50.
+
+### Review round one (2026-11-20)
+
+Ten findings, one blocking; findings 6, 8 and 9 repeat 1, 2 and 3. All are fixed or answered here, and nothing was committed in this round. The new case goes red when either fix is undone (M35, M36), and the 35 earlier mutations were re-run against the fixed files, five of them re-anchored to the new code: all 37 are red on their named cases and every restore matched by sha256 (Mutations above; /tmp/vector-v2/everywhere/ev23-fix/mut/results.json).
+
+| # | Finding | What changed | Undone, red case |
+| --- | --- | --- | --- |
+| 6 (blocking), 1 | `privateSummary` answered the stored summary as written. The post cleans it (events.ts `finish`, `renderResult`, `sanitizeReply`), but the settle decoder checks only for code, so a secret-like summary, a diff the decoder does not see, or a link to another host reached the page while the DM would have withheld or removed it | `privateSummary` returns `sanitizeReply(opened, { platform, repository, maxChars: LIMITS.summaryChars }).text`, as `renderResult` does, and nothing when that is empty ((c)). New case: four DM jobs settled with a token-shaped secret, a diff that passes the decoder (`&#100;iff --git …`), a link to another host and a link alone; GET history and the page give WITHHELD.secret, WITHHELD.code, the sentence without the link and no fourth summary, and never the raw text | M35: a held summary is cleaned on the server |
+| 2, 8 | GET history read the installation once for each job with a summary: up to 100 reads (200 store commands) for one installation | the route collects the distinct installations of the jobs that hold a summary (`summaryHeld`), reads each once before the jobs are mapped, and passes the snapshot to `privateSummary`; `accountJob` and `privateSummary` are synchronous now. The new case pins one GET of the installation key for its four jobs | M36: a held summary is cleaned on the server |
+| 3, 9 | `parseRecord` added a second JSON.parse try/catch beside `readJob`'s | `readJob` uses `parseRecord` too, so jobs.ts has one parser; a record that does not parse still throws 503 (`UndecodableJob`) there and is still `skipped` in the history. Not taken: `Schema.decodeUnknownOption(Schema.UnknownFromJsonString)`, because no module in api/_lib/everywhere imports effect, and adding it for one parse is a larger change than the finding asks | none (behaviour kept: everywhere-jobs, everywhere-jobs-api and everywhere-erase re-run green) |
+| 4 | (c) leaves the held Linear, Jira and GitHub summaries with no reader until the lead rules | no code change, as the finding says: (c), Left open and the handoff now ask the lead to rule before Linear or Jira goes live, and name the change for the spec's rule (drop the `shared` conditions in `summaryHeld` and `readJobs` once `privateResult` exists) | none (docs) |
+| 5 | The landing's 1,024-character code limit (identity.ts `OAUTH_CODE`) is below the Slack callback's 2,048 | no code change (the callbacks are outside this package): Left open here and in the handoff | none (docs) |
+| 7 | While off, POST and DELETE answer 405 with `allow: GET` instead of 404, because `methods()` runs before `begin()` | no route change: it is the pattern of every account route, and changing it is one change for all of them, for the lead. (b) records it, and the off case now also sends POST and DELETE to both routes and pins 405, no account call and no store command | none (pinned) |
+| 10 | The record did not say the private summary is cleaned | (c) and Safe by default say so; the cases and mutations tables gain the new case, M35 and M36; the case count is 66 in this entry, the progress receipt, the spec's VE-42 note and the handoff | none (docs) |
+
+Disagreements: none.
+
+## 2026-11-20, EV-24: the docs draft and the owner go-live guides (VE-44)
+
+Spec §8 VE-44; §3.12 "Docs"; §4.1 to §4.4 (registration and listing steps); §7 (go-live and listing tables); §10 (owner actions); lead amendment of 2026-11-20 (no legal, privacy, terms or consent wording). Built at HEAD `f3abbd6c` (EV-23), which equals origin/everywhere-finish and holds origin/release-finish `67ec3a60` (it has not moved, so nothing was merged). origin/main `14cb9720` is ahead and is the lead's to merge (the EV-14 precedent): `git diff HEAD...origin/main` over this package's paths is empty, and over the files its test reads it changes only docs/vector/owner-actions/github-app.md and vector-mention.md, which the guides link and never edit (main keeps github-app.md's "Production configuration" heading). The precondition `d7e4aa54` (PUB-4, src/drafts) is an ancestor. EV-23's CI at `f3abbd6c` was green before building on it (progress, EV-24). The plan was corrected by its critique, every point of which was taken; the items below say where. Nothing was committed in this step: the changes are in the working tree for the lane's commit gate.
+
+### What changed
+
+- **packages/web/src/drafts/docs/everywhere.astro** (new, 165 lines after review round one): the unreleased-draft comment on the first frontmatter line; the 2.0.0 move and its docs-nav entry named next, with DocsPage's throw for a missing entry; a comment that "Set it up" waits for the desktop write path (EV-21, "Ruling on (a)", (aj)); review round one's two notes, that step 3 waits for the production repository port and the Linear and Jira mapping route, and that Vector Local declines every job until EV-21 labels the desktop's GitHub calls; `import DocsPage from "../../layouts/DocsPage.astro"` (the same file from src/drafts/docs and src/pages/docs); `prerender = true`; `<DocsPage id="everywhere">` with the sections how, waiting, who, setup, platforms (Slack, Linear, Jira), words, erase and github. Its only links are `/legal/privacy#codium` and `/docs/vectorscope#github`.
+- **docs/vector/owner-actions/vector-everywhere-{github,slack,linear,jira}.md** (new; 122, 172, 167 and 170 lines): the same eleven `## ` sections in the same order (Where things stand, Before you start, Keys, Settings, Go-live steps, Turning it on, Live acceptance, Turning it off, Texts you provide, At 2.0.0, Listing). Keys, Turning it off and At 2.0.0 are byte-identical in all four; Turning it on is byte-identical in Slack, Linear and Jira, and GitHub's says there is nothing to turn on yet. Prettier-formatted (the Settings tables are padded).
+- **packages/web/test/everywhere-docs.test.ts** (new, 675 lines after review round one, 17 cases).
+- **api/_lib/everywhere/jobs.ts** (review round one): the sweep's default batch is exported as `SWEEP_LIMIT` (still 200) and `sweepDue` reads it, so the guides' "every further 200 live jobs" is pinned to the code. Nothing else changes.
+- Lane documents: this entry and a note under EV-04's "The safe turn-off and turn-on orders"; the progress receipt; spec notes on §3.12 Docs, §6.5's docs-nav row, §8's VE-44 row and §10's "Keys and env" and "Legal and pages"; the handoff's status bullet, an annotation under "Owner actions still to come" and an EV-24 Left open block.
+
+### The cases
+
+| Case | What it pins |
+| --- | --- |
+| the docs draft is unrouted | (review round one: also no `"everywhere"` in script/prune-vector-site.mjs, the keep line each guide's At 2.0.0 adds) the first two lines, `prerender`, `<DocsPage id="everywhere">`; no src/pages/docs/everywhere.astro and no src/pages file matching /everywhere/i; no docs-nav link with an everywhere id and no "everywhere" in docs-nav.ts or astro.config.mjs; the one import resolves to src/layouts/DocsPage.astro from both places; DocsPage still throws for an id with no entry; no src file but the draft names `drafts/docs/everywhere` or `/docs/everywhere` |
+| says what the contract holds | (review round one: also the intro's pointer "except as described below when you choose a Vector Codium model", the request going "on through OpenRouter to the model's provider", and "a push that has already started finishes, and its draft pull request can still open") the brief's six pinned sentences (S1 to S6) on the markup-free text; the numbers from the code: waits at most `ceil(TIMING.queueMs / hour)` hours with `queueMs < bodyTtlMs`, encrypted for at most `bodyTtlMs` hours, `jiraQueueMs` minutes in Jira, `jiraRunMs` minutes, `LIMITS.threadMessages` messages, a link code `KEEP_MS.linkCode` minutes, jobs `KEEP_MS.job` and audit `KEEP_MS.audit` days, `COMPUTER_SEEN_MS` days; the Codium gateway qualifier ("does not store them") and its `/legal/privacy#codium` link; macOS and Windows, the private-repository push rule, refused approvals, "the summary may name files but carries no code", nobody else's request, the start-nothing list and "can only lower them" |
+| names every control word | every backticked word `renderHelp` gives for Slack, Linear and Jira (help, link, repo, status, stop, unlink) appears as `<code>word` |
+| links only pages that exist | the hrefs are exactly the two above; privacy.astro has `id="codium"`, vectorscope.astro `id="github"`; no `/everywhere` href and no vectordev.ai/everywhere; "the Vector everywhere page" in text |
+| promises nothing the contract refuses | 25 deny patterns, each commented with what it guards (comparative and parity, other products, Actions and runners, hosted computers, laptop-first and binder, teammates and allowlists, phones and passkeys, search and other history, the CLI, prices and plan names, compliance, guarantees, availability, a Linear or Jira summary, a "settings file", projects) and the drafting phrases |
+| the deny list leaves ordinary sentences alone | ten sentences with Slack, provider, maximum, as soon as, misleading, instance, "the only exceptions", the teammate sentence, Professional and "Vector's servers" match nothing; ten sentences, one per family, are each caught |
+| the guides share their headings | the h1 per platform, one h1, the eleven h2s in order; no vector-everywhere-legal-drafts.md |
+| the shared sections are byte-identical | Keys, Turning it off and At 2.0.0 across four; Turning it on across three; GitHub's names `HANDOFF_UNAVAILABLE` and says not to list `github` |
+| a Settings row for every setting | the row count equals the expected names (a parse miss fails loudly); each guide has the seven common `ENV_NAMES` and its own platform's, and no other platform's; three cells, value and off cells of 10 characters or more; the union is all of `ENV_NAMES`; `CRON_SECRET` is not to be changed, needs 16 characters and names the 401; the flag's off cell names claim's 409 and `{enabled: false}` |
+| the key commands make keys the code accepts | the two `node -e '…'` lines from Keys run under bun in a temporary folder (removed in `finally`); `cd "$(mktemp -d)"` precedes the pair command and no text points at a checkout; the data key's warning names the installations; 44 characters that `parseDataKey` accepts; a 43-character public key; the PEM at mode 0600 that `parseOfferSigningKey` accepts as written and with `\n` escapes; `offerPublicKey` gives the printed key; an offer signed by `signOffer` verifies with the desktop's `createOfferVerifier` against `{kid: printed}` |
+| turn it off in EV-04's order | (review round one: also "each server keeps the switch for `SWITCH_CACHE_MS / 1000` seconds" and "every further `SWEEP_LIMIT` live jobs", from codium-switches.ts and jobs.ts) `stop`, then "at least 2 minutes", then "Unset `VECTOR_EVERYWHERE_ENABLED`"; `no-new` named; every backticked lowercase word but a switch name or true/false is an `everywhere` switch value, so never `off`; `SWITCH_CACHE_MS` plus a minute fits in 2 minutes; vercel.json has the per-minute sweep cron |
+| turn it on from the stop switch | `stop`, then the flag `true`, then back to `on`; redeploy; your own account id only; `VECTOR_REMOTE_ENABLED` and the `remote` switch; never the flag without the cron; never `github`; CRON_SECRET left as it is |
+| go-live before listing | Slack's 10 active workspaces and 20 monthly active users; Linear's 320×320 and the directory-submission gate under Go-live; Jira's partner, security contact and questionnaire, and the manifest test named in its go-live; GitHub's "No listing is needed", HANDOFF_UNAVAILABLE and Q13 |
+| every open gate is named while open | (review round one: also the page's "With Vector Local on, the computer declines jobs." and its frontmatter's rewrite note, present exactly while desktop everywhere-runner.ts holds the `github` guard in `localAllows`; and the frontmatter's step-3 rewrite note, present exactly while the tracker guides name the production repository port and Linear's and Jira's "cannot be mapped") tripwires: `LAPTOP_ROUTE_WIRED` false and `OFFER_KEYS` empty, named in every Before you start; the desktop model's read-only sentence present exactly while every guide names "Ruling on (a)" and the draft's comment says to rewrite "Set it up"; the repository port and PUB-8 for the three trackers; the mapping gate and `privateResult` for Linear and Jira; Slack's and Linear's "(or in GitHub Actions)" gate present exactly while `renderHelp` says it; Slack's "GitHub runner" gate present exactly while the manifest says runner |
+| legal texts are listed, not drafted | each tracker's Texts names the privacy URL and file, the Terms URL, the H8 pin test, the consent text and `PERK_COPY.everywhere`; Slack the landing and support pages; Jira the questionnaire and `inScopeEUD: true`; no drafting phrase in any guide |
+| paths and links exist | (review round one: a guide's path to one of the three pages moved at 2.0.0 counts as present at either address, src/drafts or src/pages, and each of the three is at exactly one; the routing case stays the move's one tripwire) every backticked repository path (no globs, braces or `:line`) and every relative link in the guides exists, but the three 2.0.0 targets, which must not exist yet |
+| no leaks | (review round one: the machine-path pattern also catches /root/…, C:\Users\… and /tmp/claude-…, pinned by five caught and five allowed sentences) no PEM body, Slack, GitHub, Linear, AWS or `sk-` token, no secret-like setting with a value, no email address, no home folder, and no comparative claim, in the page or any guide |
+
+### Deviations
+
+- **(a) The lead's amendment: no legal or privacy drafts.** docs/vector/owner-actions/vector-everywhere-legal-drafts.md is not written. Each Slack, Linear and Jira guide lists, under "Texts you provide", what the owner writes (the privacy section, the legal read and any Terms clause, the consent text for "This computer takes jobs", the perk copy, and per platform the landing, support, agent description, directory and Marketplace texts), where each appears (URL and source file) and the facts it must match. This supersedes spec §3.12 "Docs", §8 VE-44 ("drafts of the Slack landing, privacy and support text") and §10 "Legal and pages". The privacy and Terms rows also say both pages are hash-pinned by test/codium-legal.test.ts (H8) and change only in a release commit that moves their date, after codium-track's change (critique taken).
+- **(b) The page is a draft with no sidebar entry until 2.0.0.** It lives at packages/web/src/drafts/docs/everywhere.astro, beside §6.6's packages/web/src/pages/docs/everywhere.astro, and VE-44's "listed in the docs sidebar" moves to the owner's 2.0.0 step, whose exact five-line entry is in every guide's At 2.0.0. DocsPage throws at build for an id with no docs-nav entry (DocsPage.astro:23), so a move without the entry fails loudly; the test pins that throw.
+- **(c) No link to the unreleased account pages** (critique taken; the plan's exemption is not built). The plan exempted this draft from EV-23's "nothing imports or links the drafts" scan so it could link /everywhere and /everywhere/link. That loosens an existing guard, which the lane rules forbid, so everywhere-pages.test.ts is unchanged and the page names "the Vector everywhere page" in text only (the plan's own fallback). The 2.0.0 change can add the links with the move.
+- **(d) Shared sections are duplicated, not included.** Each guide is self-contained; Keys, Turning it off and At 2.0.0 are byte-identical in all four and Turning it on in the three trackers, pinned by the test, with no fifth file. GitHub's Turning it on and Live acceptance differ (critique taken): listing `github` in VECTOR_EVERYWHERE_PLATFORMS opens it (`readConfig` counts GitHub as always configured) while its handoff still answers 501, and VE-50 has nothing to run on GitHub today.
+- **(e) The first activation starts from the `stop` switch**, beyond EV-04's re-activation order: deploy (the routes, the cron and the switch; Vector Remote live through remote.md step 8, with `VECTOR_REMOTE_ENABLED`, the relay URL and the `remote` switch on, and the owner's plan including Remote; a desktop release pinning `OFFER_KEYS`), set the switch to `stop`, set the keys, the platform's settings, ALLOW_ACCOUNTS to the owner's id only, PLATFORMS and the flag, redeploy, check the sweep's cron log for 200 (not 401 or 503; never call it with the secret), set the switch to `on`, then run VE-50 before anyone else is allowed. The Remote prerequisites are the critique's: adapters/remote.ts reads a computer offline without them. CRON_SECRET is Codium's, so the guides say never to change or regenerate it, and state the sweep's own minimum (16 characters, no whitespace or control characters, `secretUsable`) (critique taken).
+- **(f) No per-platform stop.** runtime.ts `configuredPlatforms` builds an adapter only for a listed platform, so removing a platform from PLATFORMS closes its intake but leaves its live jobs' replies unable to post; the guides say to use the full order.
+- **(g) The docs promise only the laptop route.** No Actions route (R-A4, R-C8), no GitHub laptop-first (Q13), no Linear or Jira summary (`privateResult` is not built; EV-23 (c)), no turn-on instructions and no settings file (the desktop write path is deferred, EV-21 "Ruling on (a)"). Erase is promised for a disconnect on the page only (critique taken): Linear's revocation holds without erasing (integrations/linear/README.md) and Jira's uninstall is unqualified, so each guide's live acceptance records what uninstalling does. The Linear line "a delegation with no words of your own asks you for them first" follows VE-12 (the adapter asks the creator for their own prompt), not the spec's fixed task line.
+- **(h) "Your code stays off Vector's servers" is qualified.** The job carries the request, the thread or issue text read as context and ids, encrypted for at most 2 hours; the computer sends fixed steps, counts, a summary and the PR link, never code or a diff, and "the summary may name files but carries no code" (`sanitizeReply` keeps file names; critique taken: the plan's "no file name" was false). During the run the code goes where the user's own model settings send it, and with a Vector Codium model "the model's requests, including the code it reads, pass through Vector's model gateway, which does not store them, as the privacy policy describes" (privacy.astro `#codium`; critique taken: the plan's qualifier did not say the requests include code). *Review round one:* the intro now points to this exception ("except as described below when you choose a Vector Codium model"), and the sentence adds that the requests "go on through OpenRouter to the model's provider", as `#codium` says.
+- **(i) The key commands are node one-liners that the test runs under bun**, in a fresh temporary folder (`Bun.spawn([process.execPath, "-e", code])`), and were also run once under node 22 in a scratch folder (progress, EV-24). The offer pair is made after `cd "$(mktemp -d)"`, so offer-signing.pem is never written into a checkout (the repository ignores no `*.pem`; critique taken). The data key's warning names the installations (identity.ts: tokens and notices are sealed under it; critique taken): never rotate it; a new key disconnects every installation and makes live records and queued replies unreadable.
+- **(j) Tripwires.** `LAPTOP_ROUTE_WIRED` false and `OFFER_KEYS` empty are asserted, so whoever changes either updates every guide's Before you start. Three gates are pinned both ways, present exactly while their cause is: the desktop page's read-only sentence (everywhere-model.ts), `renderHelp`'s "(or in GitHub Actions)" and the Slack manifest's "runner" (critique taken: these became go-live gates in the guides rather than Left open only).
+- **(k) Platform facts are as read on 2026-11-12** (VE-11 to VE-13); nothing was fetched. Each guide cites its source beside each fact: spec §4.1 to §4.4 for the registration and listing steps, the deviations entries VE-11 (20 monthly active users), VE-12 (the directory-submission gate) and VE-13 (no early-access notice, `read:jira-user`, the principal gate), and the integrations READMEs (Jira's fix timelines, the qualifications). GitHub's "no review" and verified-publisher facts come from spec §4.1 step 3 alone (critique taken).
+- **(l) The deny list uses word boundaries and narrowed patterns** (critique taken): plan names and SLA are case-sensitive; "the only", "best", "leading" and "soon" are narrowed (`the only (tool|agent|…)`, `the best`, `leading (tool|agent|product)`, `coming soon`); Q5 is `\bsearch` and `(all|every|other) (channels|messages|conversations)`; Q7 is `phones?` and `passkeys?`. A case runs the list over ordinary sentences and over one sentence per family. Only the comparative patterns also run over the guides, which legitimately name Actions and plans.
+- **(m) Where the owner finds their account id:** the Account ID column on /owner/codium, the id VECTOR_HOSTED_ALLOW_ACCOUNTS takes (critique taken). That list can be partial ("a limited account list"), noted under Left open.
+- Plan items dropped or changed: the EV-23 exemption ((c)); the optional v2-complete-plan.md note (critique taken: the lead's file, with a main hunk); `rows()` accepts prettier's padded cells and counts rows (critique taken); the waiting phrase is derived from `queueMs` (critique taken); mutation M14 is now "the draft links /everywhere" (red in both tests), and M2's created file is deleted in `finally` with `git status` checked after the run (critique taken).
+
+### Not changed
+
+src/pages, docs-nav.ts, script/prune-vector-site.mjs, astro.config.mjs, DocsPage.astro, the legal pages, both manifests, `renderHelp`, everywhere-pages.test.ts, the runner, every route, env var, flag, switch, workflow, dependency, lockfile and generated file. No file was regenerated. The one code change (review round one) names the sweep's default batch in api/_lib/everywhere/jobs.ts; its value and every caller are unchanged.
+
+### Safe by default
+
+- **Nothing becomes reachable.** The page is under src/drafts, which Astro does not route; docs-nav, the prune keep set, astro.config.mjs and src/pages are unchanged and pinned by both tests; its two links go to existing pages.
+- **No runtime change.** No route, env, flag or switch changes; the guides are owner instructions. jobs.ts's `SWEEP_LIMIT` is the same 200 the sweep used before (review round one).
+- **The turn-on order is conservative:** it starts from `stop`, admits only the owner's own account and never lists `github`.
+- **The tests touch no network.** They read files, generate their own keys in a temporary folder and delete it.
+- **No legal, privacy, terms or consent wording** is written; each text is listed with where it appears.
+
+### Left open
+
+- **The Slack manifest's `description` and `agent_description`** name a "GitHub runner", and **`renderHelp`'s Slack and Linear lines** say "(or in GitHub Actions)" (packages/schema/src/everywhere-policy.ts, the HELP table), while GitHub's line promises the binder's mentions on their computer. Each promises a route that is not built (R-A4, R-C8, Q13). They are now go-live gates in the guides, tripwired by the test; the wording change is for the lead (a schema and manifest change with their tests).
+- **No per-platform stop switch** ((f)), for the lead if one is wanted.
+- **The docs' "Set it up" waits for the desktop write path** (EV-21 (aj)); the test's tripwire fails when the page starts writing.
+- **The lane's path filter** (vector-everywhere.yml, FIT-4, review-fixes) does not cover packages/web/src/drafts/**, so a change to the docs draft alone does not start the lane on a pull request; the guides and the test are covered. **For review-fixes:** when it repairs the vector-everywhere.yml path filter (FIT-4), include packages/web/src/drafts/**. Until then, dispatch vector-everywhere.yml for any draft-only change.
+- **The runner's abort matrix after `pushing`** (lane notes): `stop`, `lost`, 404 and 409 answered to the `pushing` report, and a stop after the push is admitted, are not tested. The page now says only what the runner does (a push already started finishes, and its draft pull request can still open; review round one, finding 1); when those cases are built, check the sentence against them.
+- **Linear's uninstall** holds work without erasing (integrations/linear/README.md), which spec E13 does not say; the docs promise erase on disconnect only.
+- **/owner/codium's account list can be partial**, so the owner may not see their own id there ((m)).
+
+### Mutations
+
+/tmp/vector-v2/everywhere/ev24-mut/mutate.py edits files in place (or, for M2, copies the draft into src/pages/docs), runs only the named test files through vector-serial, restores every touched file from a byte snapshot in `finally` (the new files are untracked, so git cannot restore them) and deletes created files. All 32 turned their named case red, every restore matched its sha256, src/pages/docs/everywhere.astro is absent afterwards, and `git status --porcelain` equals the run's starting state (results.json beside it).
+
+| Mutation | Red case(s) | Result |
+| --- | --- | --- |
+| M1 a docs-nav entry | is unrouted | 16 pass, 1 fail |
+| M2 the draft copied into src/pages/docs | is unrouted; name only paths and links that exist | 15 pass, 2 fail |
+| M3 "a closed lid means queued" dropped | says what the contract holds | 16 pass, 1 fail |
+| M4 2 hours changed to 3 hours | says what the contract holds | 16 pass, 1 fail |
+| M5 a comparative claim | promises nothing the contract refuses; leak no secret … no comparative claim | 15 pass, 2 fail |
+| M6 GitHub Actions promised | promises nothing the contract refuses | 16 pass, 1 fail |
+| M7 one shared section edited in the Slack guide | keep the shared sections byte-identical | 16 pass, 1 fail |
+| M8 two turn-off steps swapped (all four) | turn it off in EV-04's order | 16 pass, 1 fail |
+| M9 randomBytes(16) | their key commands make keys the code accepts | 16 pass, 1 fail |
+| M10 subarray(12) dropped | their key commands make keys the code accepts | 16 pass, 1 fail |
+| M11 the VECTOR_SLACK_SIGNING_SECRET row dropped | have a Settings row for every setting | 16 pass, 1 fail |
+| M12 an `xoxb-` token | leak no secret | 16 pass, 1 fail |
+| M13 "we collect" | list the legal and privacy texts, and draft none | 16 pass, 1 fail |
+| M14 the draft links /everywhere | links only pages that exist (docs test); nothing imports or links the drafts (pages test) | 16/1 and 64/1 |
+| M15 `#codium` changed to `#missing` | says what the contract holds; links only pages that exist | 15 pass, 2 fail |
+| M16 `<code>stop` dropped | names every control word | 16 pass, 1 fail |
+| M17 Listing moved before Go-live | share their headings | 16 pass, 1 fail |
+| M18 LAPTOP_ROUTE_WIRED true | name every open gate while it is open | 16 pass, 1 fail |
+| M19 Codium's `off` in Turning it off | turn it off in EV-04's order | 16 pass, 1 fail |
+| M20 the `mktemp -d` folder dropped | their key commands make keys the code accepts | 16 pass, 1 fail |
+| M21 CRON_SECRET may be set here | have a Settings row for every setting | 16 pass, 1 fail |
+| M22 Remote not named in Turning it on | turn it on from the stop switch | 16 pass, 1 fail |
+| M23 help no longer says Actions (tripwire) | name every open gate while it is open | 16 pass, 1 fail |
+| M24 the desktop page writes (tripwire) | name every open gate while it is open | 16 pass, 1 fail |
+| M25 the word project in the draft | promises nothing the contract refuses | 16 pass, 1 fail |
+| M26 the Jira manifest test not named | put go-live before the listing | 16 pass, 1 fail |
+| M27 the data key warning without installations | their key commands make keys the code accepts | 16 pass, 1 fail |
+| M28 "the summary may name files" dropped | says what the contract holds | 16 pass, 1 fail |
+| M29 Linear and Jira promise a summary | promises nothing the contract refuses | 16 pass, 1 fail |
+| M30 the gateway's no-store qualifier dropped | says what the contract holds | 16 pass, 1 fail |
+| M31 a home folder in a guide | leak no secret | 16 pass, 1 fail |
+| M32 `github` listed in the turn-on order | turn it on from the stop switch | 16 pass, 1 fail |
+
+The plan's M1 to M19 are here, M14 changed with (c); M20 to M32 are the critique's additions.
+
+### Coordination
+
+`git fetch origin` of main and every lane, then `git diff HEAD...origin/<lane>` over this package's paths (src/drafts, docs-nav.ts, DocsPage.astro, both tests, the guides, the prune script, astro.config.mjs and the four lane documents): empty for main `14cb9720`, review-fixes `1433d105`, codium-finish `58663f5b`, connect-finish `19c48b89`, brain-transport `0d18f750`, scope-finish `e6d34fed`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5` and native-qualify `2677c32c`. Over the files the test reads (everywhere-policy.ts, everywhere.ts, the desktop settings model, config.ts, keys.ts, offer.ts, codium-switches.ts, everywhere-offer.ts, integrations/, vercel.json, privacy.astro, vectorscope.astro, THIRD_PARTY_NOTICES.md and the linked owner docs), only main, codium-finish and brain-transport change github-app.md and vector-mention.md, which the GitHub guide links by file. v2-complete-plan.md is not edited (the F4 activation note is left to the lead).
+
+### Deferred verification
+
+- VE-50 per platform, with the owner after each registration.
+- The 2.0.0 build with the docs-nav entry (DocsPage's lookup) and the pruned site.
+- CI: vector-everywhere.yml (green is the package's Done-when) and typecheck.yml are dispatched after the commit; vector-hosted-ci.yml optionally, for the root scans. vector-codium.yml is not (lane rule).
+
+### Review round one (2026-11-20)
+
+Ten findings, none blocking. Nine are fixed as the finding proposed, one of them (2) in its "better" form; none is disputed. Nothing was committed in this round. Thirteen new mutations (R1 to R13, /tmp/vector-v2/everywhere/ev24-r1/mutate.py) each turn their named case red, and the 32 earlier ones were re-run against the fixed files (earlier-mutate.py beside it, the same script with its results path moved): all 32 are red on their named cases again, every restore matched by sha256, src/pages/docs/everywhere.astro is absent afterwards and `git status --porcelain` equals its state before both runs.
+
+| # | Finding | What changed | Undone, red case |
+| --- | --- | --- | --- |
+| 1 | "Stopping it aborts the job on your computer, and nothing is pushed" is more than the runner does: once `report("pushing", true)` is admitted, the push runs on a fresh AbortController (desktop everywhere-runner.ts, "must not interrupt a push already admitted"), and the draft pull request is opened after it | the page reads "Stopping it aborts the job on your computer and nothing more is pushed, but a push that has already started finishes, and its draft pull request can still open." (the PR clause because `openPr` follows a successful push with no abort check; "the result names the branch" was not added, since whether that settle lands after a stop is not tested). The untested abort-matrix cases are under Left open | R6, says what the contract holds |
+| 2 | At 2.0.0 step 4 named only the routing case, but the move also breaks "name only paths and links that exist", and the test read the draft at its src/drafts path, so the whole file would fail to load | the better form: the test reads the page at whichever address holds it, and a guide's path to any of the three moved pages counts at either address; each of the three must be at exactly one (stronger than before: it also pins that the drafts exist). The routing case keeps its src/pages checks (`src/pages/docs/everywhere.astro` absent, no src/pages file matching /everywhere/i), so the earlier "the three later targets do not exist" assertion is covered there and was dropped from the paths case, not loosened. Step 4 (byte-identical in all four guides) now names "is unrouted" as the one docs case the move turns red, and "links only pages that exist" if the change also links the account page | R12 (the three pages moved): only is unrouted red, 16 pass; R13, name only paths and links that exist; M2, is unrouted and name only paths |
+| 3 | "30 seconds" and "200 live jobs" in Turning it off were not pinned to the code | the case asserts `each server keeps the switch for ${SWITCH_CACHE_MS / 1000} seconds` and `one more minute for every further ${SWEEP_LIMIT} live jobs`; api/_lib/everywhere/jobs.ts exports `SWEEP_LIMIT = 200` and `sweepDue` uses it (sweep.ts passes no limit) | R1 (100), R2 (20 s), turn it off |
+| 4 | The intro's "Your code stays off Vector's servers." had no qualifier, and the Codium sentence omitted that the request goes on to the provider | the intro reads "Your code stays off Vector's servers, except as described below when you choose a Vector Codium model."; the pinned sentence stays in "How a job runs"; the Codium sentence adds "and go on through OpenRouter to the model's provider", as privacy.astro `#codium` says (the gateway forwards to OpenRouter, which routes to the provider) | R7, says what the contract holds |
+| 5 | Step 3 of "Set it up" promises mapping that the guides gate (no production repository port, EV-19; no Linear or Jira mapping, EV-22) | a frontmatter note: "Rewrite step 3 of 'Set it up' when the production repository port and the Linear and Jira mapping route land.", tied both ways to the tracker guides' "production repository port" and Linear's and Jira's "cannot be mapped" | R5, name every open gate |
+| 6 | "declines jobs unless Vector Local allows what they need" overstates: the runner's `github` guard declines every job under Vector Local until EV-21 labels the desktop's GitHub calls (spec §3.5, EV-15 note) | both options: the page says plainly "With Vector Local on, the computer declines jobs.", and the frontmatter says to say what Vector Local must allow when the guard goes; both are tied to the guard line in everywhere-runner.ts `localAllows` | R3 (the guard removed), R4 (the old sentence), name every open gate |
+| 7 | The first bullet promised a push for every repository | "Vector, not the model, commits the changes to a new `vector/ve-…` branch."; the next bullet carries the private-repository push rule (Q8), already pinned | none of its own (the pinned push sentence is unchanged) |
+| 8 | The machine-path check matched only /Users/<name>/ and /home/<name>/ | `MACHINE_PATH` also matches /root/<dir>/, a Windows `X:\Users\` and `/tmp/claude-`, with five caught and five allowed sentences (repository paths, site routes and the `mktemp -d` line) | R8 (/root), R9 (C:\Users), R10 (/tmp/claude-), leak no secret |
+| 9 | The routing case did not check the prune keep set | it asserts script/prune-vector-site.mjs has no `"everywhere"` | R11, is unrouted |
+| 10 | Left open did not route the path-filter gap to review-fixes | Left open here and the handoff's EV-24 block ask review-fixes to include packages/web/src/drafts/** when it repairs the vector-everywhere.yml path filter (FIT-4), and say to dispatch vector-everywhere.yml for any draft-only change until then | none (docs) |
+
+| Mutation | Red case | Result |
+| --- | --- | --- |
+| R1 `SWEEP_LIMIT` 100 | turn it off in EV-04's order | 16 pass, 1 fail |
+| R2 `SWITCH_CACHE_MS` 20 000 | turn it off in EV-04's order | 16 pass, 1 fail |
+| R3 the runner's `github` guard removed | name every open gate while it is open | 16 pass, 1 fail |
+| R4 the old Vector Local sentence | name every open gate while it is open | 16 pass, 1 fail |
+| R5 the step-3 note dropped | name every open gate while it is open | 16 pass, 1 fail |
+| R6 the old stop sentence | says what the contract holds | 16 pass, 1 fail |
+| R7 the intro's Codium pointer dropped | says what the contract holds | 16 pass, 1 fail |
+| R8 a /root path in the Slack guide | leak no secret | 16 pass, 1 fail |
+| R9 a C:\Users path in the Linear guide | leak no secret | 16 pass, 1 fail |
+| R10 a /tmp/claude- path in the Jira guide | leak no secret | 16 pass, 1 fail |
+| R11 the keep line added early | is unrouted | 16 pass, 1 fail |
+| R12 the three drafts moved to src/pages | is unrouted (only) | 16 pass, 1 fail |
+| R13 a guide names a missing drafts path | name only paths and links that exist | 16 pass, 1 fail |
+
+Disagreements: none.
+
+## 2026-11-20, EV-25: @vector run hooks: the ticket's job id and the run start and settle listeners (R-A1, R-A2, R-A3)
+
+Spec §11 R-A1 to R-A3; §3.6 "Correlation"; §6.1 `CloudEvents`; §6.4's @vector row. The package was first checked at HEAD `3c3ddf29` (EV-24). It waited there: brain-transport's cloud-agents edits (#43 `7c7508d2`, BT01 `b4bb9b5c`, BT03 `c4ec2c83`, BT09 `aa925ff8`) were on origin/main only, in the files this package edits. The lead was asked to merge main and to rule on four findings (F-a to F-d below). The review-fixes precondition `e417c44d` (SEC-1/PUB-5) is an ancestor. Built uncommitted on the merge commit `1035f87c`.
+
+*Lead rulings (2026-11-20), recorded as given:*
+1. **Merge: authorised.** Merge origin/main (8e34d05e or newer) as a merge commit authored Vector <bot@vectordev.ai>, titled `chore(everywhere): merge main after #43`, with the RULES-v2 trailers. Resolve model-evidence.ts by keeping REVIEW_PIPELINE_REVISION 5 and recomputing REVIEW_PIPELINE_SOURCES exactly as the pin test reports. Regenerate the auto-merged SDK files only if the merged sources would produce different output. Typecheck every package the merge touched before committing. No push until EV-25 is reviewed.
+2. **F-a.** RESERVE accepts exactly the one new ticket field EV-25 needs, optional on read, so tickets without it still decode; every other unknown field stays refused. Test both: the new field accepted, an eighth unknown field still refused. No other ledger change.
+3. **F-b.** Hook the production path, settleRecordedRun, not recordRunEnd. Derive "committed" from the recorded run state it already has. Add no new caller-less code path. If the signal truly cannot be derived, stop and say why.
+4. **F-c.** Add an optional prUrl to the engine's settle payload. Accept it only if it parses as https://github.com/<owner>/<repo>/pull/<n> for the run's own repository; otherwise ignore it and record nothing. Engines that send only {outcome} keep working, and with no prUrl the hook posts without a link. Regenerate only if the settle route is part of the public Protocol/Server HttpApi.
+
+VECTOR_EVERYWHERE_ENABLED stays off by default throughout.
+
+*Additional lead ruling (2026-11-20), recorded as given:*
+5. **SETTLE_RECORDED's reply.** The script's commit path may reply `{'committed', outcome}` (retries keep the plain stored outcome), because settle listeners must fire exactly once from the call that ended the run. Every caller of the script must handle both reply shapes, with tests for the commit and the retry reply. Accepted open items: no engine phase sends prUrl yet (the agent phase settles before publish opens the PR), so listeners post without a link; the release order is safe because the hosted API deploys on merge and the engine ships only with the 2.0.0 release.
+
+### The merge (`1035f87c`)
+
+- origin/main `8e34d05e` was merged into everywhere-finish as `chore(everywhere): merge main after #43` (parents `3c3ddf29` and `8e34d05e`).
+- **One conflict**, packages/core/src/review/model-evidence.ts:
+  - REVIEW_PIPELINE_REVISION stays 5.
+  - REVIEW_PIPELINE_SOURCES is `01bf6f0a09add29b`, the digest core test/review/model-evidence.test.ts printed on the merged tree (it then passed: 30 pass, 0 fail).
+  - origin/scope-finish also edits this file (+42/-8 against main), so VectorScope will have to re-pin it again.
+- **Generated files.** packages/sdk/openapi.json and packages/sdk/js/src/{gen,v2/gen}/types.gen.ts auto-merged. Running ./packages/sdk/js/script/build.ts on the merged tree reproduced them byte for byte, and `bun run check:generated` in packages/client was clean, so nothing was regenerated.
+- **Checks before the merge commit:**
+  - the frozen install;
+  - `bun turbo typecheck` (27 of 27) and the hosted API typecheck;
+  - each alone: core local-mode/sources.test.ts (17/0), desktop remote-link.test.ts (33/0), test/codium-pool.test.ts (29/0, run from test/), engine tool/subagent-lifecycle.test.ts (18/0) and engine review/model.test.ts (21/0).
+- Not pushed, by ruling 1: the lane's commit gate pushes the merge and EV-25 together.
+
+### What changed
+
+- **api/_lib/cloud-agents-start.ts** (R-A1):
+  - the Ticket schema's optional `jobId` (:30-31), checked against JOB_ID_PATTERN from packages/schema/src/everywhere.ts (:4), a module that imports nothing;
+  - the new `CloudRunTrigger = RunTrigger & { readonly jobId?: string }` (:57-61);
+  - `startCloudRun` and `prepareCloudRun` take a CloudRunTrigger (:73, :79);
+  - an early check refuses a malformed id with 400 before any store command or entitlement call (:92-93);
+  - the ticket record keeps the id (:124);
+  - `peekRunTicket` also answers the ticket's `ticketHash` (:267).
+  - The dispatch inputs are unchanged.
+- **api/_lib/cloud-agents-ledger.ts:**
+  - RESERVE admits `jobId` as the only optional seventh field (:680-683), checked as `vej_` plus 22 lowercase Crockford characters (26 in all). A null, another seventh field or an eighth field is `corrupt`.
+  - SETTLE_RECORDED's commit path answers `{'committed', outcome}` (:843); a retry still answers the stored outcome.
+  - `settleRecordedRun` returns `{ outcome, committed }` (:339-391).
+- **api/_lib/cloud-agents-runs.ts** (R-A2, R-A3):
+  - the import of the schema's `PR_URL_PATTERN` (:3);
+  - a doc line on `recordRunEnd`: it has no production caller and tells no listener (:166-169);
+  - the hooks block (:206-343): RunEnd, RunStartListener and RunSettleListener; `registerRunStartListener` and `registerRunSettleListener`, each answering its remover; `notifyRunStart` and `notifyRunSettle`, each starting its notify's one 5 s budget; the private `runPages` (the run record's page, and the PR check); `tell` (every listener inside the budget, fixed warnings); and `afterRunResponse`.
+- **api/_lib/cloud-agents-api.ts:**
+  - mint calls `notifyRunStart(ticket.ticketHash, rid, ticket.jobId)` only when `ticket && !reserved.renewed`, after the run record and before the answer (:418-420).
+  - The settle body accepts `prUrl` beside `outcome` and refuses any other key (:463-467).
+  - settle calls `notifyRunSettle` only when `settled.committed` (:480-486).
+- **packages/engine/src/cli/cmd/github.cloud.ts:** `settle()` takes an optional `prUrl` and sends it only when given (:431-446).
+- **Tests:**
+  - packages/web/test/cloud-agents-start.test.ts: 11 cases and four helpers;
+  - packages/web/test/cloud-agents-runs.test.ts: two file-level cases without Redis (the second from review round one) and one Redis case;
+  - packages/engine/test/cli/github.cloud.test.ts: one case.
+  - No existing case changed.
+
+### Decisions
+
+- **(a) Whose files.** Every edited source file is in @vector's area (spec §6.4's @vector row), edited under the lead's brief and rulings 2 to 4. This includes the ledger and the engine, which the brief did not name (F-a, F-b, F-c). Codium's packages/schema/src/codium-run-trigger.ts is untouched (F-d): `RunTrigger` is shared with hosted jobs, ops and remote tickets, and codium-entitlements.test.ts:362 builds a `Required<RunTrigger>`. So the job id is on the cloud-agents-only `CloudRunTrigger`. cloud-agents-desktop.ts's `prepare?: typeof prepareCloudRun` stays compatible, and the desktop and ops callers pass no job id.
+- **(b) The job id grants nothing.**
+  - It never becomes a workflow input: the dispatch inputs stay `{ref, prompt, ticket, ownerId, installationId, brainUpload?}`, and S1 checks that no dispatch and no GitHub request carries the id.
+  - It comes only from internal callers of prepareCloudRun; no HTTP body reaches it.
+  - It is accepted on every enabled source (decision kept from the plan). The review asked for slack, linear and jira only, which are the only sources that will ever carry one. That restriction is deferred: until R-C8/R-A8, ENABLED_SOURCES refuses those three, so such a ticket cannot be built, even in a test (Left open).
+  - RESERVE does not compare the id it consumes with the one the peek read. Only a store writer could make them differ: ISSUE writes the ticket key once (`SET NX`), and READY compares the exact JSON. The start listener reports the peeked value. EV-30's `ticket:<hash> → jid` map stays the link, and the id only cross-checks it.
+- **(c) RESERVE's seventh field (ruling 2).**
+  - The check mirrors JOB_ID_PATTERN in Lua: a string, 26 characters, matching `^vej_[0-9a-hjkmnp-tv-z]+$`. A cjson null is not nil, so `"jobId": null` is refused.
+  - The field count is 6 without the id and 7 with it.
+  - A ticket without the id decodes and reserves as before. The existing six-field cases are unchanged and pass.
+  - The id is not copied onto the live run beside ticketHash. The plan's review asked for that, but ruling 2 says "No other ledger change". So R-A4, which must know that a run's ticket carried a job id, needs a further ledger change (Left open).
+- **(d) The start gate is `ticket && !reserved.renewed`.**
+  - The call comes after the token IIFE, so after recordRunStart, and before the answer.
+  - Nobody is told by a renewal (a bot mint with no ticket), by a concurrent mint of the same check run that peeked the same ticket (RESERVE answers `renew`), or by a mint that failed after its reservation.
+  - The event is at most once. A lost RESERVE reply, a START failure, a crash after the reservation, a failing listener or a cut-off listener loses it, and nothing retries. In production the engine's mint client retries only a 409 `OIDC_REPLAYED` and a 429 `RATE_LIMITED`, and polls an `at-once` 429 (github.cloud.ts:341-354). A 503 ends the step `unavailable`, so a lost reply belongs to a run that never starts its agent.
+  - One interleaving loses the start event of a run that does start (review round one). Two concurrent mints of one check run both peek the ticket. The second reserves as a renewal (`renewed` true) and rotates the jti. The first, which consumed the ticket fresh, then fails in recordRunStart, and its releaseRun leaves the run alone because the jti no longer matches. The run proceeds with the second mint's token, and neither mint tells the start listener. EV-30's ticketHash lookup (Left open) covers this case as it covers the others.
+  - EV-30's 900 s rule is not a backstop: under spec §3.6 it fails the job. Left open says what EV-30 must check first.
+- **(e) The settle signal comes from SETTLE_RECORDED (ruling 3).**
+  - The script already decides whether a call ends the run, from the run record it reads (`record[5]`, endedAt, absent), together with the live run. Only its reply hid that decision. The commit path now answers `{'committed', outcome}`, and the retry path still answers the stored outcome string.
+  - settleRecordedRun accepts a committed reply only when it carries this call's own outcome, and otherwise answers 503 as before.
+  - The change adds no key, field, read or code path, and recordRunEnd gains no caller.
+  - Deriving the signal outside the script was rejected:
+    - A read before the call races: two concurrent settles both see the run open.
+    - A read after the call (endedAt equal to this call's `now`, and the same outcome) has nothing unique per call: two settles of one run in the same millisecond with the same outcome would both claim the commit.
+  - Ruling 2 says "No other ledger change". This reply change was read as ruling 3's, not as part of F-a, and the lead's additional ruling 5 confirms it.
+  - **Both reply shapes.** The script has one caller, `settleRecordedRun`, and that has one caller, the settle route (cloud-agents-api.ts). `settleRecordedRun` reads both shapes:
+    - a two-element `['committed', outcome]` array is the commit;
+    - a plain outcome string is a retry;
+    - anything else answers 503.
+  - **Tests for both shapes.**
+    - The commit reply: S7 to S11, where each committing settle makes exactly one settle listener call.
+    - The retry reply: S7's retry; in S9, the two losing concurrent settles, the `cancelled` retry and the retry after a lost committing reply (200, no record read, no call).
+    - The mint-api interceptors match the script only by its six keys. They throw before it or replay it, and never fake its reply, so they are unaffected.
+- **(f) The pull request (ruling 4, F-c).**
+  - The settle body accepts `prUrl` and never refuses it; any other key is still 400. Only a string is considered.
+  - It is checked with the schema's `PR_URL_PATTERN` (packages/schema/src/everywhere.ts:182), the pattern Vector everywhere's job settle validates a pull request with (api/_lib/everywhere/jobs.ts:277 and :1312). So a URL this listener passes cannot later be refused there. The pattern's group is the repository, and its URL ends in `/pull/<number>`, so the number is the text after the last slash. The build had its own copy of the pattern with a number group; review round one replaced it.
+  - It is compared case-insensitively with the run record's repository, because GitHub owner and repository names are case-insensitive.
+  - The listener gets a URL rebuilt from the record's repository and the number, so its casing is canonical and no other caller bytes pass through. Anything else is dropped without a log, and nothing is stored.
+  - The run record is read once, after the response, and only when the settle committed and a settle listener is registered. Today none is, so production does no new work. If the read fails, the listener gets the outcome alone.
+  - The prUrl is not stored on the run record, by ruling 2.
+  - **Nothing regenerated.** The settle route is vectordev.ai's hosted API (api/cloud-agents/settle.ts over cloud-agents-api.ts), not the engine's Protocol or Server HttpApi, so no generated client or SDK file changes.
+  - **The engine.** `settle()` takes an optional `prUrl`. No phase passes it yet: the agent phase settles before the publish job opens the pull request, and the publish job holds no run token. So production listeners hear no pull request until @vector's publish phase reports one (Left open), and the spec's "the settle hook gives the PR URL" still waits for that.
+  - **Release order.** An engine that sends `prUrl` must not ship before this server is deployed: the settle route before EV-25 answers 400 to any key but `outcome`. The lead's ruling 5 accepts this as safe: the hosted API deploys on merge, and the engine ships only with the 2.0.0 release.
+- **(g) The listener contract.**
+  - Listeners run after the response, through a cloud-agents copy of api/_lib/usage.ts `afterResponse` (the request context's waitUntil). It imports neither usage.ts nor everywhere/after.ts. This follows the plan's review: the engine gives its whole settle 5 s (github.cloud.ts settle; github.lifecycle.ts shares one settlement and never retries), so a listener awaited inside the request could make a committed settle look failed.
+  - Every listener runs, unless its turn comes after the budget is spent (below). A sync throw becomes a rejection, through `Promise.resolve().then(call)`.
+  - **One budget per notify** (review round one). `notifyRunStart` and `notifyRunSettle` each start one LISTENER_MS (5 s) AbortSignal before any work; for a settle that is before the run record read. So the work handed to waitUntil ends within 5 s in all. The read is bounded by persistentStore's own 3 s fetch timeout, so a settle listener keeps at least about 2 s. When the budget is spent, one "… listeners timed out" line is logged and waitUntil is released, and a listener whose turn comes after that (after a slow read) is not started.
+  - Each failure logs exactly "Vector cloud-agents <start|settle> listener failed". Neither line carries an id or error text.
+  - **Each listener gets the budget's signal** (review round one), as a trailing argument: `(ticketHash, rid, jobId, signal)` and `(rid, end, signal)`. A listener written for R-A2's `(ticketHash, rid, jobId?)` or R-A3's `(rid, end)` still fits. Once waitUntil is released, Vercel may freeze a listener part-way, so EV-30's listeners must finish inside the budget and be idempotent (Left open).
+  - Each settle listener gets its own copy of the end.
+  - The registry is process-wide. Each registration is its own entry (the review's point): one function registered twice is called twice, and each remover removes only its own entry.
+  - No listener is registered anywhere in this package.
+- **(h) SEC-1.** Both handlers stay inside `safe`, which answers 503 (MODEL_PLANS_DISABLED or CLOUD_AGENTS_UNAVAILABLE) before the handler while the service is off, so no listener runs (case S11).
+- **(i) EV-30's registration.** EV-30 registers the listeners behind the everywhere config, from a module that api/cloud-agents/mint.ts and settle.ts import. Vercel bundles each function's own import graph, as with cloud-agents-run-registration.ts. This package edits neither route file.
+- **(j) Where the tests live.** In cloud-agents-start.test.ts, whose fixture drives the real mint and settle routes over loopback HTTP against Redis, and in cloud-agents-runs.test.ts. vector-at-mention.yml runs `test/cloud-agents-*.test.ts` in one Bun process, so every case removes its listeners in `finally`.
+- **(k) Negative checks after the response.** A start listener is called on a microtask queued before the answer is written, so it has run by the time the loopback client has the answer. A settle listener runs only after the route's one read of the run record, which the fixture's `onStore` sees before the answer is written. So "no read" proves "no call", and the settle negatives assert that.
+
+### The cases
+
+| Case | File | What it pins |
+| --- | --- | --- |
+| S1 "a ticket keeps a job id that only its pattern admits…" | start | the stored JSON is the six fields plus jobId; dispatch inputs exactly `{mode, prompt, ticket}`; no dispatch or GitHub request holds the id; ticketHash is sha256 of the ticket; the peek answers the record, key and ticketHash; the mint answers 200 (RESERVE takes 7 fields), and liveRun keeps the hash; the ticket is consumed; one start call; eight malformed ids (`vej_`, 21 and 23 characters, uppercase, an `i`, a trailing newline, a leading space, the number 42) are each 400 with no store command, no entitlement call and no new ticket |
+| S2 "RESERVE refuses a ticket changed after the peek…" | start | rewritten between the peek and RESERVE: another seventh field, an eighth field, a null id, an uppercase id, a 27-character id. Each gives a 503 mint; the ticket stays, no live run, no start call |
+| S3 "the mint that consumes a ticket tells the start listener once…" | start | `[{hash, rid, jobId}]`; a renewal (200, same rid) adds nothing; after settle a renewal and the spent ticket are 403 and add nothing; a ticket without an id on check run 1002 adds `{hash2, rid2, undefined}`; after the remover, a third mint adds nothing |
+| S4 "two check runs that peeked one ticket…" | start | [200, 403] and one call, for the winner's rid |
+| S5 "a concurrent mint of the same check run, which RESERVE renews…" | start | both peek before either reserves; the second reserves after the first answered; both 200, same rid, one call |
+| S6 "a mint that fails after its reservation…" | start | a START failure gives 503 and no call; a lost RESERVE reply gives 503, and its recovery re-mint gives 200 and still no call |
+| S7 "listener failures change no answer or record…" | start | a sync and an async throwing start listener and a throwing settle listener: the mint answers its five keys, then heartbeat, live run and run list; settle 200, outcome stored, live run gone, a retry 200; recorders called once; exactly three fixed warnings; none holds the hash, rid, jobId, account, repository id or "boom" |
+| S8 "a hanging listener delays no answer…" | start | with a start and a settle listener that never resolve, the mint and the settle each answer in under 4 s; each listener is called once; two "timed out" warnings, at least 4.9 s after the mint |
+| S9 "only the settle that ends the run tells the settle listener…" | start | three concurrent settles with different outcomes and PR numbers are all 200; one call with the stored outcome, the record's runUrl and that winner's PR URL; one record read; a `cancelled` retry reads nothing; a committing settle whose reply is lost gives 503, and its retry 200, with no read and no call |
+| S10 "F-c: the settle listener keeps only a pull request of the run's own repository…" | start | no prUrl: outcome and runUrl. Own repository: kept; uppercase: kept with the record's casing. Another repository, http, `/files`, `/issues/`, another host, `/pull/0`, 11 digits, a trailing newline, a number and null: each dropped, and the settle still 200. A body with a third key is 400 and the run stays live |
+| S11 "no listener runs while the cloud-agents service is off" | start | VECTOR_GITHUB_BRAIN_ENABLED and MODEL_PLANS_ENABLED each set false: the mint answers 503 with its code and the ticket stays; restored, one call. Off again, settle answers 503 with no read and no call; restored, settle 200 and one call |
+| R1 "run listeners: each registration hears each notify once…" | runs (no Redis) | a recorder, a sync thrower and an async rejecter: one call, two fixed warnings; every listener gets an AbortSignal that has not aborted; the same function registered twice is called twice; each remover removes only its own; with none left, nothing is called and nothing logged; an unreadable record gives each settle listener `{outcome}` alone, as distinct objects; with no settle listener the store is not read; no warning holds an id or "boom" |
+| R3 "one five-second budget covers a settle's record read and its listeners…" (review round one) | runs (no Redis) | a start listener that waits on its signal and a settle whose record read takes 6 s, notified together: both notifies answer after about 5 s and before the read ends; the start listener's signal was live when called and aborted at the budget; two fixed "timed out" lines; once the read ends, the settle listener is still not called and nothing more is logged |
+| R2 "recordRunEnd ends a record without telling any settle listener…" | runs (Redis) | the fixture's settleRun plus recordRunEnd ends the run with no call |
+| E1 "settle sends a pull request only when it is given…" | engine github.cloud | the body is `{outcome}` without prUrl and `{outcome, prUrl}` with it |
+
+### Left open
+
+- **The pull request in production** (R-A3's second half). @vector's publish phase must report the PR it opened. Today it holds no run token and settles nothing, so that needs @vector's design: a run token in the publish job, or another reporting route. Otherwise EV-30 finds the PR itself, for example from the run's branch. Until then the settle listener hears no prUrl.
+  *2026-11-20 annotation (EV-30):* still none. The settle listener drops every reported `prUrl` until a head-branch check exists, so the Actions result posts the outcome line only. See "2026-11-20, EV-30", (f).
+- **R-A4 needs a further ledger change.** RESERVE deletes the ticket and keeps only its hash on the live run, so nothing durable says that a run's ticket carried a job id.
+  *2026-11-20 annotation (EV-27):* for the server half, the link replaces that ledger change: `startDispatched` writes `run:<rid> → jid` from the start event's ticket hash, and only a 200 from GET /api/everywhere/jobs/<jid>/body proves that a run belongs to an everywhere job. EV-28 must never decide from the prompt line alone. A lost start event is still open (see "2026-11-20, EV-27", Left open).
+- **EV-30's reconciliation.** Before its 900 s rule fails a job, EV-30 must look for a live run of the sponsor's account whose ticketHash matches, and link it. This also covers the concurrent-mint interleaving in (d), whose run starts without a start event. liveRun returns ticketHash for a known rid, but no exported reader lists an account's live runs with their ticket hashes, so EV-30 needs one (a ledger reader, for the lead). A run past the longest-run limit with no settle call is still settled from listCloudRuns (§3.6).
+  *2026-11-20 annotation (EV-30):* not built. EV-28 settles `failed` within about 6 s of a missing link, so at 900 s `liveRun` no longer sees the run, and the run record holds no ticket hash; a lost start event therefore ends the job `not-started` (pinned by L7). The useful fix is EV-27's body-route fallback, a lead decision. The longest-run settle from `listCloudRuns` is built. See "2026-11-20, EV-30", (i), (k).
+- **EV-30's listener contract.** Registered listeners must finish inside their notify's 5 s budget and be idempotent: when the budget is spent waitUntil is released, and Vercel may freeze a half-done store write. Each gets the budget's AbortSignal; a settle listener after a slow record read may have only about 2 s.
+  *2026-11-20 annotation (EV-27):* the start listener's `startDispatched` now also writes the run's link. It makes one record read and one authority read (`jobGuards`), as before, and one EVAL more than a start without the link: the ticket GET, the record GET, the authority reads, the link's EVAL and the transition's EVAL. A link written before a frozen transition is harmless, because the body route re-checks the record's rid (see "2026-11-20, EV-27", review round one).
+  *2026-11-20 annotation (EV-30):* met. Both listeners check the budget's signal at each gate, both transitions are fenced and idempotent, and a fresh settle whose budget ran out is posted once by the reply outbox and the cron instead (L5). See "2026-11-20, EV-30", (d), (h).
+- **A reported pull request is checked before it is posted.** `prUrl` is reported by whoever holds the run token, which is the agent phase, model-driven code. The only check here is that it names a pull request of the run's own repository, so a prompt-injected run could name another pull request there. Nothing consumes it today, and the link stays inside the same repository. Before EV-30 posts it to a shared place (E6, E17), it confirms with the installation token it already holds that the pull request's head branch belongs to this run, or drops the link.
+  *2026-11-20 annotation (EV-30):* taken in its strict form: no PR link is posted anywhere, private places included, until the head-branch check exists (a lead decision, in @vector's github-app.ts). See "2026-11-20, EV-30", (f).
+- **Restrict jobId** to slack, linear and jira when R-C8/R-A8 lands.
+- **R-A5, R-A6, R-A9**, and the `registerOpsRunStarter` mismatch that R-A3's spec line mentions: not addressed here.
+  *2026-11-20 annotation (EV-26):* R-A9 is now built in part (a bind-time snapshot of the workflow mode); see "2026-11-20, EV-26".
+- **@vector's own documents**, which the lane does not edit, for the lead to forward: vector-at-mention-spec.md's ticket field list (the seventh field), its 2.16 run record and settle text (SETTLE_RECORDED's committed reply and the settle body's optional `prUrl`), and the release order in (f).
+
+### Mutations
+
+28 mutations, one source edit at a time, each with its named test file run alone through vector-serial against the disposable Redis (/tmp/vector-v2/everywhere/ev25-mut/: mutate.py, run.log, results.json and one log per run). Every mutation turned its named case red, and every file was restored from its saved bytes and matched its sha256. Afterwards, prettier rewrapped one line in cloud-agents-runs.ts (`notifyRunStart`'s `tell` call); the cases were re-run on the final files (progress receipt). The S, R and E codes are the case table's.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 jobId dropped from the ticket record | cloud-agents-start.ts | 34 pass, 4 fail | S1, S3, S4, S7 |
+| M2 no early jobId check | cloud-agents-start.ts | 37 pass, 1 fail | S1 |
+| M3 Lua counts exactly six fields | cloud-agents-ledger.ts | 30 pass, 8 fail | S1, S3, S4, S6, S7, S8, S9, S11 |
+| M4 Lua skips the job id check | cloud-agents-ledger.ts | 37 pass, 1 fail | S2 |
+| M5 Lua accepts any seventh field | cloud-agents-ledger.ts | 37 pass, 1 fail | S2 |
+| M6 Lua drops the length check | cloud-agents-ledger.ts | 37 pass, 1 fail | S2 |
+| M7 Ticket schema without jobId | cloud-agents-start.ts | 30 pass, 8 fail | S1, S3, S4, S6, S7, S8, S9, S11 |
+| M8 a renewal tells the start listener | cloud-agents-api.ts | 37 pass, 1 fail | S5 |
+| M9 start told before the run record is written | cloud-agents-api.ts | 30 pass, 8 fail | S1, S3, S4, S5, S6, S7, S8, S11 |
+| M10 every settle tells | cloud-agents-api.ts | 36 pass, 2 fail | S7, S9 |
+| M11 a retry reads as committed | cloud-agents-ledger.ts | 36 pass, 2 fail | S7, S9 |
+| M12 no catch on a listener | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M13 no Promise.resolve().then around a listener | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M14 no time bound | cloud-agents-runs.ts | 37 pass, 1 fail | S8 |
+| M15 the failure is logged with its error | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M16 empty run page | cloud-agents-runs.ts | 36 pass, 2 fail | S9, S10 |
+| M17 job id never passed | cloud-agents-api.ts | 34 pass, 4 fail | S1, S3, S4, S7 |
+| M18 the ticket key passed for its hash | cloud-agents-api.ts | 33 pass, 5 fail | S1, S3, S4, S5, S7 |
+| M19 a remover that removes nothing | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M20 one entry per function | cloud-agents-runs.ts | 23 pass, 1 fail | R1 |
+| M21 any repository's pull request kept | cloud-agents-runs.ts | 37 pass, 1 fail | S10 |
+| M22 case-sensitive repository match | cloud-agents-runs.ts | 37 pass, 1 fail | S10 |
+| M23 the reported URL passed as sent | cloud-agents-runs.ts | 37 pass, 1 fail | S10 |
+| M24 settle refuses prUrl | cloud-agents-api.ts | 36 pass, 2 fail | S9, S10 |
+| M25 settle accepts any field | cloud-agents-api.ts | 37 pass, 1 fail | S10 |
+| M26 mint waits for its listeners | cloud-agents-api.ts | 37 pass, 1 fail | S8 |
+| M27 settle waits for its listeners | cloud-agents-api.ts | 37 pass, 1 fail | S8 |
+| M28 the engine never sends prUrl | github.cloud.ts | 74 pass, 1 fail | E1 |
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over the eight touched source and test files is empty for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify and brain-transport. The merge's model-evidence.ts re-pin collides with scope-finish (see the merge section).
+
+### Review round one (2026-11-20)
+
+Seven findings, none blocking. All are taken: three in code and tests, four in the lane documents only. Nothing is committed in this round.
+
+| Finding | Taken as |
+| --- | --- |
+| R1 "built, uncommitted" in the spec §3.6 note, the handoff bullet and the progress "Files" line goes stale once committed | "built (CI pending)" in the §3.6 note, "CI pending" in the handoff bullet, and the progress line now points to "What changed" for its line numbers. The header's "Built uncommitted on the merge commit `1035f87c`" stays: it is history |
+| R2 §11's header "Nothing here is edited by this branch" contradicts the built R-M and R-A items | a dated note under the header, the header itself unchanged |
+| R3 the 5 s bound covers only the listeners, not the settle's record read | code: one AbortSignal per notify, started before the read and passed into `tell`; a listener whose turn comes after the budget is not started ((g)); test R3 |
+| R4 a concurrent-mint interleaving loses the start event of a run that does start | documentation: (d), Left open, the handoff's EV-30 item and the spec §8 VE-30 note. No code change: EV-30's ticketHash lookup covers it |
+| R5 `PULL_URL` duplicated the schema's `PR_URL_PATTERN` | code: the check uses `PR_URL_PATTERN`; repository from its group, number after the last slash (equivalent to "after the last `/pull/`" for a URL the pattern accepts, and every mutation of it is visible to S9 and S10); the case-insensitive comparison and the rebuilt URL are kept ((f)) |
+| R6 a model-driven run reports `prUrl`, and EV-30 may post it to a shared place | documentation: Left open, the handoff and the VE-30 note; EV-30 confirms the head branch belongs to the run, or drops the link |
+| R7 nothing tells a listener its time is up, and Vercel may freeze it part-way | the budget's AbortSignal is passed to every listener as a trailing argument, which keeps R-A2's and R-A3's shapes compatible ((g); R1 and R3), and Left open, the handoff and the VE-30 note require listeners that finish inside the budget and are idempotent |
+
+Disagreements: none.
+
+*Mutations of the round's code* (/tmp/vector-v2/everywhere/ev25-r1/mut/: mutate.py, mutate2.py, results.json, results2.json and one log per run), one at a time against the disposable Redis, each file restored from its saved bytes and matched by sha256:
+
+| Mutation | Test file | Result | Red case |
+| --- | --- | --- | --- |
+| Ma a listener is started after the budget is spent | runs | 24 pass, 1 fail | R3 |
+| Mb the settle budget starts after the record read | runs | 24 pass, 1 fail | R3 |
+| Mc a listener gets a signal that is not the budget's | runs | 24 pass, 1 fail | R3 |
+| Md2 the number taken after the first slash | start | 36 pass, 2 fail | S9, S10 |
+| Me a local pattern that accepts any `/<word>/<n>` path in place of `PR_URL_PATTERN` | start | 37 pass, 1 fail | S10 |
+
+An earlier form of the number extraction (`lastIndexOf("/pull/")`) had a surviving mutant (`indexOf("/pull/")`, which differs only for an owner or repository named `pull`), so the round took the number after the last slash instead, whose mutants the existing cases catch.
+
+## 2026-11-20, EV-26: @vector bindings record the workflow mode (R-A9)
+
+Spec §11 R-A9; §3.6 "Mode is @vector's record"; §3.4 step 6; §6.1 `binding`; §6.4's @vector row. Base: HEAD `7a806f91` (EV-25), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish` (nothing had moved). origin/main `8e34d05e` and origin/release-finish `67ec3a60` are ancestors (PR #33 is merged, and `1035f87c` merged main), so from now on the lane merges origin/main, not release-finish. Preconditions: review-fixes `e417c44d` (SEC-1/PUB-5) is an ancestor, and so are origin/review-fixes `1433d105` and origin/brain-transport `0d18f750`, so no brain-transport cloud-agents edit to the touched files is missing. Built uncommitted.
+
+**Commit precondition (critique, taken), met by the lead's ruling of 2026-11-20.** EV-26 edits api/_lib/github-app.ts, @vector's App authorization code, and its test fixture, which the brief's file list does not name ((b)). EV-25's edits to @vector files were made under the lead's rulings, so the critique made the lead's explicit approval of the github-app.ts hunk a precondition of this package's commit. The lead gave it:
+
+> LEAD RULING 2026-11-20: APPROVED: the out-of-brief edit to api/_lib/github-app.ts (the bind branch's BEST-EFFORT contents read of GithubAgents.WORKFLOW_FILE at identity.workflowSha with the validation token inside the existing try/finally, verifyBind's optional workflowMode return, and the workflowModeOf reader), plus the edits beside it in packages/web/test/github-app-fixture.ts and packages/web/test/github-app.test.ts, and the bind route's spread in api/_lib/cloud-agents-api.ts. The best-effort form chosen in review round one is the approved form: any failed or over-cap read records no mode and the @vector bind still succeeds; the strict 503 form is NOT wanted. A client-supplied mode stays refused with 400, and the commit body must say 'refused (400)', never 'ignored'.
+
+So the hunk stays as built in review round one ((e)), and the commit may go ahead. The ruling asked for a verification pass before the commit, not a rebuild. That pass is in the progress receipt ("EV-26 lead ruling and verification"). It found nothing broken, so no code changed after review round one.
+
+### What changed
+
+- **api/_lib/cloud-agents-binding.ts:**
+  - the header comment (:18-20): REDEEM also records the mode the App read, never from a request body;
+  - `Mode = Schema.Literals(["codium", "own-key"])` (:37) and `StoredBinding.workflowMode: Schema.optionalKey(Mode)` (:65). Decoding keeps `onExcessProperty: "error"`, so an unknown, empty or differently cased value reads as corrupt (503);
+  - `export type WorkflowMode` (:71); `RepoBinding.workflowMode?` (:90-94) and `RedeemInput.workflowMode?` (:112-113), each documented;
+  - `recordRepoBinding` refuses a mode outside the two literals with 400 before any store command (:233), passes it as REDEEM's ARGV[16] (:266, `""` for none) and returns it (:283);
+  - REDEEM's comment names ARGV[15] and ARGV[16] (:420-423), and after the installationId HSET it writes `workflowMode` only when ARGV[16] is not empty (:461-462). The `DEL KEYS[2]` above already dropped an earlier bind's mode;
+  - `storedBinding` returns it (:578).
+  - TOUCH, RENAME and SUSPEND are unchanged and keep the field; REVOKE deletes the hash.
+- **api/_lib/github-app.ts** (beyond the brief's list; (b)):
+  - imports `Option` and `Schema` from effect (:2) and the `WorkflowMode` type (:17; type-only, so no runtime import edge);
+  - `authorize`'s `verified` gains `workflowMode?` (:237-239);
+  - the bind branch (:404-416; the read at :408-414) reads `contents/.github/workflows/vector.yml?ref=<identity.workflowSha>` with the validation token, best effort (`.catch(() => undefined)`: a 404 or any other failed read names no mode; review round one, (e)), inside the existing `try`, so the token is still revoked in `finally`;
+  - `verifyBind` returns `workflowMode` when there is one (:772);
+  - the module-level `WorkflowHeader` schema and `workflowModeOf` (:806-834; :806-833 before review round two added a comment line), whose comment says why the header is not read with core's `readWorkflowOptions` (it would bring yaml and semver into the API bundle) and that github-app.test.ts pins the two readers together. Its mode literal is `["codium", "own-key"] as const satisfies readonly WorkflowMode[]` (:816, review round two).
+- **api/_lib/cloud-agents-api.ts:** the bind route passes `workflowMode: checked.workflowMode` to REDEEM only when the App verified the bind, read a mode, and the body's workflowVersion is at least `MIN_CODIUM_WORKFLOW_VERSION` (3) (:166-174; the comment is :166-169), with a comment that the version comes from the request and can only withhold a mode, and that the gate covers `own-key` too although `MIN_CODIUM_WORKFLOW_VERSION` names Codium (only the v3 generator writes the lines a mode is read from). The body key check (:125), the bind response, the bindings listing and bind-code are unchanged.
+- **packages/web/test/github-app-fixture.ts:** `workflowContent`, `workflowEncoding`, `workflowBase64` and `workflowReads` (:97-101); the contents route records each read's ref and, when `workflowContent` is set, serves it base64 in GitHub's 60-character lines, or `workflowBase64` verbatim (:248-263). Additive: every existing case passes unchanged.
+- **Tests:** packages/web/test/cloud-agents-binding.test.ts (four cases in a new `workflow mode (R-A9)` block, three rows in the malformed-binding case, the shape test), cloud-agents-bind-api.test.ts (three cases and a `workflows` helper over the real generator), github-app.test.ts (two cases).
+- No generated file, flag, env var, switch, workflow, dependency or lockfile changes. VECTOR_EVERYWHERE_ENABLED stays off, and the everywhere side is unchanged ((i)).
+
+### Decisions
+
+- **(a) The source is the App's read of the workflow file the bind job ran from.**
+  - No other verified source exists: the bind OIDC identity has no mode claim, the bind body (`{code, workflowVersion}`) is the client, and `verifyBind` returned only `installed`, `defaultRef`, `adminVerified` and `installationId`. The mode lives only in the workflow file, in the generator's `# vector-workflow:` header (core review/workflow.ts `readWorkflowOptions`) and in the route script's `const mode` line, which decides whether the route job accepts the App bot's dispatch (workflow.ts:531).
+  - The read is at `identity.workflowSha`. The OIDC verifier requires `workflow_sha === sha`, and `authorize` has already checked the run's path (`.github/workflows/vector.yml`), its `head_sha`, the "Vector bind" job and the actor's write permission, so this is the file the bind job ran from. It is the last check in the bind branch, so a refused bind makes no read.
+  - `workflowModeOf` (no throw, no logging, nothing of the file kept): the answer must be a `file` with `base64` encoding and content of base64 characters only (Buffer's decoder would skip stray characters, so the check is the reader's own); line 1 must be `# vector-workflow: ` followed by JSON whose `mode` is one of the two literals (other keys ignored); the file must have exactly one `const mode = …` line, equal to the header's mode. For `own-key` that is enough. For `codium` the header's `handle` and the file's one `const handle = …` line must both name this App's slug (critique, taken): the route refuses the bot when the handle is empty or another App's, so such a workflow is recorded with no mode rather than as `codium`. Only the literal leaves the function.
+  - The literals are spelled in github-app.ts rather than imported from cloud-agents-binding.ts (critique, taken), so App code gains no runtime import of the binding store; the type is imported type-only. Since review round two, `satisfies readonly WorkflowMode[]` ties the literal to the binding's `Mode`, the source of truth, at its definition (review round two, finding 2).
+  - The format is the generator's, so the tests run the reader on `buildAgentsWorkflow`'s real output, in github-app.test.ts (no Redis) and cloud-agents-bind-api.test.ts (critique, taken). A generator change that moves the header or the route lines turns those cases red.
+- **(b) Files beyond the brief.** api/_lib/github-app.ts, packages/web/test/github-app-fixture.ts and github-app.test.ts are @vector's files (§6.4) and not in EV-26's list. The App is the only holder of a token that can read the file at the verified SHA, so "taken from the verified bind identity" cannot be met without them. The hunk is kept to the bind branch, `verifyBind`'s return and one reader. It adds one GitHub request (a contents read with the validation token) to every App-verified bind and, since review round one, no new failure mode: the read is best effort ((e)). It can add latency, though: when GitHub stalls, the read can add up to 10 s to the bind (the shared `api()` helper's 10-second `AbortSignal.timeout`, which also covers reading the answer's body) before the bind goes ahead with no mode. A shorter timeout for this one read would need a per-call option on `api()`, a further change to @vector's file that the lead has not approved, so it is not built (review round two, finding 1). The lead approved this hunk, in its best-effort form, on 2026-11-20 (the ruling above); the plan's "not an owner question" is kept (it was the lead's call, not the owner's).
+- **(c) No mode** is recorded when: the App is not configured or not installed (no `verifyBind` read), the file is missing (404), the read fails (any other status, a timeout, or an answer over the 1,000,000-byte response cap; (e)), the answer is not base64 (GitHub's `none` encoding for files over 1 MB), the header is absent or not JSON or names another mode, the `const mode` lines are not exactly one or disagree with the header, a codium workflow's handle is not this App's on both lines, or the body's workflowVersion is below 3 (the generator-version half of the brief; a v2 workflow cannot take a bot dispatch). Each reads as no Actions route on the everywhere side.
+- **(d) A client's mode is refused, not ignored.** The bind and bind-code bodies already refuse an unknown key with 400, as they do for `installationId` (cloud-agents-bind-api.test.ts's installation case). EV-26 keeps that: a body naming `workflowMode` gets 400 INVALID_REQUEST before the code is peeked, and nothing is recorded (A1). This meets "a client-supplied mode is ignored" without loosening the strict bodies.
+- **(e) A failed read records no mode, and the bind goes ahead (review round one, finding 2, taken).** The read is best effort: `api(...).catch(() => undefined)` turns a 404, any other failed status, a timeout and an answer over the shared 1,000,000-byte cap (github-http.ts `githubResponseBytes`) into no mode. Everywhere is off and is the mode's only reader, so it never fails an @vector bind. The validation token is still revoked in `finally` (G1). The trade-off: a transient failure binds with no mode, which everywhere reads as no Actions route until the next rebind, so it fails closed; the bind itself is never retried for the mode's sake. `missing: true` is dropped, since a 404 is now one failed read among others.
+  - *As first built:* a non-404 failure threw GITHUB_UNAVAILABLE (503) before the bind route spent the OIDC token or the code, and a vector.yml of roughly 740 KB to 1 MB (its base64 answer over the cap) refused every App-verified bind of its repository with 503. The review's point was that this made one more request a new way for @vector binds to fail, for a route nothing reads yet. Both failure modes are gone, and the over-cap limitation is closed without a second request path.
+  - Pinned: G1 (a 404, a 403, a 503 and an over-cap answer each return the old result with no mode, every token revoked) and A3 (a 503, a good read, a 404 and an over-cap answer: four 200 binds, only the good read stores a mode).
+- **(f) "Updated whenever the workflow version changes" is only partly met (critique, taken).** At HEAD no path updated `workflowVersion` after a bind: REDEEM is its only writer, the mint reads the body's version only for its `< 3` refusal (426), and TOUCH, RENAME and SUSPEND never write it. EV-26 writes the mode in the same script as the version, after the `DEL`, so every bind, rebind, takeover or no-App rebind replaces the pair or drops the mode (B2, A2). But the pair is a bind-time snapshot: a workflow changed without a rebind (the desktop's update pull request, a hand edit) is not seen, in either direction. R-A9's "kept current when the workflow changes" is therefore met only at each bind. EV-30 must read the mode live before dispatch; that is now a hard requirement in the spec's §8 VE-30 note, not an option.
+- **(g) Not exposed.** The bind response keeps its five keys, and the bindings listing builds its rows field by field, so neither carries `workflowMode` (A1). Nothing logs it.
+- **(h) Rollback hazard.** A server older than EV-26 decodes a binding hash that carries `workflowMode` as corrupt (503 to every reader), because `StoredBinding` refuses excess keys. Rolling the hosted API back past EV-26 after binds have recorded a mode would make those repositories answer 503 until they rebind or their field is removed. Moot while the cloud-agents service is off in production (SEC-1/PUB-5: `safe()` answers 503 before any handler, so no bind reads GitHub or records a mode).
+- **(i) The everywhere side is unchanged.** It already reads no mode as no Actions route: packages/schema/src/everywhere-policy.ts (`binding.codiumMode !== true` gives `bind`), api/_lib/everywhere/router.ts (abandon), github/adapter.ts:68-70 (handoff answers `handled: false`), and `safePorts.binding` answers undefined (ports.ts). packages/schema/test/everywhere-policy.test.ts pins it. The mapping `codiumMode = workflowMode === "codium"` is EV-29's and EV-31's.
+
+### Case table
+
+| Case | File | What it shows |
+| --- | --- | --- |
+| B1 "redeem records the verified workflow mode with its version, and every reader returns it" | binding (Redis) | for `codium` and `own-key`: one EVAL; the returned binding, the stored hash, `bindingFor` and `bindingsForAccount` are exactly the documented binding with `installationId` and `workflowMode` |
+| B2 "a rebind or takeover replaces the mode with its own, or leaves none" | binding (Redis) | codium/"3", own-key/"4", a rebind without a mode (no field, HEXISTS 0), an O6 admin takeover by another account with codium, a takeover back without a mode: each read matches the step |
+| B3 "a legacy binding without a mode decodes with none, and touch, rename and suspend keep what is stored" | binding (Redis) | a hash with exactly the pre-EV-26 fields decodes, alone and in the listing, with no `workflowMode` key; a codium binding keeps it through touch, rename and suspend (generation moved), and revoke deletes the hash |
+| B4 "recordRepoBinding refuses a mode it does not know before any store command" | binding (Redis) | `byok`, `""`, `Codium`, `own_key`, `1` and `null`: 400 INVALID_REQUEST, no store command, and the code still peeks |
+| B5 "a malformed stored binding answers 503 to every reader" (three new rows) | binding (Redis) | a stored `workflowMode` of `byok`, `""` or `Codium`: 503 from `bindingFor` and `bindingsForAccount` |
+| B6 "the binding has 2.5's shape…" | binding (typecheck) | `RepoBinding` equals 2.5's shape plus `workflowMode?: "codium" \| "own-key"` |
+| A1 "R-A9: only the App's read at the verified SHA records the mode; a client's is refused; no App clears it" | bind-api (Redis) | bind-code and bind bodies naming `workflowMode` get 400 and no read; the plain bind of an own-key file records own-key from one read at the token's workflow SHA; the response keeps five keys; the listing names neither the key nor the value; a codium file's rebind records codium; a no-App rebind clears both `installationId` and the mode |
+| A2 "R-A9: each rebind records the mode beside its workflow version, so a workflow change updates both" | bind-api (Redis) | codium/"3", own-key/"4", no header line, a codium header over an own-key route, the codium file at version "2" and a hand-written workflow: the stored mode and version follow each step |
+| A3 "R-A9: a failed, missing or oversized workflow read records no mode, and the bind still succeeds" | bind-api (Redis) | four binds by one account: a 503 on the contents read, a good read, a 404, and an answer over the response cap. Each answers 200 with generation 1 to 4 and `installationId` 600; only the good read stores a mode (codium); no live token after any (review round one) |
+| G1 "R-A9: bind reads the workflow mode at the token's verified SHA and returns only the mode" | github-app | 19 files on the generator's real output (codium, own-key, CRLF, schedules, a large file under the cap: a mode; no content, no header, a non-JSON header, an unknown header mode, header and route disagreeing either way, two route lines, none, another App's handle, no handle, a route or header handle for another App, `none` encoding, base64 with characters outside its alphabet, which Buffer's decoder would skip: none). Each `verifyBind` is exactly the old result plus at most `workflowMode`, reads once at `"a".repeat(40)` (never `refs/heads/main`) on the one contents path, and leaves no live token. Wherever the App names a mode, core's `readWorkflowOptions` names the same one (review round one). Then a 404, a 403, a 503 and an over-cap answer each return the old result with no mode, and every minted token is revoked |
+| G2 "R-A9: verifyRun on an issue comment and installation() make no contents read" | github-app | with a codium file served, `verifyRun` on an issue comment and `installation()` make no contents read and return their old shapes. The review path's blob check (pull_request_review_comment), which read contents before R-A9, is out of scope (renamed in review round one) |
+
+### Mutations
+
+19 mutations, one source edit at a time, each with its named test files run alone through vector-serial against the disposable Redis (/tmp/vector-v2/everywhere/ev26/mut/: run.py, log.txt, log-m18b.txt). Every file was restored from its saved bytes and matched its sha256. M18 first survived (the non-base64 case used characters that decode to nothing useful either way); the case now inserts characters Buffer's decoder skips, and M18 was re-run red. The B, A and G codes are the case table's.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 REDEEM writes no `workflowMode` | cloud-agents-binding.ts | binding 43/3; bind-api 16/3 | B1, B2, B3; A1, A2, A3 |
+| M2 REDEEM writes it even when empty | cloud-agents-binding.ts | binding 14/32 | every case that reads a binding back, B2 among them |
+| M3 `storedBinding` drops it | cloud-agents-binding.ts | binding 43/3 | B1, B2, B3 |
+| M4 `StoredBinding` without the key | cloud-agents-binding.ts | binding 43/3 | B1, B2, B3 |
+| M5 no input validation | cloud-agents-binding.ts | binding 45/1 | B4 |
+| M6 the returned binding omits it | cloud-agents-binding.ts | binding 43/3 | B1, B2, B3 |
+| M7 the bind route passes no mode | cloud-agents-api.ts | bind-api 16/3 | A1, A2, A3 |
+| M8 no workflow version gate | cloud-agents-api.ts | bind-api 18/1 | A2 |
+| M9 the body's `workflowMode` admitted and used | cloud-agents-api.ts | bind-api 18/1 | A1 |
+| M10 the read at the default branch | github-app.ts | github-app 74/1; bind-api 18/1 | G1; A1 |
+| M11 no route-line check | github-app.ts | github-app 74/1; bind-api 18/1 | G1; A2 |
+| M12 no header check (route line alone) | github-app.ts | github-app 74/1 | G1 |
+| M13 the read without `missing: true` | github-app.ts | github-app 74/1; bind-api 18/1 | G1; A3 |
+| M14 read failures swallowed | github-app.ts | github-app 74/1; bind-api 18/1 | G1; A3 |
+| M15 `Mode` accepts any string | cloud-agents-binding.ts | binding 44/2 | B4, B5 |
+| M16 no handle check | github-app.ts | github-app 74/1 | G1 |
+| M17 `verifyBind` omits the mode | github-app.ts | github-app 74/1; bind-api 16/3 | G1; A1, A2, A3 |
+| M18 no base64 alphabet check (re-run) | github-app.ts | github-app 74/1 | G1 |
+| M19 no encoding check | github-app.ts | github-app 74/1 | G1 |
+
+*Review round one (2026-11-20):* the rows above were measured on the first form of the read. With the read best effort, M13 (no `missing: true`) no longer applies (the option is gone) and M14 (failures swallowed) is now the code. Three mutations of the new form, run the same way (/tmp/vector-v2/everywhere/ev26/review1/mut/: run.py, log.txt), each restore matched by sha256:
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| R1 the catch removed (a failed read throws again) | github-app.ts | github-app 74/1; bind-api 18/1 | G1; A3 |
+| R2 the read at the default branch (M10's new text) | github-app.ts | github-app 74/1; bind-api 18/1 | G1; A1 |
+| R3 the catch answers `{ type: "file" }` | github-app.ts | github-app 75/0 (survives) | none: equivalent, since the reader names no mode for a body without base64 content |
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over the seven touched source and test files is empty for review-fixes, scope-finish, codium-finish, connect-finish, hands-finish, workspaces-finish, native-qualify, process-finish and brain-transport. (origin/native-finish, a branch from 2026-11-14 whose base predates these files, shows them as new; it is not a lane in this brief.)
+
+### Critique of the plan (2026-11-20)
+
+The plan was corrected by its critique before building. Taken: the commit precondition (with one difference, below); "partly met" and the hard VE-30 requirement ((f), the spec's §8 note); the handle check ((a)); the real generator's output in github-app.test.ts ((a)); the local literal schema and the comment on the body's version gate ((a), cloud-agents-api.ts:166-168); the local hygiene (prettier through vector-serial, the lane branch names from `git branch -r`, the Redis shut down afterwards and its folder removed; `ss` is not installed here, so the port check was redis-server's own bind, which fails on a taken port). Rejected in part:
+- **"If the approval is not given, build nothing."** The package is built but not committed, as the task requires, so nothing ships before the lead reads the diff; the approval gates the commit instead. If the lead refuses, the github-app.ts hunk and the bind route's spread are dropped and the package waits, as the critique says.
+  *Annotation (2026-11-20):* moot. The lead approved the hunk in its best-effort form (the ruling under "Commit precondition").
+- **"Treat an oversized body as no mode."** Recorded and pinned as a known limitation instead ((e)), the critique's second option: closing it needs a second request path in github-app.ts, which would widen the hunk the lead must approve.
+  *Review round one annotation:* superseded. The best-effort read ((e)) names no mode for an oversized answer with no second request path.
+
+### Review round one (2026-11-20)
+
+Nine findings, none blocking. Code: the read is best effort, two comments, one test assertion, one case renamed, one comment rewrapped.
+
+1. **github-app.ts and its fixture and test are outside the brief.** Kept as built; the commit precondition stood unchanged at this round (the lead's explicit approval of the github-app.ts hunk and the fixture and test edits beside it; on a refusal those and the bind route's spread would be dropped together, and the package would wait). *Annotation (2026-11-20):* the lead has since approved all of it, in the best-effort form (the ruling under "Commit precondition").
+2. **A new @vector failure mode for a feature that is off.** Taken: the read is best effort ((e)). A bind whose read fails, is missing or is over the cap succeeds with no mode. G1 and A3 pin it; R1 and R2 above re-run the mutations the change touched.
+3. **"Ignored" in the brief, refused (400) in the code.** No code change ((d)). The commit body must say "refused (400)", never "ignored", so a reviewer checks it against (d) (progress receipt, commit gate).
+4. **Two readers of the `# vector-workflow:` header.** Taken, both halves: the comment above `WorkflowHeader` says why the App does not call `readWorkflowOptions` and where the two are pinned, and G1 asserts, for every case where the App names a mode, that `readWorkflowOptions(file)?.mode` names the same one (codium, own-key, CRLF lines, schedules and the large file).
+5. **The version gate's constant names Codium but also withholds own-key.** Taken, comment only (cloud-agents-api.ts:166-169).
+6. **An over-width comment in cloud-agents-binding.test.ts.** Taken: rewrapped (:1585-1587). The reader's comment block in github-app.ts (:806-813), which reached 121 and 126 columns, was rewrapped too.
+7. **G2's name claims more than it shows.** Taken: renamed "R-A9: verifyRun on an issue comment and installation() make no contents read", with a comment that the review path's existing blob read is out of scope.
+8. **The cloud-agents-api.ts range.** Taken as re-measured: the first form's hunk was :166-173, as the finding says; finding 5's added comment line makes it :166-174 now, which "What changed" gives (comment :166-169). Every other line reference in "What changed" was re-measured too (github-app.ts :404-416, :408-414, :772, :806-833).
+9. **The stored mode is a bind-time snapshot.** No code change. The VE-30 live read stays a hard requirement; the EV-29/EV-31 test (a stored `codium` with a live `own-key` or failed read gives no Actions route) is added to Left open, the spec's §8 VE-30 note and the handoff.
+
+### Review round two (2026-11-20)
+
+Four findings, none blocking. Code: one type-level change and one comment line in api/_lib/github-app.ts (finding 2); the rest are lane-document edits.
+
+1. **The bind's read can add up to 10 s when GitHub stalls** (github-app.ts:417 at the review). Taken in the documents: (b) and the items for the lead to forward to @vector (Left open; the handoff's EV-26 block) now say so. Not built: a shorter timeout for this one read. It needs a per-call option on `api()`, which widens the github-app.ts hunk past the lead's ruling, so it is left to the lead or @vector.
+2. **The mode literals are spelled twice** (github-app.ts:817 at the review). Taken: `Schema.Literals(["codium", "own-key"] as const satisfies readonly WorkflowMode[])` (:816), with the comment naming the binding's `Mode` as the source of truth. It emits the same JavaScript, so no test result can change; the hosted API typecheck is the check, and a compile-time mutation (`"byok"` added to the literal) failed it at the definition (:816) as well as at the `verified` assignment (:415), then was restored and matched by sha256. What it does: a value added only here now fails at the definition rather than only at `verified.workflowMode`. What it does not do, and no shared literal could: make the App produce a value added only to the binding's `Mode`. A new mode needs its own reading rule in `workflowModeOf` (as `codium` needs the handle check), so that direction stays a review item for whoever adds a mode.
+3. **The spec's §3.4 step 6 note omitted the best-effort cases** (spec.md:266). Taken: its parenthesis now reads "(no App, a missing, unreadable or over-cap workflow file, a v2, hand-edited or disagreeing file, or a workflow version below 3)", matching (c) and the §11 R-A9 note.
+4. **A systematic read failure is silent** (github-app.ts:412 at the review). Not built: a content-free failure counter. api/_lib has no metrics facility (a search for one found none in github-app.ts, github-app-server.ts or their neighbours), so it would be new machinery in @vector's file, outside the ruling. Taken instead, as the finding's alternative: EV-30's tests and VE-50's GitHub acceptance check that a known codium binding has `workflowMode: "codium"` stored (Left open; spec §8 VE-30 note; handoff).
+
+### Left open
+
+- **The live mode read (EV-30, hard requirement).** Before each dispatch, read `.github/workflows/vector.yml` at the default branch with the App's single-repository token, by `workflowModeOf`'s rule, and dispatch only on `codium`; a failed read means no Actions route (spec §8 VE-30 note). The alternative the plan offered, a mint-time refresh, could only ever prove `codium` (own-key runs make no cloud-agents call, INV-K1) and is not the requirement.
+- **The port mapping (EV-29/EV-31):** `codiumMode = workflowMode === "codium"`, `appInstalled = installationId !== undefined`, `laptopFirst` false until Q13/R-A6. Its tests must show that a stored `codium` with a live read of `own-key`, or with a failed live read, gives no Actions route (review round one, finding 9).
+  *2026-11-20 annotation (EV-29):* built as written in api/_lib/everywhere/adapters/cloud-agents.ts (the `binding` port and `createHandoffBinding`). The live half is pinned at the seam EV-30 fills: P7 in packages/web/test/everywhere-cloud-adapter.test.ts shows that a stored `codium` with a live read of `own-key`, of no mode, or that fails gives no Actions route. See "2026-11-20, EV-29", (a).
+- **For the lead to forward to @vector:** vector-at-mention-spec 2.5 (the binding shape gains `workflowMode`), 2.7 bind (the best-effort contents read at the verified SHA, which never fails a bind; the one extra GitHub request per App-verified bind; and that this read can add up to 10 s to a bind when GitHub stalls, under `api()`'s shared timeout, (b)) and the rollback hazard in (h). If @vector wants a shorter timeout for this read, it is a per-call option on `api()` in its own file.
+- **A systematic read failure shows only downstream (review round two, finding 4).** The best-effort read counts nothing, so a lost contents permission or a changed answer shape would record no mode on every bind, silently. EV-30's tests and VE-50's GitHub acceptance check that a known codium binding has `workflowMode: "codium"` stored (spec §8 VE-30 note).
+- **The commit gate.** The precondition is met (the lead's ruling of 2026-11-20 under "Commit precondition"). What remains: one package commit whose body says a client's mode is "refused (400)", never "ignored"; the push; and the vector-at-mention.yml and typecheck.yml dispatches on everywhere-finish (progress receipt).
+
+## 2026-11-20, EV-27: the job body route (R-A4, server half)
+
+Spec §11 R-A4; §3.6 (no Actions route until R-A4; Correlation); §3.13 (the store keys); §8 VE-30 ("the body route answers only a `vrt_` token whose run is linked to that job, once per run"); §5 E4, E11. Base: HEAD `5b040d39` (EV-26), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` and origin/main `8e34d05e` are ancestors, so nothing was merged. Preconditions: EV-25 `7a806f91` and the review-fixes commits `53e98294`, `268bc877`, `e417c44d`, `d7e4aa54`, `ce91a261` and FIT-4 `f251ac2c` are ancestors. No engine, shell, sandbox or worktree code is touched, so v2-spawn-review.md does not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+### What changed
+
+- **New api/everywhere/jobs/[jid]/body.ts** (98 lines): `GET /api/everywhere/jobs/<jid>/body` with `Authorization: Bearer vrt_…`. It exports `config` (`bodyParser: false`), `BodyRouteDeps`, `createJobBodyRoute(deps)` and the default handler. The handler lives in the route file, as api/vault/snapshots/[id].ts's does ((o)). In order: the method (405); the flag and the data key (404 `EVERYWHERE_OFF` before the token or the store); `requireRunToken(request, { allowAfterDeadline: false })` (401); the `everywhere` switch, where `stop` or an unreadable switch answers 404 `EVERYWHERE_OFF` and `no-new` passes; then `readRunBody` with the token's `sub`, `rid` and `repo`, and `platformOn` of the route's config (the config is the local `everywhere`, not `config`, which is the exported Vercel config). Busy answers 503 `EVERYWHERE_BUSY` with retry-after 2, and `EVERYWHERE_AUTHORITY_CHANGED` answers the same 404 as every other refusal. The account authority defaults to `codiumAccountAuthority` (`../../../_lib/everywhere/adapters/account.js`, inside the everywhere zone).
+- **api/_lib/everywhere/keys.ts:**
+  - `RUN_ID` (:77-81), the jobs module's rid rule. It has no colon, so `run:<rid>` and `run:<rid>:body-read` can never be one key;
+  - `everywhereKeys.run(rid)` and `everywhereKeys.runBodyRead(rid)` (:206-212). `run`'s comment says it is the body route's correlation only, which a settle must never use to find a job;
+  - `KEEP_MS.ticket` goes from one day to `TIMING.bodyTtlMs`, with new `run` and `bodyRead` at the same value (:42-48).
+- **api/_lib/everywhere/jobs.ts:**
+  - the header says an Actions job's links end with its body and are deleted, best effort, when it ends (:92-94);
+  - `untilBodyEnds` and `runLinks` (:613-625);
+  - `Decision` gains an optional `before` (:630-638): writes a step makes under the guards `change()` has just read. `change()` sends them with `authorizedCommands` after the step decides and before the transition (:659-661). No erase step has any;
+  - `change()`: when a transition newly ends a job, `Promise.resolve().then(() => deleteKeys(ctx.store, ...runLinks(written))).catch(report("unlink"))` runs before `done` (:693-701). A laptop job has no links, so nothing is sent;
+  - `Moved` gains the code `body-gone` (:949-956). `dispatchJob` answers it for a job whose body has ended, before any ticket write, and caps the ticket's PX at the body's end (:1018-1021, :1032-1035);
+  - `startDispatched`'s step, only for a `dispatched` job with that ticket hash, writes `run:<rid> → jid` through `before`, capped at the body's end. So the link is written under the job's authority and before the fenced transition, on the one record read and authority read `change()` makes (:1057-1080);
+  - the new section "The body by reference" (:1148-1255): `READ_BODY_ONCE_SCRIPT` (:1159), `RunBody`, `RunBodyVerdict`, `RunBodyRequest` (:1188), `readRunBody` (:1209) and `linkedRun` (:1244), which also requires the job's platform to be on;
+  - `eraseInstallationJobs` reads each job after its cancel and deletes its body and its links (:1790-1793 comment, :1809-1812);
+  - `eraseAccountJobs`'s history loop deletes the links with the record and the body (:1820, :1837).
+- **Files outside the brief's list ((l)):**
+  - packages/web/test/lib/everywhere-store.ts: the FakeStore's TypeScript twin of `READ_BODY_ONCE_SCRIPT` (:12-17 import, :137, :575-590);
+  - .github/workflows/vector-everywhere.yml: `api/_lib/cloud-agents-run-token.ts` added to the pull_request paths under "The helpers on main";
+  - packages/web/test/everywhere-lane.test.ts: the same path in `helpers`.
+- **New packages/web/test/everywhere-body-api.test.ts:** 27 cases (24 local, 3 real-Redis). See "The cases".
+- api/_lib/cloud-agents-run-token.ts is imported, not edited. No generated file, flag, env var, switch, dependency or lockfile changes. The route is the hosted API, not the engine's HttpApi, so nothing is regenerated. VECTOR_EVERYWHERE_ENABLED stays off.
+
+### Decisions
+
+- **(a) `requireRunToken`, not `verifyRunToken`.** Both are exported from api/_lib/cloud-agents-run-token.ts. `requireRunToken` is the module's documented path for "our service endpoints" with a `Bearer vrt_` header. It runs the same checks: the signature, the claims, `now < dl` (with `allowAfterDeadline: false`), the live run's jti, the binding's account and generation, and revocation. It also reads the header and returns `repo`, so the route copies neither the header rule nor the rid grammar. If the lead wants `verifyRunToken` literally, the route parses the header itself and takes the repository from the rid's first number.
+- **(b) The link is Vector everywhere's own key.** `startDispatched` writes `run:<rid> → jid` from the start event's ticket hash (EV-25's start listener, which EV-30 registers). That answers EV-25's Left open "R-A4 needs a further ledger change" for the server half only: only a 200 from this route proves that a run belongs to an everywhere job. The `vej_…` in the dispatch prompt is untrusted input, so EV-28 must never decide from the prompt line alone ((b) is the annotation on EV-25's Left open).
+- **(c) The ticket and the link end with the body.** The brief says their TTLs are no longer than the body's, so spec §3.13's one-day `ticket:<hash>` row changes. Each write is capped at the job's own `bodyExpiresAt`. A start that arrives after the body ended finds no ticket, so the job stays `dispatched` and the 900 s rule fails it as not started. Its run could not have read the body anyway. The schema's TIMING.dispatchStartMs comment is unchanged.
+- **(d) The marker (critique, taken with a refinement).**
+  - It is per rid. The only place it is set is inside the fenced EVAL that answers the body, and only while the body still exists.
+  - Its PX is the body's own remaining PTTL, read in Redis's clock in the same script and capped at `KEEP_MS.bodyRead`. So the marker lives exactly as long as the body it guards.
+  - The critique asked for `untilBodyEnds(job, now, KEEP_MS.bodyRead)` on the server's clock. That cap could, by the skew between the server and Redis clocks, let the marker expire a few milliseconds before the body. In that window the body is still in Redis while the server still sees time left, so a second read could succeed. Reading the body's PTTL inside the script closes that window, and it meets the critique's point that no new key outlives the body. In the FakeStore the two forms agree exactly (K1).
+  - M18 is now "the marker is uncapped", for both the Lua (R2) and the twin (K1).
+- **(e) Answers.**
+  - **200** `{task, context, outside}`.
+  - **410 `EVERYWHERE_BODY_GONE`:** this run already read the body; or the body is gone; or the server's clock has reached `bodyExpiresAt`.
+  - **404 `NOT_FOUND`:** every other refusal, identical to a missing job's 404, and none spends the read. That includes another account's job, another run's token, an unlinked or stray-linked rid, another repository's run, a GitHub job, a public repository's job, a record not on the Actions route, a job no longer running, a job whose platform is no longer listed in VECTOR_EVERYWHERE_PLATFORMS (review round one), a closed account and a removed platform link (authority changed).
+  - **401:** from the token module (`RUN_TOKEN_INVALID`, or `MODEL_PLAN_RUN_EXPIRED` past the deadline or for a settled run).
+  - **404 `EVERYWHERE_OFF`:** while the flag or the data key is off, answered before the token; under `stop` or an unreadable switch, after the token. Reading the switch is a call to Codium, and an unauthenticated caller should not cause one.
+  - **405** for any method but GET.
+  - **503:** `EVERYWHERE_BUSY` (retry-after 2) after eight lost fences; `PERSISTENT_STORE_UNAVAILABLE` for a store failure, a failed token check or a body that does not open.
+- **(f) `outside` is the platform id** (spec §6.6: the outside-marker values are the platform ids). No label, kind, repository, sponsor, reply reference, ticket, rid or lease is answered. EV-28's framing needs `kind` and `repository` (Left open).
+- **(g) The end-of-job delete is best effort**, not atomic with TRANSITION_SCRIPT: one `DEL` after the committed transition, whose failure logs a fixed `unlink` line with the jid and never turns a committed change into an error (as `audit` does). The reader re-checks the record, the TTLs end with the body, and account erase is the backstop. It covers cancel, the sweep's failures and EV-30's future Actions settle, which all go through `change()`.
+- **(h) The body is not deleted at the read:** Slack's progress post reads it (api/_lib/everywhere/slack/adapter.ts:211). It still ends with the job or at 2 hours.
+- **(i) A body that does not open answers 503, and the read stays spent** (critique, taken). That would be damage, and a second chance would make the read not once-only. With a lost 200 answer this means one run can never read its job's body. So EV-28 must settle the run at once with a failed outcome on any answer other than 200, so EV-30's settle listener ends the job promptly rather than after 135 minutes (Left open).
+- **(j) Body reads are not audited:** E16's list has no such event.
+- **(k) `startDispatched` is not made idempotent.** A repeated start for a job already `running` with the same rid answers `wrong-state` and does not rewrite the link. EV-30 decides (Left open).
+- **(l) Three files outside the brief's list.**
+  - The FakeStore twin: every package that added a script did the same, and a script the fake does not know is an error.
+  - The workflow path line: the lane test's computed `serverImports` check fails without it, because the route imports api/_lib/cloud-agents-run-token.ts. FIT-4 (review-fixes) has landed, so this is one added path.
+  - The lane test's `helpers` line (EV-09 precedent).
+- **(m) The order of checks.** The link (`run:<rid>` must hold this jid) is checked before any read of the record, so a caller whose run is not this job's reads nothing of it. Then the record: the sponsor is the token's account, the route is `actions`, the record's rid is the token's, the state is `running`, the repository id is the token's `repo`, the repository is not shared (E11), the platform is not GitHub, and the platform is still on (`platformOn`, review round one). Then the server's clock against `bodyExpiresAt`. Then the fenced EVAL under `jobGuards`, which checks the account-closed mark, the deletion tombstone and the platform installation and link revisions. A version that changed under the read (`-1`) reads again, up to eight times.
+- **(n) A job whose body has ended is never dispatched** (critique, taken in its second form). `dispatchJob` answers `body-gone` before any ticket write (review round one: it was `wrong-state`, which a router could not tell from a lost race), so no Actions run is started, on the sponsor's @vector hours, that could only get 404 or 410. A minimum body life for the Actions route is the router's choice (Left open).
+- **(o) Where the handler lives.** It is in the route file, not in jobs-api.ts, so the desktop jobs routes' bundles do not gain the run token module's import graph (cloud-agents-entitlement.ts, codium-cloud-agents.ts, codium-provisioners.ts). It stays within the brief's files.
+- **(p) The switch.** Reading a body is work on a job already taken, so `no-new` lets it through (`admits(state, "running")`), and `stop` refuses it. That matches the jobs routes.
+- **(q) Logging.** The body, its context and the requester's label are never logged. Only fixed lines with a rid (the token module's `failClosed`) or a jid (`report`) are. B12 checks every console line of a run of the route's paths.
+
+### Critique of the plan (2026-11-20)
+
+All fourteen points were taken; (d) with a refinement, explained there.
+
+1. **A fresh Node import of the route** (major). Taken, before the commit, not deferred. A scratch probe (/tmp/vector-v2/everywhere/ev27/node-probe/probe.ts, a copy of test/api-module-loading.test.ts's `writeNodeTree` and `nodeProbe`) compiles the route's 109 modules one file each. It imports the route in fresh Node 22 ESM processes in five orders: first; after cloud-agents-run-token.ts; after model-plan-caller.ts; after both; and before both. With the flag and the store variables left out and `fetch` forbidden, the route's default handler then answers 404 `{error: {code: "EVERYWHERE_OFF"}}` with no I/O, and the model-plan caller still refuses a forged `vrt_` token with MODEL_PLAN_RUN_EXPIRED. All five pass. A copy that expects 200 fails all five, so the probe can fail. **For the lead:** add `api/everywhere/jobs/[jid]/body.ts` to test/api-module-loading.test.ts's second test's `entries`. That file is outside this brief.
+2. **Installation erase** (major). Taken. B7d is a live, linked Actions job whose cancel's own `DEL` is made to fail during the erase; the delete after the cancel removes the ticket, the link and the marker (M15). B7e shows that links left on an already ended job are not reached by installation erase, because the job left `livejobs:<installation>` when it ended. They are reached only by account erase (B7c) and by their TTL, which ends with the body. jobs.ts's doc comment says so.
+3. **Settle has no account** (major). Taken: Left open, the handoff and the VE-30 note say it precisely.
+4. **A lost start event** (major). Taken: a decision for the lead in Left open, with the concrete option.
+5. **B3's third sub-case** (minor). Taken. "No record read" is asserted only for the same account's other run and Bob's own run. For a planted link tying Bob's run to A's job, and for Bob's token naming A's own run, B3 asserts one GET of A's record, nothing written, no script run and no marker.
+6. **The marker's TTL** (minor). Taken with a refinement ((d)).
+7. **Dispatch near the body's end** (minor). Taken ((n), K1b, M27). The minimum body life is Left open.
+8. **No recovery path for a spent read** (minor). Taken ((i), Left open).
+9. **The EV-25 annotation** (minor). Taken, conditional ((b)).
+10. **FrameJob's `kind` and `repository`** (minor). Taken (Left open).
+11. **Live visibility at the read** (minor). Taken (Left open, the E11 note).
+12. **Two more files to run** (minor). Taken: everywhere-docs.test.ts and everywhere-authority.test.ts ran alone, with and without Redis. packages/web/test/everywhere-cloud-adapter.test.ts and everywhere-journey-actions.test.ts (spec §8 VE-30 and VE-33) do not exist yet.
+13. **Two wordings** (minor). Taken: (q) and the route's header, and the import path in "What changed".
+14. **The synchronous throw in `change()`, and the route check** (minor). Taken: `Promise.resolve().then(...)` around the delete, and `job.route === "actions"` in `linkedRun` (M26).
+
+### The cases
+
+packages/web/test/everywhere-body-api.test.ts (B7's cases are in the "ending and erasing" block; R1 to R3 skip without VECTOR_TEST_REDIS_URL):
+
+| Case | What it pins |
+| --- | --- |
+| K1 | `run:` and `run:…:body-read` key shapes; seven malformed rids refused `EVERYWHERE_INVALID_ID`; the three new KEEP_MS values equal `KEEP_MS.jobBody`. Dispatch at +10 min, start at +20 min and read at +30 min: the ticket's and the link's PTTL equal `bodyExpiresAt − now`, and the marker's equals the body's own (90 min). At `bodyExpiresAt` the ticket, the link, the marker and the body are gone, and the route answers 404 |
+| K1b | a job one millisecond before its body ends is dispatched with a 1 ms ticket; at its end, exactly `{ok: false, code: "body-gone", state: "received"}` and no ticket key |
+| K2 | a losing second dispatch's ticket, and a cancelled job's leftover ticket, each name the job; the start answers `wrong-state` and writes no link; the job's own ticket links the run and the record names it |
+| K3 | a start whose link write fails rejects `PERSISTENT_STORE_UNAVAILABLE` and leaves the job `dispatched` with no link; the retry links and starts with one GET of the record and one of the installation's record (one authority read) |
+| B1 (Slack, Linear) | 200 with exactly `{task, context, outside}`, context items exactly `{from, text}`, `outside` the platform; the answer holds no label, account, reply reference, `ves1.`, ticket hash, rid, jid or lease; `cache-control: no-store`; the marker is set; one script run and one token check |
+| B2 | the second and later reads, with the same token and with one minted again for the same rid: 410 with no body |
+| B3 | the same account's other run and Bob's own run: the 404 a missing job gets, no command touching A's record, nothing written. A planted link tying Bob's run to A's job, and Bob's token naming A's run: one GET of A's record, nothing written, no script. No marker for any run; A then reads 200 |
+| B4 | a dispatched job with no run started: 404, A's record never read; a stray link whose record names another rid: 404 and no script; no markers; the job's own run then reads 200 |
+| B5 | flag `false`, flag unset and no data key, each with a good token, a bad token and none: 404 `EVERYWHERE_OFF`, no store command and no token check. `stop` and an unreadable switch: 404 `EVERYWHERE_OFF` after the token check, no store command, no marker. `no-new`: 200 |
+| B6 | no header, Basic, the desktop app's `vct_` token, a token under another key and a changed payload give 401 `RUN_TOKEN_INVALID`; past the deadline gives `MODEL_PLAN_RUN_EXPIRED`, with no token check and no store command; a settled run gives `MODEL_PLAN_RUN_EXPIRED`; POST gives 405 with nothing read. No marker; the good token then reads 200 |
+| B7a | a cancel deletes the ticket, the link and the marker; the route then answers 404 |
+| B7b | 900 s without a start: the sweep fails the job and its ticket is gone |
+| B7c | a cancel whose end-of-job `DEL` fails logs exactly one fixed `unlink` line and leaves the links; account erase deletes them with the record |
+| B7d | installation erase of a live linked job whose cancel's `DEL` fails: one `unlink` line, the job `cancelled`, the ticket, link, marker and body gone |
+| B7e | an ended job's surviving links are left by installation erase and expire at the body's end |
+| B8 | 404, no script and no marker for: a public repository's job (E11), a run of repository 202 linked to a job of 101, a GitHub job, a record rewritten to the laptop route, and a job that ended while its links survived |
+| B9 | a deleted body gives 410 with no marker; the server's clock at `bodyExpiresAt` gives 410 with no script run, though the store still holds the body |
+| B10 | the everywhere account-closed mark, the account's deletion tombstone (checked inside the script) and a removed platform link each give 404 and no marker |
+| B11 | five reads at once: one 200 (the only answer with the task) and four 410 |
+| B15 | VECTOR_EVERYWHERE_PLATFORMS without `slack`: 404 `NOT_FOUND`, no script and no marker; with it back, the same token reads 200 |
+| B12 | across a 200, a 410, a 404, a 401, a failing token check (503), a body that does not open (503, the marker set, then 410) and a failed unlink: the console lines include the two fixed lines and never the task, the context, "Safari", "redirect", the label or the reply reference |
+| B13 | the default export is a function; `config` is `{api: {bodyParser: false}}` |
+| B14 | a record changed under the read once is read again and answers 200; one that changes every time answers 503 `EVERYWHERE_BUSY` with retry-after 2, no marker, and a later read gets 200 |
+| R1 (Redis) | twelve `readRunBody` calls behind a barrier on the record's GET: exactly one ok and eleven 410; the marker's PTTL is in (0, `KEEP_MS.bodyRead`] |
+| R2 (Redis) | a job made 30 minutes earlier: the ticket's and the link's real PTTL are at most the body's remaining life (plus 1 s); six route reads at once give one 200 and five 410; the marker's PTTL is at most the body's; a cancel leaves `EXISTS` 0 for the ticket, the link and the marker |
+| R3 (Redis) | a deleted body gives 410 and no marker |
+
+### Left open
+
+- **The start listener and the agent phase can race.** The start listener runs after the mint's answer, within its 5 s budget, so the agent phase can ask before its run is linked and get 404. EV-28 should retry a 404 for about 6 s, or the lead decides otherwise.
+  *2026-11-20 annotation (EV-28):* built. The agent phase reads again only after the route's own 404 `NOT_FOUND`, 1 s apart, up to seven reads in all (about 6 s). See "2026-11-20, EV-28", (d).
+- **A lost start event loses the job (decision for the lead).**
+  - EV-25's start event is at most once. If it is lost, the job stays `dispatched` with no rid, and this route answers 404 for the whole run. EV-30's reconciliation acts only at the 900 s mark, long after the agent phase has given up, so the job then fails with the "no start hook" help although its run did start.
+  - A concrete option: when the link is missing, the route calls @vector's exported `liveRun(claims.sub, claims.rid)`. The token's CHECK has just proven that run live, and `liveRun` returns its `ticketHash`. The route maps `ticket:<hash>` to the jid, requires it to equal the path's jid, and calls an idempotent `startDispatched` before reading.
+  - Until the lead decides, losing the start event loses the job.
+  *2026-11-20 annotation (EV-30):* still the lead's decision. The settle listener cannot rescue it either (no settle index without the start), and the job ends with the misleading "did not start" post at 900 s (L7). See "2026-11-20, EV-30", (k).
+- **Settle has no account, and the link ends with the body.** (`everywhereKeys.run`'s comment now says so in code, review round one.)
+  - EV-25's settle listener receives `(rid, end, signal)` and no account, so EV-30 cannot look among `jobs:<sponsor>` without already knowing the sponsor.
+  - `run:<rid>` lives only as long as the body, at most 2 hours from intake. A run that starts at +60 min and runs 120 minutes settles at about +3 h, when no rid-to-jid key exists. The sweep would then fail the job at ACTIONS_OVERDUE_MS, and its result would never be posted.
+  - So EV-30's settle listener must do one of two things. It can get the account from @vector's run record (`runRecordKey(rid)`), which needs an exported reader and is a lead decision. Or it can keep its own settle index that holds only the jid and does not end with the body. That index is allowed, because it holds no platform text.
+  *2026-11-20 annotation (EV-30):* answered with the settle index: `run:<rid>:settle` → jid, written with `run:<rid>` at the start, kept 3 hours, deleted with the job's links and covered by erase. It holds only the jid. See "2026-11-20, EV-30", (c).
+- **EV-30's reconciliation** must treat a `running` job with the same rid as already linked. `startDispatched` is not idempotent ((k)).
+  *2026-11-20 annotation (EV-30):* moot: no reconciliation is built ((k)). A repeated start of a running job answers wrong-state and writes nothing (A1, L1). See "2026-11-20, EV-30".
+- **A minimum body life for the Actions route.** EV-29's and EV-30's router should refuse the Actions route unless `bodyExpiresAt − now` exceeds `TIMING.dispatchStartMs` plus the run's own start. `dispatchJob` refuses only a body that has already ended ((n)), and answers it `body-gone`, so the router can tell it from a lost race (`wrong-state`). Today's router (api/_lib/everywhere/router.ts:79-80) abandons the dispatch on any refusal, which is right for both.
+  *2026-11-20 annotation (EV-29):* not built in EV-29; deferred to EV-30, which owns the dispatch path that could run late. routeJob's only caller is the intake, right after createJob, so a body has about 1 h 59 min left when it routes. See "2026-11-20, EV-29", (k).
+  *2026-11-20 annotation (EV-30):* still unneeded: EV-30 adds no late dispatch path. See "2026-11-20, EV-30", (o).
+- **EV-28's recovery.** On any answer other than 200 from this route (after the 404 retry above), the agent phase settles at once with a failed outcome, so EV-30's settle listener ends the job promptly ((i)). The read is spent before the answer is delivered, on purpose, so a lost 200 or a 503 for a body that does not open leaves the job `running` until the Actions overdue sweep unless EV-28 does this. EV-28's tests must include: a 503, a 410, and a 404 that outlasts the retry each settle the run at once with a failed outcome, and no second read is made (review round one).
+  *2026-11-20 annotation (EV-28):* built. Every answer but a 200 that is exactly the body, after the 404 retry, ends the run with one fixed line, exit 1 and no bundle, so `withRunHeartbeat` settles `failed` at once; nothing is read a second time. packages/engine/test/everywhere/github-agent-body.test.ts has the 503s, the 410 and the lasting 404. See "2026-11-20, EV-28", (c).
+- **EV-28's framing.** The answer has no `kind` or `repository`, which `FrameJob` (packages/core/src/everywhere/frame.ts:58) and `everywhereSystemInstructions` need. EV-28 passes the repository from GITHUB_REPOSITORY and a fixed kind. That is correct, because `kind` matters only for an empty task, and `decodeJob` refuses an empty task on every non-GitHub job at creation (packages/schema/src/everywhere.ts:864).
+  *2026-11-20 annotation (EV-28):* built as written: kind `mention` and the repository from GITHUB_REPOSITORY, with `FrameJob`'s repository narrowed to its `fullName` so nothing is invented. See "2026-11-20, EV-28", (e).
+- **Live visibility at the read (E11).** Visibility is read live only before dispatch. A repository made public between the dispatch and the read still receives the platform text, because the route can only check the record's `repository.shared` snapshot. A re-read needs the App's single-repository token, which belongs to EV-30's port. It is not built here. **For EV-30:** once the cloud-agents visibility port exists, `readRunBody` (or the route, before the EVAL) takes a live visibility read through it, where a failed read counts as public, and answers the same 404 without setting the marker. Add a B8-style case whose fake port reports public, and one whose port fails (review round one).
+  *2026-11-21 (phase review, everywhere-finish lane):* the window stays open and is named in the handoff's "Lane work with no package yet". A repository made public between the dispatch (router.actions() and prepareCloud read visibility live) and the run's body read still gets the body. The run's own payload check (github.agent.ts readRequest, PrivateRepository) covers part of it. Not built now: the read would add a GitHub App call to the route, and its `internal` answer waits on EV-29 (c)'s private-or-internal ruling, which is the lead's.
+  *2026-11-20 annotation (EV-30):* not built: the EV-30 brief does not include it, and no later package names it yet. See "2026-11-20, EV-30", (o).
+- **No everywhere run can exist yet.** Until R-C8/R-A8 (owner-gated), run tokens accept only `github-*` sources and ENABLED_SOURCES reserves slack, linear and jira. Even with the flag on, production answers 404 to every caller: nothing writes `run:<rid>` until EV-30 registers the start listener, and nothing dispatches (EV-29 is not built).
+  *2026-11-20 annotation (EV-29):* still true. EV-29 built the adapter, but production has no `prepareCloud`: it needs an enabled platform source (R-C8/R-A8) and EV-30's live mode read, so nothing dispatches. See "2026-11-20, EV-29", "Safe by default".
+- **The documents.** Spec §3.13's ticket row and the TIMING.dispatchStartMs comment's wording are annotated, not rewritten.
+- **For the lead:**
+  - add the route to test/api-module-loading.test.ts's second test (critique 1);
+  - observed outside scope and not fixed here: the production jobs routes (`createJobsApi({events})`, jobs-api.ts:320) and account routes (`createAccountApi()`, account-api.ts:494) build `everywhereStore()` with no account authority. Once the flag is on, `accountGuards` falls to `missingAccountAuthority`, and every desktop jobs route and account route would answer 503 `EVERYWHERE_ACCOUNT_UNVERIFIED`. The new route defaults to `codiumAccountAuthority` and does not have this problem.
+
+### Mutations
+
+33 mutations, one source edit at a time, each with packages/web/test/everywhere-body-api.test.ts run alone through vector-serial (/tmp/vector-v2/everywhere/ev27/mut/: mutate.py, run.log, one junit file and log per mutation, before.sha256). Lua mutations ran against the disposable loopback Redis; the FakeStore keeps its own unmutated twin, so only R1 to R3 can see them. Twin mutations ran without Redis. Every mutation turned its named cases red, and every file was restored from its saved bytes and matched its sha256.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1L the Lua drops NX and ignores the SET's answer | jobs.ts (Redis) | 23/2 | R1, R2 |
+| M1T the twin drops NX | everywhere-store.ts | 19/3 | B2, B11, B12 |
+| M2L the Lua sets the marker before the body check | jobs.ts (Redis) | 24/1 | R3 |
+| M2T the twin sets the marker before the body check | everywhere-store.ts | 21/1 | B9 |
+| M3 the link check dropped | jobs.ts | 19/3 | K1, B3, B4 |
+| M4 the sponsor check dropped | jobs.ts | 21/1 | B3 |
+| M5 the record's rid check dropped | jobs.ts | 21/1 | B4 |
+| M6 the running-state check dropped | jobs.ts | 21/1 | B8 |
+| M7 the repository check dropped | jobs.ts | 21/1 | B8 |
+| M8 the public-repository check dropped | jobs.ts | 21/1 | B8 |
+| M9 the GitHub check dropped | jobs.ts | 21/1 | B8 |
+| M10 the server-clock body-end check dropped | jobs.ts | 21/1 | B9 |
+| M11 a gone body (-2) answers 404 | jobs.ts | 21/1 | B9 |
+| M12 `runScript` replaces `authorizedScript` | jobs.ts | 21/1 | B10 |
+| M13 no end-of-job DEL in `change()` | jobs.ts | 17/5 | B7a, B7b, B7c, B7d, B12 |
+| M14 account erase leaves the links | jobs.ts | 21/1 | B7c |
+| M15 installation erase leaves the links | jobs.ts | 21/1 | B7d |
+| M16 the ticket TTL uncapped | jobs.ts | 20/2 | K1, K1b |
+| M17 the link TTL uncapped | jobs.ts | 21/1 | K1 |
+| M18L the Lua marker TTL uncapped | jobs.ts (Redis) | 24/1 | R2 |
+| M18T the twin marker TTL uncapped | everywhere-store.ts | 21/1 | K1 |
+| M19 the answer adds the label | jobs.ts | 20/2 | B1 (both rows) |
+| M20 the flag check after the token check | body.ts | 21/1 | B5 |
+| M21 the switch ignored | body.ts | 21/1 | B5 |
+| M22 `allowAfterDeadline: true` | body.ts | 21/1 | B6 |
+| M23 authority changed answered 409 | body.ts | 21/1 | B10 |
+| M24 `startDispatched` links without checking the candidate (superseded in review round one: the link moved into the start step; see R-M24, R-M32, R-M33, R-M36) | jobs.ts | 21/1 | K2 |
+| M26 the Actions-route check dropped | jobs.ts | 21/1 | B8 |
+| M27 `dispatchJob` dispatches a job whose body ended | jobs.ts | 21/1 | K1b |
+| M28 a changed record (-1) answers 404 | jobs.ts | 21/1 | B14 |
+| M29 a body that does not open answers 410 | jobs.ts | 21/1 | B12 |
+| M30 the run id rule admits a colon | keys.ts | 21/1 | K1 |
+| M31 the end-of-job DEL's failure not caught | jobs.ts | 17/5 | B7c, B7d, B7e, B8, B12 |
+
+The plan's M25 ("the Lua script drops NX") is M1L. M1 and M2 are split into their Lua and twin halves.
+
+### Review round one (2026-11-20)
+
+Ten findings, none blocking. Six are taken in code. Four are taken in the lane documents only; one of those, the module-loading test, stays with the lead. Built uncommitted.
+
+| Finding | Taken |
+| --- | --- |
+| body.ts: the handler's `const config` shadows the exported Vercel `config` | Renamed to `everywhere` |
+| the test's `Answer.body` is `any` | Typed as `AnswerBody \| undefined` (optional `task`, `context`, `outside` and `error`), narrowed with `?.` and `?? {}` where it is read |
+| `startDispatched` read the record and the authority twice (its own candidate read, then `change()`'s) on the start listener's 5 s budget | Taken in code: `Decision` carries `before`, writes made under the guards `change()` has just read, so the start makes one record read and one authority read. One EVAL more than a start without the link remains; EV-25's listener-budget note is annotated with it. K3 pins the order and the single reads |
+| the receipt says "four" Lua mutations | It was three (M1L, M2L, M18L): corrected in the progress receipt |
+| `dispatchJob`'s body-ended refusal answers `wrong-state`, which a router cannot tell from a lost race | Taken in code: the new `Moved` code `body-gone`, with the job's state. Nothing reads Moved's codes exhaustively; the router (router.ts:79-80) abandons on any refusal. K1b pins the exact answer |
+| E11 at read time uses only the dispatch-time `repository.shared` snapshot | Not built here: no visibility port exists yet. Left open now gives EV-30 the concrete step (a live read through the port, a failed read counts as public, the same 404 and no marker) and its two cases |
+| the route does not check that the job's platform is still listed | Taken in code: `readRunBody` takes `platformOn`, and `linkedRun` refuses a platform that is no longer on with the same 404 and no marker, so the read is not spent. B15 |
+| test/api-module-loading.test.ts's second test does not list the route | Not changed: the file is outside the brief, and the finding asks for a follow-up the lead approves. Still in "For the lead"; the scratch Node probe was re-run after these edits and passes in all five orders |
+| the read is spent before the answer is delivered | Kept, deliberately ((i)). EV-28's test list (Left open and the handoff) now names the 503, 410 and lasting-404 cases that must settle at once with a failed outcome |
+| `run:<rid>` must not be how EV-30's settle finds a job | Taken: `everywhereKeys.run`'s comment says it is the body route's correlation only. The jid-only settle index, or the run-record reader, stays EV-30's (Left open) |
+
+Mutations for the changed code, one at a time, each with everywhere-body-api.test.ts run alone without Redis (/tmp/vector-v2/everywhere/ev27/review1/mut/: mutate.py, run.log, one log per mutation, before.sha256). The mutations whose text the edits changed (M9, M17, M20, M21, M24, M27) were re-run in their new form. Every one turned its named cases red, and `sha256sum -c` matched both restored files.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| R-M9 the GitHub check dropped | jobs.ts | 23/1 | B8 |
+| R-M17 the link TTL uncapped, in the start step | jobs.ts | 23/1 | K1 |
+| R-M20 the flag check after the token check | body.ts | 23/1 | B5 |
+| R-M21 the switch ignored | body.ts | 23/1 | B5 |
+| R-M24 the start step does not check the ticket hash | jobs.ts | 23/1 | K2 |
+| R-M27 `dispatchJob` dispatches a job whose body ended | jobs.ts | 23/1 | K1b |
+| R-M32 `change()` ignores a step's `before` | jobs.ts | 4/20 | K1, K2, K3, B1 to B6, B7a, B7c to B7e, B8, B9, B11, B12, B14, B15 |
+| R-M33 a failed `before` write is swallowed and the job moves | jobs.ts | 23/1 | K3 |
+| R-M34 the platform-listed check dropped | jobs.ts | 23/1 | B15 |
+| R-M35 a body-ended dispatch answers `wrong-state` | jobs.ts | 23/1 | K1b |
+| R-M36 the start reads the record and the authority twice again | jobs.ts | 23/1 | K3 |
+
+The receipts are in vector-everywhere-progress.md, "EV-27", "Review round one".
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over the eight touched files (and api/_lib/cloud-agents-run-token.ts, which is imported) is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, brain-transport `0d18f750` and process-finish `3ec7fb14`.
+
+### Deferred verification
+
+- The real CHECK script with this route: the route's token check uses a stand-in store, and the script itself is covered by cloud-agents-run-token.test.ts.
+- vector-everywhere.yml and typecheck.yml on everywhere-finish, after the commit gate's push (R1 to R3 run there in the Valkey job).
+- Live use, after EV-28, EV-29, EV-30 and R-C8/R-A8.
+
+## 2026-11-20, EV-28: the agent phase reads a job's request by reference (R-A4, runner half)
+
+Spec §11 R-A4 (the INV-S14 exception); §3.5.1; §3.6 ("After R-A4"); §5 E1, E4, E11, E13; §8 VE-30. Base: HEAD `c1112608` (EV-27), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` and origin/main `8e34d05e` are ancestors, so nothing was merged. Precondition: origin/brain-transport `0d18f750` is an ancestor, so BT02 and BT05 to BT07b (and the review fix `27913ae3`) are in. No worktree, shell, sandbox or process-spawn file is touched, so v2-spawn-review.md does not apply; no relay file is touched, so codium-build-spec §4.17 does not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+### What changed
+
+- **packages/schema/src/everywhere.ts** (the lane's file; it still imports nothing):
+  - `ACTIONS_JOB_PROMPT = "Vector everywhere job "` and `jobOfActionsPrompt(value)` (:247-259): the job id when `value` is exactly the line and a job id, otherwise undefined;
+  - the type `ActionsJobBody` `{task, context, outside}`, where `outside` is never `github` (:471-480);
+  - `ACTIONS_PLATFORMS` (PLATFORMS without github) and `decodeActionsJobBody` (:929-950): exactly the three fields, a non-blank task within `LIMITS.taskChars`, the envelope's `context()` and an `outside` from ACTIONS_PLATFORMS. Errors name the field, never the value.
+- **packages/core/src/everywhere/frame.ts** (types only): `FrameRepository` (`fullName` only) and `FrameJob`'s `repository` narrowed to it (:58-65); `everywhereSystemInstructions` takes the same (:76-78). The header no longer says "later", and says the two runtimes write the same block, the Actions run's with no `Thread:` line ((e); review round one). Every existing caller passes whole jobs and still compiles.
+- **packages/engine/src/cli/cmd/github.cloud.ts** (@vector's file):
+  - `post` keeps its signature and now sends through a new `send` (:164-215), which is `post`'s old body with the method chosen by whether a body is given: a GET carries no body and no Content-Type. Every POST is byte for byte what it was;
+  - `EVERYWHERE_BODY_ATTEMPTS = 7`, `EVERYWHERE_BODY_RETRY_MS = 1000`, the private `EVERYWHERE_BODY_RESPONSE = 256 KiB` and `everywhereJobBody` (:543-603);
+  - one import of `decodeActionsJobBody`, `isJobId` and the type `ActionsJobBody` from @vectordevai/schema/everywhere (:6).
+- **packages/engine/src/cli/cmd/github.run-helpers.ts** (@vector's file): a type import of `PlatformId` from @vectordevai/schema/everywhere (:35); `ChatContext.outside?: PlatformId` (:576-582); `taskPart(text, outside: PlatformId = "github")` (:592-599); `chat` passes `ctx.outside` (:621).
+- **packages/engine/src/cli/cmd/github.agent.ts** (@vector's file, additive hunks):
+  - the header's new sentences (:17-22) and two imports (:34, :44), `everywhereJobBody` in the ./github.cloud list (:70);
+  - `EVERYWHERE_UNREAD` (:107-109): "Vector could not read this Vector everywhere job's request, so it made no changes." It names no plan or price and uses no INV-H1 word;
+  - begin (:530-539, :549): `everywhere` is read after every one of begin's checks, a signal during the read returns `{cancelled: true}`, the pinned instructions become GitHub's policy, a blank line and the everywhere policy, and `everywhere` is returned;
+  - runTask (:481) returns `CANCELLED` for that answer, and `Start` (:498) excludes it (review round one);
+  - `everywhereRequest` and `readRequest` (:553-605);
+  - gather's first branch (:609-617): the framed request is the message as it stands;
+  - work's chat context (:730-731): `outside: start.everywhere?.outside`;
+  - saveConversation (:866-868): `if (start.everywhere) return` right after the first `clear()`.
+- **Outside the brief's list ((l)):**
+  - .github/workflows/vector-everywhere.yml: five pull_request paths (:62-67): github.agent.ts, github.cloud.ts, github.run-helpers.ts, github.policy.ts and test/cli/github.agent-fixture.ts;
+  - packages/web/test/everywhere-lane.test.ts: the same five in `helpers` (:308-313);
+  - packages/web/test/everywhere-body-api.test.ts B1: `decodeActionsJobBody` of the route's answer text is `{ok: true, value: body}` (:494-496), so the server and the agent phase are pinned to one contract from both ends;
+  - packages/schema/test/everywhere.test.ts: four cases (below).
+- **New packages/engine/test/everywhere/github-agent-body.test.ts:** 14 cases (6 client, 8 agent phase; B8 since review round one).
+- Nothing is regenerated: no HttpApi route, no config schema, no SDK. No dependency, flag, env var, switch or lockfile changes. The fixture (test/cli/github.agent-fixture.ts) is not edited.
+
+### Decisions
+
+- **(a) What "the run context carries a job id" means.** The ticket's `jobId` (R-A1) never leaves the server (cloud-agents-start.ts:57-61), so the agent phase sees only the dispatch. The read path is taken only for a Codium ticket dispatch (`route.ticket`: VECTOR_MODE codium, the App bot `<slug>[bot]` of MENTIONS' handle, a well-formed `inputs.ticket`, which mint step 8 verified) whose raw VECTOR_PROMPT is exactly `ACTIONS_JOB_PROMPT` and a `vej_` id. No server-side check is added to prepareCloudRun: EV-25's cases (packages/web/test/cloud-agents-start.test.ts:1167-1184) pin that a job id never reaches GitHub for an arbitrary prompt, and EV-30's adapter will build the prompt from the shared constant. Whether prepareCloudRun should enforce the line is left to the lead.
+- **(b) The line selects the read; only a 200 makes the run an everywhere job** (critique, taken; EV-27 (b) at :3518 and the handoff's annotation at :220 say "EV-28 must never decide from the prompt line alone").
+  - The line only chooses to read. Framing, the everywhere policy and the platform's outside marker follow only a 200 that `decodeActionsJobBody` accepts.
+  - Every other outcome ends the run with EVERYWHERE_UNREAD. That is deliberate: the run cannot tell a run no job links from a job whose body was spent (a lost 200, EV-27 (i)) or whose start event is late or lost, and it must never run an everywhere job's line as a service task, which would spend @vector hours on a no-op while the job stays `running`.
+  - The cost: a ticket whose own prompt is exactly the line, which only the desktop could send if its user typed it, is refused after seven reads where it would run today as a SERVICE_TASK. The case "a job line that no linked job answers, such as a desktop user's ticket that typed it" pins that refusal. Left open asks the lead whether prepareCloudRun should refuse the exact line when no `jobId` is given, so it cannot arise.
+- **(c) Where the read sits, and how it fails.** At the end of begin(), after the route, the thread, the repository name, the run id, the GitHub token and the checked-out head, and before LLMRequestPrep.pin, provider.list, sessions.create and any GitHub read. A throw there takes runTask's existing begin-crash path: `deps.error(line)` and `{exitCode: 1}` with no bundle, so withRunHeartbeat settles `failed` at once and EV-30's settle listener can end the job promptly (EV-27 (i)). The one exception is the run's own signal (SIGINT or SIGTERM) ending the read or its wait: everywhereRequest then answers `"cancelled"`, begin `{cancelled: true}` and runTask `CANCELLED`, with no line, as every other signal-aware step does (2.13; review round one, finding 1). `everywhereRequest` catches anything `readRequest` throws, the frame calls included, and throws only EVERYWHERE_UNREAD, so no other text can be printed (critique, taken). frameTask and the policy cannot throw on a body the decoder accepted and GITHUB_REPOSITORY that passed `isRepositoryName`; the catch is defence in depth (M25 survives; see Mutations).
+- **(d) The retry.** Only the route's own 404 `{error: {code: "NOT_FOUND"}}` is read again, `EVERYWHERE_BODY_RETRY_MS` (1 s) later, up to `EVERYWHERE_BODY_ATTEMPTS` (7) reads in all, about 6 s: that read is unspent, and the start listener runs after the mint's answer (EV-27 Left open). 503 `EVERYWHERE_BUSY` is not read again (following EV-27: a busy store may already have spent the read); nor are 404 `EVERYWHERE_OFF`, 410, 401, 5xx, a 404 that is not the route's JSON, a network error, a redirect, an answer over the cap or malformed JSON. The wait goes through `bounded`, and the read's signal is the run's signal joined with the run's stop (`deps.halt.onHalt`, which fires at once for a run that has already stopped), so the deadline or a heartbeat stop before the read, during the wait or during a read ends it at once with no further request (critique, taken: the earlier plan checked only the signal). That one mechanism replaced two explicit `deps.halt.reason()` checks before and after the read, which the mutations showed were redundant (M18 and M22 below).
+- **(e) The frame.** Kind `mention` and the repository from GITHUB_REPOSITORY (EV-27 Left open): kind matters to frameTask only for an empty task, which the decoder refuses and no intake writes (Linear fills "Work on this issue."). `FrameJob.repository` and `everywhereSystemInstructions`' parameter now need only `fullName`, so the run invents no repository id or `shared` value. The pinned system text is GitHub's policy and untrusted-data rule, a blank line, then the everywhere work policy and untrusted rule for the platform; no user turn carries either. No thread link is written: the answer carries none.
+- **(f) The outside marker.** `ChatContext.outside` marks every task turn of the run with the platform, the title turn (`summarize`) included, since it shares the context and repeats the reply. The default stays "github", so every other caller and every other run is unchanged.
+- **(g) The phase's own E11 check.** Nothing is read unless the event payload says `repository.private: true` (the same `PrivateRepository` begin uses for its visibility). That is the dispatch-time view, defence in depth; the route checks the job's own `repository.shared`, and a live read before the body is EV-30's (EV-27 Left open).
+- **(h) No Brain context and no saved conversation** (critique, taken in its reasoning). A session.vsa would hold the platform's text in an artifact that outlives the body's 2 hours (E4) and that erasing the job (E13) cannot reach, so a job run never saves its conversation and asks for no key; a planted session.vsa is still removed. A job line with a Brain upload (VECTOR_BRAIN_UPLOAD set) reads nothing and ends with the fixed line, rather than running stripped of its Brain context (critique, taken): prepareCloudRun accepts an upload only for a desktop run, so the two never come together for a real job. The conversation restore needs no change: a ticket run without an upload already restores nothing.
+- **(i) No `vector.unattended` mark.** The Actions session is not marked: R-M2's offline shell and R-M3's audience gate are the laptop's, and the Actions sandbox and @vector's own policy govern this run. The everywhere work policy still tells the model it is unattended.
+- **(j) The schema names.** `decodeActionsJobBody` and `ActionsJobBody` live in the import-free schema module, beside the envelope. The type is not named `RunBody`, which api/_lib/everywhere/jobs.ts:1175 already uses for the server's verdict with `outside: PlatformId` (critique, taken); jobs.ts is unchanged, and B1's cross-check ties the two. The outside list is derived from PLATFORMS (critique, taken).
+- **(k) The answer cap.** 256 KiB. The largest legal answer is about 193 KB (32,000 characters, each at most six bytes once JSON escapes it); `body()`'s default 16 KiB would refuse real bodies (M16), and no cap would read any size (M17).
+- **(l) Files outside the brief, and @vector's files.** The brief names github.agent.ts and github.policy.ts. The read is in github.cloud.ts because every vectordev.ai call of the run goes through its `Services` seam and egress label (githubFetch, `github`); the marker is in github.run-helpers.ts because `taskPart` lives there. github.policy.ts is not edited. `post`'s body moved into `send` so the GET shares it (critique, taken: no copied request helper). The workflow paths and the lane test's `helpers` follow EV-27 (l), so a change to these @vector files runs this lane's test. The web and schema test edits are the lane's.
+- **(m) Logging.** Only fixed lines: EVERYWHERE_UNREAD, or begin's earlier lines. The body, its context and the platform never reach a log; the B1 case checks every logged line of a job run.
+- **(n) Static imports.** github.agent.ts imports core's frame and schema's everywhere statically; both were already in the engine's graph (session/prompt.ts, worktree/index.ts), and schema's module imports nothing, so a dynamic import buys nothing.
+- **(o) Whitespace near-misses fail closed** (critique, taken in its first form). A ticket prompt that is the line only once trimmed (a space before, a newline after) reads nothing and ends with EVERYWHERE_UNREAD and a failed settle, instead of running as a service task. This is the one narrow exception to "without a job id, behaviour is byte-identical": only a prompt that is exactly the line (`jobOfActionsPrompt` of the trimmed trigger) is affected. Every other prompt, including the line with words after it, two spaces, other casing or a malformed id, runs exactly as before.
+- **(p) The test harness** (critique, taken). vectordev.ai is the fixture's `cloudRecorder` behind the cloud client's Services seam; the test file wraps its `request` so a script answers the body route, and sees each RequestInit as the client sends it (method, redirect, credentials, cache, headers, body). No new server is started and the fixture is not edited. `codiumFakes` and the other helpers come from test/cli/github.agent-fixture.ts; only `runtime` and `setup` come from test/lib/research.ts.
+
+### Critique of the plan (2026-11-20)
+
+All nine points were taken.
+
+1. **The known flake** (major). Taken: the only known flake is packages/engine/test/cli/review.test.ts:1050 (the "987" SHA), which is not in the `github*` glob and is not run here. github.review.test.ts is one of the 38 files run, and any failure there would be treated as real. Neither file is edited.
+2. **The harness** (major). Taken: (p).
+3. **EV-27's note** (major). Taken: (b), with the refusal pinned and the question in Left open.
+4. **Only the fixed line, and the stop during the retry** (minor). Taken: (c) and (d); the case "… a stop during a read or the wait ends it at once" (B4, retitled in review round one, when its wait sub-case was added), and M20.
+5. **The reason for not saving** (minor). Taken: (h) cites E4 and E13.
+6. **Whitespace near-misses** (minor). Taken in its first form: (o), M21.
+7. **Documentation the design contradicts** (minor). Taken: dated notes on spec §11 R-A1 and §6.4, and a Left open item for @vector's INV-S14 text.
+8. **Smaller points** (minor). Taken: the shared `send`, the outside list from PLATFORMS, the type renamed `ActionsJobBody`, and the Brain upload fails closed.
+9. **CI coverage** (minor). Taken: Left open forwards the two paths to @vector's workflow; the receipt states the precondition as origin/brain-transport `0d18f750` being an ancestor.
+
+### The cases
+
+packages/engine/test/everywhere/github-agent-body.test.ts (vectordev.ai behind the seam, the fixture's fake gateway in front of test/lib/llm-server.ts, the fixture's loopback GitHub, a fake clock, the strict network guard):
+
+| Case | What it pins |
+| --- | --- |
+| A1 | one GET to `https://vectordev.ai/api/everywhere/jobs/<jid>/body` with `Bearer vrt_…` and Accept json only, no body, `redirect: error`, `credentials: omit`, `cache: no-store`, a signal; the answer is exactly the body; nothing masked or printed |
+| A2 | `absent` and no request for an unauthorized Codium holder, an own-key holder, a short id, an upper-case id and an id followed by a newline |
+| A3 | 404 `NOT_FOUND` then 200: two reads, waits `[1000]`; a lasting 404: seven reads, six waits; one read and no wait for 404 `EVERYWHERE_OFF`, 410, 503 store, 503 busy, 401, 500, a 404 that is not the route's, and `NOT_FOUND` at status 400 |
+| A4 | one read and `unavailable` for a 200 with an extra label or jid, no context, a GitHub or unknown outside, an empty, blank or over-long task, 31 items, an item over 4,000, context over 24,000, an item with another field or `from` "owner", text that is not JSON, and a valid body padded past 256 KiB |
+| A5 | the largest legal body (every character a control character) is over 192,000 bytes, under 256 KiB, and read |
+| A6 | a request that throws, a 302 and a signal that fires during the wait each end the read after one request; an already-fired signal sends nothing |
+| B1 | a Slack job: exit 0 `no-changes`; vectordev.ai sees exactly the GET and the settle, GitHub nothing; every model request's system text holds GitHub's policy, a blank line and the Slack everywhere policy, and no user text holds either policy or SERVICE_TASK; the stored task turn is exactly frameTask's block with `{"vector.outside": "slack"}`, and every stored task turn carries the marker; the block's one raw `</everywhere_request>` is its last line, no line starts `SYSTEM`, and every context line parses back to its item; no log line holds the platform's text |
+| B2 | 404, 404, then a Linear 200: three reads, waits `[1000, 1000]`, the Linear policy pinned and the turn marked `linear` |
+| B3 | 410, 503 store, 503 busy, 404 `EVERYWHERE_OFF`, 401, 500, a 200 with an extra field, a 200 for GitHub, a 302 and a throw: each exit 1 with exactly `error: EVERYWHERE_UNREAD`, one read and a `failed` settle, no bundle; no model or gateway request and no GitHub request across the table |
+| B4 | the line with no linked job (a desktop user's typed line, or a lost start): seven reads, six waits, the fixed line, a `failed` settle; the deadline during the first read, answered 404: one read, no wait; the deadline during the wait after the route's 404, which then ends as usual: one read, waits `[1000]`, the fixed line, a `failed` settle, no bundle (review round one, finding 2); the deadline during a read answered 200: the fixed line and no bundle |
+| B5 | no read, only a `failed` settle, for a payload without a repository, a public repository, a Brain upload, a stop time already passed, the line after a space and before a newline (the fixed line), and another thread (THREAD_MISMATCH); no model request |
+| B6 | a job run with the runner's session proof: `changes`; vector-out holds only patch.diff and summary.json (the model's session.vsa is gone); no key request, export or attestation; no SESSION_* line |
+| B7 | the line with more words, a short id, lower-case words, an upper-case id, an id with a letter the alphabet leaves out and two spaces: no read, the task starts with SERVICE_TASK and holds the prompt as `Prompt (untrusted): <untrustedJson>`, no everywhere policy, the marker `github`; a writer's dispatch of the exact line reads nothing and its task is the line as written; own key refuses the ticket with BOT_REFUSED and sends nothing |
+| B8 | SIGTERM during the read (which then answers a valid 200) and during the wait after the route's 404 (a wait that never ends by itself): the phase hands back nothing and the exit code is 143; once the deadline timer is cleared, no line at all (no EVERYWHERE_UNREAD), one read (waits `[]` and `[1000]`), a `cancelled` settle, no bundle, the SIGTERM listeners restored; no model, gateway or GitHub request (review round one, finding 1) |
+
+packages/schema/test/everywhere.test.ts ("an Actions run's job (R-A4)"): the exact line gives the jid, and thirteen near misses and five non-strings give undefined; the decoder keeps the three fields for each platform, an empty context and a task at its limit; seventeen refusals each name their path; five refusals never repeat the refused value. The module-shape test still sees no imports.
+
+### Left open
+
+- **For the lead:**
+  - whether prepareCloudRun should refuse a prompt that is exactly the job line when no `jobId` is given ((b)), so a desktop user's typed line cannot be refused after seven reads; when it is built, packages/web/test/cloud-agents-start.test.ts pins that refusal (review round one, finding 7, which keeps the agent phase's fail-closed answer as it is);
+  - whether prepareCloudRun should also require the line when a `jobId` is given (EV-30 builds it from `ACTIONS_JOB_PROMPT`; (a));
+  - whether 503 `EVERYWHERE_BUSY` should be read again ((d)); today it ends the run;
+  - to forward to @vector: INV-S14's R-A4 exception (vector-at-mention-spec's contract text is unchanged although the code now has the exception), the new fixed line EVERYWHERE_UNREAD, `ChatContext.outside` and `taskPart`'s new parameter, `send`, and the two paths github.agent.ts now imports, packages/core/src/everywhere/frame.ts and packages/schema/src/everywhere.ts, for vector-at-mention.yml's pull_request paths (the lane cannot edit that workflow), so a change to them runs @vector's github*.test.ts.
+- **EV-30** builds the dispatch prompt as `${ACTIONS_JOB_PROMPT}${jid}` with no surrounding whitespace (a test there should pin it), and dispatches only to a workflow whose pinned CLI includes EV-28, read live with the mode: an older agent phase treats the line as an untrusted service prompt and spends @vector hours on it.
+  *2026-11-20 annotation (EV-29):* the prompt is built in EV-29's adapter, exactly `${ACTIONS_JOB_PROMPT}${jid}`, and pinned (P9 and R1 in packages/web/test/everywhere-cloud-adapter.test.ts; mutation M9). The CLI-version check stays with EV-30's live read: the `liveMode` seam's contract says "codium" means the pinned CLI reads the job body. See "2026-11-20, EV-29", (a).
+- **A lost start event still loses the job** (EV-27): the run reads 404 seven times and settles `failed`.
+- **Shipping needs a published CLI** (owner-gated). Nothing here reaches production before then.
+
+### Safe by default
+
+- VECTOR_EVERYWHERE_ENABLED stays off, and no flag, switch, env var or dependency changes.
+- Production cannot reach the new path: no router dispatches platform jobs to Actions (EV-29 and EV-30 are not built); ENABLED_SOURCES reserves slack, linear and jira (R-C8/R-A8, owner-gated), so no such ticket or run token exists; the body route answers 404 until EV-30 registers the start listener; and the CLI ships only with a release.
+- A run whose prompt is not the job line takes exactly today's path: `taskPart` defaults to "github" and every new branch is skipped (B7, and the 38 test/cli/github*.test.ts files with their counts unchanged).
+- Every failure fails closed before any model request: one fixed line, exit 1, no bundle, a `failed` settle, and never a second read of a body that may be spent.
+- Own key never reads (no ticket route and no run token), and a payload that does not say private reads nothing.
+
+### Mutations
+
+25 mutations, one source edit at a time, each with packages/engine/test/everywhere/github-agent-body.test.ts run alone through vector-serial (/tmp/vector-v2/everywhere/ev28/mut/: mutate.py, run.log, one log per mutation, before.sha256 and before2.sha256). Every file was restored from its saved bytes, and `sha256sum -c` matched all five source files after each round. "Red" is the number of the file's 13 cases that failed.
+
+| Mutation | File | Red | Red cases |
+| --- | --- | --- | --- |
+| M1 the ticket requirement dropped | github.agent.ts | 1 | B7 (the writer's dispatch of the line reads) |
+| M2 the prompt trimmed before the match | github.agent.ts | 1 | B5 (the line after a space and before a newline read) |
+| M3 every route 404 retried | github.cloud.ts | 2 | A3, B3 |
+| M4 503 `EVERYWHERE_BUSY` retried | github.cloud.ts | 2 | A3, B3 |
+| M5 no retry | github.cloud.ts | 4 | A3, A6, B2, B4 |
+| M6 eight reads | github.cloud.ts | 2 | A3, B4 |
+| M7 the SERVICE_TASK line kept | github.agent.ts | 2 | B1, B2 |
+| M8 the policy in the user turn | github.agent.ts | 2 | B1, B2 |
+| M9 `taskPart` ignores `outside` | github.run-helpers.ts | 2 | B1, B2 |
+| M10 the private check dropped | github.agent.ts | 1 | B5 |
+| M11 extra fields allowed | schema everywhere.ts | 2 | A4, B3 |
+| M12 a GitHub outside allowed | schema everywhere.ts | 1 | A4 |
+| M13 the save skip removed | github.agent.ts | 1 | B6 |
+| M14 the Brain upload refusal removed | github.agent.ts | 1 | B5 |
+| M15 a failed read falls back to the service task | github.agent.ts | 3 | B3, B4, B5 |
+| M16 the answer cap left at `body()`'s 16 KiB | github.cloud.ts | 1 | A5 |
+| M17 the answer cap removed | github.cloud.ts | 1 | A4 |
+| M18 the explicit stop check before the read dropped | github.agent.ts | 0 | survived: the joined signal already ends an already-stopped read with no request. The check was removed |
+| M19 frame.ts writes `JSON.stringify` instead of `untrustedJson` | core frame.ts | 1 | B1 |
+| M20 the stop not joined to the read's signal | github.agent.ts | 1 (2 after the simplification) | B4; then B4 and B5 |
+| M21 a line that matches only once trimmed runs as a service task | github.agent.ts | 1 | B5 |
+| M22 the explicit stop check after the read dropped | github.agent.ts | 0 | survived: no stop can land between the read's answer and the check (only microtasks run there), and a stop during the read aborts it. The check was removed |
+| M23 M20 and M22 together | github.agent.ts | 1 | B4 (the deadline during a read answered 200 then goes on to the model): the post-read check mattered only without the joined signal |
+| M24 any 404 retried, whatever its body | github.cloud.ts | 2 | A3, B3 |
+| M25 the frame's catch removed | github.agent.ts | 0 | survives, by design: no case can make frameTask or the policy throw after the decoder and `isRepositoryName` accepted the input, so the catch is defence in depth (critique item 4) |
+
+After M18 and M22, readRequest's two `deps.halt.reason()` checks were removed (the joined signal is the one mechanism), and M10, M14, M20 and M25 were re-run against the new code: M10, M14 and M20 red as before (M20 now also turns B5's "a stop time already passed" red), M25 still survives.
+
+### Review round one (2026-11-20)
+
+Eight findings, none blocking. Five are taken in code or tests (3 and 6 are one change), one in the lane documents, and two are kept as built, with the reason here. Built uncommitted.
+
+| Finding | Taken |
+| --- | --- |
+| 1. A cancelled run is settled `failed`, not `cancelled`: a signal during the body read or its wait made everywhereRequest throw EVERYWHERE_UNREAD, so runTask logged that line and returned `{exitCode: 1}` | Taken in code, in the read path only, so a run with no job line is unchanged: when the read answers nothing and `deps.signal` has fired, everywhereRequest answers `"cancelled"`, begin `{cancelled: true}` (excluded from `Start`) and runTask `CANCELLED`, with no line ((c)). One correction to the finding: on SIGINT or SIGTERM withRunHeartbeat's own listener already settled `cancelled`, so the settle was right before the fix (a scratch run of B8 against the unfixed code, expecting the line, passed with a `cancelled` settle: R-M26-settle.log); what was wrong was the EVERYWHERE_UNREAD line logged after the cancel, and runTask's result. B8 pins both stages (the read, and the wait after a 404) under a real SIGTERM, as the Brain read's case does: the phase hands back nothing, so B8 asserts the exit code 143, no line once the phase's timer is cleared, one read, a `cancelled` settle and no bundle; runTask's `{exitCode: 1, outcome: "cancelled"}` is not observable from outside the phase (withGithubSignals' race returns first) |
+| 2. B4's middle sub-case fired the deadline inside the first read, not during the wait | Taken in the test: that sub-case is relabelled "during the first read, answered 404", and a new sub-case fires the deadline from the site's `wait` after the route's 404. That wait then ends as usual, so only the joined signal around the wait keeps the run from reading again: one read, waits `[1000]`, the fixed line, a `failed` settle and no bundle. A wait that never ends would not tell the joined signal from the 2 s pause timeout without a timing assertion, so the agent-phase case lets it end; client case A6 keeps the never-ending wait. B4's title now says "a stop during a read or the wait" |
+| 3 and 6. `ChatContext.outside` and `taskPart`'s `outside` accept any string, so a later caller could stamp memory's trusted markers ("file", BrainSchema.PASTE) on a task turn | Taken in code: both are `PlatformId` (a type import from @vectordevai/schema/everywhere, already in the engine's graph), "github" still the default. `PlatformId` rather than `"github" \| ActionsJobBody["outside"]`: the two are the same set |
+| 4. frame.ts's header said the two runtimes write exactly the same text | Taken: it now says they write the same block, and that the Actions run's has no `Thread:` line, since the body route answers no thread link, pointing to (e) |
+| 5. E6 says every triggered session is guest-marked; (i) leaves the Actions session unmarked | Taken in the lane documents: dated EV-28 notes under spec §5 E6 and E7 say an Actions job's session is not marked `vector.unattended`, that the Actions runner's sandbox, @vector's own run policy and the pinned everywhere policy govern it, that the runner keeps no personal memory, and that the run reads no Brain context and restores no conversation, pointing here ((h), (i)) |
+| 7. A ticket prompt that is exactly the job line used to run as a SERVICE_TASK and now fails after seven reads | Kept, as the finding advises: failing closed is the safer direction ((b), (o)). Left open now says that when the lead builds prepareCloudRun's refusal of the exact line with no `jobId`, packages/web/test/cloud-agents-start.test.ts pins it |
+| 8. vector-at-mention.yml's paths miss frame.ts and schema/everywhere.ts; this lane's paths hunk sits beside FIT-4's rewrite | Kept, as the finding advises: the two paths stay in Left open for @vector (this lane cannot edit vector-at-mention.yml). The commit body is to say that the vector-everywhere.yml paths hunk sits beside review-fixes' FIT-4, so the merge with review-fixes keeps these five entries (Coordination) |
+
+Mutations for the changed code, one at a time, each with packages/engine/test/everywhere/github-agent-body.test.ts run alone through vector-serial (/tmp/vector-v2/everywhere/ev28/review1/mut/: R-M20.log, R-M26.log, R-M26-settle.log, before.sha256). `sha256sum -c` matched all four touched source and test files after each.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| R-M20 the stop not joined to the read's signal (M20 again, on the new B4) | github.agent.ts | 12/2 | B4, B5 (as M20 after the simplification). In a scratch run of B4 with its first two sub-cases removed, the new wait sub-case alone is red (it goes on to read again) |
+| R-M26 a signal during the read no longer answers `cancelled` | github.agent.ts | 13/1 | B8 (the line EVERYWHERE_UNREAD is logged after the SIGTERM) |
+
+The `PlatformId` typing has no runtime mutation; M9 (taskPart ignores `outside`) still covers the marker.
+
+The receipts are in vector-everywhere-progress.md, "EV-28 review round one".
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, brain-transport `0d18f750` and process-finish `3ec7fb14`. One overlap remains by location, not content: the vector-everywhere.yml `paths:` hunk (:62-67) sits in the block that review-fixes' FIT-4 rewrites (its dead push triggers and the non-existent path filter), so the merge with review-fixes must keep these five entries; the commit body says so (review round one, finding 8).
+
+### Deferred verification
+
+- vector-at-mention.yml, vector-everywhere.yml and typecheck.yml on everywhere-finish, after the commit gate's push.
+- Live use, after EV-29, EV-30, R-C8/R-A8 and a published CLI.
+
+## 2026-11-20, EV-29: the Actions fallback adapter: route gating and dispatch (VE-30a)
+
+Spec §8 VE-30; §3.4 step 6; §3.6; §5 E8, E11; §6.1 `binding`, `visibility`, `prepareCloud`. Base: HEAD `d605eaed` (EV-28), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` is an ancestor. Preconditions, all ancestors of HEAD: EV-25 `7a806f91`, EV-26 `5b040d39`, EV-27 `c1112608`, EV-28 `d605eaed`, and review-fixes' FIT-4 `f251ac2c` and SEC-1/PUB-5 `e417c44d`. No engine, shell, sandbox, worktree or relay file is touched, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+**origin/main.** origin/main `15f3ba77` (#51, #52) is not an ancestor. The lane convention says to merge it before a package now that PR #33 is merged (critique, taken), but this build's task forbids commits, and a merge is a commit. So the merge is left to the commit step: a separate `chore(everywhere): merge main after #52` merge commit before the package commit. `git merge-tree --write-tree HEAD origin/main` is clean, and none of main's 11 changed files is a file this package touches.
+
+### What changed
+
+- **New api/_lib/everywhere/adapters/cloud-agents.ts** (177 lines):
+  - `CloudPortsDeps` (:24-47): `store` (default persistentStore), `app` (an `attachmentRepository` reader; default github-app.ts's), `prepare` (default prepareCloudRun), `liveMode` (EV-30's seam, no default) and `sources` (default ENABLED_SOURCES).
+  - `createCloudPorts(deps)` (:49-117) returns `cloudSource`, `binding`, `visibility` and, only when `liveMode` is given and at least one platform is an enabled source (:72), `prepareCloud`.
+  - `prepareCloud`, in order, with no I/O before step 2: the source is enabled, `bodyReference` is the jid, the jid and the sponsor are well formed; then the binding is active, stored `codium` and the sponsor's; then the live visibility read says `private` (:88); then `liveMode` says `codium`; then prepareCloudRun with `{source, account, requestedBy, target: {kind: "github-run", repositoryId}, prompt: ACTIONS_JOB_PROMPT + jid, purpose: "task", jobId}` (:97 the prompt). Anything but `ok: true`, and any throw, answers undefined. The answer's `commit` calls `dispatch()` and rejects with the reason code on `{ok: false}`; `cancel` reaches prepareCloudRun's.
+  - `createHandoffBinding(deps)` (:124-138): EV-31's `GithubHandoffBinding` port. Nothing wires it.
+  - Helpers below: `currentBinding` (:145-148: a missing, suspended or unreadable binding, an id bindingFor refuses, or a binding module that fails to load answers none, so the `binding` port never rejects) over `readBinding` (:150-153, the lazy `bindingFor`), `liveVisibility` (:159-165), `defaultApp` and `defaultPrepare` (lazy imports of github-app.js and cloud-agents-start.js). `cloudSource` (:54) narrows the platform inline.
+- **api/_lib/everywhere/ports.ts** (the lane's own file): `Ports.cloudSource?: (platform) => boolean` (:31-35, new); the `prepareCloud` comment (:36); the `safePorts` comment names the cloud ports (:64-65).
+- **api/_lib/everywhere/router.ts** (the lane's own file): `routeFacts` computes `sourceEnabled` from `cloudSource` (:34-35) and reads the binding, and so the visibility, only when it is true (:36-37); the `actions` facts use it (:58). Before, `sourceEnabled` was every platform but GitHub whenever `prepareCloud` existed ((b2)). `actions()` checks `cloudSource` itself before `prepareCloud` (:74), and both binding reads (:37, :85) catch a rejection as none, as the visibility reads already did (review round one).
+- **api/_lib/everywhere/runtime.ts:** `productionPorts` adds `createCloudPorts()` only when `config.enabled` (:24-30), before the remote ports, with the JSDoc rewritten (:17-23).
+- **New packages/web/test/everywhere-cloud-adapter.test.ts** (68 cases, one of them real-Redis; the case table below). P5, P6 and B3 drive @vector's real attachmentRepository through @vector's existing App fixture, packages/web/test/github-app-fixture.ts (`githubAppFixture`, an injected transport and its own in-memory store); it is the one fake reused from outside the lane's list, and every case that uses it asserts the fetch guard clean.
+- Outside the brief's list ((j)): packages/web/test/everywhere-router.test.ts (three cases that set `prepareCloud` now set `cloudSource` too, :81, :93, :110, so they keep testing what they name); .github/workflows/vector-everywhere.yml (five `pull_request` paths, :68-74); packages/web/test/everywhere-lane.test.ts (two `helpers` entries, :314-317); docs/vector/owner-actions/vector-everywhere-{github,slack,linear,jira}.md (the same "Before you start" line in all four, byte-identical).
+- No generated file, flag, env var, switch, dependency or lockfile changes. Nothing is regenerated (no HttpApi route, no config schema, no SDK).
+
+### Decisions
+
+- **(a) The live-mode seam.** `prepareCloud` exists only when EV-30's `liveMode` reader is given. EV-26 made the live mode read a hard requirement, and the brief does not build it, so the adapter cannot route on the stored mode alone: production has no Actions route until EV-30. The seam's contract (its JSDoc): `codium` means the workflow at the default branch is in Codium mode by github-app.ts `workflowModeOf`'s rule *and* its pinned CLI reads the job body (EV-28); anything else, or a failed read, is no route. P7 pins that contract.
+  - *Critique, not taken: one combined `live(binding) => {visibility, mode}` port.* The brief fixes the visibility read on the existing github-app helper, which the `visibility` port also serves outside prepareCloud (the facts and the router's recheck); a combined port would make that port's source depend on whether EV-30 is wired. EV-30 can still answer both from one single-repository token inside github-app.ts; the adapter's seams do not prevent it.
+- **(b) The source gate, at construction, per call and in the facts.**
+  - `prepareCloud` is absent unless one platform is in `sources` (P1), and each call checks its own source again (P1, M1).
+  - **(b2) The facts (critique, taken).** Before EV-29, `routeFacts` set `sourceEnabled` for every non-GitHub platform whenever `prepareCloud` existed, so once one platform went live a job from another would mint an App token and make about six GitHub requests during the facts, and the refusal would say "bind this repository for GitHub Actions" for a platform with no Actions route. `Ports.cloudSource` carries the enabled set; `routeFacts` reads no binding or visibility for a platform it does not enable, and the policy answers `actions: "none"` (R0, M22, M23). An absent `cloudSource` enables nothing, so a port set with `prepareCloud` but no source answer routes nothing to Actions; the three router cases that set `prepareCloud` now set it too.
+- **(c) Visibility is private only when GitHub says `visibility: "private"` (critique's blocker, taken).**
+  - GitHub's `private` is also true for an internal repository, and every member of the enterprise can read an internal repository's Actions logs. The policy refuses `internal` (packages/schema/src/everywhere-policy.ts `actionsState`: "internal and a failed read are not private"; pinned in packages/schema/test/everywhere-policy.test.ts), the router's recheck requires `"private"`, and spec §3.6 reads both `private` and `visibility`.
+  - github-app.ts `attachmentRepository` answers only `publicRepository: !repository.private`, so it cannot tell private from internal. The port therefore answers `public` for `publicRepository: true`, `private` only when the read also carries `visibility: "private"`, `internal` for any other `publicRepository: false` read, and undefined for a failed read (:158-164). Through today's helper no repository reads `private`, so there is no Actions route; that costs nothing while production has no `prepareCloud`. B2 and B3 pin it; M8 is red.
+  - **For the lead (EV-30, lead approval):** one additive field on attachmentRepository's result in @vector's github-app.ts, `visibility: repository.visibility`, preferably inside EV-30's single live read. The adapter already reads it.
+  - **For the lead, a question:** the brief's "private or internal" conflicts with the policy. The build takes the strict reading; keeping `internal` out is the default until the lead rules otherwise. *Lead ruling: none yet at review round one; record it here, under this entry, before the commit.* If the lead allows `internal`, three places change together, not only `liveVisibility`: the policy's `actionsState` (packages/schema/src/everywhere-policy.ts), the router's recheck (router.ts `actions()`, `!== "private"`) and this port. Until a ruling, P12, B2, B3 and R3 are the tripwires a relaxation must turn red.
+  - The helper's other refusals (App off, not installed, installation suspended or another owner's, binder without write access, archived or disabled, the default branch moved, the binder cache unreadable or refused for a revoked CLI session) are failed reads, which count as public (P6).
+- **(d) The ticket link is dispatchJob's write.** The adapter writes no `ticket:<hash>` key: `dispatchJob` (jobs.ts) writes `ticket:<hash> → jid` under the job's guards just before its fenced transition (jobs.ts `SET` before `change()`). A dispatch abandoned before dispatchJob leaves none (R2, R3, R5, R8). One whose fenced transition loses (a laptop claim lands between the router's recheck and dispatchJob, which answers wrong-state) leaves a link to a cancelled ticket until the body ends; that is harmless, because the start hook (`startDispatched`) takes a ticket only for a job that is `dispatched` with that hash, so no run link and no body read can follow (R7). A link from prepareCloud instead would outlive every abandoned dispatch. R1 and R6 read the link back. *Corrected at review round one:* the first wording said an abandoned dispatch leaves none, which held only before dispatchJob.
+- **(e) "Refused `public-repository`" is the policy's `no-place` with `why.actions: "public"` (critique, taken as a lead decision).** `decideRoute` never answers `public-repository`: a job the Actions step refuses goes on to the queue (step 7), so a public repository either waits for the computer (R2's twin: computer seen recently, wait on) or is refused `no-place` with `why: {computer, actions: "public"}` when the queue is blocked too (R2: the sponsor's computer never seen). `refuseJob` keeps only the code, so the posted text is the generic no-place line, without the "not private" sentence `why` would add. Not fixed here. **For the lead:** keep `no-place` with `why` (and carry `why` to the reply), or have the policy answer `public-repository` when the Actions state is `public` and the queue is blocked. E11's named test is R2 under the current policy. Until the lead rules, R2 and R3 are the tripwires a change back to the brief's wording must turn red; record the ruling under this entry.
+- **(f) Lazy imports.** cloud-agents-binding.js, github-app.js and cloud-agents-start.js load on first use (AGENTS.md form, destructured at the top of the narrowest scope), so the platform intake routes, which import runtime.ts, do not load the App's JWT library, effect or Codium's entitlement reads at cold start. The schema modules are light and stay static. A Node ESM probe of the compiled tree shows each lazy target resolves outside Bun (progress receipt).
+- **(g) commit rejects with only the reason code.** The router ignores a failed commit, as before: an uncertain dispatch is never handed back to a laptop, and the 900 s start rule ends the job `not-started`.
+- **(h) Reads per dispatch.** A dispatch makes three live visibility reads: the facts, prepareCloud's own, and the router's recheck before the fenced transition (R1 counts them). Each is seven GitHub requests, measured on the fixture: the installation read, the single-repository token's mint (metadata read) and its scope check, the repository read, the binder's user and permission reads, and the token's revocation; plus two commands on @vector's store. Each read also *writes*: the fresh binder check (`verifyBinder(..., true)`) reads `vector:cloud-agents:binder-ok:<id>` and saves it again for an hour, refused for a revoked CLI session (P5 asserts the write; P6 the refusal). prepareCloud's own read is kept (critique: "consider dropping, or justify"): it keeps prepareCloudRun from issuing a ticket for a repository that is no longer private, and prepareCloud is a port whose contract must hold for any caller (EV-30's paths included), not only for today's router, which rechecks. The adapter also reads the binding five times per dispatch (the facts' binding and visibility, prepareCloud, the recheck's visibility and binding), and prepareCloudRun reads it twice more (at prepare and at dispatch). About 21 App requests per Actions dispatch is bounded, but it is a rate-limit and cost multiplier that EV-30 inherits: when EV-30 adds the `visibility` field and `liveMode`, it should consider letting one single-repository token serve the visibility and mode reads inside prepareCloud, and record the new count in its receipt (review round one, left for EV-30).
+- **(i) The handoff's `shared` is true until EV-31 reads visibility live (critique, taken).** The stored `RepoBinding.visibility` is a bind-time snapshot, and it is `"private"` whenever the bind token carried no visibility claim (cloud-agents-binding.ts `recordRepoBinding`), so reading it could call a public repository unshared. `shared: true` is the safe direction (outcome and link only). H1 pins `shared: true` for a binding stored private, internal or public; M20 is red.
+- **(j) Files outside the brief.** ports.ts and router.ts ((b2)); the router test's three `cloudSource` lines; the workflow paths, without which everywhere-lane.test.ts is red (the server-import scan finds the type imports of cloud-agents-binding.ts and cloud-agents-start.ts and the value import of codium-run-trigger.ts); github-app.ts in the paths and the lane test's `helpers`, because the adapter reaches it only by a lazy import, which the scan does not see (critique: the type-only entries would be redundant, so only this one is added, with that reason); packages/web/test/github-app-fixture.ts in both too (review round one), because the new test imports it and the scan reads only server code, so a change to it on main or on @vector's lane would otherwise not start the lane (EV-28 added github.agent-fixture.ts for the same reason); the four guides' line, stale since EV-27 and EV-28.
+- **(k) The minimum body life is deferred to EV-30.** routeJob's only caller is the intake, right after `createJob`, so a body has about 1 h 59 min left when it routes; a later path (EV-30's retries or reconciliation) is where a short body could reach a dispatch.
+
+### Critique of the plan (2026-11-20)
+
+Taken: internal is not private ((c)); the source gate reaches the facts ((b2)); `shared` true ((i)); no-place versus `public-repository` as a lead decision, with R2's queue-blocking facts named and a queue twin ((e)); the seam's JSDoc ((a)); the merge of main by convention, left to the commit step because this build may not commit (above); the Node probe made to exercise every lazy import (progress receipt); P12 restated (the adapter's `sources` never reaches prepareCloudRun, which reads ENABLED_SOURCES itself). Rejected in part:
+- **The fixture's store.** githubAppFixture's default store is its own in-memory store (packages/web/test/github-app-fixture.ts, `input.store ?? …`), not persistentStore: it answers the binder cache GET and the save EVAL. So the fixture-backed reads work without a shared stub, and bindingFor gets its own stub store. Taken from the finding: the binder-ok write is asserted (P5), a store that refuses the save for a revoked CLI session counts as public (P6, through the fixture's `store` option), so does a store that is down (P6), and the write is described in (h).
+- **The combined live port** ((a)).
+- **The four `helpers` entries** ((j)).
+
+### Case table
+
+| Code | Cases | What it shows |
+| --- | --- | --- |
+| P1 | 1 | the default sources give no prepareCloud; with `sources={linear}`, a Slack or Jira job reads nothing (0 store, 0 App, 0 prepare); `cloudSource` answers only linear |
+| P2 | 1 | no `liveMode`, no prepareCloud, even with every platform enabled |
+| P3 | 2 | no stored mode, or own-key: no route and no GitHub, live mode or prepare call |
+| P4 | 7 | missing, suspended, another account's, no installation, store down, a corrupt stored mode; and ids bindingFor refuses (0, -1, 1.5, NaN, 2^53) with no store command |
+| P5 | 1 | E11: a binding stored private whose repository is live public: no route, no mode read, no prepare; one metadata-read token for exactly that repository, revoked; the binder cache written; the fetch guard clean |
+| P6 | 9 | a private repository whose read fails: App off, not installed, installation suspended, binder lost write, the repository read fails, archived, default branch moved, the binder cache store down, a revoked CLI session (the save refused): each counts as public, no prepare, no live token, the fetch guard clean |
+| P7 | 3 | stored codium with a live read of own-key, no mode, or a failure: no prepare |
+| P8 | 1 | a body reference other than the jid, a bad jid, a bad sponsor: nothing read |
+| P9 | 1 | every gate holds: prepareCloudRun gets exactly the trigger, prompt `Vector everywhere job <jid>` with no whitespace, `jobOfActionsPrompt` names the jid, `jobId` the jid, an upper-case sponsor matched case-insensitively; one binding, one visibility and one mode read; no dispatch |
+| P10 | 3 | prepareCloudRun answering `not-binder`, `source-unavailable`, or throwing: no route |
+| P11 | 1 | commit dispatches once and rejects with `dispatch-failed`; cancel reaches prepareCloudRun's |
+| P12 | 1 | tripwire: ENABLED_SOURCES holds none of slack, linear, jira; the real prepareCloudRun, every earlier gate passed, refuses a Linear job before its ticket (one store command, the binding read) |
+| B1 | 7 | the binding port: codium, own-key, no mode, no installation map; suspended, missing, unreadable answer none (and visibility none) |
+| B2 | 5 | the visibility port: public; private and internal by GitHub's field; `private:true` with no field reads internal; a failure and a binding with no installation answer none (no App call) |
+| B3 | 2 | through the real helper and the fixture, `private:true` with `visibility` private or internal reads internal, so there is no route; the fetch guard clean |
+| R0 | 1 | through routeFacts and routeJob: a platform that is not an enabled source reads no binding or visibility, and the refusal names `actions: "none"` |
+| R1 | 1 | E8: a dispatch writes `ticket:<hash> → jid`, the job is `dispatched` with that hash before the dispatch, a late claim loses, the trigger carries the line and the jid, the `actions` milestone is posted, three visibility reads |
+| R2 | 2 | E11: stored private, live public, the computer never seen: `{refuse, no-place, why: {not-seen, public}}`, refused, no prepare, no ticket key; the twin with the computer seen recently waits, no prepare, no ticket key |
+| R3 | 3 | a visibility read that fails, says internal, or says `private:true` with no field: refused as public, no prepare, no ticket key |
+| R4 | 1 | no stored mode: `why.actions: "bind"` |
+| R5 | 1 | the switch at stop after prepare: cancel once, no dispatch, not dispatched, no ticket key |
+| R6 | 1 | R1 on a real Redis (skips without VECTOR_TEST_REDIS_URL) |
+| R7 | 1 | a laptop claim that lands inside the recheck (offer, then claim, in the `binding` port) wins: `{action: "laptop"}`, cancel once, no dispatch, the job `claimed` with no ticket hash; the one `ticket:` link dispatchJob wrote names the cancelled ticket, and `startDispatched` with it answers not ok and leaves the job `claimed` |
+| R8 | 1 | a `binding` port that rejects: in the facts, `actions.binding` none and `{refuse, no-place, why: {not-seen, bind}}` with no prepare; in the recheck only, cancel once, no dispatch, not dispatched, no ticket key |
+| R9 | 1 | the router's own source gate: facts built with the source enabled, then `cloudSource` answering false: the adapter's prepareCloud is never called, not dispatched, no ticket key |
+| H1 | 4 | the handoff binding: stored private, internal or public all give `shared: true`, `laptopFirst: false`, numbers and the repository; own-key gives `codiumMode: false` |
+| H2 | 4 | no installation, suspended, missing, store down: none |
+| S1 | 1 | flag off: productionPorts has no prepareCloud, visibility or cloudSource, safePorts' binding, no KV request, the fetch guard clean |
+| S2 | 1 | flag on, App off: no prepareCloud, no platform enabled, the binding mapped from a loopback KV (two binding reads), visibility none with no GitHub request |
+
+### Mutations
+
+27 mutations, one source edit at a time, each with packages/web/test/everywhere-cloud-adapter.test.ts run alone through vector-serial, without Redis (/tmp/vector-v2/everywhere/ev29/mut/: mutate.py, run.log, one log per mutation, before.sha256). Every mutation turned its named cases red, and `sha256sum -c` matched all three source files after the run. "Result" is pass/fail of the file's 64 cases that run without Redis.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 the per-call source check dropped | cloud-agents.ts | 63/1 | P1 |
+| M2 the construction gate ignores the sources | cloud-agents.ts | 63/1 | P1 |
+| M3 the construction gate ignores liveMode | cloud-agents.ts | 63/1 | P2 |
+| M4 the live mode read ignored | cloud-agents.ts | 60/4 | P7, P9 |
+| M5 the stored mode ignored | cloud-agents.ts | 62/2 | P3 |
+| M6 the sponsor check dropped | cloud-agents.ts | 63/1 | P4 |
+| M7 a failed read answers private | cloud-agents.ts | 52/12 | B2, P6, R3, S2 |
+| M8 `private:true` answers private without GitHub's field | cloud-agents.ts | 58/6 | B2, B3, R3 |
+| M9 a newline after the prompt | cloud-agents.ts | 62/2 | P9, R1 |
+| M10 `jobId` dropped | cloud-agents.ts | 62/2 | P9, R1 |
+| M11 the body reference ignored | cloud-agents.ts | 63/1 | P8 |
+| M12 prepareCloudRun's rejection not caught | cloud-agents.ts | 63/1 | P10 |
+| M13 commit resolves on a failed dispatch | cloud-agents.ts | 63/1 | P11 |
+| M14 cancel does not reach prepareCloudRun | cloud-agents.ts | 62/2 | P11, R5 |
+| M15 productionPorts' flag gate dropped | runtime.ts | 63/1 | S1 |
+| M16 `laptopFirst` true | cloud-agents.ts | 61/3 | H1 |
+| M17 the binding port's `codiumMode` inverted | cloud-agents.ts | 52/12 | B1, R1 to R5, S2 |
+| M18 the handoff's `codiumMode` inverted | cloud-agents.ts | 60/4 | H1 |
+| M19 `appInstalled` always true | cloud-agents.ts | 63/1 | B1 |
+| M20 `shared` from the stored visibility | cloud-agents.ts | 63/1 | H1 |
+| M21 a suspended binding admitted | cloud-agents.ts | 61/3 | B1, H2, P4 |
+| M22 the facts ignore `cloudSource` | router.ts | 63/1 | R0 |
+| M23 `cloudSource` ignores the sources | cloud-agents.ts | 61/3 | P1, R0, S2 |
+| M24 the App read without an installation | cloud-agents.ts | 62/2 | B2, P4 |
+| M25 prepareCloud skips its own visibility read | cloud-agents.ts | 50/14 | B3, P4, P5, P6, P9, R1 |
+| M26 the default sources open every platform | cloud-agents.ts | 62/2 | P1, S2 |
+| M27 a store failure not caught | cloud-agents.ts | 59/5 | B1, H2, P4 |
+
+Review round one added four more, the same way, with the 67 cases that run without Redis (/tmp/vector-v2/everywhere/ev29/fix1/mut/: mutate.py, run.log, before.sha256; `sha256sum -c` matched router.ts and cloud-agents.ts afterwards):
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M28 the router's own source gate in `actions()` dropped | router.ts | 66/1 | R9 |
+| M29 the facts' binding read not caught | router.ts | 66/1 | R8 |
+| M30 the recheck's binding read not caught | router.ts | 66/1 | R8 |
+| M31 `currentBinding`'s guarded read not caught | cloud-agents.ts | 62/5 | B1, H2, P4 (three) |
+
+The guard over `readBinding`'s `import()` has no case of its own: making a module fail to load would need a module mock, which the lane does not use. M31 shows the catch that covers it is load-bearing, since the import and `bindingFor` now reject through the same promise.
+
+Two checks were removed before the mutation run because they were equivalent to others: `prepareCloud`'s own `installationId` check (a binding with no installation has no visibility read, so it never reads private; P4 still covers it) and `currentBinding`'s id check (bindingFor refuses a non-decimal id before any store command; P4 asserts no store command).
+
+### Review round one (2026-11-20)
+
+Ten findings, none blocking. Taken:
+- **The fixture path** (vector-everywhere.yml): packages/web/test/github-app-fixture.ts is in the `pull_request` paths and the lane test's `helpers`, with a reason ((j)).
+- **The ticket link wording** (cloud-agents.ts module comment and (d)): corrected; the suggested router case is R7. The wording differs from the finding's in one place: the finding said the *body route* ignores the stale link, but the body route reads `run:<rid>`, never `ticket:<hash>`; the ticket reaches only the start hook, which refuses it (jobs.ts `startDispatched`: `dispatched` with that hash). R7 asserts that.
+- **The unguarded import** (`currentBinding`): the import and `bindingFor` now run in `readBinding`, and `currentBinding` catches both, so the `binding` port never rejects. The router also catches a rejecting `binding` port in `routeFacts` and `actions()`, as it already did for `visibility`, so any Ports set answers no Actions route instead of throwing (R8; M29, M30, M31).
+- **The single-use guard**: `actionsSource` and the `ActionsSource` alias are gone; `cloudSource` narrows inline (:54).
+- **The router's own source gate**: `actions()` returns false unless `cloudSource` answers true (router.ts :74), before `prepareCloud`. It is a separate line rather than the finding's `||` on the existing return, to keep the line under 120 characters. R0 and the router cases stay green; R9 and M28 pin it.
+- **The env in productionPorts' cases**: the describe-wide `beforeAll`/`afterAll` is replaced by `withLoopbackKv(run)`, which each of S1 and S2 calls; it starts its own loopback KV and restores the five names in a `finally`, so a failing case cannot leave the env for a later one. The env stays the seam (productionPorts reads persistentStore's env), as the finding says; `useKv` itself is not reused because it points at a fixed fake origin, not a loopback server.
+- **The fetch guard in P5, P6 and B3**: each asserts `guard.violations` empty, and the fixture is named as the reused @vector fake ("What changed").
+Recorded, no code change:
+- **Visibility, private or internal** ((c)) and **`no-place` versus `public-repository`** ((e)): kept strict, waiting for the lead's ruling, which is to be recorded under this entry before the commit; the tripwires are named in (c) and (e).
+- **The read count** ((h)): left for EV-30, as recorded there.
+
+### Left open
+
+- **EV-30:**
+  - the `liveMode` reader, in github-app.ts (lead approval), by `workflowModeOf`'s rule at the default branch, including the pinned CLI version check (EV-28);
+  - the additive `visibility` field on attachmentRepository's result ((c)), without which no repository reads private;
+  - the listeners, the reconciliation and the settle index (EV-25, EV-27 Left open);
+  - the body route's live visibility through this adapter's `visibility` port, a failed read counted as public (EV-27 Left open);
+  - the minimum body life for any path that can dispatch late ((k)).
+  *2026-11-20 annotation (EV-30):* built: the listeners and the settle index; not built: the reconciliation (a lead decision on EV-27's body-route fallback). The `liveMode` reader with the pinned-CLI check, the `visibility` field and the body route's live visibility read are not in the EV-30 brief and have no package yet; the minimum body life is still unneeded. See "2026-11-20, EV-30", (k), (o).
+- **EV-31:** wire `createHandoffBinding` with R-A5, and read `shared` live before laptop-first ((i)).
+  *2026-11-20 annotation (EV-31):* built: runtime.ts `productionHandoffDeps` wires `createHandoffBinding` and the new `createHandoffVerifier` (R-A5) only with the flag on, and the route's `shared` follows the token's signed `repository_visibility` claim (only `private` is unshared); the port's `shared: true` is now the fallback for a token with no claim. See "2026-11-20, EV-31", (e).
+- **For the lead:** the brief's "private or internal" versus the policy ((c)); `no-place` with `why` versus `public-repository`, and whether the reply carries `why` ((e)); the read count ((h)); the main merge, which the commit gate of 2026-11-20 did not make: its brief merges only origin/everywhere-finish, so origin/main `15f3ba77` is left for the lead.
+- **Owner:** R-C8/R-A8 (RESERVED in packages/schema/src/codium-run-trigger.ts). Until then no platform is an enabled source, and P12 is the tripwire.
+
+### Safe by default
+
+- VECTOR_EVERYWHERE_ENABLED off: productionPorts is safePorts plus the account authority, exactly as before (S1, M15).
+- Flag on: `binding` and `visibility` are @vector's, but there is no `prepareCloud`, for two reasons, each sufficient: no platform is an enabled source (R-C8/R-A8) and no `liveMode` reader exists (EV-30). `cloudSource` answers false for every platform, so routing reads no binding, no visibility and writes no ticket (S2).
+- Past both gates, prepareCloudRun itself still refuses reserved sources (P12), and through today's helper no repository reads private ((c)).
+- Every failure is no route, and nothing in the adapter logs.
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14` and brain-transport `0d18f750`. The vector-everywhere.yml hunk (:68-72) sits after EV-28's five entries, in the block FIT-4 rewrote, which has already merged.
+
+### Deferred verification
+
+- vector-everywhere.yml (the new file; R6 in its Valkey job), vector-at-mention.yml and typecheck.yml on everywhere-finish, after the commit step's push. vector-hosted-ci.yml is not needed for these files.
+- Live use, after EV-30, R-C8/R-A8 and a published CLI.
+
+## 2026-11-20, EV-30: the Actions listeners and the Actions settle transition (VE-30b)
+
+Spec §8 VE-30; §3.4 (the job states, the sweep); §3.6 "Correlation"; §3.7; §3.13; §5 E4, E8, E10, E13; §6.1 `CloudEvents`; §6.4's @vector row. Handoff build order 4 ("VE-30 also adds the Actions settle transition"); deviations VE-05 "Edges" (the 135-minute running limit, settled from `listCloudRuns`). Base: HEAD `3200acc2` (EV-29), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` is an ancestor. Precondition "depends on EV-29": EV-25 `7a806f91`, EV-26 `5b040d39`, EV-27 `c1112608`, EV-28 `d605eaed` and EV-29 `3200acc2` are all ancestors. No engine, shell, sandbox, worktree or relay file is touched, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+**origin/main.** origin/main `15f3ba77` (#51, #52) is not an ancestor. `git merge-tree --write-tree HEAD origin/main` is clean, and none of main's 11 changed files is a file this package touches. The plan proposed a `chore(everywhere): merge main after #52` merge commit; the critique rejected it, and this build follows the critique: the lane notes say both "merge origin/main once #33 is merged" and "the lead merges main into this branch; never merge main yourself", and every package since EV-14 (EV-19, EV-20, EV-22, EV-23, EV-24, EV-28, EV-29) followed the EV-14 receipt ("The lead also owns merging origin/main"). The package does not need main. So there is one package commit, and origin/main stays the lead's to merge. By the end of the build origin/main had moved to `3670461a` (#53, desktop files only); `git merge-tree --write-tree HEAD origin/main` is still clean, and none of main's changed files is touched here.
+
+### What changed
+
+- **api/_lib/everywhere/jobs.ts:**
+  - the header (:96-100) names the Actions `running` → `settled` move, the settle index and its lifetime, and the cron's grace;
+  - `ACTIONS_CRON_GRACE_MS` (10 minutes, :126), `ACTIONS_OUTCOMES` and `ActionsOutcome` (:128-135: changes, no-changes, failed, refused, cancelled, `satisfies readonly Outcome[]`), and `ActionsRunEnd` (:140), the cron's reader type; the `ACTIONS_OVERDUE_MS` comment no longer says "VE-30's";
+  - `runLinks` (:647) also returns `run:<rid>:settle`, so the end-of-job delete, `eraseInstallationJobs` and `eraseAccountJobs` remove it (E13);
+  - `startDispatched(ctx, ticketHash, rid, jobId?)` (:1095): a `jobId` that is not the jid `ticket:<hash>` names answers not-found after the ticket read and before any record read (EV-25 (b)'s cross-check); its `before` writes `run:<rid>` (until the body ends, as before) and `run:<rid>:settle` → jid for `KEEP_MS.runSettle` in the same ATOMIC_COMMANDS EVAL (:1113), so a start costs no extra read or EVAL. The three-argument calls are unchanged;
+  - `RunSettle`, `RunSettled` and `settleDispatched(ctx, jid, {rid, outcome})` (:1122-1156), the fenced transition: malformed ids answer not-found and an outcome outside `ACTIONS_OUTCOMES` wrong-state, both with no store command; then, through `change()` under `jobGuards`, a job whose rid is not this run's (every laptop job: only an Actions start sets a rid) or that is neither `running` nor `settled` answers wrong-state, a job already `settled` answers `{ok: true, fresh: false}`, and a running one ends `settled` with the outcome and no result. TRANSITION_SCRIPT queues it on `jobs:posts`, and `change()` deletes the links. A fresh settle is audited `settle <outcome>`;
+  - `timeout(job, now, stop, overdue)` (:1605-1656): `overdue` is `{lazy, read?: ActionsOutcome | "unread"}` (:1592). A running Actions job past due waits while `lazy` (an account's own sweep) or `read === "unread"`, until due plus `ACTIONS_CRON_GRACE_MS` (:1641); then it ends `settled` with the read outcome, or `failed` with outcome `failed`. Before, it ended `failed` with no outcome, and events.ts `finish` rendered `outcome ?? "cancelled"`, so the post said "was cancelled";
+  - `sweepOne` (:1662-1714): when the observed job is a running Actions job with a rid, neither `stop` nor a lost authority holds, and the sweep has a reader (only the cron's has one, and the cron takes only due jobs), it calls `runEnd(sponsor, rid)` once before the change; a rejection is logged `run-end` with the jid and the code, and reads `"unread"`. A job whose authority ended is never lazy (:1687), so every sweep, the cron's and an account's, fails it unread at its due time (A9). An ended job is audited `settle <outcome ?? state>` (:1712), so the cron's settle from @vector's record is audited with the run's outcome, as the settle hook's is ((d));
+  - `Sweep` (:1595, beside `Overdue`) carries `lazy` and `runEnd` through `sweepEach`; `sweepAccount` sweeps lazy and reads nothing (:1759); `sweepDue(ctx, {limit, stop, runEnd})` is not lazy (:1782). Without `runEnd`, `sweepDue` fails an overdue run at its due time, as before.
+- **api/_lib/everywhere/keys.ts** (outside the brief's list; the settle index needs a key): `KEEP_MS.runSettle` (3 hours, :49-54) and `everywhereKeys.runSettle(rid)` → `vector:everywhere:run:<rid>:settle` (:219-223). RUN_ID has no colon, so it is never `run:<rid>` or `run:<rid>:body-read`.
+- **api/_lib/everywhere/adapters/cloud-agents.ts** (EV-29's adapter):
+  - the module comment names VE-30b (:28-30); `liveMode`'s comment no longer says EV-30 builds it (no package does yet);
+  - `cloudSource` refuses Jira whatever the sources say (:64-66, decision (j));
+  - `ACTIONS_OUTCOME` (:152-164, its comment first), @vector's six outcomes to the five Actions outcomes, `draft` → `failed`;
+  - `RunJobDeps`, `RunHooksDeps` and `createRunHooks(deps)` (:166-209), the two listeners; the returned object `satisfies { start: RunStartListener; settle: RunSettleListener }` (:208) rather than annotating the return type, so its members are typed by inference (AGENTS.md);
+  - `createActionsRunEnd({list?, enabled?, store?})` (:214-235), the cron's reader, with lazy defaults `defaultList` (listCloudRuns) and `cloudAgentsOn` (model-plan-config.js `cloudAgentsEnabled`) (:276-284). Static imports added: `everywhereKeys` and `getValue`; the rest are type imports. jobs.js, cloud-agents-runs.js and model-plan-config.js load lazily, so a flag-off mint or settle function loads none of them through this module.
+- **New api/_lib/everywhere/run-hooks.ts** (40 lines): `registerEverywhereRunHooks({config?, hooks?})` registers both listeners with @vector's `registerRunStartListener` and `registerRunSettleListener` only while `config.enabled`, and answers one remover (undefined while off). Production `hooks`: Vector everywhere's store (`everywhereStore()`) for the settle index, and a `load` that imports runtime.js only once a run is an everywhere job's, for `productionContext`, `productionJobEvents.settled` and the `everywhere` switch.
+- **New api/_lib/everywhere/run-hooks-registration.ts** (11 lines): calls `registerEverywhereRunHooks()` once per process.
+- **api/cloud-agents/mint.ts and api/cloud-agents/settle.ts** (@vector's route files, spec §6.4's @vector area; the place EV-25 (i) named): one additive side-effect line each, `import "../_lib/everywhere/run-hooks-registration.js"`, after the cloud-agents-api import. *Flagged for the lead*: two lines in @vector's files; not a blocker.
+- **api/_lib/everywhere/sweep.ts:** `createSweep`'s deps gain `runEnd?: ActionsRunEnd`, and the cron calls `sweepDue(context(), {stop, runEnd: deps.runEnd ?? createActionsRunEnd()})` (:35). The flag-off path still answers before anything is built.
+- **Lane CI wiring** (outside the brief's list): .github/workflows/vector-everywhere.yml gains `api/_lib/cloud-agents-runs.ts` (the lane test's server-import scan finds it in run-hooks.ts and the adapter), `api/_lib/model-plan-config.ts` (the reader's lazy service gate) and `api/cloud-agents/{mint,settle}.ts` (they import the registration, which a scan of everywhere code cannot see) (:74-80); packages/web/test/everywhere-lane.test.ts lists the last three in `helpers`, with those reasons (:318-322).
+- **The four owner guides** (docs/vector/owner-actions/vector-everywhere-{github,slack,linear,jira}.md, :15, byte-identical): the "Before you start" Actions line no longer names EV-30 as the live workflow read's package, says the run hooks are built, and says Jira stays out of Actions until a run limit ends a Jira job before 50 minutes.
+- **Tests:** packages/web/test/everywhere-jobs.test.ts (A1 to A9 and one Redis case; the existing overdue case now also pins outcome `failed`) and packages/web/test/everywhere-cloud-adapter.test.ts (P13, L1 to L10, C1 to C6; two stale "EV-30" comments corrected). "The cases" below.
+- **ports.ts is unchanged** (critique, taken): `CloudEvents` stays. It is unused, and the hooks are typed by cloud-agents-runs.ts (`RunStartListener`, `RunSettleListener`); the §6.1 note says so. ports.ts:36 and runtime.ts:21 still say "EV-30" for the live mode read (Left open).
+- No generated file, flag, env var, switch, dependency or lockfile changes. Nothing is regenerated: the hooks live in vectordev.ai's hosted API, not the engine's HttpApi. VECTOR_EVERYWHERE_ENABLED stays off.
+
+### Decisions
+
+- **(a) Registration.** Two new modules and one import line in each of @vector's two route files, because Vercel bundles each function's own import graph (the cloud-agents-run-registration.ts pattern). ESM evaluates the registration once per process, so a process that loads both routes registers once. The flag is read once, at module load; a changed environment needs a redeploy on Vercel anyway. The Node probe measured what the two functions now bundle (progress receipt): their static graph grows from 101 to 110 files (+46 KB of source), and with the lazy imports, which Vercel's tracer follows, from 101 to 155 files (+514 KB), almost all of it runtime.js's graph (the platform adapters, routes and account authority).
+- **(b) The start gate.** Only a ticket that carries a `jobId` is read (prepareCloud always sets it), so every other @vector run costs the start listener nothing (L2). The ticket link decides; the `jobId` only cross-checks it, and a mismatch moves nothing after one GET (A1, L2).
+- **(c) The settle index `run:<rid>:settle` → jid.** It answers EV-27's Left open "settle has no account, and the link ends with the body" with the index option, which needs no lead decision: it holds only a jid, never platform text (E4), so it need not end with the body. It lasts 3 hours from the start (`KEEP_MS.runSettle`), longer than `ACTIONS_OVERDUE_MS` plus the grace (A1), is deleted with the job's other links when the job ends, and is covered by installation and account erase (A8). `run:<rid>` still ends with the body and stays the body route's only key.
+- **(d) `settleDispatched`.** Fenced through `change()`, like the laptop settle, and only for that run's own running Actions job. A repeat answers `fresh: false` and posts nothing (A2, L10; through the listener a repeat normally finds the index already deleted with the job's links, L3); the transition's outbox entry and events.ts's post lock make the post once-only even when a function is frozen part-way (L5). Both ends of an Actions run are audited the same way: the hook's settle as `settle <outcome>`, and the cron's settle from @vector's record as `settle <outcome>` too, not `settle settled` (A3; review round one). The route check the plan had (`job.route !== "actions"`) was removed before the mutation run as equivalent: only an Actions start sets a rid, so the rid check refuses every laptop job (A2's laptop case).
+- **(e) The outcome map (critique, considered).** `draft` maps to `failed`. In github-agents.ts a `draft` is a run a gateway STOP_CODE ended early (MODEL_PLAN_RUN_EXPIRED, the run, daily and plan limits, payment, capacity, a missing perk, plans disabled, an update required) that kept its work as a draft. `over-budget` ("stopped at its spending cap") is true for only part of that set and false for the rest (expiry, capacity, a disabled plan), and `interrupted` says "when the app restarted", which is laptop wording. The settle hook does not carry the stop code, so no truer line can be chosen; `failed` is never false. L4 and M23 pin it. If @vector later reports the stop code, a finer map can follow.
+- **(f) The pull request link (critique, taken): every `prUrl` is dropped.** The plan kept a same-repository PR in private places and dropped it in shared ones. The critique is right that this is half-way: the URL comes from the model-driven agent phase (E6, E17), runPages already does the repository check, and dropping it only in shared places has no stated threat while removing the link from text §3.7 shows there. So neither the listener nor `settleDispatched` takes a PR link: `RunSettle` has no `prUrl`, and the result posts once as "Done in GitHub Actions." (L3, with a same-repository PR reported). EV-25's rule stands: before a PR link is posted, the installation token confirms that the PR's head branch belongs to this run. That check needs the App token in @vector's github-app.ts, so it is a lead decision, and the brief's "with the PR URL and checks did not run" is Left open, tied to it. No engine phase sends `prUrl` yet, so production loses nothing today. renderResult's Actions form adds the checks line only with a link or a branch, so it does not appear either until then.
+- **(g) Switches.** Under `stop` neither hook moves a job (E10, matching the jobs API and the body route); the sweep cancels instead. `no-new` passes, since both are work on a job already taken (L6).
+- **(h) The budget (critique, taken: measured and stated).** Each listener checks the budget's signal at its gates: on entry, after the index read, after the load and switch read, and before posting. A fresh settle whose budget ran out after the transition is not posted by the hook; the reply outbox holds it, and the cron's `postPending` posts it once, normally within about a minute (L5). The Node probe timed the cold `load()` (importing runtime.js) plus the switch read and a ticket GET at 76 ms against a loopback KV, and a warm settle with an index at 7 ms. In production each store command is an Upstash round trip, and a fresh settle makes about fifteen (the index, the record, the account, install and link guards, the transition, the unlink, the audit, then the post's authority read, outbox check and lock, the summary clear and the outbox removal) plus the platform post, which is the slow part. That normally fits the 5 s; when it does not, the cron posts.
+- **(i) The overdue rule.** The cron reads @vector's run through `listCloudRuns` (the sponsor's newest 200 runs, all @vector keeps per account) and settles an ended run with its outcome (A3, C3); an open or unknown run is failed with outcome `failed`, and its post now says "The run in GitHub Actions failed." (C4). A failed or damaged read waits up to 10 minutes, read again each minute, then fails (A4, C6).
+  - **The service gate (critique, taken).** While the cloud-agents service is off (`cloudAgentsEnabled()` false) the reader answers undefined without a read, as cloud-agents-run-registration.ts does for every run reader, and the job fails at its due time (C2, C5, M24). The gate is a lazy import of model-plan-config.js, which is now in the workflow paths and the lane test's `helpers`.
+  - **Account sweeps (trade-off, recorded; critique).** The jobs API, the intake and Jira's GetTask sweep an account lazily: they read no @vector record and leave an overdue run to the cron for 10 minutes, which avoids racing the cron from 30-second laptop calls. Past the grace they fail it unread (A5). So if the cron has been down for 10 minutes, a run that ended with changes is posted "failed", although it may have opened a PR. Letting sweepAccount read too (it has the sponsor) would close that, but adds a @vector read to the desktop's frequent calls for a case that needs the cron to be down; it is not built, and A5 pins today's behaviour. A job whose authority ended is the exception: no sweep reads its record, so there is nothing to wait for, and an account's sweep retires it at its due time, as the cron does and as every sweep did before EV-30 (A9; review round one).
+- **(j) Jira (critique, taken: kept off).** A Jira job must end before 50 minutes from intake, queue included (§4.4), and the laptop path caps a run at 35 minutes. An Actions run takes @vector's plan limit, up to 120 minutes, and this package's overdue rule is 135 minutes plus the grace for every platform, so a Jira Actions run could settle long after its A2A task can take a reply (the task completes at 50 minutes with "Still running on your computer", which is also wrong for Actions). The adapter's `cloudSource` therefore refuses Jira whatever the sources say (P13, M27), so lifting R-C8/R-A8 for Jira opens no Jira Actions route until a Jira run limit exists (Left open). The four guides say so.
+- **(k) Lost correlation (critique, taken: recorded and pinned).** Reconciliation is not built:
+  - EV-28 settles `failed` within about 6 s of a missing link, so at 900 s `liveRun` no longer sees the run, and the run record holds no ticket hash, so the reconciliation EV-25 asked for cannot find it then.
+  - **A lost start event** (the start listener failed or was frozen, or the concurrent-mint interleaving of EV-25 (d)) leaves the job `dispatched`; its run gets 404 on the body and settles `failed`, but the settle listener finds no `run:<rid>:settle`, reads that one key and moves nothing. At 900 s the job ends `not-started` and the post says "GitHub Actions did not start; check the workflow uses Codium.", which is misleading: the run did start (L7 pins it).
+  - **A settle that arrives before the start listener has written the index** (both run after their own responses) leaves the job `running` until 135 minutes plus the cron, which then settles it from @vector's record.
+  - The useful fix for both is EV-27's body-route fallback (on a missing link, read `liveRun(sub, rid)`'s ticket hash and call an idempotent `startDispatched`), which stays the lead's decision.
+- **(l) E8.** No code change: `claimJob` already answers a dispatched job 409 `JOB_TAKEN`. A7 adds the running and settled states.
+- **(m) Listener failures never touch @vector's record.** By construction: the listeners receive only Vector everywhere's store, and the reader only lists runs. L8 runs both listeners over a failing everywhere store: two fixed warning lines, the job unchanged, and @vector's store saw only the settle notify's own record read.
+- **(n) Outside the brief:** the files keys.ts, the two new modules, @vector's two route files, the workflow paths, the lane test and the four guides; and one behaviour change to EV-29's adapter, the Jira refusal in `cloudSource` ((j)), with the four guides' line that says so. The commit body names both. ports.ts is left alone (critique). sweep.ts is touched only for the reader; the timeouts live in jobs.ts.
+- **(o) Still with no package** (EV-29 assigned them to "EV-30"; this brief does not include them, nor do EV-31 to EV-33): the `liveMode` reader with the pinned-CLI check; the additive `visibility` field on `attachmentRepository`'s result (github-app.ts, lead approval); the body route's live visibility read. Without the first two production can never have `prepareCloud`, even after R-C8/R-A8. EV-27's minimum body life is still unneeded: this package adds no late dispatch path.
+
+### Critique of the plan (2026-11-20)
+
+Taken: no main merge (above); every `prUrl` dropped ((f)); the service gate on the run read ((i)); listCloudRuns kept with its limits recorded (Left open) and a damaged-neighbour case (C1, C6); `draft` → `failed` with the reason ((e)); ports.ts and `CloudEvents` left alone ((n), the §6.1 note); Jira kept off ((j)); the budget measured and stated ((h)); the lost-correlation effects recorded and pinned ((k), L7); the account-sweep trade-off recorded and pinned ((i), A5). Rejected: none. Simplifications of the plan, each equivalent to another check: `settleDispatched`'s route check ((d)); the read's rid tag (a running job's rid never changes, so the cron's read is always that job's run); the reader's `endedAt` check, since @vector's decoder keeps `endedAt` and `outcome` together; and, found by the mutation run, `sweepOne`'s due check (Mutations).
+
+### The cases
+
+| Code | File | What it shows |
+| --- | --- | --- |
+| A1 | jobs | a ticket whose `jobId` names another job: one GET, nothing moves; the start writes `run:<rid>:settle` → jid with PTTL `KEEP_MS.runSettle` while `run:<rid>` still ends with the body; the index outlives 135 minutes plus the grace; a second start of the same ticket moves nothing |
+| A2 | jobs | malformed jid, rid and outcome: no store command; another run's settle, a laptop job and a dispatched job: wrong-state, no outbox entry; the settle: `settled`, outcome, no result, one outbox entry, body, ticket, run link, marker and index gone, off the live and due sets; a repeat: `fresh: false` with the first outcome, no EVAL or DEL, one `settle changes` audit entry |
+| A3 | jobs | the cron reads nothing before due; at due it settles the ended run (`no-changes`) and fails the open one (`failed`), reading each once with (sponsor, rid); the two are audited `settle no-changes` and `settle failed`; a late settle hook answers `fresh: false` or wrong-state |
+| A4 | jobs | a reader that rejects: ten minutes of sweeps leave the job running, the eleventh fails it; eleven reads, eleven fixed `run-end` lines with the jid and the code only |
+| A5 | jobs | account sweeps read nothing and wait the grace (a settle hook inside it still lands), then fail the run unread: the recorded trade-off |
+| A6 | jobs | under `stop` the cron cancels an overdue run and reads nothing |
+| A7 | jobs | E8: a laptop claim gets 409 `JOB_TAKEN` after the dispatch, after the start and after the settle; the job never gains a device, lease or claim time |
+| A8 | jobs | installation erase removes the index; an index a failed end-of-job DEL left is removed by account erase |
+| A9 | jobs | a job whose authority ended (its link record gone) is failed at its due time without reading @vector's record, by the cron and, for a second job a minute later, by an account's own sweep, with no grace |
+| (Redis) | jobs | on Valkey: a mismatched `jobId` is not-found; the index's real PTTL is within a minute of 3 hours and the run link's at most the body's; six concurrent settles give exactly one fresh, all ok; one outbox entry; the index gone |
+| P13 | adapter | Jira as the only source gives no prepareCloud, and `cloudSource("jira")` is false; with Slack and Jira, a Jira prepare reads nothing; Slack stays on |
+| L1 | adapter | through @vector's real notify: a start with the job id moves the job to `running` and writes both links; a repeated notify moves nothing |
+| L2 | adapter | no job id or a malformed one: no store command, no load; another job's id: only the ticket GET |
+| L3 | adapter | a settle with a same-repository PR (which runPages keeps): `settled`, outcome `changes`, no result; exactly one post, "Done in GitHub Actions."; the outbox empty; a repeat notify and postPending post nothing more |
+| L4 | adapter | `ACTIONS_OUTCOME` covers @vector's six outcomes and maps into `ACTIONS_OUTCOMES`; a `draft` settle posts "The run in GitHub Actions failed." |
+| L5 | adapter | a budget that ends right after the transition: settled, not posted by the hook, one outbox entry, postPending posts it once ("Finished in GitHub Actions with no changes."); a spent budget stops both hooks before any read |
+| L6 | adapter | under `stop` neither hook moves the job; `no-new` lets both through, one post |
+| L7 | adapter | a settle with no index reads only that key and moves nothing; 900 s later the job ends `not-started` and the post is the "did not start" text ((k)) |
+| L8 | adapter | over a failing everywhere store: the two fixed warnings, the job unchanged, @vector's store saw only the notify's one record read |
+| L9 | adapter | the test process's flag is off; `readConfig({})` registers nothing; with the registration module imported, notifies read nothing; with the flag on both listeners hear a settle (one index GET), and one remover removes both; @vector's mint.ts and settle.ts import the registration |
+| L10 | adapter | an end-of-job unlink that fails leaves the settle index: a repeated settle reaches `settleDispatched`, answers `fresh: false`, moves nothing and posts nothing |
+| C1 | adapter | the real listCloudRuns over a stub of @vector's store: an ended run's outcome, `draft` → failed, none for an open run, another account's run or an unknown rid; each read is `ZREVRANGE runs:<account> 0 199` then the READ script, nothing else; a store that is down and one damaged neighbour both reject 503 |
+| C2 | adapter | `enabled: false`, and the default gate with MODEL_PLANS_ENABLED and VECTOR_GITHUB_BRAIN_ENABLED unset: no read; with both set, the default gate reads and answers |
+| C3 | adapter | the cron route (createSweep over the route harness): nothing read before due; at due the run @vector recorded as ended is settled `changes` and posted once, "Done in GitHub Actions."; the next sweep posts nothing |
+| C4 | adapter | an open run: `failed`, outcome `failed`, posted "The run in GitHub Actions failed." |
+| C5 | adapter | the production default reader with the service off: no read, the run failed at its due time, the fetch guard clean |
+| C6 | adapter | a damaged neighbouring record: the cron waits until due plus the grace, then fails the run; three `run-end` lines |
+
+### Mutations
+
+30 mutations, one source edit at a time, each with the named test files run alone through vector-serial, without Redis (/tmp/vector-v2/everywhere/ev30/mut/: mutate.py, run.log and the per-run stdout files, one log per mutation and file, before.sha256). Every mutation turned its named cases red, and `sha256sum -c` matched jobs.ts, cloud-agents.ts, run-hooks.ts and sweep.ts after each run. "Result" is pass/fail of the cases each file runs without Redis.
+
+The first run (M1 to M30) found two survivors, and both were fixed before the final run:
+- the plan's "the cron reads only a due job" check in `sweepOne` was equivalent (the cron takes only due jobs from `jobs:due`, and under `stop`, when it takes every job, it reads nothing), so it was removed, and M14 now mutates the authority gate instead, which A9 (new) pins;
+- "a repeated settle posts" survived because a repeat never reaches `settleDispatched` once the job's end has deleted the settle index; L10 (new) keeps the index with a failed unlink, so the repeat is fenced (`fresh: false`) and posts nothing.
+M13, M14 and M20 were run again on the final tree (out of 52 jobs cases and 84 adapter cases); the other 27 rows are from the first run, on the tree before A9, L10 and the removed check (out of 51 and 83), whose mutated lines are unchanged. M31 and M32 were added with review round one's fixes and run on that tree (/tmp/vector-v2/everywhere/ev30/fix/: m31.log, m32.log, before.sha256; `sha256sum -c` matched jobs.ts after each).
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 the start's job id cross-check dropped | jobs.ts | cloud-adapter 82/1; jobs 50/1 | A1, L2 |
+| M2 the start writes no settle index | jobs.ts | cloud-adapter 78/5; jobs 49/2 | A1, A8, L1, L3, L4, L5, L6 |
+| M3 the settle index capped at the body's end | jobs.ts | jobs 50/1 | A1 |
+| M4 the end-of-job delete and erase leave the settle index | jobs.ts | jobs 48/3 | A2, A3, A8 |
+| M5 a settle ignores the rid | jobs.ts | jobs 50/1 | A2 |
+| M6 a repeated settle is fresh | jobs.ts | cloud-adapter 83/0; jobs 49/2 | A2, A3 |
+| M7 a settle moves a job that has not started | jobs.ts | jobs 49/2 | A2, A3 |
+| M8 a settle takes any outcome | jobs.ts | jobs 50/1 | A2 |
+| M9 an account sweep ends an overdue run at once | jobs.ts | jobs 50/1 | A5 |
+| M10 an unread record ends the run at once | jobs.ts | cloud-adapter 82/1; jobs 50/1 | A4, C6 |
+| M11 the record's outcome ignored | jobs.ts | cloud-adapter 82/1; jobs 50/1 | A3, C3 |
+| M12 an overdue run fails with no outcome (before EV-30) | jobs.ts | cloud-adapter 80/3; jobs 47/4 | A3, A4, A5, C4, C5, C6, the overdue case |
+| M13 the cron reads under stop | jobs.ts | jobs 51/1 | A6 |
+| M14 the cron reads for a job whose authority ended | jobs.ts | jobs 51/1 | A9 |
+| M15 an account sweep is not lazy | jobs.ts | jobs 50/1 | A5 |
+| M16 the cron is lazy | jobs.ts | cloud-adapter 80/3; jobs 49/2 | A3, C3, C4, C5, the overdue case |
+| M17 the start gate admits a ticket with no job id | cloud-agents.ts | cloud-adapter 82/1 | L2 |
+| M18 the start ignores the stop switch | cloud-agents.ts | cloud-adapter 82/1 | L6 |
+| M19 the settle ignores the stop switch | cloud-agents.ts | cloud-adapter 82/1 | L6 |
+| M20 the settle posts a repeat too | cloud-agents.ts | cloud-adapter 83/1 | L10 |
+| M21 the settle posts after its budget ended | cloud-agents.ts | cloud-adapter 82/1 | L5 |
+| M22 the settle reads with its budget spent | cloud-agents.ts | cloud-adapter 82/1 | L5 |
+| M23 draft maps to changes | cloud-agents.ts | cloud-adapter 81/2 | C1, L4 |
+| M24 the run read ignores the service gate | cloud-agents.ts | cloud-adapter 81/2 | C2, C5 |
+| M25 the run read takes the newest run, whatever its rid | cloud-agents.ts | cloud-adapter 82/1 | C1 |
+| M26 a failed run read answers none | cloud-agents.ts | cloud-adapter 81/2 | C1, C6 |
+| M27 Jira takes the Actions route | cloud-agents.ts | cloud-adapter 82/1 | P13 |
+| M28 the registration ignores the flag | run-hooks.ts | cloud-adapter 81/2 | L8, L9 |
+| M29 the remover keeps the settle listener | run-hooks.ts | cloud-adapter 82/1 | L9 |
+| M30 the cron passes no run reader | sweep.ts | cloud-adapter 81/2 | C3, C6 |
+| M31 an account sweep waits the grace for a job whose authority ended (review round one) | jobs.ts | jobs 51/1 | A9 |
+| M32 the cron's settle is audited with the state, not the outcome (review round one) | jobs.ts | jobs 51/1 | A3 |
+
+### Review round one (2026-11-20)
+
+Eight findings, none blocking. Taken:
+- **The orphaned JSDoc** (jobs.ts): `type Sweep` and its comment moved up beside `type Overdue` (:1595), so `sweepEach`'s comment directly precedes it again.
+- **Two audit codes for one run end** ((d)): `sweepOne` audits `outcome ?? state`, so a run the cron settled from @vector's record is `settle no-changes` (or its other outcome), as the hook's is, not `settle settled`. Every other sweep end is unchanged: an expired job's outcome is `expired`, an overdue Actions failure's is `failed`, and a lost, cancelled or not-started job has no outcome. A3 pins it; M32.
+- **The authority-ended run in an account sweep** ((i)): taken as code, not a sentence. Such a job is never lazy, so an account's sweep retires it at its due time, as before EV-30. A9 adds the account sweep; M31.
+- **`createRunHooks`' return annotation**: replaced by `satisfies` on the returned object (AGENTS.md: prefer inference). The listener types still check both members, and run-hooks.ts and the tests compile unchanged.
+- **The env in C2**: kept (it is the only way to cover the default gate), with a comment in its `finally` that C5 relies on the restore.
+- **The Jira refusal outside the brief** ((j), (n)): kept; (n) and the commit body name it and the four guides' line.
+Recorded, no code change:
+- **Waiting runs at the head of `jobs:due`** (two findings, Left open): neither the per-account memo nor moving the due score is built. A memo of successful reads would need the reader to answer per account rather than per (account, rid), which changes the seam A3, A4 and C1 pin, and a rejection-only memo saves reads only for an account with several overdue runs, at most three today. Moving the score is a write outside the fenced transition, which could put back into `jobs:due` a job that a concurrent settle has just ended. The effect is bounded: at most `SWEEP_LIMIT` (200) waiting runs fill a sweep, each waits at most 10 minutes, and account sweeps go on for every account.
+
+### Left open
+
+- **The PR link and "checks did not run" in the result** ((f)): waits for a head-branch check with the installation token (@vector's github-app.ts, lead decision) and for @vector's publish phase to report the PR (EV-25 Left open). Until then the Actions result is the outcome line only.
+- **Reconciliation of a lost start event and the misleading "did not start" post** ((k)): EV-27's body-route fallback, a lead decision.
+- **listCloudRuns' limits** (critique): the reader reads the sponsor's newest 200 runs. @vector itself keeps only 200 per account (its START script trims the index), so a sponsor with more than 200 runs since this one started has lost this run's index entry anyway, and the run reads unknown and is failed although it ended. One undecodable record among the 200 makes the whole read fail, so every overdue job of that account waits the grace and then fails (C1, C6). While the read keeps failing, each overdue job costs one ZREVRANGE and one READ of up to 400 keys per minute, for at most 10 minutes, done one after another in the cron call. Such a job also keeps its past score in `jobs:due`, so it stays at the head of the cron's oldest-first `LIMIT 0 200` and is read again every minute; with more than 200 waiting at once, other due jobs (offers expiring, leases going `lost`, dispatches reaching 900 s) would wait for the cron up to 10 minutes, though account sweeps still end each account's own due jobs. That needs about 67 accounts with failing reads at today's cap of 3 live jobs per sponsor (review round one). The follow-up is a single-rid reader over `runRecordKey` (EV-27's "exported reader, a lead decision"); a per-sweep memo of each account's read, or a fenced move of the waiting job's due score, are the alternatives.
+- **The account-sweep trade-off** ((i), A5): a run that ended with changes is posted "failed" if the cron was down for the whole grace.
+- **Jira's Actions route** ((j)): needs a run limit that ends a Jira job before 50 minutes, and Actions wording for the A2A task's 50-minute text.
+- **`draft`'s wording** ((e)): finer only if the settle hook ever carries the stop code.
+- **No package yet** ((o)): the live mode reader with the pinned-CLI check, the `visibility` field, the body route's live visibility read. ports.ts:36 and runtime.ts:21 still name "EV-30" for the live mode read; correct them with that package.
+
+### Safe by default
+
+- **Flag off.** `registerEverywhereRunHooks` registers nothing, so mint and settle behave exactly as before; the only cost is one config read at import (L9 and the Node probe: no KV request, no @vector record read). The sweep answers `{enabled: false}` before any read.
+- **Flag on, with no `prepareCloud`** (R-C8/R-A8 and the live mode reader both missing). No ticket carries a `jobId`, so the start listener makes no read. The settle listener makes one everywhere GET per @vector settle and finds nothing. The cron reads @vector's records only for a running Actions job past 135 minutes, and none can exist; while the cloud-agents service is off it would read nothing anyway.
+- **Fail closed.** Every failure is a fixed log line: the hooks' own warning, or `run-end` with the jid and a code. An unread record waits, then fails. Nothing here writes to @vector's records.
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14`, brain-transport `0d18f750` and main `3670461a` (fetched at the end of the build). The two @vector route lines are additive and sit after the routes' only import; the workflow hunk follows EV-29's block.
+
+### Deferred verification
+
+- vector-everywhere.yml (the Redis cases in its Valkey job), vector-at-mention.yml (cloud-agents-start, -runs and -service-off, which import the route files) and typecheck.yml on everywhere-finish, after the commit step's push.
+- Live use, after R-C8/R-A8, the live mode reader, the `visibility` field and a published CLI.
+
+## 2026-11-20, EV-31: the GitHub handoff's OIDC audience and verifier (VE-31)
+
+Spec §8 VE-31; §4.1 item 1; §11 R-A5 (R-A6 and §10 Q13 stay @vector's and the owner's). Base: HEAD `11f8f266` (EV-30), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` is an ancestor. The preconditions are ancestors of HEAD: EV-09 `735d592b` (the relay adapter) and EV-29 `3200acc2` (`createHandoffBinding`). No engine, shell, sandbox, worktree or relay file is touched, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+**origin/main.** origin/main `3670461a` (#51 to #53, desktop and engine files only, 12 commits) is not an ancestor. `git merge-tree --write-tree HEAD origin/main` is clean, and none of main's changed files is touched here. The critique asked for a merge commit or for the lead instruction that keeps main merges with the lead. The lane notes say: "This branch starts from origin/release-finish (PR #33, the combined v2 integration). When #33 merges into main, the lead merges main into this branch; until then never merge main yourself." This build's task also forbids commits, and a merge is a commit. So no main merge here; it stays the lead's, as at EV-14, EV-29 and EV-30.
+
+### What changed
+
+- **api/_lib/github-oidc.ts** (@vector's file; R-A5, built under the lead's brief, additive):
+  - `githubOidcAudiences.handoff` = `https://vectordev.ai/api/everywhere/github/handoff` (:15-16), a literal like `token` and `installation`;
+  - `audienceEvents.handoff` = issue_comment, issues and pull_request_review_comment (:28), with the :20-21 comment saying a handoff is never a dispatch or a schedule;
+  - in the verifier, `mintRules` (:118) is true for the mint and the handoff, and it drives the review comment's merge-ref rule (:120), the strict added claims (:133) and the required runner claim (:135). The bot rule stays the mint's alone for workflow_dispatch, so a handoff never takes a bot. The identity's shape and `consumeGithubOidc` are unchanged; `runAttempt`, `event` and `actorId` were already returned.
+- **api/_lib/everywhere/adapters/cloud-agents.ts** (EV-29's @vector adapter):
+  - `createHandoffBinding` (:142-158) adds `ownerId` and `defaultRef` from the binding, and its JSDoc (:135-141) says runtime.ts wires it and that `shared: true` is only the route's fallback;
+  - the new `createHandoffVerifier({verify?})` (:160-193) and its helper `verifiedHandoff` (:287-294): the lazy import of github-oidc.js, the `handoff` purpose, an audience recheck, then GitHub-hosted runners only (403 RUNNER_NOT_SUPPORTED). It maps the identity to `GithubHandoffIdentity`, and any non-ApiError becomes 503 GITHUB_UNAVAILABLE;
+  - imports: the type import of github-oidc.js (:13) and `ApiError` from http.js (:14). The module comment names VE-31.
+- **api/_lib/everywhere/github/adapter.ts** (VE-10's route, the lane's own; compact style kept):
+  - `GithubHandoffIdentity` (:16-20) gains `ownerId`, `ref` and an optional `repositoryVisibility`; `GithubHandoffBinding` (:21-24) gains `ownerId` and `defaultRef`;
+  - the 501 comment (:60-61) names productionHandoffDeps; the 401 check also requires a positive `ownerId` (:69);
+  - a review comment hands back before the binding read (:72-77, (d)); the comment names (d) and says GITHUB_EVENTS keeps the event on purpose;
+  - the binding check adds the mint's owner and default-ref rules (:79-83);
+  - `repository` (:100) carries the live `shared` into the trigger, the facts and the job (:103-110).
+- **api/_lib/everywhere/runtime.ts:** new `productionHandoffDeps(config = readConfig())` (:36-45): `{}` with the flag off, otherwise `{verify: createHandoffVerifier(), binding: createHandoffBinding(), ports: productionPorts(config)}`. Building them does no I/O.
+- **api/everywhere/github/handoff.ts:** `createGithubHandoff(productionHandoffDeps())`, evaluated at load like productionPlatformDeps. The route still reads its config per request.
+- **New packages/web/test/everywhere-github-live.test.ts** (22 cases, one of them real-Redis; the case table below). It uses @vector's `githubAppFixture` for the live-shaped tokens and the loopback JWKS (critique, taken), `installJourney([])` and `journeyPorts` for EV-09's fake relay, and the router fixture.
+- **packages/web/test/github-oidc.test.ts** (@vector's; vector-at-mention.yml): the handoff presets and branch events, and seven new cases (O3 to O9 below); "audiences are separate" now expects 5 audiences and the handoff literal. Its four-audience loop is unchanged.
+- **Fixture-only edits:** packages/web/test/everywhere-github.test.ts :19-22 (the identity's `ownerId` and `ref`, the binding's `ownerId` and `defaultRef`); packages/web/test/everywhere-cloud-adapter.test.ts H1 (the two new fields, and the title now says `shared` is the route's fallback).
+- **Desktop** (vector-everywhere.yml, `--no-env-file`): packages/desktop/src/main/everywhere-pr.test.ts D1 and everywhere-runner.test.ts D2 (below).
+- **Lane plumbing:** .github/workflows/vector-everywhere.yml (:81-84) adds `api/_lib/github-oidc.ts`, `api/_lib/github-http.ts` and `packages/core/src/github-agents.ts`. packages/web/test/everywhere-lane.test.ts (:322-326) lists the last two in `helpers`, because github-oidc.ts imports them and the scan reads only everywhere code. The scan itself finds github-oidc.ts through cloud-agents.ts's type import.
+- **docs/vector/owner-actions/vector-everywhere-github.md** (:7, :20, :75): 501 only while the flag is off, then 404 unless `github` is listed, then `{handled: false}`. R-A5 is built; R-A6 and Q13 are not. The `HANDOFF_UNAVAILABLE` string and the "Do not add `github`" line that everywhere-docs.test.ts pins are kept.
+- No generated file, flag, env var, switch, dependency or lockfile changes. Nothing is regenerated, and no engine HttpApi route is added. @vector's workflow generator, its route job, `laptopFirst` and `GithubAgents` are untouched.
+
+### Decisions
+
+- **(a) The audience literal lives in github-oidc.ts.** `GithubAgents.AUDIENCE` (packages/core/src/github-agents.ts) is @vector's generator module, and moving the string there is @vector's call. R-A6's route job must request a token for exactly `https://vectordev.ai/api/everywhere/github/handoff`.
+- **(b) The verifier's handoff rules are the mint's** (R-A5): the same top-level workflow file, `workflow_sha === sha`, the default-branch ref for comments and issues and the merge ref for a review comment, a required and well-formed `runner_environment`, strict `ref_protected` and `repository_visibility`, no bot, and its own three events. A handoff-signed token is refused by every other audience, and every other audience's token is refused by the handoff (O8).
+- **(c) The mapping (createHandoffVerifier).**
+  - Only GitHub's own runners, as the mint route requires (403 RUNNER_NOT_SUPPORTED).
+  - The audience is checked again, so a verifier injected for another purpose cannot pass (V4).
+  - github-oidc.js loads on first use, so jose never loads for the Slack, Linear or Jira intakes or the jobs routes (EV-29 (f)); the Node probe shows it is reachable only lazily.
+  - The jti is not consumed. The route's `handoff:<repository>:<run>` SET NX admits one handoff per run, which is stronger than one per token.
+  - The route's `now` is ignored, because the verifier keeps its own clock.
+  - Any failure that is not an ApiError becomes 503 GITHUB_UNAVAILABLE (critique, taken). Before, the route's catch would answer 503 HANDOFF_UNCERTAIN, which tells the route job not to start an Actions run although no job exists (V5).
+- **(d) The mint's route rules in the handoff (critique's major point, taken).**
+  - The route now requires `binding.ownerId === identity.ownerId` and `identity.ref === binding.defaultRef`, as the mint route does (cloud-agents-api.ts, after githubProof).
+  - **A review comment hands back** (`{handled: false}`, before any binding read or dedupe key). A pull_request_review_comment run takes the workflow at refs/pull/N/merge, which the pull request's author controls. The mint does not trust that alone: without the App it answers 403 EVENT_NEEDS_APP, and with it github-app.ts `verifyRun` checks that the pull request is open, that its head and base repositories are this one, that `merge_commit_sha` is the token's SHA, and that vector.yml at the workflow SHA equals the default branch's. Any writer could put a changed vector.yml on a PR branch, and the route job's writer, fork and binder checks would then run inside that writer's own code. So a review comment by the binder on that PR could start an unattended laptop job. The verifier still takes the event (the brief, R-A5), so R-A6 and an App check can open it later. **For the lead and @vector:** open review comments only with a check equal to verifyRun's review branch, which needs the App's token (github-app.ts). The plan's PR-number check (`pullRequest === body.issue`) belongs with that check, so it is not built, and the identity carries no `pullRequest`.
+  - **Not mirrored, with reasons:** the mint's live App checks (installation, archived, binder write access, a fork), which R-A6's own writer and fork checks or an App read would give (a lead decision), and the mint's revoked-CLI-session check (`requireUnrevokedAccount`). A laptop job's claim needs the computer's own current desktop sign-in, but whether the handoff should also refuse a binding whose account's CLI session was revoked is for the lead.
+- **(e) `shared` follows the token's signed `repository_visibility` claim** (EV-29 (i) and its Left open item).
+  - Why `shared` matters here: the runner holds every shared job (everywhere-runner.ts: no push, no PR), and E17 governs what a shared result shows. With `shared: true` from the port, no GitHub handoff could ever push.
+  - Only `private` is unshared; `public` and `internal` are shared, which is the safe direction and matches EV-29 (c), still waiting on the lead's ruling on private versus internal. With no claim the binding's `true` is kept (S1).
+  - **Why the claim and not the App read** (critique, taken as a record): `ports.visibility` (liveVisibility through attachmentRepository) never answers `private` yet, because attachmentRepository has no `visibility` field (EV-29 (c), EV-30 (o)). The claim is signed by GitHub and costs no request. It is up to 5 minutes old (maxTokenAge 300); the desktop rechecks `privateRepository` live before it pushes, and the post uses `job.shared`. **Tripwire:** once attachmentRepository answers `visibility`, decide whether `shared` takes the stricter of the two.
+  - H1 is unchanged in substance: the port still says `shared: true`.
+- **(f) The answers.** Verifier refusals keep their own codes, not VE-10's handled:false for a dispatch or a schedule. A verified token that fails the attempt, event, binding or owner rules gets handled:false. The table for R-A6 (whether the route job carries on in Actions):
+
+  | Answer | When | Carry on in Actions? |
+  | --- | --- | --- |
+  | 405 | not POST | yes |
+  | 501 HANDOFF_UNAVAILABLE | the flag off | yes |
+  | 404 EVERYWHERE_OFF | GitHub not listed | yes |
+  | 401 HANDOFF_IDENTITY_INVALID or OIDC_INVALID | no or bad token, wrong audience, expired, a bot, malformed claims | yes |
+  | 403 WORKFLOW_NOT_TRUSTED, EVENT_NOT_ALLOWED, RUNNER_NOT_SUPPORTED | another workflow or ref, a dispatch or schedule, a self-hosted runner | yes |
+  | 503 GITHUB_UNAVAILABLE | the JWKS read failed, or any other verifier failure | yes |
+  | 400 HANDOFF_INVALID | a bad body (nothing persisted) | yes |
+  | 200 `{handled: false}` | a re-run, a review comment, a non-binder, laptopFirst off, another owner or ref, a repeated run, no computer took it | yes |
+  | 200 `{handled: true, jid}` | the binder's computer claimed and started the job | no: output `kind=none` |
+  | 503 HANDOFF_UNCERTAIN | a failure after admission | no |
+
+  Only `handled: true` and HANDOFF_UNCERTAIN stop the Actions run.
+- **(g) The wiring.** Only `config.enabled` gates it, as the brief says; `ports` is productionPorts because the route's safePorts default can never offer. configuredPlatforms is unchanged (Left open).
+- **(h) No IP rate limit is added.** Before verification there is no store command, and JWKS fetches are bounded by jose's 30 s cooldown and 10-minute cache. Adding githubProof's rate limit is for the lead before R-A6.
+- **(i) Files outside the brief:** adapter.ts, cloud-agents.ts, the route file, the two fixture edits, D1 and D2, the workflow paths and the lane test's `helpers`, and the guide. **The helper move is dropped** (critique, taken): the new file has its own 12-line stub of @vector's store for bindingFor's one READ (`vectorBindings`), and everywhere-cloud-adapter.test.ts keeps its helpers. Its counts are unchanged without and with Redis.
+- **(j) github-oidc.test.ts's audience count goes from 4 to 5**, and the separate 5x5 matrix (O8) carries the new audience. The existing four-audience loop signs dispatch-shaped claims, which the handoff refuses at the event list, so it stays four.
+- **(k) The test route reads the body first, as Vercel's runtime does.** The route file sets no bodyParser option, so on Vercel `request.body` is already read, and readJson takes it. The new file mounts the route through `vercelBody`, which does the same. Under Bun's node:http, a body the route never reads (every refusal answers before it) keeps the harness's connection open after an await, and `server.close()` then never returns: reproduced alone in /tmp/vector-v2/everywhere/ev31/scratch/close*.ts. The route is unchanged.
+
+### Critique of the plan (2026-11-20)
+
+All nine points taken:
+- review comments hand back until an App check exists ((d), B4, M12);
+- D2 renamed to what it tests, J1 drives the real createGithubAdapter with a capturing status port, and the acceptance rows are marked module-level with production wiring pending (Left open);
+- githubAppFixture reused and the helper move dropped ((i));
+- non-ApiError failures mapped ((c), V5) and the response table given a carry-on column ((f));
+- the claim versus App-read record ((e));
+- issues cases with and without `bodySha256` (B5);
+- the separate 5x5 matrix, with the four-audience loop and its comments kept (O8, (j));
+- the main-merge record (above);
+- Node version and paths: the probe ran on Node 22.23, the only Node here. The lane workflows use Node 24, and neither vercel.json nor any package.json pins Vercel's Node version, so the deployed runtime is the project setting. github-http.ts and github-agents.ts are in the paths and `helpers`.
+
+### The cases
+
+| Code | File | What it shows |
+| --- | --- | --- |
+| V1 | live | a live-shaped issue_comment token maps to `{repositoryId, repository, ownerId 456, actorId 789, runId 1000, runAttempt 1, eventName, ref, repositoryVisibility private}`; a review comment's maps its merge ref; no claim, no field; one JWKS read for three tokens |
+| V2 | live | through the route, each before any everywhere store command, binding read, offer or relay action: workflow_dispatch and schedule 403 EVENT_NOT_ALLOWED; tokens signed for mint, token, installation and bind 401 OIDC_INVALID; a self-hosted runner 403 RUNNER_NOT_SUPPORTED; no runner claim, a bot, an expired token 401; another workflow file 403 WORKFLOW_NOT_TRUSTED |
+| V3 | live | run_attempt 2 verifies, then `{handled: false}` with no binding read |
+| V4 | live | an injected verifier answering a mint identity: 401 OIDC_INVALID |
+| V5 | live | an injected verifier that throws a plain Error: 503 GITHUB_UNAVAILABLE, no store command |
+| B1 | live | a non-binder (actor 790): handled:false after one binding read, no everywhere command, no offer, no job |
+| B2 | live | the production binding (laptopFirst false) with the binder's token: handled:false, one binding read, no everywhere command, no dedupe key, no offer, no job |
+| B3 | live | another owner (455) and a default ref of refs/heads/release: handled:false, one binding read, no everywhere command |
+| B4 | live | the binder's review comment on its own pull request: handled:false before the binding read, no everywhere command |
+| B5 | live | an issues token: without `bodySha256` 400 HANDOFF_INVALID, no job, no dedupe key, no offer; with it offered and claimed, the job's reference `{issue 7, actorId 789, event issues, bodySha256}` |
+| S1 | live | the job's `shared` and `repository.shared`: private false; public, internal and no claim true; each job running |
+| R1 | live | over the relay Worker on loopback (EV-09): the offer frame reaches the binder's computer, verifies against the pinned key, is claimed and started on the first poll; `{handled: true, jid}` within TIMING.offerWindowMs; relay actions exactly `presence`, `job-offer`; the job running with the issue reference; the same run again handled:false with no second offer |
+| R2 | live | an online computer that never claims: handled:false at exactly 20 s; the job refused `no-place`; one offer |
+| R3 | live | R1 on a real Redis (skips without VECTOR_TEST_REDIS_URL) |
+| J1 | live | a private claim settled `changes` with a branch and no PR, posted through the real createGithubAdapter and a capturing status port (R-C5's stand-in): "The changes are on the branch `vector/ve-…`.", the summary and the job marker, no PR link. A public claim settled `held`: no branch, no summary. With no App there is no port, and status.ts posts nothing |
+| P1 | live | `productionHandoffDeps(readConfig({}))` is `{}`, and the route over it answers 501 with no JWKS read |
+| P2 | live | the production route file loaded with the flag on, called with it off: 404 EVERYWHERE_OFF, not 501, with no JWKS read; after the load readConfig() reads the flag off again (review round one) |
+| P3 | live | with the flag on: exactly `binding`, `ports`, `verify`, and the ports are productionPorts(config)'s |
+| O1, O2 | oidc | the handoff and handoff review-comment presets join the job-workflow and environment cases; the handoff's branch events keep ref_type branch and no head or base ref |
+| O3 | oidc | the handoff takes issue_comment, issues and the review comment, and refuses workflow_dispatch, schedule, pull_request, pull_request_target, workflow_run, repository_dispatch, push and dynamic |
+| O4 | oidc | the runner claim is required and well formed; self-hosted is recorded |
+| O5 | oidc | malformed ref_protected and repository_visibility are refused; well-formed ones are recorded |
+| O6 | oidc | no bot on a comment, an issue or a review comment |
+| O7 | oidc | a handoff review comment takes the mint's merge-ref rules |
+| O8 | oidc | 5 audiences, the handoff literal, and an issue comment signed for each of the five accepted only by its own audience (bind: EVENT_NOT_ALLOWED) |
+| O9 | oidc | run_attempt 2, the event and the actor id are returned unchanged |
+| D1 | desktop pr | a GitHub handoff job's draft PR: draft, head `branchFor(jid)`, title "Vector: Fix retry handling", the job marker and "Refs #7" |
+| D2 | desktop runner | a GitHub job whose `openPr` answers no URL (no PR could be opened): the branch `branchFor(jid)` is pushed and the job settles `changes` with the branch, head SHA, one file and checks skipped, and no prUrl |
+
+### Mutations
+
+24 mutations, one source edit at a time, each with the named test files run alone through vector-serial, without Redis (/tmp/vector-v2/everywhere/ev31/mut/: mutate.py, run.log, stdout.txt, one log per mutation and file, before.sha256). Every mutation turned its named cases red, and `sha256sum -c` matched all seven source files after the run. "Result" is pass/fail.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 the handoff takes workflow_dispatch | github-oidc.ts | oidc 47/1; live 20/1 | O3, V2 |
+| M2 the handoff takes schedule | github-oidc.ts | oidc 47/1; live 20/1 | O3, V2 |
+| M3 `review` back to the mint only | github-oidc.ts | oidc 44/4; live 19/2 | O1, O3, O4, O7, V1, B4 |
+| M4 strict without the handoff | github-oidc.ts | oidc 47/1 | O5 |
+| M5 runner presence without the handoff | github-oidc.ts | oidc 47/1; live 20/1 | O4, V2 |
+| M6 the handoff audience equals the mint's | github-oidc.ts | oidc 46/2 | O8 (both) |
+| M7 the mapping drops the GitHub-hosted rule | cloud-agents.ts | live 20/1 | V2 |
+| M8 the mapping drops the audience recheck | cloud-agents.ts | live 20/1 | V4 |
+| M9 the mapping hard-codes runAttempt 1 | cloud-agents.ts | live 20/1 | V3 |
+| M10 the route drops the owner check | adapter.ts | live 20/1 | B3 |
+| M11 the route drops the default-ref check | adapter.ts | live 20/1 | B3 |
+| M12 the route takes review comments | adapter.ts | live 20/1; everywhere-github 17/0 | B4 |
+| M13 `shared` ignores the claim | adapter.ts | live 19/2 | S1 (private), J1 (private) |
+| M14 internal counts as private | adapter.ts | live 20/1 | S1 (internal) |
+| M15 productionHandoffDeps ignores the flag | runtime.ts | live 20/1 | P1 |
+| M16 productionHandoffDeps omits the ports | runtime.ts | live 20/1 | P3 |
+| M17 the route file passes no deps | handoff.ts | live 20/1 | P2 |
+| M18 createHandoffBinding says laptopFirst true | cloud-agents.ts | live 20/1; cloud-adapter 81/3 | B2, H1 |
+| M19 the dedupe key differs per call | adapter.ts | live 20/1 | R1 |
+| M20 ownerId mapped from the binder's id | cloud-agents.ts | live 12/9; cloud-adapter 81/3 | S1, R1, R2, B5, J1, H1 |
+| M21 the offer window + 1 ms | adapter.ts | live 20/1 | R2 |
+| M22 the runner drops `branch` from the publication | everywhere-runner.ts | runner 51/6 | D2, and five existing publication-receipt cases |
+| M23 events.ts drops `...job.result` | events.ts | live 20/1 | J1 (private) |
+| M24 a plain verifier failure is not mapped | cloud-agents.ts | live 20/1 | V5 |
+
+### Review round one (2026-11-20)
+
+Nine findings, none blocking. Changed:
+- **live test, `world()`:** the unused `jwks` counter is removed. V1 counts JWKS reads with its own `reads`; P1 and P2 compare `app.state.requests.length`.
+- **live test, P2:** the restore loop has no `else` (an early `continue`); a comment says why process.env is the only way in (handoff.ts builds its deps from readConfig() at load and takes no argument, and only P2 catches M17) and that `saved` holds every key everywhereEnv sets; the case now also asserts `readConfig().enabled` is false again after the load (126 → 127 expects without Redis, 136 → 137 with). The try/finally stays: the env must be restored even when the import throws. M17 re-run against the new P2: P2 red (20/1), handoff.ts restored, its sha256 unchanged.
+- **adapter.ts:** `GithubHandoffIdentity` is laid out like `GithubHandoffBinding`, with the JSDoc directly above `repositoryVisibility?:` and the closing brace on its own line; the review-comment comment (:72-75) names (d) and says GITHUB_EVENTS and the verifier keep the event for when an App check equal to verifyRun exists, so the early hand-back is not taken for dead code. No behaviour change.
+- **The owner's guide (:20):** now names all three answers: 501 `HANDOFF_UNAVAILABLE` with the flag off, 404 `EVERYWHERE_OFF` with it on but `github` unlisted, `{handled: false}` once `github` is listed, as :7 and spec §3.2 do.
+- **Left open:** the Codium switch's order and the rate limit's place (below).
+
+Not changed, with reasons:
+- **EVENT_NOT_ALLOWED's message** ("This workflow event is not eligible for Vector App credentials.") is left as it is for the handoff. It is @vector's shared message in @vector's file, and for the handoff it never leaves the API: createHandoffVerifier rethrows the ApiError and the route answers `{error: {code}}` only. A per-purpose message would add an untested branch to @vector's verifier for a string nobody sees. If @vector wants one, `"This workflow event cannot hand off a job."` for `handoff`.
+- **The jti and the IP rate limit** ((c), (h)): no change in this package, as the finding says; the Left open item now says where the limit goes.
+
+### Left open
+
+- **R-A6 and Q13 (@vector, the owner):** `id-token: write` on the route job, the `laptopFirst` option, the route job's handling of the answers in (f), the audience string in (a), and `bodySha256` for `issues` (EV-02). Until then `laptopFirst` is false in every binding and production handoffs answer handled:false.
+- **The review comment's App check** ((d)): equal to verifyRun's review branch (open, same-repository head and base, merge SHA, unchanged workflow blob), with the PR-number check. A lead and @vector decision.
+- **The desktop's GitHub calls are not wired** (critique): everywhere-wiring.ts passes no `githubThread` and sets `privateRepository: async () => false` and `openPr: async () => undefined`. So every production GitHub job declines `trigger-changed` after its claim, and none could push or open a PR. readEverywhereGithubThread and openEverywherePr exist and are tested (VE-10, D1), but nothing calls them. **This blocks live laptop-first.** The VE-31 acceptance rows are therefore met module by module (S1, R1, J1, D1, D2), with production wiring pending. "With no GitHub login" also cannot hold end to end: the laptop needs the login to read the thread, so with no login it declines.
+- **No GitHub platform adapter in production:** productionPlatforms (runtime.ts configuredPlatforms) has no `github` entry, so a GitHub job's settled result has no adapter and its outbox entry is re-queued each minute until the record expires. This is needed before laptop-first.
+- **The R-C5 status port:** without it github/status.ts posts nothing, so the branch-naming text in J1 reaches no GitHub thread.
+- **The rate limit** ((h)): before R-A6 makes the route live, add githubProof's `ipLimit` and `enforceRateLimit` (cloud-agents-api.ts) after the 404 check and before `deps.verify`. Today nothing is unbounded (failed tokens never reach the store, and the per-run SET NX lasts a day, KEEP_MS.handoff), but once the route job calls it, every unauthenticated POST costs a header parse and an RS256 verify with nothing in front.
+- **App-live parity** ((d)): for the lead before R-A6.
+- **The Codium switch comes too late** (review round one): the route reads @vector's binding (a persistentStore EVAL) and writes the `handoff:<repository>:<run>` dedupe key before routeFacts reads the `everywhere` switch. Spec §3.2 step 3 puts the switches first; the flag and the platform list do answer 404 before any read, but Codium's `everywhere` switch, on this branch since EV-07 (R-C6), is read only in routeFacts. The order is VE-10's; this package makes it reachable with the flag on and `github` listed. It does not fail open (no job is created on `stop` or `no-new`), but such a handoff costs one binding read and uses up the run's dedupe key. To tighten, in a later lane package: read `ports.switch("everywhere")` before `deps.binding` and `useOnce`, and hand back on `stop` or `no-new`.
+- **The owner's §4.1 step 1:** decode one real token's claims (`repository_visibility`, `runner_environment`, `ref_protected`, the job-workflow claims) to confirm the live shape the fixture assumes.
+
+### Safe by default
+
+- **Flag off:** productionHandoffDeps is `{}`, so the route answers 501 before any read, as before (P1, M15; the Node probe: no KV request).
+- **Flag on with GitHub unlisted** (the owner's guide says never list it): 404 before the token is read (P2, the probe).
+- **Flag on with GitHub listed:** tokens are verified, but every @vector binding says laptopFirst false, so the answer is handled:false after one binding read, with no everywhere store command, no offer and no job (B2). A JWKS failure is 503 GITHUB_UNAVAILABLE with no KV request (the probe).
+- @vector's route job never calls the route until R-A6, and the generator, the route job and `laptopFirst` are untouched.
+- Every refusal comes before any write, and nothing logs token or claim data.
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14`, brain-transport `0d18f750` and main `3670461a`. github-oidc.ts and its test are @vector's files, edited additively under the lead's brief (R-A5); the workflow hunk follows EV-30's block.
+
+### Deferred verification
+
+- vector-everywhere.yml (the new file, R3 in its Valkey job, D1 and D2, the lane and docs tests), vector-at-mention.yml (github-oidc, github-app*, cloud-agents-* and api-module-loading) and typecheck.yml on everywhere-finish, after the commit step's push.
+- A real GitHub token's claims (the owner's §4.1 step 1); R-A6's handling of the answers; live acceptance on a private test repository after R-A6, Q13, the desktop wiring and the App; a real laptop.
+
+## 2026-11-21, EV-32: the Actions fallback journeys (VE-33)
+
+Spec §8 VE-33; §9 FakeCloudAgents; §5 E8, E11. Base: HEAD `c18447f9` (EV-31), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/release-finish `67ec3a60` is an ancestor, and so are the precondition EV-30 `11f8f266`, EV-29 `3200acc2` and the journey harness of EV-19 and EV-20. No engine, shell, sandbox, worktree or relay file is touched, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Built uncommitted. The plan was corrected by its critique before building (below).
+
+**origin/main.** origin/main `3670461a` (#51 to #53, desktop and engine files only) is not an ancestor. `git merge-tree --write-tree HEAD origin/main` is clean, and `git diff HEAD...origin/main` over this package's files is empty. As at EV-14 and EV-29 to EV-31, the main merge stays with the lead (the lane notes: "the lead merges main into this branch"), and this build's task forbids commits anyway.
+
+### What changed
+
+The change is test-only. No file under api/, packages/schema or any runtime package changes.
+
+- **New packages/web/test/everywhere-journey-actions.test.ts** (1,057 lines; eleven local cases and two real-Redis cases, the case table below), on EV-19's harness (lib/everywhere-journey.ts, unchanged):
+  - `cloudAgents` (:117-179): EV-29's real `createCloudPorts` over the FakeCloudAgents, with `sources("slack", "linear", "jira")` injected (or the default with `enabled: false`); EV-30's real listeners registered through `registerEverywhereRunHooks` on @vector's real run hooks; a second, recording settle listener; `start` and `settle` are @vector's own `notifyRunStart` and `notifyRunSettle`, with their 5 s budget, the settle reading @vector's run record from the stub of @vector's store. Both listeners are removed in the journey's teardown.
+  - `slackWorld` (:186-274), `linearWorld` (:277-355) and `jiraWorld` (:358-430): the platform's fixture, link and mapping (`acme/app`, id 101), the sponsor's plan, `recordSeen` when `seen`, `journeyPorts` (presence through the real relay adapter against the relay Worker with no computer connected) overlaid with the cloud ports, the platform's real adapter and route mounted with the jobs routes and the sweep, and the desktop's jobs client for the late claims (offered nothing). No `slowStore`: E12's timing belongs to EV-19 and EV-20.
+  - `throughActions` (:458-595): steps 1 to 6 for Slack and Linear, with E8's late claims after the dispatch, the start and the settle, the `pending` probe, and the run's body read through the real route.
+  - `slackActions` (:601-667) and `linearActions` (:674-739): step 7, each platform's own posts, and E4 on the command log each is given (the FakeStore's by default, the recorded Valkey commands in R1 and R2); `activityInput` (:669-671) reads a Linear activity's input.
+  - `recording` (:1012-1019): wraps the Valkey bridge's fetch and keeps every command the store sends, decoded ((n)).
+- **New packages/web/test/lib/everywhere-cloud-agents.ts** (167 lines): spec §9's FakeCloudAgents. A pure move of the @vector stand-ins that everywhere-cloud-adapter.test.ts defined (EV-29, EV-30): `BINDING_KEY`, `VECTOR_RUN_KEY`, `Command`, `bindingFields`, `bindingStore`, `stubApp`, `privateApp`, `preparer`, `liveModes`, `sources`, `vectorRun`, `vectorStore`, `runId`. Bodies unchanged; each gained `export`. Imports: `expect` (bun:test), `randomBytes` and `randomInt` (node:crypto), and type-only `GithubAgents`, `RepoBinding`, `CloudRunTrigger`, `prepareCloudRun`, `StartCloudRunResult` and `RunSource`. The core import keeps the original's relative form (`../../../core/src/github-agents`), one level deeper.
+- **packages/web/test/everywhere-cloud-adapter.test.ts** (outside the brief, a move only): the moved definitions are deleted and imported back from the lib; `ACCOUNT`, `TICKET_PREFIX`, `FixtureState`, `world`, `routed`, `ticketKeys`, `hooked` and `withHooks` stay local; the unused `randomInt`, `RepoBinding` and cloud-agents-start type imports go; the header names the lib. No case changes: 84/0, 3 skip (1,167 expects) without Redis and 85/0 (1,189) with Redis, before and after.
+- No workflow, generated file, flag, env var, switch, dependency or lockfile changes. Both new files match `packages/web/test/**/everywhere*`, so vector-everywhere.yml starts on them and its picker runs the new test file; the lib is not a test file.
+
+### Decisions
+
+- **(a) Jira has no Actions route (EV-30 (j)).** `cloudSource` refuses Jira whatever the sources say, so the Jira journey (J1) puts `jira` in the injected sources and shows that routing never looks at Actions: no binding, visibility, mode or prepare read, no ticket, presence only; the job waits Jira's 10 minutes (`TIMING.jiraQueueMs`) and ends with Jira's own text, TASK_STATE_FAILED with `renderEnd("jira-waiting", "jira")`. The brief's Jira steps 4 to 7 cannot be built until a Jira run limit exists (Left open).
+- **(b) The result has no PR link and no "checks did not run" line (EV-30 (f)).** Every reported `prUrl` is dropped, and renderResult's Actions form adds the checks line only with a link or a branch. So step 6 sends @vector's real settle a same-repository PR URL, a second, recording listener shows that @vector's notify passed it on (`{outcome, runUrl, prUrl}`), and step 7 pins the post as the outcome line alone, "Done in GitHub Actions.", with neither PR_URL nor CHECKS in any native call. The brief's checks assertion is Left open, tied to the head-branch check (the lead's).
+- **(c) No `public-repository` answer (EV-29 (e), still the lead's).** `decideRoute` never answers `public-repository`. A repository stored private and read public live is refused `no-place` when the queue is blocked too. P1 uses a computer that was never seen, so the posted text, the computer line alone, is true. P1 pins the refusal, the read counts and the absence of any ticket, never the missing "not private" sentence. The `why` itself is not observable in a journey (below, (d)): only the facts'-read row has `why.actions: "public"`; in the other two the facts read private and the refusal comes from routeJob's fallback, whose `why` is `{computer: "not-seen", actions: "none"}`. EV-29's R2 pins the facts'-read `why` directly. A fourth row makes the facts' read fail (`stubApp` throws): `liveVisibility` turns the failure into no visibility, which the policy counts as public (everywhere-policy.ts, "absent (a failed read) counts as public"), and the outcome is the facts'-read row's exactly. That is E11's other half end to end; EV-29's P6 and R3 hold it at the adapter.
+- **(d) An addition to EV-29 (e), not a new finding.** EV-29 (e) already records that `refuseJob` keeps only the code and that the posted no-place line is the generic one. The journey adds the pre-job path: intake.ts calls `adapter.refuse(trigger, decision.code)` without `why`, and the Slack, Linear and Jira adapters' `refuse` pass none to `renderRefusal`, so a refusal at intake (P1's first row) drops `why` too. The lead's question in EV-29 (e), whether to carry `why` to the reply, covers both paths.
+- **(e) The sources only through the injected port.** `createCloudPorts({sources})` enables Slack, Linear and Jira for this file's worlds; ENABLED_SOURCES is never edited. D1 is the tripwire: ENABLED_SOURCES still reserves all three, `createCloudPorts` without `sources` has no `prepareCloud`, and the same mention then reads no binding or visibility, issues no ticket and waits.
+- **(f) The stand-ins.** `liveMode` and the App's `visibility` field have no production builder (EV-30 (o)), so they are the FakeCloudAgents' `liveModes` and `stubApp`; prepareCloudRun is the recorder `preparer` (spec §9 names `startCloudRun`; the code calls prepareCloudRun, EV-29); @vector's binding decoder runs for real behind `bindingStore`; the hooks are @vector's real notify and registry over EV-30's real listeners, with @vector's run record as a read-only stub store. The binding names `acme/app` (critique): nothing checks the binding's repository against the job's today, but a future check would otherwise break the journeys confusingly.
+- **(g) The body read through the real route, beyond the brief.** The run reads its request with a real `vrt_` token (minted under a secret generated in the file, `VECTOR_RUN_TOKEN_SECRET`, restored after; its live-run check answers `ok`, as in everywhere-body-api.test.ts; the review asked for an injected secret instead, but `mintRunToken`, `readRunToken` and `requireRunToken` take no env: only `signRunTokenPayload` does, and its callers pass none, so an injected secret needs a change to @vector's api/_lib/cloud-agents-run-token.ts, which a test-only package does not make; the file keeps the save-and-restore, as everywhere-body-api.test.ts and the harness's VECTOR_CLI_TOKEN_SECRET do), at `/api/everywhere/jobs/<jid>/body?jid=<jid>`, the way Vercel passes the path segment (critique: RouteHarness does not turn the segment into a query). The first read answers the body, the second 410 EVERYWHERE_BODY_GONE. It shows E4 and E11 together: the dispatch carries only the fixed line and the job id, and the request leaves only once, by reference, after the start.
+- **(h) N1, beyond the brief.** A dispatch with no start hook ends `failed`/`not-started` through the sweep route at exactly 900 s, posts the fixed help, and a late start moves nothing.
+- **(i) The lib move, outside the brief.** The lane notes allow only the existing local fakes, and lib/everywhere-cloud-agents.ts is not a new fake: it is the existing @vector stand-ins moved so two files can share them, as EV-19 and EV-20 moved the journey harness into lib/everywhere-journey.ts, and it is spec §9's named FakeCloudAgents. EV-31 (i) dropped a similar move because its file needed only one stub; this file needs ten of them.
+- **(j) No E12 timing here.** The journeys use no slow store: the first native signal's budget is EV-19's and EV-20's, and the Actions route adds no work before it.
+- **(k) The E8 probes record the device as seen.** The claim and pending routes call `recordSeen` first, so the probes run only in worlds that already recorded the device; P1, whose refusal depends on a never-seen computer, runs none.
+- **(l) The Redis cleanup order (critique).** A describe's `afterEach` runs before the file's, so the Redis block calls `journey.teardown()` itself before `redis.close()`, as EV-19 and EV-20 do.
+- **(m) No main merge** (above).
+- **(n) E4 on Valkey (review).** R1 and R2 run on a store whose FakeStore is never used, so the plaintext checks on `w.f.fake.commands` checked nothing there, though the atomic scripts that write the body run only on Valkey. `recording` keeps every command the Valkey store sends, decoded, and R1 and R2 hand it to `slackActions` and `linearActions`, which check that it is not empty and that no command carries the task (and, for Linear, either token). M17 shows it: the task added as a spare script argument turns R1 and R2 red at exactly that check. A SCAN of the stored values would add nothing: every value reaches Valkey in a command.
+- **(o) E4 on every terminal path (review).** The settle was the only path that checked the body was erased. W1, N1 and J1 now read the body before the job ends (the task, for Slack) and find its key gone after the sweep ends it; P1's refused jobs (prepareCloud's read and the recheck) find it gone after the refusal; S1 and L1 add the body key to their list of keys gone after the settle. M16 (terminal transitions keep the body) turns every one red.
+
+### Critique of the plan (2026-11-21)
+
+All ten points taken:
+- M6 would not turn W1 red on W1's planned assertions, so W1 pins `binding.commands.length` (2 at HEAD; 3 under M6, confirmed red);
+- the body route is called with `?jid=<jid>`;
+- the move ranges are restated by definition, and `Command` is imported back for `withLoopbackKv`;
+- the citations are EV-29 (e), not (h), and (d) is an addition to EV-29 (e), naming the three adapters;
+- the P1 titles claim no `why`; their E11 evidence is the read counts, the triggers, the cancels, the dispatches and the absent ticket;
+- M12 is the single-site mutation of the prompt's job id to the repository id;
+- the lib's value imports are listed and the core specifier kept;
+- the bindings name `acme/app`, and the probes' `recordSeen` is noted ((k));
+- vector-codium is informational, not a gate, and is not dispatched for EV-32;
+- the Redis block calls the teardown itself ((l)).
+
+### Review of the build (2026-11-21)
+
+Ten findings, none blocking; two name the same range. Seven are fixed (the first six items), two asked for no code change and are recorded (the lib file, the brief's forms), and one optional change is declined (the run-token secret):
+- **E4 on Valkey** (R1, R2 checked an empty FakeStore log): fixed, (n).
+- **The `slackActions` range** (given as :597-663, raised twice): fixed; every range in "What changed" is restated for the file as it now stands.
+- **The vector-codium failure recorded without a cause** (EV-31's run 44839122921, job 136642836976): diagnosed from the job's log, read once with the GitHub tools. The one failing file is packages/web/test/model-plan-admit.test.ts (Codium's, not changed by this lane): A17 "crashed requests release concurrency at 660s but retain monthly/day/run reservations" expected MODEL_PLAN_DAILY_LIMIT at :500 and got an admission. The shard ran it at 23:52:33 UTC; the fixture's `now` is the wall clock (:39) and the case admits again at `now + 660_001`, after 00:00 UTC, where model-plan-admit.ts:101 keys the daily budget by the UTC date, so the first admission's daily reservation is in yesterday's key. The case fails whenever it starts within 11 minutes before UTC midnight. No everywhere file failed (the other 20 jobs passed or were skipped). It is the lead's to route to Codium's owner; the handoff's EV-32 block says so.
+- **The lib file outside the brief**: kept as built ((i)); the commit body names the move and the adapter test's import-only edit as outside the brief.
+- **The `input` helper shadowed by `cloudAgents(input)`**: renamed `activityInput`, with its four call sites.
+- **E4 only on the settled path**: fixed, (o).
+- **E11's failed read not in a journey**: fixed with P1's fourth row, (c).
+- **The brief's step 7 and `public-repository` not built**: unchanged, as (b) and (c) record; the commit body states both, and Left open says the change that lands the head-branch check or the `public-repository` ruling turns S1's and L1's absence checks and P1's `no-place` assertions into the brief's forms.
+- **VECTOR_RUN_TOKEN_SECRET in process.env**: kept. The run-token functions take no env, so an injected secret needs a change to @vector's runtime ((g)); the value is generated in the file and restored in `afterAll`.
+
+### The cases
+
+| Code | What it shows |
+| --- | --- |
+| S1 | A Slack channel mention, the computer offline and seen: presence only; one trigger exactly `{source: "slack", account, requestedBy {slack, U0ALICE01}, target github-run 101, prompt "Vector everywhere job <jid>", purpose "task", jobId}`, with no task text in it; the job `dispatched` on the ticket, the ticket link written; three visibility reads, five binding reads, one mode read, one dispatch. Slack: setStatus processing, users.info, setStatus processing, the plan `slackPlan("actions")`. E8: two HTTP claims (a fresh device and the sponsor's) 409 JOB_TAKEN and the jobs client stopped, after the dispatch, the start and the settle; `pending` answers `{offers: [], waiting: 0}`. The start moves the job to `running` and writes `run:<rid>` and `run:<rid>:settle`, with no native call. The run reads `{task, context, outside: "slack"}` once; the second read is 410. The settle: the listeners hear `{outcome: "changes", runUrl, prUrl}`; the job `settled`, `changes`, no `result`, the body (opened and by key), ticket, run, settle index and read marker gone, the outbox empty. Slack: chat.postMessage "Done in GitHub Actions." with the completed plan, the requester's ephemeral copy, setStatus active. E17: no thread post names `acme/app` or the device; no call carries PR_URL or CHECKS. E4: the task never in the FakeStore's commands, which are not empty |
+| L1 | The same for a Linear session: create (the first thought), user, create ("Starting your GitHub runner."), session (`linearPlan("actions")`); at the settle the completed plan with only the job page, then one `response` "Done in GitHub Actions."; `privateResult` gets the same line; Vector's activities are two thoughts and the response, the creator's prompt the only other; no `acme/app`, device, PR_URL or CHECKS in any post; neither the task nor either Linear token in the store's commands, and neither token in the trigger |
+| J1 | Jira in the injected sources: `cloudSource("jira")` false while `prepareCloud` exists; SUBMITTED, then waiting 10 minutes with no binding, visibility, mode or prepare read and no ticket; the sweep at the queue limit minus 1 ms ends nothing, at the limit `expired`/`jira-waiting`; GetTask TASK_STATE_FAILED with Jira's own text; the body kept while the job waits and gone once it expires; no private result; no late claim |
+| P1 (4 rows) | Stored private, live public, the computer never seen. The facts' read: no job, the requester's ephemeral no-place line, then setStatus active; one App read. prepareCloud's read: the job `refused` `no-place` with no route, dispatch time or ticket, posted in the thread; two App reads, no mode read, no trigger. The router's recheck: as the previous row with three App reads, one mode read, one trigger with only the fixed line, one cancel, no dispatch. In both, the refused job's body is gone. The facts' read failing: as the facts'-read row ((c)). No ticket key and no `slackPlan("actions")` post in any row |
+| W1 | A binding with no stored mode, the computer seen: waiting until the 115-minute queue limit, two binding reads, one App read, no mode read, no trigger, no ticket, the `waiting` plan; the body holds the task while the job waits; the sweep expires it with Slack's own text and the body is gone; no late claim |
+| N1 | A Slack DM dispatch with no start: the sweep at 900 s minus 1 ms ends nothing, at 900 s `failed`/`not-started` with the fixed help in the DM; the body, kept until then, gone; the ticket gone; a late start changes nothing and posts nothing; no late claim |
+| D1 | ENABLED_SOURCES reserves slack, linear and jira; with the default sources there is no `prepareCloud`; the same mention reads no binding or visibility, issues no ticket and waits |
+| G1 | The fetch guard is the fetch in place and refuses a probe; FakeSlack, FakeLinear and NativeJira refuse a foreign address |
+| R1 | S1's journey on Valkey (skips without VECTOR_TEST_REDIS_URL): the create, the fenced dispatch, the start's EVAL, the read-once script and the settle; the FakeStore saw no command, and no recorded Valkey command carries the task ((n)) |
+| R2 | L1's journey on Valkey; no recorded Valkey command carries the task or either Linear token |
+
+### Mutations
+
+14 mutations, one source edit at a time, the new file alone without Redis (/tmp/vector-v2/everywhere/ev32/mut/: mutate.py, run.log, stdout.txt, one log per mutation, before.sha256). Every mutation turned its named cases red, and `sha256sum -c` matched all five source files after the run.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M1 every job renders route `laptop` | events.ts | 8/2 | S1, L1 |
+| M2 `changes` maps to `no-changes` | adapters/cloud-agents.ts | 8/2 | S1, L1 |
+| M3 `cloudSource` admits Jira | adapters/cloud-agents.ts | 9/1 | J1 |
+| M4 prepareCloud skips its visibility read | adapters/cloud-agents.ts | 6/4 | S1, L1, P1 prepareCloud's read, P1 recheck |
+| M5 the router's recheck dropped | router.ts | 7/3 | S1, L1, P1 recheck |
+| M6 actionsState ignores `codiumMode` | everywhere-policy.ts | 9/1 | W1 (binding reads 3, not 2) |
+| M7 claimJob takes a dispatched job | jobs.ts | 8/2 | S1, L1 |
+| M8 the read-once marker differs per read | jobs.ts | 8/2 | S1, L1 (the second read 200, not 410) |
+| M9 the dispatched timeout drops `ending: "not-started"` | jobs.ts | 9/1 | N1 |
+| M10 routeFacts reads the binding without `sourceEnabled` | router.ts | 9/1 | J1 |
+| M11 startDispatched leaves the job `dispatched` | jobs.ts | 8/2 | S1, L1 |
+| M12 the prompt names the repository id, not the job | adapters/cloud-agents.ts | 7/3 | S1, L1, P1 recheck |
+| M13 the settle listener does not post | adapters/cloud-agents.ts | 8/2 | S1, L1 |
+| M14 the default sources enable all three | adapters/cloud-agents.ts | 9/1 | D1 |
+
+Three more after the review (/tmp/vector-v2/everywhere/ev32/fixes/mut/: mutate.py and mutate-redis.py, run.log, one log per mutation, before.sha256), on the file with its four P1 rows; M15 and M16 without Redis (11 cases), M17 with a disposable loopback Redis (13 cases). `sha256sum -c` matched adapters/cloud-agents.ts and jobs.ts afterwards, and Redis was left with 0 keys.
+
+| Mutation | File | Result | Red cases |
+| --- | --- | --- | --- |
+| M15 a failed visibility read counts as private | adapters/cloud-agents.ts | 10/1 | P1 the facts' read failing |
+| M16 terminal transitions keep the body | jobs.ts | 4/7 | S1, L1, J1, P1 prepareCloud's read, P1 recheck, W1, N1 |
+| M17 the task as a spare argument of the create script | jobs.ts | 9/4 | S1, L1, R1, R2, each at its E4 check |
+
+### Left open
+
+- **The checks line and the PR link** ((b)): the head-branch check with the installation token in @vector's github-app.ts (EV-30 (f), the lead's). When it lands, S1 and L1's posts change to the link and the checks line; their PR_URL and CHECKS absence checks are the tripwires, and the same change turns them into the brief's forms (the link and "checks did not run" in the post).
+- **Jira's Actions route** ((a)): a Jira run limit and Actions wording for the A2A task (EV-30 (j)).
+- **`why` in the reply** ((c), (d)): EV-29 (e)'s question, now for the intake path too.
+- **`public-repository` naming** (EV-29 (e)). If the lead rules for a `public-repository` answer, the same change turns P1's `no-place` assertions into the brief's `public-repository` refusal.
+- **No package yet** for the live mode reader and attachmentRepository's `visibility` field (EV-30 (o)); production has no `prepareCloud` until both exist and the owner lifts R-C8/R-A8.
+- **R-C8/R-A8** (the owner): until a platform leaves RESERVED, there is no Actions route; D1 shows it.
+
+### Safe by default
+
+- Test-only. No flag, env var, switch, dependency, lockfile, workflow or generated file changes, and nothing is regenerated.
+- ENABLED_SOURCES is untouched; D1 asserts it still reserves slack, linear and jira and gives no `prepareCloud`.
+- productionPorts still has no `prepareCloud` (EV-30's S1 and S2 in everywhere-cloud-adapter.test.ts, unchanged).
+- Every key, token and secret is generated in the file; the fetch guard refuses every host but loopback (G1); the listener registry is cleaned in the teardown.
+
+### Coordination
+
+`git diff HEAD...origin/<lane>` over every touched file is empty for review-fixes `1433d105`, scope-finish `e6d34fed`, codium-finish `58663f5b`, connect-finish `19c48b89`, hands-finish `8139e5fc`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c`, process-finish `3ec7fb14`, brain-transport `0d18f750` and main `3670461a`.
+
+### Deferred verification
+
+- vector-everywhere.yml (the new file with R1 and R2 in its Valkey job, the moved adapter test, the lane and docs tests) and typecheck.yml on everywhere-finish, after the commit step's push. The commit gate also dispatches vector-hosted-ci.yml and vector-at-mention.yml, which run none of this package's files. vector-codium.yml is not dispatched for this package (the lane notes: not before PR #33 is on main and merged into this branch; PR #33 is on main, but main is not merged into this branch).
+
+## 2026-11-21, EV-33: lane close-out: the lane's paths, the handoff and the progress record (VE-00, F1, FIT-4)
+
+Spec §8 VE-00 (the lane's path rules); review:everywhere:fit F1; pre-merge FIT-4. Base: HEAD `9944b7b5`, equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish review-fixes`; FIT-4 (`f251ac2c`, `48b76a5b`), FIT-5 (`dcd781d0`) and origin/release-finish `67ec3a60` are ancestors. origin/main `f3d7ac74` (#51 to #54, 23 files, none of them a file this branch changes) was merged first, as `535ac94e` ((l)). No engine, shell, sandbox, worktree or relay source changes, only path names, so v2-spawn-review.md and codium-build-spec §4.17 do not apply. Receipts: vector-everywhere-progress.md, "EV-33".
+
+### What changed
+
+- **.github/workflows/vector-everywhere.yml**, `on.pull_request.paths` and its comments only. The three src/pages entries become packages/web/src/drafts/everywhere*, packages/web/src/drafts/everywhere/** and packages/web/src/drafts/docs/everywhere.astro, under a comment that the owner's 2.0.0 move takes them back to src/pages. After the last helper, five commented groups add 18 patterns:
+  - vercel.json, api/_lib/codium-perks.ts, packages/schema/src/codium-entitlements.ts, packages/schema/src/codium-owner.ts, packages/relay/src/**;
+  - packages/desktop/src/main/{remote-link,remote-runtime,keep-awake,vector-account}.ts, one entry each;
+  - packages/engine/src/worktree/index.ts, packages/engine/src/session/prompt.ts, packages/engine/src/session/unattended-shell.ts, packages/engine/src/tool/shell.ts, packages/engine/src/tool/shell/sandbox.ts;
+  - packages/core/src/local-mode/sources.ts, packages/app/src/components/settings-v2/settings-registry.ts* and dialog-settings-v2.ts* (`.ts*` matches the one file that exists of each, settings-registry.ts and dialog-settings-v2.tsx, and not settings-registry.test.ts);
+  - packages/web/src/lib/account-client.ts.
+
+  60 paths before; 60 − 3 + 21 = 78 after, all unique. Nothing else in the file changes: workflow_dispatch, push `[main]`, the concurrency group, permissions, runners, services, every job and step and both scripts are byte-identical.
+- **packages/web/test/everywhere-lane.test.ts**: the paths test's zones, helpers (20 new pins, 48 in all) and unrelated files; a new test that every path names a tracked file but the Solid zone; three new scope commits. Details in the progress receipt.
+- **The lane documents**: the spec's status line and one dated note in §9 "In CI" (the only spec pointer; the VE-00 row and §6.6 are covered here, (m)); the handoff's new top, "Current state", with the old status section kept as the package log and dated annotations; the progress receipt; this entry.
+
+### Decisions
+
+- **(a) The brief's entries already present are kept once.** api/_lib/remote-relay.ts, packages/schema/src/codium-copy.ts and codium-run-trigger.ts, api/_lib/cloud-agents-{run-token,binding,start,runs}.ts, api/_lib/github-oidc.ts and packages/engine/src/cli/cmd/github.agent.ts were added by EV-09 to EV-31. The lane test refuses a duplicate (mutation M7), so the groups' comments name them instead of listing them again.
+- **(b) Nothing is restored.** FIT-4 kept packages/core/src/v1/config/everywhere.ts (it exists since EV-10, `7146a98f`), so the brief's conditional restore does not apply. FIT-4's push trigger, header, concurrency and scope-step comments, its test pins and workflow-compliance's new rule are untouched.
+- **(c) The drafts, narrowly, and the 2.0.0 tripwire.** The three draft entries replace the three src/pages ones, which matched nothing since EV-23 and EV-24 put the pages under packages/web/src/drafts/. EV-24 asked review-fixes for packages/web/src/drafts/**; that glob is not used, because drafts/docs/vector-hands.astro and drafts/docs/vectorscope-github.astro are other lanes' drafts and would start this lane for nothing. The lane test pins vector-hands.astro as unrelated (M10). The new tracked-file test turns red when the owner moves the drafts to src/pages at 2.0.0 until the three entries move with them, as a path that names nothing would otherwise hide a move (FIT-4's lesson).
+- **(d) Three files beyond the brief.**
+  - packages/engine/src/session/unattended-shell.ts is the lane's own R-M2 file (EV-16) and sits outside spec 6.6's zones; engine test/everywhere/offline-shell.test.ts imports it, and its bubblewrap cases run only in this lane.
+  - packages/desktop/src/main/vector-account.ts: everywhere-wiring.ts:38 imports `tokenClaims`, which EV-17 changed, to pick the account whose offers are checked.
+  - packages/web/src/lib/account-client.ts: EverywhereAccount.tsx:3 and EverywhereLink.tsx:3 import it, and EV-22 recorded the gap.
+- **(e) Every other lane-changed file has another check.** `git diff --name-only origin/main...HEAD` lists 190 files; 127 match the paths, and these 63 do not, each covered elsewhere:
+  - @vector's and Codium's hosted API (api/_lib/cloud-agents-api.ts, cloud-agents-ledger.ts, codium-owner-api.ts): vector-at-mention.yml and vector-hosted-ci.yml both start on api/**, test.yml runs the root test/ suite, and vector-codium.yml takes Codium's;
+  - the engine's route plumbing and config (server/routes/instance/httpapi/api.ts, server.ts, groups/experimental.ts, handlers/{config,experimental,global,session,sync}.ts; config/config.ts; session/instruction.ts; tool/read.ts, also vector-at-mention's; tool/subagent-lifecycle.ts; tool/terminal.ts) and its tests and fixtures (test/cli/github.cloud.test.ts, vector-at-mention's; test/config/subagent-config.test.ts; test/session/instruction.test.ts; test/fixture/config.ts; test/server/httpapi-exercise/index.ts): test.yml's engine shards and its HttpApi exerciser, and typecheck.yml. The only lane-only engine cases are offline-shell's bubblewrap ones, which depend on the three shell files now listed; the handlers' mark refusals need no bubblewrap and run in test.yml too;
+  - core (config/managed.ts; review/model-evidence.ts, also vector-at-mention's packages/core/src/review/**; v1/config/config.ts; test/local-mode/sources.test.ts): test.yml's `turbo test` and typecheck.yml;
+  - the app (context/server-sdk.tsx, server-sync.tsx; features/local/local-model.ts and its test; settings-v2/settings-registry.test.ts) and packages/ui/src/context/helper.tsx: test.yml's `turbo test` and typecheck.yml;
+  - the desktop's remote-link.test.ts and remote-relay.fixture.ts, the relay's e2e/relay-smoke.ts, test/internal.test.ts and test/relay.test.ts, the schema's codium-copy and codium-entitlements tests, and the root test/codium-owner, codium-pool, codium-switches and remote-relay-contract tests: vector-hosted-ci.yml (packages/desktop/src/main/remote-*, packages/relay/**, packages/schema/**, test/**, with the relay's wrangler dry run and local smoke); test.yml also runs the root suite, and vector-codium.yml the Codium-named ones;
+  - packages/web's Codium tests and component (components/marketing/codium/CodiumPricing.test.ts, components/marketing/owner/CodiumOwner.tsx and its test, test/codium-docs, codium-public, model-plan-admit, model-plan-status-api and docs-config-reference): vector-codium.yml, which picks Codium-named files and every test file changed since origin/main (packages/web has no test script, so test.yml runs none of them);
+  - packages/web's @vector tests (cloud-agents-bind-api, cloud-agents-binding, cloud-agents-runs, cloud-agents-start, github-app, github-oidc): vector-at-mention.yml;
+  - the generated files (packages/sdk/js/src/gen/{sdk,types}.gen.ts, src/v2/gen/{sdk,types}.gen.ts, packages/sdk/openapi.json): test.yml's `check:generated`; packages/web/public/config.json: test.yml's deployed-schemas.test.ts, and docs-config-reference.test.ts in vector-codium.yml;
+  - docs/vector/build/v2-notes/v2-complete-plan.md: the lead's record, documentation only.
+
+  Also considered and not added: the fixtures the lane's tests import that it did not change (packages/relay/test/fakes.ts, packages/web/test/fixture/codium-fakes.ts); everywhere-runner-delivery.md (documentation only); a relay entry in the typecheck matrix, which would change a job, outside the brief.
+- **(f) The Solid zone stays, named as the only empty path.** packages/web/src/components/everywhere/** is spec 6.6's Solid zone and matches nothing: the account components are React, under components/marketing/everywhere/**. Dropping it would change 6.6, which is the lead's; the new test allows exactly that one empty path (M9 turns it red when the zone is dropped).
+- **(g) The handoff's old status is kept, as the package log.** "Current continuation status (2026-11-12)" becomes "Package log (2026-11-12 to 2026-11-21)" with a dated line that "Current state" supersedes it; its bullets stay as each package recorded them, because "Left open" and the deviations log point into them.
+- **(h) Per platform, registration comes before the flag.** The brief lists the flag (step 9) before the app registrations (step 11). The handoff keeps that numbering but writes step 9 as a per-platform sequence (the app's registration, then its flag, then its VE-50) and marks step 11 as done before that platform's step 9, so nobody sets VECTOR_EVERYWHERE_PLATFORMS for an app that does not exist; the owner guides already give this order.
+- **(i) The vector-codium hold has ended.** The lane notes hold vector-codium.yml until PR #33 is on main and merged into this branch. PR #33 is on main as `b362fdf6` and arrived here with `1035f87c`, before EV-25; EV-32's handoff note still held it back. Dispatching it is the lead's at the lane end.
+- **(j) EV-32's and `9944b7b5`'s CI are recorded here**, read back with the GitHub tools, with the test jobs' "71/71 test files passed" lines: progress record, "EV-32 CI (recorded by EV-33)" and "CI follow-up before EV-33".
+- **(k) F1 is closed.** F1 said the lane did not know v2. The retired branches are gone from the triggers (FIT-4: push `[main]` only, and workflow-compliance allows no build or integration branch), and the paths now name the files the lane depends on in their current places. The Tier B table's F1 row carries the dated note.
+- **(l) The main merge is a commit.** The brief's first step asks for a merge, never a rebase, so `535ac94e` is a `--no-ff` merge commit made with the Vector identity and the trailers before any EV-33 edit. Every EV-33 change is left uncommitted, as this build's task asks.
+- **(m) The spec gets the status line and one note.** The critique asked to keep the contract's diff small: the status line is rewritten, and §9's "In CI" sentence, now wrong ("each push to the branch"), gets one dated note that points here. The VE-00 row's "on push to `vector-everywhere`" and §6.6's src/pages names are explained by (b), (c) and (k) instead of notes of their own.
+
+### Critique of the plan (2026-11-21)
+
+All ten points taken:
+- the merge read main's tip at merge time (`f3d7ac74`, #54, 23 files) and is titled "merge main after #54"; the desktop typecheck ran after it (#53 changed packages/desktop/tsconfig.json);
+- the handoff's A17 line (EV-32's loose ends) gets a dated annotation that `9944b7b5` changed Codium's file here, with the cause and vector-codium 44847317908, and that main still fails in the 11 minutes before UTC midnight until this lane's PR merges; it is in Coordination and in the handoff's decisions for the lead;
+- the counts: 60 − 3 + 21 = 78, and 20 helper pins for 18 patterns, counted from the final test;
+- EV-24's drafts/** request is recorded as narrowed, with the reason ((c));
+- (e) lists the 63 files by group with their workflows;
+- step 9 of the activation list is a per-platform sequence ((h));
+- the YAML comment says what fails and when;
+- "How CI runs on this branch" gets an annotation on dispatches through the GitHub tools, the historical `gh` commands and the retired ref, and the path-filtered pushes to main; the moved line another lane's document cites is in Coordination;
+- the mutations restore by copying a saved original.yml and checking its sha256 after each;
+- the spec carries the status line and one §9 note only ((m)).
+
+### Review (2026-11-21)
+
+Four non-blocking findings, all taken; no code or workflow change:
+- the three paths beyond the brief are (d); the commit body names them as outside the brief, so the PR reviewer sees it. The side effect, the lane also starting on a desktop sign-in change, only runs the read-only, secret-free lane more often;
+- the package log's "Current gates and remaining coverage" heading gets one dated annotation (superseded by "Current state"; the runner abort-matrix item closed by EV-03 `9426c945`; the cron's start), because "Left open by the repairs" still points to it by name. Its text is not rewritten ((g));
+- activation step 4 is now a check, not an owner action: main deploys vectordev.ai on every merge, so the per-minute cron in vercel.json:559-562 starts at the first main deploy after this lane's PR merges, while the relay Worker deploy (step 3) stays a separate manual step. The "Dormant" bullet says the same. It is still safe: the sweep answers 401 without CRON_SECRET, otherwise `{enabled: false}`, before any switch or store read (api/_lib/everywhere/sweep.ts:25-32);
+- activation step 1 says CRON_SECRET is Codium's existing secret, to confirm and not change, as spec §10's EV-24 note and the owner guides say.
+
+### Left open
+
+- GitHub's own `pull_request` path filter is first exercised on the lane's PR into main (Deferred verification).
+- The Solid zone question ((f)) is the lead's.
+- Everything in the handoff's "Current state" lists (lane work with no package, decisions for the lead, the owner's activation steps) is unchanged by EV-33.
+
+### Safe by default
+
+No runtime code changes. The edit touches only `on.pull_request.paths` (which the scope job also reads for pushes to main), YAML comments, a test and documents. A wider path list only starts the read-only, secret-free lane more often. No flag, env, switch, route, page, nav, sitemap, dependency or generated file changes, and nothing becomes reachable on vectordev.ai.
+
+### Coordination
+
+- Other lanes' changes that now start this lane: scope-finish's (session/prompt.ts, tool/shell.ts, tool/shell/sandbox.ts); Codium's (codium-perks.ts, codium-entitlements.ts, codium-owner.ts, the relay, remote-link.ts and remote-runtime.ts, vercel.json); Hands' (keep-awake.ts, the settings registry and dialog); main's owners' (worktree/index.ts, session/prompt.ts).
+- `9944b7b5` changed Codium's packages/web/test/model-plan-admit.test.ts on this branch (A17 kept inside one UTC day; the assertions unchanged). It is not on main and reaches it only with this lane's PR; Codium's owners should know before they edit that file.
+- docs/vector/build/multiagent-parity-deviations.md cites `vector-everywhere-handoff.md:124` for the flake list. That line had already moved, and EV-33's new top moves the section further; the handoff's "How CI runs on this branch" now says to cite it by heading. The other lane's document is not edited here.
+- FIT-4 is untouched ((b)).
+
+### Deferred verification
+
+- vector-everywhere.yml and typecheck.yml on everywhere-finish, dispatched after the commit step's push; test.yml once for the lane end and vector-codium.yml are the lead's.
+- GitHub's `pull_request` path filter: locally only Bun's globs are proven, which are what the scope job uses for pushes to main. The patterns use only `*` and `**`, which mean the same to both (the lane test's no-brace check), but GitHub's own filter first runs on the lane's PR into main.
+
+## 2026-11-21, everywhere-finish lane: phase review fixes
+
+The lane's phase review: thirteen non-blocking findings (two of them the same F5 point), none blocking. Base: HEAD `ef6151bf` (EV-33), equal to origin/everywhere-finish after `git fetch origin release-finish main everywhere-finish`; origin/main `f3d7ac74` and origin/release-finish `67ec3a60` are ancestors, so nothing was merged. docs/vector/build/v2-spawn-review.md was read before the shell and terminal edits: they add no spawn site and change no spawn order. Left in the working tree, not committed (the task said so). Receipts: vector-everywhere-progress.md, "Phase review fixes (everywhere-finish lane)".
+
+### Taken in code
+
+- **(a) The plan's half of `everywhere` uses the listing's whole rule** (api/_lib/everywhere/adapters/remote.ts `planListsEverywhere`). After the cheap checks (the wiring, MODEL_PLANS_ENABLED, `everywhere` in CODIUM_LISTED_PERKS), it loads codium-perks.ts with a dynamic import and asks `listedPerks` itself, with `everywhere`'s service check read from this configuration and wiring (`everywhereReady(config, wired)`, the same values as production's own reads). So `everywhereReady()`, the `everywhere` switch `on` and Remote listed and not hidden (`CodiumCopy.requires`) now apply, beside the `codium` switch and `perks-off`. The now-unused `readSwitch` and `readDisabledSet` import is gone. EV-09 (c) carries a dated annotation. The listing's other candidates' service checks run as well, as they do for every other caller of `listedPerks`, but only once the route is wired. New case in packages/web/test/everywhere-remote-adapter.test.ts: the plan's answer equals the listing's in every case, and both are false when only GitHub is open, without the offer key, without CRON_SECRET, under `no-new` and `stop`, when Remote is left out of CODIUM_LISTED_PERKS, when `remote` is in `perks-off`, when the `remote` switch is off, and without the phone app's origin. It fails against the old adapter (20/1).
+- **(b) A lineage that cannot be read is a typed refusal** (packages/engine/src/session/unattended-shell.ts). `UnattendedShell.LineageError` (tag `UnattendedShell.LineageError`, the exported `LINEAGE` message) replaces the defect for each failure mode: a failed session read (Session.get dies on a database error, so `find` catches the defect, never an interruption), a loop, and 64 sessions with a parent above. `marked` and `replayRefusal` fail with it. The shell and terminal tools refuse with its message, as they refuse everything else (a die with a fixed Error), before anything is asked. The HTTP shell route and POST /sync/replay answer 403 with it instead of 500. Nothing is ever read as unmarked because a read failed. Two new cases in engine test/everywhere/offline-shell.test.ts, both red against the old module (14/2): first, a child whose parent read dies is refused with LINEAGE and not the database's message, after reading exactly itself and its parent, with nothing asked and nothing run, while a session with no parent reads only itself and its command runs although every other read would die; second, `marked` itself fails with the typed error for a failed read, a two-session loop and 65 sessions, and answers false for 64 sessions and for an orphan.
+- **(c) The runner's rules pin the audience assumption** (packages/desktop/src/main/everywhere-engine.test.ts): `task`, `workflow`, `research`, `research_plan`, `research_run` and `teammate` are denied under both shell policies, even with the user allowing `*` and each of them. EV-14 (e) carries the dated reason.
+- **(d) The docs draft claims only what E4 holds** (packages/web/src/drafts/docs/everywhere.astro). "How a job runs" now opens with "A job's request reaches Vector's servers only as encrypted text for at most 2 hours; your repository's code does not, unless you choose a Vector Codium model (below)." The Codium sentence keeps only that the model's requests, the code included, pass through Vector's model gateway, then points to the privacy policy. The gateway's no-storage claim and the provider route are gone. packages/web/test/everywhere-docs.test.ts pins the new sentences and that the page says nothing of "does not store", OpenRouter or retention. The intro's qualified sentence is unchanged.
+- **(e) The perk copy is tied to the Actions gate.** packages/schema/test/codium-copy.test.ts has a new case that fails while Slack, Linear or Jira is in ENABLED_SOURCES, so the owner's R-C8/R-A8 step cannot pass CI until the laptop-only text is approved again and the pin moves with it. A comment beside the text in packages/schema/src/codium-copy.ts says the same. EV-08 and the handoff's activation step 7 carry it.
+- **(f) Comments.** account-api.ts's header and api/everywhere/history.ts now name the one free text the history route answers: a private place's held summary, cleaned by `sanitizeReply`, with the lead's 3.12/3.7 ruling still pending (EV-23 (c)). EV-23's progress and deviations wording does not repeat the old phrase (searched), so only the two comments change.
+
+### Taken in the documents
+
+- **(g) F5 has one status: open.** The handoff's Findings line now reads "F5 stays open: its import is an accepted cross-package test (EV-01), widened by EV-18 and EV-19/EV-20". EV-01 is annotated that "accepted" means the test dependency, and the plan's F5 row is annotated. EV-18 (s) already said this.
+- **(h) The plan's §4.2 rows** F1, F3, F4, F5, C3, C4, C5, C6 and C7/C8 carry dated annotations in the F6 row's form, with their commits and files; the lead's text is not rewritten.
+- **(i) The handoff.** EV-23's stale "uncommitted" annotation names `f3abbd6c`. The EV-03 row and "Lane work with no package yet" name the open "no settle after 404/409" gap. The lane work list names the body route's live visibility read. Activation step 7 names the copy's re-approval. "Decisions waiting for the lead" names the SF-08 land order. "CI at the close" records EV-33's runs. The owner's rules are byte-identical (sha256 checked before and after).
+- **(j) EV-33's CI** is recorded: vector-everywhere 44851550997 and typecheck 44851562712 on `ef6151bf`, both success (progress record, "EV-33 CI"). EV-33's self-reported `bun -e` slip stays as written.
+
+### Disagreements and choices
+
+- **(k) A shell whose parent read fails is refused, not run** (the review's test, "an ordinary session's shell keeps working when a parent lookup fails"). A failed read cannot tell an ordinary child from a child of a marked session. Running it would fail open for exactly the session R-M2 must confine. The review's premise, "none of these reads happened before", also does not hold for the shell tool. Its own `ShellPermission.ask` (packages/engine/src/tool/shell.ts, from the shallow clone's boundary commit `4ac9f8dd`, on main, before EV-16) walks the same parent chain on every command, dies on any failed parent read (`orDie`, NotFound included) and refuses a loop or 64 sessions. `FreeModelGuests.marked` walks the lineage with `orDie` on every prompt step of every session. Making the shell keep working would need ShellPermission to change too, which this lane does not own. The test therefore pins what is sound: a session with no parent reads no other session, and a failed parent read is the readable refusal (b).
+- **(l) The root's mark is not cached.** A cached "marked" answer is sound, because marks never change and replayRefusal keeps a marked lineage in place, but it saves no read for an ordinary session. A cached "unmarked" answer goes stale: a replayed update may move an unmarked session under a marked parent, and a missing ancestor may be created later with the marks.
+- **(m) audienceOf is not changed** (prompt.ts). The parent-chain rule would add a lineage read on every step of every session, the cost (k) is about, to protect a case no runner can reach today. The pin (c) makes the dependency explicit instead, and EV-14 (e) says what must change first if a child tool is ever allowed. The research-lead rule is untouched.
+- **(n) The body route's live visibility read is recorded, not built** (EV-27, "Live visibility at the read", annotated). It would add a GitHub App call to the route and a VE-30 port to BodyRouteDeps, and its answer for an internal repository waits on EV-29 (c)'s private-or-internal ruling, which is the lead's. It is also in the handoff's lane work list.
+- **(o) "No settle after 404/409" is listed, not built** (EV-03, annotated). Options (b) and (c) change the runner's delivery and the jobs client's contract, and EV-03 left the choice to the lead.
+- **(p) sandbox.ts is not edited.** The SF-08 port must stay byte-identical for the merge, so the docblock clause and the NOTE line wait until both lanes have landed (EV-16 Coordination, annotated; handoff "Decisions waiting for the lead").
+- **(q) The docs sentence narrows the review's wording.** The review's suggested "your repository's code does not" would itself be a flat claim the Codium paragraph contradicts, so it carries "unless you choose a Vector Codium model (below)". EV-24's brief had pinned "Your code stays off Vector's servers." in "How a job runs". That sentence is replaced and its pin moved with it, as the review asked. The draft is already on each owner guide's legal-read row (docs/vector/owner-actions/vector-everywhere-{slack,linear,jira}.md), so no new list entry is added.
+- **(r) Beyond the review's text.** The copy tripwire (e) is a test, not only the optional comment. The history route's own comment (f) is changed too. replayRefusal's refusal is mapped in the sync handler, not inside replayRefusal, which keeps that function's body unchanged.
+
+### Safe by default
+
+No flag, env var, switch, route, page, nav, sitemap, dependency, lockfile or generated file changes. The plan check is still closed while `LAPTOP_ROUTE_WIRED` is false, and it can now only refuse more. The lineage change only turns defects into refusals with a fixed text: no command runs that did not run before. The docs draft stays unreleased under packages/web/src/drafts/.
+
+### Coordination
+
+- packages/schema/src/codium-copy.ts (a comment) and packages/schema/test/codium-copy.test.ts (one case) are Codium's files. The new case makes the owner's R-C8/R-A8 edit to packages/schema/src/codium-run-trigger.ts fail CI until the copy is approved again, on purpose.
+- packages/engine/src/tool/shell.ts, tool/terminal.ts and the session and sync handlers change only at this lane's own EV-16 call sites.
+
+## 2026-11-21, everywhere-finish lane: final review fixes
+
+The final review before the lane's PR into main: nine findings, one blocking. Base: HEAD `2f05f15b`, with origin/main `f3d7ac74` an ancestor (merged at `535ac94e`).
+
+### Taken in code
+
+- **(a) The "Jobs for this computer" row is hidden while the block is off** (blocking; the lead ruling that nothing user-visible changes with Everywhere off). packages/app/src/features/local/local-model.ts `offInLocal` takes `{ everywhere }` and skips the `everywhere` source unless it is true; Settings > Vector Local passes `everywhereView(globalConfig).written`, the local engine's `everywhere.enabled`, the same read the Everywhere tab uses. The registry entry stays, so `Egress.fetch("everywhere")` and the sources tests are unchanged, and the other `offInLocal` caller (off-in-local.tsx) never asks for that source. local-model.test.ts asserts the row is absent with the block off and present, with the same text and state, with it on. EV-15 (h)'s KEPT_OFF line is unchanged, so no waiver of the ruling is needed.
+- **(b) vector-at-mention.yml's pull_request paths** gain `packages/core/src/everywhere/**` and `packages/schema/src/everywhere.ts`, the two files github.agent.ts now imports, so a change to either re-runs the @vector suites. The file is main's since PR #33 merged; EV-28's "the lane cannot edit" note is annotated.
+- **(c) Stale comments.** api/_lib/everywhere/config.ts's `LAPTOP_ROUTE_WIRED` docblock names EV-18's landed worktree adapter (`cf9195d0`) and the reasons that remain: the empty `OFFER_KEYS`, and that a macOS or Windows shell runs no checks (EV-16). adapters/cloud-agents.ts's `liveMode` comment says EV-29 and EV-30 closed without a production builder and points at the lane work "the live mode reader".
+- **(d) The offline-v1 case's first sandbox spawn is untimed** (packages/engine/test/everywhere/unattended-session.test.ts). Before `h.client.prompt` it reads GET /experimental/shell/unattended, which runs and caches the bubblewrap self-test, and asserts `{ shell: "offline-v1" }`. The 10 s deadline is unchanged.
+
+### Taken in the documents
+
+- **(e) The handoff's "Decisions waiting for the lead"** now carries the four "For the lead to forward to @vector" items (EV-25, EV-26, EV-28, EV-14), the scope-finish conflicts in packages/engine/src/config/config.ts (keep both `delete next.review` and `delete next.everywhere`) and packages/engine/test/config/subagent-config.test.ts (keep both sides' cases), and the EV-23 summary ruling with its fallback (drop `summary` from accountJob and privateSummary). Its KEPT_OFF pointer says the row is hidden while off.
+- **(f) The runner ledger erase** is in the lane work list, as a precondition for pinning the offer key: on `vectorAccount` sign-out or a change of the token's `sub`, delete userData/everywhere/runner.json (or drop `pending` and `jobs`), with a wiring test. Not built here: nothing can reach the file while `OFFER_KEYS` is empty, and the erase belongs with the package that pins the key and wires the account change.
+
+### Not changed, with the reason
+
+- **(g) The sweep cron stays in vercel.json** (accepted and noted at the handoff's activation step 4). It answers before any store, 401 without CRON_SECRET or `{enabled: false}`, so the cost is one function start a minute. Moving the entry to the change that sets `LAPTOP_ROUTE_WIRED` true is the lead's alternative.
+- **(h) The public config schema keeps the `everywhere` block** as generated. It follows the computer/connect precedent and is marked "Not available in Vector 1.99.112 or earlier". With the block set, the desktop tab shows and readiness calls get 404 while the server is off, which changes nothing for a user who has not set it. Marking it experimental would be a generator change for the lead; config.json is not hand-edited.
+- **(i) GET /api/everywhere/history keeps the held summary** pending EV-23's 3.12/3.7 ruling, which must be recorded before the flag is turned on (handoff, "Decisions waiting for the lead"). The route is behind the flag, the account and the installation snapshot.
+
+### Safe by default
+
+No flag, env var, route, dependency, lockfile or generated file changes. The only user-visible change is that the Vector Local pane no longer names Jobs for this computer while the `everywhere` block is off.

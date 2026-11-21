@@ -1,42 +1,53 @@
 import { branchFor, commitMessage } from "@vectordevai/core/everywhere/publish"
-import { COMPUTER_CAPS, PERMISSION_ID_PATTERN, TIMING, decodeJob, decodeSettle, type DeclineCode, type EverywhereJob, type Milestone, type Outcome, type Settle } from "@vectordevai/schema/everywhere"
-import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
-import { unattendedRules, type RunnerEngine } from "./everywhere-engine"
+import { COMPUTER_CAPS, OFFER_PATTERN, PERMISSION_ID_PATTERN, READINESS_FIELDS, READINESS_QUERY, TIMING, decodeJob, decodeSettle, type DeclineCode, type EverywhereJob, type Milestone, type Outcome, type Readiness, type Settle } from "@vectordevai/schema/everywhere"
+import { responseText, unattendedRules, type RunnerEngine } from "./everywhere-engine"
 import type { RunnerGit } from "./everywhere-git"
 import type { JobLedger } from "./everywhere-ledger"
 import { checkedSummary, mayPushDiff } from "./everywhere-scan"
+import type { RunnerSettings } from "./everywhere-settings"
 import { frameTask, type FrameOptions } from "@vectordevai/core/everywhere/frame"
-
-export type RunnerSettings = {
-  readonly enabled: boolean
-  readonly localMode: boolean
-  readonly modelAllowed: boolean
-  readonly maxUsd: number
-  readonly minutes: number
-  readonly atOnce: number
-  readonly perDay: number
-  readonly push: boolean
-  readonly projects: readonly { readonly directory: string; readonly repository: string; readonly base: string }[]
-  readonly rules?: readonly PermissionV1.Rule[]
-  readonly model?: { readonly providerID: string; readonly modelID: string }
-}
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { LocalSources } from "@vectordevai/core/local-mode/sources"
+import type { LocalMode } from "@vectordevai/schema/local-mode"
+import { Option, Schema } from "effect"
 
 export type JobsClient = {
   readonly claim: (jid: string) => Promise<EverywhereJob>
   readonly decline: (jid: string, reason: DeclineCode, lease?: string) => Promise<void>
   readonly report: (job: EverywhereJob, seq: number, milestone: Milestone, files?: number) => Promise<"continue" | "stop" | "lost">
   readonly settle: (result: Settle) => Promise<void>
+  /**
+   * Waiting jobs for this computer (3.4 `pending`), asked with its readiness booleans: fresh signed offers, verified
+   * and claimed like a relay's. The service's off answers (200 `action: "stop"`, and any 404) are no jobs.
+   */
+  readonly pending: (readiness: Readiness) => Promise<{ readonly offers: readonly string[]; readonly waiting: number }>
 }
+
+/** The most offers kept from one `pending` answer; the server keeps at most three jobs live (SERVER_CAPS). */
+const PENDING_OFFERS = 32
+/** 32 offers of at most 2,140 characters each, with room for the JSON around them. */
+const PENDING_BYTES = 128 * 1024
+const NO_JOBS = { offers: [], waiting: 0 } as const
+/** The pending answer, from the network: the off answer, or offers and a count. Other keys are ignored. */
+const PendingAnswer = Schema.fromJsonString(Schema.Struct({
+  action: Schema.optional(Schema.String),
+  offers: Schema.optional(Schema.Array(Schema.Unknown)),
+  waiting: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+}))
 
 export function createEverywhereJobsClient(input: { readonly token: () => Promise<string>; readonly device: string; readonly fetcher?: typeof fetch; readonly url?: string }): JobsClient {
   const origin = new URL(input.url ?? "https://vectordev.ai")
   if (!(origin.origin === "https://vectordev.ai" || (origin.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname))) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Invalid Everywhere service")
   const call = async (route: string, body: unknown) => {
-    const response = await (input.fetcher ?? fetch)(new URL(`/api/everywhere/jobs/${route}`, origin), {
+    // Each request is the `everywhere` source: Vector Local decides and logs it first, and one it blocks rejects with
+    // EgressGuard.EgressBlocked before anything is sent. With Vector Local off it goes to the fetcher unchanged (under
+    // Bun, with a company's certificate authorities added: LocalCA).
+    const response = await Egress.fetch("everywhere", new URL(`/api/everywhere/jobs/${route}`, origin), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${await input.token()}`, "x-vector-device": input.device, "content-type": "application/json" },
       body: JSON.stringify(body),
-    })
+    }, input.fetcher)
     if (!response.ok) throw new Error(response.status === 404 || response.status === 409 ? "Everywhere job stopped" : "Everywhere service unavailable")
     return await response.json() as Record<string, unknown>
   }
@@ -62,20 +73,60 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
       if (!checked.ok) throw new Error("Invalid Everywhere result")
       await call("settle", checked.value)
     },
+    async pending(readiness) {
+      // The same label, sign-in, device and ten-second bound as the POST routes; a GET with the booleans as `1` or `0`.
+      const url = new URL("/api/everywhere/jobs/pending", origin)
+      for (const field of READINESS_FIELDS) url.searchParams.set(READINESS_QUERY[field], readiness[field] ? "1" : "0")
+      const response = await Egress.fetch("everywhere", url, {
+        method: "GET", redirect: "error", signal: AbortSignal.timeout(10_000),
+        headers: { authorization: `Bearer ${await input.token()}`, "x-vector-device": input.device,
+          accept: "application/json" },
+      }, input.fetcher)
+      // 404: a deployment without the route, or a platform route's EVERYWHERE_OFF. Either way there is nothing to take.
+      if (response.status === 404) {
+        await response.body?.cancel().catch(() => undefined)
+        return NO_JOBS
+      }
+      if (!response.ok) throw new Error("Everywhere service unavailable")
+      // A longer body is refused unread, so a misbehaving service cannot make this process parse an unbounded answer.
+      const answer = Option.getOrUndefined(Schema.decodeUnknownOption(PendingAnswer)(
+        await responseText(response, PENDING_BYTES).catch(() => undefined)))
+      if (!answer) throw new Error("Invalid Everywhere pending answer")
+      // While the feature or its Codium switch is off the route answers 200 `action: "stop"` (jobs-api.ts pending).
+      if (answer.action === "stop") return NO_JOBS
+      if (!answer.offers || answer.waiting === undefined) throw new Error("Invalid Everywhere pending answer")
+      const offers = answer.offers.filter((offer): offer is string => typeof offer === "string" &&
+        OFFER_PATTERN.test(offer))
+      return { offers: offers.slice(0, PENDING_OFFERS), waiting: answer.waiting }
+    },
   }
 }
 
-/** This capability is absent on main; see vector-everywhere-main-requests.md. No unsafe endpoint fallback exists. */
+/**
+ * The job's own checkout (vector-everywhere-main-requests.md): the engine's owner-only POST
+ * /experimental/worktree/unattended (EV-13), offered only while its probe answers `unattended-v1`
+ * (everywhere-wiring.ts unattendedWorktree, EV-18). There is no fallback to POST /experimental/worktree.
+ */
 export type SafeWorktree = {
   readonly policy: "unattended-v1"
   readonly create: (input: { directory: string; repository: string; jid: string; from: string; branch: string; signal: AbortSignal }) => Promise<{ directory: string; from: string; branch: string }>
 }
 
+/** The engine refused the checkout for this repository here (it is not listed, open in Vector or trusted): the job is held. */
+export class WorktreeUnavailable extends Error {
+  constructor() {
+    super("The unattended worktree is not available for this repository here")
+  }
+}
+
+const UNAVAILABLE_HERE = "This computer could not take the job: its repository must be listed for Vector everywhere, open in Vector and trusted. No changes were pushed."
+
 export type RunnerDeps = {
   readonly settings: () => Promise<RunnerSettings>
   readonly verify: (offer: unknown) => Promise<{ jid: string } | undefined>
   readonly ledger: JobLedger
-  readonly jobs: JobsClient
+  /** The runner never asks for waiting jobs; everywhere-wiring.ts does. */
+  readonly jobs: Omit<JobsClient, "pending">
   readonly safeWorktree?: SafeWorktree
   readonly git: (directory: string, repository: string, signal: AbortSignal) => RunnerGit
   readonly engine: (directory: string) => RunnerEngine
@@ -84,6 +135,8 @@ export type RunnerDeps = {
   readonly openPr: (input: { job: EverywhereJob; branch: string; base: string; summary: string; held: number }) => Promise<string | undefined>
   readonly now?: () => number
   readonly every?: (ms: number, work: () => Promise<void>) => () => void
+  /** Vector Local's policy in effect. Default: this process's (Egress.policy). */
+  readonly localPolicy?: () => LocalMode.Policy
   /** Local diagnostics with fixed text only: no repository output, paths or job content. */
   readonly log?: (message: string) => void
 }
@@ -101,6 +154,34 @@ function settingsValid(settings: RunnerSettings) {
     Number.isInteger(settings.perDay) && settings.perDay >= 1 && settings.perDay <= COMPUTER_CAPS.perDay.max
 }
 
+// What a laptop job reaches, by registry source (E15): the jobs service; git's fetch and push on GitHub, which run in a
+// child process the backstop guard never sees, so they are decided here and again before git starts
+// (everywhere-git.ts); and GitHub's API, for the visibility check, the GitHub thread and the draft pull request.
+const LOCAL_NEEDS = [
+  { source: "everywhere", url: "https://vectordev.ai/api/everywhere/jobs" },
+  { source: "git-remote", url: "https://github.com/" },
+  { source: "github", url: "https://api.github.com/" },
+] as const
+
+/**
+ * Whether Vector Local lets this computer take and publish a laptop job (E15): every source the job needs is allowed.
+ * With Vector Local off every verdict allows. A source the registry lacks, and a pending policy, refuse. Pure, so the
+ * runner's one-second check logs nothing; the requests themselves are decided and logged where they are made.
+ */
+export function localAllows(policy: LocalMode.Policy) {
+  return LOCAL_NEEDS.every((need) => {
+    // 2026-11-16 (EV-15): desktop github-api.ts still sends unlabelled, so under Vector Local the backstop refuses every
+    // GitHub API call whatever is allowed, and a claimed job could only end held. Until EV-21 labels those calls
+    // `github`, that need refuses whenever Vector Local is on, and laptop jobs stay declined under it.
+    if (need.source === "github" && policy.enabled) return false
+    const source = LocalSources.get(need.source)
+    return (
+      source !== undefined &&
+      LocalPolicy.decide(policy, { purpose: source.purpose, url: need.url, source: source.id }).decision === "allow"
+    )
+  })
+}
+
 const every = (ms: number, work: () => Promise<void>) => {
   let running = false
   const timer = setInterval(() => {
@@ -114,6 +195,7 @@ const every = (ms: number, work: () => Promise<void>) => {
 export function createEverywhereRunner(deps: RunnerDeps) {
   const now = deps.now ?? Date.now
   const active = new Map<string, AbortController>()
+  const localAllowed = () => localAllows((deps.localPolicy ?? Egress.policy)())
 
   async function deliver(result: Settle, journaled = false) {
     // JobsClient has a ten-second request bound. An acknowledgement loss must replay this
@@ -162,7 +244,9 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         settled = true
         return
       }
-      if (!deps.safeWorktree || deps.safeWorktree.policy !== "unattended-v1") {
+      // Read once: the wiring offers the worktree only while the engine's probe does, and that may change mid-job.
+      const worktree = deps.safeWorktree
+      if (!worktree || worktree.policy !== "unattended-v1") {
         await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "held", summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed." })
         settled = true
         return
@@ -207,7 +291,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       }
       stopTimer = (deps.every ?? every)(1_000, async () => {
         const current = await deps.settings().catch(() => undefined)
-        if (!current?.enabled || current.localMode || !current.modelAllowed) return abort("cancelled")
+        if (!current?.enabled || !localAllowed() || !current.modelAllowed) return abort("cancelled")
         if (now() >= deadline) return abort("over-budget")
         if (now() - acknowledgedAt >= TIMING.leaseMs) return abort("interrupted")
         if (now() - acknowledgedAt >= 60_000) await report("heartbeat", true)
@@ -216,12 +300,20 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       const original = await git.snapshot()
       const from = await git.fetch(original, project.base, jid)
       const branch = branchFor(jid, job.issue ? { key: job.issue.key, platform: job.platform } : undefined)
-      const placed = await deps.safeWorktree.create({ directory: project.directory, repository: project.repository, jid, from, branch, signal: controller.signal })
+      const placed = await worktree.create({ directory: project.directory, repository: project.repository, jid, from, branch, signal: controller.signal })
+        .catch((error: unknown) => {
+          if (error instanceof WorktreeUnavailable) return undefined
+          throw error
+        })
+      if (!placed) {
+        settled = await deliver({ jid, lease: job.lease.id, outcome: "held", summary: UNAVAILABLE_HERE })
+        return
+      }
       if (placed.from !== from || placed.branch !== branch || !placed.directory || placed.directory === project.directory || !await git.unchanged(original)) throw new Error("Invalid unattended worktree authority")
       const snapshot = await git.snapshot(placed.directory)
       if (snapshot.baseSha !== from) throw new Error("The unattended worktree has a different base")
       engine = deps.engine(placed.directory)
-      session = await engine.create(job, unattendedRules(settings.rules))
+      session = await engine.create(job, unattendedRules(settings.rules, settings.shell))
       await deps.ledger.update({ jid, lease: job.lease.id, sessionID: session, startedAt: now() })
       const sessions = new Set([session])
       let ready!: () => void
@@ -283,7 +375,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         const headSha = await git.commit(snapshot, placed.directory, commitMessage({ jid, task, issueKey: job.issue?.key }))
         const current = await deps.settings()
         const mapped = current.projects.some((item) => item.directory === project.directory && item.repository.toLowerCase() === project.repository.toLowerCase())
-        if (!headSha || !settings.push || !current.enabled || !current.push || !current.modelAllowed || !mapped || current.localMode || job.repository.shared || now() >= deadline || controller.signal.aborted || !await report("pushing", true) || !await deps.privateRepository(job).catch(() => false)) outcome = "held"
+        if (!headSha || !settings.push || !current.enabled || !current.push || !current.modelAllowed || !mapped || !localAllowed() || job.repository.shared || now() >= deadline || controller.signal.aborted || !await report("pushing", true) || !await deps.privateRepository(job).catch(() => false)) outcome = "held"
         else {
           // Persist before crossing the remote side-effect boundary. A process crash or
           // ambiguous transport failure can then never recover as "nothing published".
@@ -316,8 +408,8 @@ export function createEverywhereRunner(deps: RunnerDeps) {
           }
         }
       }
-      await deps.jobs.settle({ jid, lease: job.lease.id, outcome, summary, branch, checks: "skipped" })
-      settled = true
+      // A lost acknowledgement replays this exact result, keeping its summary and local branch.
+      settled = await deliver({ jid, lease: job.lease.id, outcome, summary, branch, checks: "skipped" })
       await watched
     } catch {
       if (controller.signal.aborted && outcome === "failed") outcome = "cancelled"
@@ -342,7 +434,9 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       const verified = await deps.verify(offer)
       if (!verified || active.has(verified.jid)) return false
       const settings = await deps.settings()
-      const reason: DeclineCode | undefined = !settings.enabled ? "off" : settings.localMode ? "local-mode" : !settings.modelAllowed ? "model-not-allowed" : !settingsValid(settings) ? "busy" : undefined
+      // While Vector Local blocks the jobs service itself (its default), the jobs client refuses this decline before
+      // sending it and the offer rejects: the server hears no answer from this computer.
+      const reason: DeclineCode | undefined = !settings.enabled ? "off" : !localAllowed() ? "local-mode" : !settings.modelAllowed ? "model-not-allowed" : !settingsValid(settings) ? "busy" : undefined
       if (reason) { await deps.jobs.decline(verified.jid, reason); return false }
       if (!await deps.ledger.reserve(verified.jid, settings)) { await deps.jobs.decline(verified.jid, "busy"); return false }
       const controller = new AbortController()

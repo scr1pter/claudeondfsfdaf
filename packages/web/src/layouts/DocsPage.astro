@@ -235,7 +235,10 @@ const footer: [string, string][] = [
   const slug = (text: string) =>
     text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60)
 
-  const headings = body ? [...body.querySelectorAll<HTMLElement>("h2, h3")] : []
+  // A figure's own headings, such as the steps of a diagram, belong to the figure, not to the page's outline.
+  const headings = body
+    ? [...body.querySelectorAll<HTMLElement>("h2, h3")].filter((heading) => !heading.closest("figure"))
+    : []
   const used = new Set([...document.querySelectorAll("[id]")].map((element) => element.id))
   for (const heading of headings) {
     if (heading.id) continue

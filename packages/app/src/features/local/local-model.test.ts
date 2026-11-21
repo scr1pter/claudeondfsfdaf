@@ -235,6 +235,7 @@ describe("the Allow dialog", () => {
       "chatgpt-signin",
       "help-assistant",
       "external-agents",
+      "everywhere",
       "unlabelled",
     ])
       expect(allowChoices(source(id), status())).toEqual({ once: false, always: false })
@@ -251,7 +252,7 @@ describe("the Allow dialog", () => {
 
 describe("Off in Vector Local", () => {
   test("lists every source Vector Local restricts, never one it lets through or one nobody labelled", () => {
-    const items = offInLocal(status())
+    const items = offInLocal(status(), { everywhere: true })
     const ids = items.map((item) => item.source.id)
     const restricted = sources.filter(
       (item) =>
@@ -259,6 +260,8 @@ describe("Off in Vector Local", () => {
         item.purpose !== "unknown",
     )
     expect(ids).toEqual(restricted.map((item) => item.id))
+    // With the everywhere block off, the only change is that Jobs for this computer are not named.
+    expect(offInLocal(status()).map((item) => item.source.id)).toEqual(ids.filter((id) => id !== "everywhere"))
     expect(ids).not.toContain("local-inference")
     expect(ids).not.toContain("webfetch")
     expect(ids).not.toContain("unlabelled")
@@ -288,6 +291,17 @@ describe("Off in Vector Local", () => {
     expect(external.state).toBe("never")
     expect(external.allowable).toBe(false)
     expect(external.why).toContain("Vector does not start them while Vector Local is on.")
+    // Jobs for this computer are absent while the everywhere block is off. With it on they are listed under their
+    // neutral name, kept off with no Allow… in this release.
+    expect(offInLocal(status()).some((item) => item.source.id === "everywhere")).toBe(false)
+    expect(offInLocal(status(), { everywhere: false }).some((item) => item.source.id === "everywhere")).toBe(false)
+    const jobs = offInLocal(status(), { everywhere: true }).find((item) => item.source.id === "everywhere")!
+    expect(jobs.name).toBe("Jobs for this computer")
+    expect(jobs.state).toBe("never")
+    expect(jobs.allowable).toBe(false)
+    expect(jobs.why).toBe(
+      "Jobs for this computer come from vectordev.ai and report back to it, so this computer takes none while Vector Local is on.",
+    )
     expect(Object.values(OFF_STATE).some((label) => label.includes("Hidden"))).toBe(false)
   })
 

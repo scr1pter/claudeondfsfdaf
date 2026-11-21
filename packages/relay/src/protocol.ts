@@ -10,13 +10,27 @@
 //
 // Data: binary frames, at most 64 KiB and 20 a second on average.
 //
-//   byte 0       kind: 0x01 data (0x02 job.offer is reserved; a client may not send it)
+//   byte 0       kind: 0x01 data, 0x02 job offer (sent by the relay only; a client may not send it)
 //   bytes 1-16   the other device's id: the target when sending, the sender when receiving
 //   bytes 17-    the end-to-end ciphertext, passed on byte for byte
 //
 // A phone may send only to a computer and a computer only to a phone of the same account. The relay never reads the
 // ciphertext, and drops a frame when the target is not connected. A computer that keeps sending with no viewer
 // attached is closed.
+//
+// Job offers (R-C1): when Vector's servers make the signed internal job-offer call, the relay sends one binary frame to
+// every connected computer of the account, and never to a phone:
+//
+//   byte 0       0x02
+//   bytes 1-16   sixteen zero bytes: no device sent it
+//   bytes 17-    the offer string `vef1.…`, byte for byte as the API sent it (visible ASCII 0x21-0x7e, so its UTF-8
+//                bytes are its characters)
+//
+// The relay checks only the offer's form. A computer decodes the frame with `decodeFrame`, drops it unless the kind is
+// 0x02 and all 16 device bytes are zero, and verifies the Ed25519 signature against its pinned keys before it acts on
+// it. A computer whose ticket lapsed while idle still receives offers until the relay closes it
+// (`computerTicketMaxAgeMs`). A client that sends a 0x02 frame, or the control message `{t:"job.offer"}`, gets a
+// `reserved` notice, and nothing is passed on.
 //
 // Control: JSON text frames. The client sends `{t:"refresh", ticket}` (a new ticket for the same device, before the
 // current one expires; a viewer is closed a minute after expiry, a computer's frames are dropped until it refreshes) and

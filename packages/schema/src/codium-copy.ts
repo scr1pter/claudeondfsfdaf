@@ -12,6 +12,7 @@ export const requires: Readonly<Partial<Record<PerkId, readonly PerkId[]>>> = {
   overnight: ["computer"],
   "on-call": ["alerts"],
   "ship-desk": ["alerts"],
+  everywhere: ["remote"],
 }
 
 export const COMPUTER_LABEL = "a computer Vector runs for you"
@@ -138,6 +139,14 @@ export const PERK_COPY: Readonly<Record<PerkId, PerkCopy>> = {
     label: "Vector Playbooks",
     applies: (c) => c.playbooks,
     text: () => "Replay proven workflows with Codium models.",
+  },
+  // Every paid plan (Q11); the laptop route needs Remote, hence `requires`. The wording waits for the owner's approval.
+  // It describes the laptop-only route: making Slack, Linear or Jira a run source (R-C8/R-A8) needs it approved again.
+  everywhere: {
+    label: "Vector everywhere",
+    applies: every,
+    text: () =>
+      "Ask Vector from an issue or a chat, and the job runs on your own paired computer through Vector Remote while that computer is online.",
   },
 }
 

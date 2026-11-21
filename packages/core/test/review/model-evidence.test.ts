@@ -962,7 +962,7 @@ describe("scope", () => {
     expect(canonicalPrompts({ holdback: "secrets" }).slice(0, -4)).toEqual(canonicalPrompts())
     expect(policyDigest(DEFAULT_REVIEW_CONFIG)).toBe("70512122f41ec160")
     expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" })).toBe("fc36732a7163e50b")
-    expect(REVIEW_PIPELINE_REVISION).toBe(4)
+    expect(REVIEW_PIPELINE_REVISION).toBe(5)
     expect(
       evidenceScope({ adapter: "engine", config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" } }).prompts,
     ).toBe(secrets)

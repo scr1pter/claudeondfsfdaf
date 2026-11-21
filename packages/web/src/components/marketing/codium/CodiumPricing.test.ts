@@ -235,6 +235,21 @@ describe("Codium pricing", () => {
     }
   })
 
+  test("EV-08: Vector everywhere is one comparison row on every plan, on no card, and only with Remote listed", () => {
+    const copy = CodiumCopy.PERK_COPY.everywhere
+    const perk = copy.text(ENTITLEMENTS["vector-10"])
+    const html = render(full)
+    expect(html).toContain(`<th scope="row">${copy.label}</th>`)
+    // Its text appears once per plan, all four in the comparison table, and never on a card (it is no headline).
+    expect(text(html).split(perk).length - 1).toBe(CodiumPlan.PLANS.length)
+    for (const card of cards(html)) expect(text(card)).not.toContain(perk)
+    for (const config of [{ ...full, listed: full.listed!.filter((id) => id !== "remote") }, empty]) {
+      const visible = text(render(config))
+      expect(visible).not.toContain(copy.label)
+      expect(visible).not.toContain(perk)
+    }
+  })
+
   test("all eleven FAQ questions start collapsed and are independently labelled", () => {
     const html = render(full)
     const buttons = [...html.matchAll(/id="(cx-faq-q-[^"]+)" aria-expanded="(true|false)" aria-controls="([^"]+)"/g)]

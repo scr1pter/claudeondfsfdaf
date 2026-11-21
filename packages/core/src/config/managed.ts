@@ -135,7 +135,7 @@ export type TrustOptions = {
 
 // The test managed folder, chosen explicitly by the test harness. No environment variable can: one would let whatever
 // starts Vector swap the company's policy for a folder it owns, or drop the MDM profile and the policy key.
-const testing: { directory?: string; acl?: AclReader } = {}
+const testing: { directory?: string; acl?: AclReader; policies?: readonly Policy[] } = {}
 
 /**
  * Tests only: read company policy from `directory`, let the user running Vector own the files there, and leave this
@@ -146,6 +146,14 @@ const testing: { directory?: string; acl?: AclReader } = {}
 export function useTestDirectory(directory: string | undefined, acl?: AclReader) {
   testing.directory = directory
   testing.acl = directory === undefined ? undefined : acl
+}
+
+/**
+ * Tests only, beside useTestDirectory: the MDM profile or Windows policy key text read() returns while a test directory
+ * is set, in place of none, so a test can merge a policy without this computer's own. Undefined clears it.
+ */
+export function useTestPolicies(policies: readonly Policy[] | undefined) {
+  testing.policies = policies
 }
 
 /** The folders that hold managed vector.json and vector.jsonc. */
@@ -178,7 +186,7 @@ export function read(): Read {
     .flatMap((directory) => MANAGED_FILES.map((file) => path.join(directory, file)))
     .filter((file) => existsSync(file))
     .map((file) => ({ file, verdict: check(file, { user, ...(user && testing.acl ? { acl: testing.acl } : {}) }) }))
-  const policies = user ? [] : systemPolicies()
+  const policies = user ? (testing.policies ?? []) : systemPolicies()
   return {
     files: checked.filter((item) => item.verdict === undefined).map((item) => item.file),
     policies: policies.filter((item) => "text" in item),

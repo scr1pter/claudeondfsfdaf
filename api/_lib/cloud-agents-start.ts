@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
+import { JOB_ID_PATTERN } from "../../packages/schema/src/everywhere.js"
 import { bindingFor, bindingKey, generationKey, type RepoBinding } from "./cloud-agents-binding.js"
 import {
   cloudAgentEntitlement,
@@ -26,6 +27,8 @@ const Ticket = Schema.Struct({
   source: Schema.Literals(RUN_SOURCES),
   purpose: Schema.Literals(["task", "review", "incident", "changes"]),
   exp: Whole,
+  // The one optional field (R-A1): a ticket without it decodes as before, and the ledger's RESERVE admits only it.
+  jobId: Schema.optionalKey(Schema.String.check(Schema.isPattern(JOB_ID_PATTERN))),
 })
 const decodeTicket = Schema.decodeUnknownOption(Schema.fromJsonString(Ticket), { onExcessProperty: "error" })
 const FORMAT = /^vtk_[A-Za-z0-9_-]{43}$/
@@ -51,6 +54,12 @@ export type StartCloudRunResult =
         | Extract<CloudAgentAllowance, { active: false }>["reason"]
     }
 
+/**
+ * A run trigger plus Vector everywhere's job id (R-A1, spec 3.6 "Correlation"). The id is kept on the ticket only so the
+ * run start listener can name the job (cloud-agents-runs.ts); it is never a workflow input and grants nothing.
+ */
+export type CloudRunTrigger = RunTrigger & { readonly jobId?: string }
+
 export type PreparedCloudRun = {
   ok: true
   /** The opaque ticket's SHA-256; the raw ticket stays in this server-side closure. */
@@ -61,14 +70,14 @@ export type PreparedCloudRun = {
 }
 
 /** Internal user-tap entry point. It stores no prompt or requester identity, and never runs inference itself. */
-export async function startCloudRun(trigger: RunTrigger, deps: StartDeps = {}): Promise<StartCloudRunResult> {
+export async function startCloudRun(trigger: CloudRunTrigger, deps: StartDeps = {}): Promise<StartCloudRunResult> {
   const prepared = await prepareCloudRun(trigger, deps)
   return prepared.ok ? prepared.dispatch() : prepared
 }
 
 /** Issue a ticket without dispatching. A router must commit its own exclusive route before calling dispatch. */
 export async function prepareCloudRun(
-  trigger: RunTrigger,
+  trigger: CloudRunTrigger,
   deps: StartDeps = {},
 ): Promise<PreparedCloudRun | Extract<StartCloudRunResult, { ok: false }>> {
   const store = deps.store ?? persistentStore
@@ -79,6 +88,8 @@ export async function prepareCloudRun(
     deps.brainUpload !== undefined &&
     (trigger.source !== "desktop" || !/^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/.test(deps.brainUpload))
   )
+    throw invalidRequest()
+  if (trigger.jobId !== undefined && (typeof trigger.jobId !== "string" || !JOB_ID_PATTERN.test(trigger.jobId)))
     throw invalidRequest()
   if (trigger.purpose === "scheduled") return { ok: false, reason: "purpose-unavailable" }
   if (
@@ -110,6 +121,7 @@ export async function prepareCloudRun(
     source: trigger.source,
     purpose: trigger.purpose,
     exp: now() + TTL * 1000,
+    ...(trigger.jobId === undefined ? {} : { jobId: trigger.jobId }),
   }
   if (!Schema.is(Ticket)(record)) throw invalidRequest()
   const key = ticketKey(ticket)
@@ -252,7 +264,7 @@ export async function peekRunTicket(
     !ENABLED_SOURCES.has(record.source)
   )
     return undefined
-  return { ...record, key }
+  return { ...record, key, ticketHash: createHash("sha256").update(ticket).digest("hex") }
 }
 
 function ticketKey(ticket: string) {

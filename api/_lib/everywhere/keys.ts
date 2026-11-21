@@ -39,7 +39,19 @@ export const KEEP_MS = {
   deliveryDone: 7 * DAY,
   offer: TIMING.offerReplayMs,
   seen: 30 * DAY,
-  ticket: DAY,
+  /**
+   * EV-27: an Actions job's links (its ticket, its run's link and that run's body-read marker) never outlive its body.
+   * Each write is also capped at that job's own body end, and all three are deleted when the job ends.
+   */
+  ticket: TIMING.bodyTtlMs,
+  run: TIMING.bodyTtlMs,
+  bodyRead: TIMING.bodyTtlMs,
+  /**
+   * EV-30: a run's settle index. It holds only a jid, never platform text (E4), so it is not capped at the body's end:
+   * a run that starts late in its body's life still settles after it. It outlives ACTIONS_OVERDUE_MS (135 minutes)
+   * plus the cron's grace (10 minutes), and it is deleted with the job's other links when the job ends.
+   */
+  runSettle: 3 * HOUR,
   jiraTask: 2 * DAY,
   audit: 90 * DAY,
 } as const
@@ -68,6 +80,11 @@ const STATE_ID = /^[A-Za-z0-9_-]{16,128}$/
 const COUNT_WINDOW = /^(?:d[0-9]{8}|h[0-9]{10})$/
 /** @vector's ticket hash (R-A1), hex or base64url. */
 const TICKET_HASH = /^[A-Za-z0-9_-]{16,128}$/
+/**
+ * An Actions run id (R-A2's rid), such as @vector's `gh-<repository>-<run>-<attempt>-<check run>`: the jobs module's
+ * own rule. It has no colon, so `run:<rid>` and its `body-read` marker can never be one key.
+ */
+const RUN_ID = /^[A-Za-z0-9_-]{1,128}$/
 
 function invalid(): never {
   throw new ApiError(400, "EVERYWHERE_INVALID_ID", "An id in this request is not valid.")
@@ -162,7 +179,10 @@ export const everywhereKeys = {
   /** Terminal transitions enqueue fixed replies atomically; the sweep retries failed platform posts. */
   jobsPosts: () => key("jobs", "posts"),
   jobPostLock: (jobId: string) => key("job", jid(jobId), "posting"),
+  /** Excludes concurrent status posts for one job (Slack and GitHub); each post holds it once and releases it. */
   jobStatusLock: (jobId: string) => key("job", jid(jobId), "status"),
+  /** VE-10: present for 30 s after a GitHub progress post, so progress edits the status comment at most every 30 s. */
+  jobStatusEdited: (jobId: string) => key("job", jid(jobId), "status", "edited"),
   /** Slack's conservative one-thread-read-per-workspace-per-minute budget, shared by all functions. */
   slackThreadRead: (team: string) => key("slack", "thread", matching(team, /^T[A-Z0-9]{1,31}$/)),
   slackRetry: (installationKey: string, method: string) => key("slack", "retry", installation(installationKey), matching(method, /^[a-zA-Z.]{1,64}$/)),
@@ -189,6 +209,18 @@ export const everywhereKeys = {
   offer: (jti: string) => key("offer", matching(jti, RANDOM_ID_PATTERN)),
   seen: (accountId: string) => key("seen", account(accountId)),
   ticket: (hash: string) => key("ticket", matching(hash, TICKET_HASH)),
+  /**
+   * EV-27: the job an Actions run works on, written when that run starts (`startDispatched`). It is the body route's
+   * correlation only: it ends with the body, and a run can settle later, so a settle must never find its job by it.
+   */
+  run: (rid: string) => key("run", matching(rid, RUN_ID)),
+  /** EV-27: present once that run has read its job's body, which it may do once. */
+  runBodyRead: (rid: string) => key("run", matching(rid, RUN_ID), "body-read"),
+  /**
+   * EV-30: the job a run's settle finds, written with `run:<rid>` when that run starts. It holds only the jid and
+   * outlives the body (KEEP_MS.runSettle), so `run:<rid>` stays the body route's own key.
+   */
+  runSettle: (rid: string) => key("run", matching(rid, RUN_ID), "settle"),
   jiraTask: (taskId: string) => key("jira", "task", freePart(taskId)),
   jiraTaskDraft: (taskId: string) => key("jira", "draft", matching(taskId, UUID)),
   jiraTasks: (installationKey: string) => key("jira", "tasks", installation(installationKey)),

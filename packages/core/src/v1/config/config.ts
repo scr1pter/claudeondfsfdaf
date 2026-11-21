@@ -23,6 +23,7 @@ import { ConfigReviewV1 } from "./review"
 import { ConfigConnectV1 } from "./connect"
 import { ConfigServerV1 } from "./server"
 import { ConfigSkillsV1 } from "./skills"
+import { ConfigEverywhereV1 } from "./everywhere"
 
 export type Layout = ConfigLayoutV1.Layout
 
@@ -128,6 +129,10 @@ export const Info = Schema.Struct({
     description: "@deprecated Use 'references' field instead. Named git or local directory references",
   }),
   watcher: Schema.optional(Schema.Struct({ ignore: Schema.optional(Schema.mutable(Schema.Array(Schema.String))) })),
+  everywhere: Schema.optional(ConfigEverywhereV1.Info).annotate({
+    description:
+      "Not available in Vector 1.99.112 or earlier, which rejects this key. Read only from your own user config: repository, company, organization and environment config cannot set it.",
+  }),
   snapshot: Schema.optional(Schema.Boolean).annotate({
     description:
       "Enable or disable snapshot tracking. When false, filesystem snapshots are not recorded and undoing or reverting will not undo/redo file changes. Defaults to true.",

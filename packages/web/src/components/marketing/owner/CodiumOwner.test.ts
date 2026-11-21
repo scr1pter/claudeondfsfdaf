@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { CodiumOwner } from "@vectordevai/schema/codium-owner"
+import { SWITCH_NAMES, SWITCH_VALUES } from "../../../../../../api/_lib/codium-switches"
 // Match Astro's React-island compilation; the web package otherwise defaults to Solid JSX.
 const react = new Bun.Transpiler({
   loader: "tsx",
@@ -112,6 +113,15 @@ const render = (value: CodiumOwner.Dashboard) =>
       onMutation: async () => undefined,
     }),
   )
+const switchOptions = (html: string, name: string) =>
+  [
+    ...(new RegExp(`<select[^>]*id="owner-switch-${name}"[^>]*>(.*?)</select>`).exec(html)?.[1] ?? "").matchAll(
+      /<option([^>]*)>/g,
+    ),
+  ].map((match) => ({
+    value: /value="([^"]*)"/.exec(match[1] ?? "")?.[1],
+    selected: / selected=""/.test(match[1] ?? ""),
+  }))
 
 describe("private Codium owner frontend", () => {
   test("the public shell includes no private data, server fetch or serialized preview", async () => {
@@ -231,6 +241,35 @@ describe("private Codium owner frontend", () => {
     expect(html).not.toContain("@")
     expect(html).not.toContain("ownerSecret")
     expect(html).toContain('role="img" aria-labelledby="owner-history-title"')
+  })
+
+  test("the everywhere control offers On, No new and Stop like hosted, never Off", () => {
+    const html = render({
+      ...summary,
+      switches: [
+        { name: "everywhere", value: "no-new", changedAt: NOW },
+        { name: "remote", value: "on", changedAt: 0 },
+      ],
+    })
+    expect(switchOptions(html, "everywhere")).toEqual([
+      { value: "on", selected: false },
+      { value: "no-new", selected: true },
+      { value: "stop", selected: false },
+    ])
+    expect(switchOptions(html, "remote").map((option) => option.value)).toEqual(["on", "off"])
+    expect(html).toContain('for="owner-switch-everywhere">Everywhere</label>')
+    expect(html).toContain("Applies only while the Everywhere flag is set.")
+  })
+
+  test("every switch offers exactly the values Codium's writeSwitch accepts", () => {
+    // The page hand-codes its choices; this pins them to SWITCH_VALUES for every listed switch, so they cannot drift.
+    const html = render({
+      ...summary,
+      switches: SWITCH_NAMES.map((name) => ({ name, value: "on", changedAt: 0 })),
+    })
+    expect(
+      Object.fromEntries(SWITCH_NAMES.map((name) => [name, switchOptions(html, name).map((option) => option.value)])),
+    ).toEqual(Object.fromEntries(SWITCH_NAMES.map((name) => [name, [...SWITCH_VALUES[name]]])))
   })
 
   test("a bounded account list is labelled and unknown refund quotes disable the destructive action", () => {

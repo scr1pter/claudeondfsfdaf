@@ -1,12 +1,18 @@
-import { describe, expect, test } from "bun:test"
-import { createPrivateKey, generateKeyPairSync, sign } from "node:crypto"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createPrivateKey, generateKeyPairSync, randomUUID, sign } from "node:crypto"
 import { REMOTE_LIMITS } from "../api/_lib/codium-limits"
+import { signOffer } from "../api/_lib/everywhere/offer"
 import { signInternal as apiSign, verifyInternal as apiVerify } from "../api/_lib/hosted-internal"
-import { utf8 } from "../packages/relay/src/bytes"
+import { relayCall } from "../api/_lib/remote-relay"
+import { fromUtf8, utf8 } from "../packages/relay/src/bytes"
+import { handleRequest } from "../packages/relay/src/index"
 import { signInternal as relaySign, verifyInternalSignature as relayVerify } from "../packages/relay/src/internal"
 import { PLAN_RANKS, RELAY_LIMITS, VIEWER_HOURS } from "../packages/relay/src/limits"
+import { DEVICE_BYTES, FRAME, decodeFrame } from "../packages/relay/src/protocol"
 import { importTicketKeys, verifyTicket, type TicketClaims } from "../packages/relay/src/ticket"
+import { Harness, INTERNAL_SECRET } from "../packages/relay/test/fakes"
 import { ENTITLEMENTS } from "../packages/schema/src/codium-entitlements"
+import { OFFER_PATTERN, createJobId } from "../packages/schema/src/everywhere"
 
 // WP A39: the relay Worker and Vector's server must agree byte for byte. The Worker re-implements A37's internal HMAC on
 // WebCrypto and checks tickets the API (A40) will sign with node:crypto; its fixed limits mirror §4.2's REMOTE_LIMITS.
@@ -109,5 +115,57 @@ describe("limits", () => {
         hours: REMOTE_LIMITS.viewerHours[plan],
       })
     expect(Object.keys(VIEWER_HOURS).map(Number).sort()).toEqual([...PLAN_RANKS])
+  })
+})
+
+describe("job offers between the API and the relay (R-C1, EV-09)", () => {
+  const saved = {
+    VECTOR_REMOTE_RELAY_URL: process.env.VECTOR_REMOTE_RELAY_URL,
+    VECTOR_HOSTED_INTERNAL_SECRET: process.env.VECTOR_HOSTED_INTERNAL_SECRET,
+  }
+  beforeEach(() => {
+    process.env.VECTOR_REMOTE_RELAY_URL = "wss://relay.contract.invalid"
+    process.env.VECTOR_HOSTED_INTERNAL_SECRET = INTERNAL_SECRET
+  })
+  afterEach(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[name]
+        continue
+      }
+      process.env[name] = value
+    }
+  })
+
+  /** The API's signed calls go straight into the relay Worker's own request handler: no network. */
+  const through = (h: Harness) =>
+    Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => handleRequest(new Request(input, init), h.env, h.runtime),
+      { preconnect: fetch.preconnect },
+    )
+
+  test("relayCall('job-offer') with a signOffer offer reaches the account's computer through the Worker, byte for byte", async () => {
+    const h = await Harness.create()
+    const account = randomUUID()
+    const computer = await h.computer({ sub: account })
+    const key = { kid: "contract-offer-key", key: generateKeyPairSync("ed25519").privateKey }
+    const offer = signOffer(key, { account, jid: createJobId(h.clock.now), now: h.clock.now }).offer
+    expect(await relayCall("job-offer", { account, offer }, through(h), h.clock.now)).toEqual({ delivered: 1 })
+    const frames = computer.socket.frames()
+    expect(frames).toHaveLength(1)
+    const decoded = decodeFrame(frames[0]!)
+    expect(decoded?.kind).toBe(FRAME.JOB_OFFER)
+    expect(decoded?.device).toEqual(new Uint8Array(DEVICE_BYTES))
+    expect(decoded ? fromUtf8(decoded.ciphertext) : undefined).toBe(offer)
+  })
+
+  test("the longest offer OFFER_PATTERN allows passes the relay's form and size checks", async () => {
+    const h = await Harness.create()
+    const account = randomUUID()
+    const computer = await h.computer({ sub: account })
+    const offer = `vef1.${"A".repeat(2_048)}.${"B".repeat(86)}`
+    expect(OFFER_PATTERN.test(offer)).toBe(true)
+    expect(await relayCall("job-offer", { account, offer }, through(h), h.clock.now)).toEqual({ delivered: 1 })
+    expect(computer.socket.frames()).toHaveLength(1)
   })
 })

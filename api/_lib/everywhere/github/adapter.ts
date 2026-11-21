@@ -13,10 +13,14 @@ import { productionContext } from "../runtime.js"
 import { githubStatus, type GithubStatusPort } from "./status.js"
 
 /** The verifier owns signature/audience=handoff/current workflow/ref/SHA/runner checks. Raw claims are insufficient. */
-export type GithubHandoffIdentity = { repositoryId: number; repository: string; actorId: number; runId: number; runAttempt: number; eventName: string }
+export type GithubHandoffIdentity = {
+  repositoryId: number; repository: string; ownerId: number; actorId: number; runId: number; runAttempt: number; eventName: string; ref: string
+  /** The token's signed repository_visibility, which `shared` follows when present (EV-31). */
+  repositoryVisibility?: "public" | "private" | "internal"
+}
 export type GithubHandoffBinding = {
-  account: string; githubId: number; installationId: number; laptopFirst: boolean; codiumMode: boolean
-  workflowVersion: string; repository: Repository
+  account: string; githubId: number; ownerId: number; installationId: number; laptopFirst: boolean; codiumMode: boolean
+  workflowVersion: string; defaultRef: string; repository: Repository
 }
 
 export function createGithubAdapter(input: { readonly context: () => JobsContext; readonly status?: GithubStatusPort }): PlatformAdapter {
@@ -53,7 +57,8 @@ export function createGithubHandoff(deps: {
   return async (request: ApiRequest, response: ApiResponse) => {
     try {
       requireMethod(request, "POST")
-      // Deliberately no production OIDC adapter until R-A5/VE-31 is reviewed and wired.
+      // Without a verifier and a binding (runtime.ts productionHandoffDeps gives them only with the flag on) the handoff
+      // answers 501 before any read.
       if (!deps.verify || !deps.binding) return json(response, 501, { error: { code: "HANDOFF_UNAVAILABLE" } })
       const config = (deps.config ?? readConfig)()
       if (!platformOn(config, "github")) return json(response, 404, { error: { code: "EVERYWHERE_OFF" } })
@@ -61,14 +66,21 @@ export function createGithubHandoff(deps: {
       const token = typeof authorization === "string" ? /^Bearer ([A-Za-z0-9_.-]{20,16384})$/.exec(authorization)?.[1] : undefined
       const identity = token ? await deps.verify(token, now()) : undefined
       const positive = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0
-      if (!identity || !positive(identity.repositoryId) || !positive(identity.actorId) || !positive(identity.runId) || !isRepositoryName(identity.repository))
+      if (!identity || !positive(identity.repositoryId) || !positive(identity.ownerId) || !positive(identity.actorId) || !positive(identity.runId) || !isRepositoryName(identity.repository))
         return json(response, 401, { error: { code: "HANDOFF_IDENTITY_INVALID" } })
       const back = () => json(response, 200, { handled: false })
-      if (identity.runAttempt !== 1 || !(GITHUB_EVENTS as readonly string[]).includes(identity.eventName)) return back()
+      // A review comment's run takes the workflow at refs/pull/N/merge, which the pull request's author controls, so it
+      // hands back until an App check equal to the mint's exists (open, same repository, merge SHA, unchanged workflow).
+      // On purpose, so the review comment never reaches the GITHUB_EVENTS check below: see vector-everywhere-deviations.md,
+      // "2026-11-20, EV-31" (d). GITHUB_EVENTS and the verifier keep the event for when an App check equal to verifyRun exists.
+      if (identity.runAttempt !== 1 || identity.eventName === "pull_request_review_comment" ||
+        !(GITHUB_EVENTS as readonly string[]).includes(identity.eventName)) return back()
       const binding = await deps.binding(identity.repositoryId)
+      // The mint's route rules too (cloud-agents-api.ts): the owner the repository was bound under and its default ref.
       if (!binding || !ACCOUNT_ID_PATTERN.test(binding.account) || binding.githubId !== identity.actorId || !positive(binding.installationId) ||
         !binding.laptopFirst || !binding.codiumMode || binding.repository.id !== identity.repositoryId ||
-        binding.repository.fullName.toLowerCase() !== identity.repository.toLowerCase()) return back()
+        binding.repository.fullName.toLowerCase() !== identity.repository.toLowerCase() || binding.ownerId !== identity.ownerId ||
+        identity.ref !== binding.defaultRef) return back()
       const body = await readJson<unknown>(request, BODY_LIMITS.github)
       if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "HANDOFF_INVALID", "Invalid handoff reference.")
       const fields = body as Record<string, unknown>
@@ -84,16 +96,18 @@ export function createGithubHandoff(deps: {
       const ctx = context()
       if (!await useOnce(ctx.store, everywhereKeys.handoff(identity.repositoryId, identity.runId), KEEP_MS.handoff)) return back()
       const ports = deps.ports ?? safePorts(config)
+      // The token's signed visibility wins over the binding's: only `private` is unshared (EV-31 (e)).
+      const repository = { ...binding.repository, shared: identity.repositoryVisibility === undefined ? binding.repository.shared : identity.repositoryVisibility !== "private" }
       const trigger: InboundTrigger = { platform: "github", installation: `github:${binding.installationId}`, deliveryId: String(identity.runId),
         actor: { userId: String(identity.actorId), bot: false, external: false, guest: false }, kind: "mention", thread: { ref }, task: "", context: [],
-        github: reference.value, repository: binding.repository, shared: binding.repository.shared }
+        github: reference.value, repository, shared: repository.shared }
       const subject = { sponsor: binding.account, installation: trigger.installation, userId: trigger.actor.userId }
       const counts = await readCounts(ctx.store, subject, now())
-      const facts = await routeFacts({ ctx, ports, trigger, sponsor: binding.account, repository: binding.repository, counts, receivedAt: ctx.now,
+      const facts = await routeFacts({ ctx, ports, trigger, sponsor: binding.account, repository, counts, receivedAt: ctx.now,
         github: { actorId: identity.actorId, binderId: binding.githubId } })
       if (decideRoute(facts).action !== "offer" || !(await countJob(ctx.store, subject, now())).admitted) return back()
       const created = await createJob(context(), { platform: "github", installation: trigger.installation, kind: "mention", sponsor: binding.account,
-        requester: { userId: trigger.actor.userId, account: binding.account }, repository: binding.repository, shared: trigger.shared,
+        requester: { userId: trigger.actor.userId, account: binding.account }, repository, shared: trigger.shared,
         github: reference.value, task: "", context: [], reply: { ref } }, { jid: createJobId(now()) })
       if (!created.ok) return back()
       const offered = await offerJob(context(), created.job.jid)

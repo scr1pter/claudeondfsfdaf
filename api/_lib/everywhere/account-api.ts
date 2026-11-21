@@ -1,7 +1,17 @@
-import { isPlatform, type PlatformId } from "../../../packages/schema/src/everywhere.js"
+import {
+  LIMITS,
+  isPlatform,
+  type DeclineCode,
+  type JobState,
+  type Outcome,
+  type PlatformId,
+  type RefusalCode,
+} from "../../../packages/schema/src/everywhere.js"
+import { sanitizeReply, type Ending } from "../../../packages/schema/src/everywhere-policy.js"
 import { requireTrustedJsonRequest } from "../abuse.js"
 import { requireAccountUser } from "../account.js"
 import { ApiError, handleApiError, json, queryValue, readJson, type ApiRequest, type ApiResponse } from "../http.js"
+import { readAudit, type AuditEntry } from "./audit.js"
 import { checkAccount } from "./authority.js"
 import { platformOn, readConfig, type Env, type EverywhereConfig } from "./config.js"
 import { eraseInstallation, type InstallRevoker, type JobEraser } from "./erase.js"
@@ -16,7 +26,7 @@ import {
   listLinks,
   listMappings,
   oauthUrl,
-  readInstall, readInstallState,
+  readInstall, readInstallSnapshot, readInstallState,
   redeemConnectCode,
   removeMapping,
   setMapping,
@@ -26,7 +36,8 @@ import {
   type Notifier,
   type OAuthExchanges,
 } from "./identity.js"
-import { jobEraser } from "./jobs.js"
+import { jobEraser, openSummary, readJobHistory, type JobRecord, type JobRoute } from "./jobs.js"
+import { KEEP_MS } from "./keys.js"
 import { platformExchanges } from "./oauth-exchanges.js"
 import { revokeSlack } from "./slack/install.js"
 import { revokeLinear } from "./linear/install.js"
@@ -34,7 +45,12 @@ import { everywhereStore, type Store } from "./store.js"
 
 /*
  * The signed-in account's Vector everywhere routes on vectordev.ai (contract 3.8, 3.12): link codes, links,
- * installations, repository mappings and the OAuth finish. Every route authenticates the browser session through
+ * installations, repository mappings, the OAuth finish, and two reads: the account's jobs of the last 30 days and its
+ * audit log of the last 90 (E16), each capped at 100 and holding ids, fixed codes and times only (E18 for the jobs:
+ * only the account's own, never the task, a device or a lease). The one free text either read answers is a job's
+ * `summary`: the sealed settle summary of a job in a private place (a Slack DM) that the signed-in account asked for and
+ * whose post has not gone out, cleaned by sanitizeReply as posts are (`privateSummary`); a shared place's is never
+ * answered. Whether it stays is the lead's 3.12/3.7 ruling (EV-23). Every route authenticates the browser session through
  * `requireAccountUser` (a bearer token, never a cookie) and answers 404 before any store read while the feature is off.
  * There is no `allow` route: teammates are not allowed to spend anyone's runs until the owner says yes (Q2).
  *
@@ -48,7 +64,13 @@ export type AccountApiDeps = {
   /** For `requireAccountUser`'s call to the account service. */
   readonly fetcher?: typeof fetch
   readonly now?: () => number
-  /** The platforms' OAuth exchanges: Slack's (VE-11) and Linear's (VE-12) are added here when they exist. */
+  /**
+   * Replaces the default exchanges, oauth-exchanges.ts `platformExchanges`: Slack's install (VE-11) and Linear's
+   * install and sign-in link (VE-12), built per request for each platform in `config.platforms` (listed in
+   * VECTOR_EVERYWHERE_PLATFORMS with complete settings, and empty while the feature is off). In identity.ts
+   * `finishOAuth`, a platform that is not on (`platformOn`) answers 404 first; one that is on but has no exchange for
+   * the purpose answers 501 EVERYWHERE_UNAVAILABLE.
+   */
   readonly exchanges?: OAuthExchanges
   readonly notify?: Notifier
   /** The jobs module's eraser; the default is jobs.ts `jobEraser` over this store (VE-05). */
@@ -58,6 +80,34 @@ export type AccountApiDeps = {
 }
 
 const BODY_LIMIT = 8_000
+/** The most jobs GET history answers, newest first (3.12). */
+export const HISTORY_LIMIT = 100
+/** The most entries GET audit answers, newest first (E16). */
+export const AUDIT_PAGE = 100
+
+/** A job as the account's job list shows it: ids, fixed codes, times and the pull request link only. */
+export type AccountJob = {
+  readonly jid: string
+  readonly platform: PlatformId
+  readonly installation: string
+  readonly state: JobState
+  readonly route?: JobRoute
+  readonly outcome?: Outcome
+  readonly code?: RefusalCode | DeclineCode
+  readonly ending?: Ending
+  readonly repository: string
+  readonly issue?: string
+  /** The reply went to a shared place: its summary is never answered here. */
+  readonly shared: boolean
+  readonly receivedAt: number
+  readonly endedAt?: number
+  readonly prUrl?: string
+  /** A private place's summary not yet posted, for the account that asked, cleaned as posts are (`privateSummary`). */
+  readonly summary?: string
+}
+
+/** An audit entry without the computer's id or another account's id: `byOther` says another account acted. */
+export type AccountAuditEntry = Omit<AuditEntry, "device" | "actor"> & { readonly byOther?: true }
 
 function notFound(): ApiError {
   return new ApiError(404, "NOT_FOUND", "Not found.")
@@ -332,7 +382,115 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
     }),
   )
 
-  return { link, links, installs, repos, oauthFinish }
+  /**
+   * GET: the account's jobs of the last 30 days, newest first, at most HISTORY_LIMIT (3.12): only jobs it sponsors
+   * (E18), each as `accountJob` shows it. `capped` says there were more; `skipped` counts records that did not decode.
+   */
+  const history = route((request, response) =>
+    methods(request, response, {
+      GET: async () => {
+        const session = await begin(request, deps)
+        const read = await readJobHistory(session.ctx.store, session.account, {
+          now: session.ctx.now,
+          limit: HISTORY_LIMIT,
+        })
+        // One installation read per installation, however many of its jobs hold a summary.
+        const snapshots = new Map(
+          await Promise.all(
+            [...new Set(read.jobs.filter((job) => summaryHeld(session, job)).map((job) => job.installation))].map(
+              async (installation) =>
+                [installation, await readInstallSnapshot(session.ctx.store, installation)] as const,
+            ),
+          ),
+        )
+        const jobs = read.jobs.map((job) =>
+          accountJob(job, privateSummary(session, job, snapshots.get(job.installation))),
+        )
+        // As GET repos: an account closed during the reads gets nothing.
+        await checkAccount(session.ctx, session.account)
+        json(response, 200, { jobs, capped: read.capped, skipped: read.skipped })
+      },
+    }),
+  )
+
+  /**
+   * GET: the account's audit log of the last 90 days, newest first, at most AUDIT_PAGE (E16, 3.13). Entries carry ids
+   * and fixed codes; the computer's id and another account's id are left out.
+   */
+  const audit = route((request, response) =>
+    methods(request, response, {
+      GET: async () => {
+        const session = await begin(request, deps)
+        const cutoff = session.ctx.now - KEEP_MS.audit
+        const entries = (await readAudit(session.ctx.store, session.account, AUDIT_PAGE))
+          .filter((entry) => entry.at >= cutoff)
+          .map((entry) => accountAuditEntry(entry, session.account))
+        await checkAccount(session.ctx, session.account)
+        json(response, 200, { entries })
+      },
+    }),
+  )
+
+  return { link, links, installs, repos, oauthFinish, history, audit }
+}
+
+function accountJob(job: JobRecord, summary: string | undefined): AccountJob {
+  return {
+    jid: job.jid,
+    platform: job.platform,
+    installation: job.installation,
+    state: job.state,
+    ...(job.route !== undefined ? { route: job.route } : {}),
+    ...(job.outcome !== undefined ? { outcome: job.outcome } : {}),
+    ...(job.code !== undefined ? { code: job.code } : {}),
+    ...(job.ending !== undefined ? { ending: job.ending } : {}),
+    repository: job.repository.fullName,
+    ...(job.issue !== undefined ? { issue: job.issue.key } : {}),
+    shared: job.shared,
+    receivedAt: job.receivedAt,
+    ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
+    ...(job.result?.prUrl !== undefined ? { prUrl: job.result.prUrl } : {}),
+    ...(summary !== undefined ? { summary } : {}),
+  }
+}
+
+/**
+ * A settle summary still held for a job in a private place (a Slack DM), only for the account that asked. A summary
+ * is erased once posted (3.2), so this is one whose post has not gone out. A shared place's summary is never answered
+ * (the private result surface is not built). It is opened only while the installation is the one the job ran under
+ * (`install`, its current record): after a disconnect, or any install after the job was received, it stays hidden
+ * (E13). The computer cleans a summary before settle, but the server does not rely on it: the text goes through
+ * `sanitizeReply` as the post does (3.7), so a secret or code is withheld and a link to another host removed.
+ */
+function privateSummary(session: Session, job: JobRecord, install: { readonly record: InstallRecord } | undefined) {
+  if (!summaryHeld(session, job) || !install || install.record.installedAt > job.receivedAt) return undefined
+  const opened = openSummary(session.ctx, job)
+  if (opened === undefined) return undefined
+  const clean = sanitizeReply(opened, {
+    platform: job.platform,
+    repository: job.repository.fullName,
+    maxChars: LIMITS.summaryChars,
+  }).text
+  return clean === "" ? undefined : clean
+}
+
+/** A private place's job that the signed-in account asked for and that still holds a sealed summary. */
+function summaryHeld(session: Session, job: JobRecord) {
+  return !job.shared && job.requester.account === session.account && job.summaryEnc !== undefined
+}
+
+function accountAuditEntry(entry: AuditEntry, account: string): AccountAuditEntry {
+  return {
+    id: entry.id,
+    at: entry.at,
+    event: entry.event,
+    ...(entry.platform !== undefined ? { platform: entry.platform } : {}),
+    ...(entry.installation !== undefined ? { installation: entry.installation } : {}),
+    ...(entry.jid !== undefined ? { jid: entry.jid } : {}),
+    ...(entry.code !== undefined ? { code: entry.code } : {}),
+    ...(entry.userId !== undefined ? { userId: entry.userId } : {}),
+    ...(entry.actor !== undefined && entry.actor !== account ? { byOther: true as const } : {}),
+  }
 }
 
 /** The production routes: environment, store and account service as deployed. */

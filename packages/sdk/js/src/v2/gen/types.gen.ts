@@ -1995,6 +1995,30 @@ export type ServerConfig = {
   cors?: Array<string>
 }
 
+export type EverywhereProject = {
+  /**
+   * An absolute folder path, at most 4096 characters, with no `.` or `..` and no trailing separator
+   */
+  directory: string
+  /**
+   * The folder's GitHub repository as owner/name
+   */
+  repository: string
+}
+
+export type EverywhereConfig = {
+  enabled?: boolean
+  max_usd?: number
+  minutes?: number
+  at_once?: number
+  per_day?: number
+  model?: string
+  wait_for_computer?: boolean
+  push?: boolean
+  stay_awake?: boolean
+  projects?: Array<EverywhereProject>
+}
+
 export type PermissionActionConfig = "ask" | "allow" | "deny"
 
 export type PermissionObjectConfig = {
@@ -2397,6 +2421,7 @@ export type ConfigWithLocks = {
   watcher?: {
     ignore?: Array<string>
   }
+  everywhere?: EverywhereConfig
   snapshot?: boolean
   plugin?: Array<
     | string
@@ -2597,6 +2622,7 @@ export type Config = {
   watcher?: {
     ignore?: Array<string>
   }
+  everywhere?: EverywhereConfig
   snapshot?: boolean
   plugin?: Array<
     | string
@@ -3157,6 +3183,27 @@ export type McpResource = {
   description?: string
   mimeType?: string
   client: string
+}
+
+export type WorktreeUnattendedPolicy = {
+  policy: "unattended-v1"
+}
+
+export type WorktreeUnattendedInput = {
+  directory: string
+  base: string
+  branch: string
+  jid: string
+}
+
+export type WorktreeUnattended = {
+  directory: string
+  branch: string
+  base: string
+}
+
+export type ShellUnattendedPolicy = {
+  shell: "offline-v1" | "none"
 }
 
 export type Symbol = {
@@ -14403,6 +14450,95 @@ export type ExperimentalResourceListResponses = {
 
 export type ExperimentalResourceListResponse =
   ExperimentalResourceListResponses[keyof ExperimentalResourceListResponses]
+
+export type WorktreeUnattendedPolicyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/experimental/worktree/unattended"
+}
+
+export type WorktreeUnattendedPolicyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type WorktreeUnattendedPolicyError = WorktreeUnattendedPolicyErrors[keyof WorktreeUnattendedPolicyErrors]
+
+export type WorktreeUnattendedPolicyResponses = {
+  /**
+   * Unattended worktree policy
+   */
+  200: WorktreeUnattendedPolicy
+}
+
+export type WorktreeUnattendedPolicyResponse =
+  WorktreeUnattendedPolicyResponses[keyof WorktreeUnattendedPolicyResponses]
+
+export type WorktreeUnattendedCreateData = {
+  body?: WorktreeUnattendedInput
+  path?: never
+  query?: never
+  url: "/experimental/worktree/unattended"
+}
+
+export type WorktreeUnattendedCreateErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type WorktreeUnattendedCreateError = WorktreeUnattendedCreateErrors[keyof WorktreeUnattendedCreateErrors]
+
+export type WorktreeUnattendedCreateResponses = {
+  /**
+   * Unattended worktree created
+   */
+  200: WorktreeUnattended
+}
+
+export type WorktreeUnattendedCreateResponse =
+  WorktreeUnattendedCreateResponses[keyof WorktreeUnattendedCreateResponses]
+
+export type ShellUnattendedPolicyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/experimental/shell/unattended"
+}
+
+export type ShellUnattendedPolicyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ShellUnattendedPolicyError = ShellUnattendedPolicyErrors[keyof ShellUnattendedPolicyErrors]
+
+export type ShellUnattendedPolicyResponses = {
+  /**
+   * Unattended shell policy
+   */
+  200: ShellUnattendedPolicy
+}
+
+export type ShellUnattendedPolicyResponse = ShellUnattendedPolicyResponses[keyof ShellUnattendedPolicyResponses]
 
 export type FindTextData = {
   body?: never

@@ -56,6 +56,7 @@ import {
   webNote,
   webNoteLocked,
 } from "./local-model"
+import { everywhereView } from "./everywhere-model"
 import { SettingsMemorySearchModel } from "./memory-search-model"
 import "./settings-v2.css"
 import "@/features/local/local.css"
@@ -71,6 +72,7 @@ const title = (id: (typeof SECTIONS)[number]["id"]) => SECTIONS.find((section) =
 
 export function SettingsLocalV2() {
   const reader = useLocalStatus({ retry: true })
+  const serverSync = useServerSync()
   const local = useLocalChange()
   const dialog = useDialog()
   const [notice, setNotice] = createSignal("")
@@ -221,7 +223,11 @@ export function SettingsLocalV2() {
                   </div>
                 </div>
                 <div class="settings-v2-card-body">
-                  <For each={offInLocal(status())}>
+                  <For
+                    each={offInLocal(status(), {
+                      everywhere: everywhereView(serverSync().globalConfig()).written,
+                    })}
+                  >
                     {(item) => (
                       <div data-slot="local-row">
                         <OffInLocalRow

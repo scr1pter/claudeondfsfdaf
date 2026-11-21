@@ -1,0 +1,16 @@
+---
+// Unreleased draft: Astro routes only src/pages, so this page is not built, linked or listed in the sitemap.
+// At 2.0.0 the owner moves it to src/pages/everywhere.astro and adds "everywhere" to the keep set in
+// script/prune-vector-site.mjs in the same change (spec §6.5). It is also the OAuth landing: the Slack and Linear
+// callbacks redirect to /everywhere#platform=…&code=…&state=… (PUB-8), so both go live only with this move.
+import { EverywhereAccount } from "../components/marketing/everywhere/EverywhereAccount"
+import MarketingLayout from "../components/marketing/MarketingLayout.astro"
+
+export const prerender = true
+---
+
+<MarketingLayout title="Vector everywhere" description="Your Vector everywhere connections, links, jobs and audit log." noindex>
+  <div class="account-environment">
+    <EverywhereAccount client:only="react" />
+  </div>
+</MarketingLayout>
