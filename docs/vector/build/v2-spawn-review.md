@@ -617,6 +617,11 @@ by this addendum.
   root-owned bwrap runs (owned-process.test.ts's skip pattern, kept in this file rather than the native
   `process-isolation-linux.test.ts`), `printf '%s|'` through the plan prints `a b|it's|$HOME|`x`|`. On the old join
   all three fail (7 pass, 3 fail; bwrap exit 2). FLOOR stays false; nothing is activated.
+- Review note (21 November 2026): with this change the floor branch quotes `args` while the unguarded and non-floor
+  branches still let cross-spawn join them unquoted, so `launch(file, args, { shell: true })` with non-empty args
+  would build different command lines with and without the floor. No caller does that today (all pass `args: []`). A
+  check that shell mode is only used with empty args (in `ProcessIsolation.launch` or spawn-inventory) is left as a
+  follow-up.
 
 ## Addendum, 21 November 2026: F7 (Windows taskkill through PATH) closed for core and the engine
 
@@ -635,6 +640,12 @@ by this addendum.
 - Follow-ups, not changed here: `packages/sdk/js/src/process.ts:8` (the SDK copy cannot import core; after the
   regeneration PR, inline the absolute path and a minimal environment), `packages/desktop/src/main/github-clone.ts:560`
   (`execFileSync("taskkill", …)`) and `packages/desktop/src/main/external-agents.ts:1033` (`"taskkill"`).
+- Known limit (review note, 21 November 2026): a Windows installed outside `C:\Windows` (another drive or folder) has
+  no `C:\Windows\System32\taskkill.exe`, so a tree kill there now fails where the old bare name still resolved:
+  killGroup returns a kill PlatformError, `core/shell.ts` killTree resolves through its `error` handler, and
+  `engine/util/process.ts` stop() gets a nothrow failure, so the process tree is left running. `config/managed.ts`
+  makes the same fixed-path choice. A possible follow-up, not taken: when the fixed path is missing, fall back to a
+  SystemRoot validated as an absolute, local, system-owned folder (never PATH).
 
 ## Addendum, 21 November 2026: F8 (the PTY foreground read used a `ps` from PATH) closed
 
@@ -657,6 +668,8 @@ SystemRoot stay, so nvidia-smi on Windows is unaffected. The stricter minimal en
 was not chosen: Windows GPU detection has no CI runner and would fail quietly to "no GPU". The inventory row says so,
 and `spawn-inventory.test.ts` "the hardware read starts its tool with the untrusted-child environment" is red without
 the option.
+The check allows whitespace and line breaks between `execFile(` and its arguments, so the prettier-wrapped call
+(21 November 2026 style commit) still matches; it stays red with the option removed.
 
 **F10, Dependency-internal spawns (inventory).** The direct-spawn lint cannot see processes a dependency starts inside
 itself. These are the ones core and the engine load, read from the installed packages:
