@@ -682,6 +682,42 @@ jobs:
           Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"
           bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
           if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }
+      - name: Report the per-architecture native build window
+        # Measurement only (#52 phase 1): file times under each per-architecture CMake tree. It reads,
+        # writes nothing and cannot fail the job; build-computer-helper.ts caps each cmake call at 300 s.
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: pwsh
+        env:
+          VECTOR_HELPER_RESTORED: ${{ steps.restore.outputs.restored == 'true' }}
+        run: |
+          $seconds = { param($from, $to) if ($from -and $to) { [math]::Round(($to - $from).TotalSeconds, 1) } else { $null } }
+          foreach ($arch in "x64", "arm64") {
+            $tree = "native/build/win32-$arch"
+            $files = @(if (Test-Path -LiteralPath $tree -PathType Container) { Get-ChildItem -LiteralPath $tree -Recurse -File -ErrorAction SilentlyContinue })
+            $release = [IO.Path]::GetFullPath((Join-Path $tree "Release")) + [IO.Path]::DirectorySeparatorChar
+            $start = ($files | Sort-Object CreationTimeUtc | Select-Object -First 1).CreationTimeUtc
+            $generated = ($files | Where-Object { $_.Extension -in ".sln", ".vcxproj" } | Sort-Object LastWriteTimeUtc | Select-Object -Last 1).LastWriteTimeUtc
+            $firstObject = ($files | Where-Object { $_.Extension -eq ".obj" } | Sort-Object LastWriteTimeUtc | Select-Object -First 1).LastWriteTimeUtc
+            $lastOutput = ($files | Where-Object { $_.FullName.StartsWith($release) -and $_.Extension -in ".exe", ".lib", ".pdb" } | Sort-Object LastWriteTimeUtc | Select-Object -Last 1).LastWriteTimeUtc
+            $configure = & $seconds $start $generated
+            $build = & $seconds $generated $lastOutput
+            $window = [ordered]@{
+              arch = $arch
+              restored = $env:VECTOR_HELPER_RESTORED -eq "true"
+              files = $files.Count
+              configureStart = if ($start) { $start.ToString("o") } else { $null }
+              generated = if ($generated) { $generated.ToString("o") } else { $null }
+              firstObject = if ($firstObject) { $firstObject.ToString("o") } else { $null }
+              lastOutput = if ($lastOutput) { $lastOutput.ToString("o") } else { $null }
+              configureSeconds = $configure
+              buildSeconds = $build
+              firstObjectSeconds = & $seconds $generated $firstObject
+              buildHeadroomSeconds = if ($null -ne $build) { [math]::Round(300 - $build, 1) } else { $null }
+            }
+            Write-Output ("computer-helper-build-window " + ($window | ConvertTo-Json -Compress))
+          }
       - name: Run Windows unit and fresh version/probe checks
         timeout-minutes: 5
         shell: bash

@@ -1692,6 +1692,34 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
   expect(emitted.join("")).not.toContain("PRIVATE")
 })
 
+test("the per-architecture native build window report runs after the build, reads only and cannot fail the job", () => {
+  const current = steps(job("windows-build"))
+  const build = current.findIndex((step) => step.name === "Build both channel helper architectures")
+  const report = current[build + 1]
+  expect(build).toBeGreaterThan(-1)
+  expect(report?.name).toBe("Report the per-architecture native build window")
+  expect(report!.if).toBe("always()")
+  expect(report!["continue-on-error"]).toBe(true)
+  expect(report!["timeout-minutes"]).toBe(1)
+  expect(report!.shell).toBe("pwsh")
+  expect(record(report!.env)).toEqual({ VECTOR_HELPER_RESTORED: "${{ steps.restore.outputs.restored == 'true' }}" })
+  const script = String(report!.run)
+  expect(script).toContain('foreach ($arch in "x64", "arm64") {')
+  expect(script).toContain('$tree = "native/build/win32-$arch"')
+  expect(script).toContain('Write-Output ("computer-helper-build-window " + ($window | ConvertTo-Json -Compress))')
+  // Measurement only: no write, no output variable, no native/out path, no build or digest input.
+  expect(script).not.toMatch(
+    /native\/out|Out-File|Set-Content|Add-Content|New-Item|Remove-Item|Copy-Item|Move-Item|GITHUB_OUTPUT|GITHUB_ENV|>>|cmake|bun |exit|throw/,
+  )
+  // The digest-bound build step itself keeps its deadline, parallelism and command.
+  expect(current[build]!["timeout-minutes"]).toBe(20)
+  expect(lines(current[build]!.run)).toEqual([
+    'Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"',
+    "bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32",
+    'if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }',
+  ])
+})
+
 test("each Windows architecture prints its helper identity right after its version check, logging only", () => {
   for (const [name, arch, check] of [
     ["windows-build", "x64", "Run Windows unit and fresh version/probe checks"],
