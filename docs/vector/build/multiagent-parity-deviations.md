@@ -2420,3 +2420,13 @@ Remaining:
 - After several Windows engine shards that hold local.test.ts pass on the fix, remove "local.test.ts probe 400" from the four handoff docs above. The lead removes it from RULES-v2.md. 21 Nov 2026: removed from `v2-master-prompt.md`, `v2-handoff.md`, `connected-workspace-handoff.md` and `vector-everywhere-handoff.md`.
 - Follow-up, not in this change: `ollamaModels` (probe.ts, the model read for a listed loopback Ollama server with no pin before a model call) still defaults to the 400 ms loopback wait. On a busy Windows machine it can miss the same slow /api/version; `read` then returns false, so `holds` never learns which models that server passes on and `passesOn` sees only models whose names look like cloud models. This is the same class of budget mismatch, on the forwarding check rather than a refusal. Decide whether an unpinned listed loopback server should also get `IDENTIFY_TIMEOUT.remote`, and add a slow-version regression test for model calls (like the new probe.test.ts case) with it. If a CI failure ever traces back to an unpinned loopback model read, do this then.
 - Do not re-run job `133439824061` on its own. It failed inside a test body, so the re-run policy does not cover it.
+- 21 Nov 2026 (branch `engine-core-fixes`): the `ollamaModels` follow-up above is done. Decision: an unpinned listed
+  server on this computer is one address the person or company listed, not a Detect scan, so `ollamaModels` now
+  defaults to `options.timeout ?? IDENTIFY_TIMEOUT.remote` (3 s). A missed read lets a server that forwards to
+  ollama.com pass as local, which is worse than holding the first model call to a slow or silent server; the check is
+  cached per policy and origin, so only the first call waits (a refused connection still fails at once on Linux, and
+  takes about 2 s on Windows). The `IDENTIFY_TIMEOUT` comment now says `loopback` is for Detect only. Test: probe.test.ts
+  "gives a listed server with no pin on this computer the long wait, so a slow Ollama still says which models it passes
+  on": an unpinned 127.0.0.1 Ollama fake answers /api/version `IDENTIFY_TIMEOUT.loopback + 200` ms late and lists
+  `mymodel` with `remote_host`, and `forwards`/`passesOn` are true; with `makeHolds({ timeout: 100 })` they are false.
+  Red on the old default (0 pass, 1 fail). probe.test.ts 62 pass and detect.test.ts 6 pass after the change.

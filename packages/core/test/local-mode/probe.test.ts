@@ -450,6 +450,42 @@ describe("checking a listed server before its first model call", () => {
     expect(holds.passesOn("https://api.openai.com/v1", ["gpt-oss:120b-cloud"], company)).toBe(false)
   })
 
+  // CI14: a listed server with no pin is one address the person or company listed, not a Detect scan, so its model read
+  // before a call gets the long wait. With the short one, a slow Ollama that forwards to ollama.com passed as local.
+  test("gives a listed server with no pin on this computer the long wait, so a slow Ollama still says which models it passes on", async () => {
+    const forwarding = async () => {
+      const server = await fake("ollama", {
+        "GET /api/tags": () => Response.json({ models: [{ name: "mymodel:latest", size: 1 }] }),
+        "POST /api/show": () => Response.json({ remote_host: "https://ollama.com:443", remote_model: "gpt-oss:120b" }),
+      })
+      const version = (await LocalServers.load("ollama")).interactions.find((item) =>
+        item.request.url.endsWith("/api/version"),
+      )!
+      server.route("GET /api/version", async () => {
+        await Bun.sleep(LocalProbe.IDENTIFY_TIMEOUT.loopback + 200)
+        return new Response(version.response.body, { status: version.response.status, headers: version.response.headers })
+      })
+      return server
+    }
+    const late = await forwarding()
+    const listed = policy(late.origin)
+    expect(listed.pins?.[late.origin]).toBeUndefined()
+    Egress.configure(listed)
+    const holds = LocalProbe.makeHolds()
+    await holds.check(`${late.origin}/v1/chat/completions`, listed, ["mymodel"])
+    expect(holds.forwards(late.origin, "mymodel")).toBe(true)
+    expect(holds.passesOn(`${late.origin}/v1/chat/completions`, ["mymodel"], listed)).toBe(true)
+
+    // An explicit shorter wait still applies: the read misses and nothing is learned.
+    const other = await forwarding()
+    const short = policy(other.origin)
+    Egress.configure(short)
+    const hurried = LocalProbe.makeHolds({ timeout: 100 })
+    await hurried.check(`${other.origin}/v1/chat/completions`, short, ["mymodel"])
+    expect(hurried.forwards(other.origin, "mymodel")).toBe(false)
+    expect(hurried.passesOn(`${other.origin}/v1/chat/completions`, ["mymodel"], short)).toBe(false)
+  })
+
   test("reads a server again when a call names a model it did not list, once for each model", async () => {
     const server = await fake("ollama", {
       "GET /api/tags": () => Response.json({ models: [{ name: "qwen3:8b", size: 1 }] }),
