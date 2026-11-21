@@ -11,6 +11,7 @@ import fsp from "fs/promises"
 import path from "path"
 import { Cause, Effect, Option, Schema } from "effect"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
+import { ReviewCheckpointLock } from "@vectordevai/core/review/checkpoint-lock"
 import { Flock } from "@vectordevai/core/util/flock"
 import {
   MAX_RULES_BYTES,
@@ -2058,7 +2059,9 @@ function writeLocalState(
     locked,
     batch,
     written,
-  }: Partial<Pick<LocalReviewRecord, "outcome" | "strictPolicy" | "checkedRules" | "diagnosticsHost" | "inversionKey">> & {
+  }: Partial<
+    Pick<LocalReviewRecord, "outcome" | "strictPolicy" | "checkedRules" | "diagnosticsHost" | "inversionKey">
+  > & {
     locked?: Awaited<ReturnType<typeof lockBatchFile>>
     batch?: ReturnType<typeof localBatchStore>["metadata"]
     unchangedRecord?: string
@@ -2066,6 +2069,7 @@ function writeLocalState(
   } = {},
 ) {
   if (!file) return Effect.void
+  let writer: ReviewCheckpointLock.Lease | undefined
   const encodeLocal = (value: ReviewState) => encodeState(diagnosticsHost ? redactDiagnosticData(value) : value)
   const publish = async (record: { state: string }, notify = false) => {
     // Compare the original bytes under the lock. Mask the visible fields at publication for both a normal
@@ -2075,10 +2079,21 @@ function writeLocalState(
       : record
     const text = JSON.stringify(saved) + "\n"
     if (locked) return locked.replace(text)
-    const temporary = `${file}.${crypto.randomUUID()}.tmp`
+    if (!writer && process.platform === "linux") throw new Error("The local review writer is not held.")
+    const destination = writer ? path.join(writer.directory, path.basename(file)) : file
+    const temporary = `${destination}.${crypto.randomUUID()}.tmp`
     try {
-      await fsp.writeFile(temporary, text, { mode: 0o600, flag: "wx" })
-      await fsp.rename(temporary, file)
+      if (writer) {
+        const output = await fsp.open(temporary, "wx", 0o600)
+        try {
+          await output.writeFile(text)
+          await output.sync()
+        } finally {
+          await output.close()
+        }
+      } else await fsp.writeFile(temporary, text, { mode: 0o600, flag: "wx" })
+      await fsp.rename(temporary, destination)
+      await writer?.sync()
       if (notify) written?.(text)
     } finally {
       await fsp.rm(temporary, { force: true })
@@ -2087,7 +2102,7 @@ function writeLocalState(
   const write = async () => {
     if (locked) await locked.verify()
     else {
-      const latest = await concurrentBatchRecord(file, previous?.text, !!previous?.batchAccounting)
+      const latest = await concurrentBatchRecord(file, previous?.text, !!previous?.batchAccounting, writer)
       if (latest) {
         // An ordinary review acquired the publication lock after a funded review had already
         // written its checkpoint. Settle its own charge without displacing that review's state.
@@ -2129,7 +2144,9 @@ function writeLocalState(
     // A newer run can finish while an earlier one checks its budget. Change only the marker on the exact
     // record we started with, keeping the original outcome (including legacy usage metadata) intact.
     if (unchangedRecord !== undefined) {
-      const current = locked ? await locked.read() : await fsp.readFile(file, "utf8")
+      const current = locked
+        ? await locked.read()
+        : await fsp.readFile(writer ? path.join(writer.directory, path.basename(file)) : file, "utf8")
       if (current !== unchangedRecord) return
     }
     const carried =
@@ -2161,11 +2178,21 @@ function writeLocalState(
       catch: () =>
         new LocalReviewError({ message: "The local batch checkpoint could not be saved. Coverage was not committed." }),
     })
-  return Effect.promise(() =>
-    Flock.withLock(path.basename(file), write, { dir: path.dirname(file) }).catch((error: unknown) =>
-      say(`Warning: could not save this review for next time: ${error instanceof Error ? error.message : error}`),
-    ),
-  )
+  return Effect.promise(async () => {
+    try {
+      // Funded batches are Linux-only. Preserve ordinary cache behavior on other supported hosts.
+      if (process.platform !== "linux")
+        return await Flock.withLock(path.basename(file), write, { dir: path.dirname(file) })
+      writer = await ReviewCheckpointLock.acquire(path.basename(file), { dir: path.dirname(file) })
+      try {
+        await writer.use(write)
+      } finally {
+        await writer.release()
+      }
+    } catch (error) {
+      say(`Warning: could not save this review for next time: ${error instanceof Error ? error.message : error}`)
+    }
+  })
 }
 
 // Only repository-relative, regular instruction files can establish a local rule. A linked file or directory

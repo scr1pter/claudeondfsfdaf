@@ -5,7 +5,7 @@ import fs, { type FileHandle } from "node:fs/promises"
 import path from "node:path"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import type { Effect } from "effect"
-import { Flock } from "@vectordevai/core/util/flock"
+import { ReviewCheckpointLock } from "@vectordevai/core/review/checkpoint-lock"
 import {
   decodeState,
   emptyState,
@@ -45,7 +45,7 @@ export async function lockBatchFile(root: string, file: string, head: string, si
   )
     throw unsafe()
   const handles: FileHandle[] = []
-  let lock: Flock.Lease | undefined
+  let lock: ReviewCheckpointLock.Lease | undefined
   const close = async () => {
     try {
       await lock?.release()
@@ -76,9 +76,9 @@ export async function lockBatchFile(root: string, file: string, head: string, si
     }
     const dir = fdPath(handle)
     const leaf = path.join(dir, path.basename(file))
-    lock = await Flock.acquire(path.basename(file), { dir, signal })
+    lock = await ReviewCheckpointLock.acquire(path.basename(file), { dir, signal })
     signal?.throwIfAborted()
-    const verify = async () => {
+    const verifyRepository = async () => {
       const visible = await fs.realpath(path.dirname(file))
       const original = await handle.stat({ bigint: true })
       const current = await fs.lstat(visible, { bigint: true })
@@ -95,8 +95,10 @@ export async function lockBatchFile(root: string, file: string, head: string, si
       )
         throw unsafe()
     }
+    const owned = lock
+    const verify = () => owned.use(verifyRepository)
     await verify()
-    const read = async () => {
+    const readOwned = async () => {
       try {
         const found = await fs.open(leaf, flags)
         try {
@@ -111,7 +113,7 @@ export async function lockBatchFile(root: string, file: string, head: string, si
         if (!code(error, "ENOENT")) throw error
       }
     }
-    const replace = async (encoded: string) => {
+    const replaceOwned = async (encoded: string) => {
       if (Buffer.byteLength(encoded) > maximumBytes) throw unsafe()
       const temporary = leaf + "." + crypto.randomUUID() + ".tmp"
       try {
@@ -122,7 +124,7 @@ export async function lockBatchFile(root: string, file: string, head: string, si
         } finally {
           await output.close()
         }
-        await verify()
+        await verifyRepository()
         await fs.rename(temporary, leaf)
         // A charged dispatch is safe only after both the bytes and their new name survive a restart.
         await handle.sync()
@@ -130,6 +132,12 @@ export async function lockBatchFile(root: string, file: string, head: string, si
         await fs.rm(temporary, { force: true })
       }
     }
+    const read = () =>
+      owned.use(async () => {
+        await verifyRepository()
+        return readOwned()
+      })
+    const replace = (encoded: string) => owned.use(() => replaceOwned(encoded))
     return { file: leaf, text: await read(), close, verify, read, replace }
   } catch (error) {
     await close()
@@ -139,11 +147,16 @@ export async function lockBatchFile(root: string, file: string, head: string, si
 
 // Ordinary reviews hold the writer lock only at publication. A ledger created or updated while
 // their model was running must survive, including when the ordinary review began with no cache.
-export async function concurrentBatchRecord(file: string, previous: string | undefined, previouslyBatch: boolean) {
+export async function concurrentBatchRecord(
+  file: string,
+  previous: string | undefined,
+  previouslyBatch: boolean,
+  writer?: Pick<ReviewCheckpointLock.Lease, "directory">,
+) {
   let current: string | undefined
   try {
-    if ((await fs.realpath(path.dirname(file))) !== path.dirname(file)) return { changed: true } as const
-    const handle = await fs.open(file, flags)
+    if (!writer && (await fs.realpath(path.dirname(file))) !== path.dirname(file)) return { changed: true } as const
+    const handle = await fs.open(writer ? path.join(writer.directory, path.basename(file)) : file, flags)
     try {
       const stat = await handle.stat()
       if (!stat.isFile() || stat.nlink !== 1) throw unsafe()

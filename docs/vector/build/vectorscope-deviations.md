@@ -26526,3 +26526,13 @@ Moved the existing credential screening helper from citation verification to the
 Connect checks again for changed settings before looking up the branch checkpoint. The existing cache receipt and Git collector isolation remain in place. The original cache cases passed in the hosted run, which reported the settings and checkpoint lookup in the opposite order. The native collector tests require hosted verification on the repaired commit. [Linux engine job](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44936504715/job/136949163682)
 
 The focused checks passed 176 tests (ledger 86, rule 4, selector 45, pin 37, cache 1, connect 3). The evaluation project and all 27 workspace packages passed typechecking. The pipeline remains at revision 5 and the source digest moved from `31a9837d871ec207` to `e9374c25be7600bf`.
+
+## 2026-11-21 · VS-19 Serialize local review checkpoint writers
+
+Linux batch and ordinary writers acquire the same persistent SQLite sidecar next to the checkpoint. SQLite holds an exclusive kernel lock across reads, reconciliation and publication. The existing directory lease remains in place for coordination with healthy older writers. The sidecar holds no review data, and release drains in-flight writes before closing the connection. Linux publication syncs the new file and its directory.
+
+Process tests cover both Node and Bun SQLite drivers, a suspended holder with a backdated heartbeat, abrupt process exit, descriptor aliases and release during a write. The CLI batch fixture exercises checkpoint publication and resume through the normal command path. The checkpoint format is unchanged. Batching remains Linux-only, and ordinary publication on macOS and Windows keeps its existing path. Older binaries still use the original stale-heartbeat behavior, so the shared guarantee applies when both writers are upgraded.
+
+Two negative controls removed the exclusive transaction and the release drain in a scratch copy. The suspension and drain tests failed respectively, then passed after restoring the original source.
+
+The focused files passed 61 tests (races 4, pin 37, batch 3, connect-cache 1, strict 13, pr-verdict 3). Core, engine, evaluation and all 27 workspace packages passed typechecking. The SDK and editor schemas matched their checked-in output. The source digest moved from `e9374c25be7600bf` to `102ac0ede06d9bac` at revision 5.

@@ -44,6 +44,7 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // pinned from the day they land: once wired they decide which findings select.ts demotes and which dismissals become
 // team memory. The batch planner, size skip and cursor validation now determine when a large change is
 // reviewed and which files can retain coverage. Pin their contracts and the durable ReviewState reader.
+// Pin the checkpoint writer fence too: a stale publisher must not displace durable batch coverage/accounting.
 // verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
 // The CLI apply step (cli/cmd/review.fix.ts, VS-12c) runs after selection. The shared executor (review/fix.ts)
 // is pinned from SF-33 because it launches consented diagnostic evidence adapters. The owner fix API adapter (engine
@@ -65,6 +66,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/engine/src/review/batch.ts",
   "packages/engine/src/review/batch-local.ts",
+  "packages/core/src/review/checkpoint-lock.ts",
   "packages/engine/src/review/checks.ts",
   "packages/engine/src/review/diagnostic-adapter.ts",
   "packages/engine/src/review/fix.ts",
