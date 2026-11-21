@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { Effect } from "effect"
+import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { McpCatalog } from "@/mcp/catalog"
+import { Config } from "@/config/config"
+import { TestConfig } from "../fixture/config"
+import { testEffect } from "../lib/effect"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import { ReviewMcp } from "@/review/mcp"
@@ -119,3 +124,75 @@ test("filters the entire model catalog before listing or connecting, preserving 
   ])
   expect(calls).toBe(1)
 })
+
+test("inherits persisted review ancestry and denies missing or cyclic ancestry", () => {
+  const tree = new Map<string, { id: string; internal?: string; parentID?: string }>([
+    ["root", { id: "root", internal: "vectorscope.review" }],
+    ["one", { id: "one", parentID: "root" }],
+    ["child", { id: "child", parentID: "one" }],
+    ["loop", { id: "loop", parentID: "loop" }],
+    ["ordinary", { id: "ordinary" }],
+  ])
+  const get = (id: string) => {
+    const session = tree.get(id)
+    return session ? Effect.succeed(session) : Effect.fail("missing")
+  }
+  for (const session of [tree.get("child")!, tree.get("loop")!, { id: "lost", parentID: "unknown" }])
+    expect(Effect.runSync(ReviewMcp.restrictedFamily(session, get))).toBe(true)
+  expect(Effect.runSync(ReviewMcp.restrictedFamily({ id: "other", parentID: "ordinary" }, get))).toBe(false)
+})
+
+test("a cached SDK tool rechecks live authority at execution and propagates cancellation without retry", async () => {
+  let calls = 0
+  let settled = 0
+  const started = Promise.withResolvers<void>()
+  const client = {
+    callTool: async (_args: unknown, _schema: unknown, opts: { signal?: AbortSignal }) => {
+      calls++
+      started.resolve()
+      if (!opts.signal) return { content: [{ type: "text", text: "ordinary result" }] }
+      await new Promise<void>((_, reject) =>
+        opts.signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }),
+      )
+    },
+  }
+  const tool = McpCatalog.convertTool(
+    { name: "look_up", inputSchema: { type: "object" } },
+    client as unknown as Parameters<typeof McpCatalog.convertTool>[1],
+    undefined,
+    {
+      onSettled: async () => {
+        settled++
+      },
+    },
+  )
+  const call = (signal?: AbortSignal) =>
+    Promise.resolve(tool.execute!({ query: "untrusted-data" }, { toolCallId: "c", messages: [], abortSignal: signal }))
+  await expect(ReviewMcp.withinCall(true, () => call())).rejects.toThrow(ReviewMcp.unavailable)
+  await expect(call(AbortSignal.abort())).rejects.toThrow()
+  expect([calls, settled]).toEqual([0, 0])
+  const control = new AbortController()
+  const pending = call(control.signal)
+  await started.promise
+  control.abort()
+  await expect(pending).rejects.toThrow("cancelled")
+  expect([calls, settled]).toEqual([1, 1])
+  expect(await call()).toMatchObject({ content: [{ type: "text", text: "ordinary result" }] })
+})
+
+const cold = testEffect(
+  LayerNode.compile(MCP.node, [[Config.node, TestConfig.layer({ get: () => Effect.die("review initialized MCP") })]]),
+)
+cold.effect(
+  "stock lifecycle blocks direct reads, redirects, commands and reconnects before loading any connector",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* MCP.Service
+      expect(yield* service.resources("injected")).toEqual({})
+      expect(yield* service.prompts()).toEqual({})
+      expect(yield* service.tools()).toEqual({})
+      expect(yield* service.readResource("injected", "other://redirect?query=raw")).toBeUndefined()
+      expect(yield* service.getPrompt("injected", "ask", { cursor: "raw" })).toBeUndefined()
+      expect((yield* Effect.exit(service.connect("injected")))._tag).toBe("Failure")
+    }).pipe(Effect.provideService(ReviewMcp.Restricted, true)),
+)

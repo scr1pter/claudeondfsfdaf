@@ -114,7 +114,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const sessions = yield* Session.Service
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
-  const catalog = MCP.modelCatalog(mcp, ReviewMcp.restrictsModel(input.session.internal))
+  const restricted = yield* ReviewMcp.restrictedFamily(input.session, sessions.get)
+  const catalog = MCP.modelCatalog(mcp, restricted)
+  // The SDK executes JS callbacks after the listing fiber has returned. Carry the non-egress scope into them.
+  const runTool: typeof run.promise = (effect) =>
+    ReviewMcp.withinCall(restricted, () =>
+      run.promise(restricted ? Effect.provideService(effect, ReviewMcp.Restricted, true) : effect),
+    )
+
   const truncate = yield* Truncate.Service
   const brain = yield* Brain.Service
   // The prompt guard reads what this directory's prompts come from, so every caller must hand it the config.
@@ -333,12 +340,13 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       }).pipe(Effect.orDie),
   })
 
-  const builtinTask = (yield* registry.named()).task
+  const builtinTask = (yield* registry.named(restricted)).task
   const decodeTask = Schema.decodeUnknownResult(builtinTask.parameters)
   for (const item of yield* registry.tools({
     modelID: ModelV2.ID.make(input.model.api.id),
     providerID: input.model.providerID,
     agent: input.agent,
+    ...(restricted ? { review: true } : {}),
   })) {
     const { schema, description } = definition(input.model, item)
     tools[item.id] = tool({
@@ -364,15 +372,19 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           : undefined,
       ),
       execute(args, options) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            const review = restricted || (yield* ReviewMcp.blocked)
+            if (review && (item.id === "task" || ToolRegistry.isPluginToolDef(item)))
+              throw new Error(ReviewMcp.unavailable)
             const ctx = context(args, options)
             yield* access.output(args).pipe(Effect.orDie)
-            yield* plugin.trigger(
-              "tool.execute.before",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
-              { args },
-            )
+            if (!review)
+              yield* plugin.trigger(
+                "tool.execute.before",
+                { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+                { args },
+              )
             yield* access.output(args).pipe(Effect.orDie)
             const result = yield* item.execute(args, ctx).pipe(
               // The owner approved these changes, so they are not held at the next start.
@@ -390,11 +402,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
             // Before plugins: an after-hook must not receive a guest family's private raw output.
             yield* checked(options.toolCallId, output)
-            yield* plugin.trigger(
-              "tool.execute.after",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
-              output,
-            )
+            if (!review)
+              yield* plugin.trigger(
+                "tool.execute.after",
+                { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                output,
+              )
             if (options.abortSignal?.aborted) {
               yield* input.processor.completeToolCall(options.toolCallId, output)
             }
@@ -436,8 +449,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }),
       ),
       execute(args, opts) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            ReviewMcp.checkCall(opts.abortSignal)
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
             const clients = yield* catalog.clients()
@@ -528,8 +542,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }),
       ),
       execute(args, opts) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            ReviewMcp.checkCall(opts.abortSignal)
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
             const clients = yield* catalog.clients()
@@ -624,8 +639,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }),
       ),
       execute(args, opts) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            ReviewMcp.checkCall(opts.abortSignal)
             const parsed = parseReadMcpResourceArgs(args)
             const ctx = context(toRecord(args), opts)
             const clients = yield* catalog.clients()
@@ -703,8 +719,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     const transformed = ProviderTransform.schema(input.model, { ...schema, properties: schema.properties ?? {} })
     item.inputSchema = jsonSchema(transformed)
     item.execute = (args, opts) =>
-      run.promise(
+      runTool(
         Effect.gen(function* () {
+          ReviewMcp.checkCall(opts.abortSignal)
           const ctx = context(args, opts)
           yield* access.output(args).pipe(Effect.orDie)
           yield* plugin.trigger(

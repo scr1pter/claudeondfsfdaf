@@ -34,6 +34,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
+import { ReviewMcp } from "@/review/mcp"
 import { McpComputerPolicy } from "./computer-policy"
 import { McpEvent } from "@vectordevai/schema/mcp-event"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
@@ -855,11 +856,13 @@ const layer = Layer.effect(
     })
 
     const clients = Effect.fn("MCP.clients")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       const s = yield* InstanceState.get(state)
       return s.clients
     })
 
     const instructions = Effect.fn("MCP.instructions")(function* () {
+      if (yield* ReviewMcp.blocked) return []
       const s = yield* InstanceState.get(state)
       return Object.entries(s.instructions)
         .filter(([name]) => s.status[name]?.status === "connected")
@@ -1006,6 +1009,7 @@ const layer = Layer.effect(
     })
 
     const connect = Effect.fn("MCP.connect")(function* (name: string) {
+      if (yield* ReviewMcp.blocked) return yield* Effect.die(new Error(ReviewMcp.unavailable))
       const mcp = yield* requireMcpConfig(name)
       const enabled = { ...mcp, enabled: true }
       const s = yield* InstanceState.get(state)
@@ -1033,6 +1037,7 @@ const layer = Layer.effect(
     }
 
     const tools = Effect.fn("MCP.tools")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       const result: Record<string, Tool> = {}
       const s = yield* InstanceState.get(state)
 
@@ -1061,6 +1066,7 @@ const layer = Layer.effect(
     })
 
     const cloudTools = Effect.fn("MCP.cloudTools")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       const s = yield* InstanceState.get(state)
       const result: Record<string, McpCloud.Request> = {}
       for (const clientName of Object.keys(s.clients)) {
@@ -1103,10 +1109,12 @@ const layer = Layer.effect(
     }
 
     const prompts = Effect.fn("MCP.prompts")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       return yield* collectFromConnected(yield* InstanceState.get(state), McpCatalog.prompts, "prompts")
     })
 
     const resources = Effect.fn("MCP.resources")(function* (clientName?: string) {
+      if (yield* ReviewMcp.blocked) return {}
       return yield* collectFromConnected(
         yield* InstanceState.get(state),
         McpCatalog.resources,
@@ -1117,6 +1125,7 @@ const layer = Layer.effect(
     })
 
     const resourceTemplates = Effect.fn("MCP.resourceTemplates")(function* (clientName?: string) {
+      if (yield* ReviewMcp.blocked) return {}
       return yield* collectFromConnected(
         yield* InstanceState.get(state),
         McpCatalog.resourceTemplates,
@@ -1132,6 +1141,7 @@ const layer = Layer.effect(
       label: string,
       meta?: Record<string, unknown>,
     ) {
+      if (yield* ReviewMcp.blocked) return undefined
       const s = yield* InstanceState.get(state)
       const client = s.clients[clientName]
       if (!client) {

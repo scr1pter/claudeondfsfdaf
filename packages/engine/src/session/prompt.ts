@@ -43,6 +43,7 @@ import { ComputerGeneric } from "@/computer/generic"
 import { Computer } from "@vectordevai/schema/computer"
 import { assertExternalDirectoryEffect, readPatterns } from "@/tool/external-directory"
 import type { Tool } from "@/tool/tool"
+import { ReviewMcp } from "@/review/mcp"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
 import { ulid } from "ulid"
@@ -485,7 +486,13 @@ const layer = Layer.effect(
             ? Effect.die(
                 new Error("Workflow runs cannot receive prompts or commands; resume them with the workflow tool."),
               )
-            : TaskPlace.within(sessionID)(effect),
+            : ReviewMcp.restrictedFamily(session, sessions.get).pipe(
+                Effect.andThen((restricted) =>
+                  TaskPlace.within(sessionID)(
+                    restricted ? Effect.provideService(effect, ReviewMcp.Restricted, true) : effect,
+                  ),
+                ),
+              ),
         ),
       )
     const admit: Interface["admit"] = (sessionID) =>
@@ -1799,6 +1806,16 @@ const layer = Layer.effect(
       )(function* (part) {
         if (part.type === "file") {
           if (part.source?.type === "resource") {
+            if (yield* ReviewMcp.restrictedFamily(current, sessions.get))
+              return [
+                {
+                  messageID: info.id,
+                  sessionID: input.sessionID,
+                  type: "text",
+                  synthetic: true,
+                  text: ReviewMcp.unavailable,
+                },
+              ]
             const { clientName, uri } = part.source
             yield* Effect.logInfo("mcp resource", { clientName, uri, mime: part.mime })
             const pieces: Draft<SessionV1.Part>[] = [

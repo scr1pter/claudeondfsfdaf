@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks"
+import { Context as FiberContext, Effect } from "effect"
 import { Hash } from "@vectordevai/core/util/hash"
 import type { Trust } from "@vectordevai/core/review/types"
 
@@ -9,6 +11,55 @@ export const LIVE_REVIEW_MCP = false
 // The engine stamps its own helper sessions; model text and the agent's display name are not authority.
 export function restrictsModel(internal: string | undefined): boolean {
   return internal?.startsWith("vectorscope.") === true && !LIVE_REVIEW_MCP
+}
+
+// The Effect reference follows session work; the async scope covers already-listed SDK tools and plugin callbacks
+// which speak Promise. Ordinary concurrent sessions retain their own scope.
+export const Restricted = FiberContext.Reference<boolean>("@vector/ReviewMcpRestricted", { defaultValue: () => false })
+// Bundled SDK callbacks and the engine can load separate copies of this module.
+const contextKey = Symbol.for("vector.review.mcp-model-call")
+const holder = globalThis as { [contextKey]?: AsyncLocalStorage<true> }
+const modelCall = (holder[contextKey] ??= new AsyncLocalStorage<true>())
+export const unavailable = "Live MCP calls are unavailable during a VectorScope review."
+
+export function withinCall<A>(restricted: boolean, operation: () => A): A {
+  return restricted ? modelCall.run(true, operation) : operation()
+}
+
+export function checkCall(signal?: AbortSignal) {
+  signal?.throwIfAborted()
+  if (modelCall.getStore()) throw new Error(unavailable)
+}
+
+export const blocked = Effect.gen(function* () {
+  return (yield* Restricted) || modelCall.getStore() === true
+})
+
+interface SessionIdentity<ID extends string> {
+  readonly id: ID
+  readonly parentID?: ID
+  readonly internal?: string
+}
+
+// A missing or circular ancestor cannot authorize model-controlled egress. Roots take no lookup.
+export function restrictedFamily<ID extends string, E>(
+  current: SessionIdentity<ID>,
+  get: (id: ID) => Effect.Effect<SessionIdentity<ID>, E>,
+) {
+  return Effect.gen(function* () {
+    if (yield* blocked) return true
+    const seen = new Set<ID>()
+    let session = current
+    for (;;) {
+      if (restrictsModel(session.internal)) return true
+      if (!session.parentID) return false
+      if (seen.has(session.id) || seen.size >= 64) return true
+      seen.add(session.id)
+      const parent = yield* get(session.parentID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      if (!parent || parent.id !== session.parentID) return true
+      session = parent
+    }
+  })
 }
 
 export interface Context {

@@ -73,6 +73,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
 import { LearnedSkill } from "../skill/learned"
+import { ReviewMcp } from "@/review/mcp"
 import { Permission } from "@/permission"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -117,6 +118,11 @@ type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 const builtinPatches = new WeakSet<Tool.Def>()
 const builtinTasks = new WeakSet<Tool.Def>()
+const pluginTools = new WeakSet<Tool.Def>()
+
+export function isPluginToolDef(tool: Tool.Def) {
+  return pluginTools.has(tool)
+}
 
 export function isBuiltinTask(tool: Tool.Def) {
   return builtinTasks.has(tool)
@@ -182,11 +188,12 @@ export interface Interface {
   readonly reviewDefinitions?: () => Effect.Effect<Tool.Def[] | undefined>
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
-  readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
+  readonly named: (review?: boolean) => Effect.Effect<{ task: TaskDef; read: ReadDef }>
   readonly tools: (model: {
     providerID: ProviderV2.ID
     modelID: ModelV2.ID
     agent: Agent.Info
+    review?: boolean
   }) => Effect.Effect<Tool.Def[]>
 }
 
@@ -198,6 +205,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const dependencies = yield* ConfigDependencies.Service
     const plugin = yield* Plugin.Service
+    const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
@@ -238,7 +246,7 @@ const layer = Layer.effect(
     const connecttool = yield* ConnectTool
     const agent = yield* Agent.Service
 
-    const state = yield* InstanceState.make<State>(
+    const makeState = (restricted: boolean) => InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
         const custom: Tool.Def[] = []
 
@@ -266,6 +274,14 @@ const layer = Layer.effect(
             description: def.description,
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
+                if (yield* ReviewMcp.blocked) throw new Error(ReviewMcp.unavailable)
+                // A stock tool can also be called directly, outside SessionPrompt. Check an existing session's
+                // persisted lineage before invoking any plugin code, preserving sessionless manual invocations.
+                const session = yield* sessions
+                  .get(toolCtx.sessionID)
+                  .pipe(Effect.catch(() => Effect.succeed(undefined)))
+                if (session && (yield* ReviewMcp.restrictedFamily(session, sessions.get)))
+                  throw new Error(ReviewMcp.unavailable)
                 ProcessIsolation.assertExternalCodeAllowed()
                 // Bridge the host's Effect-based `ask` into a Promise-returning
                 // function for the plugin to make sure context persists
@@ -321,7 +337,7 @@ const layer = Layer.effect(
           }
         }
 
-        const dirs = ProcessIsolation.required() ? [] : yield* config.directories()
+        const dirs = restricted || ProcessIsolation.required() ? [] : yield* config.directories()
         if (dirs.length) ProcessIsolation.assertExternalCodeAllowed()
         const matches = customToolFiles(dirs)
         if (matches.length && !InstallationLocal) yield* dependencies.prepare().pipe(Effect.forkDetach)
@@ -350,7 +366,7 @@ const layer = Layer.effect(
           }
         }
 
-        const plugins = ProcessIsolation.required() ? [] : yield* plugin.list()
+        const plugins = restricted || ProcessIsolation.required() ? [] : yield* plugin.list()
         for (const p of plugins) {
           ProcessIsolation.assertExternalCodeAllowed()
           for (const [id, def] of Object.entries(p.tool ?? {})) {
@@ -423,11 +439,15 @@ const layer = Layer.effect(
             tool.patch,
             // Offered only to a sized request below Thorough; the session runtime removes it everywhere else.
             tool.escalate,
-            ...(process.env.VECTOR_BROWSER_BRIDGE_URL && process.env.VECTOR_BROWSER_BRIDGE_TOKEN ? [tool.browser] : []),
+            ...(process.env.VECTOR_BROWSER_BRIDGE_URL && process.env.VECTOR_BROWSER_BRIDGE_TOKEN
+              ? [tool.browser]
+              : []),
             ...(process.env.VECTOR_COMPUTER_BRIDGE_URL && process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
               ? [tool.computer]
               : []),
-            ...(process.env.VECTOR_CLOUD_BRIDGE_URL && process.env.VECTOR_CLOUD_BRIDGE_TOKEN ? [tool.vectorcloud] : []),
+            ...(process.env.VECTOR_CLOUD_BRIDGE_URL && process.env.VECTOR_CLOUD_BRIDGE_TOKEN
+              ? [tool.vectorcloud]
+              : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
             // Deep research's tools, offered to the research agents alone (below), and the build agent's research tool.
@@ -450,11 +470,16 @@ const layer = Layer.effect(
       }),
     )
 
+    const state = yield* makeState(false)
+    // A cold review must not initialize extensions while deciding which tools to withhold.
+    const reviewState = yield* makeState(true)
+    const listed = (s: State, restricted: boolean) =>
+      [...s.builtin, ...(restricted || ProcessIsolation.required() ? [] : s.custom)].filter(
+        (tool) => !actionsWithheld(tool.id) && !(restricted && tool.id === TaskTool.id),
+      )
     const all: Interface["all"] = Effect.fn("ToolRegistry.all")(function* () {
-      const s = yield* InstanceState.get(state)
-      return [...s.builtin, ...(ProcessIsolation.required() ? [] : s.custom)].filter(
-        (tool) => !actionsWithheld(tool.id),
-      ) as Tool.Def[]
+      const restricted = yield* ReviewMcp.blocked
+      return listed(yield* InstanceState.get(restricted ? reviewState : state), restricted)
     })
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {
@@ -480,7 +505,8 @@ const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
-      const builtin = yield* InstanceState.get(state)
+      const restricted = input.review || (yield* ReviewMcp.blocked)
+      const builtin = yield* InstanceState.get(restricted ? reviewState : state)
       const settings = yield* config.get()
       const researchSetting = settings.research?.tool
       const computerUnavailable = yield* computerAvailability.unavailable()
@@ -489,7 +515,7 @@ const layer = Layer.effect(
       // A research agent is offered its own tools and nothing else, whatever a session's or the user's rules allow:
       // no edit, shell, plugin or custom tool reaches Deep research (RC1).
       const own = Agent.researchTools(input.agent.name)
-      const filtered = (yield* all()).filter((tool) => {
+      const filtered = listed(builtin, restricted).filter((tool) => {
         if (
           tool.id === ComputerTool.id &&
           (computerUnavailable || computerDenied || settings.tools?.computer === false)
@@ -531,7 +557,7 @@ const layer = Layer.effect(
             parameters: tool.parameters,
             jsonSchema: initialSchema,
           }
-          yield* plugin.trigger("tool.definition", { toolID: tool.id }, output)
+          if (!restricted) yield* plugin.trigger("tool.definition", { toolID: tool.id }, output)
           const jsonSchema =
             output.parameters === tool.parameters || output.jsonSchema !== initialSchema ? output.jsonSchema : undefined
           const result = {
@@ -544,6 +570,7 @@ const layer = Layer.effect(
             execute: tool.execute,
             formatValidationError: tool.formatValidationError,
           }
+          if (builtin.custom.includes(tool)) pluginTools.add(result)
           if (tool === builtin.patch && output.parameters === tool.parameters && output.jsonSchema === tool.jsonSchema)
             builtinPatches.add(result)
           if (
@@ -559,8 +586,8 @@ const layer = Layer.effect(
       )
     })
 
-    const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* () {
-      const s = yield* InstanceState.get(state)
+    const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* (review = false) {
+      const s = yield* InstanceState.get(review || (yield* ReviewMcp.blocked) ? reviewState : state)
       return { task: s.task, read: s.read }
     })
 

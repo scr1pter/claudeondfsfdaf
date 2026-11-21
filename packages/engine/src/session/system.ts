@@ -441,7 +441,10 @@ const layer = Layer.effect(
         internal?: string,
       ) {
         const ruleset = Permission.merge(agent.permission, permission ?? [])
-        const listed = yield* MCP.modelCatalog(mcp, ReviewMcp.restrictsModel(internal)).instructions()
+        const listed = yield* MCP.modelCatalog(
+          mcp,
+          ReviewMcp.restrictsModel(internal) || (yield* ReviewMcp.blocked),
+        ).instructions()
         // A server a run on GitHub Actions withholds whole (INV-S13) has no tool the model may call, so its instructions
         // go too.
         const withheld = ToolRegistry.actionsWithheldServers(

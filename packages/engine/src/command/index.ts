@@ -191,7 +191,11 @@ const layer = Layer.effect(
     // Keep separate caches: a command list initialized for an ordinary session contains live prompt templates.
     const reviewState = yield* InstanceState.make<State>((ctx) => init(ctx, true))
     const forSession = (internal?: string) =>
-      InstanceState.get(ReviewMcp.restrictsModel(internal) ? reviewState : state)
+      Effect.gen(function* () {
+        return yield* InstanceState.get(
+          ReviewMcp.restrictsModel(internal) || (yield* ReviewMcp.blocked) ? reviewState : state,
+        )
+      })
 
     const get = Effect.fn("Command.get")(function* (name: string, internal?: string) {
       const s = yield* forSession(internal)
