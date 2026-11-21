@@ -1105,5 +1105,5 @@ branch's first PR run; until then each entry is local evidence only.
   running with OCR unconfigured in the turbo run. The step fails if Bun reports any skip. Locally (tesseract 5.3.4,
   pdftoppm from poppler-utils): 4 pass 5 skip without the variables, which the step's check turns into exit 1; 9 pass
   with them, exit 0. `workflow-compliance.test.ts` asserts both steps, their order, the env and the skip check
-  (mutation: replacing the check with `if false` fails the case). Windows and macOS stay uncovered: the hosted runners
-  have no packaged tesseract that this step could pin.
+  (mutation: replacing the check with `if false` fails the case). Windows and macOS stay uncovered: this step does not
+  install the tools there.
