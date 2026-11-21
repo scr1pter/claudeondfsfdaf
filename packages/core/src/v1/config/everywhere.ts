@@ -11,8 +11,9 @@ import { PositiveInt } from "../../schema"
 // runner's COMPUTER_CAPS, and the runner applies the lower of these and a job's own limits. Unknown keys are refused,
 // so a misspelled key such as `pushh: false` makes the file invalid instead of leaving the setting at its default.
 
-// One folder name: not `.` or `..`, and free of separators, NUL and line breaks.
-const SEGMENT = String.raw`(?!\.\.?(?:[\\/]|$))[^\\/\0\r\n]+`
+// One folder name: not `.` or `..`, and free of separators, NUL and line breaks. Written without lookahead, which
+// fast-check cannot generate from: a name starts with a non-dot, or a dot and a non-dot, or two dots and more.
+const SEGMENT = String.raw`(?:[^.\\/\0\r\n][^\\/\0\r\n]*|\.[^.\\/\0\r\n][^\\/\0\r\n]*|\.\.[^\\/\0\r\n]+)`
 // An absolute POSIX, drive-letter or UNC path on one line: no root alone, no repeated or trailing separator, no `.` or
 // `..`, and one separator throughout a drive-letter path. Case is kept as written and links are not resolved, so
 // `C:\Repo` and `c:\repo`, or a folder and a link to it, are still two entries: whatever matches a job to a folder

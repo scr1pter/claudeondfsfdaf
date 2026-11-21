@@ -135,8 +135,22 @@ describe("everywhere config", () => {
       "/a\u0000b",
       `/${"a".repeat(4096)}`,
       42,
+      // `.` and `..` are refused as any folder name, under every root form.
+      "/.",
+      "/..",
+      "/./a",
+      "/../a",
+      "C:\\..",
+      "C:/.",
+      "C:/../a",
+      "\\\\..\\share",
+      "\\\\server\\.",
+      "\\\\server\\share\\..",
     ])
       expect([directory, accepted(project(directory))]).toEqual([directory, false])
+    // Names that only start or end with dots are folders like any other.
+    for (const directory of ["/.a", "/a.", "/...", "/..a", "C:\\.git", "D:/..x", "\\\\server\\..x", "\\\\.s\\share"])
+      expect([directory, accepted(project(directory))]).toEqual([directory, true])
     for (const repository of ["widgets", "acme/", "/widgets", "acme/widgets/x", "acme/wid gets", "acme/w\nx", ""])
       expect([repository, accepted(project("/home/u/repo", repository))]).toEqual([repository, false])
     expect(accepted(project(`/${"a".repeat(4095)}`))).toBe(true)
