@@ -7,6 +7,7 @@ import { ComputerNativeContext } from "@/computer/native-context"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
+import { ReviewMcp } from "@/review/mcp"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -113,6 +114,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const sessions = yield* Session.Service
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
+  const catalog = MCP.modelCatalog(mcp, ReviewMcp.restrictsModel(input.session.internal))
   const truncate = yield* Truncate.Service
   const brain = yield* Brain.Service
   // The prompt guard reads what this directory's prompts come from, so every caller must hand it the config.
@@ -411,8 +413,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   // The MCP servers a run on GitHub Actions withholds whole (INV-S13): none of their tools is offered, and none of their
   // resources is listed or read. The resource tools ask again when they run, since a server can connect later.
-  const mcpClients = yield* mcp.clients()
-  const mcpTools = yield* mcp.tools()
+  const mcpClients = yield* catalog.clients()
+  const mcpTools = yield* catalog.tools()
   const withheldServers = ToolRegistry.actionsWithheldServers(Object.keys(mcpClients), Object.keys(mcpTools))
   const hasMcpResourceServer = Object.entries(mcpClients).some(
     ([name, client]) => !withheldServers.includes(name) && !!client.getServerCapabilities()?.resources,
@@ -438,8 +440,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           Effect.gen(function* () {
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
-            const clients = yield* mcp.clients()
-            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
+            const clients = yield* catalog.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(
+              Object.keys(clients),
+              Object.keys(yield* catalog.tools()),
+            )
             const resourceServers = Object.entries(clients)
               .filter((entry) => !withheld.includes(entry[0]) && !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
@@ -466,7 +471,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               always: permissionPatterns,
             })
 
-            const resources = Object.values(yield* mcp.resources(parsed.server))
+            const resources = Object.values(yield* catalog.resources(parsed.server))
             const filtered = resources
               .filter(
                 (resource) =>
@@ -527,8 +532,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           Effect.gen(function* () {
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
-            const clients = yield* mcp.clients()
-            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
+            const clients = yield* catalog.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(
+              Object.keys(clients),
+              Object.keys(yield* catalog.tools()),
+            )
             const resourceServers = Object.entries(clients)
               .filter((entry) => !withheld.includes(entry[0]) && !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
@@ -555,7 +563,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               always: permissionPatterns,
             })
 
-            const templates = Object.values(yield* mcp.resourceTemplates(parsed.server))
+            const templates = Object.values(yield* catalog.resourceTemplates(parsed.server))
             const filtered = templates
               .filter(
                 (template) =>
@@ -620,8 +628,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           Effect.gen(function* () {
             const parsed = parseReadMcpResourceArgs(args)
             const ctx = context(toRecord(args), opts)
-            const clients = yield* mcp.clients()
-            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
+            const clients = yield* catalog.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(
+              Object.keys(clients),
+              Object.keys(yield* catalog.tools()),
+            )
             const client = withheld.includes(parsed.server) ? undefined : clients[parsed.server]
             if (!client) {
               throw new Error(`MCP server "${parsed.server}" is not connected`)
@@ -681,7 +692,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
-  const cloud = yield* mcp.cloudTools()
+  const cloud = yield* catalog.cloudTools()
   for (const [key, item] of Object.entries(mcpTools)) {
     // A computer-use server's tools, and any id the registry withholds, are never offered on GitHub Actions (INV-S13).
     if (ToolRegistry.actionsWithheldMcpTool(key, withheldServers)) continue

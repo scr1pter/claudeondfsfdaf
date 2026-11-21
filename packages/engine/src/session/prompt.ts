@@ -3260,7 +3260,7 @@ const layer = Layer.effect(
                       : {}),
                   },
                 ).pipe(Effect.orDie),
-            quick || pinnedReview ? Effect.succeed(undefined) : sys.mcp(agent, rules),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.mcp(agent, rules, session.internal),
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
             MessageV2.toModelMessagesEffect(history, model, { dropMedia }),
           ])
@@ -4481,16 +4481,16 @@ const layer = Layer.effect(
         command: input.command,
         agent: input.agent,
       })
-      const cmd = yield* commands.get(input.command)
+      const currentSession = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      const cmd = yield* commands.get(input.command, currentSession.internal)
       if (!cmd) {
-        const available = (yield* commands.list()).map((c) => c.name)
+        const available = (yield* commands.list(currentSession.internal)).map((c) => c.name)
         const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
       const agentName = cmd.agent ?? input.agent
-      const currentSession = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const agent = !agentName
         ? yield* agents.defaultInfo()
         : currentSession.internal
@@ -4787,9 +4787,7 @@ const layer = Layer.effect(
         })
         const instructions: string[] = []
         let skills: string | undefined
-        // Resource tools share the read permission, even for a pinned review. An unpinned review may also
-        // hear instructions from a server with no tools. A sizing query must never connect to discover either.
-        if (!mcp.snapshot || Object.values(yield* mcp.snapshot()).some((item) => item.status !== "disabled")) return
+        // The real review session uses the empty MCP catalog, including zero-tool instructions and resource tools.
         if (!pinned) {
           if (
             settings.instructions?.some((source) => /^https?:\/\//.test(source)) ||

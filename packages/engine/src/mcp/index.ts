@@ -295,6 +295,27 @@ export interface Interface {
   readonly getAuthStatus: (mcpName: string) => Effect.Effect<AuthStatus>
 }
 
+// A model-facing view of the stock lifecycle. None of the restricted getters initializes MCP state:
+// initialization would start servers and perform dynamic discovery even if the caller discarded the results.
+export type ModelCatalog = Pick<
+  Interface,
+  "clients" | "instructions" | "tools" | "cloudTools" | "prompts" | "resources" | "resourceTemplates"
+>
+
+const noModelCatalog: ModelCatalog = {
+  clients: () => Effect.succeed({}),
+  tools: () => Effect.succeed({}),
+  cloudTools: () => Effect.succeed({}),
+  instructions: () => Effect.succeed([]),
+  prompts: () => Effect.succeed({}),
+  resources: () => Effect.succeed({}),
+  resourceTemplates: () => Effect.succeed({}),
+}
+
+export function modelCatalog(service: ModelCatalog, restricted: boolean): ModelCatalog {
+  return restricted ? noModelCatalog : service
+}
+
 export class Service extends Context.Service<Service, Interface>()("@vector/MCP") {}
 
 export const use = serviceUse(Service)

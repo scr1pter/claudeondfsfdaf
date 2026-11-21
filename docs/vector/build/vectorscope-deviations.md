@@ -26450,3 +26450,9 @@ Merged main at `94823aee817c` after the Connect cache repair. The desktop GitHub
 The broker matches the owner, repository context, endpoint, schema and selected capability. A missing grant or changed identity closes access. Trusted local live reads stay disabled under D11. Audit events carry identifiers and digests. The default grant source is empty. The desktop does not issue MCP review grants. The package adds no named replay variant. The existing default review and pipeline revision 5 are preserved.
 
 The local package files passed 41 tests (`core/test/review/model-evidence.test.ts` 36, `engine/test/review/mcp.test.ts` 4, `engine/test/review/run.test.ts` 1). The core / engine package typechecks, the evaluation project and all 27 workspace typechecks passed. In separate scratch runs, the source mutations for live disposition, scope binding each failed the expected regression. The source pin moved from `29d724d7ad1daa56` to `e241f91b7516b39c`.
+
+## 2026-11-21 · VS-14 Filter MCP discovery from review sessions (SF-30a)
+
+Review sessions filter MCP tools, instructions, resources and command prompts before they enter the model context, including instructions from servers that expose zero tools. Ordinary sessions retain their existing discovery path. These discovery filters apply to engine review sessions. The package adds no named replay variant. The existing default review and pipeline revision 5 are preserved.
+
+The local package files passed 65 tests (`core/test/review/model-evidence.test.ts` 36, `engine/test/review/mcp.test.ts` 5, `engine/test/session/system.test.ts` 23, `engine/test/review/run.test.ts` 1). The core / engine package typechecks, the evaluation project and all 27 workspace typechecks passed. In separate scratch runs, the source mutations for ordinary catalog, zero tool instructions each failed the expected regression. The source pin moved from `e241f91b7516b39c` to `0863a78746985ace`.

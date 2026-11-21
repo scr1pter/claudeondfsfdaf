@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
+import { Effect } from "effect"
+import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import { ReviewMcp } from "@/review/mcp"
 
@@ -79,4 +81,41 @@ describe("VectorScope MCP consent", () => {
     for (const value of [context.server, canary, "owner-secret", fake.instructions, fake.capability.id])
       expect(JSON.stringify(audit)).not.toContain(value)
   })
+})
+
+// The ordinary lifecycle can touch its transport merely by listing. A restricted view must settle before
+// that call rather than asking the server and removing the response afterwards.
+test("filters the entire model catalog before listing or connecting, preserving the ordinary view", () => {
+  let calls = 0
+  const empty = () => {
+    calls++
+    return Effect.succeed({})
+  }
+  const ordinary: MCP.ModelCatalog = {
+    clients: empty,
+    tools: empty,
+    cloudTools: empty,
+    resources: empty,
+    resourceTemplates: empty,
+    prompts: empty,
+    instructions: () => {
+      calls++
+      return Effect.succeed([{ name: "zero-tools", instructions: "hostile text", tools: [] }])
+    },
+  }
+  for (const internal of ["vectorscope.review", "vectorscope.bound.judge", "vectorscope.fix"]) {
+    const view = MCP.modelCatalog(ordinary, ReviewMcp.restrictsModel(internal))
+    for (const method of ["clients", "tools", "cloudTools", "resources", "resourceTemplates", "prompts"] as const) {
+      const listing: Effect.Effect<unknown> = view[method]()
+      expect(Effect.runSync(listing)).toEqual({})
+    }
+    expect(Effect.runSync(view.instructions())).toEqual([])
+  }
+  expect(calls).toBe(0)
+  const plain = MCP.modelCatalog(ordinary, ReviewMcp.restrictsModel(undefined))
+  expect(plain).toBe(ordinary)
+  expect(Effect.runSync(plain.instructions())).toEqual([
+    { name: "zero-tools", instructions: "hostile text", tools: [] },
+  ])
+  expect(calls).toBe(1)
 })

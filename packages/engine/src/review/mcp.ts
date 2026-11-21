@@ -6,6 +6,11 @@ export * as ReviewMcp from "./mcp"
 // D11. A grant may authorize a broker snapshot. No first-release review exposes a live call to a model.
 export const LIVE_REVIEW_MCP = false
 
+// The engine stamps its own helper sessions; model text and the agent's display name are not authority.
+export function restrictsModel(internal: string | undefined): boolean {
+  return internal?.startsWith("vectorscope.") === true && !LIVE_REVIEW_MCP
+}
+
 export interface Context {
   readonly owner: string
   readonly repository: string
