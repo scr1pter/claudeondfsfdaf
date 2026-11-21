@@ -6379,9 +6379,14 @@ These are pointers only; nothing is fixed here.
     21 Nov 2026 (v2-closeout-ci): corrected premise. No Windows job ran this case: `packages/cloud` has no turbo test
     task, so the unit job never ran `workflow-compliance.test.ts`, and the comment that said it did was wrong. test.yml's
     unit job now has a Windows-only step, "Run the Codium dispatch-input compliance case" (5 minutes, `packages/cloud`,
-    `--test-name-pattern "only as step environment"`), and the case asserts that the step exists. Locally the pattern
-    selects that one case (1 pass); with the step removed the case fails. The Windows job ID is to be recorded after the
-    first PR run; a failure there is fixed in the pass-through list, never skipped.
+    `--test-name-pattern "reach the picker only as step environment"`), and the case asserts that the step exists.
+    Locally the pattern selects that one case (1 pass); with the step removed the case fails. The Windows job ID is to
+    be recorded after the first PR run; a failure there is fixed in the pass-through list, never skipped.
+    21 Nov 2026 (v2-closeout-ci, review fix): the first pattern, "only as step environment", also matched the A58
+    rollback case added later on this branch ("rolls back only to a full SHA on main, passed to the preflight only as
+    step environment"), so the step ran 2 cases, and the rollback one starts bash and git without Windows' system
+    variables. The pattern is now "reach the picker only as step environment", and the case also checks that the
+    step's pattern matches no other test title in the file (with the old pattern it fails, listing the rollback case).
 - TB ("Codium finish: Track B receipts and P4 closings", For the lead):
   - item 1 is closed on this branch by `31ddb43b`, but the same change is still needed on `release-finish`;
     16 Nov 2026: superseded. Main's `9be63d68` (`api/_lib/cloud-agents-epoch.ts`) is the one copy; `bc8cad48` drops

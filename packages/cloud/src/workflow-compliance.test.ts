@@ -999,10 +999,20 @@ describe("Codium CI lane", () => {
         if: "${{ !cancelled() && runner.os == 'Windows' }}",
         "timeout-minutes": 5,
         "working-directory": "packages/cloud",
-        run: 'GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "only as step environment" src/workflow-compliance.test.ts',
+        run: 'GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "reach the picker only as step environment" src/workflow-compliance.test.ts',
       },
     )
-    const PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
+    // That step picks this case by name, so its pattern must not match any other title in this file.
+    const pattern = tests.jobs.unit.steps
+      .find((item) => item.name === "Run the Codium dispatch-input compliance case")
+      ?.run?.match(/--test-name-pattern "([^"]+)"/)?.[1]
+    expect(pattern).toBeDefined()
+    expect(
+      [...(await read("packages/cloud/src/workflow-compliance.test.ts")).matchAll(/\btest\("([^"]*)"/g)]
+        .map((match) => match[1])
+        .filter((title) => new RegExp(pattern ?? "").test(title)),
+    ).toEqual(["a dispatch's inputs reach the picker only as step environment, and pushes leave them empty"])
+    const PATH =`${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`
     const system = Object.fromEntries(
       Object.entries(process.env).filter(
         (entry): entry is [string, string] =>

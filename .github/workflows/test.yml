@@ -685,7 +685,7 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         timeout-minutes: 5
         working-directory: packages/cloud
-        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "only as step environment" src/workflow-compliance.test.ts
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "reach the picker only as step environment" src/workflow-compliance.test.ts
 
       - name: Check generated client
         if: runner.os == 'Linux'
