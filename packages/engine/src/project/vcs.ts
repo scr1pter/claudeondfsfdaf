@@ -1,5 +1,5 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import { Effect, Layer, Context, Schema, Scope } from "effect"
+import { Effect, Layer, Context, Schema } from "effect"
 import { formatPatch, structuredPatch } from "diff"
 import { InstanceState } from "@/effect/instance-state"
 import { Watcher } from "@vectordevai/core/filesystem/watcher"
@@ -411,7 +411,6 @@ const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Service> = 
   Effect.gen(function* () {
     const git = yield* Git.Service
     const events = yield* EventV2Bridge.Service
-    const scope = yield* Scope.Scope
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Vcs.state")(function* (ctx) {
@@ -448,7 +447,7 @@ const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Service> = 
 
     return Service.of({
       init: Effect.fn("Vcs.init")(function* () {
-        yield* InstanceState.get(state).pipe(Effect.forkIn(scope))
+        yield* InstanceState.get(state)
       }),
       branch: Effect.fn("Vcs.branch")(function* () {
         return yield* InstanceState.use(state, (x) => x.current)
