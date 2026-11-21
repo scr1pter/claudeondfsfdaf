@@ -1692,6 +1692,45 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
   expect(emitted.join("")).not.toContain("PRIVATE")
 })
 
+test("each Windows architecture prints its helper identity right after its version check, logging only", () => {
+  for (const [name, arch, check] of [
+    ["windows-build", "x64", "Run Windows unit and fresh version/probe checks"],
+    ["windows-arm64-test", "arm64", "Run ARM64 unit and fresh version/probe checks"],
+  ] as const) {
+    const current = steps(job(name))
+    const label = arch === "x64" ? "x64" : "ARM64"
+    const print = current.find((step) => step.name === `Print the Windows ${label} helper identity`)
+    expect(print, name).toBeDefined()
+    // Before the staged Stop or any later step can skip it, and only once the version check passed.
+    expect(current.indexOf(print!)).toBe(current.findIndex((step) => step.name === check) + 1)
+    for (const key of ["if", "continue-on-error", "id"]) expect(print![key], `${name} ${key}`).toBeUndefined()
+    expect(print!["timeout-minutes"]).toBe(1)
+    expect(print!.shell).toBe("bash")
+    const body = String(print!.run)
+      .split("<<'NODE'\n")[1]!
+      .replace(/\nNODE\s*$/, "")
+      .replace(/^import .*$/gm, "")
+    expect(body).not.toMatch(/throw|exit|GITHUB_OUTPUT|GITHUB_STEP_SUMMARY|spawnSync/)
+    const written: string[] = []
+    const read: string[] = []
+    runInNewContext(
+      body,
+      {
+        readFileSync(file: string) {
+          read.push(file)
+          return JSON.stringify({ helperVersion: "1.0.15", sourceDigest: "fixture-digest", toolchain: "fixture-msvc" })
+        },
+        process: { stdout: { write: (text: string) => written.push(text) } },
+      },
+      { timeout: 1000 },
+    )
+    expect(read).toEqual([`native/out/win32/${arch}/computer-helper.json`])
+    expect(written).toEqual([
+      `vector-helper-identity platform=win32 arch=${arch} version=1.0.15 sourceDigest=fixture-digest toolchain=fixture-msvc\n`,
+    ])
+  }
+})
+
 test("the fast macOS certificate lane shares the real fixture and cleanup without native build or release credit", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-macos-signing"])
   expect(diagnostic["runs-on"]).toBe("macos-15")
