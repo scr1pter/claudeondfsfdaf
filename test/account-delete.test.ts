@@ -562,7 +562,7 @@ function deleteRoute(w: World, confirm = EMAIL, overrides: Parameters<typeof han
   )
 }
 
-function cronRoute(w: World, secret = CRON) {
+function cronRoute(w: World, secret = CRON, overrides: Parameters<typeof handleAccountDeletions>[2] = {}) {
   return invoke(
     (request, response) =>
       handleAccountDeletions(request, response, {
@@ -570,6 +570,7 @@ function cronRoute(w: World, secret = CRON) {
         clock: w.clock,
         revoke: async () => markRevoked(w),
         forget: async () => true,
+        ...overrides,
       }),
     { method: "GET", authorization: `Bearer ${secret}` },
   )
@@ -1396,31 +1397,6 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
   })
 
-  test("a follow-up pass stuck past the revocation mark's 100 days renews it, so the deletion can still finish", async () => {
-    restore()
-    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
-    const w = deletionWorld()
-    await seedEverything(w)
-    w.services.workspacesLeft = 1
-    expect((await deleteRoute(w)).status).toBe(200)
-    advance(w, DELETION_RECHECK_MS)
-    expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
-    // The host keeps one workspace for longer than the mark lives; the passes keep failing on it alone.
-    for (let day = 0; day < 101; day++) {
-      advance(w, DAY)
-      expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
-    }
-    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
-      stage: "check",
-      failed: ["workspaces", "codium", "keys"],
-    })
-    expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
-    w.services.workspacesLeft = 0
-    advance(w, DAY)
-    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
-    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
-  })
-
   test("the follow-up pass erases what a request already past its checks created after the erase", async () => {
     const w = deletionWorld()
     await seedEverything(w)
@@ -1685,6 +1661,29 @@ describe("the follow-up pass re-asserts the account revocation before it erases 
     expect(w.services.relay.slice(relay).filter((path) => path.endsWith("/erase"))).toHaveLength(1)
     expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
   })
+
+  test("a follow-up pass stuck past the revocation mark's 100 days renews it, so the deletion can still finish", async () => {
+    const w = deletionWorld()
+    await seedEverything(w)
+    w.services.workspacesLeft = 1
+    expect((await deleteRoute(w)).status).toBe(200)
+    advance(w, DELETION_RECHECK_MS)
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    // The host keeps one workspace for longer than the mark lives; the passes keep failing on it alone.
+    for (let day = 0; day < 101; day++) {
+      advance(w, DAY)
+      expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    }
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      stage: "check",
+      failed: ["workspaces", "codium", "keys"],
+    })
+    expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
+    w.services.workspacesLeft = 0
+    advance(w, DAY)
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
+  })
 })
 
 describe("cloud workspaces against the real supervisor", () => {
@@ -1863,9 +1862,15 @@ describe("cloud workspaces against the real supervisor", () => {
       ).toEqual(["running", "running"])
       host.stuck.add(stuck)
 
-      // The gateway's signed close fences the account on the host, so the identity goes while one volume stays.
-      expect((await deleteRoute(host.world)).status).toBe(200)
+      // The gateway's signed close fences the account on the host, so the identity goes while one volume stays. No
+      // revoke is injected here: the production writer (revocation.ts) sets the mark through the fake store's
+      // path-style REST form and asks the relay to end the account's sessions.
+      expect((await deleteRoute(host.world, EMAIL, { revoke: undefined })).status).toBe(200)
       expect(w.services.identities).toEqual([ACCOUNT])
+      expect(w.fakes.store.get(`vector:cli-revoked:${ACCOUNT}`)).toBe("1")
+      expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
+      expect(await accountTokensRevoked(ACCOUNT, host.world.fetcher)).toBe(true)
+      expect(w.services.relay.filter((path) => path.endsWith("/kill"))).toHaveLength(1)
       const refused = await host.call("/workspaces")
       expect(refused.status).toBe(403)
       expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("ACCOUNT_CLOSED")
@@ -1875,7 +1880,14 @@ describe("cloud workspaces against the real supervisor", () => {
 
       // The follow-up pass reads the host's own `remaining` and keeps the deletion due.
       advance(w, DELETION_RECHECK_MS)
-      expect((await cronRoute(host.world)).body).toEqual({ due: 1, deleted: 0, checked: 0, pending: 1, busy: 0 })
+      expect((await cronRoute(host.world, CRON, { revoke: undefined })).body).toEqual({
+        due: 1,
+        deleted: 0,
+        checked: 0,
+        pending: 1,
+        busy: 0,
+      })
+      expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
       expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
         attempts: 1,
         stage: "check",
@@ -1891,12 +1903,21 @@ describe("cloud workspaces against the real supervisor", () => {
       expect(host.store.list(ACCOUNT)).toEqual([])
       expect(host.volumes.size).toBe(0)
 
-      // DP-2: the account's revocation mark is gone before the next pass. The pass's injected revoke (the fixture's
-      // markRevoked, not the real revocation write) writes it again before the cloud-agents part erases.
+      // DP-2: the account's revocation mark is gone before the next pass. The production writer sets it again, with
+      // its full lifetime, before the cloud-agents part erases.
       w.fakes.store.remove(`vector:cli-revoked:${ACCOUNT}`)
+      expect(await accountTokensRevoked(ACCOUNT, host.world.fetcher)).toBe(false)
       advance(w, deletionRetryMs(1))
-      expect((await cronRoute(host.world)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+      expect((await cronRoute(host.world, CRON, { revoke: undefined })).body).toEqual({
+        due: 1,
+        deleted: 0,
+        checked: 1,
+        pending: 0,
+        busy: 0,
+      })
       expect(w.fakes.store.get(`vector:cli-revoked:${ACCOUNT}`)).toBe("1")
+      expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
+      expect(await accountTokensRevoked(ACCOUNT, host.world.fetcher)).toBe(true)
       expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
       expect(leftovers(w).filter((left) => !left.kept)).toEqual([])
       const closed = await host.call("/accounts/close", {})

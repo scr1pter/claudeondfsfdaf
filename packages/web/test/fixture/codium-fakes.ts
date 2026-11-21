@@ -1326,8 +1326,18 @@ export function codiumFakes(options: { now?: number } = {}) {
       return Response.json({ id: `email_${mail.sent.length}` })
     }
     if (url.origin === FAKE_KV_URL) {
+      // Upstash's path-style form, as the CLI token revocation (api/_lib/revocation.ts) sends it: `/set/<key>/<value>`
+      // with `?ex=<seconds>`, and `/get/<key>`.
+      const [, verb, ...parts] = url.pathname.split("/").map(decodeURIComponent)
+      const ex = url.searchParams.get("ex")
+      const command =
+        verb === "set" && parts.length === 2
+          ? ["SET", ...parts, ...(ex === null ? [] : ["PX", String(Number(ex) * 1000)])]
+          : verb === "get" && parts.length === 1
+            ? ["GET", ...parts]
+            : (JSON.parse(body) as unknown[])
       try {
-        return Response.json({ result: store.command(JSON.parse(body) as unknown[]) })
+        return Response.json({ result: store.command(command) })
       } catch (error) {
         if (store.down) return new Response("unavailable", { status: 503 })
         throw error

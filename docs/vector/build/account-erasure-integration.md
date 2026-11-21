@@ -91,3 +91,14 @@ writes it again and the deletion still finishes (DP-2's check-pass re-assert, wi
 revocation write). The real revocation store write is not exercised here, nor are the real runtime's container and
 volume removal under runsc and the quota driver, or a deployed host behind ingress (cloud-workspaces.md, "Operator
 setup"). Local run, Bun 1.3.14, from `test`: 41 pass, 1 Valkey-only skip, 0 fail.
+
+**21 Nov 2026 (`codium-api-fixes`).** That first case no longer injects a revoke: the request and both follow-up
+passes run the production `revokeAccountTokens` against the fixture store, which now answers Upstash's path-style
+`/set/<key>/<value>?ex=` and `/get/<key>` (packages/web/test/fixture/codium-fakes.ts; no production change). The case
+asserts the mark is `1` with a lifetime above 99 days after the request and after each pass, that
+`accountTokensRevoked` reads it back (and reads `false` once the test removes it), that the relay stand-in received one
+`kill`, and that the default writer sets the removed mark again before the final pass finishes (DP-2). Mutation: the
+writer's `ex` set to 60 seconds fails the case. The other cases keep `markRevoked`, since they test ordering and
+failures. Still operator validation, not run here: the real runtime's container and volume removal under runsc and the
+quota driver, and a deployed host behind ingress. Local run: 44 pass, 1 Valkey-only skip, 0 fail (three new A46 cases
+in the same file).
