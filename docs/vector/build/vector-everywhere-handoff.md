@@ -13,7 +13,7 @@ Start with "Current state" below, the lane's summary at its close-out (EV-33). T
 | Stage A | P1 and P2 (VE-00 to VE-08, VE-10 to VE-13): the CI lane, shared types and policy, the server foundation, identity, jobs and offers, the router and intake, the runner core, the engine check, and the GitHub, Slack, Linear and Jira intakes; the review repairs C1 to C6 | on main through PR #33 (`b362fdf6`) | C1 to C6 |
 | EV-01 | Docs refresh and Tier B status | `b82acf57` (after the merge `5733ceea`) | F3 |
 | EV-02 | The GitHub status lock is released; the issue body hash is required | `c46a6598` | C7, C8 |
-| EV-03 | The runner's abort matrix at the push boundary | `9426c945` | the C test gap |
+| EV-03 | The runner's abort matrix at the push boundary | `9426c945` | the C test gap, but for the brief's "no settle after 404/409" (lane work below) |
 | EV-04 | The per-minute sweep cron, store-free while off | `dbf9bca1` | R-C11, F4 |
 | EV-05 | Relay presence honours the kill flag and suspension | `8caf62cb` | R-C4 |
 | EV-06 | The relay forwards signed job offers | `411317d8` | R-C1, relay half |
@@ -48,7 +48,7 @@ Start with "Current state" below, the lane's summary at its close-out (EV-33). T
 | Main merge | main after #54 | `535ac94e` | none |
 | EV-33 | Lane close-out: the lane's paths, this summary and the receipts | this commit | VE-00, F1 |
 
-**Findings.** F1 is closed by FIT-4 (`f251ac2c`) and EV-33. F2 was fixed by the merge. F3 by EV-01, with FIT-5 (`dcd781d0`). F4 is done (registration, and the cron in EV-04). F5 is accepted (deviations log, F5). F6 by EV-18. C1 to C8 are done. Review-fixes' DP-1, PUB-2, PUB-4, PUB-5, PUB-6, SEC-1, SEC-2, FIT-4 and FIT-5 are on main.
+**Findings.** F1 is closed by FIT-4 (`f251ac2c`) and EV-33. F2 was fixed by the merge. F3 by EV-01, with FIT-5 (`dcd781d0`). F4 is done (registration, and the cron in EV-04). F5 stays open: its import is an accepted cross-package test (EV-01), widened by EV-18 and EV-19/EV-20 (deviations log, EV-18 (s)). F6 by EV-18. C1 to C8 are done. Review-fixes' DP-1, PUB-2, PUB-4, PUB-5, PUB-6, SEC-1, SEC-2, FIT-4 and FIT-5 are on main.
 
 **Dormant, and why.** Nothing runs a job in production today:
 - VECTOR_EVERYWHERE_ENABLED is unset. The platform and account routes answer 404, the GitHub handoff 501 before any read, and the jobs API `stop` after the token check, before any store. The sweep answers 200 `{enabled: false}` before any switch or store call (api/_lib/everywhere/sweep.ts:32). productionPorts is safePorts exactly, and no run hooks are registered (run-hooks.ts:20).
@@ -70,7 +70,7 @@ Start with "Current state" below, the lane's summary at its close-out (EV-33). T
 4. A check, not an owner action: the per-minute sweep cron (EV-04) starts at the first main deploy after this lane's PR merges, since main deploys on every merge. It is harmless while off: 401 without CRON_SECRET, otherwise `{enabled: false}`.
 5. Codium's `everywhere` switch, starting at `stop`.
 6. Approval of the perk's label and text, then listing (MODEL_PLANS_ENABLED and CODIUM_LISTED_PERKS), only after the plan check and the four listing preconditions ("Owner decisions" below).
-7. ENABLED_SOURCES: remove Slack, Linear and Jira from `RESERVED` (R-C8/R-A8). Jira still has no Actions route until a Jira run limit exists (EV-30 (j)).
+7. ENABLED_SOURCES: remove Slack, Linear and Jira from `RESERVED` (R-C8/R-A8). Jira still has no Actions route until a Jira run limit exists (EV-30 (j)). The `everywhere` PERK_COPY text (packages/schema/src/codium-copy.ts) describes the laptop-only route, so this step needs the owner to approve that text again; packages/schema/test/codium-copy.test.ts fails until the text and its pin move with it (EV-08; phase review, 2026-11-21).
 8. Q13/R-A6: @vector's route job gains `id-token: write` and the `laptopFirst` option. Until then GitHub ships without laptop-first.
 9. The flag, platform by platform, in spec §7's order (G2 Slack, G3 Linear, G4 Jira; G1's GitHub laptop-first only after step 8), with only the owner's account allowed first: for each platform, first its app registration (step 11), then VECTOR_EVERYWHERE_ENABLED, VECTOR_EVERYWHERE_PLATFORMS and VECTOR_EVERYWHERE_ALLOW_ACCOUNTS, then its VE-50 (step 12). The per-platform guides in docs/vector/owner-actions/ give this order. Turning off: the switch to `stop`, one sweep, then the flag (EV-04).
 10. At 2.0.0: the drafts move from packages/web/src/drafts/ to src/pages, with the `"everywhere"` keep line in script/prune-vector-site.mjs, the docs-nav.ts entry and the lane's three draft paths moved back to src/pages (everywhere-lane.test.ts fails until they are); then the desktop and CLI releases (R-A4's agent phase needs a published CLI).
@@ -81,7 +81,7 @@ Start with "Current state" below, the lane's summary at its close-out (EV-33). T
 - a production `repository` port (EV-19);
 - adding Linear and Jira mappings on vectordev.ai (EV-22);
 - the private result surface, `privateResult` (EV-20, EV-23);
-- the live mode reader and attachmentRepository's `visibility` field (EV-29, EV-30);
+- the live mode reader, attachmentRepository's `visibility` field and the body route's live visibility read (E11: a repository made public between the dispatch and the read still gets the body; EV-27, EV-29, EV-30);
 - the head-branch check that lets a PR link be posted (EV-30, in @vector's file);
 - the desktop's GitHub calls, a production GitHub platform adapter and R-C5's status port (EV-31);
 - the desktop write path for the settings page (EV-21);
@@ -89,13 +89,14 @@ Start with "Current state" below, the lane's summary at its close-out (EV-33). T
 - reconciling a lost start event (EV-27, EV-30);
 - the Jira compare-and-set and Linear's acknowledgement cost (EV-20);
 - a relay `unreachable` that queues instead of refusing (EV-09);
-- the macOS and Windows shell for unattended runs (EV-16): until then laptop jobs there edit but run no checks.
+- the macOS and Windows shell for unattended runs (EV-16): until then laptop jobs there edit but run no checks;
+- no settle once the server has answered 404 or 409 to `pushing` or a heartbeat (EV-03's brief): the runner still sends one bounded settle, three identical attempts, which the server refuses and records nowhere. EV-03's options (b) and (c) are the lead's (deviations log, EV-03; phase review, 2026-11-21).
 
 **Not built by choice:** VE-32 (waits for V27's manifest.files[], R-A7, Q6), VE-43 (Q11: no CLI), R-C10 (Q7, later), R-M4, R-H1 and R-W1 (the connect lane's, with its SDK regeneration).
 
-**Decisions waiting for the lead** (pointers only; each item is in "Left open by the repairs" and the deviations log): EV-03's two push-boundary points; the perk's plan check and one bad switch hiding every perk (EV-08, a request to Codium); the Vector Local pane's `KEPT_OFF` line (EV-15); the summary rule for the job page (EV-23); the body-route fallback for a lost start event (EV-27, EV-30); EV-28's three prepareCloudRun questions; internal visibility and `why` against `public-repository` (EV-29); the head-branch check and a single-run reader (EV-30); the review comment's App check, an IP rate limit and the switch order (EV-31); the shared loopback harness's close (EV-22); adding the body route to test/api-module-loading.test.ts (EV-27); and `9944b7b5`'s fix to Codium's packages/web/test/model-plan-admit.test.ts, which reaches main only with this lane's PR (EV-32's loose ends, annotation of 2026-11-21).
+**Decisions waiting for the lead** (pointers only; each item is in "Left open by the repairs" and the deviations log): EV-03's two push-boundary points; the perk's plan check and one bad switch hiding every perk (EV-08, a request to Codium); the Vector Local pane's `KEPT_OFF` line (EV-15); the summary rule for the job page (EV-23); the body-route fallback for a lost start event (EV-27, EV-30); EV-28's three prepareCloudRun questions; internal visibility and `why` against `public-repository` (EV-29); the head-branch check and a single-run reader (EV-30); the review comment's App check, an IP rate limit and the switch order (EV-31); the shared loopback harness's close (EV-22); adding the body route to test/api-module-loading.test.ts (EV-27); `9944b7b5`'s fix to Codium's packages/web/test/model-plan-admit.test.ts, which reaches main only with this lane's PR (EV-32's loose ends, annotation of 2026-11-21); and the land order with scope-finish: EV-16 carries SF-08's `writes: "workspace"` sandbox mode (`a6fd38d3`) byte for byte in packages/engine/src/tool/shell/sandbox.ts, so SF-08 is a precondition for a clean sandbox merge. The lane's PR body must say so; whichever lane merges second re-runs engine test/everywhere/offline-shell.test.ts and src/tool/shell/sandbox.test.ts alone, and once both have landed the `writes` docblock clause ("the shell tool never passes it") and the NOTE line naming fix.ts `execute` are corrected (deviations log, EV-16; phase review, 2026-11-21).
 
-**CI at the close.** The last receipts, all success, are on `742f46ac` (EV-32) and `9944b7b5` (the CI fix), with vector-everywhere's test job at 71/71 files on Valkey both times; run ids in the progress record, "EV-32 CI" and "CI follow-up before EV-33". EV-33's own dispatches (vector-everywhere.yml, typecheck.yml) follow its push and are recorded at the lane end. test.yml once for the lane end, and vector-codium.yml now that PR #33 is merged here, are the lead's.
+**CI at the close.** The last receipts, all success, are on `742f46ac` (EV-32) and `9944b7b5` (the CI fix), with vector-everywhere's test job at 71/71 files on Valkey both times; run ids in the progress record, "EV-32 CI" and "CI follow-up before EV-33". EV-33's own dispatches on `ef6151bf` passed too: vector-everywhere 44851550997 (9/9 jobs, 71/71 test files on Valkey) and typecheck 44851562712 (progress record, "EV-33 CI"). test.yml once for the lane end, and vector-codium.yml now that PR #33 is merged here, are the lead's.
 
 ## Package log (2026-11-12 to 2026-11-21)
 
@@ -295,7 +296,7 @@ Each item below is also in the deviations log.
   - **Adding a repository mapping on vectordev.ai.** Not built; see "Current gates" (Linear teams and Jira keys) and deviations log, EV-22 (e), with EV-19's repository-port gate.
   - **The private mark.** The page shows it read-only, because no server path reads it. The package that wires `private` into Linear and Jira parsing must not honour a mark set before it lands without asking the connector again: the repos PUT already accepts `private`. The mapping's `setAt` cannot show when the mark was set, because setMapping (api/_lib/everywhere/identity.ts:1311-1313) rewrites `setAt` on every PUT, this page's drop-repository included, while keeping the old mark. So the package needs a timestamp of the mark itself (for example a `privateSetAt` that setMapping writes only when `input.private` is present), or it clears or ignores every mark that existed before it lands. Deviations log, EV-22 (f).
   - **EV-23** mounts `EverywhereAccount` in the draft pages, adds the OAuth landing (the callbacks redirect to `/everywhere#platform&code&state`, api/_lib/everywhere/slack/install.ts:59 and api/_lib/everywhere/linear/install.ts:60) and the Linear link page, which reuses the model's `startLink` (and `startInstall`, with no second start; for the lead to confirm), and builds the jobs and audit views.
-    *2026-11-20 (EV-23):* done, uncommitted at the time of writing (deviations log, "2026-11-20, EV-23"). The link page reuses `startLink` and the account page keeps `startInstall`; there is no second start. Its own loose ends are below.
+    *2026-11-20 (EV-23):* done, committed as `f3abbd6c` (deviations log, "2026-11-20, EV-23"). The link page reuses `startLink` and the account page keeps `startInstall`; there is no second start. Its own loose ends are below.
   - **The loopback harness's close.** packages/web/test/lib/everywhere-account.ts `RouteHarness.stop()` never returns once a route has refused a request body it did not read, after the account check; the EV-22 refused-token case answers its writes' 401 in its request wrapper for that reason. A fix to the shared fake is for the lead.
   - **Mapping writes are last-write-wins**; the page reloads after each write.
   - **The lane's path filter** does not list packages/web/src/lib/account-client.ts, which the root imports.

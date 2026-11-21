@@ -529,8 +529,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       // This route runs a command outside the shell tool, so outside the offline sandbox too.
-      if (yield* UnattendedShell.marked(session, ctx.params.sessionID))
-        return yield* new ForbiddenError({ message: UnattendedShell.USER_SHELL })
+      const unattended = yield* UnattendedShell.marked(session, ctx.params.sessionID).pipe(
+        Effect.catchTag("UnattendedShell.LineageError", (error) =>
+          Effect.fail(new ForbiddenError({ message: error.message })),
+        ),
+      )
+      if (unattended) return yield* new ForbiddenError({ message: UnattendedShell.USER_SHELL })
       yield* admitted(ctx.params.sessionID)
       yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
       return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))

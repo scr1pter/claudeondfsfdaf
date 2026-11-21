@@ -147,6 +147,19 @@ test("bash is denied without the offline-v1 capability and allowed with it; unsa
   expect(decide(unattendedRules([{ permission: "bash", pattern: "*", action: "deny" }], "offline-v1"), "bash", "true")).toBe("deny")
 })
 
+// EV-14 (e), phase review: the engine's audienceOf (session/prompt.ts) reads only a session's own `vector.unattended`,
+// while UnattendedShell.marked walks the parent chain. The two agree only while an unattended session starts no child
+// session, so every tool that starts one stays denied, whatever the user allows. Allowing one needs audienceOf to walk
+// the parent chain first.
+test("no tool that starts a child session is ever allowed, so audienceOf's own-mark rule covers every session a job has", () => {
+  const user = ["*", "task", "workflow", "research", "research_plan", "teammate"].map((permission) => ({ permission, pattern: "*", action: "allow" as const }))
+  for (const shell of ["none", "offline-v1"] as const) {
+    const rules = unattendedRules(user, shell)
+    for (const permission of ["task", "workflow", "research", "research_plan", "research_run", "teammate"])
+      expect({ shell, permission, action: decide(rules, permission) }).toEqual({ shell, permission, action: "deny" })
+  }
+})
+
 test("a user deny holds whatever order the engine's answer gives the keys in, and only a key's own patterns keep theirs", () => {
   // GET /global/config re-encodes the block: the known keys come first, so a `*` written first arrives last.
   const written = { "*": "allow", edit: "deny", bash: { "*": "deny", "git status": "allow" }, zz_tool: "ask" }

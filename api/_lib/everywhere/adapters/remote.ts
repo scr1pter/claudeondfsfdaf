@@ -2,10 +2,9 @@ import { PERK_COPY } from "../../../../packages/schema/src/codium-copy.js"
 import { ACCOUNT_ID_PATTERN } from "../../../../packages/schema/src/everywhere.js"
 import { renewalGraceMinutes } from "../../codium-limits.js"
 import { readSnapshot, requireUsableSnapshot } from "../../codium-snapshot.js"
-import { readDisabledSet, readSwitch } from "../../codium-switches.js"
 import { remoteConfigured } from "../../remote-config.js"
 import { relayCall, relayPresence } from "../../remote-relay.js"
-import { LAPTOP_ROUTE_WIRED, sponsorListed, type EverywhereConfig } from "../config.js"
+import { LAPTOP_ROUTE_WIRED, everywhereReady, sponsorListed, type EverywhereConfig } from "../config.js"
 import type { Ports } from "../ports.js"
 import { codiumSwitches, readRemoteSwitch } from "../switch.js"
 
@@ -71,7 +70,7 @@ export function createRemotePorts(deps: RemotePortsDeps): Pick<Ports, "presence"
       // A non-UUID account is never looked up, not even the listing's switches.
       if (!ACCOUNT_ID_PATTERN.test(account)) return false
       if (perk === "everywhere" && sponsorListed(deps.config, account)) return true
-      if (perk === "everywhere" && !(await planListsEverywhere(wired, fetcher()))) return false
+      if (perk === "everywhere" && !(await planListsEverywhere(deps.config, wired, fetcher()))) return false
       const caps = await remoteCaps(account)
       if (!caps) return false
       return perk === "remote" || PERK_COPY.everywhere.applies(caps)
@@ -81,20 +80,24 @@ export function createRemotePorts(deps: RemotePortsDeps): Pick<Ports, "presence"
 
 /**
  * Whether a paid plan grants the `everywhere` perk beside the VECTOR_EVERYWHERE_ALLOW_ACCOUNTS allowlist: only once the
- * laptop route is wired and the owner lists the perk, read as listedPerks in codium-perks.ts reads it: MODEL_PLANS_ENABLED
- * and `everywhere` in CODIUM_LISTED_PERKS, then Codium's `codium` switch `on` and `everywhere` not in `perks-off`. The
- * store half is read only once the rest holds, and a failed read is false. Until then the allowlist is the only grant, so
- * the owner can still run with the allowlist alone, and no paying account is admitted while the perk is unlisted or
- * hidden.
+ * laptop route is wired and Codium's own listing (listedPerks in codium-perks.ts) lists the perk, so a paying account
+ * is never admitted while vectordev.ai hides it. The listing's whole rule applies: MODEL_PLANS_ENABLED and `everywhere`
+ * in CODIUM_LISTED_PERKS, the `codium` and `everywhere` switches `on`, `everywhere` not in `perks-off`, its readiness
+ * (everywhereReady: the offer key, CRON_SECRET, and Slack, Linear or Jira open) and Remote listed beside it
+ * (CodiumCopy.requires). Only the readiness is read from this configuration and wiring instead of the listing's own
+ * reads, which are the same in production. The first three checks need no I/O, so the listing module (and the Stripe
+ * modules behind it) loads, and the store is read, only once they hold; a failed read is false. Until then the
+ * allowlist is the only grant, so the owner can still run with the allowlist alone.
  */
-async function planListsEverywhere(wired: boolean, fetcher: typeof fetch) {
+async function planListsEverywhere(config: EverywhereConfig, wired: boolean, fetcher: typeof fetch) {
   if (!wired || process.env.MODEL_PLANS_ENABLED !== "true") return false
   const listed = (process.env.CODIUM_LISTED_PERKS ?? "")
     .split(",")
     .map((value) => value.trim())
     .includes("everywhere")
   if (!listed) return false
-  return Promise.all([readSwitch("codium", fetcher), readDisabledSet("perks-off", fetcher)])
-    .then(([codium, hidden]) => codium === "on" && !hidden.has("everywhere"))
+  const { listedPerks, perkServices } = await import("../../codium-perks.js")
+  return listedPerks(fetcher, { services: { ...perkServices, everywhere: () => everywhereReady(config, wired) } })
+    .then((perks) => perks.has("everywhere"))
     .catch(() => false)
 }

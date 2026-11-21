@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { CodiumCopy } from "../src/codium-copy"
 import { ENTITLEMENTS, PERK_IDS, publicEntitlements, type PerkId } from "../src/codium-entitlements"
 import { CodiumPlan } from "../src/codium-plan"
+import { ENABLED_SOURCES, type RunSource } from "../src/codium-run-trigger"
 
 const all = new Set(PERK_IDS)
 const models: CodiumCopy.Model[] = [
@@ -156,5 +157,14 @@ describe("the everywhere perk", () => {
       expect(text).not.toContain(CodiumCopy.COMPUTER_LABEL)
       expect(text).not.toMatch(/hosted|cloud|Actions|GitHub|Slack|Linear|Jira/i)
     }
+  })
+
+  // The text describes the laptop-only route. Once the owner makes Slack, Linear or Jira a run source (R-C8/R-A8), a
+  // private repository's job may run in GitHub Actions instead (spec 3.6), so this fails until the owner approves the
+  // text again and this pin moves with it (handoff, activation step 7).
+  test("its laptop-only text holds only while no chat or issue platform is an Actions run source", () => {
+    expect((["slack", "linear", "jira"] satisfies RunSource[]).filter((source) => ENABLED_SOURCES.has(source))).toEqual(
+      [],
+    )
   })
 })

@@ -47,7 +47,10 @@ import { everywhereStore, type Store } from "./store.js"
  * The signed-in account's Vector everywhere routes on vectordev.ai (contract 3.8, 3.12): link codes, links,
  * installations, repository mappings, the OAuth finish, and two reads: the account's jobs of the last 30 days and its
  * audit log of the last 90 (E16), each capped at 100 and holding ids, fixed codes and times only (E18 for the jobs:
- * only the account's own, never the task, a device or a lease). Every route authenticates the browser session through
+ * only the account's own, never the task, a device or a lease). The one free text either read answers is a job's
+ * `summary`: the sealed settle summary of a job in a private place (a Slack DM) that the signed-in account asked for and
+ * whose post has not gone out, cleaned by sanitizeReply as posts are (`privateSummary`); a shared place's is never
+ * answered. Whether it stays is the lead's 3.12/3.7 ruling (EV-23). Every route authenticates the browser session through
  * `requireAccountUser` (a bearer token, never a cookie) and answers 404 before any store read while the feature is off.
  * There is no `allow` route: teammates are not allowed to spend anyone's runs until the owner says yes (Q2).
  *

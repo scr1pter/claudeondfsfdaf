@@ -30,7 +30,17 @@ export const USER_SHELL =
   "Vector did not run this command. This session's commands run only in Vector's offline sandbox, and a command sent to the session's shell does not."
 export const TERMINAL =
   "Vector did not use the terminal. This session's commands run only in Vector's offline sandbox, and a terminal does not run there. Use the shell tool."
-const LINEAGE = "The conversation ancestry of this command could not be verified."
+export const LINEAGE = "The conversation ancestry of this command could not be verified."
+
+/**
+ * A lineage that could not be read to its end: a session read failed (Session.get dies on a failed database read), or
+ * the chain loops or reaches 64 sessions. It is never taken as unmarked, so each caller refuses with its message
+ * instead of failing with a defect. A session that is stored and has no parent reads no other session, so it never
+ * meets this.
+ */
+export class LineageError extends Schema.TaggedErrorClass<LineageError>()("UnattendedShell.LineageError", {
+  message: Schema.String,
+}) {}
 
 /**
  * Only bubblewrap's own start is tried: a fixed argument list with no user input, the namespaces and mounts the offline
@@ -98,7 +108,8 @@ export function differs(
 /**
  * Whether a session's commands run only in the offline sandbox: it, or a session above it, carries the shell mark,
  * whatever its value. A session that is not stored is judged by `parentID`, the tool context's, and what is stored above
- * that; a tool run with neither stored (outside any conversation, as the tools' own tests run it) has no mark.
+ * that; a tool run with neither stored (outside any conversation, as the tools' own tests run it) has no mark. A
+ * lineage that cannot be read to its end fails with LineageError.
  */
 export const marked = Effect.fn("UnattendedShell.marked")(function* (
   sessions: Session.Interface,
@@ -120,27 +131,28 @@ const find = (sessions: Session.Interface, id: SessionID) =>
   sessions.get(id).pipe(
     Effect.map((session): Node | undefined => session),
     Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
-    Effect.orDie,
+    // Session.get dies on a failed database read: a refusal the caller names, never a missing session.
+    Effect.catchDefect(() => Effect.fail(new LineageError({ message: LINEAGE }))),
   )
 
 /**
  * Whether `node` or a session above it carries the shell mark. A missing ancestor ends the lineage, so an orphan (an
  * import, a replayed child) runs its commands as any session does: the marks never change, Session.remove removes a
  * session's children before it, and a sync replay may not delete or move a session of a marked lineage
- * (replayRefusal), so no session of a marked lineage goes while one below it stays. A loop or a lineage deeper than 64
- * is refused.
+ * (replayRefusal), so no session of a marked lineage goes while one below it stays. A loop, a lineage deeper than 64
+ * or a failed read is LineageError.
  */
 function lineage(
-  lookup: (id: SessionID) => Effect.Effect<Node | undefined>,
+  lookup: (id: SessionID) => Effect.Effect<Node | undefined, LineageError>,
   id: SessionID,
   node: Node,
   seen: readonly SessionID[],
-): Effect.Effect<boolean> {
+): Effect.Effect<boolean, LineageError> {
   if (node.metadata?.[UNATTENDED_SHELL_KEY] !== undefined) return Effect.succeed(true)
   const parentID = node.parentID
   if (parentID === undefined) return Effect.succeed(false)
   const path = [...seen, id]
-  if (path.includes(parentID) || path.length >= 64) return Effect.die(new Error(LINEAGE))
+  if (path.includes(parentID) || path.length >= 64) return Effect.fail(new LineageError({ message: LINEAGE }))
   return lookup(parentID).pipe(
     Effect.flatMap((parent) =>
       parent === undefined ? Effect.succeed(false) : lineage(lookup, parentID, parent, path),
@@ -212,7 +224,7 @@ const decodeReplayed = Schema.decodeUnknownOption(
  * another parent. A deletion would let a later creation bring the same ID back without the marks and would cut the
  * sessions below it off from the mark above them, as a move would. A replayed update replaces the session's whole
  * metadata and parent, so each event is compared with the session as the replay leaves it before that event: an
- * earlier event of the same replay, or the stored session.
+ * earlier event of the same replay, or the stored session. A lineage it cannot read fails with LineageError.
  */
 export const replayRefusal = Effect.fn("UnattendedShell.replayRefusal")(function* (
   sessions: Session.Interface,

@@ -678,8 +678,10 @@ export const TerminalTool = Tool.define<
     const run = Effect.fn("TerminalTool.run")(function* (params: Params, ctx: Tool.Context, directory: string) {
       // An unattended session's commands run only in the offline sandbox, and no terminal runs there: none is opened,
       // listed, read, typed into or closed for it (R-M2).
-      if (yield* UnattendedShell.marked(sessions, ctx.sessionID, ctx.parentID))
-        return yield* Effect.die(new Error(UnattendedShell.TERMINAL))
+      const unattended = yield* UnattendedShell.marked(sessions, ctx.sessionID, ctx.parentID).pipe(
+        Effect.catchTag("UnattendedShell.LineageError", (error) => Effect.die(new Error(error.message))),
+      )
+      if (unattended) return yield* Effect.die(new Error(UnattendedShell.TERMINAL))
       const offline = Egress.policy()
       // Refused before anything is asked: a terminal runs outside the sandbox Web access None keeps every command in.
       if (["open", "type", "keys", "signal"].includes(params.action) && offline.enabled && offline.web === "none")

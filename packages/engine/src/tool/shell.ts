@@ -2235,7 +2235,10 @@ export const ShellTool = Tool.define(
               // Refused before anything is asked: with Web access None a command runs only in the sandbox, and this
               // computer has none to run it in. An unattended session's commands run only in the offline sandbox,
               // whatever Vector Local and VECTOR_SHELL_SANDBOX say, and nowhere it cannot be applied (R-M2).
-              const unattended = yield* UnattendedShell.marked(sessions, ctx.sessionID, ctx.parentID)
+              // A conversation ancestry that cannot be read is refused with its own message, never run as unmarked.
+              const unattended = yield* UnattendedShell.marked(sessions, ctx.sessionID, ctx.parentID).pipe(
+                Effect.catchTag("UnattendedShell.LineageError", (error) => Effect.die(new Error(error.message))),
+              )
               const refused = unattended
                 ? yield* UnattendedShell.refusal(spawner)
                 : webNone()

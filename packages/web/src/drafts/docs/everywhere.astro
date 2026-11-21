@@ -28,17 +28,17 @@ export const prerender = true
 
   <h2 id="how">How a job runs</h2>
   <p>
-    Your code stays off Vector's servers. A job carries only the request: its text, the thread or issue text read as
-    context, and ids. Vector keeps it encrypted for at most 2 hours and erases it when the job ends. Your computer
-    reports fixed progress steps and counts, then a short summary and the pull request link. It never sends code or a
-    diff; the summary may name files but carries no code.
+    A job's request reaches Vector's servers only as encrypted text for at most 2 hours; your repository's code does
+    not, unless you choose a Vector Codium model (below). The request is its text, the thread or issue text read as
+    context, and ids, and Vector erases it when the job ends. Your computer reports fixed progress steps and counts,
+    then a short summary and the pull request link. It never sends code or a diff; the summary may name files but
+    carries no code.
   </p>
   <p>
     While the job runs, the code goes where your own model settings send it: a local model keeps it on your computer,
     and a hosted model's provider receives it, as in any other session. If you choose a Vector Codium model, the
-    model's requests, including the code it reads, pass through Vector's model gateway, which does not store them, and
-    go on through OpenRouter to the model's provider, as the <a href="/legal/privacy#codium">privacy policy</a>
-    describes.
+    model's requests, including the code it reads, pass through Vector's model gateway; how they are handled is in the
+    <a href="/legal/privacy#codium">privacy policy</a>.
   </p>
   <p>
     The job runs on your computer first, in its own copy of the repository. It reads and edits files and asks nothing:

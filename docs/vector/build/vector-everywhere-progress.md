@@ -4772,3 +4772,49 @@ One slip: a one-line `bun -e` that counted the edited workflow's paths (78, all 
 - This commit cannot name its own runs. After the push, vector-everywhere.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next receipt.
 - test.yml once for the lane end, and vector-codium.yml (its hold has ended: PR #33 is merged here), are the lead's dispatches.
 - `9944b7b5` changed Codium's packages/web/test/model-plan-admit.test.ts; it reaches main only with this lane's PR.
+
+### EV-33 CI (recorded by the phase review fixes, 2026-11-21)
+
+Read back with the GitHub tools. Both are workflow_dispatch runs on everywhere-finish at `ef6151bf`, EV-33's commit:
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| Vector everywhere | [44851550997](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44851550997) | success, 9/9 jobs (01:40:25 to 01:45:38 UTC). The test job 136683900370 reports "Vector everywhere: 71/71 test files passed" and workflow-compliance 58/0 (1,104 expects) |
+| typecheck | [44851562712](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44851562712) | success (01:40:33 to 01:44:02 UTC) |
+
+EV-33's self-reported slip (one `bun -e` without vector-serial) stands as written above.
+
+## Phase review fixes (everywhere-finish lane, 2026-11-21)
+
+The phase review's thirteen non-blocking findings. Deviations log: "2026-11-21, everywhere-finish lane: phase review fixes". Base: HEAD `ef6151bf`, equal to origin/everywhere-finish; origin/main `f3d7ac74` and origin/release-finish `67ec3a60` are ancestors. Left uncommitted by the fix step (its task said so) and committed by the lane's commit gate as "fix(everywhere): everywhere-finish lane review" (below). Scratch and logs are in /tmp/vector-v2/everywhere/phase-review/, and engine boots used TMPDIR=/tmp/vector-v2/everywhere-finish/phase-review/tmp, so the preload's XDG roots were fresh.
+
+**Files.**
+- Code: api/_lib/everywhere/adapters/remote.ts (`planListsEverywhere` asks `listedPerks`); packages/engine/src/session/unattended-shell.ts (`LineageError`, the exported `LINEAGE`); its callers in packages/engine/src/tool/shell.ts, tool/terminal.ts and server/routes/instance/httpapi/handlers/session.ts and sync.ts.
+- Comments: api/_lib/everywhere/account-api.ts and api/everywhere/history.ts (the summary exception); packages/schema/src/codium-copy.ts (the laptop-only text).
+- The draft: packages/web/src/drafts/docs/everywhere.astro, two paragraphs.
+- Tests: packages/web/test/everywhere-remote-adapter.test.ts (one case, the `readyConfig` helper, and the phone origin in the environment); packages/engine/test/everywhere/offline-shell.test.ts (two cases); packages/desktop/src/main/everywhere-engine.test.ts (one case); packages/schema/test/codium-copy.test.ts (one case); packages/web/test/everywhere-docs.test.ts (the moved pins).
+- Documents: this record, the deviations log (the new entry, plus dated annotations at EV-01, EV-03, EV-08, EV-09 (c), EV-14 (e), EV-16 Coordination and EV-27 Left open), the handoff and the plan's §4.2 annotations.
+
+**Checks** (each through vector-serial, one file at a time with `--timeout 30000`, from the owning package; "pass/fail (expects)"):
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-remote-adapter.test.ts | 21/0 (198); 20/1 (188) with HEAD's remote.ts, the new case red at its first not-ready case (GitHub alone open) |
+| packages/engine test/everywhere/offline-shell.test.ts | 16/0, 2 skipped (225). The bubblewrap cases ran here; the skips are the no-sandbox case and the VECTOR_TEST_REQUIRE_BWRAP probe. With HEAD's unattended-shell.ts and shell.ts it was 14/2, both new cases red with "database is locked" in the cause |
+| packages/desktop src/main/everywhere-engine.test.ts (`--no-env-file`) | 13/0 (715) |
+| packages/schema test/codium-copy.test.ts | 12/0 (575) |
+| packages/web test/everywhere-docs.test.ts | 17/0 (218) |
+| packages/web test/everywhere-journey-laptop.test.ts (imports the adapter through the journey harness) | 5/0, 2 skipped without VECTOR_TEST_REDIS_URL (211) |
+| packages/web test/everywhere-lane.test.ts | 14/0 (170) |
+| root test/no-personal-paths, no-project-wording, api-module-loading (from test/) | 1/0 (2); 2/0 (16); 3/0 (22) |
+| `bun typecheck` in packages/engine, packages/schema and packages/desktop; the hosted API (`--project ../../tsconfig.json`) | exit 0 each |
+| `bun typecheck` in packages/web | exit 0: 309 files, 0 errors, 0 warnings, 455 hints |
+| `TURBO_CACHE_DIR=/home/user/wt/ev/.turbo/cache bun turbo typecheck --concurrency=2` | exit 0, 27/27 tasks (22 cached) |
+| prettier `--check` on the eleven changed .ts files that were clean at HEAD (five needed `--write`); `git diff --check` | clean. account-api.ts, terminal.ts and everywhere-engine.test.ts were not prettier-clean at HEAD and were not reformatted; the root prettier has no parser for the .astro draft |
+| the owner's rules in the handoff, from "## Rules (from the owner; all still binding)" to the end | sha256 7e532229…8044b8 before and after |
+
+**The two red checks.** Each copied the changed source aside, put HEAD's version in place, ran the file alone, then copied the change back and checked its sha256. For the engine, the old unattended-shell.ts only gained an exported `LINEAGE` and a stub `LineageError` so the test file would load. That check ran against an earlier build that mapped replayRefusal's error inside the function rather than in the sync handler; nothing the two cases touch differs.
+
+**CI.** Deferred until the lead's commit and push: vector-everywhere.yml (it runs offline-shell, the desktop engine test, everywhere-remote-adapter and everywhere-docs, plus the typechecks) and typecheck.yml, as workflow_dispatch on everywhere-finish. vector-hosted-ci.yml runs the schema's codium-copy test.
+
+**Commit gate** (2026-11-21). Re-ran before the commit, each through vector-serial, one file at a time with `--timeout 30000` from the owning package: engine test/everywhere/offline-shell.test.ts 16/0, 2 skipped (225); engine test/everywhere/unattended-session.test.ts 7/0 (270); engine test/server/session-metadata.test.ts 3/0 (52); desktop src/main/everywhere-engine.test.ts (`--no-env-file`) 13/0 (715); schema test/codium-copy.test.ts 12/0 (575); web test/everywhere-remote-adapter.test.ts 21/0 (198), test/everywhere-docs.test.ts 17/0 (218), test/everywhere-pages.test.ts 65/0, 1 skipped (1,943), test/everywhere-lane.test.ts 14/0 (170), test/everywhere-journey-laptop-tracker.test.ts 5/0, 4 skipped without VECTOR_TEST_REDIS_URL (345). The hosted API typecheck (`--project ../../tsconfig.json`) and `bun turbo typecheck --concurrency=2` (27/27 tasks) exit 0; `git diff --check` clean. After the push the gate dispatches vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml, typecheck.yml and, once for the lane end, test.yml on everywhere-finish; their run ids go in the next receipt.

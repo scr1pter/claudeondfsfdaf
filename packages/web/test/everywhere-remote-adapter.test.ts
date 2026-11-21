@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { generateKeyPairSync, randomUUID } from "node:crypto"
 import { includes } from "../../../api/_lib/codium-entitlements"
+import { listedPerks, perkServices } from "../../../api/_lib/codium-perks"
 import { buildSnapshot, snapshotKey, type SnapshotFacts } from "../../../api/_lib/codium-snapshot"
 import { disabledSetKey, switchKey } from "../../../api/_lib/codium-switches"
 import { codiumAccountAuthority } from "../../../api/_lib/everywhere/adapters/account"
 import { createRemotePorts } from "../../../api/_lib/everywhere/adapters/remote"
-import { ENV_NAMES, readConfig, type EverywhereConfig } from "../../../api/_lib/everywhere/config"
+import { ENV_NAMES, everywhereReady, readConfig, type EverywhereConfig } from "../../../api/_lib/everywhere/config"
 import { issueLinkCode, recordInstall, redeemLinkCode, setMappingByWord } from "../../../api/_lib/everywhere/identity"
 import { claimJob, readJob } from "../../../api/_lib/everywhere/jobs"
 import { offerPublicKey, offerVerifyKey, signOffer, verifyOffer } from "../../../api/_lib/everywhere/offer"
@@ -20,7 +21,7 @@ import { ENTITLEMENTS } from "../../../packages/schema/src/codium-entitlements"
 import { PLANS, type PlanId } from "../../../packages/schema/src/codium-plan"
 import { TIMING, createJobId } from "../../../packages/schema/src/everywhere"
 import { FAKE_KV_URL, codiumFakes, codiumTestEnvironment } from "./fixture/codium-fakes"
-import { everywhereEnv } from "./lib/everywhere-account"
+import { everywhereEnv, secret } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { routerFixture } from "./lib/everywhere-router"
 
@@ -78,6 +79,8 @@ beforeEach(async () => {
     VECTOR_REMOTE_RELAY_URL: `ws://127.0.0.1:${relay.port}`,
     VECTOR_HOSTED_INTERNAL_SECRET: INTERNAL_SECRET,
     CODIUM_LISTED_PERKS: undefined,
+    // Remote's own listing readiness (codium-perks.ts), which the plan's half of `everywhere` requires.
+    VECTOR_PHONE_APP_ORIGIN: "https://phone.vector.test",
     NODE_ENV: "test",
   })
 })
@@ -102,6 +105,11 @@ function fetcher(): typeof fetch {
 
 function config(env: Record<string, string> = {}) {
   return readConfig({ ...everywhereEnv(), ...env })
+}
+
+/** A configuration Codium's listing calls ready once the route is wired: the offer key, CRON_SECRET and Slack open. */
+function readyConfig(env: Record<string, string> = {}) {
+  return config({ ...OFFER_ENV, [ENV_NAMES.cronSecret]: secret(), ...env })
 }
 
 function ports(options: { config?: EverywhereConfig; wired?: boolean; fetcher?: typeof fetch } = {}) {
@@ -496,7 +504,7 @@ describe("the everywhere perk: the allowlist, and the plan only once it may join
 
   test("once wired and listed by the owner, a paid plan with Remote joins the allowlist", async () => {
     process.env.CODIUM_LISTED_PERKS = "remote, everywhere"
-    const settings = config()
+    const settings = readyConfig()
     const paid = randomUUID()
     const frozen = randomUUID()
     const none = randomUUID()
@@ -518,7 +526,7 @@ describe("the everywhere perk: the allowlist, and the plan only once it may join
     const listed = randomUUID()
     const paid = randomUUID()
     seed(paid, "vector-10")
-    const settings = config({ [ENV_NAMES.allowAccounts]: listed })
+    const settings = readyConfig({ [ENV_NAMES.allowAccounts]: listed })
     // Each check through new ports, so Codium's 30-second cache per fetcher never answers for the store.
     const everywhere = (account: string) => ports({ config: settings, wired: true }).perk(account, "everywhere")
     expect(await everywhere(paid)).toBe(true)
@@ -548,6 +556,51 @@ describe("the everywhere perk: the allowlist, and the plan only once it may join
     expect(await ports({ config: settings, wired: true }).perk(paid, "remote")).toBe(true)
   })
 
+  test("the plan's half refuses whenever Codium's own listing leaves `everywhere` out", async () => {
+    process.env.CODIUM_LISTED_PERKS = "remote,everywhere"
+    const paid = randomUUID()
+    seed(paid, "vector-10")
+    const ready = readyConfig()
+    // The listing as vectordev.ai reads it once the route is wired, beside the plan's answer, each through a new
+    // fetcher, so Codium's 30-second switch cache never answers for the store.
+    const both = async (settings: EverywhereConfig) => [
+      (
+        await listedPerks(fetcher(), {
+          services: { ...perkServices, everywhere: () => everywhereReady(settings, true) },
+        })
+      ).has("everywhere"),
+      await ports({ config: settings, wired: true }).perk(paid, "everywhere"),
+    ]
+    const setSwitch = (name: "everywhere" | "remote", value: string) =>
+      fakes.store.set(switchKey(name), JSON.stringify({ value, changedAt: h.clock.now, generation: `g-${value}` }))
+    expect(await both(ready)).toEqual([true, true])
+    // Not ready: GitHub alone open, no offer key, or no CRON_SECRET.
+    expect(await both(readyConfig({ [ENV_NAMES.platforms]: "github" }))).toEqual([false, false])
+    expect(await both(config({ [ENV_NAMES.cronSecret]: secret() }))).toEqual([false, false])
+    expect(await both(config(OFFER_ENV))).toEqual([false, false])
+    // The `everywhere` switch anything but `on`.
+    for (const value of ["no-new", "stop"]) {
+      setSwitch("everywhere", value)
+      expect(await both(ready)).toEqual([false, false])
+    }
+    setSwitch("everywhere", "on")
+    expect(await both(ready)).toEqual([true, true])
+    // Remote not listed beside it: left out of CODIUM_LISTED_PERKS, hidden in `perks-off`, its switch off, or not ready.
+    process.env.CODIUM_LISTED_PERKS = "everywhere"
+    expect(await both(ready)).toEqual([false, false])
+    process.env.CODIUM_LISTED_PERKS = "remote,everywhere"
+    fakes.store.command(["SADD", disabledSetKey("perks-off"), "remote"])
+    expect(await both(ready)).toEqual([false, false])
+    fakes.store.command(["SREM", disabledSetKey("perks-off"), "remote"])
+    setSwitch("remote", "off")
+    expect(await both(ready)).toEqual([false, false])
+    setSwitch("remote", "on")
+    delete process.env.VECTOR_PHONE_APP_ORIGIN
+    expect(await both(ready)).toEqual([false, false])
+    process.env.VECTOR_PHONE_APP_ORIGIN = "https://phone.vector.test"
+    expect(await both(ready)).toEqual([true, true])
+  })
+
   test("the Slack repo word's sponsor check follows the same rule", async () => {
     const f = routerFixture()
     const ctx = f.context()
@@ -569,7 +622,7 @@ describe("the everywhere perk: the allowlist, and the plan only once it may join
     await link(listed, "U0LISTED1")
     await link(paid, "U0PAIDAA1")
     const word = (userId: string, place: string, wired: boolean) => {
-      const adapter = ports({ config: config({ [ENV_NAMES.allowAccounts]: listed }), wired })
+      const adapter = ports({ config: readyConfig({ [ENV_NAMES.allowAccounts]: listed }), wired })
       return setMappingByWord(ctx, {
         installation,
         place,

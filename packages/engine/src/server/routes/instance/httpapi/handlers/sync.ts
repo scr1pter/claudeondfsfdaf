@@ -57,7 +57,9 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
       const source = payload[0].aggregateID
       // A replayed creation is a creation and a replayed update replaces the metadata, so neither may set or change the
       // unattended marks against the rules the session routes keep.
-      const marks = yield* UnattendedShell.replayRefusal(session, payload, owner)
+      const marks = yield* UnattendedShell.replayRefusal(session, payload, owner).pipe(
+        Effect.catchTag("UnattendedShell.LineageError", (error) => Effect.succeed(error.message)),
+      )
       if (marks) return yield* new ForbiddenError({ message: marks })
       if (owner) {
         // Imports may only tighten privacy. Install all relation and isolation hints before publishing any aggregate.

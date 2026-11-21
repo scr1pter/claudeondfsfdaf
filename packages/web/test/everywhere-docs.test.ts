@@ -209,8 +209,11 @@ describe("the docs draft", () => {
 
   test("says what the contract holds", () => {
     const has = (phrase: string) => expect(text.toLowerCase()).toContain(phrase.toLowerCase())
-    // The brief's pinned sentences.
-    has("Your code stays off Vector's servers.")
+    // The brief's pinned sentences. "Your code stays off Vector's servers." was narrowed to what E4 holds by the phase
+    // review of 2026-11-21 (deviations log, "everywhere-finish lane").
+    has(
+      "A job's request reaches Vector's servers only as encrypted text for at most 2 hours; your repository's code does not",
+    )
     has("The job runs on your computer first, in its own copy of the repository.")
     has("Slack history is read only for the thread of a mention:")
     has("A closed lid means queued:")
@@ -219,7 +222,7 @@ describe("the docs draft", () => {
     // The same numbers, from the code that enforces them.
     expect(TIMING.queueMs).toBeLessThan(TIMING.bodyTtlMs)
     has(`waits at most ${Math.ceil(TIMING.queueMs / HOUR)} hours`)
-    has(`encrypted for at most ${TIMING.bodyTtlMs / HOUR} hours`)
+    has(`encrypted text for at most ${TIMING.bodyTtlMs / HOUR} hours`)
     has(`${TIMING.jiraQueueMs / MINUTE} minutes in Jira`)
     has(`A Jira job runs at most ${TIMING.jiraRunMs / MINUTE} minutes`)
     has(`at most ${LIMITS.threadMessages} messages`)
@@ -227,12 +230,15 @@ describe("the docs draft", () => {
     has(`jobs of the last ${KEEP_MS.job / DAY} days`)
     has(`audit log of the last ${KEEP_MS.audit / DAY} days`)
     has(`checked in for ${COMPUTER_SEEN_MS / DAY} days`)
-    // "Code stays off Vector's servers" is qualified where the user's own model choice sends code through Vector.
+    // "Code stays off Vector's servers" is qualified where the user's own model choice sends code through Vector, and
+    // how the gateway handles it is left to the privacy policy: the page restates no retention or third-party fact.
     has("Vector Codium")
-    has("model gateway, which does not store them")
-    has("go on through OpenRouter to the model's provider")
+    has("unless you choose a Vector Codium model (below)")
+    has("pass through Vector's model gateway; how they are handled is in the")
     has("Your code stays off Vector's servers, except as described below when you choose a Vector Codium model.")
     expect(page).toContain('href="/legal/privacy#codium"')
+    for (const restated of ["does not store", "OpenRouter", "retain"])
+      expect(text.toLowerCase()).not.toContain(restated.toLowerCase())
     // Laptop facts the page promises.
     has("On macOS and Windows a job edits files and runs no commands.")
     has("Only a private repository's branch is pushed. A public repository's branch stays on your computer.")

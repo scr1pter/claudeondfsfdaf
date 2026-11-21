@@ -691,6 +691,90 @@ describe("the shell tool for an offline-only session where no sandbox runs", () 
       expect(existsSync(marker)).toBe(true)
     }),
   )
+
+  // Every read but the command's own session's dies, as Session.get does on a failed database read.
+  const failing = (sessions: Session.Interface, own: SessionID, reads: SessionID[]): Session.Interface => ({
+    ...sessions,
+    get: (id) => {
+      reads.push(id)
+      return id === own ? sessions.get(id) : Effect.die(new Error("database is locked"))
+    },
+  })
+
+  tool.live(
+    "an ancestry that cannot be read is refused with its own message; a session with no parent reads no other",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* tmpdirScoped({ git: true })
+        const sessions = yield* Session.Service
+        const plain = yield* sessions.create({}).pipe(provideInstance(dir))
+        const child = yield* sessions.create({ parentID: plain.id }).pipe(provideInstance(dir))
+        const marker = path.join(dir, "ran")
+        const run = (id: SessionID, reads: SessionID[]) =>
+          ShellTool.pipe(
+            Effect.provideService(Session.Service, failing(sessions, id, reads)),
+            Effect.flatMap((info) => info.init()),
+            Effect.flatMap((shell) => shell.execute({ command: `echo ran > "${marker}"` }, context(id))),
+            provideInstance(dir),
+            Effect.exit,
+          )
+        asked.length = 0
+        // The child's parent cannot be read: refused before anything is asked, with the lineage's message rather than
+        // the database's defect, and nothing runs.
+        const childReads: SessionID[] = []
+        const refused = yield* run(child.id, childReads)
+        expect(Exit.isFailure(refused)).toBe(true)
+        const cause = String(Exit.isFailure(refused) ? refused.cause : "")
+        expect(cause).toContain(UnattendedShell.LINEAGE)
+        expect(cause).not.toContain("database is locked")
+        expect(childReads).toEqual([child.id, plain.id])
+        expect(asked).toEqual([])
+        expect(existsSync(marker)).toBe(false)
+        // A session with no parent reads only itself, so its command runs whatever any other read would answer.
+        const plainReads: SessionID[] = []
+        expect(Exit.isSuccess(yield* run(plain.id, plainReads))).toBe(true)
+        expect(plainReads.length).toBeGreaterThan(0)
+        expect(plainReads.filter((id) => id !== plain.id)).toEqual([])
+        expect(existsSync(marker)).toBe(true)
+      }),
+  )
+
+  tool.live("marked fails with the typed LineageError, never a defect: a failed read, a loop and 65 sessions", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const sessions = yield* Session.Service
+      const plain = yield* sessions.create({}).pipe(provideInstance(dir))
+      const child = yield* sessions.create({ parentID: plain.id }).pipe(provideInstance(dir))
+      // A lineage stored nowhere: each session's parent is the next one. The last has none (a root), the first (a
+      // loop) or one that is not stored (an orphan).
+      const chain = (count: number, end: "root" | "loop" | "orphan") => {
+        const ids = Array.from({ length: count }, () => SessionID.descending())
+        const last = { root: undefined, loop: ids[0], orphan: SessionID.descending() }[end]
+        const lookup: Session.Interface = {
+          ...sessions,
+          get: (id) => {
+            const at = ids.indexOf(id)
+            if (at < 0) return sessions.get(id)
+            return Effect.succeed({ ...plain, id, parentID: at + 1 < ids.length ? ids[at + 1] : last })
+          },
+        }
+        return UnattendedShell.marked(lookup, ids[0]).pipe(provideInstance(dir))
+      }
+      const refused = <R>(marked: Effect.Effect<boolean, UnattendedShell.LineageError, R>) =>
+        marked.pipe(
+          Effect.flip,
+          Effect.map((error) => ({ tag: error._tag, message: error.message })),
+        )
+      const lineage = { tag: "UnattendedShell.LineageError" as const, message: UnattendedShell.LINEAGE }
+      const unread = UnattendedShell.marked(failing(sessions, child.id, []), child.id).pipe(provideInstance(dir))
+      expect(yield* refused(unread)).toEqual(lineage)
+      expect(yield* refused(chain(2, "loop"))).toEqual(lineage)
+      expect(yield* refused(chain(65, "root"))).toEqual(lineage)
+      // The controls: 64 sessions end at their root, and a missing ancestor ends the lineage.
+      expect(yield* chain(64, "root")).toBe(false)
+      expect(yield* chain(3, "orphan")).toBe(false)
+    }),
+  )
 })
 
 describe("the capability an engine reports", () => {
