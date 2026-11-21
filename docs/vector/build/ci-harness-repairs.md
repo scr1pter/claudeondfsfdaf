@@ -1085,6 +1085,57 @@ Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 
 does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
 change has not run on Windows CI yet.
 
+## 2026-11-21: Mac helper channel-eof pgrep past its 500 ms budget on a cold Intel runner
+
+Branch `helper-pgrep-warmup` from `4fc245b6`. A harness change in the macOS selftest fixture setup only. The 500 ms
+pgrep/ps inspection budgets, the 1000 ms lifecycle deadline, the topology assertions, the ESRCH/zombie logic and
+`runObservedNativeCommand`'s single deadline are unchanged.
+
+Evidence. main push test.yml run 44885765033 on `153f9a22` (#56 merge, which touched no native, helper or selftest
+file), job 136798635643 `computer-helper / mac-test (macos-15-intel)`, step "Run required grant-free native checks":
+"Computer helper checks: 30 passed, 1 skipped, 1 failed", `FAILED channel-eof: supervisor-pgrep-timeout`. The same
+job passed on `3e90df62` and `5a5b5619` (job 136775468212), and the macos-26 job on the same run passed. The
+"standalone unit diagnostics could not complete" line after it comes from the separate continue-on-error diagnose
+step that runs on any failure; the unit check itself passed. hands-progress.md (Helper13, Intel) records the same
+check failing in pgrep before EOF once before.
+
+Cause. `channel-eof` runs `pgrep -P <caller>` and then `pgrep -P <supervisor>` before EOF, to find the PIDs the
+post-EOF ps/ESRCH loop must see die. These are the only pgrep calls in the selftest, so the supervisor call is always
+pgrep's first exec on the runner, and nothing earlier runs `/bin/ps` either. `runObservedNativeCommand` starts its
+clock before `spawn()`, so the 500 ms covers exec, the code-signature check, dyld and page-in from the system volume.
+On a cold x86 macOS VM that first exec can take hundreds of milliseconds and now and then crosses 500 ms. In the
+failing job the worker call never ran, because the supervisor timeout ended the check first; by design it would have
+run warm. This cause is inferred, not measured: the report records no inspection elapsed time. It is an inspection-tool start-up cost, not a helper lifecycle failure; pgrep's time
+never counted toward the 1000 ms lifecycle window.
+
+Change. `packages/desktop/scripts/computer-helper-selftest.ts` adds `warmLifecycleInspection`, which runs
+`/usr/bin/pgrep -P <own pid>` and `/bin/ps -p <own pid> -o stat=` once each under a 5000 ms setup bound (the same
+bound as the fixture's probe command). `createVerifiedFixture` calls it after the codesign and bundle-digest checks
+and before any lifecycle closure is built, so the first-exec cost lands outside every timed window. pgrep may exit 0
+or 1 (this process may have no children); ps must exit 0. A timeout or other exit fails closed through the existing
+fixture-setup path (`verified-caller-unavailable`). In CI a warm-up failure therefore shows as every remaining check
+reporting `verified-caller-unavailable`, not as a `<role>-pgrep-*` or `<role>-ps-*` reason.
+
+Regression tests in `computer-helper-selftest.test.ts`: one checks that the warm-up runs exactly pgrep then ps
+against this process with a 5000 ms bound and rejects a timeout, a pgrep exit other than 0/1, a null exit, or a ps
+exit other than 0; one checks from the source that the single warm-up call sits after the last codesign and
+`bundleDigest` call and before `open`, the 500 ms ps and pgrep inspections and the lifecycle closure, and that the
+1000 ms deadline is still there. Against `origin/main`'s selftest source the file fails (no export). Mutations, each
+red and then restored: the call removed; the call moved after the inspection closures; ps exit 1 accepted; the
+warm-up pgrep bound set to 500 ms.
+
+Validation, through the Bun lock: `scripts/computer-helper-selftest.test.ts` 52 pass; `packages/desktop`
+`bun typecheck` passes. The fixture runs only on darwin, so the real proof is CI: `computer-helper / mac-test
+(macos-15-intel)` must report `channel-eof` passed with "31 passed, 1 skipped" (or the run's usual skip count) and no
+`*-pgrep-timeout` or `*-ps-timeout` reason, and macos-26 must stay green. The failure was intermittent, so one green run
+does not by itself prove the cause; a recurrence after this change would point at real contention rather than a cold
+first exec.
+
+Not changed. On the same run, `engine (windows, shard 7/12)` job 136791583207 passed in 36 min 52 s (1041 tests,
+0 failures) against its 45-minute bound. #56 added four `test/everywhere` files, which moved Bun's modulo shard
+assignment and grouped heavy files into shard 7. Rebalancing the Windows shards is a separate decision; no test or
+workflow change is made for it here.
+
 ## 2026-11-21: EV-18 worktree test cleanup hit EBUSY on the job's checkout on Windows
 
 Branch `worktree-test-cleanup` from `4fc245b6`. The first commit (`4d72d6a4`) is test-only; the second path below
