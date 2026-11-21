@@ -42,6 +42,7 @@ import { TaskNotify } from "./notify"
 import { TaskSignals } from "./signals"
 import { ShellJobs } from "./shells"
 import { SessionFork } from "@/session/fork"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Provider } from "@/provider/provider"
 import { Agent } from "@/agent/agent"
 import { SubagentModel } from "@/agent/subagent-model"
@@ -1583,6 +1584,13 @@ const layer = Layer.effect(
       if (SubagentLifecycle.open(record)) return yield* running
       if (RESEARCH_AGENTS.has(record.agent))
         return yield* new Error({ code: "invalid", message: "A research agent cannot be resumed; start a new one." })
+      // A connect fix child runs only the findings connect handed it, under connect's own gate (CW-07); an agent's resume
+      // would start it again outside that. The owner may still resume it from the Tasks pane.
+      if (record.agent === ConnectPolicy.FIX_AGENT && origin === "agent")
+        return yield* new Error({
+          code: "invalid",
+          message: "A connect fix cannot be resumed; ask connect for a new fix.",
+        })
       // A fork resumes only while forks may start: it sends its whole inherited window again (5.E.3).
       if (record.fork && (yield* config.get()).sizing?.subagents?.fork === false)
         return yield* new Error({ code: "invalid", message: SessionFork.TURNED_OFF })

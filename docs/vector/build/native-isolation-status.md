@@ -271,7 +271,7 @@ activation is authorized by this document.
 The bounded lane dispatch `43675930370` (job `132695971881`, head `f05f9916`) closed at
 admission with `prepare-mask-host-temp-keeper-search`. The keeper cannot search a strict
 ancestor of the fixed hosted temporary root `/home/runner/work/_temp`, which is
-`/home/runner` or `/home/runner/work`; which of the two is still unproven. The earlier
+`/home/runner` or `/home/runner/work`; which of the two is still unproven. (21 Nov 2026: D34 moved to known limits by D108 in `native-qualify-notes.md`.) The earlier
 dispatch `43660129312` closed with `...-bwrap-destination-host-temp-eacces-...` on that
 same fifth mask. Bubblewrap applies its operations in order, so the four earlier masks
 over Root-owned host directories did not fail. That last step is code reading of
@@ -421,7 +421,7 @@ ancestor of the hosted temporary root. Run 43660129312 shows this at constructio
 bubblewrap, running as the keeper, got `EACCES` on the parents of the hosted temporary
 root. Run 43675930370 shows it at admission, with the keeper-search label. Which of
 `/home/runner` and `/home/runner/work` blocks the keeper is still unproven (lane decision
-D34).
+D34). (21 Nov 2026: D34 moved to known limits by D108 in `native-qualify-notes.md`.)
 
 ### The last run
 
@@ -472,6 +472,10 @@ The scope of this result is narrow:
   that this is what aborted step 16 is still inference. It stays inference until a run
   with the `/proc` decision applied passes.
 - No Node cell was dispatched, so `probe-node-zero` qualifies no Node cell.
+  - Superseded 21 Nov 2026: Node cells were dispatched in runs 18 and 19 (`native-qualify-notes.md`, "Native Shell
+    runs 18 and 19"). In run 19 (`c9a8e489`) the four Node cells passed and the four Bun cells failed at step 16
+    with `driverExit` 134 and `probe-empty-abort-own-zero`. Per-SHA, on `native-qualify`, not main; no
+    qualification, and both native build switches and FLOOR stay false.
 
 The `/proc` decision still belongs to the lead or the native lane, and to the owner where
 it touches the held-off FLOOR.
@@ -522,6 +526,10 @@ The three runner-home witness obligations:
 
 The two open obligations are checks in the `inspect` case, which no run reached.
 
+21 Nov 2026 (`native-qualify-notes.md`, "Runner-home witness obligations 1 and 2 for Node"): both are now
+witnessed for Node at `c9a8e489`, by the two Node baseline cells of run 43867414546 (jobs 133299449128 and
+133299449236). A Bun witness stays open (run 19's Bun cells failed at step 16). Per-SHA, not main, no qualification.
+
 ### Remaining qualification at `ce5e5605`
 
 **Proven** by one run at one head (43697711119, job `132761821581`, `ce5e5605`), for the
@@ -551,10 +559,10 @@ that cell at that head.
   cells), including owned cleanup on every path. They were never dispatched in this lane;
 - the native `owned` refusal case. It does not exist: `CASES` is at
   `native-shell-payload.ts:17-28`;
-- the two open witness obligations above, D34, and D4 (Ubuntu's rewritten userns-denied
-  message has no closed label);
+- the two open witness obligations above (21 Nov 2026: witnessed for Node, a Bun witness open), D4 (Ubuntu's
+  rewritten userns-denied message has no closed label), and D34, which D108 moves to known limits;
 - a hosted `test.yml` run of the lane's Bun tests. `test.yml` has no run on
-  `native-qualify`;
+  `native-qualify`; 21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").
 - the reader integration clause in "Remaining qualification" above. This lane has not
   verified it;
 - a reviewed reader re-pin before any native dispatch after a merge.

@@ -47,7 +47,7 @@ const restores = []
 const vault = {
   status: async () => status,
   configure: async () => ({ ok: true, message: "Saved.", status }),
-  backup: async () => ({ ok: true, message: `Backed up 3 memory files to ${LABEL}.`, status }),
+  backup: async () => ({ ok: true, message: `Backed up 3 files to ${LABEL}.`, status }),
   versions: async () => ({
     ok: true,
     label: LABEL,

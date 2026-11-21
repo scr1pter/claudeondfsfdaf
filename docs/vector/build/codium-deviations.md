@@ -3157,6 +3157,12 @@ under two minutes), but the run is not green under the lane rule, because of the
      reaches `Provider.use.defaultModel()` (`:155`). Run locally here it picked `amazon-bedrock`, not `openai` (the file
      11 pass, 1 fail); it passed in CI (12/0, engine (linux, shard 4/4) job 132574289024). It should clear the other
      provider variables or run with an isolated `Env`. The file is outside this lane; this package does not fix it.
+     21 Nov 2026: closed on branch `engine-core-fixes`. Both GitHub-token cases now run with
+     `{ trusted: true, config: { enabled_providers: ["openai", "github-copilot"] } }`, the provider allow-list
+     provider.test.ts uses, so Bedrock, Vertex and other host-derived providers cannot take the default while
+     github-copilot stays allowed; the assertions are unchanged. With `AWS_WEB_IDENTITY_TOKEN_FILE` and
+     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` set the file gave 11 pass, 1 fail (`amazon-bedrock`) before and 12 pass
+     after; 12 pass without them too. The CI job is recorded when the branch's PR runs.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 - 15 Nov 2026, post-push CI and For the lead item 1. Vector Codium run 43665227929 (codium-finish 7c479924): Codium
   tests job 132662998717 stopped at "Codium: 119/120" on `packages/web/test/model-plan-gateway-hooks.test.ts` with the
@@ -3324,6 +3330,16 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
   billing literals would fail the same way, and a failed read returns `invalid` with a reconnect message. VectorScope's
   `packages/core/src/review/local-result.ts:26` decodes a retained result's cost kind with its own closed literal. Both
   are recorded readings, not changed; each is a package of its own if the lead wants downgrade tolerance there.
+  - 21 Nov 2026 (branch `engine-core-fixes`): the desktop task-bridge half is closed. `read()` in
+    `packages/engine/src/task/desktop.ts` maps a string `costKind` that `RunBudget.CostKind` rejects to "unknown" on
+    each stored task and each of its `budgetScopes` before the decode (`knownCostKinds`, below the layer), so a record
+    a newer engine wrote no longer reads as damaged. Strings only: a non-string cost kind, or any other malformed
+    field, still returns `invalid` (tasks are not decoded one at a time; the "damaged record" contract is unchanged).
+    Tests in `packages/engine/test/task/bridge-decode.test.ts` write raw records through `Storage.Service`: the
+    parent's list reads `unknown` for the task and its scope, a child's record read with the parent's descendants
+    does not break the listing, and a numeric cost kind still gives `invalid`. The first is red on the old `read()`
+    ("The desktop task record is damaged"). The other closed literals named here (status, source, billing) and
+    `local-result.ts:26` (VectorScope's) are unchanged.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 
 ## Codium finish: F44 sanitized lifecycle text (15 Nov 2026)
@@ -3590,6 +3606,19 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
      - `info.workspaceID` (`session.ts:613`).
 
      Each is a privacy reading of `--sanitize` outside F44's lifecycle scope.
+     21 Nov 2026: repaired on branch `engine-core-fixes`, all in `packages/engine/src/cli/cmd/export.ts`. The tool
+     error state's `error` is redacted (`tool-error`); retry parts and the assistant `error` go through one
+     `redactError` helper that keeps the name, codes, flags and figures, redacts `message`, `responseBody` and `ref`,
+     and turns `responseHeaders`/`metadata` into markers (literal fields such as `code`/`reason` stay, so the union
+     still decodes); `structured` becomes a `structured` marker (or redacted strings when it is not a record); the
+     user `format`'s JSON schema becomes a `format-schema` marker; `info.path` is redacted, each permission rule's
+     `pattern` is redacted (tool and action stay), and `share` and `workspaceID` are deleted. The `default` branch now
+     fails closed: an unnamed part kind keeps its type and id keys (`id`, `sessionID`, `messageID`, `*_id`) and every
+     other string is redacted. Tests: `packages/engine/test/cli/export-sanitize.test.ts` "sanitized export
+     pass-throughs (F44b)" seeds one private value per field, checks the source holds all eleven, then that the
+     sanitized archive holds none, decodes as `SessionArchive.Legacy`, and carries the exact markers; red on the old
+     `export.ts` (21 pass, 1 fail). `import.test.ts` 6 pass. The CLI child-lifecycle case in
+     `import.test.ts` followed later the same day (item 3 below).
   2. **F6's CI receipt is missing from the records.** F6's Vector Codium run 43674652525, on `5f19b0c9`, completed with
      conclusion failure (`get_workflow_run`). This package's review fixes read its jobs (`list_workflow_jobs`) and the
      failing job's log tail (`get_job_logs`, 140 lines):
@@ -3607,6 +3636,15 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
   3. **A CLI-level export check.** T5 runs `localArchive`, not the CLI. `packages/engine/test/cli/import.test.ts`
      could assert that a plain `vector export` output contains a child's title and mailbox text, and a `--sanitize`
      output does not. It starts `vector serve`, so it runs only in CI. It is left for the lead or a later package.
+     21 Nov 2026: added on branch `engine-core-fixes`. `import.test.ts` "a sanitized CLI export of a child session
+     redacts its lifecycle title and mailbox text" starts a real `vector serve`, creates a parent and a child whose
+     `metadata.subagent` record holds a title and one mailbox entry, then runs the CLI: a plain `vector export` holds
+     both strings, and `vector export --sanitize` holds neither and carries the `subagent-title` and
+     `subagent-mailbox-text` markers. It runs locally (7 pass, 0 fail, 58 s for the file). Mutation: the LIFECYCLE
+     rule's mailbox `text` set to `true` makes only this case red (the mailbox text leaks); restored from a copy. It
+     uses the file's `PROCESSES` budget, like the other multi-process cases. Seen while writing it: `POST /session`
+     passes a caller's `metadata.subagent` through `Session.create` unfiltered, while `PATCH` keeps it lifecycle-owned
+     (`SubagentLifecycle.setPublicMetadata`). Left as a follow-up for the lead; not changed here.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 
 **F44's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
@@ -3888,10 +3926,12 @@ and F28 used it too.
 
   The F28 CI receipt (`codium-p6-repairs.md`, and item 10 of the F28 section above) is a separate record from R45a's.
 - **For the lead:** R45-4(b) (`packages/core/src/vault/github.ts:115-118`: drop git's stderr line or strip paths and
-  URLs from it); R45-18 (`packages/core/src/child-environment.ts:5-14`: add `VECTOR_VAULT_RECOVERY_CODE` to
-  `PRIVATE_RUNTIME_ENVIRONMENT`); R45-19 (`packages/engine/src/tool/shell/sandbox.ts:83`, `:496-514`: deny
+  URLs from it; repaired 21 Nov 2026 on branch `engine-core-fixes` by dropping it, see `codium-p7-repairs.md` R45-4); R45-18 (`packages/core/src/child-environment.ts:5-14`: add `VECTOR_VAULT_RECOVERY_CODE` to
+  `PRIVATE_RUNTIME_ENVIRONMENT`; repaired 21 Nov 2026 on branch `engine-core-fixes`, see `codium-p7-repairs.md`
+  R45-18); R45-19 (`packages/engine/src/tool/shell/sandbox.ts:83`, `:496-514`: deny
   `<data>/vault/vault.json`); R45-20 (`packages/engine/src/cli/cmd/vault.ts:168` or the sandbox: move the CLI's copy
-  out of the cache, or deny it); R45-22 (`packages/desktop/src/main/remote-runtime.ts:43-45`, for A41's next review).
+  out of the cache, or deny it; repaired 21 Nov 2026 on branch `engine-core-fixes` by moving it to the data folder and
+  passing no-hooks to every ref-writing git, see `codium-p7-repairs.md` R45-20); R45-22 (`packages/desktop/src/main/remote-runtime.ts:43-45`, for A41's next review).
   For the owner's A60 legal read: backups now carry `skills` and `insights` sections (the A45 notes still say memory
   only); no privacy text changed.
 - **Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`: desktop `vault-backup.test.ts`
@@ -4270,6 +4310,13 @@ below.
     20 restored was in use. With the brain's order put back, `:269` fails.
   - The spec's "restored as drafts for review" names no number. Whether a restore should take more drafts is a product
     decision (For the lead).
+  - 21 Nov 2026 (branch `engine-core-fixes`): the backup line no longer calls learned files memory. The CLI
+    (`cli/cmd/vault.ts`), the desktop (`vault-backup.ts`) and Settings → Memory → Backup's last line
+    (`memory-backup-model.ts`) say "Backed up N file(s)" / "N file(s)"; `last.files` stays the total. New cases: desktop
+    `vault-backup.test.ts` backs up one memory, one skills and one insights file and expects "Backed up 3 files to …"
+    (red on the old copy), and app `memory-backup-model.test.ts` checks a three-file last line names no memory file
+    (red on the old copy); the e2e fixture's message follows. The cap is unchanged: a restore still brings back at most
+    `LIMIT.pending` 20 skills per repository. Proposed for the lead to record as accepted; not decided here.
 - **B10-4. Confirmed: "Show versions" on a new computer could fail in git.**
   - Cause: the desktop's `versions()` reads `store.list()` and `store.readKey()` at once (`vault-backup.ts:467`). Core's
     GitHub store did not share an overlapping read (`vault/github.ts`, `sync`), so a new computer's empty copy was set
@@ -6403,11 +6450,14 @@ These are pointers only; nothing is fixed here.
     21 Nov 2026: closed. `dbfca832` is an ancestor of main (through #33), and this lane merged main before PR #36
     merged as `b5cbad1c`, so no conflict is left;
   - item 7: the non-hermetic `upstream-free.test.ts:148`, which reads host provider variables.
+    21 Nov 2026: closed on branch `engine-core-fixes` (the provider allow-list; see item 7 above).
 - F6 ("Codium finish: F6 cost kind on read", For the lead): the desktop task-bridge store's closed literals
   (`packages/engine/src/task/desktop.ts:24-33`), and `packages/core/src/review/local-result.ts:26`'s own closed
-  cost-kind literal.
+  cost-kind literal. 21 Nov 2026: the task-bridge cost kinds are closed on branch `engine-core-fixes` (see "Codium
+  finish: F6 cost kind on read", For the lead); `local-result.ts` stays open with VectorScope.
 - F44 ("Codium finish: F44 sanitized lifecycle text", For the lead):
   - item 1, F44b's `sanitizeLegacy` pass-throughs (`export.ts:127-131`, `:250` and the parts listed there);
+    21 Nov 2026: repaired on branch `engine-core-fixes` (see the F44b item above);
   - item 3, a CLI-level export check. Item 2 is completed above.
 - P6 review addendum (For the lead):
   - item 1, an allowlist module out of `packages/core/src/brain/skill.ts`;

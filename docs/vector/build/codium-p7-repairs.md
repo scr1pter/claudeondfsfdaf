@@ -149,6 +149,15 @@ searched for vault, backup and restore lines:
   reading that "the URL carries no credential" holds only for Vector's own URL. The repair belongs in core's store:
   drop the stderr line, or keep it only after removing anything that looks like a path or a URL. That file is A43's
   and outside R45a's restricted scope, so it is recorded under For the lead.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`): `failed()` now takes only the fixed copy and returns
+    `${what}.`; git's stderr is never appended (the comment there says why). The push branch's stale/rejected test of
+    stderr is unchanged and still answers its own copy. Two cases in `packages/core/test/vault/github.test.ts` wrap the
+    real git: `ls-remote` and, separately, `push` exit 128 with a token URL and a `/home/person` path on stderr. They
+    assert the exact fixed message and that it holds none of `ghp_`, `/home/person`, `fatal` or `https://`. On the old
+    `failed()` both fail (9 pass, 2 fail, the token URL in the message). Stripping paths and URLs by pattern was not
+    taken: it misses Windows paths and home folders. One consequence: desktop's runner copy "Git could not start on
+    this computer…" is no longer appended to "Vector could not set up its copy of the vault"; the desktop case
+    "git that cannot start shows plain copy" now lists the bare fixed copy as its second accepted text.
 
 ### Checks that hold
 
@@ -283,7 +292,7 @@ searched for vault, backup and restore lines:
 ### For the lead (recorded, not repaired here)
 
 - **R45-4(b).** Core's `failed()` (`packages/core/src/vault/github.ts:115-118`), as above. A43's file, outside this
-  package's scope.
+  package's scope. Repaired 21 Nov 2026 on branch `engine-core-fixes` (see R45-4 (b) above).
 - **R45-18. Confirmed: an exported `VECTOR_VAULT_RECOVERY_CODE` reaches agents' shells.** The CLI reads it
   (`cli/cmd/vault.ts:214`). `privateRuntimeKey` (`packages/core/src/child-environment.ts:163-174`) drops `VECTOR_*`
   names ending `_TOKEN`, `_KEY`, `_PASSWORD` or `_SECRET` and the names in `PRIVATE_RUNTIME_ENVIRONMENT` (`:5-14`), and
@@ -293,6 +302,10 @@ searched for vault, backup and restore lines:
   name in `PRIVATE_RUNTIME_ENVIRONMENT`, in core's shared child-environment file. The critique's alternative, deleting
   the variable inside `vault restore`, does not help: agents' shells inherit from the long-running `vector` process,
   not from `vault restore`.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`): `VECTOR_VAULT_RECOVERY_CODE` is in
+    `PRIVATE_RUNTIME_ENVIRONMENT` (`packages/core/src/child-environment.ts`), so `untrustedChildEnvironment` drops it
+    in any letter case. `packages/core/test/child-environment.test.ts`'s first case now passes it upper and lower case
+    and expects both gone; without the one-name fix it fails (11 pass, 1 fail, the two names left in the output).
 - **R45-19. Confirmed: the shell sandbox does not hide the CLI's vault key file.** `credentialStorePaths`
   (`packages/engine/src/tool/shell/sandbox.ts:496-514`, with `CREDENTIAL_FILES` at `:83`) lists `auth.json`,
   `mcp-auth.json`, `cli-auth.json`, `plugin-oauth-approvals.json` and the databases, not `<data>/vault/vault.json`
@@ -306,6 +319,19 @@ searched for vault, backup and restore lines:
   `VECTOR_SHELL_SANDBOX`, or Web access None, to matter at all. Two repair sites: move the CLI's copy to
   `Global.Path.data` (this lane's CLI file), or deny the copy in the sandbox. Left for the lead because it changes the
   CLI's on-disk layout and touches the sandbox's chosen soft spot.
+  - Repaired, 21 Nov 2026 (branch `engine-core-fixes`), sandbox untouched: the CLI's copy is now
+    `Global.Path.data/vault/github/<owner>/<name>.git` (`githubCopy` in `cli/cmd/vault.ts`), beside `vault.json`, and
+    `gitRunner` runs in the data folder. `storeFor` removes the old `Global.Path.cache/vault` before use, so a copy
+    that was already tampered with is never fetched into again; the next backup sets up a fresh copy from GitHub. In
+    core, `init`, `fetch`, `update-ref` and `push` all pass `-c core.hooksPath=<copy>/no-hooks` (push alone did), so a
+    `reference-transaction` hook cannot run even where the copy is writable (the desktop's copy in its own cache
+    included). Tests: engine `test/cli/vault.test.ts` asserts the copy resolves under data and outside the cache (red
+    with the cache path put back); core `test/vault/github.test.ts` "hooks planted in the copy…" plants the hook in
+    `hooks/` and in a folder the copy's config names as `core.hooksPath`, backs up twice against a local bare remote,
+    and asserts no marker (red on the old core: 11 pass, 1 fail). The B10 overlap case's subcommand reader now skips
+    each `-c` value. Not done: a `credential.helper=` reset, which would also drop the person's own helper that the
+    push relies on; with the copy out of the sandbox's reach a planted helper has nowhere to be written. R45-19 (the
+    sandbox's deny list) stays with `v2-closeout-ci`.
 - **R45-21. Reading: `versions()` is not exclusive** (`vault-backup.ts:449-479`). It can fetch into the same bare copy
   while a backup runs and answer a transient "changed while Vector read it". Not a defect.
 - **R45-22. Reading for A41's next review:** `remote-runtime.ts:43-45` reads its sealed identity the way R45-1

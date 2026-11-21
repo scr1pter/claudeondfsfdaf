@@ -134,11 +134,11 @@ const INVENTORY = {
   },
   "packages/core/src/pty/process.ts": {
     stance: "fixed-helper",
-    why: "foreground() reads a terminal's foreground group with `ps -o tpgid= -p <pid>` for the PTY's own pid, resolved through PATH with the engine's environment.",
+    why: "foreground() reads a terminal's foreground group with /bin/ps -o tpgid= -p <pid> for the PTY's own pid, with the untrusted-child environment; no caller input reaches its argv.",
   },
   "packages/core/src/shell.ts": {
     stance: "fixed-helper",
-    why: "killTree's Windows-only `taskkill /pid <pid> /f /t`: a fixed argv, resolved through PATH and the working directory, with the untrusted-child environment.",
+    why: "killTree's Windows-only tree kill: WindowsSystem.taskkill(), C:\\Windows\\System32\\taskkill.exe or a validated SystemRoot's copy, with taskkillArgs(pid), never found on PATH or in the working directory, with the untrusted-child environment.",
   },
   "packages/core/src/config/managed.ts": {
     stance: "fixed-helper",
@@ -146,7 +146,7 @@ const INVENTORY = {
   },
   "packages/core/src/local-mode/hardware.ts": {
     stance: "fixed-helper",
-    why: "Vector Local's hardware read (run()): vm_stat or nvidia-smi with fixed arguments, found with which outside the repository, with the engine's environment.",
+    why: "Vector Local's hardware read (run()): vm_stat or nvidia-smi with fixed arguments, found with which outside the repository, with the untrusted-child environment.",
   },
   "packages/engine/src/lsp/launch.ts": {
     stance: "type-only",
@@ -214,12 +214,32 @@ const INVENTORY = {
   },
 } as const satisfies Record<string, { stance: Stance; why: string }>
 
+// Dependencies that start processes inside themselves, which the scan above cannot see (F10; v2-spawn-review.md,
+// "Dependency-internal spawns"), and every core and engine source file that loads one. A new importer fails here until
+// its stance is reviewed and listed.
+const DEPENDENCY_SPAWNERS = {
+  // GoogleAuth runs `gcloud config config-helper` for a missing project id, and a pluggable executable source only
+  // with GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1.
+  "google-auth-library": [
+    "packages/core/src/plugin/provider/google-vertex.ts",
+    "packages/engine/src/provider/provider.ts",
+  ],
+  // fromNodeProviderChain runs a profile's credential_process from the person's own AWS config.
+  "@aws-sdk/credential-providers": [
+    "packages/core/src/plugin/provider/amazon-bedrock.ts",
+    "packages/engine/src/provider/provider.ts",
+  ],
+  // Arborist runs lifecycle scripts unless ignoreScripts, which npm.ts always sets.
+  "@npmcli/arborist": ["packages/core/src/npm.ts"],
+}
+
 // Calls in a launch file that start something other than the planned file, excused one by one.
 const HELPER_CALLS = [
   {
     file: "packages/core/src/cross-spawn-spawner.ts",
-    call: "NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`",
-    why: "killGroup's Windows tree kill of a process this spawner started; Windows refuses every launch while isolation is required.",
+    // The scan's call text stops at the first ")", here the one closing taskkill().
+    call: "NodeChildProcess.execFile(taskkill(",
+    why: "killGroup's Windows tree kill of a process this spawner started: the system taskkill.exe (WindowsSystem.taskkill()), no shell, the untrusted-child environment; Windows refuses every launch while isolation is required.",
   },
 ] as const
 
@@ -551,6 +571,37 @@ describe("direct process spawn inventory (spawn review §4, principle 5)", () =>
       .map((source) => source.file)
     expect(constructs).toEqual(["packages/engine/src/mcp/stdio.ts"])
     expect(listed("launch")).toContain("packages/engine/src/mcp/stdio.ts")
+  })
+
+  // F7: taskkill runs only as WindowsSystem.taskkill()'s absolute path, from the one file that names it. A bare name
+  // resolves through PATH and, on Windows, the working folder first, where a repository could put its own taskkill.exe.
+  test("no core or engine source starts a bare taskkill", async () => {
+    const sources = await scanned
+    expect(
+      sources.filter((source) => /(["'`])taskkill(?:\.exe)?[\s"'`]/i.test(source.code)).map((source) => source.file),
+    ).toEqual(["packages/core/src/windows-system.ts"])
+  })
+
+  // F9: Vector Local's hardware read runs vm_stat or nvidia-smi without Vector's own secrets.
+  test("the hardware read starts its tool with the untrusted-child environment", async () => {
+    const source = (await scanned).find((item) => item.file === "packages/core/src/local-mode/hardware.ts")
+    expect(source?.code).toMatch(
+      /\bexecFile\(\s*executable,\s*command\.slice\(1\),\s*\{[^{}]*\benv: untrustedChildEnvironment\(\)/,
+    )
+  })
+
+  test("every file that loads a dependency which spawns inside itself is listed (F10)", async () => {
+    const sources = await scanned
+    expect(
+      Object.fromEntries(
+        Object.keys(DEPENDENCY_SPAWNERS).map((specifier) => [
+          specifier,
+          sources
+            .filter((source) => new RegExp(`(["'\`])${specifier.replace(/[./]/g, "\\$&")}\\1`).test(source.code))
+            .map((source) => source.file),
+        ]),
+      ),
+    ).toEqual(DEPENDENCY_SPAWNERS)
   })
 
   test("only cross-spawn-spawner.ts builds Effect's ChildProcessSpawner service", async () => {
