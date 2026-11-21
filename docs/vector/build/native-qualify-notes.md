@@ -3055,3 +3055,22 @@ main; not a qualification; both native build switches and `FLOOR` false.
     `prepare-mask-host-temp-keeper-search-runner-home`/`-runner-work` label, before it can be qualified.
   - Edited to say so: `native-isolation-status.md` (the two "still unproven" sentences and the Open list) and this
     file's Open list. No code, workflow or label changed; both native build switches and `FLOOR` stay false.
+
+## 21 November 2026: D4, Ubuntu's rewritten userns-denied message gets its closed label (NQ-D4)
+
+- `packages/core/src/process-isolation/linux/entry.py` `keeper_log_classification`: a second exact
+  `bwrap-userns-denied` label, directly after the upstream one, for Ubuntu 0.9.0-1ubuntu0.3's Debian-patched text:
+  "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user
+  namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>." The bytes were
+  read from that package's `/usr/bin/bwrap` (`dpkg -s bubblewrap`: 0.9.0-1ubuntu0.3) with
+  `grep -ao 'No permissions to create new namespace[^\x00]*'`. The category is unchanged, so the closed vocabulary and
+  the TypeScript side (`github.isolation.ts`) need nothing; the pin comment names the Ubuntu package.
+- `packages/core/test/fixture/native-mask-origins.py`: the pinned-label table gains the line (21 to 22 labels, 18
+  categories), so the existing generic checks run on it too (prefix, `Bwrap:` case, private suffix, missing final LF,
+  doubled line), and `test_ubuntu_userns_denied_text_is_exact` adds the exact match, a lowercased copy, a copy cut after
+  "See <https://deb.li/bubblewrap>", a trailing private suffix (no-marker), and the line without its LF or doubled
+  (invalid).
+- Not run locally: the fixture refuses to run outside its approved CI job (`CI=true`), and that guard was respected;
+  both Python files parse. The proof is the `native-guard-unit.yml` run on this branch's PR. Locally,
+  `process-isolation-linux.test.ts` (18 pass), `process-isolation-runtime.test.ts` (11 pass) and the native-shell
+  `policy.test.ts` (11 pass) stay green. Both native build switches and `FLOOR` stay false.
