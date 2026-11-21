@@ -12,7 +12,8 @@ import { deleteKeys, everywhereStore, getValue, removeMembers, setMembers, type 
 
 /*
  * Erasing (contract E13). Slack `app_uninstalled` and `tokens_revoked`, Linear's revocation, a disconnect on
- * vectordev.ai and account deletion remove the installation, its links, its mappings and its live job bodies.
+ * vectordev.ai and account deletion remove the installation, its links, its mappings, its live job bodies and the
+ * sealed summaries its ended jobs of the last 30 days still hold (EV-23).
  *
  * Every record is found through its index set (identity.ts writes the index before the record), so nothing scans the
  * store. Live jobs belong to the jobs module (VE-05, jobs.ts), which erases them through the `jobs` seam.
@@ -23,7 +24,7 @@ import { deleteKeys, everywhereStore, getValue, removeMembers, setMembers, type 
 
 export type EraseReason = Exclude<(typeof ERASE_REASONS)[number], "unlinked">
 
-/** The jobs module's half of erasing (VE-05): cancel live jobs and erase their bodies. */
+/** The jobs module's half of erasing (VE-05): cancel live jobs, erase their bodies and ended jobs' summaries. */
 export type JobEraser = {
   readonly installation: (installation: string, store?: Store) => Promise<void>
   readonly account: (account: string) => Promise<void>

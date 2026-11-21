@@ -89,9 +89,10 @@ import {
  * Each live job is in four indexes: `jobs:due` (by its next timeout, for the sweep), `jobs:<sponsor>` (live and
  * waiting jobs, which the live cap counts), `livejobs:<installation>` (for erasing an installation) and
  * `history:<sponsor>` (every job of the last 30 days, for the job list and for erasing an account). A job leaves the
- * first three when it ends, in the same script that ends it, and its encrypted body is deleted then too. An Actions job's
- * links (`ticket:<hash>`, `run:<rid>` and that run's body-read marker) end with its body and are deleted, best effort,
- * when it ends (EV-27).
+ * first three when it ends, in the same script that ends it, and its encrypted body is deleted then too. That script
+ * also records it in `endedjobs:<installation>` for 30 days from its end (EV-23), so erasing the installation still
+ * reaches the sealed summary its record keeps. An Actions job's links (`ticket:<hash>`, `run:<rid>` and that run's
+ * body-read marker) end with its body and are deleted, best effort, when it ends (EV-27).
  *
  * An Actions job moves `running` → `settled` from @vector's settle hook (`settleDispatched`), fenced like a laptop
  * settle, through the run's settle index `run:<rid>:settle`: written with `run:<rid>` at the start, it holds only the
@@ -612,12 +613,15 @@ export const CREATE_JOB_SCRIPT = luaKeyTypes(["string", "string", "zset", "zset"
 
 /**
  * One state change, fenced: it writes only while the record still starts with the version and state it was read
- * with. KEYS: job, body, due, the sponsor's live set, the installation's live set. ARGV: expected version, expected
- * state, the next record, its TTL, the next due score ('' leaves `jobs:due`), '1' to stay live or '0' to leave both
- * live sets, the body ('keep', 'delete', or 'require': only while the body still exists), jid. Answers 1, 0 (no
- * record), -1 (someone changed it first) or -2 (the body is gone).
+ * with. KEYS: job, body, due, the sponsor's live set, the installation's live set, `jobs:posts`, the installation's
+ * ended set. ARGV: expected version, expected state, the next record, its TTL, the next due score ('' leaves
+ * `jobs:due`), '1' to stay live or '0' to leave both live sets, the body ('keep', 'delete', or 'require': only while
+ * the body still exists), jid, the time a job that ends now ends ('' when it does not end now), and how long the ended
+ * set keeps a job. A job that ends is queued on `jobs:posts` and (EV-23) recorded in `endedjobs:<installation>` by
+ * that time; the ended set drops the jobs that ended more than ARGV[10] before it and lives ARGV[10] from the newest.
+ * Key 7 is optional. Answers 1, 0 (no record), -1 (someone changed it first) or -2 (the body is gone).
  */
-export const TRANSITION_SCRIPT = luaKeyTypes(["string", "string", "zset", "zset", "zset", "zset"]) + [
+export const TRANSITION_SCRIPT = luaKeyTypes(["string", "string", "zset", "zset", "zset", "zset", "zset"]) + [
   "local raw = redis.call('GET', KEYS[1])",
   "if not raw then return 0 end",
   'local version, state = string.match(raw, \'^{"version":(%d+),"state":"([a-z]+)"\')',
@@ -628,6 +632,9 @@ export const TRANSITION_SCRIPT = luaKeyTypes(["string", "string", "zset", "zset"
   "if ARGV[6] == '0' then redis.call('ZREM', KEYS[4], ARGV[8]) redis.call('ZREM', KEYS[5], ARGV[8]) end",
   "if ARGV[7] == 'delete' then redis.call('DEL', KEYS[2]) end",
   "if ARGV[9] ~= '' then redis.call('ZADD', KEYS[6], ARGV[9], ARGV[8]) end",
+  "if KEYS[7] and ARGV[9] ~= '' then redis.call('ZADD', KEYS[7], ARGV[9], ARGV[8])" +
+    " redis.call('ZREMRANGEBYSCORE', KEYS[7], '-inf', '(' .. (tonumber(ARGV[9]) - tonumber(ARGV[10])))" +
+    " redis.call('PEXPIRE', KEYS[7], ARGV[10]) end",
   "return 1",
 ].join(" ")
 
@@ -693,10 +700,11 @@ async function change<T>(
     const due = terminal ? undefined : dueOf(decision.next)
     const written = { ...decision.next, version: job.version + 1, ...(due === undefined ? {} : { due }) } as JobRecord
     const body: BodyMode = terminal ? "delete" : (decision.body ?? "keep")
+    const endsNow = terminal && !TERMINAL_STATES.has(job.state) ? ctx.now : ""
     const result = storeInteger(
       await (guards.length ? authorizedScript(ctx.store, guards, TRANSITION_SCRIPT,
-        [everywhereKeys.job(jid), everywhereKeys.jobBody(jid), everywhereKeys.jobsDue(), everywhereKeys.jobs(job.sponsor), everywhereKeys.installationJobs(job.installation), everywhereKeys.jobsPosts()],
-        [job.version, job.state, encodeJobRecord(written), recordTtl(job, ctx.now), due === undefined ? "" : due, terminal ? "0" : "1", body, jid, terminal && !TERMINAL_STATES.has(job.state) ? ctx.now : ""]) : runScript(
+        [everywhereKeys.job(jid), everywhereKeys.jobBody(jid), everywhereKeys.jobsDue(), everywhereKeys.jobs(job.sponsor), everywhereKeys.installationJobs(job.installation), everywhereKeys.jobsPosts(), everywhereKeys.installationEnded(job.installation)],
+        [job.version, job.state, encodeJobRecord(written), recordTtl(job, ctx.now), due === undefined ? "" : due, terminal ? "0" : "1", body, jid, endsNow, KEEP_MS.job]) : runScript(
         ctx.store,
         TRANSITION_SCRIPT,
         [
@@ -706,6 +714,7 @@ async function change<T>(
           everywhereKeys.jobs(job.sponsor),
           everywhereKeys.installationJobs(job.installation),
           everywhereKeys.jobsPosts(),
+          everywhereKeys.installationEnded(job.installation),
         ],
         [
           job.version,
@@ -716,7 +725,8 @@ async function change<T>(
           terminal ? "0" : "1",
           body,
           jid,
-          terminal && !TERMINAL_STATES.has(job.state) ? ctx.now : "",
+          endsNow,
+          KEEP_MS.job,
         ],
       )),
     )
@@ -1900,12 +1910,15 @@ export async function offerWaiting(ctx: JobsContext, account: string): Promise<{
 // ---------------------------------------------------------------------------------------------------------------------
 
 /**
- * Cancels every live job on an installation and erases their bodies and Actions links. A job that already ended has
- * left this index, so its links are reached only by account erase and by their TTL, which ends with the body.
+ * Cancels every live job on an installation and erases their bodies and Actions links, then (EV-23) erases the sealed
+ * summary of every job on it that ended in the last 30 days, found through `endedjobs:<installation>`. Such a record
+ * stays for the sponsor's job list with its summary gone. A job that already ended has left the live index, so its
+ * links are reached only by account erase and by their TTL, which ends with the body.
  */
 export async function eraseInstallationJobs(ctx: JobsContext, installation: string): Promise<number> {
   ctx = { ...ctx, erasing: true }
   const key = everywhereKeys.installationJobs(installation)
+  const endedKey = everywhereKeys.installationEnded(installation)
   let cancelled = 0
   for (const jid of members(await ctx.store(["ZRANGE", key, 0, -1]))) {
     try {
@@ -1923,7 +1936,21 @@ export async function eraseInstallationJobs(ctx: JobsContext, installation: stri
     const job = await readJob(ctx.store, jid).catch(() => undefined)
     await deleteKeys(ctx.store, everywhereKeys.jobBody(jid), ...(job ? runLinks(job) : []))
   }
-  await deleteKeys(ctx.store, key)
+  // The jobs that ended (the ones just cancelled among them): each one's sealed summary goes.
+  for (const jid of members(await ctx.store(["ZRANGE", endedKey, 0, -1]))) {
+    let job: JobRecord | undefined
+    try {
+      job = await readJob(ctx.store, jid)
+    } catch (error) {
+      if (!(error instanceof UndecodableJob)) throw error
+      // As above: a record this deployment cannot read on this installation's index is this installation's job.
+      await deleteKeys(ctx.store, everywhereKeys.job(jid))
+      await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
+      continue
+    }
+    if (job?.installation === installation && job.summaryEnc) await clearSummary(ctx, jid)
+  }
+  await deleteKeys(ctx.store, key, endedKey)
   return cancelled
 }
 
