@@ -73,6 +73,13 @@ describe("engine capabilities", () => {
     expect(Object.keys(parsed).sort()).toEqual([...FLAGS].sort())
   })
 
+  test("reads code review after each task as on only for true", () => {
+    expect(parseCapabilities({ codeReviewAfterTask: true }).codeReviewAfterTask).toBe(true)
+    for (const value of [undefined, null, false, 1, "true", {}, []])
+      expect(parseCapabilities({ codeReviewAfterTask: value }).codeReviewAfterTask).toBe(false)
+    expect(NO_CAPABILITIES.codeReviewAfterTask).toBe(false)
+  })
+
   test("HTML, text, arrays and garbage read as every flag off", () => {
     for (const data of ["<!doctype html><html></html>", "ok", 42, null, undefined, [true], true])
       expect(parseCapabilities(data)).toEqual(NO_CAPABILITIES)

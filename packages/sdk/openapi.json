@@ -20259,6 +20259,9 @@
                   "secondOpinion": {
                     "type": "boolean"
                   },
+                  "codeReview": {
+                    "type": "boolean"
+                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -21590,6 +21593,9 @@
                   "secondOpinion": {
                     "type": "boolean"
                   },
+                  "codeReview": {
+                    "type": "boolean"
+                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -21773,6 +21779,9 @@
                     "$ref": "#/components/schemas/TaskJudgeMode"
                   },
                   "secondOpinion": {
+                    "type": "boolean"
+                  },
+                  "codeReview": {
                     "type": "boolean"
                   },
                   "parts": {
@@ -32240,6 +32249,9 @@
           },
           "secondOpinion": {
             "type": "boolean"
+          },
+          "codeReview": {
+            "type": "boolean"
           }
         },
         "required": ["id", "sessionID", "role", "time", "agent", "model"],
@@ -40654,6 +40666,9 @@
             "type": "boolean"
           },
           "vectorscopeLocalFixes": {
+            "type": "boolean"
+          },
+          "codeReviewAfterTask": {
             "type": "boolean"
           },
           "connections": {

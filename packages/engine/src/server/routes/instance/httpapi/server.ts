@@ -49,6 +49,7 @@ import { Vcs } from "@/project/vcs"
 import { ProviderAuth } from "@/provider/auth"
 import { Provider } from "@/provider/provider"
 import { Question } from "@/question"
+import { SessionCodeReview } from "@/session/code-review"
 import { SessionCompaction } from "@/session/compaction"
 import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
@@ -311,6 +312,7 @@ const app = LayerNode.group([
   WorkflowOwner.node,
   ReviewOwner.node,
   ReviewFixOwner.node,
+  SessionCodeReview.node,
   ReviewMemoryOwner.node,
   ConnectOwner.node,
   TaskNotify.node,

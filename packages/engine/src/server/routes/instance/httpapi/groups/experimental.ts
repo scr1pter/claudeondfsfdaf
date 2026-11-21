@@ -142,6 +142,7 @@ const CapabilitiesResponse = Schema.Struct({
   vectorscopeReviewMemoryControls: Schema.optional(Schema.Boolean),
   // The owner fix routes exist. Each call is still refused unless the owner turned VectorScope on, on Linux.
   vectorscopeLocalFixes: Schema.optional(Schema.Boolean),
+  codeReviewAfterTask: Schema.optional(Schema.Boolean),
   connections: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "ExperimentalCapabilities" })
 

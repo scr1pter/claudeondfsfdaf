@@ -23,6 +23,7 @@ export const FLAGS = [
   "vectorscopeRuns",
   "vectorscopeReviewMemoryControls",
   "vectorscopeLocalFixes",
+  "codeReviewAfterTask",
   "connections",
 ] as const
 

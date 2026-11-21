@@ -1084,6 +1084,11 @@ describe("workflow v3", () => {
       expect(() => buildAgentsWorkflow({ ...CODIUM, ...change })).toThrow()
     for (const version of ["1.99.112", "1.99.113-beta.1", "local", "$(echo bad)"])
       expect(() => buildAgentsWorkflow({ ...CODIUM, version })).toThrow()
+    // The desktop and its bundled engine pin their own product version, which no published CLI carries yet, so setup
+    // stays refused for it until the owner publishes a CLI at MIN_AGENTS_CLI.
+    expect(() => buildAgentsWorkflow({ ...CODIUM, version: release.version })).toThrow(
+      `GitHub agents require CLI ${GithubAgents.MIN_AGENTS_CLI} or newer`,
+    )
     expect(() => buildAgentsWorkflow({ ...CODIUM, version: "10.0.0" })).not.toThrow()
     expect(() => buildAgentsWorkflow({ ...OWN_KEY, share: true })).not.toThrow()
     expect(readWorkflowOptions("# vector-workflow: {broken}")).toBeUndefined()

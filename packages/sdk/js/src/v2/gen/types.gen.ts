@@ -324,6 +324,7 @@ export type UserMessage = {
   size?: TaskSizeChoice
   judge?: TaskJudgeMode
   secondOpinion?: boolean
+  codeReview?: boolean
 }
 
 export type ProviderAuthError = {
@@ -2977,6 +2978,7 @@ export type ExperimentalCapabilities = {
   vectorscopeRuns?: boolean
   vectorscopeReviewMemoryControls?: boolean
   vectorscopeLocalFixes?: boolean
+  codeReviewAfterTask?: boolean
   connections?: boolean
 }
 
@@ -20551,6 +20553,7 @@ export type SessionPromptData = {
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
     secondOpinion?: boolean
+    codeReview?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -21065,6 +21068,7 @@ export type SessionPromptAsyncData = {
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
     secondOpinion?: boolean
+    codeReview?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -21117,6 +21121,7 @@ export type SessionCommandData = {
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
     secondOpinion?: boolean
+    codeReview?: boolean
     parts?: Array<{
       id?: string
       type: "file"

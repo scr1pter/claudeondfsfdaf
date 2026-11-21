@@ -79,6 +79,11 @@ describe("settings registry", () => {
       expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["general"])
   })
 
+  test("finds Code review after each task under General", () => {
+    for (const query of ["code review", "vectorscope", "Code Review"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toContain("general")
+  })
+
   test("finds what happens while Vector works, follow-ups and the Stop button, under General", () => {
     for (const query of ["follow-up", "followup", "steer", "queue", "stop button", "stop helpers", "while working"])
       expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["general"])
