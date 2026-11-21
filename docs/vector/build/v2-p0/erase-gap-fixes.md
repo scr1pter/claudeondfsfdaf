@@ -26,7 +26,7 @@ Files: `api/_lib/everywhere/{keys,jobs,erase}.ts`, `packages/web/test/lib/everyw
 
 - :1398, "erasing an installation clears the sealed summary of its ended jobs; another installation's stays". It settles a SLACK and a SLACK_OTHER job with summaries and erases SLACK. The SLACK record is still `settled` but has no `summaryEnc`, and `openSummary` is undefined. The ended-set key is gone. SLACK_OTHER's summary still opens, and its ended set holds only its jid.
 - :1419, "an installation's ended jobs are recorded once, for 30 days from their end". It checks the score is the end time, the TTL is `KEEP_MS.job`, `clearSummary` adds nothing and does not extend the TTL, and a job that ends 31 days after the first drops it.
-- :1694, the same erase assertions in the real-Redis block, together with the ended set's TTL on Redis. It runs in `vector-everywhere.yml` against Valkey and skips locally.
+- :1719 (:1694 before the review's case below), the same erase assertions in the real-Redis block, together with the ended set's TTL on Redis. It runs in `vector-everywhere.yml` against Valkey and skips locally.
 
 **Evidence** (each file run alone with `--timeout 30000`):
 
@@ -62,3 +62,23 @@ Files: `api/_lib/everywhere/{keys,jobs,erase}.ts`, `packages/web/test/lib/everyw
 - The plan's fixture-risk files passed with no fixture change: `account-delete-api` 8, `ops-payment-pipeline` 10, `ops-worker-contract` 9, `release-guard` 36 pass and 1 skip, and `packages/web` `desktop-account` 12.
 - Also green: `ops-guard`, `ops-screens`, `ops-domain-health`, `codium-outbox`, `github-webhook`, `api-module-loading`, `ship-desk`, `codium-founding`, `hosted-lifecycle`, `hosted-jobs`, `hosted-internal`, `web-push`, `brain-vault-api` and `remote-ticket-api`; in packages/web, `codium-configuration`, `codium-public` and `cloud-agents-entitlement-contract`.
 - Typecheck: the api reported 0 errors.
+
+## 2026-11-21, independent review of both items
+
+The review re-ran every file above alone with `--timeout 30000`, repeated the red and green runs, and found one gap and one weak spot. Both are fixed in their own commits.
+
+**EV-23: account deletion left the deleted account's jids in another connector's ended set.** `eraseAccountJobs` cancels the account's live jobs, and with this branch that cancel records each one in `endedjobs:<installation>`, which may be someone else's installation. The history loop then deleted the records, and it already removed each jid from `jobs:due` and `jobs:posts`, but not from the ended set. So the deletion itself left the account's jids there for up to 30 days. The loop now ZREMs the jid from `endedjobs:<job.installation>` before it deletes the record, because the record is the only place that names the installation. A jid whose record is already gone can't be found, and its entry ends with the set's TTL.
+
+- Test: `packages/web/test/everywhere-jobs.test.ts` :1473, "deleting an account clears its installation's ended summaries and leaves none of its jobs in another's ended set". Alice connects SLACK and Bob connects SLACK_OTHER, and each settles a job, with a summary, on both. Alice also has a live job on SLACK_OTHER. Alice's account is then deleted through the production eraser (`eraseEverywhereAccount` with `jobEraser`: no data keys, and the installation erase's fenced store). That is the path the earlier cases did not reach. Bob's ended job on Alice's erased installation keeps its record but loses its summary, and SLACK's ended set is gone. Bob's ended set names only his own job, and his summary still opens.
+- Red-before, with only the new ZREM reverted in the working tree: 54 pass and 1 fail. Alice's settled job and her cancelled live job were both still in SLACK_OTHER's ended set. Restored with `git apply`, and the sha256 matched. Green: 55 pass, 11 skip.
+- Mutation: the ZREM aimed at `livejobs:<installation>` instead of the ended set made :1473 go red. Restored, and the sha256 matched.
+- Still green: `everywhere-erase` (read-only, 11), `everywhere-account-adapter`, `everywhere-body-api`, the three `everywhere-journey-*` files, `everywhere-cloud-adapter`, `everywhere-github`, `everywhere-jobs-api` and `everywhere-keys`.
+
+**OPS: only `plan` was pinned.** The branch's cases send only a `plan`, and on-call's settings case only a `config`. Dropping `release` or `suspend` from the actions that write the record turned nothing red.
+
+- Test: `test/account-delete.test.ts` :1621, "every call that can leave data at the Worker records its account first, even a refused one; state, erase and flags record none". Each of `plan`, `config`, `release` and `suspend` goes to its own account, and the Worker refuses the `release`, which must still leave its record, because the Worker may have applied part of it. A `state`, an `erase` and a `flags` call then record nothing.
+- Red-before, with only `ops-worker.ts` reverted: :1564, :1600 and :1621 failed (44 pass). Green: 47 pass, 1 skip.
+- Mutations, each restored with the sha256 matched. Dropping `release` from the set made :1621 go red. Writing the record only after a successful answer made :1600 and :1621 go red. Writing it after the fetch but before the answer check made :1600 go red.
+- Still green: `on-call` 30, `ops-payment-pipeline` 10, `ops-worker-contract` 9, `account-delete-api` 8, `release-guard` 36, `ops-guard` 13, `ship-desk` 27, `github-webhook` 31, `remote-phone-api` 8, and `desktop-account` 12 in packages/web.
+
+**Checked and left as is.** `change()` is the only path that writes a job's state (create starts every job live), so every way a job ends records it. A record lives at most 30 days from when it was received, so the ended set, kept for 30 days from each end, never drops a job whose record is still there. The 7th key is optional in both `luaKeyTypes` and the `authorizedScript` wrapper, which copies only its own keys. `opsWorkerAccountsKey()` with no mode is written in the current Stripe mode, as `trackOpsAccount` writes `ops:accounts`, and the erase check reads both modes. `state` reads the Worker but leaves no data there, so it writes no record. The on-call change asserts more than before, not less.
