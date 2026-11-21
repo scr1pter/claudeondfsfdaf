@@ -48,7 +48,7 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 - **Flags stay off by default:** `MODEL_PLANS_ENABLED` (Codium), `VECTOR_EXPERIMENTAL_CONNECT`, `VECTOR_EVERYWHERE_ENABLED`, `VECTOR_GITHUB_BRAIN_ENABLED`, native isolation, Hands (until onboarding), cloud workspaces.
 - **Known CI flakes.** Re-run once with `gh run rerun <id> --failed`, and only when the failed job matches one of these and nothing else failed:
   - a Bun segfault on a Linux shard;
-  - Windows: `local-fit`, `prompt` 3 s, `task-size` 30 s, effect-flock contention, `local.test` probe 400, `task-manage-abort` 2 s;
+  - Windows: `local-fit`, `prompt` 3 s, `task-size` 30 s, effect-flock contention, `task-manage-abort` 2 s (`local.test.ts` probe 400 was dropped on 21 Nov 2026: `e817fe51`, merged with PR #40, gives one-address identity reads the full identify budget, and later Windows shards holding `local.test.ts` are green);
   - packet-capture DNS (UDP to 198.18.0.53:53) or the 55-minute setup timeout;
   - GitHub "Failed to CreateArtifact";
   - Chocolatey or ripgrep 504;
