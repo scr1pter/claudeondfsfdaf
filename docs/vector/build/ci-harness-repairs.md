@@ -1098,3 +1098,12 @@ branch's first PR run; until then each entry is local evidence only.
   `VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER=true` in the process environment). Still to check: the unit (linux) and
   unit (windows) logs show every Watcher case ran and passed. A real platform failure gets a root cause; only a proven
   backend limit may get a platform gate, with the job ID and reason on line 18 and here.
+- **Document OCR cases.** Five of the nine cases in `packages/core/test/brain/document-ocr.test.ts` skip unless
+  `VECTOR_OCR_TESSERACT` and `VECTOR_OCR_PDFTOPPM` are set, and no workflow set them or installed the tools. The Linux
+  unit job now installs `tesseract-ocr tesseract-ocr-eng poppler-utils` (the ripgrep step's apt retry and timeout
+  flags, 5 minutes) and runs that file in its own step with both variables set, so the rest of the brain suite keeps
+  running with OCR unconfigured in the turbo run. The step fails if Bun reports any skip. Locally (tesseract 5.3.4,
+  pdftoppm from poppler-utils): 4 pass 5 skip without the variables, which the step's check turns into exit 1; 9 pass
+  with them, exit 0. `workflow-compliance.test.ts` asserts both steps, their order, the env and the skip check
+  (mutation: replacing the check with `if false` fails the case). Windows and macOS stay uncovered: the hosted runners
+  have no packaged tesseract that this step could pin.

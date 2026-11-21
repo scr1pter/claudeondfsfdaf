@@ -591,6 +591,18 @@ jobs:
           fi
           rg --version
 
+      # OCR needs native tesseract and pdftoppm, which the published installers do not ship, so the OCR cases in
+      # packages/core/test/brain/document-ocr.test.ts skip without them. Linux installs both for the OCR step below.
+      - name: Install OCR tools
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-eng poppler-utils
+          tesseract --version
+          pdftoppm -v
+
       # Without rg on PATH the core search tests download it from its releases page while they run, and in run
       # 41968211015 that download hung past their 60-second preparation deadline. Install it as the Windows engine
       # shards do.
@@ -620,6 +632,24 @@ jobs:
         run: GITHUB_ACTIONS=false bun turbo test --filter='!@vectordevai/engine' --log-order=stream --continue=dependencies-successful
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
+
+      # The OCR cases run with the tools configured in their own step, not job-wide, so the other brain tests keep
+      # running with OCR unconfigured in the turbo run above. A skipped case fails the step: a skipIf regression would
+      # otherwise pass silently.
+      - name: Run document OCR tests
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        timeout-minutes: 5
+        working-directory: packages/core
+        env:
+          VECTOR_OCR_TESSERACT: /usr/bin/tesseract
+          VECTOR_OCR_PDFTOPPM: /usr/bin/pdftoppm
+        run: |
+          set -o pipefail
+          GITHUB_ACTIONS=false bun test --timeout 30000 test/brain/document-ocr.test.ts 2>&1 | tee "$RUNNER_TEMP/document-ocr.log"
+          if grep -Eq '^ *[0-9]+ skip' "$RUNNER_TEMP/document-ocr.log"; then
+            echo "::error::document OCR cases were skipped"
+            exit 1
+          fi
 
       # Desktop tests otherwise run only in the release workflow (turbo has no vector-desktop#test task). The
       # computer-use build contract runs desktop main's computer tests on both unit lanes, so they run here even when

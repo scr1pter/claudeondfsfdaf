@@ -566,6 +566,41 @@ test("the test workflow runs the client and SDK suites on both unit lanes", asyn
   expect(step?.run).toContain("exit $status")
 })
 
+// OCR needs native tools, so the Linux unit lane installs them and runs the OCR cases in their own step, which fails
+// when any case skips.
+test("the Linux unit lane runs the document OCR cases with the tools installed and no skip", async () => {
+  const workflow = Bun.YAML.parse(await read(".github/workflows/test.yml")) as {
+    jobs: {
+      unit: {
+        steps: Array<{
+          name?: string
+          if?: string
+          run?: string
+          env?: Record<string, string>
+          "working-directory"?: string
+        }>
+      }
+    }
+  }
+  const steps = workflow.jobs.unit.steps
+  const install = steps.findIndex((item) => item.name === "Install OCR tools")
+  const run = steps.findIndex((item) => item.name === "Run document OCR tests")
+  expect(install).toBeGreaterThanOrEqual(0)
+  expect(run).toBeGreaterThan(install)
+  expect(steps[install]?.if).toBe("runner.os == 'Linux'")
+  expect(steps[install]?.run).toContain(
+    "install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-eng poppler-utils",
+  )
+  expect(steps[run]?.["working-directory"]).toBe("packages/core")
+  expect(steps[run]?.env).toEqual({
+    VECTOR_OCR_TESSERACT: "/usr/bin/tesseract",
+    VECTOR_OCR_PDFTOPPM: "/usr/bin/pdftoppm",
+  })
+  expect(steps[run]?.run).toContain("bun test --timeout 30000 test/brain/document-ocr.test.ts")
+  expect(steps[run]?.run).toContain("if grep -Eq '^ *[0-9]+ skip'")
+  expect(steps.find((item) => item.name === "Run unit tests")?.env).not.toHaveProperty("VECTOR_OCR_TESSERACT")
+})
+
 // Chocolatey's community feed answered 504 and 503 with nothing installed and exit 0 (jobs 133556510297 and
 // 133557296076). Windows jobs install ripgrep through one action that downloads a pinned, checksum-verified release
 // from GitHub with retries. This reads only the repository's own files.
