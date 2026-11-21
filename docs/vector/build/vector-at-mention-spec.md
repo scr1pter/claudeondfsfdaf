@@ -340,6 +340,8 @@ Test: `packages/engine/test/tool/registry-actions.test.ts` › "bridged and comp
 
 Test: `packages/engine/test/cli/github.policy.test.ts` (V03: the policy is in the system layer) and `packages/engine/test/cli/github.bundle.test.ts` › "a `</issue>` payload stays inside its JSON string; a non-writer comment is labelled and collapsed" (V18)
 
+_2026-11-21 note (Vector everywhere, recorded by v2-closeout-ci; forwarded from vector-everywhere-deviations.md, meaning of the text above unchanged):_ the code now has an R-A4 exception (EV-28). When a ticket carries a job id and the Vector everywhere body route answers exactly 200, only the framed job request is the task. Every other outcome ends the run with the fixed line EVERYWHERE_UNREAD ("Vector could not read this Vector everywhere job's request, so it made no changes."). Only the route's own 404 `NOT_FOUND` is read again, 1 s later, up to 7 reads in all.
+
 **INV-S15. Untrusted text never reaches a shell line or an expression.** Comment bodies, issue titles, inputs (prompt, code, ticket and Codium's `brain_upload`, deviations 2026-11-14 BT01) and schedule prompts reach steps only through `env:`. No `run:` line contains `${{` with event or input data, and the route script contains no `${{`. Every user string the generator writes (schedule prompts, the options header) has each `$` encoded as `$` inside its JSON. Key names match `^[A-Z_][A-Z0-9_]{0,99}$`, and provider and model names a fixed safe charset. Every `${{` in a generated file comes from a fixed allowlist of expressions.
 Test: `github.workflow.test.ts` › "no event or input expression in any run line"; "every expression is allowlisted" (V14)
 
@@ -703,6 +705,8 @@ Codium's registry maps every 401 or 403 from us to `MODEL_PLAN_RUN_EXPIRED` anyw
 
 ## 2.5 Repo bindings, bind codes and tickets: `api/_lib/cloud-agents-binding.ts`, `api/_lib/cloud-agents-start.ts`
 
+_2026-11-21 note (Vector everywhere, recorded by v2-closeout-ci; forwarded from vector-everywhere-deviations.md, meaning of the text above unchanged):_ the ticket may carry the Vector everywhere `jobId` (`vej_` plus 22 lowercase Crockford characters), RESERVE's only optional seventh field; a null, another seventh field or an eighth field is refused (EV-25). It is never a workflow input. `RepoBinding` gains `workflowMode?: "codium" | "own-key"`, which REDEEM writes from `verifyBind`'s read; a bind or bind-code body that names `workflowMode` gets 400 INVALID_REQUEST (EV-26). Rollback hazard (EV-26 (h)): a server older than EV-26 decodes a binding that carries `workflowMode` as corrupt and answers 503 to every reader, until the repository rebinds or the field is removed.
+
 ```ts
 type SuspendReason = "transferred" | "deleted" | "binder-left"
 type RepoBinding = { repositoryId: string; ownerId: string; repository: string; account: string
@@ -885,6 +889,8 @@ Abuse scopes go through `enforceRateLimit` (HMAC-keyed, `requirePersistent: true
 
 ## 2.8 HTTP API
 
+_2026-11-21 note (Vector everywhere, recorded by v2-closeout-ci; forwarded from vector-everywhere-deviations.md, meaning of the text above unchanged):_ an App-verified bind now makes a best-effort contents read of the workflow file at the verified SHA (EV-26, lead ruling of 2026-11-20). It never fails a bind, costs one extra GitHub request per App-verified bind, and can add up to 10 s when GitHub stalls, under `api()`'s shared timeout.
+
 Each route is a three-line file in `api/cloud-agents/`: `export const config = { api: { bodyParser: false } }` plus a default export of the handler from `createCloudAgentsApi(deps)` in `api/_lib/cloud-agents-api.ts`. The deps are injectable: `verify`, `store`, `entitlement`, `revokedBefore`, `app`, `now` and `fetcher`.
 
 Every response is JSON with `no-store`, `nosniff` and `no-referrer`. Unknown errors become 503 `CLOUD_AGENTS_UNAVAILABLE`, and upstream errors are never serialized. No response carries a refusal `reason` (INV-P1). This reuses the `safe()` pattern of `github-api.ts`. V09 exports that file's `proof()` as `githubProof(request, response, audience, verify)`, so both APIs share it.
@@ -1021,6 +1027,8 @@ The engine's agent phase (and the Codium review path) maps the session's final e
 What the bundle records (2.12): the row's code as `stop`, except that the six "unavailable for this binding" codes are all recorded as `MODEL_PLAN_BLOCKED`, because `summary.json` is a downloadable run artifact (P6). `MODEL_PLAN_RUN_LIMIT` also records the gateway's `limit` (`ceiling`, `hours` or `at-once`), so publish can tell the ceiling line from the used-up line. The heartbeat and deadline row records `"deadline"`. The default row records no stop: its outcome (`draft` or `failed` with no `stop`) is what says "Vector stopped early". Only Codium gateway errors are mapped; an own-key run's errors always take the default row (INV-K1).
 
 ## 2.10 OIDC rules per audience (`api/_lib/github-oidc.ts`, amendment 2)
+
+_2026-11-21 note (Vector everywhere, recorded by v2-closeout-ci; forwarded from vector-everywhere-deviations.md, meaning of the text above unchanged):_ a fifth audience, `handoff` (`https://vectordev.ai/api/everywhere/github/handoff`), is added for the Vector everywhere GitHub handoff (EV-31). Its events are issue_comment, issues and pull_request_review_comment, never a dispatch or a schedule; its rules are the mint's, and a handoff-signed token is refused by every other audience.
 
 `githubOidcAudiences` gains `mint: GithubAgents.AUDIENCE.mint` and `bind: GithubAgents.AUDIENCE.bind`. (Amendment 2 asked for one `run` audience; two per-endpoint audiences keep its intent and are recorded at the top of the deviations file.)
 
@@ -1413,6 +1421,8 @@ Without webhooks, the mint's owner-id check still catches a transfer (INV-S11). 
 **Website.** `packages/web/src/components/marketing/account/GithubAgents.tsx`, in `AccountPage.tsx` under `id="github"`, shows bindings and their last use, Unbind, and a bind code with instructions. It renders only when `github-agents` is listed, or at `/account?github-preview=1#github` (INV-H2).
 
 ## 2.16 Run records (`api/_lib/cloud-agents-runs.ts`)
+
+_2026-11-21 note (Vector everywhere, recorded by v2-closeout-ci; forwarded from vector-everywhere-deviations.md, meaning of the text above unchanged):_ the settle body accepts an optional `prUrl` beside `outcome` and refuses any other key; the settle listener keeps it only for a pull request of the run's own repository, and it is not stored on the run record. SETTLE_RECORDED's commit path may reply `{'committed', outcome}` (retries keep the plain stored outcome), so settle listeners fire exactly once. `registerRunStartListener` and `registerRunSettleListener` each answer their remover (EV-25). Release order (EV-25 (f), lead ruling 5): an engine that sends `prUrl` must not ship before this server is deployed, because the settle route before EV-25 answers 400 to any key but `outcome`.
 
 ```ts
 type RunRecordIdentity = { account: string; generation: number; jti: string }

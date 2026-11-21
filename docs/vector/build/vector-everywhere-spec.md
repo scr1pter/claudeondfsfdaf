@@ -1046,6 +1046,7 @@ Nothing here is edited by this branch. The owner forwards each request; the adap
 
 *2026-11-20 note:* R-M1 to R-M3 (EV-14 to EV-16) and R-A1 to R-A3 (EV-25) were built in this lane under the lead's briefs; see each item's note.
 *2026-11-20 note (EV-26):* R-A9 was built in this lane too, partly (a bind-time snapshot); see its note.
+_2026-11-21 note (v2-closeout-ci):_ the @vector contract text for R-A1 to R-A5 and R-A9 (the ticket's seventh field, `workflowMode` and its rollback hazard, the bind's contents read, INV-S14's R-A4 exception, the `handoff` audience, the settle body's `prUrl`, SETTLE_RECORDED's committed reply, the listeners and the release order) is now forwarded as dated notes in vector-at-mention-spec.md (INV-S14, §2.5, §2.8, §2.10 and §2.16). The Codium (R-C), Connect (R-W) and Hands (R-H) requests are not forwarded by this note.
 
 **Codium (codium branch).**
 - **R-C1. Job offers through the relay.** `RelayAction` gains `job-offer` (api/\_lib/remote-relay.ts, `relayCall("job-offer", {account, offer})`). The Worker forwards `/internal/v1/job-offer` instead of answering 501. `AccountRelay` adds a case that checks `killed()` and the suspension, then sends frame `0x02` with the offer string as its body to every live computer socket of the account. Offers count toward awake time but never toward `NO_VIEWER`; at most 30 offers an hour per account.

@@ -4801,3 +4801,14 @@ No flag, env var, route, dependency, lockfile or generated file changes. The onl
   until a reconnect; Linear erasure comes from a disconnect or account deletion. `everywhere-erase.test.ts`'s header
   comment no longer lists "Linear's revocation" among the erasing events and says the `revoked` reason is what Jira's
   uninstall and a future qualified Linear erase use. Closes the E13 wording gap recorded under "2026-11-20, EV-24".
+
+## 2026-11-21, v2-closeout-ci: the @vector contract notes forwarded
+
+Docs only. The items EV-25 to EV-31 left "for the lead to forward" to @vector's own documents are now dated notes in
+vector-at-mention-spec.md: INV-S14 (the R-A4 exception, EVERYWHERE_UNREAD and the seven-read 404 retry, EV-28), §2.5
+(the ticket's optional seventh field `jobId`, `workflowMode` with its 400 refusal and the rollback hazard, EV-25 and
+EV-26), §2.8 (the bind's best-effort contents read, EV-26), §2.10 (the `handoff` audience, EV-31) and §2.16 (the settle
+body's `prUrl`, SETTLE_RECORDED's committed reply, the listeners and the release order, EV-25). The wording follows the
+entries above, and no existing spec text changed meaning. vector-everywhere-spec.md §11 has a dated status line. Not
+forwarded here: `ChatContext.outside`, `taskPart`'s new parameter and the two import paths named in EV-28's list for
+vector-at-mention.yml, which are code facts the @vector lane can read from source.
