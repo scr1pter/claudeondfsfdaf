@@ -31,6 +31,7 @@ import type {
   Severity,
   SkippedFile,
   StrictDrop,
+  StrictFinding,
   StrictResult,
   StrictSummary,
   Trust,
@@ -325,6 +326,14 @@ export function fenceFor(text: string): string {
   let longest = 0
   for (const run of text.matchAll(/`+/g)) longest = Math.max(longest, run[0].length)
   return "`".repeat(Math.max(3, longest + 1))
+}
+
+// The body of the selected strict finding; a committable suggestion travels in its own field.
+export function strictFindingBody(finding: StrictFinding): string {
+  const body = `${finding.trigger}\n\n${finding.impact}`
+  if (finding.fix.kind === "suggestion") return body
+  const fence = fenceFor(finding.fix.text)
+  return `${body}\n\n${finding.fix.kind === "patch" ? "Checked patch" : "Unchecked fix"}\n\n${fence}diff\n${finding.fix.text}\n${fence}`
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -914,7 +923,7 @@ function countLine(selection: Selection, strict?: StrictSummary, incomplete?: bo
 // is all that emptied it, and "Review incomplete" otherwise, never a clean result. It reads the strict result alone, so
 // a selection the runner has not composed with it yet cannot make an empty strict result read otherwise. A non-empty
 // one is counted as the selection counts it, or, when the selection has nothing on lines, as its blocking findings.
-function strictCountLine(strict: StrictSummary, parts: string[], below: string): string {
+export function strictCountLine(strict: StrictSummary, parts: string[], below: string): string {
   if (strict.findingCount)
     return `**${parts.length ? parts.join(" · ") : `${strict.findingCount} blocking`}** on the changed lines${below}`
   if (!strict.complete)

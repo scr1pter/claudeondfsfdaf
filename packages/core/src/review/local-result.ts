@@ -4,7 +4,8 @@ import { Option, Schema } from "effect"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { NonNegativeInt, optional, PositiveInt } from "@vectordevai/schema/schema"
 import { hash } from "../util/encode"
-import { BUDGET_REQUEST_CHANGED } from "./format"
+import { BUDGET_REQUEST_CHANGED, strictFindingBody } from "./format"
+import { withAlso } from "./select"
 import {
   CATEGORIES,
   FAILURE_CLASSES,
@@ -17,7 +18,9 @@ import {
   STRICT_DROPS,
   STRICT_FIX_KINDS,
   VERIFIED_BY,
+  type Finding,
   type ReviewOutcome,
+  type StrictFinding,
 } from "./types"
 import { REVIEW_VERDICTS, reviewVerdict, unfinishedCauses, type VerdictResult } from "./verdict"
 
@@ -160,6 +163,7 @@ const Outcome = Schema.Struct({
   cost: optional(
     Schema.Struct({
       costUsd: amount,
+      labs: optional(Schema.Literals([2, 3])),
       codium: optional(Schema.Boolean),
       tokensOwnOnly: optional(Schema.Boolean),
       usageMissing: optional(Schema.Boolean),
@@ -291,6 +295,88 @@ function sameVerdict(
     stored.verdict === canonical.verdict &&
     JSON.stringify(stored.causes) === JSON.stringify(canonical.causes) &&
     JSON.stringify(stored.notes) === JSON.stringify(canonical.notes)
+  )
+}
+
+const strictLocation = (finding: Pick<Finding, "path" | "line" | "side" | "title">) =>
+  JSON.stringify([finding.path, finding.line, finding.side, finding.title])
+
+// The selected row has no verifier model name. Compare the evidence both records carry, including the
+// unchecked fix which postableStrict puts only in the body. Selection can append its own "also at" sentence.
+function sameStrictEvidence(finding: Finding, kept: StrictFinding) {
+  const body = strictFindingBody(kept)
+  return (
+    strictLocation(finding) === strictLocation(kept) &&
+    finding.endLine === kept.endLine &&
+    finding.severity === "blocking" &&
+    finding.verified === true &&
+    finding.verifiedBy === kept.verifiedBy &&
+    finding.failure?.class === kept.class &&
+    finding.failure.mechanism === kept.mechanism &&
+    finding.failure.trigger === kept.trigger &&
+    finding.failure.impact === kept.impact &&
+    JSON.stringify(finding.quotes) === JSON.stringify(kept.quotes) &&
+    finding.suggestion === (kept.fix.kind === "suggestion" ? kept.fix.text : undefined) &&
+    finding.patch === (kept.fix.kind === "patch" ? kept.fix.text : undefined) &&
+    finding.body === (finding.also?.length ? withAlso(body, finding.also) : body)
+  )
+}
+
+/** A branch cache may serve a completed strict result only for the head and coverage that produced it. */
+export function completeStrictReview(input: unknown, head: string): boolean {
+  const decoded = Schema.decodeUnknownOption(Outcome, { onExcessProperty: "error" })(input)
+  if (Option.isNone(decoded)) return false
+  const outcome = decoded.value
+  const strict = outcome.strict
+  const summary = outcome.selection.strict
+  if (!strict) return false
+  const selected = [
+    ...outcome.selection.inline,
+    ...outcome.selection.outsideDiff,
+    ...outcome.selection.elsewhere,
+    ...outcome.selection.overflow,
+    ...outcome.selection.nits,
+  ]
+  const verified = new Map(strict.findings.map((finding) => [finding.id, finding]))
+  const locations = new Map(strict.findings.map((finding) => [strictLocation(finding), finding]))
+  const places = new Set(strict.findings.map((finding) => `${finding.path}:${finding.line}`))
+  // An inline finding that reappeared or rose to blocking takes its prior comment's ID in selectFindings.
+  // Its StrictFinding retains the verifier's original ID. No other selected row can use this substitution.
+  const continued = new Set([...outcome.selection.reappeared, ...outcome.selection.raised.map((row) => row.id)])
+  const used = new Set<string>()
+  const matches = selected.every((finding, index) => {
+    const inline = outcome.selection.inline[index]
+    const kept = inline && continued.has(finding.id) ? locations.get(strictLocation(finding)) : verified.get(finding.id)
+    if (!kept || used.has(kept.id) || !sameStrictEvidence(finding, kept)) return false
+    if (finding.also?.some((place) => !places.has(place) || place.slice(0, place.lastIndexOf(":")) !== finding.path))
+      return false
+    if (
+      inline &&
+      (inline.anchor.path !== kept.path ||
+        inline.anchor.side !== kept.side ||
+        inline.anchor.line < kept.line ||
+        inline.anchor.line > (kept.endLine ?? kept.line) ||
+        (inline.anchor.startLine !== undefined && inline.anchor.startLine !== kept.line) ||
+        (inline.suggestionAllowed && kept.fix.kind !== "suggestion"))
+    )
+      return false
+    used.add(kept.id)
+    return true
+  })
+  return (
+    outcome.head === head &&
+    strict.head === head &&
+    strict.complete &&
+    !strict.incomplete?.length &&
+    summary?.complete === true &&
+    summary.findingCount === strict.findings.length &&
+    verified.size === strict.findings.length &&
+    matches &&
+    JSON.stringify(summary.dropped) === JSON.stringify(strict.dropped) &&
+    strict.fixUnchecked === strict.findings.filter((finding) => finding.fix.kind === "unchecked").length &&
+    !outcome.selection.diffIncomplete &&
+    !outcome.trivial &&
+    !unfinishedCauses(outcome).length
   )
 }
 

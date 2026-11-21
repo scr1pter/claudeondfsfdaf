@@ -395,6 +395,77 @@ describe("review spend presentation", () => {
 })
 
 describe("runReview", () => {
+  const desktopStrictNotice =
+    'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".'
+
+  test("desktop strict requests use ordinary review and label fresh, restored and reused results", async () => {
+    const config = (guardrail?: string) => JSON.stringify({ verify: "off", ...(guardrail ? { guardrail } : {}) })
+    const execute = (guardrail?: string) =>
+      fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": config(guardrail) } })
+    const plain = execute()
+    const explicitOff = execute("off")
+    const strict = execute("strict")
+    const baseline = (await run(plain.client))!
+    const off = (await run(explicitOff.client))!
+    const ordinary = (await run(strict.client))!
+    expect(off.selection).toEqual(baseline.selection)
+    expect(off.notes).toEqual(baseline.notes)
+    expect(off.notes).not.toContain(desktopStrictNotice)
+    expect(strict.calls.prompt.map((call) => call.format)).toEqual(plain.calls.prompt.map((call) => call.format))
+    expect(strict.calls.prompt.map((call) => call.parts)).toEqual(plain.calls.prompt.map((call) => call.parts))
+    expect(ordinary.selection).toEqual(baseline.selection)
+    expect(ordinary.selection.inline).toHaveLength(1)
+    expect(ordinary).not.toHaveProperty("strict")
+    expect(ordinary.selection).not.toHaveProperty("strict")
+    expect(ordinary.notes).toEqual([...baseline.notes, desktopStrictNotice])
+
+    const old = { ...ordinary, notes: ["An earlier review note."] }
+    const reopened = execute("strict")
+    const restored = (await run(reopened.client, { previous: old, catalog: [] }))!
+    expect(restored.unchanged).toBe(true)
+    expect(restored.selection).toEqual(ordinary.selection)
+    expect(restored.notes).toEqual([...old.notes, desktopStrictNotice])
+    expect(old.notes).toEqual(["An earlier review note."])
+    const reused = (await run(reopened.client, { previous: restored, catalog: [] }))!
+    expect(reused.notes).toEqual(restored.notes)
+    const switched = fakeClient({ files: { "src/list.ts": BASE, ".vector/review.json": config("strict") } })
+    const rebuilt = (await run(switched.client, { previous: restored, catalog: [] }))!
+    expect(rebuilt.checkout.mode).toBe("rebuilt")
+    expect(rebuilt.notes).toEqual(restored.notes)
+    expect(switched.calls.create).toEqual([])
+    expect(reopened.calls.create).toEqual([])
+    const disabled = execute("off")
+    const afterStrict = (await run(disabled.client, { previous: restored }))!
+    expect(afterStrict.unchanged).not.toBe(true)
+    expect(afterStrict.notes).toEqual(baseline.notes)
+    expect(afterStrict.selection).toEqual(baseline.selection)
+  })
+
+  test("desktop strict requests disclose the limitation on early outcomes and provider refusals", async () => {
+    const configured = (other: Record<string, unknown> = {}) =>
+      fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify({ guardrail: "strict", ...other }) },
+      })
+    const ignored = configured()
+    const result = (await run(ignored.client, { diff: join(lockDiff) }))!
+    expect(result.notes).toContain(desktopStrictNotice)
+    expect(result.selection).not.toHaveProperty("strict")
+    const held = configured({ holdback: "secrets" })
+    const heldResult = (await run(held.client, {
+      diff: join(fileDiff("deploy/.netrc", ["@@ -1 +1 @@", "-old", "+new"])),
+    }))!
+    expect(heldResult.notes).toContain(desktopStrictNotice)
+    const capped = configured({ maxInputTokens: 1 })
+    const stopped = (await run(capped.client))!
+    expect(stopped.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(() => reviewPanelResult(stopped)).toThrow(desktopStrictNotice)
+    const unavailable = configured()
+    await expect(run(unavailable.client, { catalog: [] })).rejects.toThrow(desktopStrictNotice)
+    const noChanges = configured()
+    await expect(run(noChanges.client, { diff: "" })).rejects.toThrow(desktopStrictNotice)
+    for (const fake of [ignored, held, capped, unavailable, noChanges]) expect(fake.calls.create).toEqual([])
+  })
+
   test("a configured token budget requires a complete preview before any model call, including a rerun", async () => {
     const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":500000}' } })
     const outcome = (await run(fake.client))!

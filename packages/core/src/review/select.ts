@@ -445,7 +445,7 @@ const ALSO_LINES = /The same problem is also at lines? ((?:\d+, )*\d+(?: and \d+
 
 // "path:line" entries of one file, as the sentence a reader sees under the finding. A sentence written by an earlier
 // fold is replaced, so a carried finding never lists a place twice.
-function withAlso(body: string, also: readonly string[]): string {
+export function withAlso(body: string, also: readonly string[]): string {
   const lines = [...new Set(also.map(lineOf))].toSorted((a, b) => a - b)
   const list = lines.length === 1 ? lines[0] : `${lines.slice(0, -1).join(", ")} and ${lines.at(-1)}`
   const sentence = `The same problem is also at ${lines.length === 1 ? "line" : "lines"} ${list}.`

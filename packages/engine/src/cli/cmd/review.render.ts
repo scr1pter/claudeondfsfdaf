@@ -11,8 +11,10 @@ import {
   formatDuration,
   formatTokens,
   formatUsd,
+  strictCountLine,
 } from "@vectordevai/core/review/format"
 import { checkedLine } from "@vectordevai/core/review/second-lab"
+import { unfinishedCauses } from "@vectordevai/core/review/verdict"
 import type {
   Finding,
   PlacedFinding,
@@ -87,17 +89,7 @@ export function renderLocalReview(input: RenderInput): string {
       `Vectorscope review · ${plain(target.label)} vs ${plain(target.baseRef)} (${at}) · ${files} ${files === 1 ? "file" : "files"}, +${outcome.stats.additions} −${outcome.stats.deletions}`,
     ),
   )
-  // A review the route rules stopped (VS-23b) assessed nothing, so it names no risk; nor does one that holdback left
-  // nothing to send (VS-34), which ran no reviewer at all (I-7).
-  lines.push(
-    outcome.partial === "privacy"
-      ? "Not reviewed"
-      : !outcome.specialists.length && outcome.held?.length
-        ? `Not reviewed: ${outcome.mode === "incremental" ? "everything new since the last review is in files" : "every changed file was"} held back from the model.`
-        : selection.diffIncomplete || firstRequestStopDetail(outcome)
-          ? ["Partial review", counts(outcome)].filter(Boolean).join(" · ")
-          : `Risk: ${capitalize(selection.risk)} · ${counts(outcome) || "No issues found"}`,
-  )
+  lines.push(reviewHeadline(outcome))
   const partial = partialLine(input)
   if (partial) lines.push(partial)
 
@@ -154,6 +146,25 @@ export function renderLocalReview(input: RenderInput): string {
   return lines.join("\n") + "\n"
 }
 
+// A partial or skipped strict result cannot use the ordinary clean-review wording.
+function reviewHeadline(outcome: ReviewOutcome): string {
+  const { selection, strict } = outcome
+  if (outcome.partial === "privacy" || outcome.partial === "budget-estimate" || outcome.trivial) return "Not reviewed"
+  if (!outcome.specialists.length && outcome.held?.length)
+    return `Not reviewed: ${outcome.mode === "incremental" ? "everything new since the last review is in files" : "every changed file was"} held back from the model.`
+  if (strict) {
+    const complete = strict.complete && !selection.diffIncomplete && unfinishedCauses(outcome).length === 0
+    const summary = strictCountLine({ ...strict, complete, findingCount: strict.findings.length }, [], "").replaceAll(
+      "**",
+      "",
+    )
+    return !complete && strict.findings.length ? `Review incomplete · ${summary}` : summary
+  }
+  if (selection.diffIncomplete || firstRequestStopDetail(outcome))
+    return ["Partial review", counts(outcome)].filter(Boolean).join(" · ")
+  return `Risk: ${capitalize(selection.risk)} · ${counts(outcome) || "No issues found"}`
+}
+
 // The counts line: every new finding by severity, wherever it is listed.
 function counts(outcome: ReviewOutcome): string {
   const selection = outcome.selection
@@ -176,7 +187,7 @@ function counts(outcome: ReviewOutcome): string {
 
 function partialLine(input: RenderInput): string | undefined {
   const { outcome, limits } = input
-  if (!outcome.partial) return undefined
+  if (!outcome.partial || outcome.partial === "budget-estimate") return undefined
   // VS-23b: the route rules' stop is no partial review; the note below says which model and why.
   if (outcome.partial === "privacy") {
     const files = outcome.unreviewed

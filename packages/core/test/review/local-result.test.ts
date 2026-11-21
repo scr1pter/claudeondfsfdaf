@@ -2,9 +2,16 @@ import { describe, expect, test } from "bun:test"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { hash } from "../../src/util/encode"
-import { decodeLocalResult, decodeLocalRun, type LocalResult } from "../../src/review/local-result"
+import { parseUnifiedDiff } from "../../src/review/diff"
+import {
+  completeStrictReview,
+  decodeLocalResult,
+  decodeLocalRun,
+  type LocalResult,
+} from "../../src/review/local-result"
+import { selectFindings } from "../../src/review/select"
+import { DEFAULT_REVIEW_CONFIG, type Finding, type ReviewOutcome, type StrictFinding } from "../../src/review/types"
 import { reviewVerdict } from "../../src/review/verdict"
-import type { ReviewOutcome } from "../../src/review/types"
 
 const head = "a".repeat(40)
 const base = "b".repeat(40)
@@ -83,6 +90,139 @@ const expectedRun = { parentID: "ses_result_parent", request: { requestID: "requ
 const decode = (value: unknown) => decodeLocalRun(value, expectedRun)
 
 describe("retained local review result decoding", () => {
+  test("only an exact completed strict outcome can supply a branch-cache verdict", () => {
+    const original = outcome()
+    const strict = { version: 1, head, complete: true, findings: [], dropped: [], fixUnchecked: 0 }
+    const summary = { complete: true, findingCount: 0, dropped: [] }
+    const selection = { ...original.selection, strict: summary }
+    const cached = { ...original, strict, selection, cost: { ...original.cost, labs: 2 } }
+    expect(completeStrictReview(cached, head)).toBe(true)
+    expect(completeStrictReview(cached, base)).toBe(false)
+    for (const value of [
+      original,
+      { ...cached, head: base },
+      { ...cached, strict: { ...strict, head: base } },
+      { ...cached, partial: "timeout" },
+      { ...cached, specialists: [] },
+      { ...cached, unreviewed: ["unseen.ts"] },
+      { ...cached, strict: { ...strict, incomplete: ["blob-unreadable"] } },
+      { ...cached, strict: { ...strict, fixUnchecked: 1 } },
+      { ...cached, strict: { ...strict, version: 2 } },
+      { ...cached, selection: { ...selection, diffIncomplete: true } },
+      { ...cached, selection: { ...selection, strict: { ...summary, findingCount: 1 } } },
+      { ...cached, selection: { ...selection, strict: { ...summary, dropped: [{ reason: "cap", count: 1 }] } } },
+    ])
+      expect(completeStrictReview(value, head)).toBe(false)
+  })
+
+  test("a strict selection can retain a prior comment ID only with the same verified evidence", () => {
+    const kept: StrictFinding = {
+      id: "new-fingerprint",
+      path: "file.ts",
+      line: 1,
+      side: "RIGHT",
+      title: "Empty input crashes",
+      class: "crash",
+      mechanism: "logic",
+      trigger: "No input.",
+      impact: "The request fails.",
+      quotes: [{ path: "file.ts", line: 1, side: "RIGHT", code: "fail()" }],
+      fix: { kind: "suggestion", text: "return" },
+      verifiedBy: "model",
+      verifier: "provider/reviewer",
+    }
+    const finding: Finding = {
+      id: kept.id,
+      path: kept.path,
+      line: kept.line,
+      side: kept.side,
+      title: kept.title,
+      category: "bug",
+      severity: "blocking",
+      confidence: 1,
+      source: "review",
+      verified: true,
+      verifiedBy: kept.verifiedBy,
+      quotes: kept.quotes,
+      suggestion: kept.fix.text,
+      failure: { class: kept.class, mechanism: kept.mechanism, trigger: kept.trigger, impact: kept.impact },
+      body: `${kept.trigger}\n\n${kept.impact}`,
+    }
+    const anchors = parseUnifiedDiff(
+      "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old()\n+fail()\n",
+    )
+    for (const status of ["fixed", "open"] as const) {
+      const value = outcome()
+      value.strict = { version: 1, head, complete: true, findings: [kept], dropped: [], fixUnchecked: 0 }
+      value.report.findings = [finding]
+      value.selection = selectFindings({
+        head,
+        trust: "trusted",
+        mode: "full",
+        config: DEFAULT_REVIEW_CONFIG,
+        findings: [finding],
+        anchors,
+        prior: [
+          {
+            where: "inline",
+            id: "prior-comment",
+            sha: base,
+            path: kept.path,
+            line: kept.line,
+            side: kept.side,
+            category: "bug",
+            severity: "concern",
+            title: kept.title,
+            status,
+          },
+        ],
+      })
+      value.selection.strict = { complete: true, findingCount: 1, dropped: [] }
+      const [row] = value.selection.inline
+      expect(row.id).toBe("prior-comment")
+      expect(status === "fixed" ? value.selection.reappeared : value.selection.raised.map((entry) => entry.id)).toEqual(
+        [row.id],
+      )
+      expect(completeStrictReview(value, head)).toBe(true)
+      const check = (changed: Partial<typeof row>) =>
+        completeStrictReview({ ...value, selection: { ...value.selection, inline: [{ ...row, ...changed }] } }, head)
+      expect(check({ id: kept.id })).toBe(true)
+      expect(check({ id: "unrelated-comment" })).toBe(false)
+      for (const changed of [
+        { path: "other.ts" },
+        { line: 2 },
+        { endLine: 3 },
+        { side: "LEFT" as const },
+        { title: "Different" },
+        { anchor: { ...row.anchor, path: "other.ts" } },
+        { anchor: { ...row.anchor, line: 2 } },
+        { body: "Unverified advice" },
+        { verified: false },
+        { severity: "nit" as const },
+        { verifiedBy: "runtime" as const },
+        { quotes: [{ ...kept.quotes[0], code: "invented" }] },
+        { suggestion: "unverified fix" },
+        { patch: "an unverified patch" },
+        { failure: { ...finding.failure!, impact: "Different consequence" } },
+      ]) {
+        expect(check(changed)).toBe(false)
+        expect(check({ ...changed, id: kept.id })).toBe(false)
+      }
+      const copied = { ...value.selection, inline: [], overflow: [finding, { ...finding, id: row.id }] }
+      expect(completeStrictReview({ ...value, selection: copied }, head)).toBe(false)
+      // The strict result retains both accepted occurrences when ordinary selection folds their display.
+      value.strict.findings.push(
+        { ...kept, id: "other-line", line: 12 },
+        { ...kept, id: "other-file", path: "other.ts", line: 12 },
+      )
+      value.selection.strict.findingCount = value.strict.findings.length
+      const also = { also: ["file.ts:12"], body: `${finding.body}\n\nThe same problem is also at line 12.` }
+      expect(check(also)).toBe(true)
+      expect(check({ ...also, also: ["other.ts:12"] })).toBe(false)
+      expect(check({ ...also, body: `${finding.body}\n\nThe same problem is also at line 14.` })).toBe(false)
+    }
+  })
+
   test("the service's budget-stop error and zero-attempt outcome round-trip with no clean credit", async () => {
     const stopped: ReviewOutcome = {
       ...outcome(),

@@ -4,7 +4,7 @@ import { Effect } from "effect"
 import { applyFixPatch, buildAnchorIndex, lookupFile } from "@vectordevai/core/review/diff"
 import { holdbackText } from "@vectordevai/core/review/holdback"
 import { unfinishedCauses } from "@vectordevai/core/review/verdict"
-import { fenceFor } from "@vectordevai/core/review/format"
+import { strictFindingBody } from "@vectordevai/core/review/format"
 import {
   MAX_FIX_HUNKS,
   strictBlobRequests,
@@ -166,11 +166,6 @@ function postableStrict(accepted: readonly StrictFinding[], candidates: readonly
         finding.side === kept.side,
     )
     if (!original) return []
-    const fence = fenceFor(kept.fix.text)
-    const fix =
-      kept.fix.kind === "suggestion"
-        ? ""
-        : `\n\n${kept.fix.kind === "patch" ? "Checked patch" : "Unchecked fix"}\n\n${fence}diff\n${kept.fix.text}\n${fence}`
     return [
       {
         id: kept.id,
@@ -187,7 +182,7 @@ function postableStrict(accepted: readonly StrictFinding[], candidates: readonly
         failure: { class: kept.class, mechanism: kept.mechanism, trigger: kept.trigger, impact: kept.impact },
         quotes: kept.quotes,
         verifiedBy: kept.verifiedBy,
-        body: `${kept.trigger}\n\n${kept.impact}${fix}`,
+        body: strictFindingBody(kept),
         ...(kept.fix.kind === "suggestion" ? { suggestion: kept.fix.text } : {}),
         ...(kept.fix.kind === "patch" ? { patch: kept.fix.text } : {}),
       },

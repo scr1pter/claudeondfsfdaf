@@ -16,6 +16,10 @@ import {
   type ZdrAttestedEntry,
 } from "./types"
 
+// The desktop accepts a diff and checkout files, without immutable base and head blob reads for strict verification.
+export const DESKTOP_STRICT_NOTICE =
+  'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".'
+
 export const REVIEW_CONFIG_PATH = ".vector/review.json"
 export const REVIEW_RULES_PATHS = [".vector/review.md", ".vector/REVIEW.md"] as const
 export const MAX_RULES_BYTES = 16 * 1024
@@ -519,8 +523,7 @@ function settle(
   }
   if (!github && trigger === "desktop" && config.impact === "graph")
     warnings.push('Desktop reviews use grep for related code. The engine review supports "impact": "graph".')
-  if (!github && trigger === "desktop" && config.guardrail === "strict")
-    warnings.push('Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".')
+  if (!github && trigger === "desktop" && config.guardrail === "strict") warnings.push(DESKTOP_STRICT_NOTICE)
   if (!github && trigger === "desktop" && (config.maxInputTokens ?? 0) > 0)
     warnings.push("Desktop reviews with a token cap require a first-request estimate from the local engine.")
   warnings.push(

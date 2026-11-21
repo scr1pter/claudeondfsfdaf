@@ -1431,6 +1431,9 @@ describe("--reselect strict (VS-27b)", () => {
       incomplete: ["verdict-unreadable"],
     })
     expect(result.run.posted.map((finding) => finding.key)).toEqual(run.posted.map((finding) => finding.key))
+    expect(result.run.spend).toEqual({ uncertainUsd: 0, usageMissing: false, admitted: true })
+    expect(value.strictCandidates?.unanswered).toEqual([unanswered.id])
+    expect(value.outcome?.strict?.incomplete).toEqual(["verdict-unreadable"])
     const refused = { ...value, posted: [], refused: "check refused the write" }
     expect(reselect(refused).reselection).toMatchObject({ candidates: 0, unposted: 3, complete: false })
   })

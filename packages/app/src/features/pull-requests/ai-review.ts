@@ -14,6 +14,7 @@ import { requestComposerPrompt } from "@/utils/composer-handoff"
 // each step is testable without a model.
 
 import {
+  DESKTOP_STRICT_NOTICE,
   mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
@@ -736,6 +737,10 @@ const NO_USAGE: Usage = { messages: [], complete: true }
 
 type SpecialistResult = SpecialistRun & { report?: ModelReport; usage: Usage }
 
+function withStrictNotice(text: string, config: ReviewConfig) {
+  return config.guardrail === "strict" ? `${text} ${DESKTOP_STRICT_NOTICE}` : text
+}
+
 export async function runReview(input: ReviewRunInput, client: ReviewClient): Promise<ReviewOutcomeLite | undefined> {
   const timeoutMs = input.timeoutMs ?? REVIEW_TIMEOUT_MS
   const previewDeadline = Date.now() + timeoutMs
@@ -747,13 +752,23 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const checks = ("pr" in input ? input.checks : undefined) ?? []
   if (!pr) status("Reading your changes…")
   const files = parseUnifiedDiff("pr" in input ? input.diff : await uncommittedDiff(client, directory))
-  if (!files.length)
-    throw new Error(
-      pr ? `Pull request #${pr.number} has no changes to review.` : "There are no uncommitted changes to review.",
-    )
   const read = async (path: string) => {
     const result = await client.file.read({ directory, path }).catch(() => undefined)
     return result?.data?.type === "text" ? result.data.content : undefined
+  }
+
+  if (!files.length) {
+    const problem = pr
+      ? `Pull request #${pr.number} has no changes to review.`
+      : "There are no uncommitted changes to review."
+    // There is no changed settings file in an empty diff. Guardrail is set only by this checkout's review.json.
+    const json = await read(REVIEW_CONFIG_PATH)
+    const { config } = mergeReviewConfig({
+      surface: "local",
+      json: { at: "working-tree", text: json },
+      trigger: "desktop",
+    })
+    throw new Error(withStrictNotice(problem, config))
   }
 
   // Settings come from the user's checkout, as for `vector review`, unless a pull request changes them: a pull
@@ -801,9 +816,11 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   input.onSettings?.({ config: structuredClone(config), warnings: [...merged.warnings] })
   // The settings' warnings about privacy, holdback and attestations (a value read as the stricter setting, an
   // attestation dropped) say why a review was raised to zdr or refused, so the outcome and a refusal carry them. The
-  // other warnings stay out, as before SF-15; without these settings there are none.
-  const settingNotes = merged.warnings.filter((warning) =>
-    /\breview\.(privacy|holdback|zdrAttested)\b|"(privacy|holdback|zdrAttested)"/.test(warning),
+  // desktop strict notice also applies to an ordinary result reused from a previous desktop review.
+  const settingNotes = merged.warnings.filter(
+    (warning) =>
+      warning === DESKTOP_STRICT_NOTICE ||
+      /\breview\.(privacy|holdback|zdrAttested)\b|"(privacy|holdback|zdrAttested)"/.test(warning),
   )
   const withSettingNotes = (text: string) => [text, ...settingNotes].join(" ")
   const attributes = attributesText ? parseGitAttributes(attributesText) : undefined
@@ -950,7 +967,17 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   // Nothing changed since the last review, so its findings stand. The checkout is the one read just now: the user may
   // have switched branches since, and Apply fix and Ask the agent follow it.
   if (previous && unchanged.size === review.length && Object.keys(previous.fileKeys ?? {}).length === review.length)
-    return { ...previous, head, checkout, label, unchanged: true }
+    return {
+      ...previous,
+      head,
+      checkout,
+      label,
+      unchanged: true,
+      // Older desktop outcomes with this settings key used ordinary selection but did not retain its warning.
+      ...(config.guardrail === "strict" && !previous.notes.includes(DESKTOP_STRICT_NOTICE)
+        ? { notes: [...previous.notes, DESKTOP_STRICT_NOTICE] }
+        : {}),
+    }
 
   // An explicit model in review.json wins; otherwise the review runs on the agent's model (see preferredModels).
   // The resolved model is passed explicitly to every prompt.
@@ -963,9 +990,12 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const named = config.triageModel ? pickReviewModel([config.triageModel], catalog) : undefined
   if (!chosen)
     throw new Error(
-      catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
-        ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
-        : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
+      withStrictNotice(
+        catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
+          ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
+          : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
+        config,
+      ),
     )
   // WP A35: on Vector Codium without a triageModel the review runs the plan's review pair, a same-lab pair runs one
   // pass, and the panel adds a judge from a third lab (review.json's judgeModel, or the plan's panel judge).
@@ -987,7 +1017,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const refusal = [model, ...(triage ? [triage] : []), ...(judge ? [judge] : [])]
     .map((item) => (item.context ? contextRefusal(modelName(item), item.context) : undefined))
     .find(Boolean)
-  if (refusal) throw new Error(refusal)
+  if (refusal) throw new Error(withStrictNotice(refusal, config))
   // VS-23d (SF-15): under privacy "zdr" a model whose names alone the route rules refuse (Vector Codium, a free model,
   // a router or preset, one whose provider requires retention) is refused before any session is created, as
   // `vector review` refuses it. Where its requests go decides the rest, which the engine server holds each session to.

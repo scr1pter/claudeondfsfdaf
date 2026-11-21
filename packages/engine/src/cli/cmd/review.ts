@@ -5,6 +5,7 @@ import { codiumPass, reviewForOutput } from "./review-output"
 // working tree. A pull request is reviewed untrusted: its commit is fetched into FETCH_HEAD only, its files go in the
 // prompt, nothing of it is checked out, and its settings come from the base.
 
+import { createHash } from "node:crypto"
 import fs from "fs"
 import fsp from "fs/promises"
 import path from "path"
@@ -46,6 +47,8 @@ import {
   parseGitAttributes,
   type GitAttributes,
 } from "@vectordevai/core/review/ignore"
+import { completeStrictReview } from "@vectordevai/core/review/local-result"
+import { policyDigest } from "@vectordevai/core/review/model-evidence"
 import { diffBudgetChars, estimateCostUsd } from "@vectordevai/core/review/plan"
 import type { PromptInput } from "@vectordevai/core/review/prompt"
 import { collectSecretValues, redactSecrets } from "@vectordevai/core/review/redact"
@@ -325,14 +328,73 @@ export function executeLocalReview<RunR, ModelR>(
     const ignored = (file: string) => denied(file) || classifyPath(file, { config, attributes }) !== undefined
 
     // 3. What changed. Only a branch keeps "since last review" state, in the repository's git directory.
+    // A saved branch review can contain evidence outside a service's admitted read authority.
+    const requiresFreshCoverage =
+      options.context && (config.guardrail === "strict" || !!options.context.admittedReads || !!readDenies?.length)
     const statePath =
-      !options.context?.stateless && !worktree && options.pr === undefined && branch
+      !options.context?.stateless && !requiresFreshCoverage && !worktree && options.pr === undefined && branch
         ? yield* localStatePath(git, root, branch)
         : undefined
-    const stored = statePath ? yield* readLocalState(statePath, !options.full) : undefined
+    let strictPolicy: string | undefined
+    if (statePath && config.guardrail === "strict") {
+      const owner = Option.isSome(settings) ? yield* settings.value.get() : undefined
+      const model =
+        options.model?.trim() || config.model?.trim() || owner?.agent?.review?.model?.trim() || owner?.model?.trim()
+      // A provider-history fallback can change without any local review setting changing. A fresh review
+      // resolves it normally; consulting credentials or refreshing providers just to replay a cache is unnecessary.
+      const specialists = [owner?.agent?.review, owner?.agent?.security]
+      // Configured instruction files and URLs can change independently of a reviewed commit.
+      if (
+        model &&
+        !owner?.instructions?.length &&
+        !specialists.some((agent) => Object.keys(agent?.options ?? {}).length > 0)
+      ) {
+        const agents = specialists.map(
+          (agent) =>
+            agent && [
+              agent.model,
+              agent.variant,
+              agent.prompt,
+              agent.steps,
+              agent.temperature,
+              agent.top_p,
+              agent.tools,
+              agent.permission,
+            ],
+        )
+        const applied = [
+          policyDigest(config),
+          config,
+          rulesText,
+          attributesText,
+          model,
+          agents,
+          owner?.permission,
+          options.checks === true,
+        ]
+        // Keep only the digest; prompts, review rules and attribute patterns can be private.
+        strictPolicy = createHash("sha256").update(JSON.stringify(applied)).digest("hex")
+      }
+    }
+    const stored = statePath ? yield* readLocalState(statePath, !options.full || !!strictPolicy) : undefined
     const retryFull = stored?.state.retryFullAfterBudget === true
-    // An explicit full review starts fresh as before, but a pending retry retains earlier findings and spend.
-    const saved = !options.full || retryFull ? stored?.state : undefined
+    // A strict result certifies one immutable pair and one policy. Even an unchanged patch on a new
+    // commit must get its own strict result. Preserve the previous findings and spend when requesting that full run.
+    const retryStrict =
+      stored &&
+      (config.guardrail === "strict"
+        ? !strictPolicy ||
+          stored.strictPolicy !== strictPolicy ||
+          stored.state.head !== current ||
+          stored.state.failed ||
+          stored.state.unreviewed.length > 0 ||
+          !stored.outcome ||
+          stored.outcome.base !== stored.state.base ||
+          !base ||
+          stored.state.base !== (yield* mergeBaseOf(git, root, base, current, "HEAD"))
+        : stored.strict)
+    const fullRetry = retryFull || retryStrict === true
+    const saved = !options.full || fullRetry ? stored?.state : undefined
     const range: Range =
       options.pr !== undefined
         ? yield* pullRange(git, root, options.pr, base!)
@@ -345,7 +407,7 @@ export function executeLocalReview<RunR, ModelR>(
               saved,
               config,
               ignored,
-              full: options.full || retryFull,
+              full: options.full || fullRetry,
             })
     const target = range.target
     const open = (saved?.findings ?? []).filter((finding) => finding.status === "open")
@@ -394,7 +456,7 @@ export function executeLocalReview<RunR, ModelR>(
     }
     // As CI skips a commit it already reviewed; --fail-on still sees what that review left open. The last review of
     // this commit is printed again, so a script, or someone who lost the first output, still gets its findings.
-    if (!retryFull && saved?.head === range.head && !saved.unreviewed.length && !saved.failed) {
+    if (!fullRetry && saved?.head === range.head && !saved.unreviewed.length && !saved.failed) {
       const note = `Nothing new to review: ${short(range.head)} was already reviewed.${stillOpen(open)} Run \`vector review --full\` to review it again.`
       if (options.apply)
         say(
@@ -424,7 +486,7 @@ export function executeLocalReview<RunR, ModelR>(
     }
 
     // Earlier findings follow the lines through what changed since the last review.
-    const priorHead = range.since ?? (retryFull ? saved?.head : undefined)
+    const priorHead = range.since ?? (fullRetry ? saved?.head : undefined)
     const changes =
       saved && priorHead && priorHead !== range.head
         ? yield* ReviewSource.prDiff({ directory: root, mergeBase: priorHead, head: range.head }).pipe(
@@ -529,8 +591,8 @@ export function executeLocalReview<RunR, ModelR>(
           : Effect.fail(error),
       ),
     )
-    if ("refused" in resolved)
-      return yield* notReviewed({
+    if ("refused" in resolved) {
+      const refusal: ReviewOutcome = {
         report: { summary: "", risk: "low", files: [], findings: [] },
         selection: {
           inline: [],
@@ -562,7 +624,9 @@ export function executeLocalReview<RunR, ModelR>(
           deletions: review.reduce((sum, file) => sum + file.deletions, 0),
         },
         notes: [notePrivacyRefused({ ...resolved.refused, attempts: 0 })],
-      })
+      }
+      return yield* notReviewed(config.guardrail === "strict" ? incompleteStrictCoverage(refusal) : refusal)
+    }
     const model = resolved.model
     const modelName = `${model.providerID}/${model.modelID}`
     if (options.checks) {
@@ -647,7 +711,7 @@ export function executeLocalReview<RunR, ModelR>(
 
     // Only a complete, trusted commit comparison can authorize the zero-token policy. Staged changes and
     // working files have no immutable head blob for their edits. A service cache reset is not a user --full.
-    const forceFull = (options.full === true || retryFull) && !options.context
+    const forceFull = (options.full === true || fullRetry) && !options.context
     const trivialProof =
       config.trivial === "skip" &&
       !forceFull &&
@@ -732,13 +796,14 @@ export function executeLocalReview<RunR, ModelR>(
       rulesSource: options.context || trust !== "trusted" ? "base branch" : "working tree",
       ...(ignoredPaths ? { ignored: ignoredPaths } : {}),
     })
-    const reviewed = withheld.length
+    const visible = withheld.length
       ? {
           ...result,
           unreviewed: [...new Set([...result.unreviewed, ...withheld.map((file) => file.path)])],
           notes: [...result.notes, "Some changed files were not reviewed because this conversation cannot read them."],
         }
       : result
+    const reviewed = withheld.length && config.guardrail === "strict" ? incompleteStrictCoverage(visible) : visible
     if (reviewed.trivial) {
       const open = reviewed.selection.stillOpen
       if (options.json)
@@ -811,7 +876,7 @@ export function executeLocalReview<RunR, ModelR>(
       moved: selection.inline,
     })
     if (retryFull && unfinishedCauses(outcome).length) next.retryFullAfterBudget = true
-    yield* writeLocalState(statePath, next, say, outcome)
+    yield* writeLocalState(statePath, next, say, outcome, undefined, strictPolicy)
 
     if (options.json)
       yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
@@ -1403,60 +1468,111 @@ const localStatePath = Effect.fnUntraced(function* (git: ReviewGit.Client, root:
   return dir ? path.join(dir, "vector", "review", `${encodeURIComponent(branch)}.json`) : undefined
 })
 
+// The local command can refuse model selection or omit files before the runner sees them. Its strict
+// result must include that coverage loss, including alongside findings the runner could verify.
+function incompleteStrictCoverage(outcome: ReviewOutcome): ReviewOutcome {
+  const previous = outcome.strict
+  const incomplete = [
+    ...new Set([...unfinishedCauses({ ...outcome, strict: undefined }), ...(previous?.incomplete ?? [])]),
+  ]
+  const strict: NonNullable<ReviewOutcome["strict"]> = {
+    version: 1,
+    head: outcome.head,
+    findings: previous?.findings ?? [],
+    dropped: previous?.dropped ?? [],
+    fixUnchecked: previous?.fixUnchecked ?? 0,
+    complete: false,
+    incomplete,
+  }
+  return {
+    ...outcome,
+    strict,
+    selection: {
+      ...outcome.selection,
+      strict: {
+        complete: false,
+        findingCount: strict.findings.length,
+        dropped: strict.dropped,
+      },
+    },
+  }
+}
+
 // `{ version: 1, state, outcome? }`: the state encoded as in the sticky comment, so the same validation reads it back,
 // and the last review's outcome, printed again when its commit is asked about.
+interface LocalReviewRecord {
+  text: string
+  state: ReviewState
+  strict: boolean
+  strictPolicy?: string
+  outcome?: ReviewOutcome
+}
+
 function readLocalState(file: string, includeOutcome: boolean) {
-  return Effect.promise(
-    async (): Promise<{ text: string; state: ReviewState; outcome?: ReviewOutcome } | undefined> => {
-      const text = await fsp.readFile(file, "utf8").catch(() => undefined)
-      if (!text) return undefined
-      const data = parseJson(text)
-      if (!data || data.version !== 1 || typeof data.state !== "string") return undefined
-      const state = decodeState(data.state)
-      if (!state) return undefined
-      if (!includeOutcome || !isOutcome(data.outcome)) return { text, state }
-      // Serialized caches are useful history, but cannot certify that old mixed token aggregates were partitioned.
-      const outcome = data.outcome
-      const mixed =
-        (outcome.cost && reviewCostHasCodium(outcome.cost)) || outcome.passes?.some((pass) => codiumPass(pass))
-      const pure =
-        outcome.cost &&
-        (reviewCostIsCodium(outcome.cost) ||
-          (outcome.cost.codium !== true &&
-            !!outcome.passes?.length &&
-            outcome.passes.every((pass) => codiumPass(pass)) &&
-            !outcome.cost.model
-              .split(" + ")
-              .some((model) => model.includes("/") && Billing.hasOwnIdentity({ providerID: model.split("/")[0] }))))
-      return {
-        text,
-        state,
-        outcome: {
-          ...outcome,
-          ...(outcome.cost
-            ? {
-                cost: {
-                  ...outcome.cost,
-                  tokensOwnOnly: false,
-                  ...(mixed ? { codium: true, kind: pure ? ("codium" as const) : outcome.cost.kind } : {}),
-                },
-              }
-            : {}),
-          ...(mixed && outcome.passes
-            ? {
-                passes: outcome.passes.map((pass) => ({
-                  ...pass,
-                  usageMissing: true,
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                })),
-              }
-            : {}),
-        },
-      }
-    },
-  )
+  return Effect.promise(async (): Promise<LocalReviewRecord | undefined> => {
+    const text = await fsp.readFile(file, "utf8").catch(() => undefined)
+    if (!text) return undefined
+    const data = parseJson(text)
+    if (!data || data.version !== 1 || typeof data.state !== "string") return undefined
+    const state = decodeState(data.state)
+    if (!state) return undefined
+    // Legacy strict records have no policy marker. Keep their history, but never certify them as current.
+    const strict =
+      Object.hasOwn(data, "strictPolicy") ||
+      (typeof data.outcome === "object" && data.outcome !== null && Object.hasOwn(data.outcome, "strict")) ||
+      (isOutcome(data.outcome) && Object.hasOwn(data.outcome.selection, "strict"))
+    const record = {
+      text,
+      state,
+      strict,
+      ...(typeof data.strictPolicy === "string" ? { strictPolicy: data.strictPolicy } : {}),
+    }
+    if (
+      !includeOutcome ||
+      !isOutcome(data.outcome) ||
+      (strict && !completeStrictReview(data.outcome, state.head ?? ""))
+    )
+      return record
+    // Serialized caches are useful history, but cannot certify that old mixed token aggregates were partitioned.
+    const outcome = data.outcome
+    const mixed =
+      (outcome.cost && reviewCostHasCodium(outcome.cost)) || outcome.passes?.some((pass) => codiumPass(pass))
+    const pure =
+      outcome.cost &&
+      (reviewCostIsCodium(outcome.cost) ||
+        (outcome.cost.codium !== true &&
+          !!outcome.passes?.length &&
+          outcome.passes.every((pass) => codiumPass(pass)) &&
+          !outcome.cost.model
+            .split(" + ")
+            .some((model) => model.includes("/") && Billing.hasOwnIdentity({ providerID: model.split("/")[0] }))))
+    return {
+      ...record,
+      outcome: {
+        ...outcome,
+        ...(outcome.cost
+          ? {
+              cost: {
+                ...outcome.cost,
+                tokensOwnOnly: false,
+                ...(mixed ? { codium: true, kind: pure ? ("codium" as const) : outcome.cost.kind } : {}),
+              },
+            }
+          : {}),
+        ...(mixed && outcome.passes
+          ? {
+              passes: outcome.passes.map((pass) => ({
+                ...pass,
+                usageMissing: true,
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+              })),
+            }
+          : {}),
+      },
+    }
+  })
 }
 
 function isOutcome(value: unknown): value is ReviewOutcome {
@@ -1479,6 +1595,7 @@ function writeLocalState(
   say: (text: string) => void,
   outcome?: ReviewOutcome,
   unchangedRecord?: string,
+  strictPolicy?: string,
 ) {
   if (!file) return Effect.void
   return Effect.promise(() =>
@@ -1491,7 +1608,12 @@ function writeLocalState(
         const encoded = encodeState(state)
         const record =
           unchangedRecord === undefined
-            ? { version: 1, state: encoded, ...(outcome ? { outcome } : {}) }
+            ? {
+                version: 1,
+                state: encoded,
+                ...(outcome ? { outcome } : {}),
+                ...(strictPolicy ? { strictPolicy } : {}),
+              }
             : { ...JSON.parse(unchangedRecord), state: encoded }
         const temporary = `${file}.${crypto.randomUUID()}.tmp`
         try {

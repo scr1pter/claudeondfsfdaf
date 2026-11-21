@@ -202,7 +202,7 @@ export const VARIANTS = {
     planned: 'guardrail: "strict"',
     keys: { guardrail: "strict" },
     engine: { from: "VS-27c" },
-    desktop: { pending: "VS-27c" },
+    desktop: { pending: "VS-27c requires immutable base and head files on desktop" },
   },
   "depth-auto": {
     planned: 'depth: "auto"',
