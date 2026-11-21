@@ -297,6 +297,8 @@ export interface ReviewState {
   month?: { key: string; costUsd: number } // key is "2026-09"
   unreviewed: string[] // files a partial run did not cover; added to the next focus
   failed?: boolean
+  // An in-flight or refused budget-gated run can retry the entire diff, even when the head moves.
+  retryFullAfterBudget?: true
   notedHead?: string
   inlinePosted: number
   inflight?: { run: string; head: string; at: number; costUsd: number }
@@ -374,9 +376,7 @@ export interface ReviewOutcome {
   forcePushed?: boolean
   // SF-16: only a zero-attempt policy skip carries this marker. The verdict retains earlier open findings.
   trivial?: true
-  // "privacy" and "budget-estimate" are VS-23's and VS-24's stops. Review.run and `vector review` make "privacy" when
-  // the route rules refuse a model or an attempt (VS-23b), with every file unreviewed; no runner makes
-  // "budget-estimate" before VS-24 wiring.
+  // "privacy" records a route refusal. "budget-estimate" stops before model dispatch with every file unreviewed.
   partial?: "budget" | "steps" | "timeout" | "model-error" | "privacy" | "budget-estimate"
   unreviewed: string[]
   specialists: {
@@ -543,9 +543,8 @@ export interface ReviewConfig {
   maxCostUsdPerPr: number // across automatic reviews of one PR; 0 = none
   maxCostUsdPerMonth: number // 0 = none; install writes REVIEW_MAX_COST_USD_PER_MONTH=50 for paid models
   // VS-24: a cap on the first-turn input tokens of a review's planned passes, summed (dispatch.ts, decideDispatch); it
-  // counts free, plan and local models too. Absent or 0 means none. A budget, not a policy key, and an estimate: admission
-  // and the dollar caps stay the real bounds. Parsed, and read by no runner until VS-24 wiring (UNAPPLIED_REVIEW_KEYS),
-  // so the parser warns that a cap is not applied.
+  // counts free, plan and local models too. Absent or 0 leaves pre-dispatch estimation off. This budget uses an
+  // estimate; admission and provider limits still bound actual spend.
   maxInputTokens?: number
   timeoutMinutes: number
   model?: string // "provider/model"
@@ -618,7 +617,6 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
-  "maxInputTokens",
   "scopeGate",
   "verifyEvidence",
   "depth",

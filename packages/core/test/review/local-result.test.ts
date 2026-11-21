@@ -83,6 +83,78 @@ const expectedRun = { parentID: "ses_result_parent", request: { requestID: "requ
 const decode = (value: unknown) => decodeLocalRun(value, expectedRun)
 
 describe("retained local review result decoding", () => {
+  test("the service's budget-stop error and zero-attempt outcome round-trip with no clean credit", async () => {
+    const stopped: ReviewOutcome = {
+      ...outcome(),
+      report: { risk: "low", summary: "", files: [], findings: [] },
+      partial: "budget-estimate",
+      unreviewed: ["src/file.ts"],
+      cost: undefined,
+      sessions: [],
+      specialists: [],
+      passes: undefined,
+    }
+    const stored: LocalResult = JSON.parse(
+      JSON.stringify({
+        ...result(stopped),
+        exitCode: 2,
+        error: "Not reviewed. The estimated review exceeded the configured budget before any model request.",
+      }),
+    )
+    expect(stored.verdict).toEqual({ verdict: "not-reviewed", causes: ["budget-estimate"], notes: [] })
+    expect(decodeLocalResult(stored, target)).toEqual(stored)
+    expect((await decode(await info(stored, "failed")))?.verdict).toEqual(stored.verdict)
+    expect(decodeLocalResult({ ...stored, verdict: result().verdict }, target)).toBeUndefined()
+    const strict = {
+      version: 1,
+      head,
+      complete: false,
+      incomplete: ["budget-estimate", "unreviewed", "no-reviewer"],
+      findings: [],
+      dropped: [],
+      fixUnchecked: 0,
+    }
+    const strictStop = (value: unknown) =>
+      decodeLocalResult({ ...stored, outcome: { ...stored.outcome, strict: value } }, target)
+    expect(strictStop(strict)?.verdict).toEqual(stored.verdict)
+    expect(strictStop({ ...strict, complete: true })).toBeUndefined()
+    expect(strictStop({ ...strict, incomplete: ["no-reviewer"] })).toBeUndefined()
+    // The live first-request check runs after a private helper exists. Its retained session explains
+    // the refusal, while the specialist has zero steps and no usage or completed review.
+    const changedRequest =
+      "Not reviewed. The prepared model request could no longer be confirmed to fit the configured budget."
+    const prepared = {
+      ...stored.outcome!,
+      sessions: ["ses_helper"],
+      specialists: [{ name: "review", status: "skipped", detail: "first-request-changed", steps: 0 }] as const,
+      notes: [changedRequest],
+    }
+    const retained = { ...stored, outcome: prepared, error: changedRequest }
+    expect(decodeLocalResult(retained, target)?.verdict).toEqual(stored.verdict)
+    for (const wrong of [
+      { sessions: [] },
+      { sessions: ["one", "two"] },
+      { specialists: [{ ...prepared.specialists[0], steps: 1 }] },
+      { specialists: [{ ...prepared.specialists[0], status: "ok" }] },
+      { cost: outcome().cost },
+    ])
+      expect(decodeLocalResult({ ...retained, outcome: { ...prepared, ...wrong } }, target)).toBeUndefined()
+    for (const changed of [
+      { exitCode: 0 },
+      { error: "" },
+      { outcome: { ...stored.outcome, partial: "steps" } },
+      { outcome: { ...stored.outcome, trivial: true } },
+      { outcome: { ...stored.outcome, sessions: outcome().sessions } },
+      { outcome: { ...stored.outcome, specialists: outcome().specialists } },
+      { outcome: { ...stored.outcome, passes: outcome().passes } },
+      { outcome: { ...stored.outcome, cost: outcome().cost } },
+      { outcome: { ...stored.outcome, unreviewed: [] } },
+      { outcome: { ...stored.outcome, unreviewed: ["src/file.ts", "src/file.ts"] } },
+      { outcome: { ...stored.outcome, skipped: [{ path: "other.ts", reason: "size-limit" }] } },
+    ])
+      expect(decodeLocalResult({ ...stored, ...changed }, target)).toBeUndefined()
+  })
+
   test("an exact zero-attempt policy skip round-trips while mixed provider work cannot claim a skip", () => {
     const value = outcome()
     const skipped: ReviewOutcome = {

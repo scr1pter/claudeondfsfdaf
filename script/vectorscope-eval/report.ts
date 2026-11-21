@@ -25,7 +25,7 @@ import {
 } from "../../packages/core/src/review/guardrail"
 import { verifyCandidates, verifyUnanswered } from "../../packages/core/src/review/plan"
 import { parseFindingMarker, readState } from "../../packages/core/src/review/state"
-import { noteTrivialSkip } from "../../packages/core/src/review/format"
+import { noteBudgetEstimate, noteTrivialSkip } from "../../packages/core/src/review/format"
 import {
   buildReport,
   DEFAULT_GATE,
@@ -368,10 +368,12 @@ export interface StrictReselection {
 
 export function reselectRun(artifact: ReplayArtifact, run: EvalRun): { run: EvalRun; reselection: StrictReselection } {
   const outcome = artifact.outcome
-  const selection = outcome?.selection
+  const selection = run.status === "not-sent" ? undefined : outcome?.selection
   const posted = postedParts(artifact, run.status === "failed")
   const recorded =
-    artifact.config?.value?.guardrail === "strict" && outcome?.strict ? artifact.strictCandidates : undefined
+    run.status !== "not-sent" && artifact.config?.value?.guardrail === "strict" && outcome?.strict
+      ? artifact.strictCandidates
+      : undefined
   const postedIds = recorded ? strictPostedIds(artifact) : undefined
   const selected = selection
     ? [
@@ -689,9 +691,16 @@ export function fromArtifact(
     artifact.config?.value?.impact === "graph" &&
     !artifact.files.reviewed.length &&
     !artifact.attempts.some((attempt) => attempt.admitted && (attempt.pass === "review" || attempt.pass === "security"))
+  const notReviewed = outcome?.trivial
+    ? noteTrivialSkip()
+    : outcome?.partial === "budget-estimate"
+      ? noteBudgetEstimate(outcome.notes)
+      : graphUnsent
+        ? "Not reviewed. No reviewer request was admitted."
+        : undefined
   const status = failed
     ? "failed"
-    : graphUnsent || outcome?.trivial
+    : notReviewed
       ? "not-sent"
       : !outcome ||
           outcome.partial ||
@@ -704,19 +713,17 @@ export function fromArtifact(
     ? `every changed file was skipped (${artifact.files.skipped.length}), so nothing was reviewed`
     : failed
       ? (reviewers.find((entry) => entry.detail)?.detail ?? "every reviewer failed")
-      : outcome.trivial
-        ? noteTrivialSkip()
-        : graphUnsent
-          ? "Not reviewed. No reviewer request was admitted."
-          : status === "partial"
-            ? [
-                ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
-                ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
-                ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
-                ...(outcome.strict?.complete === false ? (outcome.strict.incomplete ?? ["guardrail incomplete"]) : []),
-              ].join(", ")
-            : undefined
-  const selection = graphUnsent ? undefined : outcome?.selection
+      : notReviewed
+        ? notReviewed
+        : status === "partial"
+          ? [
+              ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
+              ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
+              ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
+              ...(outcome.strict?.complete === false ? (outcome.strict.incomplete ?? ["guardrail incomplete"]) : []),
+            ].join(", ")
+          : undefined
+  const selection = notReviewed ? undefined : outcome?.selection
   const writes = postedParts(artifact, failed)
   const strictIds = outcome?.strict ? strictPostedIds(artifact) : undefined
   const posted = selection
@@ -761,7 +768,7 @@ export function fromArtifact(
     trust: artifact.trust,
     status,
     ...(detail ? { detail } : {}),
-    proposed: (graphUnsent ? [] : proposed).map((finding) => evalFinding(finding)),
+    proposed: (notReviewed ? [] : proposed).map((finding) => evalFinding(finding)),
     posted,
     ...(outcome ? { ms: outcome.durationMs } : {}),
     attempts: artifact.attempts.filter((attempt) => attempt.admitted).length,
@@ -898,30 +905,39 @@ export function fromDesktopArtifact(artifact: DesktopArtifact, manifest: Manifes
   if (artifact.variant?.applied === false) return undefined
   const item = manifest?.cases.find((entry) => entry.id === artifact.label)
   const outcome = artifact.outcome
+  const notReviewed = outcome?.partial === "budget-estimate" ? noteBudgetEstimate(outcome.notes) : undefined
   // The desktop runner's specialists are its reviewers; its double-check is reported apart, as `verification`.
   const reviewers = outcome?.specialists ?? []
   const failed =
     artifact.error !== undefined || (reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed"))
   const unfinished = [
+    ...(outcome?.partial === "budget"
+      ? [
+          "stopped early (budget)",
+          ...(outcome.unreviewed?.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
+        ]
+      : []),
     ...reviewers.filter((entry) => entry.status !== "ok").map((entry) => `${entry.name} ${entry.status}`),
     ...(outcome?.verification?.status === "failed" ? ["verify failed"] : []),
   ]
   const status = failed
     ? "failed"
-    : !outcome
-      ? "partial"
-      : artifact.aborted.length || unfinished.length
+    : notReviewed
+      ? "not-sent"
+      : !outcome || artifact.aborted.length || unfinished.length
         ? "partial"
         : "completed"
   const detail =
     status === "failed"
       ? (artifact.error ?? reviewers.find((entry) => entry.detail)?.detail ?? "every reviewer failed")
-      : !outcome
-        ? "nothing was reviewed"
-        : status === "partial"
-          ? [...(artifact.aborted.length ? [`aborted ${artifact.aborted.join(", ")}`] : []), ...unfinished].join(", ")
-          : undefined
-  const selection = outcome?.selection
+      : notReviewed
+        ? notReviewed
+        : !outcome
+          ? "nothing was reviewed"
+          : status === "partial"
+            ? [...(artifact.aborted.length ? [`aborted ${artifact.aborted.join(", ")}`] : []), ...unfinished].join(", ")
+            : undefined
+  const selection = notReviewed ? undefined : outcome?.selection
   const posted =
     selection && artifact.proposed && !failed
       ? [
@@ -966,10 +982,11 @@ export function fromDesktopArtifact(artifact: DesktopArtifact, manifest: Manifes
     trust: artifact.trust ?? "untrusted",
     status,
     ...(detail ? { detail } : {}),
-    proposed: (outcome?.report.findings ?? []).map((finding) => evalFinding(finding)),
+    proposed: (notReviewed ? [] : (outcome?.report.findings ?? [])).map((finding) => evalFinding(finding)),
     posted,
     ...(outcome ? { ms: outcome.durationMs } : {}),
     attempts: artifact.attempts.length,
+    ...(outcome?.partial ? { stop: outcome.partial } : {}),
     ...(timed.length ? { passes: timed } : {}),
     spend: {
       ...(priced.length ? { costUsd: priced.reduce((total, attempt) => total + (attempt.costUsd ?? 0), 0) } : {}),

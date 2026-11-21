@@ -122,6 +122,7 @@ const mcp = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
     status: () => Effect.succeed({}),
+    snapshot: () => Effect.succeed({}),
     clients: () => Effect.succeed({}),
     instructions: () => Effect.succeed([]),
     tools: () => Effect.succeed({}),
@@ -1095,35 +1096,124 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // SF-16 applies the trivial policy; the independently staged input-token cap is still pending.
   it.instance(
-    "replays the base's trivial policy and retains the warning for the pending input-token cap",
+    "replays the base's trivial policy and input-token cap on a change that needs a reviewer",
     () =>
       Effect.gen(function* () {
-        const settings = JSON.stringify({ trivial: "skip", maxInputTokens: 1_000, minConfidence: 0.75 })
+        const settings = JSON.stringify({ trivial: "skip", maxInputTokens: 100_000, minConfidence: 0.75 })
         const { directory, llm, base, head } = yield* checkout({
           base: { "src/list.ts": LIST_BASE, ".vector/review.json": settings },
           head: { "src/list.ts": LIST_HEAD },
           price: PRICE,
         })
+        // The replay CLI resolves its model before admission. Warm that same local catalog for this direct replay.
+        const provider = yield* Provider.Service
+        yield* provider.getModel(MODEL.providerID, MODEL.modelID)
         yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
         const artifact = yield* ReviewEval.replay({
           case: replayCase(directory, base, head),
           model: MODEL,
-          config: { maxCostUsd: 2, verify: "off" },
+          config: { maxCostUsd: 100, verify: "off" },
           posting: ReviewEval.recordingPosting(),
           check: recordingCheck().check,
         })
         expect(artifact.config.value.trivial).toBe("skip")
-        expect(Object.hasOwn(artifact.config.value, "maxInputTokens")).toBe(false)
+        expect(artifact.config.value.maxInputTokens).toBe(100_000)
         expect(artifact.config.value.minConfidence).toBe(0.75)
-        expect(artifact.config.warnings).toEqual([
-          '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
-        ])
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.dispatch?.firstTurnTokens).toBeGreaterThan(0)
+        expect(artifact.shrink).toEqual([])
         expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
         expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, trivial: "review" }))
         // The run was a review, not a skip.
         expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "records the initial and shrunk estimates and a zero-attempt budget stop without a reviewed head",
+    () =>
+      Effect.gen(function* () {
+        const comment = "// " + "This unchanged paragraph documents the public API. ".repeat(8)
+        const render = (value: number) =>
+          [comment, comment, comment, `export const size = ${value}`, comment, comment, comment, ""].join("\n")
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/size.ts": render(1) },
+          head: { "src/size.ts": render(2) },
+          price: PRICE,
+        })
+        // The replay CLI resolves its model before admission. Warm that same local catalog for this direct replay.
+        const provider = yield* Provider.Service
+        yield* provider.getModel(MODEL.providerID, MODEL.modelID)
+        const checks = recordingCheck()
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxInputTokens: 1, maxCostUsd: 100, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: checks.check,
+        })
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.outcome).toMatchObject({
+          partial: "budget-estimate",
+          unreviewed: ["src/size.ts"],
+          sessions: [],
+          specialists: [],
+        })
+        expect(artifact.dispatch?.firstTurnTokens).toBeGreaterThan(1)
+        expect(artifact.dispatch?.passes.map((pass) => pass.pass)).toEqual(["review"])
+        const before = artifact.dispatch!.passes[0]!
+        expect(before.usd?.low).toBeGreaterThan(0)
+        expect(before.v2.usd?.low).toBeGreaterThan(0)
+        expect(artifact.shrink?.map((entry) => entry.step)).toEqual(["diff"])
+        const after = artifact.shrink![0]!.estimate
+        expect(after.firstTurnTokens).toBeLessThan(artifact.dispatch!.firstTurnTokens)
+        expect(after.firstTurnTokens).toBeGreaterThan(1)
+        expect(artifact.files.reviewed).toEqual([])
+        expect(artifact.context.locations).toEqual([])
+        expect(artifact.passes).toEqual([])
+        expect(artifact.attempts).toEqual([])
+        expect(yield* llm.hits).toHaveLength(0)
+        expect(artifact.posted).toHaveLength(1)
+        const note = artifact.posted[0]
+        if (note?.write !== "createIssueComment") throw new Error("the replay did not record the budget note")
+        expect(note.body).toContain("Not reviewed")
+        expect(note.body).not.toContain("No issues found")
+        expect(readState(note.body)).toBeUndefined()
+        expect(checks.calls).toHaveLength(1)
+        expect(checks.calls[0]?.sessionIDs).toEqual([])
+
+        const strict = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } },
+          config: { maxInputTokens: 1, maxCostUsd: 100 },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(strict.outcome?.partial).toBe("budget-estimate")
+        expect(strict.outcome?.unreviewed).toEqual(["src/size.ts"])
+        expect(strict.outcome?.strict?.complete).toBe(false)
+        for (const cause of ["budget-estimate", "unreviewed", "no-reviewer"])
+          expect(strict.outcome?.strict?.incomplete).toContain(cause)
+        expect(strict.outcome?.strict?.findings).toEqual([])
+        expect(strict.outcome?.strict?.dropped).toEqual([])
+        expect(strict.strictCandidates).toBeUndefined()
+        expect(strict.dispatch?.firstTurnTokens).toBeGreaterThan(1)
+        expect(strict.files.reviewed).toEqual([])
+        expect(strict.context.locations).toEqual([])
+        expect(strict.attempts).toEqual([])
+        expect(strict.outcome?.sessions).toEqual([])
+        expect(yield* llm.hits).toHaveLength(0)
+        expect(strict.posted).toHaveLength(1)
+        const strictNote = strict.posted[0]
+        if (strictNote?.write !== "createIssueComment")
+          throw new Error("the strict replay did not record the budget stop")
+        expect(strictNote.body).toContain("Not reviewed")
+        expect(strictNote.body).not.toContain("No verified production-breaking issues")
+        expect(readState(strictNote.body)).toBeUndefined()
       }),
     GIT,
     TIMEOUT,
@@ -1919,7 +2009,7 @@ describe("ReviewEval.replay", () => {
         expect(pass?.ms).toBeGreaterThanOrEqual(150)
         // The outcome's pass of the same name, matched by name and not by position, counted the same cache reads.
         expect(artifact.outcome?.passes?.find((entry) => entry.name === pass?.pass)?.cacheRead).toBe(400)
-        // A default replay never builds graph context. The pre-dispatch budget field remains pending.
+        // This replay opts into neither graph context nor the pre-dispatch budget gate.
         expect(artifact.tier1).toBeUndefined()
         expect(artifact.dispatch).toBeUndefined()
         expect(artifact.shrink).toBeUndefined()

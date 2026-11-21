@@ -242,10 +242,6 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  maxInputTokens: {
-    applies: (config) => (config.maxInputTokens ?? 0) > 0,
-    warning: '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
-  },
   // Only under "strict": without it the key is ignored (settle's note), so it is never also "not applied".
   scopeGate: {
     applies: (config) => config.scopeGate === "introduced" && config.guardrail === "strict",
@@ -525,6 +521,8 @@ function settle(
     warnings.push('Desktop reviews use grep for related code. The engine review supports "impact": "graph".')
   if (!github && trigger === "desktop" && config.guardrail === "strict")
     warnings.push('Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".')
+  if (!github && trigger === "desktop" && (config.maxInputTokens ?? 0) > 0)
+    warnings.push("Desktop reviews with a token cap require a first-request estimate from the local engine.")
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),
   )

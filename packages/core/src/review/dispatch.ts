@@ -1,5 +1,5 @@
 // The pre-dispatch estimate and decision (VectorScope upgrade contract §1.2 and §4 VS-24 item 4), with addendum A's
-// VS-40 estimate v2 recorded beside it. Pure and browser-safe. Nothing calls it yet: VS-24 wiring builds every planned
+// VS-40 estimate v2 recorded beside it. Pure and browser-safe. Under the opt-in, Review.run builds every planned
 // pass's first prompt before the specialists fan out in Review.run, estimates them here, shrinks while decideDispatch
 // names a lever, and stops with "budget-estimate" and zero attempts when none is left.
 //

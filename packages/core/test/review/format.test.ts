@@ -15,6 +15,7 @@ import {
   inlineLeads,
   MAX_BODY_CHARS,
   noteAlreadyReviewed,
+  noteBudgetEstimate,
   noteFailed,
   noteForcePush,
   noteGeneratedHeader,
@@ -402,6 +403,52 @@ describe("the summary comment", () => {
     expect(body).toContain(`## Vectorscope review · Risk: High\n\n> ${banner}\n\n`)
   })
 
+  test("a first-request budget stop keeps earlier findings and lists what still needs checking", async () => {
+    const banner = notePartial({
+      reason: "budget",
+      detail: "first-request-budget",
+      maxCostUsd: 0,
+      unreviewed: ["src/auth/refresh.ts"],
+    })
+    const input: SummaryInput = {
+      head: HEAD,
+      baseRef: "main",
+      mode: "full",
+      form: "desktop",
+      incomplete: true,
+      banners: [banner],
+      report: { summary: "No issues found", files: [] },
+      selection: selection({
+        stillOpen: [prior({ where: "summary", title: "Earlier concern" })],
+        outsideDiff: [outside],
+        nits: nits.slice(0, 1),
+      }),
+    }
+    await golden("first-request-budget", buildSummaryBody(input))
+    const stillOpen = buildSummaryBody({
+      ...INCREMENTAL,
+      incomplete: true,
+      banners: [banner],
+      form: "desktop",
+    })
+    for (const label of [
+      blocking.title,
+      concern.title,
+      "src/auth/refresh.ts:52",
+      "Fixed since last review",
+      "Dismissed",
+      "Retry delay is not capped",
+      "Why it matters",
+    ])
+      expect(stillOpen).toContain(label)
+    expect(buildSummaryBody({ ...input, strict: { complete: true, findings: [], dropped: [] } })).not.toContain(
+      "No verified production-breaking issues",
+    )
+    expect(notePartial({ reason: "budget", detail: "first-request-budget", unreviewed: [] })).toBe(
+      "**Partial review.** A follow-up check could not confirm that its first request fit the configured budget.",
+    )
+  })
+
   // VS-34 (SF-13a): the label only. No runner records a held-back skip before VS-34 wiring (SF-13b).
   test("a held-back file is listed as not reviewed (VS-34)", async () => {
     const body = buildSummaryBody({
@@ -729,6 +776,18 @@ describe("notes", () => {
     expect(notePartial({ reason: "model-error", unreviewed: [], detail: "security: timed out" })).toBe(
       "**Partial review.** One reviewer could not finish: security: timed out. Comment `/vector review` to try again.",
     )
+    expect(notePartial({ reason: "budget-estimate", unreviewed: ["x.ts"] })).toBe(
+      "Not reviewed. The estimated review exceeded the configured budget before any model request.",
+    )
+    const unavailable = "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+    expect(noteBudgetEstimate([unavailable])).toBe(unavailable)
+    const changed =
+      "Not reviewed. The prepared model request could no longer be confirmed to fit the configured budget."
+    expect(noteBudgetEstimate([changed])).toBe(changed)
+    expect(notePartial({ reason: "budget", detail: "first-request-changed", unreviewed: ["a.ts"] })).toBe(
+      "**Partial review.** A prepared model request could no longer be confirmed to fit the configured budget. Checks remain for `a.ts`.",
+    )
+    expect(noteBudgetEstimate(["No issues found"])).toBe(noteBudgetEstimate())
   })
 
   test("a route refusal is never shown as clean, and says what was sent (VS-23a)", () => {

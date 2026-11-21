@@ -178,6 +178,8 @@ type State = {
 }
 
 export interface Interface {
+  /** Definitions a fresh review helper can be offered, without starting unrelated tools or importing extensions. */
+  readonly reviewDefinitions?: () => Effect.Effect<Tool.Def[] | undefined>
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
@@ -321,9 +323,7 @@ const layer = Layer.effect(
 
         const dirs = ProcessIsolation.required() ? [] : yield* config.directories()
         if (dirs.length) ProcessIsolation.assertExternalCodeAllowed()
-        const matches = dirs.flatMap((dir) =>
-          Glob.scanSync("{tool,tools}/*.{js,ts}", { cwd: dir, absolute: true, dot: true, symlink: true }),
-        )
+        const matches = customToolFiles(dirs)
         if (matches.length && !InstallationLocal) yield* dependencies.prepare().pipe(Effect.forkDetach)
         for (const match of matches) {
           const namespace = path.basename(match, path.extname(match))
@@ -564,9 +564,24 @@ const layer = Layer.effect(
       return { task: s.task, read: s.read }
     })
 
-    return Service.of({ ids, all, named, tools })
+    const reviewDefinitions = Effect.fn("ToolRegistry.reviewDefinitions")(function* () {
+      if (!ProcessIsolation.required() && customToolFiles(yield* config.directories()).length) return
+      const settings = yield* config.get()
+      if (!flags.pure && settings.plugin_origins?.length) return
+      // These are the same Tool.Info objects in the ordinary registry. Vector reviews deny every other
+      // registered tool. No computer probe, MCP connection, custom module or executor is needed here.
+      return yield* Effect.all([Tool.init(read), Tool.init(globtool), Tool.init(greptool), Tool.init(shell)])
+    })
+
+    return Service.of({ ids, all, named, tools, reviewDefinitions })
   }),
 )
+
+function customToolFiles(dirs: readonly string[]) {
+  return dirs.flatMap((dir) =>
+    Glob.scanSync("{tool,tools}/*.{js,ts}", { cwd: dir, absolute: true, dot: true, symlink: true }),
+  )
+}
 
 function isZodType(value: unknown): value is z.ZodType {
   return typeof value === "object" && value !== null && "_zod" in value

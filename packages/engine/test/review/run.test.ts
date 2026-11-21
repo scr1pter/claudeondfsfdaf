@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { $ } from "bun"
 import fs from "node:fs/promises"
+import { writeFileSync } from "node:fs"
 import path from "path"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
@@ -26,6 +27,7 @@ import { CREDENTIAL_FILES, holdsBack, reviewPermissionRules } from "@vectordevai
 import { INPUT_REDACTION, PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { certificateProblems, evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import {
+  BUDGET_ESTIMATE_UNAVAILABLE,
   noteHeldBack,
   noteIgnoreUnchecked,
   noteIgnoredCommitted,
@@ -206,7 +208,7 @@ const root = LayerNode.group([
   SystemPrompt.node,
   CrossSpawnSpawner.node,
   RuntimeFlags.node,
-  LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
+  LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.loopback, deps: [] }),
 ])
 
 const replacements = [
@@ -3960,6 +3962,694 @@ describe("VS-23b route admission", () => {
           expect(seen).toHaveLength(1)
           expect(seen[0]).toMatchObject({ policy: { privacy: "zdr" }, agent: identity ?? "review" })
         }
+      }),
+    TIMEOUT,
+  )
+})
+
+describe("VS-24 pre-dispatch budget (SF-17)", () => {
+  const dispatches = (events: Review.Observation[]) => events.filter((event) => event.type === "dispatch")
+  // These loopback fixtures supply a ResolvedModel directly. The normal CLI resolves its route before
+  // Review.run, so its already-loaded catalog is available to the side-effect-free request preview.
+  const resolvedServer = (price?: typeof PRICE) =>
+    Effect.gen(function* () {
+      const fixture = yield* useServer(price)
+      const provider = yield* Provider.Service
+      yield* provider.getModel(ref.providerID, ref.modelID)
+      return fixture
+    })
+  const runObserved = (run: Review.RunInput) =>
+    Effect.gen(function* () {
+      const events: Review.Observation[] = []
+      const outcome = yield* Review.run({ ...run, observe: (event) => events.push(event) })
+      return { outcome, events, dispatch: dispatches(events) }
+    })
+
+  it.instance(
+    "a fixture-owned first-request preview drives an actual diff shrink, while a missing preview stops before admission",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer()
+        const sessions = yield* Session.Service
+        const sessionIds = () => sessions.list({ limit: 50 }).pipe(Effect.map((items) => items.map((item) => item.id)))
+        const original = yield* sessionIds()
+        const prompts = yield* SessionPrompt.Service
+        const marker = "UNCHANGED_FIXTURE_TAIL"
+        const run = input(directory, {
+          model: { ...ref, context: 100_000, costKind: "local" },
+          config: config({ security: "off", maxCostUsd: 0, maxInputTokens: 100_000 }),
+          headFiles: [{ path: "src/list.ts", exact: true, text: LIST_SOURCE + "// " + marker + "\n" }],
+        })
+
+        const prepared: string[] = []
+        const accounting: Review.ReviewRequestAccounting = {
+          reviewFirstRequest: ({ session, prompt }) =>
+            Effect.sync(() => {
+              expect(session.permission?.length).toBeGreaterThan(0)
+              expect(prompt.model).toEqual(ref)
+              expect(prompt.format?.type).toBe("json_schema")
+              const text = prompt.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+              prepared.push(text)
+              // These numbers control only this fixture's decision. Production wire estimates are checked separately.
+              return { promptTokens: text.includes(marker) ? 110_000 : 100_000 }
+            }),
+        }
+        const withPreview = { ...prompts, ...accounting }
+        const withoutPreview = { ...prompts, reviewFirstRequest: undefined }
+        const stopped = yield* runObserved(run).pipe(Effect.provideService(SessionPrompt.Service, withoutPreview))
+        expect(stopped.events).toEqual([])
+        expect(stopped.outcome).toMatchObject({
+          partial: "budget-estimate",
+          notes: [BUDGET_ESTIMATE_UNAVAILABLE],
+          sessions: [],
+          specialists: [],
+          unreviewed: ["src/list.ts"],
+        })
+        expect(yield* sessionIds()).toEqual(original)
+        expect(yield* llm.inputs).toEqual([])
+
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const admitted = yield* runObserved(run).pipe(Effect.provideService(SessionPrompt.Service, withPreview))
+        expect(prepared).toHaveLength(2)
+        expect(prepared[0]).toContain(marker)
+        expect(prepared[1]).not.toContain(marker)
+        expect(prepared[1]).toContain("return items[index]")
+        expect(admitted.dispatch.map(({ step, estimate }) => [step, estimate.firstTurnTokens])).toEqual([
+          [undefined, 110_000],
+          ["diff", 100_000],
+        ])
+        expect(admitted.outcome.sessions).toHaveLength(1)
+        expect(admitted.outcome.specialists).toEqual([{ name: "review", status: "ok", steps: 1 }])
+        expect(admitted.events.filter((event) => event.type === "attempt" && event.admitted)).toHaveLength(1)
+        const requests = yield* modelRequests(llm)
+        expect(requests).toHaveLength(1)
+        const sent = lastUserText(requests[0]!)
+        expect(sent).toContain(prepared[1]!)
+        expect(sent).not.toContain(marker)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "when a conditional verifier exceeds its reservation, its candidate and prior claim remain unreviewed",
+    () =>
+      Effect.gen(function* () {
+        const { directory } = yield* TestInstance
+        const llm = yield* TestLLMServer
+        const files = yield* FSUtil.Service
+        const provider = testProviderConfig(llm.url)
+        Object.assign(provider.provider.lmstudio.models, {
+          "cheap-model": { ...provider.provider.lmstudio.models["test-model"], id: "cheap-model", name: "Triage" },
+        })
+        yield* files.writeWithDirs(path.join(directory, "vector.json"), JSON.stringify(provider))
+        yield* files.writeWithDirs(path.join(directory, "src/list.ts"), LIST_SOURCE)
+        yield* Effect.promise(() => trustWorkspace(directory))
+        const unaffected = parseUnifiedDiff(
+          [
+            "diff --git a/docs/guide.md b/docs/guide.md",
+            "--- a/docs/guide.md",
+            "+++ b/docs/guide.md",
+            "@@ -1 +1 @@",
+            "-Old",
+            "+Updated",
+          ].join("\n"),
+        )
+        const changed = [...LIST, ...AUTH, ...unaffected]
+        const prior = {
+          id: "abcdef012345",
+          where: "inline",
+          path: AUTH[0]!.path,
+          line: 2,
+          side: "RIGHT",
+          severity: "blocking",
+          category: "security",
+          title: "Token is never verified",
+          sha: "1111111",
+          status: "open",
+        } as const
+        const triage = { ...ref, modelID: ModelV2.ID.make("cheap-model"), context: 100_000, costKind: "free" as const }
+        const prompts = yield* SessionPrompt.Service
+        let materialized = ""
+        const accounting: Review.ReviewRequestAccounting = {
+          reviewFirstRequest: ({ prompt, conditional }) =>
+            Effect.sync(() => {
+              if (conditional?.pass === "verify") return { promptTokens: 40 }
+              if (prompt.model?.modelID === triage.modelID) return { promptTokens: 100_000 }
+              materialized = prompt.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+              return { promptTokens: 41 }
+            }),
+        }
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", {
+              ...report([finding()]),
+              priorStatus: [{ id: prior.id, status: "fixed", reason: "Verifier added." }],
+            })
+            .usage({ input: 80, output: 15 }),
+        )
+        const result = yield* runObserved(
+          input(directory, {
+            model: { ...ref, context: 100_000, costKind: "local" },
+            triage,
+            files: changed,
+            anchors: changed,
+            prior: [prior],
+            config: config({ security: "off", verify: "blocking", maxCostUsd: 0, maxInputTokens: 100_040 }),
+          }),
+        ).pipe(Effect.provideService(SessionPrompt.Service, { ...prompts, ...accounting }))
+        expect(result.dispatch).toHaveLength(1)
+        expect(result.dispatch[0]!.estimate.passes.map((entry) => [entry.pass, entry.promptTokens])).toEqual([
+          ["review", 100_000],
+          ["verify", 40],
+        ])
+        expect(materialized).toContain(`<untrusted_fixed_claim id="${prior.id}"`)
+        expect(materialized).toContain('<untrusted_candidate id="')
+        expect(result.outcome.partial).toBe("budget")
+        expect(result.outcome.unreviewed.toSorted()).toEqual([AUTH[0]!.path, LIST[0]!.path].toSorted())
+        expect(result.outcome.specialists).toEqual([
+          { name: "review", status: "ok", steps: 1 },
+          { name: "verify", status: "skipped", steps: 0, detail: "first-request-budget" },
+        ])
+        expect(result.outcome.notes).toContain(
+          "The verify pass did not run because its complete first request could not fit within the reserved review budget.",
+        )
+        expect(result.outcome.report.priorStatus ?? []).toEqual([])
+        const attempts = result.events.filter((event) => event.type === "attempt")
+        expect(attempts.map((event) => [event.pass, event.admitted])).toEqual([
+          ["review", true],
+          ["verify", false],
+        ])
+        expect(result.outcome.sessions).toEqual([attempts[0]!.sessionID!])
+        expect((yield* modelRequests(llm)).map((body) => body.model)).toEqual(["cheap-model"])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the conditional checker enforces its serialized text and row limits even if a preview would count one token",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* resolvedServer()
+        const prompts = yield* SessionPrompt.Service
+        for (const findings of [
+          [finding({ body: "\\".repeat(5_000) })],
+          ["First", "Second", "Third", "Fourth", "Fifth"].map((word) => finding({ title: `${word} failing check` })),
+        ]) {
+          let limit = 0
+          let concreteChecks = 0
+          const accounting: Review.ReviewRequestAccounting = {
+            reviewFirstRequest: ({ prompt, conditional }) =>
+              Effect.sync(() => {
+                if (conditional) {
+                  expect(conditional.candidateLimit).toBe(4)
+                  limit = conditional.maxSerializedTextChars ?? 0
+                } else if (
+                  prompt.parts.some(
+                    (part) => part.type === "text" && part.text.includes("You are checking candidate findings"),
+                  )
+                )
+                  concreteChecks++
+                return { promptTokens: conditional ? 1 : 100_000 }
+              }),
+          }
+          yield* llm.reset
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report(findings)))
+          const run = input(directory, {
+            model: { ...ref, context: 100_000, costKind: "local" },
+            config: config({ security: "off", verify: "all", maxComments: 1, maxInputTokens: 100_001, maxCostUsd: 0 }),
+          })
+          const result = yield* runObserved(run).pipe(
+            Effect.provideService(SessionPrompt.Service, { ...prompts, ...accounting }),
+          )
+          const checker = result.events.find((event) => event.type === "pass" && event.pass === "verify")
+          expect(checker?.type).toBe("pass")
+          if (checker?.type !== "pass") throw new Error("Expected an observed conditional checker")
+          expect(limit).toBeGreaterThan(0)
+          if (findings.length === 1) {
+            expect(checker.text.length).toBeLessThan(limit)
+            expect(JSON.stringify(checker.text).length).toBeGreaterThan(limit)
+          } else {
+            expect(JSON.stringify(checker.text).length).toBeLessThan(limit)
+          }
+          expect(concreteChecks).toBe(0)
+          expect(result.outcome.partial).toBe("budget")
+          expect(result.outcome.unreviewed).toEqual(["src/list.ts"])
+          expect(result.outcome.specialists.find((pass) => pass.name === "verify")).toMatchObject({
+            status: "skipped",
+            detail: "first-request-budget",
+          })
+          expect(result.outcome.sessions).toHaveLength(1)
+          expect(yield* modelRequests(llm)).toHaveLength(1)
+        }
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a hanging first-request preview releases on caller cancellation or the review deadline without admitting a pass",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const prompts = yield* SessionPrompt.Service
+        for (const stop of ["caller", "deadline"] as const) {
+          const entered = yield* Deferred.make<void>()
+          const released = yield* Deferred.make<void>()
+          const accounting: Review.ReviewRequestAccounting = {
+            reviewFirstRequest: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(Deferred.succeed(released, undefined)),
+              ),
+          }
+          const controller = new AbortController()
+          const running = yield* runObserved(
+            input(directory, {
+              config: config({ security: "off", maxInputTokens: 120, timeoutMinutes: stop === "deadline" ? 0.05 : 12 }),
+              ...(stop === "caller" ? { stopSignal: controller.signal } : {}),
+            }),
+          ).pipe(Effect.provideService(SessionPrompt.Service, { ...prompts, ...accounting }), Effect.forkChild)
+          yield* awaitWithTimeout(Deferred.await(entered), "The preview did not start", "5 seconds")
+          if (stop === "caller") controller.abort()
+          const { outcome, events } = yield* awaitWithTimeout(
+            Fiber.join(running),
+            "The preview outlived the review",
+            "8 seconds",
+          )
+          yield* awaitWithTimeout(Deferred.await(released), "The stopped preview did not release")
+          expect(outcome.partial).toBe("timeout")
+          expect(outcome.unreviewed).toEqual(["src/list.ts"])
+          expect(outcome.sessions).toEqual([])
+          expect(events.some((event) => event.type === "attempt" && event.admitted)).toBe(false)
+          expect(events.some((event) => event.type === "dispatch")).toBe(false)
+          expect(yield* llm.inputs).toEqual([])
+        }
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "an exhausted token budget on free, local, plan and priced models stops before admission or session creation",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer(PRICE)
+        const sessions = yield* Session.Service
+        const original = (yield* sessions.list({ limit: 50 })).map((entry) => entry.id)
+        const files = [...LIST, ...AUTH]
+        for (const costKind of ["free", "local", "plan", "priced"] as const) {
+          const { outcome, events, dispatch } = yield* runObserved(
+            input(directory, {
+              files,
+              anchors: files,
+              config: config({ security: "always", maxInputTokens: 1, maxCostUsd: 0 }),
+              model: { ...ref, context: 100_000, costKind, ...(costKind === "priced" ? { price: PRICE } : {}) },
+            }),
+          )
+          expect(dispatch[0]?.estimate.firstTurnTokens).toBeGreaterThan(1)
+          if (costKind !== "priced") {
+            expect(dispatch[0]!.estimate.usd).toBeUndefined()
+            expect(dispatch[0]!.estimate.unpriced.toSorted()).toEqual(["review", "security"])
+          }
+          expect(events.filter((event) => event.type === "attempt")).toEqual([])
+          expect(outcome).toMatchObject({ partial: "budget-estimate", sessions: [], specialists: [] })
+          expect(outcome.unreviewed.toSorted()).toEqual(files.map((file) => file.path).toSorted())
+          expect(outcome.cost).toBeUndefined()
+          expect(outcome.passes).toBeUndefined()
+          expect(outcome.notes.join(" ")).toContain("Not reviewed")
+          expect(reviewVerdict({ kind: "outcome", outcome })).toMatchObject({
+            verdict: "not-reviewed",
+            causes: ["budget-estimate"],
+          })
+          expect(yield* llm.inputs).toEqual([])
+          expect((yield* sessions.list({ limit: 50 })).map((entry) => entry.id)).toEqual(original)
+        }
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the first-turn limit covers the sum of review, security and the planned verify, even when each alone fits",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer()
+        // No hunk context can be lost between measuring the plan and exercising the aggregate limit.
+        const files = parseUnifiedDiff(
+          [
+            "diff --git a/src/auth.ts b/src/auth.ts",
+            "--- a/src/auth.ts",
+            "+++ b/src/auth.ts",
+            "@@ -1 +1 @@",
+            "-a()",
+            "+b()",
+          ].join("\n"),
+        )
+        const measure = (maxInputTokens: number) =>
+          runObserved(
+            input(directory, {
+              model: { ...ref, context: 100_000, costKind: "local" },
+              files,
+              anchors: files,
+              config: config({ security: "always", verify: "blocking", maxCostUsd: 0, maxInputTokens }),
+            }),
+          )
+        const probe = yield* measure(1)
+        const estimate = probe.dispatch.at(-1)!.estimate
+        expect(estimate.passes.map((plan) => plan.pass).toSorted()).toEqual(["review", "security", "verify"])
+        const perPass = estimate.passes.map((plan) => plan.promptTokens)
+        expect(estimate.firstTurnTokens).toBe(perPass.reduce((sum, count) => sum + count, 0))
+        const cap = Math.max(...perPass)
+        expect(cap).toBeLessThan(estimate.firstTurnTokens)
+        const stopped = yield* measure(cap)
+        expect(stopped.outcome.partial).toBe("budget-estimate")
+        expect(stopped.dispatch.at(-1)!.estimate.passes.every((plan) => plan.promptTokens <= cap)).toBe(true)
+        expect(stopped.events.some((event) => event.type === "attempt")).toBe(false)
+        expect(yield* llm.inputs).toEqual([])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "D3: absent and explicit zero keep identical wire requests, session permissions, results and the 30-step cap",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer(PRICE)
+        const sessions = yield* Session.Service
+        const runs = yield* Effect.forEach([{}, { maxInputTokens: 0 }], (setting) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()).usage({ input: 500, output: 20 }))
+            const { outcome, events, dispatch } = yield* runObserved(
+              input(directory, { model: priced, config: config({ security: "off", ...setting }) }),
+            )
+            expect(dispatch).toEqual([])
+            expect(events.filter((event) => event.type === "pass").map((event) => event.maxSteps)).toEqual([30])
+            const { sessions: ids, durationMs, ...stable } = outcome
+            expect(ids).toHaveLength(1)
+            expect(durationMs).toBeGreaterThanOrEqual(0)
+            const { permission } = yield* sessions.get(SessionID.make(ids[0]!))
+            expect(permission?.length).toBeGreaterThan(0)
+            const requests = yield* modelRequests(llm)
+            expect(requests).toHaveLength(1)
+            return { bodies: requests.map((body) => JSON.stringify(body)), permission, outcome: stable }
+          }),
+        )
+        expect(runs[1]).toEqual(runs[0])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the opt-in dollar gate admits a review whose legacy LOW fits and whose HIGH and v2 LOW exceed the cap",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer(PRICE)
+        const measure = (maxCostUsd: number) =>
+          runObserved(
+            input(directory, {
+              model: priced,
+              config: config({ security: "off", maxInputTokens: 1_000_000, maxCostUsd }),
+            }),
+          )
+        // Measure without spending. This stays valid as reviewers' system prompts and tool schemas evolve.
+        const probe = yield* measure(0.000001)
+        const original = probe.dispatch[0]!.estimate
+        expect(probe.outcome.partial).toBe("budget-estimate")
+        expect(yield* llm.inputs).toEqual([])
+        expect(original.passes[0]?.maxSteps).toBe(30)
+        const cap = (original.usd!.low + original.v2.usd!.low) / 2
+        expect(original.usd!.low).toBeLessThan(cap)
+        expect(original.usd!.high).toBeGreaterThan(cap)
+        expect(original.v2.usd!.low).toBeGreaterThan(cap)
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()).usage({ input: 500, output: 20 }))
+        const allowed = yield* measure(cap)
+        expect(allowed.dispatch.map((event) => event.step)).toEqual([undefined])
+        expect(allowed.outcome.partial).toBeUndefined()
+        expect(allowed.outcome.specialists).toEqual([{ name: "review", status: "ok", steps: 1 }])
+        expect(allowed.events.filter((event) => event.type === "attempt" && event.admitted)).toHaveLength(1)
+        const bodies = yield* modelRequests(llm)
+        expect(bodies).toHaveLength(1)
+        const body = bodies[0]!
+        expect(toolNames(body)).toContain("StructuredOutput")
+        // Use the engine replay's wire accounting, including system instructions, tools and their output schema.
+        const firstTurnTokens = Math.ceil(JSON.stringify(body).length / 3.5)
+        expect(allowed.dispatch[0]!.estimate.passes[0]!.promptTokens).toBeGreaterThanOrEqual(firstTurnTokens)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the dispatch estimate reads tier rates from an already loaded catalog and never initializes a missing catalog",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* resolvedServer(PRICE)
+        const provider = yield* Provider.Service
+        const info = yield* provider.getProvider(ref.providerID)
+        const model = info.models[ref.modelID]!
+        const prompts = yield* SessionPrompt.Service
+        const rates = { input: 40, output: 80, cache: { read: 10, write: 45 } }
+        const cost = { input: 10, output: 10, cache: { read: 0, write: 0 } }
+        for (const shape of ["tier", "legacy", "missing"] as const) {
+          let initialized = 0
+          const entry: Provider.Model = {
+            ...model,
+            cost: {
+              ...cost,
+              ...(shape === "tier"
+                ? { tiers: [{ tier: { type: "context" as const, size: 100_000 }, ...rates }] }
+                : shape === "legacy"
+                  ? { experimentalOver200K: rates }
+                  : {}),
+            },
+          }
+          const result = yield* runObserved(
+            input(directory, { model: priced, config: config({ security: "off", maxCostUsd: 0, maxInputTokens: 1 }) }),
+          ).pipe(
+            Effect.provideService(Provider.Service, {
+              ...provider,
+              reviewProvider: () =>
+                Effect.succeed(
+                  shape === "missing" ? undefined : { ...info, models: { ...info.models, [ref.modelID]: entry } },
+                ),
+              getProvider: () => {
+                initialized++
+                return Effect.die("Pricing a review must not initialize the provider.")
+              },
+            }),
+            Effect.provideService(SessionPrompt.Service, {
+              ...prompts,
+              reviewFirstRequest: () => Effect.succeed({ promptTokens: 200 }),
+            }),
+          )
+          const price = result.dispatch[0]!.estimate.passes[0]!.price
+          if (shape === "missing") expect(price).toEqual(PRICE)
+          else
+            expect(price?.tiers).toEqual([
+              { above: shape === "tier" ? 100_000 : 200_000, input: 40, output: 80, cacheRead: 10, cacheWrite: 45 },
+            ])
+          expect(initialized).toBe(0)
+          expect(result.outcome.partial).toBe("budget-estimate")
+          expect(result.outcome.sessions).toEqual([])
+          expect(yield* llm.inputs).toEqual([])
+        }
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the actual first request rejects instructions that grow after the recorded dispatch estimate",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm } = yield* resolvedServer()
+        const settings = config({ security: "off", maxCostUsd: 0, maxInputTokens: 100_000 })
+        const events: Review.Observation[] = []
+        let added = false
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const outcome = yield* Review.run(
+          input(directory, {
+            model: { ...ref, context: 100_000, costKind: "local" },
+            config: settings,
+            observe: (event) => {
+              events.push(event)
+              if (event.type === "dispatch" && !added) {
+                writeFileSync(
+                  path.join(directory, "AGENTS.md"),
+                  "Include this newly added requirement in every review. ".repeat(700),
+                )
+                added = true
+              }
+            },
+          }),
+        )
+        expect(added).toBe(true)
+        expect(outcome.partial).toBe("budget-estimate")
+        expect(outcome.unreviewed).toEqual(["src/list.ts"])
+        expect(outcome.specialists).toMatchObject([
+          { name: "review", status: "skipped", detail: "first-request-changed" },
+        ])
+        expect(outcome.cost).toBeUndefined()
+        expect(outcome.passes).toBeUndefined()
+        expect(
+          events.filter((event) => event.type === "attempt").map((event) => [event.pass, event.phase, event.admitted]),
+        ).toEqual([["review", "turn", false]])
+        expect(events.filter((event) => event.type === "settle")).toEqual([])
+        expect(yield* llm.inputs).toEqual([])
+        expect(reviewVerdict({ kind: "outcome", outcome }).verdict).toBe("not-reviewed")
+        expect(outcome.notes[0]).toBe(
+          "Not reviewed. The prepared model request could no longer be confirmed to fit the configured budget.",
+        )
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a token-only shrink removes actual file context from the wire, keeps the changed lines and reports reduced coverage",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer()
+        const marker = "OUTSIDE_THE_CHANGED_HUNK"
+        const headFiles = [
+          { path: "src/list.ts", exact: true, text: LIST_SOURCE + "// " + marker + "x".repeat(8000) + "\n" },
+        ]
+        const run = (maxInputTokens: number) =>
+          runObserved(
+            input(directory, {
+              model: { ...ref, context: 100_000, costKind: "local" },
+              headFiles,
+              config: config({ maxCostUsd: 0, security: "off", maxInputTokens }),
+            }),
+          )
+        const probe = yield* run(1)
+        expect(probe.outcome.partial).toBe("budget-estimate")
+        expect(probe.dispatch.map((event) => event.step)).toEqual([undefined, "diff"])
+        const full = probe.dispatch[0]!.estimate.firstTurnTokens
+        const trimmed = probe.dispatch[1]!.estimate.firstTurnTokens
+        expect(trimmed).toBeLessThan(full)
+        expect(yield* llm.inputs).toEqual([])
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const baseline = yield* run(full)
+        expect(baseline.dispatch).toHaveLength(1)
+        expect(lastUserText((yield* modelRequests(llm))[0]!)).toContain(marker)
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const result = yield* run(trimmed)
+        expect(result.dispatch.map((event) => event.step)).toEqual([undefined, "diff"])
+        expect(result.outcome.notes.join(" ")).toMatch(/coverage|trimmed|changed hunks/i)
+        expect(result.outcome.specialists).toMatchObject([{ name: "review", status: "ok" }])
+        const requests = yield* modelRequests(llm)
+        expect(requests).toHaveLength(1)
+        const sent = lastUserText(requests[0]!)
+        expect(sent).toContain("src/list.ts")
+        expect(sent).toContain("return items[index]")
+        expect(sent).not.toContain(marker)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "an unpayable LOW estimate shrinks only effective levers in order, with a strictly lower estimate at each step",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer(PRICE)
+        const measure = (maxCostUsd: number) =>
+          runObserved(
+            input(directory, {
+              model: priced,
+              headFiles: [
+                { path: "src/list.ts", exact: true, text: LIST_SOURCE + "// " + "context".repeat(500) + "\n" },
+              ],
+              config: config({
+                security: "always",
+                verify: "blocking",
+                maxSteps: 8,
+                maxComments: 2,
+                maxInputTokens: 1_000_000,
+                maxCostUsd,
+              }),
+            }),
+          )
+        const { outcome, events, dispatch } = yield* measure(0.000001)
+        expect(outcome.partial).toBe("budget-estimate")
+        const steps = dispatch.slice(1).map((event) => event.step)
+        // Halving the verifier from ten to five steps leaves LOW unchanged.
+        expect(dispatch[0]!.estimate.passes.find((plan) => plan.pass === "verify")?.maxSteps).toBe(10)
+        const ordered: typeof steps = ["steps:security", "steps:review", "diff"]
+        expect([...new Set(steps)]).toEqual(ordered)
+        expect(steps.map((step) => ordered.indexOf(step!))).toEqual(
+          steps.map((step) => ordered.indexOf(step!)).toSorted((a, b) => a - b),
+        )
+        for (let i = 1; i < dispatch.length; i++) {
+          const { estimate, step } = dispatch[i]!
+          const previous = dispatch[i - 1]!.estimate
+          expect(estimate.usd!.low).toBeLessThan(previous.usd!.low)
+          if (step === "diff") expect(estimate.firstTurnTokens).toBeLessThan(previous.firstTurnTokens)
+          else {
+            const pass = step!.slice("steps:".length)
+            expect(estimate.passes.find((plan) => plan.pass === pass)!.maxSteps).toBeLessThan(
+              previous.passes.find((plan) => plan.pass === pass)!.maxSteps,
+            )
+          }
+        }
+        expect(events.some((event) => event.type === "attempt")).toBe(false)
+        expect(yield* llm.inputs).toEqual([])
+
+        // Admit after reducing both primary caps. The two passes must actually receive the caps the gate priced.
+        const index = dispatch.findIndex((event) => event.step === "steps:review")
+        const cap = (dispatch[index]!.estimate.usd!.low + dispatch[index - 1]!.estimate.usd!.low) / 2
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()).usage({ input: 200, output: 10 }))
+        yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report()).usage({ input: 200, output: 10 }))
+        const allowed = yield* measure(cap)
+        const final = allowed.dispatch.at(-1)!
+        expect(final.step).toBe("steps:review")
+        const actual = allowed.events.filter((event) => event.type === "pass")
+        expect(actual.map((event) => event.pass).toSorted()).toEqual(["review", "security"])
+        for (const event of actual) {
+          expect(final.estimate.passes.find((plan) => plan.pass === event.pass)).toMatchObject({
+            maxSteps: event.maxSteps,
+          })
+        }
+        expect((yield* llm.hits).filter((hit) => REVIEW(hit) || SECURITY(hit))).toHaveLength(2)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "routing refusals and wholly held changes keep their own outcome under a one-token cap",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* resolvedServer()
+        const refused = yield* runObserved(
+          input(directory, {
+            config: config({ security: "off", privacy: "zdr", maxInputTokens: 1 }),
+            model: { ...ref, modelID: ModelV2.ID.make("claude-fable-5"), context: 100_000, costKind: "priced" },
+          }),
+        )
+        expect(refused.outcome.partial).toBe("privacy")
+        expect(refused.dispatch).toEqual([])
+        expect(refused.events.filter((event) => event.type === "attempt" && event.admitted)).toEqual([])
+        const files = parseUnifiedDiff(
+          [
+            "diff --git a/.env b/.env",
+            "--- a/.env",
+            "+++ b/.env",
+            "@@ -1 +1 @@",
+            "-MODE=old",
+            "+MODE=held_marker",
+          ].join("\n"),
+        )
+        const held = yield* runObserved(
+          input(directory, {
+            files,
+            anchors: files,
+            ignored: [],
+            config: config({ security: "always", holdback: "secrets", maxInputTokens: 1 }),
+          }),
+        )
+        expect(held.outcome.unreviewed).toEqual([])
+        expect(held.outcome.skipped).toEqual([{ path: ".env", reason: "held-back" }])
+        expect(held.outcome.held?.map((file) => file.path)).toEqual([".env"])
+        expect(held.outcome.partial).not.toBe("budget-estimate")
+        expect(held.events).toEqual([])
+        expect(yield* llm.inputs).toEqual([])
       }),
     TIMEOUT,
   )

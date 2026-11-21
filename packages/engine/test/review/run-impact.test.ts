@@ -35,7 +35,7 @@ const it = testEffect(
       EventV2Bridge.node,
       FSUtil.node,
       CrossSpawnSpawner.node,
-      LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
+      LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.loopback, deps: [] }),
     ]),
   ),
 )
@@ -124,6 +124,7 @@ const checkout = Effect.gen(function* () {
         text: firstUserText(requests[0]!),
         outcome,
         impact: events.filter((event) => event.type === "impact"),
+        dispatch: events.filter((event) => event.type === "dispatch"),
         parity: { bodies: requests.map((body) => JSON.stringify(body)), rules, outcome: stable },
       }
     })
@@ -162,6 +163,39 @@ native(
       expect(graph.impact[0]!.locations).toContain("src/consumer.ts:3")
       expect(graph.impact[0]!.record.stages.packed).toBeGreaterThan(0)
       expect(JSON.stringify(graph.impact)).not.toContain("COMMITTED_CALL")
+    }),
+  { git: true },
+  90_000,
+)
+
+native(
+  "the first-request budget drops the lowest-ranked graph dependent before trimming changed context",
+  () =>
+    Effect.gen(function* () {
+      const { input, execute } = yield* checkout
+      const provider = yield* Provider.Service
+      yield* provider.getModel(input.model.providerID, input.model.modelID)
+      const config = {
+        ...input.config,
+        impact: "graph" as const,
+        holdback: "secrets" as const,
+        maxInputTokens: 100_000,
+      }
+      const initial = yield* execute({ config, ignored: [] })
+      const initialTokens = initial.dispatch[0]!.estimate.firstTurnTokens
+      expect(initialTokens).toBeGreaterThan(1)
+      expect(initial.text).toContain("COMMITTED_CALL")
+      expect(initial.impact[0]!.locations).toContain("src/consumer.ts:3")
+      const reduced = yield* execute({ config: { ...config, maxInputTokens: initialTokens - 1 }, ignored: [] })
+      expect(reduced.dispatch.map((event) => event.step)).toEqual([undefined, "dependents"])
+      expect(reduced.dispatch[1]!.estimate.firstTurnTokens).toBeLessThan(initialTokens)
+      expect(reduced.text).not.toContain("COMMITTED_CALL")
+      expect(reduced.impact[0]!.locations).not.toContain("src/consumer.ts:3")
+      expect(reduced.outcome.unreviewed).toEqual([])
+      expect(reduced.text).toContain("diff --git a/src/a.ts b/src/a.ts")
+      expect(reduced.text).toContain("diff --git a/src/z.ts b/src/z.ts")
+      expect(reduced.text).not.toContain("READ_DENIED")
+      expect(reduced.text).not.toContain(secret)
     }),
   { git: true },
   90_000,

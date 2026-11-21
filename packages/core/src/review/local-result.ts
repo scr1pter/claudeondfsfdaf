@@ -4,6 +4,7 @@ import { Option, Schema } from "effect"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { NonNegativeInt, optional, PositiveInt } from "@vectordevai/schema/schema"
 import { hash } from "../util/encode"
+import { BUDGET_REQUEST_CHANGED } from "./format"
 import {
   CATEGORIES,
   FAILURE_CLASSES,
@@ -18,7 +19,7 @@ import {
   VERIFIED_BY,
   type ReviewOutcome,
 } from "./types"
-import { REVIEW_VERDICTS, reviewVerdict, type VerdictResult } from "./verdict"
+import { REVIEW_VERDICTS, reviewVerdict, unfinishedCauses, type VerdictResult } from "./verdict"
 
 const text = Schema.String.check(Schema.isMaxLength(ReviewRun.RESULT_BYTES))
 const amount = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
@@ -321,23 +322,37 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
       JSON.stringify(summary.dropped) !== JSON.stringify(outcome.strict.dropped))
   )
     return undefined
+  const budgetStop = outcome?.partial === "budget-estimate"
+  // A materialized request can outgrow its plan after an empty helper session is created.
+  // Preserve its zero-step refusal while rejecting a session that actually performed model work.
+  const stoppedAtSend = budgetStop && outcome.notes[0] === BUDGET_REQUEST_CHANGED
   if (
-    outcome?.trivial &&
+    stoppedAtSend &&
+    (!outcome.specialists.length ||
+      outcome.sessions.length !== outcome.specialists.length ||
+      new Set(outcome.sessions).size !== outcome.sessions.length ||
+      outcome.specialists.some(
+        (entry) =>
+          (entry.name !== "review" && entry.name !== "security") ||
+          entry.status !== "skipped" ||
+          entry.steps !== 0 ||
+          entry.detail !== "first-request-changed",
+      ))
+  )
+    return undefined
+  if (
+    outcome &&
+    (outcome.trivial || budgetStop) &&
     (outcome.cost ||
       (outcome.strict &&
         (outcome.strict.complete ||
-          outcome.strict.incomplete?.length !== 1 ||
-          outcome.strict.incomplete[0] !== "no-reviewer" ||
+          JSON.stringify(outcome.strict.incomplete) !==
+            JSON.stringify(unfinishedCauses({ ...outcome, strict: undefined })) ||
           outcome.strict.findings.length ||
           outcome.strict.dropped.length ||
           outcome.strict.fixUnchecked)) ||
-      outcome.sessions.length ||
-      outcome.specialists.length ||
+      (!stoppedAtSend && (outcome.sessions.length || outcome.specialists.length)) ||
       outcome.passes?.length ||
-      outcome.partial ||
-      outcome.held?.length ||
-      outcome.unreviewed.length ||
-      outcome.skipped.length ||
       outcome.report.findings.length ||
       outcome.report.files.length ||
       outcome.selection.inline.length ||
@@ -347,8 +362,31 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
       outcome.selection.nits.length)
   )
     return undefined
-  if (result.error !== undefined && (result.outcome || result.exitCode !== 2)) return undefined
-  if (result.outcome && result.exitCode === 2) return undefined
+  if (
+    outcome?.trivial &&
+    (outcome.partial || outcome.held?.length || outcome.unreviewed.length || outcome.skipped.length)
+  )
+    return undefined
+  if (budgetStop) {
+    // The local service retains this refusal with its target and error. All the changed files remain due,
+    // including any which were already classified as skipped before the budget check.
+    const due = new Set(outcome.unreviewed)
+    if (
+      result.exitCode !== 2 ||
+      !result.error?.trim() ||
+      due.size !== outcome.unreviewed.length ||
+      due.size < outcome.stats.files ||
+      outcome.skipped.some((file) => !due.has(file.path)) ||
+      outcome.held?.some((file) => !due.has(file.path)) ||
+      outcome.report.priorStatus?.length ||
+      outcome.selection.raised.length ||
+      outcome.selection.reappeared.length
+    )
+      return undefined
+  } else {
+    if (result.error !== undefined && (result.outcome || result.exitCode !== 2)) return undefined
+    if (result.outcome && result.exitCode === 2) return undefined
+  }
   const verdict = result.outcome
     ? reviewVerdict({ kind: "outcome", outcome: result.outcome })
     : result.error !== undefined

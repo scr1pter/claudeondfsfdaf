@@ -76,6 +76,11 @@ export function taskOffered(
   )
 }
 
+/** Provider-facing definition shared with first-turn review sizing. */
+export function definition(model: Provider.Model, item: Tool.Def) {
+  return { description: item.description, schema: ProviderTransform.schema(model, ToolJsonSchema.fromTool(item)) }
+}
+
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
@@ -333,9 +338,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     providerID: input.model.providerID,
     agent: input.agent,
   })) {
-    const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
+    const { schema, description } = definition(input.model, item)
     tools[item.id] = tool({
-      description: item.description,
+      description,
       // The built-in Task advertises the concise batch form, while old model
       // calls and clients may still send a singular brief. Validate against its
       // real runtime decoder before tool hooks; changed plugin schemas keep the

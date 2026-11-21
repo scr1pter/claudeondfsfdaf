@@ -884,10 +884,8 @@ describe("review.md rules", () => {
   })
 })
 
-// The engine applies the opt-in trivial policy. The input-token cap is parsed but still awaits SF-17.
+// The engine's VS-24 policy and pre-dispatch budget are both opt-in.
 describe("VS-24's keys", () => {
-  const CAP = '"maxInputTokens" is not applied yet: no input-token cap is enforced.'
-
   test("neither has a default entry, so the defaults and their digests stay as they were", () => {
     const { config, warnings } = parseReviewConfig()
     for (const key of ["trivial", "maxInputTokens"] as const) {
@@ -909,10 +907,10 @@ describe("VS-24's keys", () => {
     })
   })
 
-  test("review.json accepts the trivial policy and warns only for the unapplied cap", () => {
+  test("review.json accepts both opt-ins", () => {
     const set = parseReviewConfig({ json: JSON.stringify({ trivial: "skip", maxInputTokens: 200_000 }) })
     expect(set.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "skip", maxInputTokens: 200_000 })
-    expect(set.warnings).toEqual([CAP])
+    expect(set.warnings).toEqual([])
     // Their defaults, written out, change nothing a runner would do, so they warn about nothing.
     const defaults = parseReviewConfig({ json: JSON.stringify({ trivial: "review", maxInputTokens: 0 }) })
     expect(defaults.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "review", maxInputTokens: 0 })
@@ -926,7 +924,7 @@ describe("VS-24's keys", () => {
     })
     expect(config.trivial).toBe("skip")
     expect(config.maxInputTokens).toBe(100_000)
-    expect(warnings).toEqual([CAP])
+    expect(warnings).toEqual([])
   })
 
   test("automatic and command GitHub jobs keep reviewing, while local replays can apply the opt-in", () => {
@@ -942,6 +940,24 @@ describe("VS-24's keys", () => {
         })
       }
     }
+  })
+
+  test("every surface preserves a positive input-token cap and only the desktop documents its dollar limit", () => {
+    const config = { ...DEFAULT_REVIEW_CONFIG, maxInputTokens: 250 }
+    for (const trigger of ["auto", "command", "local", "desktop"] as const) {
+      const warnings =
+        trigger === "desktop"
+          ? ["Desktop reviews with a token cap require a first-request estimate from the local engine."]
+          : []
+      const env = { REVIEW_MAX_INPUT_TOKENS: "250" }
+      expect(parseReviewConfig({ trigger, env })).toEqual({ config, warnings })
+      expect(
+        mergeReviewConfig({ surface: "local", trigger, json: { at: "base", text: '{"maxInputTokens":250}' } }),
+      ).toEqual({ config, warnings })
+      if (trigger === "auto" || trigger === "command")
+        expect(mergeReviewConfig({ surface: "github", trigger, env })).toEqual({ config, warnings })
+    }
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_MAX_INPUT_TOKENS: "0" } }).warnings).toEqual([])
   })
 
   test("a bad value warns naming the value in use, which for an unset key is its default", () => {
@@ -976,7 +992,7 @@ describe("VS-24's keys", () => {
     })
     expect(parseReviewConfig({ json: JSON.stringify({ maxInputTokens: 1_000.6 }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, maxInputTokens: 1_001 },
-      warnings: [`${REVIEW_CONFIG_PATH}: "maxInputTokens": 1000.6 is out of range; using 1001.`, CAP],
+      warnings: [`${REVIEW_CONFIG_PATH}: "maxInputTokens": 1000.6 is out of range; using 1001.`],
     })
   })
 

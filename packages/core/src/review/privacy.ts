@@ -385,7 +385,9 @@ export function zdrPathRefusal(path: unknown): RouteRefusal | undefined {
 // OpenRouter's `:online` variant turns on its web plugin, which sends the query to a search provider, wherever it sits
 // in a stacked variant (`:online:nitro`, `:nitro:online`). From OpenRouter's model variants as recalled: its docs could
 // not be read here, so VS-23c's fake server (SF-35) is to check the wire.
-const ONLINE = /:online(?:$|[:@])/
+export function openRouterOnlineVariant(id: string): boolean {
+  return /:online(?:$|[:@])/.test(id.trim().toLowerCase())
+}
 // Anthropic's Covered Models need 30-day retention and are not available under ZDR unless Anthropic expressly
 // authorizes the organization: Claude Fable 5 and 5.1 and Mythos 5 and 5.1, read 2026-11-05 [enablers §1.6]. Matched
 // as a token on every provider (OpenRouter, Bedrock, Vertex and aliases), so a digit may follow (`fable5`) and a letter
@@ -476,7 +478,7 @@ function idRefusal(ids: readonly unknown[]): RouteRefusal | undefined {
   const names = ids.flatMap((id) => (typeof id === "string" && id.trim() ? [id.trim().toLowerCase()] : []))
   if (names.some((id) => isOpenRouterFreeModel(id, undefined))) return "free-model"
   if (names.some((id) => openRouterModelRouting(undefined, id).length > 0)) return "router-or-preset"
-  if (names.some((id) => ONLINE.test(id))) return "plugins"
+  if (names.some(openRouterOnlineVariant)) return "plugins"
   if (names.some((id) => RETENTION_REQUIRED.test(id))) return "retention-required-model"
   return undefined
 }

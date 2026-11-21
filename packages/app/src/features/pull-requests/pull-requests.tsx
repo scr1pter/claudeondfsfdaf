@@ -25,6 +25,7 @@ import {
   repoOf,
   reviewEvents,
   reviewFooter,
+  reviewPanelResult,
   reviewSpendText,
   type ReviewSpend,
   skippedText,
@@ -753,8 +754,12 @@ export function PullRequests(props: {
     )
   const events = () => {
     const outcome = review()
-    return outcome ? reviewEvents(withoutDismissed(outcome.selection, dismissedIds())) : undefined
+    return outcome ? reviewEvents(withoutDismissed(outcome.selection, dismissedIds()), outcome.partial) : undefined
   }
+  const approvalNote = () =>
+    review()?.partial
+      ? "Approve is off while the review is incomplete."
+      : "Approve is off while a blocking finding stands."
   // One section per severity; dismissed findings sink to the bottom of theirs.
   const sections = () => findingSections(groups(), { filter: severityFilter(), dismissed: dismissed() })
   const canFix = () =>
@@ -1146,6 +1151,7 @@ export function PullRequests(props: {
           if (progress.type === "checkout") setCheckout({ mode: progress.checkout.mode, label: progress.label })
         },
       })
+      .then(reviewPanelResult)
       .catch((cause: unknown) => {
         if (!current()) return undefined
         setError(pullRequestErrorMessage(cause))
@@ -1175,7 +1181,7 @@ export function PullRequests(props: {
     const request = { path: projectPath, revision: projectRevision }
     const ignored = dismissedIds()
     if (!bridge || !pr || !outcome || !projectPath || busy()) return
-    if (!reviewEvents(withoutDismissed(outcome.selection, ignored))[event]) return
+    if (!events()?.[event]) return
     const draft = buildDesktopReview(outcome, pr.url, ignored)
     const current = () =>
       props.open &&
@@ -1392,7 +1398,7 @@ export function PullRequests(props: {
               : review()?.unchanged
                 ? `No changes since the last review of ${subject.pr ? review()!.head.slice(0, 7) : "your uncommitted changes"} · nothing was sent`
                 : review()
-                  ? `Reviewed ${subject.pr ? review()!.head.slice(0, 7) : "your uncommitted changes"} · ${reviewFooter(review()!)}`
+                  ? `${review()!.partial ? "Review incomplete for" : "Reviewed"} ${subject.pr ? review()!.head.slice(0, 7) : "your uncommitted changes"} · ${reviewFooter(review()!)}`
                   : liveSpend()
                     ? `${reviewFailed() ? "Review failed" : "Review stopped"} · ${reviewSpendText(liveSpend()!)}`
                     : "Not reviewed yet"}
@@ -1523,7 +1529,9 @@ export function PullRequests(props: {
                   )}
                 </For>
               </div>
-              <RiskMeter risk={outcome().selection.risk} counts={counts()} />
+              <Show when={!outcome().partial}>
+                <RiskMeter risk={outcome().selection.risk} counts={counts()} />
+              </Show>
             </div>
 
             <Show
@@ -1666,7 +1674,7 @@ export function PullRequests(props: {
                     <button
                       type="button"
                       disabled={Boolean(busy()) || !events()?.approve}
-                      title={events()?.approve ? undefined : "Approve is off while a blocking finding stands."}
+                      title={events()?.approve ? undefined : approvalNote()}
                       class={SECONDARY}
                       onClick={() => void postReview("approve")}
                     >
@@ -1678,7 +1686,7 @@ export function PullRequests(props: {
                         ? status()?.login
                           ? `Posting as @${status()!.login}`
                           : "Posting with your GitHub sign-in"
-                        : "Approve is off while a blocking finding stands."}
+                        : approvalNote()}
                     </span>
                   </Show>
                 </footer>

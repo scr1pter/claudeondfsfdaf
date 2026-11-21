@@ -4,7 +4,14 @@
 
 import { Billing } from "@vectordevai/schema/billing"
 import { reviewCostHasCodium, reviewCostIsCodium } from "@vectordevai/core/review/state"
-import { costWording, formatDuration, formatTokens, formatUsd } from "@vectordevai/core/review/format"
+import {
+  costWording,
+  FIRST_REQUEST_STOP_NOTES,
+  firstRequestStopDetail,
+  formatDuration,
+  formatTokens,
+  formatUsd,
+} from "@vectordevai/core/review/format"
 import { checkedLine } from "@vectordevai/core/review/second-lab"
 import type {
   Finding,
@@ -87,7 +94,7 @@ export function renderLocalReview(input: RenderInput): string {
       ? "Not reviewed"
       : !outcome.specialists.length && outcome.held?.length
         ? `Not reviewed: ${outcome.mode === "incremental" ? "everything new since the last review is in files" : "every changed file was"} held back from the model.`
-        : selection.diffIncomplete
+        : selection.diffIncomplete || firstRequestStopDetail(outcome)
           ? ["Partial review", counts(outcome)].filter(Boolean).join(" · ")
           : `Risk: ${capitalize(selection.risk)} · ${counts(outcome) || "No issues found"}`,
   )
@@ -182,6 +189,14 @@ function partialLine(input: RenderInput): string | undefined {
   const failed = outcome.specialists.find(
     (entry) => entry.status === "failed" && entry.name !== "verify" && entry.name !== "judge",
   )
+  const unreviewed = outcome.unreviewed
+  const shown = unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(plain).join(", ")
+  const more = unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
+  const requestStop = firstRequestStopDetail(outcome)
+  if (requestStop) {
+    const note = FIRST_REQUEST_STOP_NOTES[requestStop]
+    return shown ? `${note} Checks remain for ${shown}${more}.` : note
+  }
   const stop =
     outcome.partial === "budget"
       ? `stopped at the ${formatUsd(limits.maxCostUsd)} budget`
@@ -190,10 +205,7 @@ function partialLine(input: RenderInput): string | undefined {
         : outcome.partial === "timeout"
           ? `stopped at the ${limits.timeoutMinutes}-minute time limit`
           : `${failed ? `the ${failed.name} reviewer` : "a reviewer"} could not finish${failed?.detail ? ` (${clipWords(plain(failed.detail), 160)})` : ""}`
-  const unreviewed = outcome.unreviewed
   if (!unreviewed.length) return `Partial review: ${stop}.`
-  const shown = unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(plain).join(", ")
-  const more = unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
   const next = input.resumable ? " Run `vector review` again to review them." : ""
   return `Partial review: ${stop}. Not reviewed: ${shown}${more}.${next}`
 }

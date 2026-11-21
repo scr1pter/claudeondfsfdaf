@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
-import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
+import { budgetDiff, parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import {
+  BUDGET_ESTIMATE_UNAVAILABLE,
+  noteBudgetEstimate,
   noteHeldBack,
   noteIgnoreUnchecked,
   notePrivacyRefused,
@@ -43,6 +45,7 @@ import {
   reviewCatalog,
   reviewEvents,
   reviewFooter,
+  reviewPanelResult,
   reviewSpendText,
   type ReviewSpend,
   runReview,
@@ -392,6 +395,283 @@ describe("review spend presentation", () => {
 })
 
 describe("runReview", () => {
+  test("a configured token budget requires a complete preview before any model call, including a rerun", async () => {
+    const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":500000}' } })
+    const outcome = (await run(fake.client))!
+    expect(outcome).toMatchObject({
+      partial: "budget-estimate",
+      unreviewed: ["src/list.ts", "bun.lock"],
+      sessions: [],
+      specialists: [],
+    })
+    expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(outcome.notes.join(" ")).toContain("No model request was sent.")
+    expect(() => reviewPanelResult(outcome)).toThrow(outcome.notes.join(" "))
+    expect(reviewEvents(outcome.selection, outcome.partial)).toEqual({
+      comment: false,
+      approve: false,
+      "request-changes": false,
+    })
+    expect(outcome.fileKeys).toBeUndefined()
+    expect(outcome.settingsKey).toBeUndefined()
+    for (const summary of [
+      buildDesktopSummary(outcome),
+      buildDesktopReview(outcome).body,
+      buildDesktopReview(outcome).fallbackBody,
+    ]) {
+      expect(summary).toContain(BUDGET_ESTIMATE_UNAVAILABLE)
+      expect(summary).not.toContain("No issues found")
+      expect(summary).not.toContain("Risk:")
+    }
+    const again = (await run(fake.client, { previous: outcome }))!
+    expect(again.unchanged).toBeUndefined()
+    expect(again.partial).toBe("budget-estimate")
+    expect(fake.calls.create).toEqual([])
+    expect(fake.calls.prompt).toEqual([])
+  })
+
+  test("the settings observer cannot disable token admission or inject warnings", async () => {
+    const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":1}' } })
+    const outcome = (await run(fake.client, {
+      onSettings: (observed) => {
+        observed.config.maxInputTokens = 0
+        ;(observed.warnings as string[]).push("review.privacy observer injection")
+      },
+    }))!
+    expect(outcome.partial).toBe("budget-estimate")
+    expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(outcome.notes.join(" ")).not.toContain("observer injection")
+    expect(fake.calls.create).toEqual([])
+    expect(fake.calls.prompt).toEqual([])
+  })
+
+  test("a missing desktop preview takes precedence over cached coverage and provider selection", async () => {
+    const options = { files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":500000}' } }
+    const admitted = fakeClient(options)
+    const previous = (await run(admitted.client, { estimateFirstTurn: async () => 100 }))!
+    expect(reviewPanelResult(previous)).toBe(previous)
+    expect(previous.fileKeys).toBeDefined()
+    expect(previous.dispatch).toBeDefined()
+
+    const retried = fakeClient({ ...options, uncommitted: diff })
+    const rerun = (await run(retried.client, { previous, catalog: [] }))!
+    const changes = (await runReview({ uncommitted: true, directory: "/w/project", catalog: [] }, retried.client))!
+    for (const stopped of [rerun, changes]) {
+      expect(stopped.partial).toBe("budget-estimate")
+      expect(stopped.unchanged).toBeUndefined()
+      expect(stopped.dispatch).toBeUndefined()
+      expect(stopped.fileKeys).toBeUndefined()
+      expect(stopped.settingsKey).toBeUndefined()
+      expect(() => reviewPanelResult(stopped)).toThrow("No model request was sent.")
+    }
+    expect(retried.calls.create).toEqual([])
+    expect(retried.calls.prompt).toEqual([])
+  })
+
+  test("absent and zero token caps preserve the same desktop SDK requests and reported evidence", async () => {
+    const preview: NonNullable<ReviewRunInput["estimateFirstTurn"]> = () => {
+      throw new Error("uncapped reviews must not invoke preview")
+    }
+    const before = fakeClient({ files: { "src/list.ts": HEAD } })
+    const zero = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":0}' } })
+    const a = (await run(before.client, { estimateFirstTurn: preview }))!
+    const b = (await run(zero.client, { estimateFirstTurn: preview }))!
+    expect(before.calls.create.length).toBeGreaterThan(0)
+    expect(zero.calls.create).toEqual(before.calls.create)
+    expect(zero.calls.prompt).toEqual(before.calls.prompt)
+    expect(b.report).toEqual(a.report)
+    expect(b.selection).toEqual(a.selection)
+    expect(b.dispatch).toBeUndefined()
+    expect(b.shrink).toBeUndefined()
+  })
+
+  test("a missing, invalid or failed conditional preview stops before the first specialist", async () => {
+    for (const invalid of [undefined, 0, NaN, Infinity, -10, 1.5, "error"] as const) {
+      const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":500000}' } })
+      const outcome = (await run(fake.client, {
+        estimateFirstTurn: async (request) => {
+          if (request.pass === "review") return 100
+          expect(request.pass).toBe("verify")
+          if (invalid === "error") throw new Error("preview unavailable")
+          return invalid
+        },
+      }))!
+      expect(outcome.partial).toBe("budget-estimate")
+      expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+      expect(fake.calls.create).toEqual([])
+      expect(fake.calls.prompt).toEqual([])
+    }
+  })
+
+  test("counts review, security and conditional verification together on free, local and plan models", async () => {
+    for (const costKind of ["free", "local", "plan"] as const) {
+      const fake = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":299,"security":"always"}' },
+      })
+      const model = { ...pickle, costKind }
+      const reserved: number[] = []
+      const outcome = (await run(fake.client, {
+        catalog: [model],
+        preferredModels: [modelName(model)],
+        estimateFirstTurn: async (request) => {
+          if (request.pass === "verify") reserved.push(request.candidateLimit!)
+          return 100
+        },
+      }))!
+      expect(outcome.dispatch?.passes.map((p) => p.pass)).toEqual(["review", "security", "verify"])
+      expect(reserved.every((count) => count === 20)).toBe(true)
+      expect(outcome.dispatch?.firstTurnTokens).toBe(300)
+      expect(outcome.partial).toBe("budget-estimate")
+      expect(outcome.notes[0]).toBe(noteBudgetEstimate())
+      expect(fake.calls.prompt).toEqual([])
+      expect(fake.calls.create).toEqual([])
+    }
+  })
+
+  test("a smaller changed-lines prompt really runs and the omitted context is never cached as full coverage", async () => {
+    const fake = fakeClient({
+      files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":300,"verify":"off"}' },
+    })
+    const outcome = (await run(fake.client, {
+      estimateFirstTurn: async ({ text }) => (text.includes("export function last(items: number[])") ? 400 : 300),
+    }))!
+    expect(outcome.partial).toBeUndefined()
+    expect(outcome.dispatch?.firstTurnTokens).toBe(400)
+    expect(outcome.shrink?.map((step) => [step.step, step.estimate.firstTurnTokens])).toEqual([["diff", 300]])
+    expect(fake.calls.prompt).toHaveLength(1)
+    expect(fake.calls.prompt[0]!.parts?.[0]?.text).toContain("+  return items[items.length]")
+    expect(fake.calls.prompt[0]!.parts?.[0]?.text).not.toContain("export function last(items: number[])")
+    expect(outcome.notes.join(" ")).toContain("Partial coverage")
+    expect(outcome.fileKeys).toBeUndefined()
+  })
+
+  test("checks the actual verifier first turn against the remaining allowance before opening its session", async () => {
+    const fake = fakeClient({
+      files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":400,"triageModel":"openai/gpt-5.5"}' },
+    })
+    const outcome = (await run(fake.client, {
+      estimateFirstTurn: async (request) =>
+        request.pass === "verify" && request.candidateLimit === undefined ? 301 : 100,
+    }))!
+    expect(outcome.partial).toBe("budget")
+    expect(reviewPanelResult(outcome)).toBe(outcome)
+    expect(reviewEvents(outcome.selection, outcome.partial)).toEqual({
+      comment: true,
+      approve: false,
+      "request-changes": true,
+    })
+    expect(outcome.unreviewed).toEqual(["src/list.ts"])
+    expect(outcome.cost?.costUsd).toBeGreaterThan(0)
+    expect(outcome.verification?.status).toBe("skipped")
+    expect(outcome.notes.join(" ")).toContain("remaining token budget")
+    expect(outcome.fileKeys).toBeUndefined()
+    expect(fake.calls.create.map((call) => call.internal)).toEqual(["vectorscope.review"])
+    expect(fake.calls.prompt).toHaveLength(1)
+    expect(buildDesktopReview(outcome).body).toContain("Review incomplete.")
+    expect(outcome.selection.inline).toEqual([])
+    expect(buildDesktopReview(outcome).body).not.toContain("No issues found")
+    const retry = (await run(fake.client, { previous: outcome, estimateFirstTurn: async () => 100 }))!
+    expect(retry.unchanged).toBeUndefined()
+    expect(retry.partial).toBeUndefined()
+    expect(retry.verification?.status).toBe("ok")
+    expect(fake.calls.create.map((call) => call.internal)).toEqual([
+      "vectorscope.review",
+      "vectorscope.review",
+      "vectorscope.verify",
+    ])
+  })
+
+  test("shrinking a rebuilt review retains head-only changes in the specialist, verify and judge requests", async () => {
+    const context = "// unchanged " + "x".repeat(7600)
+    const before = "export const second = '" + "a".repeat(500) + "'"
+    const after = "export const second = missingValue"
+    const firstName = "src/first.ts"
+    const secondName = "src/second.ts"
+    const diff = join(
+      fileDiff(firstName, ["@@ -1,2 +1,2 @@", " " + context, "-oldFirst()", "+newFirst()"]),
+      fileDiff(secondName, ["@@ -1 +1 @@", "-" + before, "+" + after]),
+    )
+    expect(budgetDiff(parseUnifiedDiff(diff), 8000).notInlined.map((f) => f.path)).toEqual([secondName])
+    const judge = { providerID: "google", modelID: "gemini-2.5-pro", costKind: "plan" as const }
+    const fake = fakeClient({
+      files: {
+        [firstName]: context + "\noldFirst()\n",
+        [secondName]: before + "\n",
+        ".vector/review.json": JSON.stringify({
+          maxInputTokens: 300,
+          maxDiffChars: 8000,
+          panel: true,
+          triageModel: modelName(pickle),
+          judgeModel: modelName(judge),
+        }),
+      },
+      reply: (call) =>
+        isVerify(call)
+          ? answer(verdicts(call))
+          : answer(report([{ ...offByOne, path: secondName, line: 1, evidence: [firstName + ":2"] }])),
+    })
+    const outcome = (await run(fake.client, {
+      diff,
+      catalog: [sonnet, pickle, judge],
+      estimateFirstTurn: async ({ text }) => (text.includes(context) ? 200 : 100),
+    }))!
+    expect(outcome.checkout.mode).toBe("rebuilt")
+    expect(outcome.shrink?.map((step) => step.step)).toEqual(["diff"])
+    expect(outcome.partial).toBeUndefined()
+    expect(fake.calls.create.map((call) => call.internal)).toEqual([
+      "vectorscope.review",
+      "vectorscope.verify",
+      "vectorscope.judge",
+    ])
+    for (const request of fake.calls.prompt) {
+      const text = request.parts![0]!.text
+      expect(text).toContain("+" + after)
+      expect(text).toContain("+newFirst()")
+      expect(text).not.toContain(context)
+    }
+  })
+
+  test("cancel interrupts a nonresponsive desktop preview before dispatch and while estimating a checker", async () => {
+    for (const when of ["before", "checker"] as const) {
+      const cancel = new AbortController()
+      let started!: (signal: AbortSignal) => void
+      const pending = new Promise<AbortSignal>((resolve) => {
+        started = resolve
+      })
+      const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":400}' } })
+      const result = run(fake.client, {
+        signal: cancel.signal,
+        estimateFirstTurn: async (request) => {
+          if (when === "checker" && (request.pass !== "verify" || request.candidateLimit !== undefined)) return 100
+          started(request.signal)
+          return new Promise<number>(() => {})
+        },
+      })
+      const signal = await pending
+      cancel.abort()
+      const outcome = await result
+      expect(signal.aborted).toBe(true)
+      expect(fake.calls.prompt).toHaveLength(when === "before" ? 0 : 1)
+      if (when === "before") expect(outcome).toBeUndefined()
+      else expect(outcome?.verification?.status).toBe("skipped")
+    }
+  })
+
+  test("a nonresponsive preview expires within the review timeout without opening a session", async () => {
+    const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":400}' } })
+    let signal: AbortSignal | undefined
+    const outcome = (await run(fake.client, {
+      timeoutMs: 100,
+      estimateFirstTurn: async (request) => {
+        signal = request.signal
+        return new Promise<number>(() => {})
+      },
+    }))!
+    expect(signal?.aborted).toBe(true)
+    expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(fake.calls.create).toEqual([])
+  })
+
   test("creates the session with the review rules and prompts the review agent with the schema", async () => {
     const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD } })
     const outcome = await run(client)

@@ -32,6 +32,8 @@ import * as Option from "effect/Option"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { reviewRequestProjection } from "./review-request-size"
+import { SessionAdmission } from "./admission"
 import { LLMTiming } from "./llm/timing"
 import { NativePatch } from "./llm/native-patch"
 import { Session } from "./session"
@@ -52,6 +54,7 @@ export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 const INHERITED = Symbol("vector.computer-inherited-message")
 
 export type StreamInput = {
+  reviewFirstRequest?: SessionAdmission.ReviewFirstRequest
   user: SessionV1.User
   sessionID: string
   parentSessionID?: string
@@ -259,6 +262,24 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      // The repository instructions, definitions or model revision may have changed after dispatch planning.
+      // Check this exact, prepared invocation before constructing its provider stream or executing any of its tools.
+      if (input.reviewFirstRequest) {
+        const { maxTokens, checked } = input.reviewFirstRequest
+        const stockHooks = plugin.reviewRequestHooks && (yield* plugin.reviewRequestHooks())
+        const measured =
+          !stockHooks ||
+          (!flags.pure && cfg.plugin_origins?.length) ||
+          isWorkflow ||
+          (!zdr && flags.experimentalNativeLlm) ||
+          input.computerRequested
+            ? undefined
+            : yield* reviewRequestProjection({ prepared, model: input.model })
+        const tokens = measured?.promptTokens
+        checked(tokens)
+        if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0 || tokens === undefined || tokens > maxTokens)
+          return yield* Effect.fail(new SessionAdmission.ReviewFirstRequestBudget())
+      }
       if (
         input.model.providerID === "openai" &&
         info &&

@@ -55,6 +55,9 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // review/permission.ts) are pinned from SF-14: they hold the credential files the reviewer's read tool may not open
 // under holdback "secrets" (CREDENTIAL_FILES, which holdback.ts holds back from the prompt too), and so decide what a
 // review may read.
+// The first-request budget can stop a review before it creates a session. Pin its preparation inputs too: the
+// cached model and hooks, the available tool definitions, the Brain context, and the GitHub handler that supplies
+// the remaining spend and decides whether a stopped head is eligible for another review.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/connect/hub.ts",
   "packages/engine/src/connect/adapters/vectorscope.ts",
@@ -85,6 +88,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/schema/src/review-run.ts",
   "packages/core/src/review/local-result.ts",
   "packages/engine/src/cli/cmd/review.ts",
+  "packages/engine/src/cli/cmd/github.review.ts",
   "packages/engine/src/session/tools.ts",
   "packages/engine/src/session/prompt.ts",
   "packages/engine/src/agent/agent.ts",
@@ -92,8 +96,15 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/route.ts",
   "packages/engine/src/config/agent.ts",
   "packages/engine/src/session/processor.ts",
+  "packages/engine/src/session/admission.ts",
   "packages/engine/src/session/llm.ts",
   "packages/engine/src/session/llm/request.ts",
+  "packages/engine/src/session/review-request-size.ts",
+  "packages/engine/src/effect/instance-state.ts",
+  "packages/engine/src/provider/provider.ts",
+  "packages/engine/src/plugin/index.ts",
+  "packages/engine/src/tool/registry.ts",
+  "packages/core/src/brain/brain.ts",
   "packages/engine/src/tool/grep.ts",
   "packages/engine/src/tool/glob.ts",
   "packages/engine/src/tool/read.ts",
@@ -617,6 +628,15 @@ describe("scope", () => {
     // Every other key keeps its digest behaviour: a changed value still moves it, with trivial set or not.
     expect(policyDigest({ ...skip, maxComments: 3 })).not.toBe(policyDigest(skip))
     expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, maxSteps: 31 })).not.toBe(base)
+  })
+
+  test("the applied input-token budget keeps existing evidence scopes and their policy digest", () => {
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("maxInputTokens")).toBe(false)
+    for (const adapter of ["engine", "desktop"] as const)
+      for (const maxInputTokens of [0, 1, 200_000]) {
+        const config: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, maxInputTokens }
+        expect(evidenceScope({ adapter, config })).toEqual(evidenceScope({ adapter, config: DEFAULT_REVIEW_CONFIG }))
+      }
   })
 
   test("only the engine's graph review has impact evidence", () => {

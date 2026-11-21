@@ -14,7 +14,7 @@ import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { Billing } from "@vectordevai/schema/billing"
-import { Cause, Duration, Effect, Exit, Option, Scope } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Option, Scope } from "effect"
 import type { EventV2 } from "@vectordevai/core/event"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -24,19 +24,40 @@ import {
   buildAnchorIndex,
   explicitPatchPaths,
   lookupFile,
+  renderPatch,
   resolveAnchor,
   type DiffFile,
 } from "@vectordevai/core/review/diff"
 import { strictSelect } from "@vectordevai/core/review/guardrail"
 import { strictReviewConfig } from "@vectordevai/core/review/config"
+import {
+  decideDispatch,
+  estimateDispatch,
+  remainingUsd,
+  shrinkStepCap,
+  type DispatchEstimate,
+  type PassPlan,
+  type Shrink,
+} from "@vectordevai/core/review/dispatch"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
 import { heldReason, holdbackContext, holdbackFiles } from "@vectordevai/core/review/holdback"
-import { IMPACT_LIMITS, impactRecord, orderImpactFiles, type ImpactRecord } from "@vectordevai/core/review/impact"
+import {
+  IMPACT_LIMITS,
+  impactRecord,
+  orderImpactFiles,
+  shrinkImpactDependents,
+  type ImpactRecord,
+} from "@vectordevai/core/review/impact"
 import { checkedLabs, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import {
   codeSpan,
+  BUDGET_ESTIMATE_UNAVAILABLE,
+  BUDGET_REQUEST_CHANGED,
+  formatTokens,
+  formatUsd,
+  noteBudgetEstimate,
   noteHeldBack,
   noteIgnoreUnchecked,
   noteIgnoredCommitted,
@@ -63,6 +84,7 @@ import {
   diffBudgetChars,
   estimateCostUsd,
   NEXT_STEP_SLACK,
+  OUTPUT_PER_STEP,
   nextStepCostUsd,
   planSpecialists,
   verifyCandidates,
@@ -158,6 +180,8 @@ export interface RunInput {
   prior: PriorFinding[]
   rules: string
   config: ReviewConfig
+  /** Trusted prior spend for the PR and calendar month, when the caller keeps those ledgers. */
+  spent?: { prUsd?: number; monthUsd?: number }
   model: ResolvedModel
   // A cheaper model for the review and security passes. The double-check then runs on `model` for every finding
   // above a nit, even with verify "off", and only the findings it confirmed are reported. Without one, a review on
@@ -232,6 +256,7 @@ export interface Projection {
 export type Observation =
   | { type: "strict-candidates"; findings: Finding[]; unanswered: string[] }
   | { type: "impact"; record: ImpactRecord; locations: string[] }
+  | { type: "dispatch"; estimate: DispatchEstimate; step?: Shrink }
   // A pass is about to run with this prompt and step cap, or was planned and skipped (verify with no budget or time
   // left).
   | { type: "pass"; pass: Name; model: string; text: string; maxSteps: number }
@@ -281,6 +306,95 @@ interface Spec<T> {
   text: string
   schema: Record<string, unknown>
   decode: (value: unknown) => T | undefined
+}
+
+// A session runtime can supply this only when it can prepare the same complete first request without
+// creating the session, running tools or contacting a provider. The conditional passes have no model
+// output yet: they need a bound for every candidate/check payload the runtime would admit, including
+// their head files. Measuring just their fixed instructions does not provide that bound.
+export type ReviewRequestAccounting = Pick<SessionPrompt.Interface, "reviewFirstRequest">
+
+type PlannedRequest = Pick<Spec<unknown>, "name" | "model" | "cap" | "text" | "schema">
+
+// Only the initial measurement and changes that actually reduce a binding limit are recorded. A cap
+// changes admission's step count, never the first request: it needs no second pass through preparation.
+function dispatchPlan(input: {
+  requests: PlannedRequest[]
+  dependents: boolean
+  shrink: (lever: "diff" | "dependents") => Iterable<{ requests: PlannedRequest[]; accept: () => void }>
+  measure: (requests: PlannedRequest[]) => Effect.Effect<PassPlan[] | undefined>
+  limits: { maxInputTokens: number; remainingUsd?: number }
+  observe: (event: Extract<Observation, { type: "dispatch" }>) => void
+}) {
+  return Effect.gen(function* () {
+    const initial = yield* input.measure(input.requests)
+    if (!initial) return { decision: "unknown" as const, notes: [] }
+    let plans = initial
+    let estimate = estimateDispatch(plans)
+    // Observers may retain and mutate their input. The admission decision and the prices used by later
+    // shrink steps must stay independent of the replay's copy.
+    input.observe({ type: "dispatch", estimate: structuredClone(estimate) })
+    const available = new Set<Shrink>(["diff"])
+    if (input.dependents) available.add("dependents")
+    for (const plan of plans) {
+      if (plan.pass === "review" || plan.pass === "security" || plan.pass === "verify")
+        available.add(`steps:${plan.pass}`)
+    }
+    const notes: string[] = []
+    for (;;) {
+      const decision = decideDispatch(estimate, { ...input.limits, available: [...available] })
+      if (decision.go) return { decision: "go" as const, plans, estimate, notes }
+      if (decision.ineffective.length) {
+        const passes = decision.ineffective.map((lever) => lever.replace("steps:", "")).join(", ")
+        notes.push(`Lowering the step limits for ${passes} would leave the review over budget.`)
+      }
+      for (const lever of decision.ineffective) available.delete(lever)
+      if ("stop" in decision) return { decision: "stop" as const, estimate, notes }
+      const lever = decision.shrink
+      available.delete(lever)
+      if (lever === "dependents" || lever === "diff") {
+        // Try progressively smaller context without changing what any specialist sees until a measured
+        // proposal actually lowers a binding limit. Preserve the step caps admitted in preceding rounds.
+        const caps = new Map(plans.map((plan) => [plan.pass, plan.maxSteps]))
+        let accepted = false
+        for (const proposal of input.shrink(lever)) {
+          const reduced = yield* input.measure(proposal.requests)
+          if (!reduced) return { decision: "unknown" as const, notes }
+          const next = reduced.map((plan) => ({ ...plan, maxSteps: caps.get(plan.pass) ?? plan.maxSteps }))
+          const candidate = estimateDispatch(next)
+          const lowersLimit =
+            (decision.over.includes("input-tokens") && candidate.firstTurnTokens < estimate.firstTurnTokens) ||
+            (decision.over.includes("usd") && candidate.usd && estimate.usd && candidate.usd.low < estimate.usd.low)
+          if (!lowersLimit || next.some((plan, index) => plan.promptTokens > plans[index]!.promptTokens)) continue
+          plans = next
+          proposal.accept()
+          accepted = true
+          break
+        }
+        if (!accepted) {
+          if (lever === "diff")
+            notes.push(
+              "Trimming the surrounding file context could not reduce the overage without growing a planned request.",
+            )
+          continue
+        }
+        if (lever === "dependents") available.add("dependents")
+        notes.push(
+          lever === "diff"
+            ? "Coverage was reduced to changed hunks. Surrounding file context was trimmed."
+            : "The lowest-ranked dependent context was removed to fit the review budget.",
+        )
+      } else {
+        const pass = lever === "steps:verify" ? "verify" : lever === "steps:security" ? "security" : "review"
+        plans = shrinkStepCap(plans, pass)
+        notes.push(
+          `The ${pass} pass was limited to ${plans.find((plan) => plan.pass === pass)!.maxSteps} steps to fit the review budget.`,
+        )
+      }
+      estimate = estimateDispatch(plans)
+      input.observe({ type: "dispatch", step: lever, estimate: structuredClone(estimate) })
+    }
+  })
 }
 
 interface Asked<T> {
@@ -475,6 +589,7 @@ export const run: (
     ...(input.instructionsFromContext ? { instructions: "provided" as const } : {}),
     ...(input.admittedReads?.patterns.length || input.readDenies?.length ? { restrictedReads: true as const } : {}),
   }
+  const firstRequestLimits = new Map<Name, number>()
   const tracks = new Map<string, Track>()
   const reservations = new Map<Name, { turn: number; finalize: number }>()
   const sessionIDs: SessionID[] = []
@@ -490,7 +605,10 @@ export const run: (
   }
   const scope = yield* Scope.make()
   const bridge = input.stopSignal ? yield* EffectBridge.make() : undefined
+  const previewAborted = config.maxInputTokens && input.stopSignal ? Deferred.makeUnsafe<void>() : undefined
+  let previewTimedOut = false
   const stop = () => {
+    if (previewAborted) Deferred.doneUnsafe(previewAborted, Exit.void)
     for (const track of tracks.values()) track.stop ??= "timeout"
     // Abort callbacks retain this review's instance and services. Admission below also checks the signal, so
     // a session created concurrently with cancellation cannot start a provider call or a finalizer.
@@ -723,11 +841,25 @@ export const run: (
     yield* Effect.tryPromise(() => save(spent)).pipe(Effect.ignore)
   })
 
+  const passSession = (name: Name) => ({
+    title: `Vectorscope review · ${input.head.slice(0, 7)} · ${name}`,
+    internal: `${input.instructionsFromContext ? PINNED_SESSION_PREFIX : "vectorscope."}${name}`,
+    parentID: input.parentID,
+    permission: rules,
+  })
+  const passPrompt = (spec: Pick<Spec<unknown>, "name" | "model" | "schema">, text: string) => ({
+    agent: input.identity === VECTORSCOPE_AGENT ? VECTORSCOPE_AGENT : spec.name === "security" ? "security" : "review",
+    model: { providerID: spec.model.providerID, modelID: spec.model.modelID },
+    ...(spec.model.variant ? { variant: spec.model.variant } : {}),
+    format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: spec.schema, retryCount: 0 }),
+    parts: [{ type: "text" as const, text, metadata: { [SCOPE]: reviewed } }],
+  })
+
   // One session: the prompt, and when it was stopped or returned nothing usable, a finalize prompt in the same
   // session with every tool but StructuredOutput denied.
   function ask<T>(spec: Spec<T>): Effect.Effect<Asked<T>> {
     return Effect.gen(function* () {
-      if (input.stopSignal?.aborted)
+      if (input.stopSignal?.aborted || previewTimedOut)
         return { name: spec.name, status: "stopped", stop: "timeout", detail: "timeout", steps: 0 } satisfies Asked<T>
       // Include the structured-output schema and a fixed context allowance. The first turn has no reported usage
       // yet, so this is only an admission estimate; provider usage replaces it as soon as it arrives.
@@ -756,12 +888,7 @@ export const run: (
         return { name: spec.name, status: "stopped", stop: "budget", detail: "budget", steps: 0 } satisfies Asked<T>
       }
       // A helper session: it stays out of session lists, and the review reports what it spent.
-      const session = yield* sessions.create({
-        title: `Vectorscope review · ${input.head.slice(0, 7)} · ${spec.name}`,
-        internal: `${input.instructionsFromContext ? PINNED_SESSION_PREFIX : "vectorscope."}${spec.name}`,
-        parentID: input.parentID,
-        permission: rules,
-      })
+      const session = yield* sessions.create(passSession(spec.name))
       const track: Track = {
         name: spec.name,
         sessionID: session.id,
@@ -782,8 +909,8 @@ export const run: (
       tracks.set(session.id, track)
       sessionIDs.push(session.id)
       // The agent every turn of this pass is prompted with (send, below).
-      const agent =
-        input.identity === VECTORSCOPE_AGENT ? VECTORSCOPE_AGENT : spec.name === "security" ? "security" : "review"
+      const firstPrompt = passPrompt(spec, spec.text)
+      const agent = firstPrompt.agent
       // Every session is registered with the review's policy and its pass's agent, and under "zdr" with the model its
       // pass was decided for and what it was decided on, which admission below and VS-23c's transport backstop
       // (provider.ts) hold each attempt to. Under "zdr" the session runtime (llm.ts) sends only that agent's turns of
@@ -793,9 +920,12 @@ export const run: (
 
       // One policy survives every processor instance, retry and prompt for this fresh owned session. It is never
       // rebuilt at a continuation boundary, and the finalizer gets exactly one separately reserved invocation.
+      let firstMessageID: string | undefined
+      let firstBudgetRefused = false
       const policy: SessionAdmission.Policy = {
         sessionID: session.id,
         admit: (request) => {
+          if (firstBudgetRefused) return
           const phase: Phase = track.finalizing ? "finalize" : "turn"
           const attempt = { type: "attempt", pass: track.name, phase, sessionID: session.id } as const
           // VS-23b, before the step and budget logic (never inside reserve(), which admits every uncapped attempt): the
@@ -840,26 +970,59 @@ export const run: (
             observe({ ...attempt, admitted: false, stop: "budget", estimateUsd: estimate })
             return
           }
-          if (track.finalizing) track.finalizeAttempts++
-          else track.attempts++
-          observe({
-            ...attempt,
-            admitted: true,
-            estimateUsd: estimate,
-            model: {
-              providerID: request.model.providerID,
-              modelID: request.model.id,
-              api: request.model.api.id,
-              npm: request.model.api.npm,
-            },
-          })
+          // The catalog forecast can precede a workspace edit. Bind the first message (including retries)
+          // to its reserved share, and publish admission only once the transport checks its actual prepared input.
+          firstMessageID ??= request.messageID
+          const limit =
+            !track.finalizing && request.messageID === firstMessageID ? firstRequestLimits.get(spec.name) : undefined
+          let admitted = false
+          const accept = () => {
+            if (admitted) return
+            admitted = true
+            if (track.finalizing) track.finalizeAttempts++
+            else track.attempts++
+            observe({
+              ...attempt,
+              admitted: true,
+              estimateUsd: estimate,
+              model: {
+                providerID: request.model.providerID,
+                modelID: request.model.id,
+                api: request.model.api.id,
+                npm: request.model.api.npm,
+              },
+            })
+          }
+          if (limit === undefined) accept()
           return {
+            ...(limit === undefined
+              ? {}
+              : {
+                  reviewFirstRequest: {
+                    maxTokens: limit,
+                    checked: (tokens: number | undefined) => {
+                      if (admitted || firstBudgetRefused) return
+                      if (tokens !== undefined && Number.isSafeInteger(tokens) && tokens > 0 && tokens <= limit) {
+                        accept()
+                        return
+                      }
+                      firstBudgetRefused = true
+                      track.stop = "budget"
+                      track.denied = true
+                      reservations.delete(track.name)
+                      observe({ ...attempt, admitted: false, stop: "budget", estimateUsd: 0 })
+                    },
+                  },
+                }),
             ...(track.finalizing ? { tools: ["StructuredOutput"] } : {}),
             observe: (cost) => {
               const reservation = reservations.get(track.name)
               if (reservation) reservation.turn = Math.max(reservation.turn, cost)
             },
             settle: (result) => {
+              if (firstBudgetRefused) return
+              // A provider startup error may precede size measurement. It retains ordinary failure accounting.
+              if (!admitted) accept()
               observe({
                 type: "settle",
                 pass: track.name,
@@ -891,16 +1054,7 @@ export const run: (
         Effect.suspend(() => {
           if (ms <= 0 || input.stopSignal?.aborted) return Effect.succeed<Sent>({ timedOut: true })
           return prompts
-            .prompt({
-              sessionID: session.id,
-              agent,
-              model: { providerID: spec.model.providerID, modelID: spec.model.modelID },
-              ...(spec.model.variant ? { variant: spec.model.variant } : {}),
-              // A class instance: the stored user message only accepts the schema class, not a plain object.
-              format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: spec.schema, retryCount: 0 }),
-              // The changed paths and the trust choose how the owner reviews (section 6.4a), never the PR's own text.
-              parts: [{ type: "text", text, metadata: { [SCOPE]: reviewed } }],
-            })
+            .prompt({ sessionID: session.id, ...(text === spec.text ? firstPrompt : passPrompt(spec, text)) })
             .pipe(
               Effect.provideService(SessionAdmission.Current, policy),
               Effect.timeoutOption(Duration.millis(ms)),
@@ -930,6 +1084,7 @@ export const run: (
       })
 
       const first = yield* send(spec.text, deadline - Date.now())
+      if (firstBudgetRefused) return done(undefined, "skipped", "budget", "first-request-changed")
       if (!first.timedOut && first.contextError) return done(undefined, "failed", undefined, first.contextError)
       if (first.timedOut) track.stop ??= "timeout"
       const message = first.timedOut ? undefined : first.message
@@ -1024,7 +1179,7 @@ export const run: (
           : {}),
         ...(input.mode === "incremental" && focus ? { focus } : {}),
       })
-      return { split, overBudget, packed }
+      return { ordered, split, overBudget, packed }
     }
     const excluded = new Set([...input.skipped.map((file) => file.path), ...heldPaths])
     // The private view admits regular Git blobs only. Match their relative and absolute spellings
@@ -1074,7 +1229,7 @@ export const run: (
       )
     })
     const impact = graph && !uncommitted ? yield* collectImpact : undefined
-    const { split, overBudget, packed } = layout(impact?.changedRanks)
+    const { ordered, split, overBudget, packed } = layout(impact?.changedRanks)
     const index = buildAnchorIndex(input.anchors)
     const strictDenied = (file: string) => {
       if (!ReadOnlyGit.repositoryPath(file) || ESCAPING_PATH.test(file) || denied(file)) return true
@@ -1128,30 +1283,367 @@ export const run: (
       nits: wantsNits(config),
       ...(strictMode ? { guardrail: "strict" as const, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
     }
-    if (impact && !input.stopSignal?.aborted && input.observe)
-      observe({
-        type: "impact",
-        record: structuredClone(impactRecord(impact.slice)),
-        locations: [...impact.slice.locations],
-      })
-
-    // 1–5. The specialists, in parallel, one session each. When holdback left nothing to send no pass runs: the held
-    // files are skipped, nothing is unreviewed, and no reviewer leaves the verdict incomplete.
+    let activePayload = promptInput
+    let activeImpact = impact?.slice
+    const recordImpact = (sent: boolean) => {
+      if (activeImpact && !input.stopSignal?.aborted && input.observe)
+        observe({
+          type: "impact",
+          record: structuredClone(impactRecord(activeImpact)),
+          locations: sent ? [...activeImpact.locations] : [],
+        })
+    }
     const strictKeys = { guardrail: "strict" } as const
     const reportSchema = strictMode ? strictReportJsonSchema(strictKeys)! : REVIEW_REPORT_JSON_SCHEMA
-    const asked = yield* Effect.forEach(
-      nothingToSend ? [] : planSpecialists(input.files, config),
-      (name) =>
-        ask({
-          name,
-          model: triage,
-          cap: name === "security" ? Math.ceil((config.maxSteps * 2) / 3) : config.maxSteps,
-          text: name === "security" ? buildSecurityPrompt(promptInput) : buildReviewPrompt(promptInput),
-          schema: reportSchema,
-          decode: strictMode ? (value) => decodeReport(value, strictKeys) : decodeReport,
-        }),
-      { concurrency: 2 },
-    )
+    const names = nothingToSend ? [] : planSpecialists(input.files, config)
+    const primaryRequests = (payload: PromptInput) =>
+      names.map((name) => ({
+        name,
+        model: triage,
+        cap: name === "security" ? Math.ceil((config.maxSteps * 2) / 3) : config.maxSteps,
+        text: name === "security" ? buildSecurityPrompt(payload) : buildReviewPrompt(payload),
+        schema: reportSchema,
+        decode: strictMode ? (value: unknown) => decodeReport(value, strictKeys) : decodeReport,
+      }))
+    let requests = primaryRequests(promptInput)
+    let checkHeadFiles = checkFiles
+    let verifySteps = VERIFY_STEPS
+    let checkerStop:
+      | ((
+          pass: "verify" | "judge",
+          target: ResolvedModel,
+          text: string,
+          rows: number,
+        ) => Effect.Effect<"budget" | "timeout" | undefined>)
+      | undefined
+    // VS-34's deterministic notes: what was held back, what was sent redacted, and what is committed although ignored.
+    const holdNotes = hold
+      ? [
+          // The value-unsent wording only where the reviewer can run no check and read nothing outside the worktree
+          // (the saved outputs of a trusted review, `allowDirs`), where the held paths are not denied.
+          noteHeldBack(
+            hold.held.map((file) => file.path),
+            {
+              promptOnly: input.checks === true || input.trust !== "untrusted" || (input.allowDirs?.length ?? 0) > 0,
+            },
+          ),
+          noteRedacted(hold.redactions.map((row) => row.path)),
+          input.ignored ? noteIgnoredCommitted(hold.ignoredCommitted) : noteIgnoreUnchecked(),
+        ].filter((note) => note !== undefined)
+      : []
+    const dispatchNotes: string[] = []
+    if (
+      config.maxInputTokens &&
+      config.maxInputTokens > 0 &&
+      names.length &&
+      !refusedUpFront &&
+      !input.stopSignal?.aborted
+    ) {
+      const prepare = prompts.reviewFirstRequest
+      function withinDeadline<A>(effect: Effect.Effect<A>) {
+        return Effect.suspend(() => {
+          const ms = deadline - Date.now()
+          if (input.stopSignal?.aborted || ms <= 0) {
+            previewTimedOut = true
+            return Effect.succeed(undefined)
+          }
+          const work = previewAborted
+            ? effect.pipe(Effect.raceFirst(Deferred.await(previewAborted).pipe(Effect.as(undefined))))
+            : effect
+          return work.pipe(
+            Effect.timeoutOption(Duration.millis(ms)),
+            Effect.map((value) => {
+              if (Option.isNone(value) || input.stopSignal?.aborted) previewTimedOut = true
+              return Option.getOrUndefined(value)
+            }),
+          )
+        })
+      }
+      const prices = new Map<string, ReviewPrice>()
+      const dispatchPrice = (chosen: ResolvedModel) =>
+        Effect.gen(function* () {
+          if (chosen.costKind !== "priced" || !chosen.price || chosen.price.tiers?.length) return chosen.price
+          const key = nameOf(chosen)
+          if (prices.has(key)) return prices.get(key)
+          // A caller can supply a model without ever booting its catalog. Pricing a preview must not
+          // initialize provider authentication or refresh a plan, even when only static rates are known.
+          const loaded = provider.reviewProvider
+            ? yield* withinDeadline(provider.reviewProvider(chosen.providerID))
+            : undefined
+          const cost = loaded?.models[chosen.modelID]?.cost
+          const tiers = (
+            cost?.tiers?.length
+              ? cost.tiers.flatMap((item) =>
+                  item.tier.type === "context" ? [{ above: item.tier.size, rates: item }] : [],
+                )
+              : cost?.experimentalOver200K
+                ? [{ above: 200_000, rates: cost.experimentalOver200K }]
+                : []
+          ).map(({ above, rates }) => ({
+            above,
+            input: rates.input,
+            output: rates.output,
+            cacheRead: rates.cache.read,
+            cacheWrite: rates.cache.write,
+          }))
+          const price = tiers.length ? { ...chosen.price, tiers } : chosen.price
+          prices.set(key, price)
+          return price
+        })
+      const fullPlan = (initial: PlannedRequest[], versions: typeof headFiles): PlannedRequest[] => {
+        if (!triaged && config.verify === "off") return initial
+        // These are the actual fixed blocks and the full set of eligible head files. Only the runtime's
+        // conditional bound can account for future candidates, fixed claims and the judge's verdicts.
+        const check = {
+          trust: input.trust,
+          head: input.head,
+          candidates: [],
+          headFiles: verifyHeadFiles(files, versions, versions ?? []),
+          ...(strictMode ? { ...strictKeys, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
+        }
+        return [
+          ...initial,
+          { name: "verify", model, text: buildVerifyPrompt(check), cap: VERIFY_STEPS, schema: VERIFY_JSON_SCHEMA },
+          ...(judgeModel
+            ? [
+                {
+                  name: "judge" as const,
+                  model: judgeModel,
+                  text: buildJudgePrompt({ ...check, checks: [] }),
+                  cap: VERIFY_STEPS,
+                  schema: VERIFY_JSON_SCHEMA,
+                },
+              ]
+            : []),
+        ]
+      }
+      const candidateLimit = Math.max(4, 2 * config.maxComments)
+      // Future claims have no bytes yet. Reserve one ordinary model-output allowance per candidate
+      // in addition to all concrete prompt text. Enforce both this serialized character budget and the
+      // whole measured request before sending any materialized verifier or judge request.
+      const checkerTextLimit = (text: string) =>
+        JSON.stringify(text).length + Math.ceil(candidateLimit * OUTPUT_PER_STEP * 3.5)
+      const firstTurn = (draft: PlannedRequest, conditional?: "verify" | "judge") =>
+        prepare
+          ? withinDeadline(
+              Effect.suspend(() => {
+                const prompt = passPrompt(draft, draft.text)
+                return prepare({
+                  session: passSession(draft.name),
+                  prompt,
+                  route: {
+                    policy: route,
+                    agent: prompt.agent,
+                    ...decided.find(({ chosen }) => chosen === draft.model)?.result,
+                  },
+                  ...(conditional
+                    ? {
+                        conditional: {
+                          pass: conditional,
+                          candidateLimit,
+                          maxSerializedTextChars: checkerTextLimit(draft.text),
+                        },
+                      }
+                    : {}),
+                })
+              }).pipe(
+                Effect.catchCauseIf(
+                  (cause) => !Cause.hasInterrupts(cause),
+                  () => Effect.succeed(undefined),
+                ),
+                Effect.map((accounting) =>
+                  accounting && Number.isSafeInteger(accounting.promptTokens) && accounting.promptTokens > 0
+                    ? accounting
+                    : undefined,
+                ),
+              ),
+            )
+          : Effect.succeed(undefined)
+      const measure = (drafts: PlannedRequest[]) =>
+        Effect.gen(function* () {
+          if (!prepare) return undefined
+          const plans: PassPlan[] = []
+          for (const draft of drafts) {
+            const accounting = yield* firstTurn(
+              draft,
+              draft.name === "verify" || draft.name === "judge" ? draft.name : undefined,
+            )
+            if (!accounting) return undefined
+            const price = draft.model.costKind === "priced" ? yield* dispatchPrice(draft.model) : undefined
+            if (previewTimedOut) return undefined
+            plans.push({
+              pass: draft.name,
+              model: nameOf(draft.model),
+              maxSteps: draft.cap,
+              promptTokens: accounting.promptTokens,
+              ...(price ? { price } : {}),
+              ...(draft.model.variant ? { effort: draft.model.variant } : {}),
+              ...(accounting.cached === undefined ? {} : { cached: accounting.cached }),
+            })
+          }
+          return plans
+        })
+      const proposal = (payload: PromptInput, versions: typeof checkFiles, slice = activeImpact) => {
+        const next = primaryRequests(payload)
+        return {
+          requests: fullPlan(next, versions),
+          accept: () => {
+            activePayload = payload
+            activeImpact = slice
+            requests = next
+            checkHeadFiles = versions
+          },
+        }
+      }
+      function* shrink(lever: "dependents" | "diff") {
+        if (lever === "dependents") {
+          let slice = activeImpact
+          while (slice && (slice = shrinkImpactDependents(slice)))
+            yield proposal({ ...activePayload, impact: slice }, checkHeadFiles, slice)
+          return
+        }
+        // Preserve the changed lines of all displayed files, including the ones whose inline representation
+        // was a complete annotated head. A previously excluded file never becomes eligible while trimming.
+        const displayed = new Set([
+          ...split.inline.map((file) => file.path),
+          ...packed.headFiles.filter((file) => file.annotated).map((file) => file.path),
+        ])
+        const changes = ordered.filter((file) => displayed.has(file.path))
+        const byPath = new Map(changes.map((file) => [file.path, file]))
+        const versions = checkHeadFiles?.map((file) => {
+          const change = byPath.get(file.path)
+          return change ? { path: file.path, exact: false, text: renderPatch([change], 0) } : file
+        })
+        yield proposal(
+          {
+            ...activePayload,
+            diff: renderPatch(changes, 0),
+            headFiles: packed.headFiles.filter((file) => !displayed.has(file.path)),
+            notInlined: activePayload.notInlined?.filter((file) => !displayed.has(file.path)),
+          },
+          versions,
+        )
+      }
+      const result = yield* dispatchPlan({
+        requests: prepare ? fullPlan(requests, checkHeadFiles) : [],
+        dependents: !!activeImpact?.dependents.length,
+        shrink,
+        measure,
+        observe,
+        limits: {
+          maxInputTokens: config.maxInputTokens,
+          remainingUsd: remainingUsd(config, input.spent ? { ...input.spent, trigger: input.trigger } : undefined),
+        },
+      })
+      // Codium exposes plan usage as a percentage. Per-pass token and dollar figures stay in the observation.
+      if (result.decision !== "unknown" && !onCodium) {
+        const { firstTurnTokens, usd, v2 } = result.estimate
+        result.notes.push(
+          `The planned first requests total an estimated ${formatTokens(firstTurnTokens)} tokens.` +
+            (usd && v2.usd
+              ? ` Priced passes are estimated at ${formatUsd(usd.low)}–${formatUsd(usd.high)}. The v2 range is ${formatUsd(v2.usd.low)}–${formatUsd(v2.usd.high)}.`
+              : ""),
+        )
+      }
+      if (result.decision !== "go" && !input.stopSignal?.aborted && !previewTimedOut) {
+        const skipped = [
+          ...input.skipped,
+          ...(hold?.held ?? []).map((file) => ({ path: file.path, reason: "held-back" as const })),
+        ]
+        const unreviewed = [...new Set([...input.anchors, ...input.files, ...skipped].map((file) => file.path))]
+        recordImpact(false)
+        const strict = strictMode
+          ? strictSelect([], {
+              head: input.head,
+              anchors: input.anchors,
+              trust: input.trust,
+              verifier: nameOf(model),
+              unanswered: [],
+              coverage: { partial: "budget-estimate", unreviewed, skipped, specialists: [], held: hold?.held },
+              blobs: { head: new Map(), base: new Map() },
+              config: { ...strictKeys, maxComments: config.maxComments, suggestions: config.suggestions },
+            })
+          : undefined
+        return {
+          partial: "budget-estimate",
+          report: { summary: "", risk: "low", files: [], findings: [] },
+          selection: {
+            ...selectFindings({
+              findings: [],
+              anchors: input.anchors,
+              head: input.head,
+              trust: input.trust,
+              mode: input.mode,
+              config,
+              prior: input.prior,
+            }),
+            ...(strict ? { strict: strictSummary(strict) } : {}),
+          },
+          ...(strict ? { strict } : {}),
+          skipped,
+          unreviewed,
+          specialists: [],
+          sessions: [],
+          base: input.base,
+          head: input.head,
+          ...(input.since ? { since: input.since } : {}),
+          mode: input.mode,
+          stats: changeStats(input.files),
+          notes: [
+            result.decision === "unknown" ? BUDGET_ESTIMATE_UNAVAILABLE : noteBudgetEstimate(),
+            ...result.notes,
+            ...holdNotes,
+          ],
+          ...(hold?.held.length ? { held: hold.held } : {}),
+          durationMs: Date.now() - started,
+        } satisfies ReviewOutcome
+      }
+      if (result.decision === "go") {
+        for (const plan of result.plans) {
+          if (plan.pass === "review" || plan.pass === "security" || plan.pass === "verify" || plan.pass === "judge")
+            firstRequestLimits.set(plan.pass, plan.promptTokens)
+        }
+        dispatchNotes.push(...result.notes)
+        const conditionalLimits = new Map(
+          fullPlan(requests, checkHeadFiles)
+            .filter((draft) => draft.name === "verify" || draft.name === "judge")
+            .map((draft) => [draft.name, checkerTextLimit(draft.text)]),
+        )
+        const caps = new Map(result.plans.map((plan) => [plan.pass, plan.maxSteps]))
+        requests = requests.map((spec) => ({ ...spec, cap: caps.get(spec.name) ?? spec.cap }))
+        verifySteps = caps.get("verify") ?? VERIFY_STEPS
+        checkerStop = (pass, target, text, rows) =>
+          Effect.gen(function* () {
+            // Findings and the checker's reasons now exist. Never send them when their entire first request
+            // cannot be accounted for within its reserved share; ordinary verification bookkeeping still
+            // records which findings were left unchecked.
+            const reserved = result.plans.find((plan) => plan.pass === pass)
+            const fitsText = rows <= candidateLimit && JSON.stringify(text).length <= (conditionalLimits.get(pass) ?? 0)
+            const actual = fitsText
+              ? yield* firstTurn({
+                  name: pass,
+                  model: target,
+                  cap: caps.get(pass) ?? VERIFY_STEPS,
+                  text,
+                  schema: VERIFY_JSON_SCHEMA,
+                })
+              : undefined
+            if (previewTimedOut || input.stopSignal?.aborted) {
+              dispatchNotes.push(`The ${pass} pass did not run before the review stopped.`)
+              return "timeout" as const
+            }
+            if (reserved && actual && actual.promptTokens <= reserved.promptTokens) return undefined
+            dispatchNotes.push(
+              `The ${pass} pass did not run because its complete first request could not fit within the reserved review budget.`,
+            )
+            return "budget" as const
+          })
+      }
+    }
+
+    recordImpact(!input.stopSignal?.aborted && !previewTimedOut)
+    // 1–5. The specialists fan out only after the opted-in plan fits.
+    const asked = yield* Effect.forEach(requests, (spec) => ask(spec), { concurrency: 2 })
 
     // 6. Normalize.
     const reports = asked.flatMap((entry) =>
@@ -1226,27 +1718,32 @@ export const run: (
             candidates,
             ...(strictMode ? { ...strictKeys, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
             ...(claims.length ? { fixed: claims } : {}),
-            headFiles: verifyHeadFiles(files, checkFiles, [...candidates, ...claims]),
+            headFiles: verifyHeadFiles(files, checkHeadFiles, [...candidates, ...claims]),
           })
         : ""
     const verifyPrice = priceOf(model)
     const estimate = verifyPrice
       ? estimateCostUsd({
           promptTokens: Math.ceil(verifyText.length / 3.5),
-          maxSteps: VERIFY_STEPS,
+          maxSteps: verifySteps,
           price: verifyPrice,
         }).low
       : 0
-    const late = deadline - Date.now() < VERIFY_MIN_MS
+    const verifyStop =
+      verifyText && checkerStop
+        ? yield* checkerStop("verify", model, verifyText, candidates.length + claims.length)
+        : undefined
+    const late = verifyStop === "timeout" || deadline - Date.now() < VERIFY_MIN_MS
     // A projection is asked only about a verify pass that would otherwise run: one skipped for time never mattered.
     // The Codium token stop (CODIUM_REVIEW_TOKEN_STOP) is not a dollar decision, so no projection lifts it.
     const unaffordable =
+      verifyStop === "budget" ||
       (yield* overTokenStop(verifyText)) ||
       (capped &&
         state.spent + state.uncertain + estimate > config.maxCostUsd &&
         !(verifyText !== "" && !late && lift({ pass: "verify", phase: "turn", site: "verify", estimateUsd: estimate })))
     if (verifyText && (unaffordable || late)) {
-      observe({ type: "pass", pass: "verify", model: nameOf(model), text: verifyText, maxSteps: VERIFY_STEPS })
+      observe({ type: "pass", pass: "verify", model: nameOf(model), text: verifyText, maxSteps: verifySteps })
       observe({
         type: "attempt",
         pass: "verify",
@@ -1264,11 +1761,17 @@ export const run: (
     const verify: Asked<ReturnType<typeof decodeVerify>> | undefined = !verifyText
       ? undefined
       : unaffordable || late
-        ? { name: "verify", status: "skipped", steps: 0, detail: unaffordable ? "budget" : "time" }
+        ? {
+            name: "verify",
+            status: "skipped",
+            steps: 0,
+            ...(verifyStop ? { stop: verifyStop } : {}),
+            detail: verifyStop === "budget" ? "first-request-budget" : unaffordable ? "budget" : "time",
+          }
         : yield* ask({
             name: "verify",
             model,
-            cap: VERIFY_STEPS,
+            cap: verifySteps,
             text: verifyText,
             schema: VERIFY_JSON_SCHEMA,
             decode: verifyDecoder,
@@ -1284,7 +1787,7 @@ export const run: (
             candidates,
             ...(strictMode ? { ...strictKeys, ...(uncommitted ? { uncommitted: true } : {}) } : {}),
             checks: verify.value ?? [],
-            headFiles: verifyHeadFiles(files, checkFiles, candidates),
+            headFiles: verifyHeadFiles(files, checkHeadFiles, candidates),
           })
         : ""
     const judgePrice = judgeModel ? priceOf(judgeModel) : undefined
@@ -1292,9 +1795,14 @@ export const run: (
       ? estimateCostUsd({ promptTokens: Math.ceil(judgeText.length / 3.5), maxSteps: VERIFY_STEPS, price: judgePrice })
           .low
       : 0
-    const judgeLate = deadline - Date.now() < VERIFY_MIN_MS
+    const judgeStop =
+      judgeText && judgeModel && checkerStop
+        ? yield* checkerStop("judge", judgeModel, judgeText, candidates.length)
+        : undefined
+    const judgeLate = judgeStop === "timeout" || deadline - Date.now() < VERIFY_MIN_MS
     // As verify's pre-check: a projection may lift only the dollar cap, and only for a judge that would otherwise run.
     const judgeUnaffordable =
+      judgeStop === "budget" ||
       (yield* overTokenStop(judgeText)) ||
       (capped &&
         state.spent + state.uncertain + judgeEstimate > config.maxCostUsd &&
@@ -1318,7 +1826,13 @@ export const run: (
       !judgeModel || !judgeText
         ? undefined
         : judgeUnaffordable || judgeLate
-          ? { name: "judge", status: "skipped", steps: 0, detail: judgeUnaffordable ? "budget" : "time" }
+          ? {
+              name: "judge",
+              status: "skipped",
+              steps: 0,
+              ...(judgeStop ? { stop: judgeStop } : {}),
+              detail: judgeStop === "budget" ? "first-request-budget" : judgeUnaffordable ? "budget" : "time",
+            }
           : yield* ask({
               name: "judge",
               model: judgeModel,
@@ -1355,6 +1869,12 @@ export const run: (
     const fixed = new Set(claims.filter((claim) => verdicts.get(claim.id) === "confirmed").map((claim) => claim.id))
     // A status for an earlier finding the prompts left out (holdback) is dropped, so a held file's earlier finding is
     // never settled fixed on the model's word; unset, `unshown` is empty and the report is as it was.
+    const lateVerify = verifyStop ?? (verify?.detail === "first-request-changed" ? ("budget" as const) : undefined)
+    const lateJudge = judgeStop ?? (judged?.detail === "first-request-changed" ? ("budget" as const) : undefined)
+    const conditionalUnreviewed = new Set(
+      (lateVerify ? [...candidates, ...claims] : lateJudge ? candidates : []).map((finding) => finding.path),
+    )
+    for (const entry of prior) if (conditionalUnreviewed.has(entry.path)) unshown.add(entry.id)
     const checked: ModelReport =
       triaged || strictMode
         ? {
@@ -1374,18 +1894,27 @@ export const run: (
     const refused = state.refused
     // A partial run records the files no finished specialist saw, so the next run reviews them. A run where no
     // specialist finished, or one the route rules stopped, leaves every file unreviewed.
-    const partial = refused
+    const noRequestSent =
+      !refused &&
+      !input.stopSignal?.aborted &&
+      asked.length > 0 &&
+      asked.every((entry) => entry.status === "skipped" && entry.detail === "first-request-changed") &&
+      [...tracks.values()].every((track) => !track.attempts && !track.finalizeAttempts)
+    const primaryStop = refused
       ? ("privacy" as const)
       : (asked.find((entry) => entry.stop)?.stop ??
         (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined))
+    const partial = noRequestSent ? ("budget-estimate" as const) : (primaryStop ?? lateVerify ?? lateJudge)
     const missed = nothingToSend
       ? []
       : refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
         ? files.map((file) => file.path)
-        : partial && partial !== "model-error"
+        : primaryStop && primaryStop !== "model-error"
           ? yield* uncovered(asked.flatMap((entry) => (entry.value && entry.sessionID ? [entry.sessionID] : [])))
           : []
-    const missedCoverage = overBudget.size ? [...new Set([...missed, ...overBudget])] : missed
+    const missedCoverage = noRequestSent
+      ? [...new Set([...input.anchors, ...input.files, ...input.skipped].map((file) => file.path))]
+      : [...new Set([...missed, ...overBudget, ...conditionalUnreviewed])]
 
     const skippedFiles = hold?.held.length
       ? [...input.skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))]
@@ -1479,9 +2008,10 @@ export const run: (
               ...(rejected ? [{ reason: "rejected-by-verify" as const, count: rejected }] : []),
               ...(unconfirmed ? [{ reason: "unconfirmed" as const, count: unconfirmed }] : []),
             ],
-      modelRisk: refused || strict ? "low" : report.risk,
-      sensitiveChanged: !refused && input.files.some((file) => isSensitivePath(file.path)),
-      changedLines: refused ? 0 : input.files.reduce((sum, file) => sum + file.additions + file.deletions, 0),
+      modelRisk: refused || noRequestSent || strict ? "low" : report.risk,
+      sensitiveChanged: !refused && !noRequestSent && input.files.some((file) => isSensitivePath(file.path)),
+      changedLines:
+        refused || noRequestSent ? 0 : input.files.reduce((sum, file) => sum + file.additions + file.deletions, 0),
     })
 
     function uncovered(ids: SessionID[]) {
@@ -1560,21 +2090,6 @@ export const run: (
           "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",
         ]
       : []
-    // VS-34's deterministic notes: what was held back, what was sent redacted, and what is committed although ignored.
-    const holdNotes = hold
-      ? [
-          // The value-unsent wording only where the reviewer can run no check and read nothing outside the worktree
-          // (the saved outputs of a trusted review, `allowDirs`), where the held paths are not denied.
-          noteHeldBack(
-            hold.held.map((file) => file.path),
-            {
-              promptOnly: input.checks === true || input.trust !== "untrusted" || (input.allowDirs?.length ?? 0) > 0,
-            },
-          ),
-          noteRedacted(hold.redactions.map((row) => row.path)),
-          input.ignored ? noteIgnoredCommitted(hold.ignoredCommitted) : noteIgnoreUnchecked(),
-        ].filter((note) => note !== undefined)
-      : []
     return {
       report: refused
         ? { summary: "", risk: "low", files: [], findings: [] }
@@ -1604,8 +2119,8 @@ export const run: (
       },
       ...(strict ? { strict: strict.result } : {}),
       skipped: skippedFiles,
-      cost: { ...cost, ...(labs ? { labs } : {}) },
-      ...(spentByPass.length ? { passes: spentByPass } : {}),
+      ...(noRequestSent ? {} : { cost: { ...cost, ...(labs ? { labs } : {}) } }),
+      ...(!noRequestSent && spentByPass.length ? { passes: spentByPass } : {}),
       durationMs: Date.now() - started,
       base: input.base,
       head: input.head,
@@ -1627,6 +2142,7 @@ export const run: (
             ...incomplete,
           ]
         : [
+            ...(noRequestSent ? [BUDGET_REQUEST_CHANGED] : []),
             ...picked.notes,
             ...(graph && uncommitted
               ? ["Impact context is unavailable for staged or uncommitted changes."]
@@ -1643,6 +2159,7 @@ export const run: (
                   `Changed files left unreviewed because their diffs exceeded the context budget include ${[...overBudget].slice(0, 10).map(codeSpan).join(", ")}${overBudget.size > 10 ? ` and ${overBudget.size - 10} more` : ""}.`,
                 ]
               : []),
+            ...dispatchNotes,
             ...holdNotes,
             ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
             ...(strictMode ? [] : verifyNotes),

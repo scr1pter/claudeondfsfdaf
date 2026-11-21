@@ -100,6 +100,27 @@ const render = (input: Partial<RenderInput> & Pick<RenderInput, "outcome">) =>
   })
 
 describe("renderLocalReview", () => {
+  test("an unaffordable follow-up check keeps completed work visible without reporting a dollar stop or a clean review", () => {
+    const review = outcome({
+      partial: "budget",
+      specialists: [
+        { name: "review", status: "ok", steps: 1 },
+        { name: "verify", status: "skipped", steps: 0, detail: "first-request-budget" },
+      ],
+      unreviewed: ["src/check.ts"],
+    })
+    for (const findings of [[], [placed({ severity: "blocking", title: "The job discards its pending result" })]]) {
+      const text = render({
+        outcome: { ...review, selection: selection({ inline: findings }) },
+        limits: { maxCostUsd: 0, maxSteps: 30, timeoutMinutes: 10 },
+      })
+      expect(text).toContain("A follow-up check could not confirm that its first request fit the configured budget.")
+      expect(text).toContain("src/check.ts")
+      expect(text).not.toMatch(/stopped at the \$|no issues found|Risk: Low/i)
+      if (findings.length) expect(text).toContain(findings[0]!.title)
+    }
+  })
+
   test("prints the section 1.7 layout", () => {
     const text = render({
       since: LAST,

@@ -26,6 +26,7 @@ import { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 import { ProviderTransform } from "@/provider/transform"
 import { LLMRequestPrep } from "./llm/request"
+import { reviewRequestProjection } from "./review-request-size"
 
 import { type Tool as AITool, tool, jsonSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
@@ -243,6 +244,22 @@ const FAST_EXECUTION_SYSTEM_PROMPT = [
   "Begin validation as soon as its dependencies are ready and avoid redundant narration, but never skip tests or silently lower quality.",
 ].join(" ")
 
+function sessionSystem(
+  environment: string[],
+  instructions: string[],
+  mcp?: string,
+  skills?: string,
+  executionMode?: SessionV1.User["executionMode"],
+) {
+  return [
+    ...environment,
+    ...instructions,
+    ...(mcp ? [mcp] : []),
+    ...(skills ? [skills] : []),
+    ...(executionMode === "fast" ? [FAST_EXECUTION_SYSTEM_PROMPT] : []),
+  ]
+}
+
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
   const padding = trimmed.endsWith("==") ? 2 : trimmed.endsWith("=") ? 1 : 0
@@ -267,7 +284,18 @@ export class FreeModelsResumeError extends Schema.TaggedErrorClass<FreeModelsRes
   message: Schema.String,
 }) {}
 
+export interface ReviewFirstRequest {
+  readonly session: NonNullable<Session.CreateInput>
+  readonly prompt: Omit<PromptInput, "sessionID">
+  readonly route: ReviewRoutes.Registered
+  readonly conditional?: { pass: "verify" | "judge"; candidateLimit: number; maxSerializedTextChars?: number }
+}
+
 export interface Interface {
+  /** Locally size the fresh review helper's model-visible request, before creating or admitting a session. */
+  readonly reviewFirstRequest?: (
+    input: ReviewFirstRequest,
+  ) => Effect.Effect<{ promptTokens: number; cached?: boolean } | undefined>
   /** Reuse prompt model selection for owner actions without admitting a prompt or changing a free selection. */
   readonly currentModel: (
     sessionID: SessionID,
@@ -3234,11 +3262,7 @@ const layer = Layer.effect(
                   ...(stillWorking ? [stillWorking] : []),
                 ]
               : []),
-            ...env.session,
-            ...instructions,
-            ...(mcpInstructions ? [mcpInstructions] : []),
-            ...(skills ? [skills] : []),
-            ...(lastUser.executionMode === "fast" ? [FAST_EXECUTION_SYSTEM_PROMPT] : []),
+            ...sessionSystem(env.session, instructions, mcpInstructions, skills, lastUser.executionMode),
           ]
           const format = lastUser.format ?? { type: "text" as const }
           if (
@@ -4621,7 +4645,207 @@ const layer = Layer.effect(
       return result
     })
 
+    const reviewFirstRequest = Effect.fn("SessionPrompt.reviewFirstRequest")(
+      function* ({ session, prompt, route, conditional }: ReviewFirstRequest) {
+        const part = prompt.parts[0]
+        const format = prompt.format
+        const rules = session.permission
+        const name = prompt.agent
+        if (
+          !session.internal ||
+          !/^vectorscope\.(?:bound\.)?(?:review|security|verify|judge)$/.test(session.internal) ||
+          !name ||
+          !["review", "security", "vectorscope"].includes(name) ||
+          route.agent !== name ||
+          !prompt.model ||
+          format?.type !== "json_schema" ||
+          prompt.parts.length !== 1 ||
+          part?.type !== "text" ||
+          part.ignored ||
+          part.synthetic ||
+          prompt.size ||
+          prompt.noReply ||
+          prompt.secondOpinion ||
+          prompt.judge ||
+          isComputerMention(part.metadata?.[Computer.MENTION_KEY]) ||
+          !rules ||
+          rules[0]?.permission !== "*" ||
+          rules[0]?.pattern !== "*" ||
+          rules[0]?.action !== "deny" ||
+          rules
+            .slice(1)
+            .some(
+              (rule) =>
+                !["read", "grep", "glob", "list", "bash", "external_directory", "StructuredOutput"].includes(
+                  rule.permission,
+                ),
+            )
+        )
+          return
+        const scope = scopeOf(part.metadata)
+        const pinned = session.internal.startsWith(PINNED_SESSION_PREFIX)
+        if (
+          pinned !== (scope?.instructions === "provided") ||
+          (!route.decision?.allowed && route.decision !== undefined)
+        )
+          return
+        if (
+          conditional &&
+          (!session.internal.endsWith("." + conditional.pass) ||
+            !Number.isSafeInteger(conditional.candidateLimit) ||
+            conditional.candidateLimit < 0 ||
+            conditional.maxSerializedTextChars === undefined ||
+            !Number.isSafeInteger(conditional.maxSerializedTextChars) ||
+            conditional.maxSerializedTextChars < JSON.stringify(part.text).length)
+        )
+          return
+
+        const settings = yield* config.get()
+        if (!flags.pure && settings.plugin_origins?.length) return
+        if (flags.experimentalNativeLlm && route.policy.privacy !== "zdr") return
+        const info = provider.reviewProvider && (yield* provider.reviewProvider(prompt.model.providerID))
+        const model = info?.models[prompt.model.modelID]
+        if (!info || !model || model.api.npm === "gitlab-ai-provider") return
+        const hooks = plugin.reviewRequestHooks && (yield* plugin.reviewRequestHooks())
+        const defs = registry.reviewDefinitions && (yield* registry.reviewDefinitions())
+        if (!hooks || !defs) return
+
+        const agent = yield* agents.helper(name, pinned ? { reviewedPrompt: true } : undefined)
+        if (!agent) return
+        const same = agent.model?.providerID === model.providerID && agent.model?.modelID === model.id
+        const variant =
+          prompt.variant ?? (same && agent.variant && model.variants?.[agent.variant] ? agent.variant : undefined)
+        // A request-shaped user message only in memory. No session, registry entry, guard, transcript, or assistant is created.
+        const sessionID = SessionID.descending()
+        const user: SessionV1.User = {
+          id: MessageID.ascending(),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: name,
+          model: { ...prompt.model, variant },
+          tools: prompt.tools,
+          system: prompt.system,
+          executionMode: prompt.executionMode,
+          format,
+        }
+        const parts: SessionV1.Part[] = [{ ...part, id: PartID.ascending(), messageID: user.id, sessionID }]
+        const tools: Record<string, AITool> = Object.fromEntries(
+          defs.map((def) => {
+            const { description, schema } = SessionTools.definition(model, def)
+            return [def.id, { description, inputSchema: jsonSchema(schema) }]
+          }),
+        )
+        tools.StructuredOutput = createStructuredOutputTool({
+          schema: format.schema,
+          retryCount: format.retryCount,
+          model,
+          onSuccess() {},
+        })
+        const offered = Object.keys(LLMRequestPrep.resolveTools({ tools, agent, permission: rules, user }))
+        const nested = session.parentID !== undefined
+        const subagents = {
+          ...SystemPrompt.subagentAvailability({
+            agents: yield* agents.list(),
+            permission: agent.permission,
+            session: rules,
+            agent: name,
+            nested,
+          }),
+          ...(nested ? { fork: false } : {}),
+          teammates: offered.includes("send_teammate_message"),
+        }
+        const env = yield* sys.environment(model, {
+          subagents,
+          tools: offered,
+          nested,
+          workspace: !pinned,
+          date: user.time.created,
+        })
+        const instructions: string[] = []
+        let skills: string | undefined
+        // Resource tools share the read permission, even for a pinned review. An unpinned review may also
+        // hear instructions from a server with no tools. A sizing query must never connect to discover either.
+        if (!mcp.snapshot || Object.values(yield* mcp.snapshot()).some((item) => item.status !== "disabled")) return
+        if (!pinned) {
+          if (
+            settings.instructions?.some((source) => /^https?:\/\//.test(source)) ||
+            (settings.skills?.urls?.length && !Permission.disabled(["skill"], agent.permission).has("skill"))
+          )
+            return
+          if (!brain.previewReviewContext) return
+          const place = yield* instruction.place()
+          const paths = scope?.paths ?? []
+          const memory = yield* brain.previewReviewContext(place, {
+            personal: !freeModelMayTrain(model) && !(session.parentID && (yield* guests.marked(session.parentID))),
+            kinds: habitsOf(session, name, scope).kinds,
+            query: scopeQuery(paths),
+            files: paths.map((file) => path.join(place.root, file)),
+            wrap: ownerBlock,
+          })
+          if (!memory) return
+          instructions.push(...(yield* instruction.system()))
+          if (memory.digest) instructions.push(memory.digest)
+          if (memory.recall)
+            parts.push({
+              type: "text",
+              synthetic: true,
+              id: PartID.ascending(),
+              messageID: user.id,
+              sessionID,
+              text: memory.recall,
+            })
+          skills = yield* sys.skills(agent, { learned: [] })
+        }
+        const messages = yield* MessageV2.toModelMessagesEffect([{ info: user, parts }], model)
+        if ((agent.steps ?? Infinity) <= 1) messages.push({ role: "assistant", content: MAX_STEPS_PROMPT })
+        const system = [
+          ...sessionSystem(env.session, instructions, undefined, skills, user.executionMode),
+          STRUCTURED_OUTPUT_SYSTEM_PROMPT,
+        ]
+        // Only auth *kind* changes model input. Evaluate the possible shapes without consulting any credentials.
+        const authKinds: Array<Pick<Auth.Info, "type"> | undefined> =
+          model.providerID === "openai" ? [undefined, { type: "oauth" }] : [undefined]
+        let largest: { promptTokens: number; cached?: boolean } | undefined
+        for (const kind of authKinds) {
+          const prepared = yield* LLMRequestPrep.prepare({
+            user,
+            agent,
+            provider: info,
+            model,
+            permission: rules,
+            sessionID,
+            parentSessionID: session.parentID,
+            explore: subagents.permitted?.includes("explore"),
+            stableSystem: env.stable,
+            system,
+            messages,
+            tools,
+            isWorkflow: false,
+            modelInputOnly: true,
+            purpose: "review",
+            ...(pinned ? { pinnedContext: true } : {}),
+            auth: kind,
+            flags,
+            plugin: hooks,
+          })
+          const estimate = yield* reviewRequestProjection({
+            prepared,
+            model,
+            ...(conditional && conditional.maxSerializedTextChars !== undefined
+              ? { conditional: { text: part.text, maxSerializedTextChars: conditional.maxSerializedTextChars } }
+              : {}),
+          })
+          if (!estimate) return
+          if (!largest || estimate.promptTokens > largest.promptTokens) largest = estimate
+        }
+        return largest
+      },
+      Effect.catchCause((cause) => (Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(undefined))),
+    )
+
     return Service.of({
+      reviewFirstRequest,
       currentModel,
       awaitTitles,
       cancel,

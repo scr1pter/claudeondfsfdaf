@@ -50,11 +50,13 @@ import {
   buildReviewBody,
   buildSummaryBody,
   findingItem,
+  firstRequestStopDetail,
   inlineLeads,
   noteFailed,
   noteGeneratedHeaders,
   noteInlineCap,
   noteNothingToReview,
+  noteBudgetEstimate,
   notePartial,
   noteTrivialSkip,
 } from "@vectordevai/core/review/format"
@@ -156,8 +158,8 @@ export interface ReplayInput {
   // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
   // applies to the prompt since SF-13b and to the reviewer's read and grep tools since SF-14, and so may the
   // engine:holdback-secrets variant (VARIANT_KEYS.engine), which may only raise it to "secrets". Nor a key
-  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-24's maxInputTokens,
-  // VS-42's scopeGate, VS-44's verifyEvidence, VS-28's depth and lenses, VS-30's runtime, which is also
+  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-42's scopeGate, VS-44's verifyEvidence,
+  // VS-28's depth and lenses, VS-30's runtime, which is also
   // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
@@ -215,7 +217,7 @@ export type ReplayVariant = VariantRecord | { verifyPolicy?: ReviewConfig["verif
 
 // One step of VS-24's pre-dispatch shrink, in the order it ran: the lever core dispatch.ts's decideDispatch named, and
 // the estimate after it, which holds both the legacy range the gate decides on and VS-40's v2 beside it, per pass.
-// Nothing writes it before VS-24 wiring.
+// An ineffective or unavailable lever has no step.
 export interface ShrinkStep {
   step: Shrink
   estimate: DispatchEstimate
@@ -283,8 +285,7 @@ export interface ReplayArtifact {
     cacheWrite?: number
     reasoning?: number // VS-21e: the reasoning tokens measureCost counts; absent when the provider reported none
   }[]
-  // VS-24's first pre-dispatch estimate, before any shrink, then its shrink steps, in order. Both absent until VS-24
-  // wiring.
+  // Present only when the runner estimated this dispatch. Each step records its new estimate in application order.
   dispatch?: DispatchEstimate
   shrink?: ShrinkStep[]
   // VS-49's slice utilisation (core eval.ts SliceUtilisation), from the passes' session events at zero tokens: each
@@ -406,6 +407,8 @@ export interface ProjectionRecord {
   tier1?: ImpactRecord
   models: ReplayArtifact["models"]
   files: ReplayArtifact["files"]
+  dispatch?: DispatchEstimate
+  shrink?: ShrinkStep[]
   // Every decision the dollar cap refused, which the projection ran. From the first on, the record describes an
   // uncapped run: a capped paid run would have stopped that pass there, and every lifted reservation and settlement
   // counts against the other passes too.
@@ -901,11 +904,15 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify")
   const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
   const run = digest([item.label, repetition]).slice(0, 8)
-  if (outcome.trivial) {
-    const body = buildNoteBody({ note: noteTrivialSkip() })
+  const notReviewed = outcome.trivial
+    ? noteTrivialSkip()
+    : outcome.partial === "budget-estimate"
+      ? noteBudgetEstimate(outcome.notes)
+      : undefined
+  if (notReviewed) {
+    const body = buildNoteBody({ note: [...new Set([notReviewed, ...outcome.notes])].join("\n\n") })
     yield* post({ write: "createIssueComment", pr: prNumber, body }, outcome.sessions)
-  }
-  if (failed) {
+  } else if (failed) {
     const detail = reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no review"
     const state = nextState(undefined, {
       head: item.head,
@@ -924,7 +931,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       outcome.sessions,
     )
   }
-  if (!outcome.trivial && !failed && selection.inline.length) {
+  if (!notReviewed && !failed && selection.inline.length) {
     const payload = buildCreateReviewPayload({
       head: item.head,
       inline: selection.inline,
@@ -936,9 +943,10 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     })
     yield* post({ write: "createReview", pr: prNumber, payload }, outcome.sessions)
   }
-  if (!outcome.trivial && !failed) {
+  if (!notReviewed && !failed) {
     const count = posted.flatMap((write) => (write.write === "createReview" ? write.payload.comments : [])).length
-    const detail = outcome.specialists.find((entry) => entry.status === "failed")?.detail
+    const requestStop = firstRequestStopDetail(outcome)
+    const detail = requestStop ?? outcome.specialists.find((entry) => entry.status === "failed")?.detail
     const banners = outcome.partial
       ? [
           notePartial({
@@ -983,6 +991,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       head: item.head,
       baseRef: item.baseRef ?? "base",
       mode: "full",
+      ...(requestStop ? { incomplete: true } : {}),
       report: outcome.report,
       ...(outcome.strict ? { strict: outcome.strict } : {}),
       selection,
@@ -1066,13 +1075,15 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // holdback drops (holdbackContext), so a location is listed only when the model saw it.
   const excluded = new Set(outcome.held?.map((file) => file.path))
   const graph = config.impact === "graph"
-  if (graph) {
+  const estimates = observed.filter((event) => event.type === "dispatch")
+  const initial = estimates.find((event) => event.step === undefined)
+  if (graph || (initial && outcome.partial === "budget")) {
     for (const file of outcome.unreviewed) excluded.add(file)
   }
   const impact = observed.find((event) => event.type === "impact")
   const quoted =
-    !outcome.trivial &&
-    (!graph ||
+    !notReviewed &&
+    ((!graph && !initial) ||
       attempts.some((attempt) => attempt.admitted && (attempt.pass === "review" || attempt.pass === "security")))
   const relatedLocations = quoted
     ? quotedLocations(
@@ -1085,7 +1096,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // complete serialized strict record, including the same findings repeated in the outcome and placements.
   const observedStrict = observed.find((event) => event.type === "strict-candidates")
   let strictCandidates: ReplayArtifact["strictCandidates"]
-  if (config.guardrail === "strict" && outcome.strict && observedStrict) {
+  if (!notReviewed && config.guardrail === "strict" && outcome.strict && observedStrict) {
     const index = buildAnchorIndex(plan.files)
     strictCandidates = {
       findings: observedStrict.findings.map((finding) => {
@@ -1120,6 +1131,12 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   }
   const artifact: ReplayArtifact = {
     ...common,
+    ...(initial
+      ? {
+          dispatch: initial.estimate,
+          shrink: estimates.flatMap((event) => (event.step ? [{ step: event.step, estimate: event.estimate }] : [])),
+        }
+      : {}),
     ...(strictCandidates ? { strictCandidates } : {}),
     ...(impact ? { tier1: impact.record } : {}),
     files: {
@@ -1279,6 +1296,7 @@ function projectionOf(input: {
     ...(artifact.tier1 ? { tier1: artifact.tier1 } : {}),
     models: artifact.models,
     files: artifact.files,
+    ...(artifact.dispatch ? { dispatch: artifact.dispatch, shrink: artifact.shrink } : {}),
     cap: { maxCostUsd: artifact.config.value.maxCostUsd, over: [...input.over] },
     passes,
     unattributed: input.wire.filter((request) => !request.sessionID || !named.has(request.sessionID)).length,
@@ -1336,7 +1354,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  maxInputTokens: "VS-24 wiring",
   scopeGate: "VS-42 wiring",
   verifyEvidence: "VS-44 wiring",
   depth: "VS-28 wiring",

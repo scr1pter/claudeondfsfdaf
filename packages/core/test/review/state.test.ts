@@ -98,6 +98,17 @@ describe("encodeState and decodeState", () => {
     expect(decodeState(encodeState(emptyState()))).toEqual(emptyState())
   })
 
+  test("an optional full retry after a budget stop round-trips independently of the analyzed head", () => {
+    const pending = { ...FULL, retryFullAfterBudget: true as const }
+    expect(readState(stateMarker(pending))).toEqual(pending)
+    expect(rawJson(encodeState(FULL))).not.toHaveProperty("q")
+    const malformed = { ...rawJson(encodeState(FULL)), q: "1" }
+    expect(decodeState(base64url(JSON.stringify(malformed)))?.retryFullAfterBudget).toBeUndefined()
+    const run = { head: HEAD, base: BASE, mode: "full" as const, now: NOW }
+    expect(nextState(pending, { ...run, failed: true }).retryFullAfterBudget).toBe(true)
+    expect(nextState(pending, run).retryFullAfterBudget).toBeUndefined()
+  })
+
   test("use base64url, short keys and a shared path table", () => {
     const encoded = encodeState(FULL)
     expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/)

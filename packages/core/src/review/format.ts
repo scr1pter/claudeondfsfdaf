@@ -459,6 +459,18 @@ export function noteTrivialSkip(): string {
   return "Not reviewed. The change met the configured policy for skipping trivial changes."
 }
 
+export const BUDGET_ESTIMATE_UNAVAILABLE =
+  "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+export const BUDGET_REQUEST_CHANGED =
+  "Not reviewed. The prepared model request could no longer be confirmed to fit the configured budget."
+
+// Only the runner's known reason can replace the default in a retained or posted budget stop.
+export function noteBudgetEstimate(notes: readonly string[] = []): string {
+  return notes[0] === BUDGET_ESTIMATE_UNAVAILABLE || notes[0] === BUDGET_REQUEST_CHANGED
+    ? notes[0]
+    : "Not reviewed. The estimated review exceeded the configured budget before any model request."
+}
+
 export function noteNothingToReview(): string {
   return "Nothing to review: every changed file is a lockfile, generated, or ignored."
 }
@@ -518,6 +530,18 @@ export function noteAlreadyReviewed(head: string): string {
   return `\`${short(head)}\` was already reviewed. Comment \`/vector review full\` to review it again.`
 }
 
+export const FIRST_REQUEST_STOP_NOTES = {
+  "first-request-budget": "A follow-up check could not confirm that its first request fit the configured budget.",
+  "first-request-changed": "A prepared model request could no longer be confirmed to fit the configured budget.",
+} as const
+
+export function firstRequestStopDetail(outcome: Pick<ReviewOutcome, "partial" | "specialists">) {
+  if (outcome.partial !== "budget") return
+  for (const { detail, status } of outcome.specialists) {
+    if (status === "skipped" && (detail === "first-request-budget" || detail === "first-request-changed")) return detail
+  }
+}
+
 export function notePartial(input: {
   reason: NonNullable<ReviewOutcome["partial"]>
   reviewed?: number
@@ -528,9 +552,20 @@ export function notePartial(input: {
   timeoutMinutes?: number
   detail?: string
 }): string {
+  if (input.reason === "budget-estimate") return noteBudgetEstimate()
   if (input.reason === "model-error") {
     const detail = input.detail ? `: ${sanitizeProse(clip(oneLine(input.detail), MAX_ERROR), undefined)}` : ""
     return `**Partial review.** One reviewer could not finish${detail}. Comment \`/vector review\` to try again.`
+  }
+  const shown = input.unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(codeSpan).join(", ")
+  const more =
+    input.unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${input.unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
+  if (
+    input.reason === "budget" &&
+    (input.detail === "first-request-budget" || input.detail === "first-request-changed")
+  ) {
+    const note = `**Partial review.** ${FIRST_REQUEST_STOP_NOTES[input.detail]}`
+    return shown ? `${note} Checks remain for ${shown}${more}.` : note
   }
   const stop =
     input.reason === "budget"
@@ -541,9 +576,6 @@ export function notePartial(input: {
   const after = input.total ? ` after ${input.reviewed ?? 0} of ${input.total} files` : ""
   if (!input.unreviewed.length)
     return `**Partial review.** ${stop}${after}. Comment \`/vector review\` to continue now.`
-  const shown = input.unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(codeSpan).join(", ")
-  const more =
-    input.unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${input.unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
   return `**Partial review.** ${stop}${after}. Not reviewed: ${shown}${more}. The next run reviews them, or comment \`/vector review\` to continue now.`
 }
 
@@ -731,6 +763,8 @@ export interface SummaryInput {
   report?: Pick<ModelReport, "summary" | "files">
   selection?: Selection
   trivial?: true
+  // Findings from completed stages remain useful when a later check did not run.
+  incomplete?: boolean
   // The strict guardrail's result (VS-27b's wording), set only under `guardrail: "strict"`; nothing sets it before
   // VS-27c. With it, an empty result never reads as "No issues found".
   strict?: Pick<StrictResult, "complete" | "findings" | "dropped">
@@ -803,8 +837,9 @@ function render(input: SummaryInput, limits: Limits): string {
   const strict = input.strict
     ? { complete: input.strict.complete, findingCount: input.strict.findings.length, dropped: input.strict.dropped }
     : selection?.strict
-  const heading =
-    selection?.diffIncomplete || strict?.complete === false
+  const heading = input.incomplete
+    ? "## Vectorscope review · Incomplete"
+    : selection?.diffIncomplete || strict?.complete === false
       ? "## Vectorscope review · Partial review"
       : selection
         ? `## Vectorscope review · Risk: ${capital(selection.risk)}`
@@ -812,10 +847,10 @@ function render(input: SummaryInput, limits: Limits): string {
   const lines = [heading, ""]
   if (input.banners?.length) lines.push(quote(input.banners), "")
   const summary = input.report?.summary.trim()
-  if (summary && !selection?.diffIncomplete && !strict)
+  if (summary && !input.incomplete && !selection?.diffIncomplete && !strict)
     lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
   if (selection) {
-    lines.push(countLine(selection, strict), "")
+    lines.push(countLine(selection, strict, input.incomplete), "")
     if (strict?.dropped.length) {
       const omitted = strict.dropped.reduce((sum, entry) => sum + entry.count, 0)
       const reasons = strict.dropped.map(({ count, reason }) => `${formatCount(count)} ${STRICT_DROP_LABELS[reason]}`)
@@ -848,7 +883,7 @@ function render(input: SummaryInput, limits: Limits): string {
   return lines.join("\n")
 }
 
-function countLine(selection: Selection, strict?: StrictSummary): string {
+function countLine(selection: Selection, strict?: StrictSummary, incomplete?: boolean): string {
   const onLines = [
     ...selection.inline,
     ...selection.overflow,
@@ -861,7 +896,14 @@ function countLine(selection: Selection, strict?: StrictSummary): string {
   const parts: string[] = []
   if (blocking) parts.push(`${blocking} blocking`)
   if (concerns) parts.push(`${concerns} ${concerns === 1 ? "concern" : "concerns"}`)
-  if (strict) return strictCountLine(strict, parts, below)
+  if (strict)
+    return strictCountLine(
+      incomplete || selection.diffIncomplete ? { ...strict, complete: false } : strict,
+      parts,
+      below,
+    )
+  if (incomplete && !parts.length)
+    return `**0 blocking findings or concerns recorded** on the changed lines${below || "."}`
   if (selection.diffIncomplete && !parts.length) return `No findings on the reviewed lines${below || "."}`
   if (!parts.length) return `**No issues found** on the changed lines${below || "."}`
   return `**${parts.join(" · ")}** on the changed lines${below}`
@@ -1066,10 +1108,12 @@ function skippedSection(skipped: readonly SkippedFile[], limit: number): string[
 }
 
 function footer(input: SummaryInput): string[] {
-  const parts = [`Reviewed \`${short(input.head)}\` against ${codeSpan(input.baseRef)}`]
+  const parts = [
+    `${input.incomplete ? "Partial review of" : "Reviewed"} \`${short(input.head)}\` against ${codeSpan(input.baseRef)}`,
+  ]
   if (input.mode === "incremental" && input.since) parts.push(`incremental from \`${short(input.since)}\``)
   else if (input.mode === "carry" && input.since) parts.push(`carried over from \`${short(input.since)}\``)
-  else parts.push("full review")
+  else if (!input.incomplete) parts.push("full review")
   if (input.cost) parts.push(costWording(input.cost))
   // WP A35: a first pass checked by another lab's model, or the panel's three labs. Own keys included.
   const checked = checkedLine(input.cost?.labs)

@@ -527,6 +527,39 @@ describe("saved replay artifacts", () => {
     expect(trivial.status).toBe("not-sent")
     expect(trivial.detail).toContain("Not reviewed")
     expect(trivial.detail).toContain("trivial")
+    const stopped = fromArtifact(
+      artifact(
+        { files: { reviewed: [], skipped: [] }, attempts: [], posted: [] },
+        { partial: "budget-estimate", specialists: [], unreviewed: ["a.py"], passes: [] },
+      ),
+      seed,
+      [],
+    )
+    expect(stopped).toMatchObject({
+      status: "not-sent",
+      stop: "budget-estimate",
+      attempts: 0,
+      proposed: [],
+      posted: [],
+    })
+    expect(stopped.detail).toContain("Not reviewed")
+    expect(stopped.detail).toContain("estimate")
+    const unavailable = "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+    expect(
+      fromArtifact(
+        artifact(
+          { attempts: [], posted: [] },
+          {
+            partial: "budget-estimate",
+            notes: [unavailable],
+            unreviewed: ["a.py"],
+            specialists: [],
+          },
+        ),
+        seed,
+        [],
+      ),
+    ).toMatchObject({ status: "not-sent", attempts: 0, detail: unavailable })
     const empty = fromArtifact(
       artifact({
         outcome: undefined,
@@ -538,6 +571,38 @@ describe("saved replay artifacts", () => {
     )
     expect(empty).toMatchObject({ status: "partial", proposed: [], posted: [], spend: { admitted: true } })
     expect(empty.detail).toContain("nothing was reviewed")
+  })
+
+  test("a strict pre-dispatch budget stop carries no finding or posting credit into offline re-selection", () => {
+    const shape = artifact()
+    const proposed = shape.outcome!.selection.inline[0]!
+    const value = artifact(
+      {
+        config: { digest: "strict-budget", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, guardrail: "strict" } },
+        files: { reviewed: [], skipped: [] },
+        attempts: [],
+        passes: [],
+        posted: [{ write: "createIssueComment", pr: 1, body: "Not reviewed" }],
+      },
+      {
+        partial: "budget-estimate",
+        unreviewed: [proposed.path],
+        specialists: [],
+        sessions: [],
+        strict: {
+          version: 1,
+          head: shape.source.head,
+          complete: false,
+          incomplete: ["budget-estimate", "unreviewed", "no-reviewer"],
+          findings: [],
+          dropped: [],
+          fixUnchecked: 0,
+        },
+      },
+    )
+    const run = fromArtifact(value, seed, [])
+    expect(run).toMatchObject({ status: "not-sent", attempts: 0, proposed: [], posted: [], stop: "budget-estimate" })
+    expect(reselectRun(value, run).reselection).toMatchObject({ candidates: 0, unposted: 0, complete: false })
   })
 
   test("a graph budget stop before reviewer admission supplies no review credit", () => {
@@ -1038,6 +1103,106 @@ describe("VS-21c outputs", () => {
       variant: { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" }, applied: true },
     })
     expect(fromDesktopArtifact(variant, seed)!.variant).toBe("desktop:shared-verify")
+  })
+
+  test("a conditional budget stop preserves primary attempts, findings and spend in both adapters", () => {
+    const engine = artifact()
+    const partial = fromArtifact(
+      artifact(
+        { attempts: [engine.attempts[0]!] },
+        {
+          partial: "budget",
+          unreviewed: [labelled.path],
+          specialists: [
+            { name: "review", status: "ok", steps: 1 },
+            { name: "verify", status: "skipped", steps: 0, detail: "first-request-budget" },
+          ],
+        },
+      ),
+      seed,
+      [],
+    )
+    expect(partial).toMatchObject({
+      status: "partial",
+      stop: "budget",
+      attempts: 1,
+      detail: "stopped early (budget), 1 file(s) unreviewed",
+      tokens: { input: 5000, output: 500 },
+      spend: { costUsd: 0.05, uncertainUsd: 0 },
+    })
+    expect(partial.proposed.map((finding) => finding.title)).toContain("The default argument may be None")
+    expect(partial.posted.map((finding) => finding.title)).toContain("The default argument may be None")
+
+    const base = desktop()
+    const primary = { ...base.attempts[0]!, costUsd: 0.02 }
+    const verification = { status: "skipped" as const, checked: 0, rejected: 0 }
+    const result = fromDesktopArtifact(
+      desktop({
+        attempts: [primary],
+        outcome: { ...base.outcome!, verification, partial: "budget", unreviewed: [labelled.path] },
+      }),
+      seed,
+    )!
+    expect(result).toMatchObject({
+      status: "partial",
+      stop: "budget",
+      attempts: 1,
+      detail: "stopped early (budget), 1 file(s) unreviewed",
+      tokens: { input: 4000, output: 300 },
+      spend: { costUsd: 0.02, admitted: false },
+    })
+    expect(result.proposed.map((finding) => finding.title)).toContain("The default argument may be None")
+    expect(result.posted.map((finding) => finding.title)).toContain("The default argument may be None")
+
+    // A checker legitimately skipped for an ordinary review doesn't make that review partial.
+    expect(
+      fromDesktopArtifact(
+        desktop({
+          attempts: [primary],
+          outcome: { ...base.outcome!, verification },
+        }),
+        seed,
+      )!.status,
+    ).toBe("completed")
+    expect(
+      fromArtifact(
+        artifact(
+          {},
+          {
+            specialists: [
+              { name: "review", status: "ok", steps: 1 },
+              { name: "verify", status: "skipped", steps: 0 },
+            ],
+          },
+        ),
+        seed,
+        [],
+      ).status,
+    ).toBe("completed")
+  })
+
+  test("a desktop pre-dispatch stop stays unreviewed and preserves an unavailable-estimate reason", () => {
+    const base = desktop()
+    const reason = "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+    const stopped = desktop({
+      attempts: [],
+      outcome: {
+        ...base.outcome!,
+        partial: "budget-estimate",
+        unreviewed: ["a.py"],
+        specialists: [],
+        sessions: [],
+        notes: [reason],
+      },
+    })
+    expect(fromDesktopArtifact(stopped, seed)).toMatchObject({
+      status: "not-sent",
+      detail: reason,
+      stop: "budget-estimate",
+      attempts: 0,
+      proposed: [],
+      posted: [],
+    })
   })
 
   test("a desktop run whose variant never reached its runner is left out and listed, and its case stays planned", async () => {

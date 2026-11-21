@@ -10,6 +10,7 @@ import fsp from "fs/promises"
 import path from "path"
 import { Effect, Option, Schema } from "effect"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
+import { Flock } from "@vectordevai/core/util/flock"
 import {
   mergeReviewConfig,
   parseReviewRules,
@@ -22,9 +23,12 @@ import {
   buildReviewBody,
   buildSummaryBody,
   failedSpend,
+  firstRequestStopDetail,
   formatUsd,
+  noteBudgetEstimate,
   noteMoved,
   noteNothingToReview,
+  notePartial,
   notePrivacyRefused,
   noteTrivialSkip,
 } from "@vectordevai/core/review/format"
@@ -68,6 +72,7 @@ import type {
   SummaryFinding,
   Trust,
 } from "@vectordevai/core/review/types"
+import { unfinishedCauses } from "@vectordevai/core/review/verdict"
 import { Git } from "@/git"
 import { ReviewGit } from "@/review/git"
 import { ReviewTrivial } from "@/review/trivial"
@@ -324,8 +329,10 @@ export function executeLocalReview<RunR, ModelR>(
       !options.context?.stateless && !worktree && options.pr === undefined && branch
         ? yield* localStatePath(git, root, branch)
         : undefined
-    const stored = statePath && !options.full ? yield* readLocalState(statePath) : undefined
-    const saved = stored?.state
+    const stored = statePath ? yield* readLocalState(statePath, !options.full) : undefined
+    const retryFull = stored?.state.retryFullAfterBudget === true
+    // An explicit full review starts fresh as before, but a pending retry retains earlier findings and spend.
+    const saved = !options.full || retryFull ? stored?.state : undefined
     const range: Range =
       options.pr !== undefined
         ? yield* pullRange(git, root, options.pr, base!)
@@ -338,7 +345,7 @@ export function executeLocalReview<RunR, ModelR>(
               saved,
               config,
               ignored,
-              full: options.full,
+              full: options.full || retryFull,
             })
     const target = range.target
     const open = (saved?.findings ?? []).filter((finding) => finding.status === "open")
@@ -361,7 +368,10 @@ export function executeLocalReview<RunR, ModelR>(
       Effect.gen(function* () {
         if (options.json)
           yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
-        else
+        else if (outcome.partial === "budget-estimate") {
+          const count = outcome.unreviewed.length
+          yield* print(`${error} ${count} changed ${count === 1 ? "file remains" : "files remain"} unreviewed.\n`)
+        } else
           yield* print(
             renderLocalReview({
               target,
@@ -384,7 +394,7 @@ export function executeLocalReview<RunR, ModelR>(
     }
     // As CI skips a commit it already reviewed; --fail-on still sees what that review left open. The last review of
     // this commit is printed again, so a script, or someone who lost the first output, still gets its findings.
-    if (saved?.head === range.head && !saved.unreviewed.length && !saved.failed) {
+    if (!retryFull && saved?.head === range.head && !saved.unreviewed.length && !saved.failed) {
       const note = `Nothing new to review: ${short(range.head)} was already reviewed.${stillOpen(open)} Run \`vector review --full\` to review it again.`
       if (options.apply)
         say(
@@ -414,9 +424,10 @@ export function executeLocalReview<RunR, ModelR>(
     }
 
     // Earlier findings follow the lines through what changed since the last review.
+    const priorHead = range.since ?? (retryFull ? saved?.head : undefined)
     const changes =
-      saved && range.since && range.since !== range.head
-        ? yield* ReviewSource.prDiff({ directory: root, mergeBase: range.since, head: range.head }).pipe(
+      saved && priorHead && priorHead !== range.head
+        ? yield* ReviewSource.prDiff({ directory: root, mergeBase: priorHead, head: range.head }).pipe(
             Effect.catch(() => Effect.succeed(undefined)),
           )
         : undefined
@@ -636,7 +647,7 @@ export function executeLocalReview<RunR, ModelR>(
 
     // Only a complete, trusted commit comparison can authorize the zero-token policy. Staged changes and
     // working files have no immutable head blob for their edits. A service cache reset is not a user --full.
-    const forceFull = options.full === true && !options.context
+    const forceFull = (options.full === true || retryFull) && !options.context
     const trivialProof =
       config.trivial === "skip" &&
       !forceFull &&
@@ -671,7 +682,10 @@ export function executeLocalReview<RunR, ModelR>(
     if (options.context && (yield* commitOf(git, root, "HEAD")) !== options.context.expectedHead)
       return yield* new LocalReviewError({ message: "The review head changed before the review could start." })
     yield* ReviewGit.preflight
-    if (!trivialProof) say(`Reviewing ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
+    if (!trivialProof) {
+      const action = (config.maxInputTokens ?? 0) > 0 ? "Checking the review budget for" : "Reviewing"
+      say(`${action} ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
+    }
     const result = yield* deps.runReview({
       directory: root,
       ...(options.context?.parentID ? { parentID: options.context.parentID } : {}),
@@ -733,6 +747,13 @@ export function executeLocalReview<RunR, ModelR>(
       return { exitCode: countAtOrAbove(open, failOn) ? 1 : 0, target, outcome: reviewed } satisfies LocalReviewResult
     }
     if (reviewed.partial === "privacy") return yield* notReviewed(reviewed)
+    if (reviewed.partial === "budget-estimate") {
+      // A forced full run can refuse a head an earlier review completed. Retain that result and its spend, but
+      // retry the whole branch on the next invocation even if its head or token cap changes in the meantime.
+      if (options.full && stored && !retryFull)
+        yield* writeLocalState(statePath, { ...stored.state, retryFullAfterBudget: true }, say, undefined, stored.text)
+      return yield* notReviewed(reviewed, noteBudgetEstimate(reviewed.notes))
+    }
     // Under holdback "secrets" a change whose every file, or in an incremental review every new hunk, was held back
     // from the model runs no pass (Review.run): no reviewer failed, but nothing was reviewed either.
     if (!reviewed.specialists.length && reviewed.held?.length)
@@ -778,22 +799,19 @@ export function executeLocalReview<RunR, ModelR>(
     const outcome: ReviewOutcome = { ...reviewed, selection, notes: [...reviewed.notes, ...headers.notes] }
 
     // Locally every finding is listed rather than commented, so the ones GitHub would carry inline are kept too.
-    yield* writeLocalState(
-      statePath,
-      nextState(saved, {
-        head: range.head,
-        base: range.mergeBase,
-        mode: outcome.mode,
-        now: now(),
-        unreviewed: outcome.unreviewed,
-        ...(outcome.cost ? { cost: outcome.cost } : {}),
-        prior: settled,
-        selection,
-        moved: selection.inline,
-      }),
-      say,
-      outcome,
-    )
+    const next = nextState(saved, {
+      head: range.head,
+      base: range.mergeBase,
+      mode: outcome.mode,
+      now: now(),
+      unreviewed: outcome.unreviewed,
+      ...(outcome.cost ? { cost: outcome.cost } : {}),
+      prior: settled,
+      selection,
+      moved: selection.inline,
+    })
+    if (retryFull && unfinishedCauses(outcome).length) next.retryFullAfterBudget = true
+    yield* writeLocalState(statePath, next, say, outcome)
 
     if (options.json)
       yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
@@ -951,6 +969,7 @@ const postToPull = Effect.fnUntraced(function* (input: {
       ...moved.map((finding) => ({ ...finding, reason: "line-outside-diff" as const })),
     ],
   }
+  const requestStop = firstRequestStopDetail(input.outcome)
   const summary = buildSummaryBody({
     repo,
     pr: input.pr,
@@ -959,6 +978,12 @@ const postToPull = Effect.fnUntraced(function* (input: {
     mode: input.outcome.mode,
     report: input.outcome.report,
     selection,
+    ...(requestStop
+      ? {
+          incomplete: true,
+          banners: [notePartial({ reason: "budget", detail: requestStop, unreviewed: input.outcome.unreviewed })],
+        }
+      : {}),
     files: input.files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
     skipped: input.outcome.skipped,
     notes: [...input.outcome.notes, ...(moved.length ? [noteMoved(moved.length)] : [])],
@@ -1380,55 +1405,58 @@ const localStatePath = Effect.fnUntraced(function* (git: ReviewGit.Client, root:
 
 // `{ version: 1, state, outcome? }`: the state encoded as in the sticky comment, so the same validation reads it back,
 // and the last review's outcome, printed again when its commit is asked about.
-function readLocalState(file: string) {
-  return Effect.promise(async (): Promise<{ state: ReviewState; outcome?: ReviewOutcome } | undefined> => {
-    const text = await fsp.readFile(file, "utf8").catch(() => undefined)
-    if (!text) return undefined
-    const data = parseJson(text)
-    if (!data || data.version !== 1 || typeof data.state !== "string") return undefined
-    const state = decodeState(data.state)
-    if (!state) return undefined
-    if (!isOutcome(data.outcome)) return { state }
-    // Serialized caches are useful history, but cannot certify that old mixed token aggregates were partitioned.
-    const outcome = data.outcome
-    const mixed =
-      (outcome.cost && reviewCostHasCodium(outcome.cost)) || outcome.passes?.some((pass) => codiumPass(pass))
-    const pure =
-      outcome.cost &&
-      (reviewCostIsCodium(outcome.cost) ||
-        (outcome.cost.codium !== true &&
-          !!outcome.passes?.length &&
-          outcome.passes.every((pass) => codiumPass(pass)) &&
-          !outcome.cost.model
-            .split(" + ")
-            .some((model) => model.includes("/") && Billing.hasOwnIdentity({ providerID: model.split("/")[0] }))))
-    return {
-      state,
-      outcome: {
-        ...outcome,
-        ...(outcome.cost
-          ? {
-              cost: {
-                ...outcome.cost,
-                tokensOwnOnly: false,
-                ...(mixed ? { codium: true, kind: pure ? ("codium" as const) : outcome.cost.kind } : {}),
-              },
-            }
-          : {}),
-        ...(mixed && outcome.passes
-          ? {
-              passes: outcome.passes.map((pass) => ({
-                ...pass,
-                usageMissing: true,
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-              })),
-            }
-          : {}),
-      },
-    }
-  })
+function readLocalState(file: string, includeOutcome: boolean) {
+  return Effect.promise(
+    async (): Promise<{ text: string; state: ReviewState; outcome?: ReviewOutcome } | undefined> => {
+      const text = await fsp.readFile(file, "utf8").catch(() => undefined)
+      if (!text) return undefined
+      const data = parseJson(text)
+      if (!data || data.version !== 1 || typeof data.state !== "string") return undefined
+      const state = decodeState(data.state)
+      if (!state) return undefined
+      if (!includeOutcome || !isOutcome(data.outcome)) return { text, state }
+      // Serialized caches are useful history, but cannot certify that old mixed token aggregates were partitioned.
+      const outcome = data.outcome
+      const mixed =
+        (outcome.cost && reviewCostHasCodium(outcome.cost)) || outcome.passes?.some((pass) => codiumPass(pass))
+      const pure =
+        outcome.cost &&
+        (reviewCostIsCodium(outcome.cost) ||
+          (outcome.cost.codium !== true &&
+            !!outcome.passes?.length &&
+            outcome.passes.every((pass) => codiumPass(pass)) &&
+            !outcome.cost.model
+              .split(" + ")
+              .some((model) => model.includes("/") && Billing.hasOwnIdentity({ providerID: model.split("/")[0] }))))
+      return {
+        text,
+        state,
+        outcome: {
+          ...outcome,
+          ...(outcome.cost
+            ? {
+                cost: {
+                  ...outcome.cost,
+                  tokensOwnOnly: false,
+                  ...(mixed ? { codium: true, kind: pure ? ("codium" as const) : outcome.cost.kind } : {}),
+                },
+              }
+            : {}),
+          ...(mixed && outcome.passes
+            ? {
+                passes: outcome.passes.map((pass) => ({
+                  ...pass,
+                  usageMissing: true,
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                })),
+              }
+            : {}),
+        },
+      }
+    },
+  )
 }
 
 function isOutcome(value: unknown): value is ReviewOutcome {
@@ -1450,20 +1478,33 @@ function writeLocalState(
   state: ReviewState,
   say: (text: string) => void,
   outcome?: ReviewOutcome,
+  unchangedRecord?: string,
 ) {
   if (!file) return Effect.void
   return Effect.promise(() =>
-    fsp
-      .mkdir(path.dirname(file), { recursive: true })
-      .then(() =>
-        fsp.writeFile(
-          file,
-          JSON.stringify({ version: 1, state: encodeState(state), ...(outcome ? { outcome } : {}) }) + "\n",
-        ),
-      )
-      .catch((error: unknown) =>
-        say(`Warning: could not save this review for next time: ${error instanceof Error ? error.message : error}`),
-      ),
+    Flock.withLock(
+      path.basename(file),
+      async () => {
+        // A newer run can finish while an earlier one checks its budget. Change only the marker on the exact
+        // record we started with, keeping the original outcome (including legacy usage metadata) intact.
+        if (unchangedRecord !== undefined && (await fsp.readFile(file, "utf8")) !== unchangedRecord) return
+        const encoded = encodeState(state)
+        const record =
+          unchangedRecord === undefined
+            ? { version: 1, state: encoded, ...(outcome ? { outcome } : {}) }
+            : { ...JSON.parse(unchangedRecord), state: encoded }
+        const temporary = `${file}.${crypto.randomUUID()}.tmp`
+        try {
+          await fsp.writeFile(temporary, JSON.stringify(record) + "\n", { mode: 0o600 })
+          await fsp.rename(temporary, file)
+        } finally {
+          await fsp.rm(temporary, { force: true })
+        }
+      },
+      { dir: path.dirname(file) },
+    ).catch((error: unknown) =>
+      say(`Warning: could not save this review for next time: ${error instanceof Error ? error.message : error}`),
+    ),
   )
 }
 

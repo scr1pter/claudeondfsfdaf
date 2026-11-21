@@ -571,6 +571,12 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     name. Match the two by pass name: the artifact lists every planned pass,
     and a verify pass planned and skipped for budget or time has none of the
     four; the outcome lists only the passes that reported usage;
+  - `dispatch` records the runner's initial pre-dispatch estimate when the
+    budget gate runs. `shrink` lists each applied lever and its new estimate,
+    in order. Each estimate includes first-turn tokens and per-pass legacy
+    and v2 figures. A stop before dispatch records zero attempts, zero
+    reviewed files and the budget note. The projection preserves the
+    estimates separately from requests the fake provider actually receives.
   - When the graph builder runs, `tier1` records its code-free
     `ImpactRecord`. Results include `stages` (candidates and
     gated files, confirmed and packed call sites), `dropped` (ignored,
@@ -593,8 +599,9 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     outbound signatures themselves are code text, so the record leaves them
     out. `context.locations` includes the graph locations quoted by an
     admitted reviewer. Incomplete graph context is recorded separately
-    from changed files omitted from review. The pre-dispatch `shrink`
-    field remains reserved for VS-24 budget wiring.
+    from changed files omitted from review. When the dispatch gate trims graph
+    context, `tier1` describes the retained slice and `shrink` records each
+    applied reduction with its resulting request estimate.
   - `utilisation`, typed for VS-49's slice utilisation (core `eval.ts`
     `SliceUtilisation`) and absent until the VS-49 wiring observer fills it
     from the passes' session events, at zero tokens. It enters no digest.

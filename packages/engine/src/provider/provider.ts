@@ -1458,6 +1458,8 @@ export type Error = ModelNotFoundError | InitError | NoProvidersError | NoModels
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderV2.ID, Info>>
   readonly unavailable: () => Effect.Effect<ProviderUnavailable[]>
+  /** Already resolved model catalog; a sizing query must never refresh accounts, credentials or a server. */
+  readonly reviewProvider?: (id: ProviderV2.ID) => Effect.Effect<Info | undefined>
   readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
   readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
@@ -2828,6 +2830,19 @@ const layer = Layer.effect(
       }
     }
 
+    const reviewProvider = Effect.fn("Provider.reviewProvider")(function* (id: ProviderV2.ID) {
+      const s = Option.getOrUndefined(yield* InstanceState.getSuccess(state))
+      if (!s) return
+      const policy = Config.local()
+      if (
+        (s.local.enabled || policy.enabled) &&
+        (JSON.stringify(policy) !== JSON.stringify(s.local) || s.revision !== holds.revision())
+      )
+        return
+      ProcessIsolation.assertExternalValueAllowed(s)
+      return s.providers[id]
+    })
+
     const getProvider = Effect.fn("Provider.getProvider")((providerID: ProviderV2.ID) =>
       Effect.map(providerState, (s) => s.providers[providerID]),
     )
@@ -3272,6 +3287,7 @@ const layer = Layer.effect(
       list,
       unavailable,
       getProvider,
+      reviewProvider,
       getModel,
       getLanguage,
       line,

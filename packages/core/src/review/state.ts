@@ -469,7 +469,10 @@ export function nextState(prev: ReviewState | undefined, input: NextStateInput):
   const base = input.failed ? before.base : input.base
   if (head) next.head = head
   if (base) next.base = base
-  if (input.failed) next.failed = true
+  if (input.failed) {
+    next.failed = true
+    if (before.retryFullAfterBudget) next.retryFullAfterBudget = true
+  }
   const noted = input.notedHead ?? before.notedHead
   if (noted) next.notedHead = noted
   return pruneState(next)
@@ -571,6 +574,7 @@ interface CompactState {
   m?: [string, number]
   u: number[]
   f?: 1
+  q?: 1 // retry the full diff after a pre-dispatch budget stop
   n?: string
   i: number
   x?: [string, string, number, number]
@@ -621,6 +625,7 @@ function encodeRaw(state: ReviewState): string {
   if (state.codiumReviews !== undefined) compact.k = count(state.codiumReviews)
   if (state.month) compact.m = [state.month.key, state.month.costUsd]
   if (state.failed) compact.f = 1
+  if (state.retryFullAfterBudget) compact.q = 1
   if (state.notedHead) compact.n = state.notedHead
   if (state.inflight) compact.x = [state.inflight.run, state.inflight.head, state.inflight.at, state.inflight.costUsd]
   return toBase64url(JSON.stringify(compact))
@@ -659,6 +664,7 @@ export function decodeState(payload: string): ReviewState | undefined {
   if (Array.isArray(raw.m) && typeof raw.m[0] === "string" && /^\d{4}-\d{2}$/.test(raw.m[0]))
     state.month = { key: raw.m[0], costUsd: amount(raw.m[1]) }
   if (raw.f === 1) state.failed = true
+  if (raw.q === 1) state.retryFullAfterBudget = true
   if (isSha(raw.n)) state.notedHead = raw.n
   if (Array.isArray(raw.x) && typeof raw.x[0] === "string" && isSha(raw.x[1]))
     state.inflight = { run: raw.x[0], head: raw.x[1], at: count(raw.x[2]), costUsd: amount(raw.x[3]) }

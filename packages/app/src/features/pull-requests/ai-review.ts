@@ -38,6 +38,13 @@ import {
 } from "@vectordevai/core/review/diff"
 import { fingerprint, fnv1a64, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
 import {
+  decideDispatch,
+  estimateDispatch,
+  type DispatchEstimate,
+  type PassPlan,
+} from "@vectordevai/core/review/dispatch"
+import {
+  BUDGET_ESTIMATE_UNAVAILABLE,
   buildSummaryBody,
   codeSpan,
   costWording,
@@ -47,6 +54,7 @@ import {
   noteHeldBack,
   noteIgnoreUnchecked,
   noteNothingToReview,
+  noteBudgetEstimate,
   notePrivacyRefused,
   noteRedacted,
   noteTriageUnchecked,
@@ -266,6 +274,10 @@ export type ReviewOutcomeLite = {
   carried?: number
   // Nothing changed since the last review, so this is that review again and nothing was sent to a model.
   unchanged?: true
+  partial?: "budget-estimate" | "budget"
+  unreviewed?: string[]
+  dispatch?: DispatchEstimate
+  shrink?: { step: "diff"; estimate: DispatchEstimate }[]
   // What each pass spent: the reviewers on the triage model when there is one, the double-check on the review model.
   passes?: ReviewPass[]
   triage?: string // the first pass's model, when review.json names a cheaper one than the review model
@@ -320,6 +332,23 @@ export type ReviewRunInput = ReviewRequest & {
   certificates?: readonly ModelCertificate[]
   // The settings the review runs under, once read (the eval's desktop replay records them).
   onSettings?: (settings: { config: ReviewConfig; warnings: readonly string[] }) => void
+  // An estimate from request preparation, without creating a session or contacting a model. The current desktop
+  // session API has no such preview; its production caller leaves this absent.
+  // It must cover the complete first request, including system instructions, tools and provider additions.
+  // For a conditional checker, candidateLimit requests a reservation for that many future findings.
+  // Return undefined if any of the requested inputs cannot be estimated.
+  estimateFirstTurn?: (input: {
+    pass: Specialist | "verify" | "judge"
+    directory: string
+    parentID?: string
+    model: ReviewModel
+    scope: Scope
+    rules: PermissionRule[]
+    text: string
+    format: typeof FORMAT | typeof VERIFY_FORMAT
+    candidateLimit?: number
+    signal: AbortSignal
+  }) => Promise<number | undefined>
 }
 
 type Tokens = { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
@@ -708,6 +737,8 @@ const NO_USAGE: Usage = { messages: [], complete: true }
 type SpecialistResult = SpecialistRun & { report?: ModelReport; usage: Usage }
 
 export async function runReview(input: ReviewRunInput, client: ReviewClient): Promise<ReviewOutcomeLite | undefined> {
+  const timeoutMs = input.timeoutMs ?? REVIEW_TIMEOUT_MS
+  const previewDeadline = Date.now() + timeoutMs
   const now = input.now ?? Date.now
   const started = now()
   const directory = input.directory
@@ -767,7 +798,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         trigger: "desktop",
       })
   const config = merged.config
-  input.onSettings?.({ config, warnings: merged.warnings })
+  input.onSettings?.({ config: structuredClone(config), warnings: [...merged.warnings] })
   // The settings' warnings about privacy, holdback and attestations (a value read as the stricter setting, an
   // attestation dropped) say why a review was raised to zdr or refused, so the outcome and a refusal carry them. The
   // other warnings stay out, as before SF-15; without these settings there are none.
@@ -800,6 +831,9 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const previous =
     input.previous &&
     input.previous.pr === pr?.number &&
+    !input.previous.partial &&
+    // Saved reviews from before desktop token admission may have ignored this same configured limit.
+    (!(config.maxInputTokens && config.maxInputTokens > 0) || input.previous.dispatch) &&
     input.previous.settingsKey === settingsKey &&
     input.previous.specialists.length > 0 &&
     input.previous.specialists.every((specialist) => specialist.status === "ok") &&
@@ -887,6 +921,32 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       banners: [],
       notes: [...settingNotes, ...holdNotes],
     }
+
+  const maxInputTokens = config.maxInputTokens ?? 0
+  const authored = authorship(pr, "pr" in input ? input.viewer : undefined)
+  const budgetStop = (reason: string, details: string[]): ReviewOutcomeLite => ({
+    ...reviewed,
+    checkout,
+    authored,
+    label,
+    report: { summary: "Not reviewed.", risk: "low", files: [], findings: [] },
+    selection: emptySelection(),
+    partial: "budget-estimate",
+    unreviewed: [...new Set(files.map((file) => file.path))],
+    anchored: {},
+    durationMs: now() - started,
+    specialists: [],
+    sessions: [],
+    banners: [],
+    notes: [reason, ...settingNotes, ...holdNotes, ...details],
+  })
+  // Only the engine prepares provider instructions, tools and plugin additions. A count of the desktop's diff
+  // and messages cannot bound that request. Refuse before model selection or reuse of a previously admitted run.
+  if (maxInputTokens > 0 && !input.estimateFirstTurn)
+    return budgetStop(BUDGET_ESTIMATE_UNAVAILABLE, [
+      "The desktop session API does not provide this estimate for maxInputTokens. No model request was sent.",
+    ])
+
   // Nothing changed since the last review, so its findings stand. The checkout is the one read just now: the user may
   // have switched branches since, and Apply fix and Ask the agent follow it.
   if (previous && unchanged.size === review.length && Object.keys(previous.fileKeys ?? {}).length === review.length)
@@ -967,7 +1027,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     [...changedSince, ...sent.filter((file) => unchanged.has(file.path))],
     budget,
   )
-  const heads =
+  let heads =
     checkout.trust === "untrusted"
       ? promptHeadFiles(hold?.headFiles ?? checkout.headFiles, new Set(inline.map((file) => file.path)), budget)
       : undefined
@@ -1020,7 +1080,192 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     maxComments: config.maxComments,
   }
   const plan = planSpecialists(review, config)
-  const texts: Record<Specialist, string> = { review: buildReviewPrompt(prompt), security: buildSecurityPrompt(prompt) }
+  const specialistTexts = (value: PromptInput) => ({
+    review: buildReviewPrompt(value),
+    security: buildSecurityPrompt(value),
+  })
+  let texts = specialistTexts(prompt)
+  const subject = pr ? `#${pr.number}` : "uncommitted changes"
+  // Which of the owner's memory lines the reviewers hear follows who wrote the change, never what the checkout holds.
+  const scope: Scope = {
+    paths: review.map((file) => file.path),
+    trust: authored,
+    ...(config.privacy === "zdr" ? { privacy: "zdr" as const } : {}),
+  }
+  const rules = reviewPermissionRules(hold ? { holdback: "secrets", held: [...heldPaths] } : {})
+  const verifyLimit = Math.max(4, config.maxComments * 2)
+  const verifyBase = { trust: checkout.trust, head, ...(pr ? {} : { uncommitted: true }) }
+  const dispatchNotes: string[] = []
+  let uncheckedPaths: string[] | undefined
+  const shrink: NonNullable<ReviewOutcomeLite["shrink"]> = []
+  let dispatch: DispatchEstimate | undefined
+  let remainingTokens = maxInputTokens
+
+  async function firstTurn(
+    pass: Specialist | "verify" | "judge",
+    target: ReviewModel,
+    text: string,
+    candidateLimit?: number,
+  ) {
+    const remainingMs = previewDeadline - Date.now()
+    if (!input.estimateFirstTurn || input.signal?.aborted || remainingMs <= 0) return undefined
+    const cancel = stopWhen(input.signal, remainingMs)
+    const controller = new AbortController()
+    try {
+      const estimate = input.estimateFirstTurn({
+        pass,
+        model: target,
+        text,
+        scope,
+        rules,
+        directory,
+        parentID: input.parentID,
+        format: pass === "verify" || pass === "judge" ? VERIFY_FORMAT : FORMAT,
+        signal: controller.signal,
+        ...(candidateLimit !== undefined ? { candidateLimit } : {}),
+      })
+      const tokens = await Promise.race([
+        estimate,
+        cancel.promise.then(() => {
+          controller.abort()
+          return undefined
+        }),
+      ])
+      if (input.signal?.aborted || Date.now() >= previewDeadline) return undefined
+      return tokens !== undefined && Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined
+    } catch {
+      return undefined
+    } finally {
+      cancel.dispose()
+    }
+  }
+  async function projectedTurns(projectedTexts: Record<Specialist, string>, projectedHeads: HeadFile[] | undefined) {
+    const passes: PassPlan[] = []
+    const add = async (
+      pass: Specialist | "verify" | "judge",
+      target: ReviewModel,
+      text: string,
+      steps: number,
+      limit?: number,
+    ) => {
+      const tokens = await firstTurn(pass, target, text, limit)
+      if (tokens === undefined) return false
+      passes.push({
+        pass,
+        model: modelName(target),
+        promptTokens: tokens,
+        maxSteps: steps,
+        ...(target.costKind === "priced" && target.price ? { price: target.price } : {}),
+      })
+      return true
+    }
+    for (const pass of plan) {
+      if (
+        !(await add(
+          pass,
+          first,
+          projectedTexts[pass],
+          pass === "security" ? Math.ceil((config.maxSteps * 2) / 3) : config.maxSteps,
+        ))
+      )
+        return
+    }
+    if (config.verify !== "off" || triage) {
+      const reserved = { ...verifyBase, candidates: [], headFiles: projectedHeads }
+      if (!(await add("verify", model, buildVerifyPrompt(reserved), 10, verifyLimit))) return
+      if (judge && !(await add("judge", judge, buildJudgePrompt({ ...reserved, checks: [] }), 10, verifyLimit))) return
+    }
+    return estimateDispatch(passes)
+  }
+
+  if (maxInputTokens > 0) {
+    dispatch = await projectedTurns(texts, heads)
+    let estimate = dispatch
+    if (estimate) {
+      // A lower step count cannot reduce the first input to a pass. The desktop has no dollar cap.
+      const decision = decideDispatch(estimate, {
+        maxInputTokens,
+        available: ["steps:verify", "steps:security", "steps:review", "diff"],
+      })
+      if (!decision.go && "shrink" in decision && decision.shrink === "diff") {
+        const changedOnly = renderPatch(inline, 0)
+        if (changedOnly !== prompt.diff || heads?.length) {
+          // A rebuilt PR may supply a non-inline change only through its head file. Keep its changed
+          // lines in the specialist prompt. The checker gets no specialist diff, so it needs a
+          // hunk copy for every head it could previously cite, including those in the inline diff.
+          const changes = new Map(sent.map((file) => [file.path, file]))
+          const trimmedHeads = heads?.map((head) => {
+            const file = changes.get(head.path)
+            return file?.hunks.length ? { path: head.path, text: renderPatch([file], 0), exact: false } : head
+          })
+          const inlinePaths = new Set(inline.map((file) => file.path))
+          const promptPaths = new Set(prompt.headFiles?.map((file) => file.path))
+          const trimmed = specialistTexts({
+            ...prompt,
+            diff: changedOnly,
+            headFiles: trimmedHeads?.filter(
+              (file) =>
+                promptPaths.has(file.path) && (!inlinePaths.has(file.path) || !changes.get(file.path)?.hunks.length),
+            ),
+          })
+          const next = await projectedTurns(trimmed, trimmedHeads)
+          const before = estimate
+          if (!next) {
+            estimate = undefined
+          } else if (
+            next.firstTurnTokens < before.firstTurnTokens &&
+            next.passes.every((pass, index) => pass.promptTokens <= before.passes[index]!.promptTokens)
+          ) {
+            texts = trimmed
+            heads = trimmedHeads
+            estimate = next
+            shrink.push({ step: "diff", estimate })
+            dispatchNotes.push(
+              "Partial coverage. The review used changed lines only. Surrounding lines and full file copies were omitted to fit the token budget.",
+            )
+          }
+        }
+      }
+    }
+    if (input.signal?.aborted) return undefined
+    if (!estimate || !decideDispatch(estimate, { maxInputTokens }).go) {
+      const reason = estimate ? noteBudgetEstimate() : BUDGET_ESTIMATE_UNAVAILABLE
+      return {
+        ...budgetStop(reason, dispatchNotes),
+        ...(dispatch ? { dispatch, shrink } : {}),
+      }
+    }
+    remainingTokens -= estimate.passes
+      .filter((entry) => entry.pass === "review" || entry.pass === "security")
+      .reduce((sum, entry) => sum + entry.promptTokens, 0)
+  }
+
+  async function checkerFits(pass: "verify" | "judge", target: ReviewModel, text: string, candidates: Finding[]) {
+    // The candidate count bounds the forecast only. Price the actual request without dropping findings.
+    const tokens = await firstTurn(pass, target, text)
+    if (tokens === undefined || tokens > remainingTokens) {
+      const paths = new Set(sent.map((file) => file.path))
+      const affected = [
+        ...new Set(
+          candidates
+            .flatMap((candidate) => [
+              candidate.path,
+              ...(candidate.evidence ?? []).map((source) =>
+                source.replace(/:\d+(?:-\d+)?$/, "").replace(/^(\.\/|\/)+/, ""),
+              ),
+            ])
+            .filter((path) => paths.has(path)),
+        ),
+      ]
+      uncheckedPaths = affected.length ? affected : [...paths]
+      dispatchNotes.push(
+        `Review incomplete. The ${pass} pass did not run because its first request could not be confirmed within the remaining token budget.`,
+      )
+      return false
+    }
+    remainingTokens -= tokens
+    return true
+  }
 
   if (review.length > ESTIMATE_FILES && input.confirm) {
     const estimate = estimateReview({
@@ -1039,18 +1284,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       ? `Reviewing with ${modelName(triage)}, then double-checking with ${modelName(model)}…`
       : `Reviewing with ${modelName(model)}…`,
   )
-  const subject = pr ? `#${pr.number}` : "uncommitted changes"
-  // Which of the owner's memory lines the reviewers hear follows who wrote the change, never what the checkout holds.
-  const authored = authorship(pr, "pr" in input ? input.viewer : undefined)
-  // Under "zdr" the scope says so, which can only raise what the engine server holds the session to.
-  const scope: Scope = {
-    paths: review.map((file) => file.path),
-    trust: authored,
-    ...(config.privacy === "zdr" ? { privacy: "zdr" as const } : {}),
-  }
-  const rules = reviewPermissionRules(hold ? { holdback: "secrets", held: [...heldPaths] } : {})
-  const timeoutMs = input.timeoutMs ?? REVIEW_TIMEOUT_MS
-  const stop = stopWhen(input.signal, timeoutMs)
+  const stop = stopWhen(input.signal, maxInputTokens > 0 ? Math.max(0, previewDeadline - Date.now()) : timeoutMs)
   const runs = await Promise.all(
     plan.map((name) =>
       runSpecialist({
@@ -1112,9 +1346,13 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     status(
       `Double-checking ${candidates.length} ${candidates.length === 1 ? "finding" : "findings"}${triage ? ` with ${modelName(model)}` : ""}…${spentSoFar(runs, first)}`,
     )
+  const verifyText = candidates.length
+    ? buildVerifyPrompt({ ...verifyBase, candidates, headFiles: verifyHeadFiles(sent, heads, candidates) })
+    : ""
   const verify = !candidates.length
     ? undefined
-    : stop.stopped()
+    : stop.stopped() ||
+        (maxInputTokens > 0 && (!(await checkerFits("verify", model, verifyText, candidates)) || stop.stopped()))
       ? ({ status: "skipped", verdicts: [], usage: NO_USAGE } satisfies VerifyRun)
       : await runVerify({
           client,
@@ -1123,13 +1361,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           onSession: (sessionID) => input.onProgress?.({ type: "session", sessionID, costKind: model.costKind }),
           title: `${REVIEW_SESSION_TITLE_PREFIX}${subject} · verify`,
           scope,
-          text: buildVerifyPrompt({
-            trust: checkout.trust,
-            head,
-            ...(pr ? {} : { uncommitted: true }),
-            candidates,
-            headFiles: verifyHeadFiles(sent, heads, candidates),
-          }),
+          text: verifyText,
           model,
           rules,
           stop: stop.promise,
@@ -1150,7 +1382,8 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   if (judgeText && judge) status(`Asking ${modelName(judge)} for the panel's final call…`)
   const judged = !judgeText
     ? undefined
-    : stop.stopped()
+    : stop.stopped() ||
+        (maxInputTokens > 0 && (!(await checkerFits("judge", judge!, judgeText, candidates)) || stop.stopped()))
       ? ({ status: "skipped", verdicts: [], usage: NO_USAGE } satisfies VerifyRun)
       : await runVerify({
           client,
@@ -1388,6 +1621,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     banners: partialBanners(runs, timeoutMs),
     notes: [
       ...picked.notes,
+      ...dispatchNotes,
       ...settingNotes,
       ...holdNotes,
       ...(judge && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(modelName(judge))] : []),
@@ -1428,8 +1662,9 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           },
         }
       : {}),
-    fileKeys,
-    settingsKey,
+    ...(dispatchNotes.length ? {} : { fileKeys, settingsKey }),
+    ...(uncheckedPaths ? { partial: "budget" as const, unreviewed: uncheckedPaths } : {}),
+    ...(dispatch ? { dispatch, shrink } : {}),
     ...(carried.length ? { carried: carried.length } : {}),
     ...(passes.length ? { passes } : {}),
     ...(triage ? { triage: modelName(triage) } : {}),
@@ -2329,12 +2564,23 @@ export function countBySeverity(groups: readonly { severity: Severity; findings:
 
 export type ReviewEvent = "comment" | "approve" | "request-changes"
 
-// Vector never approves on its own. The user may, but not while a blocking finding stands.
-export function reviewEvents(selection: Selection): Record<ReviewEvent, boolean> {
+// The panel's error message and retry button handle a refusal before any session. Programmatic callers
+// keep runReview's structured outcome. Once a specialist has run, the panel can show its findings and cost.
+export function reviewPanelResult(outcome: ReviewOutcomeLite | undefined) {
+  if (outcome?.partial === "budget-estimate") throw new Error(outcome.notes.join(" "))
+  return outcome
+}
+
+// Vector never approves on its own. The user may approve after a completed review with no blocking findings.
+export function reviewEvents(
+  selection: Selection,
+  partial?: ReviewOutcomeLite["partial"],
+): Record<ReviewEvent, boolean> {
+  if (partial === "budget-estimate") return { comment: false, approve: false, "request-changes": false }
   const blocking = [...selection.inline, ...selection.overflow, ...selection.outsideDiff, ...selection.elsewhere].some(
     (finding) => finding.severity === "blocking",
   )
-  return { comment: true, approve: !blocking, "request-changes": true }
+  return { comment: true, approve: !blocking && !partial, "request-changes": true }
 }
 
 export function repoOf(url: string): RepoRef | undefined {
@@ -2627,15 +2873,16 @@ export function buildDesktopSummary(outcome: ReviewOutcomeLite, url?: string) {
 function desktopSummaryBody(outcome: ReviewOutcomeLite, url?: string, inlinePosted = false) {
   return buildSummaryBody({
     form: "desktop",
+    ...(outcome.partial === "budget" ? { incomplete: true } : {}),
     inlinePosted,
     repo: url ? repoOf(url) : undefined,
     pr: outcome.pr,
     head: outcome.head,
     baseRef: outcome.baseRef,
     mode: "full",
-    report: outcome.report,
-    selection: outcome.selection,
-    files: outcome.files,
+    report: outcome.partial === "budget-estimate" ? undefined : outcome.report,
+    selection: outcome.partial === "budget-estimate" ? undefined : outcome.selection,
+    files: outcome.partial === "budget-estimate" ? [] : outcome.files,
     skipped: outcome.skipped,
     banners: outcome.banners,
     notes: outcome.notes,
