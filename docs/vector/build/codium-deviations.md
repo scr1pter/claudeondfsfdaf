@@ -3606,6 +3606,19 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
      - `info.workspaceID` (`session.ts:613`).
 
      Each is a privacy reading of `--sanitize` outside F44's lifecycle scope.
+     21 Nov 2026: repaired on branch `engine-core-fixes`, all in `packages/engine/src/cli/cmd/export.ts`. The tool
+     error state's `error` is redacted (`tool-error`); retry parts and the assistant `error` go through one
+     `redactError` helper that keeps the name, codes, flags and figures, redacts `message`, `responseBody` and `ref`,
+     and turns `responseHeaders`/`metadata` into markers (literal fields such as `code`/`reason` stay, so the union
+     still decodes); `structured` becomes a `structured` marker (or redacted strings when it is not a record); the
+     user `format`'s JSON schema becomes a `format-schema` marker; `info.path` is redacted, each permission rule's
+     `pattern` is redacted (tool and action stay), and `share` and `workspaceID` are deleted. The `default` branch now
+     fails closed: an unnamed part kind keeps its type and id keys (`id`, `sessionID`, `messageID`, `*_id`) and every
+     other string is redacted. Tests: `packages/engine/test/cli/export-sanitize.test.ts` "sanitized export
+     pass-throughs (F44b)" seeds one private value per field, checks the source holds all eleven, then that the
+     sanitized archive holds none, decodes as `SessionArchive.Legacy`, and carries the exact markers; red on the old
+     `export.ts` (21 pass, 1 fail). `import.test.ts` 6 pass. Not done: the CLI child-lifecycle case in
+     `import.test.ts` (item 3 below stays open).
   2. **F6's CI receipt is missing from the records.** F6's Vector Codium run 43674652525, on `5f19b0c9`, completed with
      conclusion failure (`get_workflow_run`). This package's review fixes read its jobs (`list_workflow_jobs`) and the
      failing job's log tail (`get_job_logs`, 140 lines):
@@ -6418,6 +6431,7 @@ These are pointers only; nothing is fixed here.
   finish: F6 cost kind on read", For the lead); `local-result.ts` stays open with VectorScope.
 - F44 ("Codium finish: F44 sanitized lifecycle text", For the lead):
   - item 1, F44b's `sanitizeLegacy` pass-throughs (`export.ts:127-131`, `:250` and the parts listed there);
+    21 Nov 2026: repaired on branch `engine-core-fixes` (see the F44b item above);
   - item 3, a CLI-level export check. Item 2 is completed above.
 - P6 review addendum (For the lead):
   - item 1, an allowlist module out of `packages/core/src/brain/skill.ts`;
