@@ -9,6 +9,7 @@ import { untrustedChildEnvironment } from "./child-environment"
 import { Flag } from "./flag/flag"
 import { FSUtil } from "./fs-util"
 import { which } from "./util/which"
+import { TASKKILL, taskkillArgs } from "./windows-system"
 
 const SIGKILL_TIMEOUT_MS = 200
 const META: Record<string, { deny?: boolean; login?: boolean; posix?: boolean; ps?: boolean }> = {
@@ -35,7 +36,7 @@ export async function killTree(proc: ChildProcess, opts?: { exited?: () => boole
 
   if (process.platform === "win32") {
     await new Promise<void>((resolve) => {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/f", "/t"], {
+      const killer = spawn(TASKKILL, taskkillArgs(pid), {
         env: untrustedChildEnvironment(),
         stdio: "ignore",
         windowsHide: true,

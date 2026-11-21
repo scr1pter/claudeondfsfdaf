@@ -138,7 +138,7 @@ const INVENTORY = {
   },
   "packages/core/src/shell.ts": {
     stance: "fixed-helper",
-    why: "killTree's Windows-only `taskkill /pid <pid> /f /t`: a fixed argv, resolved through PATH and the working directory, with the untrusted-child environment.",
+    why: "killTree's Windows-only tree kill: the fixed C:\\Windows\\System32\\taskkill.exe (WindowsSystem.TASKKILL) with taskkillArgs(pid), never found on PATH or in the working directory, with the untrusted-child environment.",
   },
   "packages/core/src/config/managed.ts": {
     stance: "fixed-helper",
@@ -218,8 +218,8 @@ const INVENTORY = {
 const HELPER_CALLS = [
   {
     file: "packages/core/src/cross-spawn-spawner.ts",
-    call: "NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`",
-    why: "killGroup's Windows tree kill of a process this spawner started; Windows refuses every launch while isolation is required.",
+    call: "NodeChildProcess.execFile(TASKKILL, taskkillArgs(proc.pid",
+    why: "killGroup's Windows tree kill of a process this spawner started: the fixed taskkill.exe (WindowsSystem.TASKKILL), no shell, the untrusted-child environment; Windows refuses every launch while isolation is required.",
   },
 ] as const
 
@@ -551,6 +551,17 @@ describe("direct process spawn inventory (spawn review §4, principle 5)", () =>
       .map((source) => source.file)
     expect(constructs).toEqual(["packages/engine/src/mcp/stdio.ts"])
     expect(listed("launch")).toContain("packages/engine/src/mcp/stdio.ts")
+  })
+
+  // F7: taskkill runs only as the fixed WindowsSystem.TASKKILL, the one file that names it. A bare name resolves through
+  // PATH and, on Windows, the working folder first, where a repository could put its own taskkill.exe.
+  test("no core or engine source starts a bare taskkill", async () => {
+    const sources = await scanned
+    expect(
+      sources
+        .filter((source) => /(["'`])taskkill(?:\.exe)?[\s"'`]/i.test(source.code))
+        .map((source) => source.file),
+    ).toEqual(["packages/core/src/windows-system.ts"])
   })
 
   test("only cross-spawn-spawner.ts builds Effect's ChildProcessSpawner service", async () => {

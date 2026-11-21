@@ -617,3 +617,21 @@ by this addendum.
   root-owned bwrap runs (owned-process.test.ts's skip pattern, kept in this file rather than the native
   `process-isolation-linux.test.ts`), `printf '%s|'` through the plan prints `a b|it's|$HOME|`x`|`. On the old join
   all three fail (7 pass, 3 fail; bwrap exit 2). FLOOR stays false; nothing is activated.
+
+## Addendum, 21 November 2026: F7 (Windows taskkill through PATH) closed for core and the engine
+
+- New `packages/core/src/windows-system.ts`: `TASKKILL` is `C:\Windows\System32\taskkill.exe` (the fixed
+  `C:\Windows`, as `config/managed.ts` reads REG and POWERSHELL; SystemRoot is the user's to change) and
+  `taskkillArgs(pid)` is `["/pid", pid, "/T", "/F"]`.
+- `core/cross-spawn-spawner.ts` killGroup: `NodeChildProcess.exec` of a `taskkill …` string (a shell, PATH and the
+  working folder) is now `execFile(TASKKILL, taskkillArgs(pid), { windowsHide: true, env: untrustedChildEnvironment(),
+  shell: false })`, with the same error mapping. killGroup stays the only signaller on this path, and the fallbacks
+  are unchanged. `core/shell.ts` killTree and `engine/util/process.ts` stop use the same constant (the latter through
+  `run`, whose cross-spawn starts an absolute `.exe` directly, with no `cmd`).
+- Tests: `packages/core/test/windows-system.test.ts` pins the constant and argv; `packages/engine/test/spawn-inventory.test.ts`
+  updates the shell.ts row and the spawner's HELPER_CALLS row, and adds "no core or engine source starts a bare
+  taskkill" (only `windows-system.ts` may name it; red on the old source, and red again with `util/process.ts`'s old
+  line put back). The Windows core and engine shards are the runtime proof.
+- Follow-ups, not changed here: `packages/sdk/js/src/process.ts:8` (the SDK copy cannot import core; after the
+  regeneration PR, inline the absolute path and a minimal environment), `packages/desktop/src/main/github-clone.ts:560`
+  (`execFileSync("taskkill", …)`) and `packages/desktop/src/main/external-agents.ts:1033` (`"taskkill"`).

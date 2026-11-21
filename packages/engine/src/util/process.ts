@@ -3,6 +3,7 @@ import type { Stream } from "node:stream"
 import launch from "cross-spawn"
 import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import { TASKKILL, taskkillArgs } from "@vectordevai/core/windows-system"
 import { buffer } from "node:stream/consumers"
 import { errorMessage } from "./error"
 
@@ -175,7 +176,7 @@ export async function stop(proc: ChildProcess) {
     return
   }
 
-  const out = await run(["taskkill", "/pid", String(proc.pid), "/T", "/F"], {
+  const out = await run([TASKKILL, ...taskkillArgs(proc.pid)], {
     nothrow: true,
   })
 
