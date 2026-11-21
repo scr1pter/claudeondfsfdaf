@@ -37,6 +37,7 @@ import {
   transcriptFailureReason,
   validateCoreTranscript,
   waitForLifecycleExit,
+  warmLifecycleInspection,
   type Command,
   type CommandResult,
   type NativeChannel,
@@ -1356,6 +1357,52 @@ test("Mac liveness requires completed ps evidence or a genuine ESRCH including r
     }
     expect(inspections).toBe(0)
   }
+})
+
+test("Mac lifecycle inspection tools warm once under a setup bound and fail closed when unavailable", async () => {
+  const calls: Command[] = []
+  const run = (pgrep: CommandResult, ps: CommandResult) => (command: Command) => {
+    calls.push(command)
+    return Promise.resolve(command.executable === "/usr/bin/pgrep" ? pgrep : ps)
+  }
+  for (const code of [0, 1]) {
+    calls.length = 0
+    await warmLifecycleInspection(run(inspectedProcess("", code), inspectedProcess("S+")))
+    expect(calls).toEqual([
+      { executable: "/usr/bin/pgrep", args: ["-P", String(process.pid)], timeoutMs: 5000 },
+      { executable: "/bin/ps", args: ["-p", String(process.pid), "-o", "stat="], timeoutMs: 5000 },
+    ])
+  }
+  for (const [pgrep, ps] of [
+    [{ ...inspectedProcess(""), timedOut: true }, inspectedProcess("S+")],
+    [inspectedProcess("", 2), inspectedProcess("S+")],
+    [{ ...inspectedProcess(""), code: null }, inspectedProcess("S+")],
+    [inspectedProcess(""), { ...inspectedProcess("S+"), timedOut: true }],
+    [inspectedProcess(""), inspectedProcess("", 1)],
+    [inspectedProcess(""), inspectedProcess("", 2)],
+  ] as const)
+    await expect(warmLifecycleInspection(run(pgrep, ps))).rejects.toThrow(
+      "The process inspection tools are unavailable.",
+    )
+})
+
+test("Mac fixture warms pgrep and ps before any timed lifecycle inspection and keeps their budgets", async () => {
+  const source = await readFile(path.join(desktopDirectory, "scripts/computer-helper-selftest.ts"), "utf8")
+  const setup = source.slice(
+    source.indexOf("async function createVerifiedFixture("),
+    source.indexOf("const lifetime = async (parentDeath: boolean)"),
+  )
+  const warm = setup.indexOf("await warmLifecycleInspection()")
+  expect(source.match(/warmLifecycleInspection\(\)/g)).toHaveLength(1)
+  expect(warm).toBeGreaterThan(setup.lastIndexOf('executable: "/usr/bin/codesign"'))
+  expect(warm).toBeGreaterThan(setup.indexOf("await bundleDigest(bundle)"))
+  for (const later of [
+    "const open = async",
+    'executable: "/bin/ps", args: ["-p", String(pid), "-o", "stat="], timeoutMs: 500',
+    'executable: "/usr/bin/pgrep", args: ["-P", String(pid)], timeoutMs: 500',
+  ])
+    expect(warm).toBeLessThan(setup.indexOf(later))
+  expect(source).toContain("const deadline = performance.now() + 1000")
 })
 
 test("lifecycle exit accepts only global environment events within its original deadline", async () => {
