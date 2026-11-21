@@ -897,6 +897,7 @@ describe("VS-24's keys", () => {
       trivial: "review",
       maxInputTokens: 0,
       impact: "grep",
+      ruleCheck: "off",
       guardrail: "off",
       scopeGate: "off",
       verifyEvidence: "off",

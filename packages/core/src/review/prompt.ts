@@ -75,6 +75,7 @@ export interface PromptInput {
   headFiles?: HeadFile[]
   related?: RelatedCode[]
   impact?: ImpactPrompt // immutable Git context from the engine's impact: "graph" review
+  ruleCheck?: "off" | "strict"
   guardrail?: "strict" // request blocking production failures for the engine guardrail
   scopeGate?: "introduced"
   history?: HistoryEntry[]
@@ -434,6 +435,11 @@ function build(input: PromptInput, kind: PromptKind): string {
     TASKS[kind],
     ...(strict ? [STRICT_FINDINGS] : []),
     ...(strict && input.scopeGate === "introduced" ? [INTRODUCED_SCOPE] : []),
+    ...(input.ruleCheck === "strict"
+      ? [
+          "Cite a rule only by quoting its smallest supporting line range; never raise a finding solely because a rule file exists. Use rule.source repository_instructions, review_rules, or an explicit paths[i] index from the trusted rules. Only cite the changed line when the rule applies to its path. Scoped instruction sources are unavailable.",
+        ]
+      : []),
     [
       "## How to work",
       "The diff is not enough. Open the changed files in full, follow the callers and callees of changed functions, and read the types, tests and config they depend on. `<related_code>` lists call sites Vector already found; `<history>` shows recent commits and blame for the changed lines.",

@@ -113,7 +113,15 @@ import {
   REVIEW_REPORT_JSON_SCHEMA,
   VERIFY_JSON_SCHEMA,
 } from "@vectordevai/core/review/schema"
-import { selectFindings, wantsNits } from "@vectordevai/core/review/select"
+import { trustedRules, safeRulePrompt } from "@vectordevai/core/review/citation"
+import type { RulePart } from "@vectordevai/core/review/config"
+import {
+  checkedRuleFindings,
+  ruleCheckNotes,
+  selectFindings,
+  wantsNits,
+  type RuleCounts,
+} from "@vectordevai/core/review/select"
 import type { RouteRefusal } from "@vectordevai/core/review/privacy"
 import type {
   CostKind,
@@ -180,6 +188,7 @@ export interface RunInput {
   pr?: PromptInput["pr"]
   prior: PriorFinding[]
   rules: string
+  ruleParts?: readonly RulePart[]
   config: ReviewConfig
   /** Trusted prior spend for the PR and calendar month, when the caller keeps those ledgers. */
   spent?: { prUsd?: number; monthUsd?: number }
@@ -1255,10 +1264,22 @@ export const run: (
       ? earlier.filter((entry) => !strictDenied(entry.path) && (!hold || !containsHeldValue(entry)))
       : earlier
     const checkFiles = overBudget.size ? headFiles?.filter((file) => !overBudget.has(file.path)) : headFiles
+    const ruleStrict = config.ruleCheck === "strict"
+    const source =
+      input.rulesSource ?? (input.trigger === "local" || input.trigger === "desktop" ? "working tree" : "base branch")
+    const ruleInput = safeRulePrompt(
+      { rules: input.rules, instructions: input.context.instructions, ruleParts: input.ruleParts },
+      config,
+    )
     const strictKeys = {
-      guardrail: "strict",
-      ...(config.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}),
-    } as const
+      ...(strictMode
+        ? {
+            guardrail: "strict" as const,
+            ...(config.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}),
+          }
+        : {}),
+      ...(ruleStrict ? { ruleCheck: "strict" as const } : {}),
+    }
     const promptInput: PromptInput = {
       mode: input.mode,
       trust: input.trust,
@@ -1280,10 +1301,15 @@ export const run: (
       ...hold?.context,
       ...(impact ? { impact: impact.slice } : {}),
       ...(hold ? { inputsRedacted: true as const } : {}),
-      rules: input.rules,
-      rulesSource:
-        input.rulesSource ??
-        (input.trigger === "local" || input.trigger === "desktop" ? "working tree" : "base branch"),
+      rules: ruleInput.rules,
+      rulesSource: source,
+      ...(ruleStrict
+        ? {
+            ruleCheck: "strict" as const,
+            instructions: ruleInput.instructions,
+            instructionsSource: source,
+          }
+        : {}),
       prior,
       maxComments: config.maxComments,
       nits: wantsNits(config),
@@ -1299,7 +1325,7 @@ export const run: (
           locations: sent ? [...activeImpact.locations] : [],
         })
     }
-    const reportSchema = strictMode ? strictReportJsonSchema(strictKeys)! : REVIEW_REPORT_JSON_SCHEMA
+    const reportSchema = strictReportJsonSchema(strictKeys) ?? REVIEW_REPORT_JSON_SCHEMA
     const names = nothingToSend ? [] : planSpecialists(input.files, config)
     const primaryRequests = (payload: PromptInput) =>
       names.map((name) => ({
@@ -1308,7 +1334,7 @@ export const run: (
         cap: name === "security" ? Math.ceil((config.maxSteps * 2) / 3) : config.maxSteps,
         text: name === "security" ? buildSecurityPrompt(payload) : buildReviewPrompt(payload),
         schema: reportSchema,
-        decode: strictMode ? (value: unknown) => decodeReport(value, strictKeys) : decodeReport,
+        decode: strictMode || ruleStrict ? (value: unknown) => decodeReport(value, strictKeys) : decodeReport,
       }))
     let requests = primaryRequests(promptInput)
     let checkHeadFiles = checkFiles
@@ -1646,16 +1672,29 @@ export const run: (
       }
     }
 
+    const trusted = ruleStrict
+      ? trustedRules({
+          ...activePayload,
+          parts: ruleInput.ruleParts,
+          anchors: overBudget.size ? files.filter((file) => !overBudget.has(file.path)) : files,
+        })
+      : undefined
+    const ruleCounts: RuleCounts[] = []
     recordImpact(!input.stopSignal?.aborted && !previewTimedOut)
     // 1–5. The specialists fan out only after the opted-in plan fits.
     const asked = yield* Effect.forEach(requests, (spec) => ask(spec), { concurrency: 2 })
 
     // 6. Normalize.
-    const reports = asked.flatMap((entry) =>
-      entry.value
-        ? [{ source: entry.name === "security" ? ("security" as const) : ("review" as const), report: entry.value }]
-        : [],
-    )
+    const reports = asked.flatMap((entry) => {
+      if (!entry.value) return []
+      let report = entry.value
+      if (trusted) {
+        const checked = checkedRuleFindings(report.findings, trusted)
+        ruleCounts.push(checked)
+        report = { ...report, findings: checked.findings }
+      }
+      return [{ source: entry.name === "security" ? ("security" as const) : ("review" as const), report }]
+    })
     const report = mergeReports(reports.map((entry) => entry.report))
     const hidden = new Set<string>()
     const normalized = reports.flatMap(({ report, source }) => {
@@ -1955,6 +1994,7 @@ export const run: (
           const review = yield* checkStrict({
             findings: pool,
             recordScope: !!input.observe && !refused && !uncommitted,
+            ...(trusted ? { trustedRules: trusted } : {}),
             anchors: input.anchors,
             directory: input.directory,
             head: input.head,
@@ -1999,6 +2039,7 @@ export const run: (
     const skipped = new Set([...input.skipped.map((file) => file.path), ...heldPaths])
     const selection = selectFindings({
       findings: listed,
+      ...(trusted ? { trustedRules: trusted, ruleCounts: refused ? [] : ruleCounts } : {}),
       anchors: input.anchors,
       head: input.head,
       trust: input.trust,
@@ -2158,6 +2199,7 @@ export const run: (
                   `The merge-base evidence was unavailable for ${strict.preExistingUnchecked} retained ${strict.preExistingUnchecked === 1 ? "finding" : "findings"}. The introduced-by-change check could not rule out a pre-existing defect.`,
                 ]
               : []),
+            ...ruleCheckNotes(ruleCounts),
             ...(graph && uncommitted
               ? ["Impact context is unavailable for staged or uncommitted changes."]
               : graph && !impact && !input.stopSignal?.aborted

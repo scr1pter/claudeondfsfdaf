@@ -35,6 +35,16 @@ const many = <S extends Schema.Top>(schema: S) =>
   Schema.mutable(Schema.Array(schema).check(Schema.isMaxLength(100_000)))
 const strictDrops = many(Schema.Struct({ reason: Schema.Literals(STRICT_DROPS), count: NonNegativeInt }))
 const quote = Schema.Struct({ path: text, line: PositiveInt, side, code: text })
+const rulesSource = Schema.Literals(["base branch", "working tree"])
+const ruleCitation = Schema.Struct({
+  source: Schema.Union([
+    Schema.Struct({ kind: Schema.Literal("repository_instructions") }),
+    Schema.Struct({ kind: Schema.Literal("review_rules") }),
+    Schema.Struct({ kind: Schema.Literal("paths"), index: NonNegativeInt }),
+  ]),
+  quote: text,
+  lines: optional(Schema.Struct({ start: PositiveInt, end: PositiveInt })),
+})
 const findingFields = {
   path: text,
   line: PositiveInt,
@@ -48,6 +58,8 @@ const findingFields = {
   confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
   evidence: optional(many(text)),
   rule: optional(text),
+  citation: optional(ruleCitation),
+  rulesSource: optional(rulesSource),
   duplicateOf: optional(text),
   failure: optional(
     Schema.Struct({
@@ -145,6 +157,7 @@ const Outcome = Schema.Struct({
           "duplicate",
           "dismissed",
           "rejected-by-verify",
+          "rule-unverified",
           "unconfirmed",
           "nit",
         ]),
@@ -234,6 +247,7 @@ const Outcome = Schema.Struct({
           fix: Schema.Struct({ kind: Schema.Literals(STRICT_FIX_KINDS), text }),
           verifiedBy: Schema.Literals(VERIFIED_BY),
           verifier: text,
+          linkedRule: optional(Schema.Struct({ source: text, quote: text, rulesSource })),
         }),
       ),
       dropped: strictDrops,
@@ -304,6 +318,20 @@ const strictLocation = (finding: Pick<Finding, "path" | "line" | "side" | "title
 // The selected row has no verifier model name. Compare the evidence both records carry, including the
 // unchecked fix which postableStrict puts only in the body. Selection can append its own "also at" sentence.
 function sameStrictEvidence(finding: Finding, kept: StrictFinding) {
+  const citation = finding.citation
+  const linked = kept.linkedRule
+  if (linked || citation || finding.rulesSource || finding.rule) {
+    if (!linked || !citation) return false
+    const source = citation.source.kind === "paths" ? `paths[${citation.source.index}]` : citation.source.kind
+    if (
+      source === "scoped" ||
+      source !== linked.source ||
+      citation.quote !== linked.quote ||
+      finding.rule !== linked.quote ||
+      finding.rulesSource !== linked.rulesSource
+    )
+      return false
+  }
   const body = strictFindingBody(kept)
   return (
     strictLocation(finding) === strictLocation(kept) &&

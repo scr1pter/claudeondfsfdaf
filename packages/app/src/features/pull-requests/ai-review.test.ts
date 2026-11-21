@@ -14,10 +14,10 @@ import {
 import { evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import { noteSameLabPair } from "@vectordevai/core/review/second-lab"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
-import { parseReviewConfig } from "@vectordevai/core/review/config"
+import { DESKTOP_STRICT_NOTICE, parseReviewConfig } from "@vectordevai/core/review/config"
 import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "@vectordevai/core/review/types"
-import { buildFinalizePrompt, SCOPE } from "@vectordevai/core/review/prompt"
-import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
+import { buildFinalizePrompt, MAX_TRUSTED_CHARS, SCOPE } from "@vectordevai/core/review/prompt"
+import { REVIEW_REPORT_JSON_SCHEMA, strictReportJsonSchema, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
 import {
   afterFixes,
   applyFix,
@@ -3518,5 +3518,216 @@ test("failed mixed review retains own receipts when no own token counters arrive
     tokens: 0,
     codium: true,
     partial: true,
+  })
+})
+
+describe("desktop rule citations (VS-43)", () => {
+  const strict = { review: { ruleCheck: "strict" } }
+  const quote = "Leave an empty list unchanged."
+
+  test("unset and explicit off send identical requests and save identical results", async () => {
+    const reviewWith = async (global: Record<string, unknown>) => {
+      const { calls, client } = fakeClient({ global, files: { "src/list.ts": HEAD, "AGENTS.md": quote } })
+      const outcome = await run(client, { now: () => 100 })
+      return { create: calls.create, prompt: calls.prompt, outcome }
+    }
+    const ordinary = await reviewWith({ review: {} })
+    expect(await reviewWith({ review: { ruleCheck: "off" } })).toEqual(ordinary)
+    expect(ordinary.prompt[0]?.format?.schema).toBe(REVIEW_REPORT_JSON_SCHEMA)
+    expect(ordinary.outcome?.selection.inline).toHaveLength(1)
+  })
+
+  test("forecasts the structured rule schema actually sent and preserves the desktop guardrail notice", async () => {
+    const files = {
+      "src/list.ts": HEAD,
+      "AGENTS.md": quote,
+      ".vector/review.json": '{"maxInputTokens":200000,"guardrail":"strict"}',
+    }
+    const reply = (call: PromptCall) =>
+      isVerify(call)
+        ? answer(verdicts(call))
+        : answer(report([{ ...offByOne, rule: { source: "repository_instructions", quote } }]))
+    const fake = fakeClient({ global: strict, files, reply })
+    const forecasts = new Map<string, unknown>()
+    const input = {
+      estimateFirstTurn: async (request: Parameters<NonNullable<ReviewRunInput["estimateFirstTurn"]>>[0]) => {
+        forecasts.set(request.pass, request.format)
+        return 100
+      },
+    }
+    const result = (await run(fake.client, input))!
+    const request = fake.calls.prompt[0]!
+    expect(forecasts.get("review")).toEqual(request.format)
+    expect(request.format?.schema).toEqual(strictReportJsonSchema({ ruleCheck: "strict" }))
+    expect(forecasts.get("verify")).toEqual(fake.calls.prompt.find(isVerify)?.format)
+    expect(result.notes).toContain(DESKTOP_STRICT_NOTICE)
+    expect(result.selection.inline[0]?.rule).toBe(quote)
+    const old = { ...result, notes: result.notes.filter((note) => note !== DESKTOP_STRICT_NOTICE) }
+    const cache = fakeClient({ global: strict, files, reply })
+    const retained = (await run(cache.client, { ...input, previous: old }))!
+    expect(retained.unchanged).toBe(true)
+    expect(retained.notes).toContain(DESKTOP_STRICT_NOTICE)
+    expect(retained.report.findings[0]?.rulesSource).toBe("working tree")
+    expect(cache.calls.prompt).toEqual([])
+  })
+
+  test("checks working-tree citations before verification, posting and saving", async () => {
+    const extra = ["src/missing.ts", "src/style.ts", "src/docs.ts", "src/outside.ts"]
+    const bad = "FORGED_RULE_SENTINEL"
+    const paths = [{ path: "src/list.ts", instructions: quote }]
+    const files = {
+      "src/list.ts": HEAD,
+      ...Object.fromEntries(extra.map((path) => [path, "after\n"])),
+      ".vector/review.json": JSON.stringify({ paths, security: "off", nits: true }),
+    }
+    const finding = (path: string, category: string, title: string, source: string, text: string) => ({
+      ...offByOne,
+      path,
+      category,
+      title,
+      line: path === "src/list.ts" ? 2 : 1,
+      rule: { source, quote: text, lines: { start: 1, end: 1 } },
+    })
+    const fake = fakeClient({
+      global: strict,
+      files,
+      reply: (call) =>
+        isVerify(call)
+          ? answer(verdicts(call))
+          : answer(
+              report([
+                finding("src/list.ts", "maintainability", "Preserve empty list", "paths[0]", quote),
+                finding(extra[0]!, "bug", "Broken empty return", "review_rules", bad),
+                finding(extra[1]!, "style", "Invented rule only", "scoped:rules.md", bad),
+                finding(extra[2]!, "docs", "Misquoted docs rule", "review_rules", bad),
+                finding(extra[3]!, "maintainability", "Wrong directory", "paths[0]", quote),
+              ]),
+            ),
+    })
+    const outcome = (await run(fake.client, {
+      diff: join(listDiff, ...extra.map((path) => fileDiff(path, ["@@ -1 +1 @@", "-before", "+after"]))),
+    }))!
+    const primary = fake.calls.prompt[0]!
+    expect(primary.format?.schema).toEqual(strictReportJsonSchema({ ruleCheck: "strict" }))
+    const prompt = primary.parts![0]!.text
+    expect(prompt).toContain('<review_rules source="working tree">')
+    expect(prompt).toContain("paths[0]")
+    expect(prompt.toLowerCase()).toContain("cite a rule only by quoting its smallest supporting line range")
+    const verifier = fake.calls.prompt.find(isVerify)!.parts![0]!.text
+    expect(verifier).toContain("Broken empty return")
+    for (const forbidden of [bad, "Invented rule only", "Misquoted docs rule", "Wrong directory"]) {
+      expect(verifier).not.toContain(forbidden)
+      expect(JSON.stringify(outcome.report.findings)).not.toContain(forbidden)
+      expect(JSON.stringify(buildDesktopReview(outcome, pr.url))).not.toContain(forbidden)
+    }
+    const accepted = outcome.selection.inline.find((item) => item.path === "src/list.ts")!
+    expect(accepted).toMatchObject({
+      severity: "concern",
+      verified: true,
+      rule: quote,
+      rulesSource: "working tree",
+      citation: { source: { kind: "paths", index: 0 }, quote },
+    })
+    expect(outcome.selection.inline.find((item) => item.path === extra[0])).toMatchObject({
+      severity: "blocking",
+      verified: true,
+    })
+    expect(outcome.selection.inline.find((item) => item.path === extra[0])?.rule).toBeUndefined()
+    expect(outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 3 })
+    expect(outcome.notes.join(" ")).toMatch(/stripped 1/i)
+    expect(buildDesktopReview(outcome, pr.url).comments.find((item) => item.path === "src/list.ts")?.body).toContain(
+      "paths[0] (working tree)",
+    )
+  })
+
+  test("never credits a pull request for its new instruction or text clipped off the wire", async () => {
+    const added = "Require an extra switch in this patch."
+    const clipped = "Require the hidden end of the instructions."
+    const cases = [
+      {
+        instructions: added,
+        text: added,
+        diff: join(listDiff, fileDiff("AGENTS.md", ["@@ -1 +1 @@", "-Old heading", "+" + added])),
+        reason: "source",
+      },
+      {
+        instructions: "x".repeat(MAX_TRUSTED_CHARS) + "\n\n" + clipped,
+        text: clipped,
+        diff: join(listDiff),
+        reason: "clipped",
+      },
+    ]
+    for (const item of cases) {
+      const fake = fakeClient({
+        global: strict,
+        files: { "src/list.ts": HEAD, "AGENTS.md": item.instructions, ...NO_VERIFY },
+        reply: () =>
+          answer(
+            report([{ ...offByOne, category: "docs", rule: { source: "repository_instructions", quote: item.text } }]),
+          ),
+      })
+      const outcome = (await run(fake.client, { diff: item.diff }))!
+      const instructions = fake.calls.prompt[0]!.parts![0]!.text.match(
+        /<repository_instructions [^>]*>([\s\S]*?)<\/repository_instructions>/,
+      )?.[1]
+      expect(instructions ?? "").not.toContain(item.text)
+      expect(outcome.selection.inline).toEqual([])
+      expect(outcome.report.findings).toEqual([])
+      expect(outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+      expect(outcome.notes.join(" ")).toContain(item.reason)
+    }
+  })
+
+  test("suppresses a secret-bearing rule block from both the wire and the proof", async () => {
+    const secret = "ghp_" + "x".repeat(36)
+    const fake = fakeClient({
+      global: { review: { ruleCheck: "strict", holdback: "secrets" } },
+      files: { "src/list.ts": HEAD, "AGENTS.md": quote + "\n\nPrivate: " + secret, ...NO_VERIFY },
+      reply: () =>
+        answer(report([{ ...offByOne, category: "docs", rule: { source: "repository_instructions", quote } }])),
+    })
+    const outcome = (await run(fake.client))!
+    expect(JSON.stringify(fake.calls.prompt)).not.toContain(secret)
+    expect(fake.calls.prompt[0]!.parts![0]!.text).not.toContain("<repository_instructions source=")
+    expect(outcome.context?.instructions).toBe(false)
+    expect(outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+  })
+
+  test("revalidates cached authority and applies strict on the restricted finalize turn", async () => {
+    const files = { "src/list.ts": HEAD, "AGENTS.md": quote, ...NO_VERIFY }
+    const reply = () => answer(report([{ ...offByOne, rule: { source: "repository_instructions", quote } }]))
+    const device = fakeClient({ global: strict, files, reply })
+    const previous = (await run(device.client))!
+    const cleanCache = fakeClient({ global: strict, files })
+    const cached = (await run(cleanCache.client, { previous }))!
+    expect(cached.unchanged).toBe(true)
+    expect(cached.report.findings[0]?.rulesSource).toBe("working tree")
+    expect(cleanCache.calls.prompt).toEqual([])
+    const tainted = structuredClone(previous)
+    tainted.selection.inline[0]!.rule = "A stale displayed citation"
+    let first = true
+    const retry = fakeClient({
+      global: strict,
+      files,
+      reply: () => {
+        if (first) {
+          first = false
+          return answer({ broken: true })
+        }
+        return reply()
+      },
+    })
+    const result = (await run(retry.client, { previous: tainted }))!
+    expect(retry.calls.prompt).toHaveLength(2)
+    expect(retry.calls.prompt[1]?.parts?.[0]?.text).toBe(buildFinalizePrompt())
+    expect(retry.calls.prompt[1]?.format?.schema).toEqual(strictReportJsonSchema({ ruleCheck: "strict" }))
+    expect(result.selection.inline[0]?.rule).toBe(quote)
+    expect(JSON.stringify(result)).not.toContain("A stale displayed citation")
+    const localConfig = fakeClient({
+      files: { ...files, ".vector/review.json": '{"ruleCheck":"strict","verify":"off"}' },
+    })
+    const off = (await run(localConfig.client, { previous }))!
+    expect(localConfig.calls.prompt[0]?.format?.schema).toBe(REVIEW_REPORT_JSON_SCHEMA)
+    expect(off.settingsKey).not.toBe(previous.settingsKey)
   })
 })

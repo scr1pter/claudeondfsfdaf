@@ -34,6 +34,9 @@ export interface ModelFinding {
   confidence: number // 0..1
   evidence?: string[] // "path:line" references it read
   rule?: string // the quoted rule sentence
+  citation?: RuleCitation // decoded under ruleCheck; only a checked quote is published
+  ruleProblem?: "not-structured" | "source" | "quote" // malformed model claim, without retaining its content
+  rulesSource?: "base branch" | "working tree" // provenance of the checked quote
   duplicateOf?: string // id of an open earlier finding this repeats
   // The engine's strict report schema uses these fields. Legacy decoding leaves them out.
   failure?: FailureInfo // asked for on every blocking finding; S2 and S5 enforce that, not the schema
@@ -99,8 +102,7 @@ export type FindingScope = (typeof FINDING_SCOPES)[number]
 // VS-43's structured rule citation (addendum A). `repository_instructions` and `review_rules` name the prompt's two
 // trusted blocks; `paths` names a ReviewConfig.paths entry by its 0-based index as parsed; `scoped` names a VS-48
 // nested instruction file, which nothing sends yet. `lines` is carried and never checked. Only schema.ts's
-// decodeRuleCitation builds one, and nothing calls it before VS-43 wiring, so ModelFinding gains no field now and
-// `rule` stays the quoted text.
+// decodeRuleCitation builds the model-side value. Its public quote and provenance are set by the citation gate.
 export type RuleSource =
   | { kind: "repository_instructions" }
   | { kind: "review_rules" }
@@ -183,6 +185,7 @@ export interface StrictFinding {
   quotes: Quote[]
   fix: { kind: (typeof STRICT_FIX_KINDS)[number]; text: string }
   verifiedBy: VerifiedBy
+  linkedRule?: { source: string; quote: string; rulesSource: "base branch" | "working tree" }
   verifier: string // the "provider/model" or the runtime check that confirmed it
 }
 export interface StrictResult {
@@ -227,6 +230,7 @@ export type DropReason =
   | "duplicate"
   | "dismissed"
   | "rejected-by-verify"
+  | "rule-unverified"
   | "unconfirmed" // after a triage pass, the review model did not confirm it
   | "nit" // a nit or a style finding, while nits are off
 
@@ -466,6 +470,8 @@ export interface ReviewConfig {
   // The engine builds graph context from the reviewed Git trees under "graph". The default and the separate
   // desktop review use grep. Leaving this key absent preserves existing configuration and evidence digests.
   impact?: "grep" | "graph"
+  // Only an owner setting or the CI base can require checked repository citations.
+  ruleCheck?: "off" | "strict"
   // Under "strict" the engine verifies every candidate and reports verified blocking findings in the five
   // production-breaking classes. The default and desktop use ordinary review selection.
   guardrail?: "off" | "strict"
@@ -599,6 +605,7 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   trivial: "review",
   maxInputTokens: 0,
   impact: "grep",
+  ruleCheck: "off",
   guardrail: "off",
   scopeGate: "off",
   verifyEvidence: "off",

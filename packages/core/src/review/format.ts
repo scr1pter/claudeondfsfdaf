@@ -366,7 +366,12 @@ export function buildInlineBody(finding: Finding | PlacedFinding, options: Inlin
   if (finding.rule) {
     // Clipped before it is sanitized, so a cut can never leave a code span open around raw HTML.
     const rule = inlineText(clip(oneLine(finding.rule), MAX_RULE), options.repo).replace(/"/g, "'")
-    meta.push(`rule from .vector/review.md: "${rule}"`)
+    const source = finding.citation?.source
+    const provenance =
+      source && finding.rulesSource
+        ? `${source.kind === "paths" ? `paths[${source.index}]` : source.kind} (${finding.rulesSource})`
+        : ".vector/review.md"
+    meta.push(`rule from ${provenance}: "${rule}"`)
   }
   if (options.trust === "trusted" && options.commands !== false)
     meta.push("reply `/vector fix` to have Vector apply this")

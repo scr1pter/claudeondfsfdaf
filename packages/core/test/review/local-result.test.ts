@@ -210,6 +210,18 @@ describe("retained local review result decoding", () => {
       }
       const copied = { ...value.selection, inline: [], overflow: [finding, { ...finding, id: row.id }] }
       expect(completeStrictReview({ ...value, selection: copied }, head)).toBe(false)
+      const quote = "Reject empty input at the boundary."
+      const citation = { source: { kind: "paths" as const, index: 0 }, quote }
+      const linkedRule = { source: "paths[0]", quote, rulesSource: "base branch" as const }
+      value.strict.findings[0] = { ...kept, linkedRule }
+      const checked = { rule: quote, citation, rulesSource: "base branch" as const }
+      expect(check(checked)).toBe(true)
+      expect(check({ ...checked, rule: "Other instruction" })).toBe(false)
+      expect(check({ ...checked, rulesSource: "working tree" })).toBe(false)
+      expect(check({ ...checked, citation: { source: { kind: "paths", index: 1 }, quote } })).toBe(false)
+      expect(check({})).toBe(false)
+      value.strict.findings[0] = kept
+      expect(check(checked)).toBe(false)
       // The strict result retains both accepted occurrences when ordinary selection folds their display.
       value.strict.findings.push(
         { ...kept, id: "other-line", line: 12 },

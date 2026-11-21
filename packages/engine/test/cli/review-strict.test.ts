@@ -352,3 +352,81 @@ it.instance(
   { git: true },
   90000,
 )
+
+it.instance(
+  "same-head local review checks trusted rules afresh and cannot replay them after disabling the policy",
+  () =>
+    Effect.gen(function* () {
+      const { directory, cache, invoke, git, base } = yield* setup
+      const ownerRule = "Preserve input order."
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(directory, ".vector"), { recursive: true })
+        await fs.writeFile(path.join(directory, "AGENTS.md"), ownerRule)
+        await fs.writeFile(path.join(directory, ".vector/review.md"), "Preserve public exports.")
+        await fs.writeFile(
+          path.join(directory, ".vector/review.json"),
+          JSON.stringify({
+            ruleCheck: "strict",
+            paths: [{ path: "*.ts", instructions: "Keep the existing call order." }],
+          }),
+        )
+        await git("add", "AGENTS.md", ".vector/review.md", ".vector/review.json")
+        await git("commit", "-qm", "rules in reviewed head")
+      })
+      const head = yield* Effect.promise(() => git("rev-parse", "HEAD"))
+      const service = yield* Config.Service
+      const global = yield* service.getGlobal()
+      const calls: Review.RunInput[] = []
+      const run = (input: Review.RunInput) =>
+        Effect.sync(() => {
+          calls.push(input)
+          return fixed(input)
+        })
+      const review = (enabled: boolean, options: Partial<LocalReviewOptions> = {}) =>
+        invoke(run, options, "off").pipe(
+          Effect.provideService(Config.Service, {
+            ...service,
+            getGlobal: () =>
+              Effect.succeed({ ...global, review: { ...global.review, ruleCheck: enabled ? "strict" : "off" } }),
+          }),
+        )
+      expect((yield* review(false)).result.error).toBeUndefined()
+      expect(JSON.parse((yield* review(false)).text).cached).toBe(true)
+      for (const active of [true, true, false]) {
+        const count = calls.length
+        const result = yield* review(active)
+        expect(result.result.error).toBeUndefined()
+        expect(calls).toHaveLength(count + 1)
+        expect(calls.at(-1)!.mode).toBe("full")
+        const call = calls.at(-1)!
+        expect(call.config.ruleCheck).toBe(active ? "strict" : undefined)
+        if (active) {
+          expect(call.context.instructions).toContain(ownerRule)
+          expect(call.rules).toContain("Preserve public exports.")
+          expect(call.rulesSource).toBe("working tree")
+        }
+        expect(JSON.parse(yield* Effect.promise(() => fs.readFile(cache, "utf8"))).checkedRules).toBe(
+          active || undefined,
+        )
+      }
+      expect(JSON.parse((yield* review(false)).text).cached).toBe(true)
+      const pinned = (settingsRef: string) => ({ context: { expectedHead: head, settingsRef, stateless: true } })
+      expect((yield* review(false, pinned(head))).result.error).toBeUndefined()
+      expect(calls.at(-1)!.config.ruleCheck).toBeUndefined()
+      expect((yield* review(true, pinned(head))).result.error).toBeUndefined()
+      expect(calls.at(-1)!.rules).toBe("")
+      expect(calls.at(-1)!.context.instructions).toBeUndefined()
+      expect((yield* review(true, pinned(base))).result.error).toBeUndefined()
+      expect(calls.at(-1)!.context.instructions ?? "").not.toContain(ownerRule)
+      expect(calls.at(-1)!.rulesSource).toBe("base branch")
+      if (process.platform !== "win32") {
+        yield* Effect.promise(async () => {
+          await fs.unlink(path.join(directory, "AGENTS.md"))
+          await fs.symlink(path.join(directory, "one.ts"), path.join(directory, "AGENTS.md"))
+        })
+        expect((yield* review(true)).result.error).toBeUndefined()
+        expect(calls.at(-1)!.context.instructions ?? "").not.toContain("export const one")
+      }
+    }),
+  { git: true },
+)

@@ -19,7 +19,7 @@ import type {
   ReplayVariant,
   VariantRecord,
 } from "../../packages/engine/src/review/eval"
-import { candidateDiff, desktopReplay, withReviewSettings } from "./desktop"
+import { candidateDiff, desktopReplay, withReviewSettings, type DesktopReplayInput } from "./desktop"
 import {
   ADAPTERS,
   admitReplay,
@@ -507,6 +507,8 @@ describe("the variant registry", () => {
       "engine:holdback-secrets",
       "desktop:holdback-secrets",
       "engine:scope-introduced",
+      "engine:rule-strict",
+      "desktop:rule-strict",
     ])
     for (const item of built) {
       const keys = Object.keys(item.entry.keys ?? {})
@@ -520,7 +522,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 10)
+    expect(pending).toHaveLength(2 * entries.length - 12)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -539,7 +541,6 @@ describe("the variant registry", () => {
       "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
       "engine:team-guarded": "VS-35 wiring",
-      "engine:rule-strict": "VS-43 wiring",
       "engine:verify-cert": "VS-44 wiring",
       "engine:explore-slice": "VS-49 wiring",
       "engine:receipt-json": "VS-47 runner wiring",
@@ -547,14 +548,7 @@ describe("the variant registry", () => {
     })
     // Addendum A's and B's entries but holdback-secrets are pending on both runners and set no key yet, and an addendum
     // name whose package has not begun here is still unknown.
-    for (const suffix of [
-      "team-guarded",
-      "rule-strict",
-      "verify-cert",
-      "explore-slice",
-      "receipt-json",
-      "verify-isolated",
-    ] as const) {
+    for (const suffix of ["team-guarded", "verify-cert", "explore-slice", "receipt-json", "verify-isolated"] as const) {
       const entry: VariantEntry = VARIANTS[suffix]
       expect(Object.hasOwn(entry, "keys") || Object.hasOwn(entry, "models")).toBe(false)
       expect(resolveVariant(`desktop:${suffix}`)).toMatchObject({ ok: false, reason: "pending" })
@@ -889,6 +883,23 @@ describe("the desktop replay", () => {
     expect(artifact.passes.map((entry) => [entry.pass, entry.startMs, entry.ms])).toEqual(
       artifact.attempts.map((attempt) => [attempt.pass, attempt.startMs, attempt.ms]),
     )
+  })
+
+  test("desktop strict rule replay uses isolated trusted settings and records what ran", async () => {
+    const directory = checkoutDirectory(join(root, "desktop-rule-strict"), planned.id)
+    expect(prepareCheckout({ mirror: mirror.dir, view, directory })).toEqual([])
+    const run = async (variant?: DesktopReplayInput["variant"]) => {
+      const { client } = fakeClient(directory)
+      return desktopReplay({ planned, directory, diff: candidateDiff(directory, view), model, client, variant })
+    }
+    const plain = await run()
+    const strict = await run({ name: "desktop:rule-strict", keys: { ruleCheck: "strict" } })
+    expect(strict.error).toBeUndefined()
+    expect(strict.variant?.applied).toBe(true)
+    expect(strict.scope.prompts).not.toBe(plain.scope.prompts)
+    expect(strict.scope.policy).not.toBe(plain.scope.policy)
+    expect(strict.passes.length).toBeGreaterThan(0)
+    expect(strict.passes[0]!.digest).not.toBe(plain.passes[0]!.digest)
   })
 
   // VS-06: the verify policy replayed as a variant, as the engine replay takes it, so both runners can be compared.

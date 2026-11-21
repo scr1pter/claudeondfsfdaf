@@ -104,8 +104,17 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
   // its settings are the defaults. A variant whose keys the desktop runner does not all apply is not handed over
   // either, so the run is the frozen pipeline's. The artifact says the variant was not applied.
   const touched = changesFile(input.diff, REVIEW_CONFIG_PATH)
+  // ruleCheck can only come from trusted settings. Supply an isolated owner setting for its named variant.
+  // A replay never reads the operator's actual global config.
+  const ruleCheck =
+    variant?.name === "desktop:rule-strict" &&
+    variant.keys.ruleCheck === "strict" &&
+    Object.keys(variant.keys).length === 1 &&
+    !touched
   const settings =
-    variant && !touched && appliable(variant.keys) ? withReviewSettings(recording.client, variant.keys) : undefined
+    variant && !touched && !Object.hasOwn(variant.keys, "ruleCheck") && appliable(variant.keys)
+      ? withReviewSettings(recording.client, variant.keys)
+      : undefined
   // The settings the runner reviewed under, as it reports them (VS-23d: mergeReviewConfig, with the base's copy when
   // the change touches review.json); the defaults when it stopped before reading them.
   const used: { config?: ReviewConfig } = {}
@@ -137,7 +146,10 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
     },
     // A replay reads no operator's user config, as the engine replay reads none (VS-23d): its review block would
     // change the pipeline under the variant's name.
-    { ...(settings?.client ?? recording.client), global: undefined },
+    {
+      ...(settings?.client ?? recording.client),
+      global: ruleCheck ? { config: { get: async () => ({ data: { review: { ruleCheck: "strict" } } }) } } : undefined,
+    },
   ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))))
   const done = outcome instanceof Error ? undefined : outcome
   const posting = done ? buildDesktopReview(done, pr.url) : undefined
@@ -202,7 +214,15 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       verified: finding.verified === true,
     })),
     ...(posting ? { proposed: { body: posting.body, comments: posting.comments, untrusted: posting.untrusted } } : {}),
-    ...(variant ? { variant: { name: variant.name, keys: variant.keys, applied: settings?.served() ?? false } } : {}),
+    ...(variant
+      ? {
+          variant: {
+            name: variant.name,
+            keys: variant.keys,
+            applied: ruleCheck ? used.config?.ruleCheck === "strict" : (settings?.served() ?? false),
+          },
+        }
+      : {}),
     ...(outcome instanceof Error ? { error: outcome.message } : {}),
   }
 }

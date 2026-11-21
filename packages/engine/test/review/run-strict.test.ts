@@ -149,7 +149,7 @@ const checkoutWith = Effect.fnUntraced(function* (helper = false) {
     knownPath: async (candidate) => candidate === file,
   }
   const run = (
-    findings: ModelFinding[],
+    findings: (Omit<ModelFinding, "rule"> & { rule?: unknown })[],
     overrides: Partial<Review.RunInput> = {},
     verdicts: ((prompt: string) => unknown[]) | "unavailable" = projectionVerdicts,
     priorStatus?: ModelReport["priorStatus"],
@@ -665,6 +665,44 @@ it.instance(
       const empty = yield* run([], { config: { ...config, ...strict } })
       expect(checked(empty.outcome)).toMatchObject({ complete: true, findings: [], dropped: [] })
       expect(empty.summary).toContain("No verified production-breaking issues")
+    }),
+  { git: true },
+  90_000,
+)
+
+native(
+  "SF-22 attaches only verified rule provenance to a strict production failure",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* checkout
+      const quote = "Keep array indexes within bounds."
+      const options = {
+        config: { ...config, ...strict, ruleCheck: "strict" as const },
+        rules: quote,
+        ruleParts: [{ from: "global" as const, text: quote }],
+      }
+      for (const [claim, valid] of [
+        [quote, true],
+        ["Invented rule", false],
+      ] as const) {
+        const result = yield* run([{ ...finding, rule: { source: "review_rules", quote: claim } }], options)
+        expect({ specialists: result.outcome.specialists, strict: result.outcome.strict }).toMatchObject({
+          specialists: [
+            { name: "review", status: "ok" },
+            { name: "verify", status: "ok" },
+          ],
+          strict: { complete: true, findings: [{ title: finding.title }] },
+        })
+        const item = result.outcome.strict!.findings[0]!
+        if (valid) {
+          expect(item.linkedRule).toEqual({ source: "review_rules", quote, rulesSource: "base branch" })
+          expect(result.outcome.selection.inline[0]).toMatchObject({ rule: quote, rulesSource: "base branch" })
+        } else {
+          expect(item).not.toHaveProperty("linkedRule")
+          expect(JSON.stringify(result.outcome)).not.toContain(claim)
+        }
+        expect(violations(strictResultJsonSchema(options.config)!, result.outcome.strict)).toEqual([])
+      }
     }),
   { git: true },
   90_000,

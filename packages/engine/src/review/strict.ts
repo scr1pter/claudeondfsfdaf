@@ -2,6 +2,7 @@
 // transformations are used by a review on the default policy.
 import { Effect } from "effect"
 import { applyFixPatch, buildAnchorIndex, lookupFile } from "@vectordevai/core/review/diff"
+import { ruleCited, type TrustedRules } from "@vectordevai/core/review/citation"
 import { holdbackText } from "@vectordevai/core/review/holdback"
 import { unfinishedCauses } from "@vectordevai/core/review/verdict"
 import { strictFindingBody } from "@vectordevai/core/review/format"
@@ -60,6 +61,7 @@ export const checkStrict = Effect.fn("Review.checkStrict")(function* (
     base: string
     uncommitted: boolean
     denied: (file: string) => boolean
+    trustedRules?: TrustedRules
     holdback?: "secrets"
     signal?: AbortSignal
     deadline: number
@@ -163,14 +165,18 @@ export const checkStrict = Effect.fn("Review.checkStrict")(function* (
   }
   return {
     result: strict,
-    listed: postableStrict(strict.findings, input.findings),
+    listed: postableStrict(strict.findings, input.findings, input.trustedRules),
     unreviewed: [...retry],
     scopeDrops,
     preExistingUnchecked,
   }
 })
 
-function postableStrict(accepted: readonly StrictFinding[], candidates: readonly Finding[]): Finding[] {
+function postableStrict(
+  accepted: readonly StrictFinding[],
+  candidates: readonly Finding[],
+  trusted?: TrustedRules,
+): Finding[] {
   return accepted.flatMap((kept) => {
     const original = candidates.find(
       (finding) =>
@@ -181,6 +187,12 @@ function postableStrict(accepted: readonly StrictFinding[], candidates: readonly
         finding.side === kept.side,
     )
     if (!original) return []
+    const citation = original.citation
+    const rule = trusted && citation ? ruleCited({ ...original, citation }, trusted) : undefined
+    if (rule?.cited && citation) {
+      const source = citation.source.kind === "paths" ? `paths[${citation.source.index}]` : citation.source.kind
+      kept.linkedRule = { source, quote: citation.quote, rulesSource: rule.rulesSource }
+    }
     return [
       {
         id: kept.id,
@@ -194,6 +206,7 @@ function postableStrict(accepted: readonly StrictFinding[], candidates: readonly
         confidence: original.confidence,
         title: kept.title,
         verified: true,
+        ...(rule?.cited && citation ? { citation, rule: citation.quote, rulesSource: rule.rulesSource } : {}),
         failure: { class: kept.class, mechanism: kept.mechanism, trigger: kept.trigger, impact: kept.impact },
         quotes: kept.quotes,
         verifiedBy: kept.verifiedBy,

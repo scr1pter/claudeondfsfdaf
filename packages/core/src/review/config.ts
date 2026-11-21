@@ -161,6 +161,7 @@ const RAISE_ONLY = {
 // - Trusted-only: read from the surface's trusted source alone, never from the working tree or the environment. This
 //   holds for `zdrAttested`'s attestation objects (VS-33) as for its text entries, and for VS-30's `runtime`.
 const TRUSTED_ONLY = {
+  ruleCheck: oneOf(["off", "strict"]),
   zdrAttested: attestations,
   runtime: oneOf(["off", "ask"]),
 } satisfies Partial<Record<keyof ReviewConfig, Field>>
@@ -340,7 +341,7 @@ export function parseReviewConfig(
  * connect's consent preview still read parseReviewConfig, which ignores the keys below.
  * - `surface`: "local" for the CLI, the desktop and the eval's replay entry point; "github" for the CI job.
  * - `global`: the user global config's `review` block (core v1/config/review.ts), read loosely.
- * - `json`: the one review.json the surface reads, at the base commit or in the working tree. `privacyOnly` is the
+ * - `json`: the review.json read at the base, in the working tree, or at a service-pinned non-base snapshot. `privacyOnly` is the
  *   desktop's base blob when a pull request changes review.json: it may raise the raise-only keys (`privacy`, VS-34's
  *   `holdback`), and every other key keeps today's defaults there.
  *
@@ -362,7 +363,7 @@ export function parseReviewConfig(
 export function mergeReviewConfig(input: {
   surface: "local" | "github"
   global?: Partial<Record<SourcedReviewKey, unknown>>
-  json?: { at: "base" | "working-tree"; text: string | undefined; privacyOnly?: boolean }
+  json?: { at: "base" | "working-tree" | "snapshot"; text: string | undefined; privacyOnly?: boolean }
   env?: Record<string, string | undefined>
   trigger?: Trigger
 }): { config: ReviewConfig; warnings: string[] } {
@@ -379,12 +380,21 @@ export function mergeReviewConfig(input: {
     warnings,
     input.surface === "github",
   )
-  const sources: { values: Record<string, unknown> | undefined; trusted: boolean; label: (key: string) => string }[] = [
-    { values: input.global, trusted: input.surface === "local", label: (key) => `review.${key} in the global config` },
+  const sources: {
+    values: Record<string, unknown> | undefined
+    trusted: (key: string) => boolean
+    label: (key: string) => string
+  }[] = [
+    {
+      values: input.global,
+      trusted: () => input.surface === "local",
+      label: (key) => `review.${key} in the global config`,
+    },
     {
       values: source,
       // The desktop's base blob may raise the raise-only keys and nothing else, so it is never the trusted source.
-      trusted: input.surface === "github" && input.json?.at === "base" && !input.json.privacyOnly,
+      trusted: (key) =>
+        input.json?.at === "base" && !input.json.privacyOnly && (input.surface === "github" || key === "ruleCheck"),
       label: (key) => `${REVIEW_CONFIG_PATH}: "${key}"`,
     },
   ]
@@ -418,8 +428,12 @@ export function mergeReviewConfig(input: {
   for (const [key, field] of Object.entries(TRUSTED_ONLY))
     for (const item of sources.filter((entry) => given(entry.values, key))) {
       const label = item.label(key)
-      if (!item.trusted) {
-        warnings.push(`${label} is ignored: "${key}" is read only from ${trusted}.`)
+      if (!item.trusted(key)) {
+        const authority =
+          key === "ruleCheck" && input.surface === "local"
+            ? "the global config or review.json on the base branch"
+            : trusted
+        warnings.push(`${label} is ignored: "${key}" is read only from ${authority}.`)
         continue
       }
       const parsed = field.parse(item.values?.[key])
@@ -638,4 +652,18 @@ export function rulesForPaths(rules: ReviewRules, changedPaths: string[], extra:
   return rulePartsForPaths(rules, changedPaths, extra)
     .map((part) => part.text)
     .join("\n\n")
+}
+
+// The prompt and the citation gate share the same source parts. Scope indexes are shown only
+// when the model may cite them. They are headings and cannot themselves establish a rule.
+export function rulePromptInput(
+  rules: ReviewRules,
+  changedPaths: string[],
+  config: Pick<ReviewConfig, "paths" | "ruleCheck">,
+) {
+  if (config.ruleCheck !== "strict") return { rules: rulesForPaths(rules, changedPaths, config.paths) }
+  const ruleParts = rulePartsForPaths(rules, changedPaths, config.paths).map((part) =>
+    part.from === "paths" ? { ...part, text: `## paths[${part.index}]\n${part.text}` } : part,
+  )
+  return { rules: ruleParts.map((part) => part.text).join("\n\n"), ruleParts }
 }

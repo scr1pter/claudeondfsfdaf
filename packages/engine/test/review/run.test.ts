@@ -5634,3 +5634,78 @@ function listedCount(outcome: ReviewOutcome) {
     ...selection.nits,
   ].length
 }
+
+describe("SF-22 trusted rule citations", () => {
+  it.instance(
+    "SF-22 default parity and head-added rule isolation on the actual model request",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const baseRule = "Preserve call order."
+        const addedRule = "Require every function to return a promise."
+        const files = [
+          ...LIST,
+          ...parseUnifiedDiff(
+            "diff --git a/AGENTS.md b/AGENTS.md\n--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n " +
+              baseRule +
+              "\n+" +
+              addedRule,
+          ),
+        ]
+        const ask = (ruleCheck?: "off" | "strict", rulesSource: "base branch" | "working tree" = "base branch") =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            const claims =
+              ruleCheck === "strict"
+                ? [
+                    { ...finding({ category: "docs" }), rule: { source: "repository_instructions", quote: addedRule } },
+                    {
+                      ...finding({ category: "reliability", title: "Unsupported claim" }),
+                      rule: { source: "review_rules", quote: "Forged rule" },
+                    },
+                    {
+                      ...finding({ category: "maintainability", title: "Supported claim" }),
+                      rule: { source: "review_rules", quote: baseRule },
+                    },
+                  ]
+                : [{ ...finding(), rule: "Legacy string rule" }]
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: claims }))
+            const outcome = yield* Review.run(
+              input(directory, {
+                config: config({ security: "off", ...(ruleCheck ? { ruleCheck } : {}) }),
+                rules: baseRule,
+                rulesSource,
+                ruleParts: [{ from: "global", text: baseRule }],
+                files,
+                anchors: files,
+                context: { instructions: rulesSource === "working tree" ? addedRule : baseRule },
+              }),
+            )
+            const { durationMs, sessions, ...stable } = outcome
+            return { outcome: stable, bodies: (yield* modelRequests(llm)).map((row) => JSON.stringify(row)) }
+          })
+        const unset = yield* ask()
+        expect(unset.bodies.length).toBe(1)
+        expect(unset.outcome.report.findings[0]?.rule).toBe("Legacy string rule")
+        expect(yield* ask("off")).toEqual(unset)
+        const base = yield* ask("strict")
+        expect(base.bodies).toHaveLength(1)
+        expect(base.bodies[0]).toContain("smallest supporting line range")
+        expect(base.outcome.report.findings).toHaveLength(2)
+        expect(base.outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+        expect(base.outcome.notes.join(" ")).toContain("head-added 1")
+        expect(base.outcome.notes.join(" ")).toContain("misquote 1")
+        expect(JSON.stringify(base.outcome)).not.toContain("Forged rule")
+        expect(base.outcome.report.findings.find((row) => row.rule)).toMatchObject({
+          rule: baseRule,
+          rulesSource: "base branch",
+          severity: "concern",
+        })
+        const local = yield* ask("strict", "working tree")
+        expect(
+          local.outcome.report.findings.some((row) => row.rule === addedRule && row.rulesSource === "working tree"),
+        ).toBe(true)
+      }),
+    TIMEOUT,
+  )
+})

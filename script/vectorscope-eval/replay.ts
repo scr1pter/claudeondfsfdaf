@@ -262,8 +262,9 @@ export const VARIANTS = {
   },
   "rule-strict": {
     planned: 'ruleCheck: "strict"',
-    engine: { pending: "VS-43 wiring" },
-    desktop: { pending: "VS-43 wiring" },
+    keys: { ruleCheck: "strict" },
+    engine: { from: "VS-43" },
+    desktop: { from: "VS-43" },
   },
   // As scope-introduced: verifyEvidence acts only under guardrail "strict". VS-44 wiring may revise it before it flips.
   "verify-cert": {

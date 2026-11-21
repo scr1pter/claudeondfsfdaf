@@ -26,6 +26,9 @@ export const Info = Schema.Struct({
   holdback: Schema.optional(Schema.Unknown).annotate({
     description: 'Review secret holdback: "secrets" only raises what a repository asks.',
   }),
+  ruleCheck: Schema.optional(Schema.Unknown).annotate({
+    description: "Check repository rule citations against the trusted text sent for this review.",
+  }),
   zdrAttested: Schema.optional(Schema.Unknown).annotate({
     description: "Provider IDs and model server hosts you attest keep no data, for reviews on this computer.",
   }),

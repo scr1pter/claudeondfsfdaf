@@ -1389,6 +1389,66 @@ describe("ReviewEval.replay", () => {
   )
 
   it.instance(
+    "the named strict rule replay retains only citations present in the base instructions",
+    () =>
+      Effect.gen(function* () {
+        const rule = "Preserve the final element."
+        const added = "Reject every list operation."
+        const { directory, llm, base, head } = yield* checkout({
+          base: {
+            "src/list.ts": LIST_BASE,
+            "AGENTS.md": rule,
+            ".gitignore": "vector.json\n",
+            ".vector/review.json": '{"ruleCheck":"strict"}',
+          },
+          head: { "src/list.ts": LIST_HEAD, "AGENTS.md": rule + "\n" + added },
+          price: PRICE,
+        })
+        const claim = (quote: string) => ({
+          ...listBug,
+          title: quote === rule ? "Order rule" : "Head-only rule",
+          category: "maintainability",
+          rule: { source: "repository_instructions", quote },
+        })
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", { ...report(), findings: [claim(rule), claim(added)] }),
+        )
+        const variant = { name: "engine:rule-strict", keys: { ruleCheck: "strict" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant,
+          config: { maxCostUsd: 2, verify: "off", security: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value.ruleCheck).toBe("strict")
+        expect(artifact.outcome?.report.findings.map((finding) => [finding.rule, finding.rulesSource])).toEqual([
+          [rule, "base branch"],
+        ])
+        expect(artifact.outcome?.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+        expect(JSON.stringify(artifact.posted)).not.toContain(added)
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", { ...report(), findings: [claim(rule), claim(added)] }),
+        )
+        const fromBase = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(fromBase.config.value.ruleCheck).toBe("strict")
+        expect(fromBase.outcome?.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
     "records a real S9 omission at its base span only in the local replay artifact",
     () =>
       Effect.gen(function* () {

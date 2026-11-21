@@ -124,6 +124,8 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/risk.ts",
   "packages/core/src/review/guardrail.ts",
   "packages/core/src/review/citation.ts",
+  "packages/core/src/review/config.ts",
+  "packages/core/src/review/schema.ts",
   "packages/core/src/review/runtime.ts",
   "packages/core/src/review/team.ts",
   "packages/engine/src/review/parse.ts",

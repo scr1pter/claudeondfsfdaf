@@ -62,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "ee10fd1a5bb6171f"
+export const REVIEW_PIPELINE_SOURCES = "aee429852eb9e6fe"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -98,6 +98,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "trivial",
   "impact",
   "guardrail",
+  "ruleCheck",
   "scopeGate",
   "verifyEvidence",
   "depth",
@@ -452,14 +453,18 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // every input set and their inputs marked redacted, for both trusts. The verify and judge prompts carry no sentence.
 export function canonicalPrompts(
   keys: Partial<
-    Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime" | "holdback" | "guardrail" | "scopeGate">
+    Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime" | "holdback" | "guardrail" | "scopeGate" | "ruleCheck">
   > = {},
 ): string[] {
   const gate =
     keys.guardrail === "strict" && keys.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}
   const finding = gate.scopeGate ? { ...STRICT_FINDING, scope: "introduced" as const } : STRICT_FINDING
   const reviewers = (input: PromptInput) => {
-    const effective: PromptInput = keys.guardrail === "strict" ? { ...input, guardrail: "strict", ...gate } : input
+    const effective: PromptInput = {
+      ...input,
+      ...(keys.guardrail === "strict" ? { guardrail: "strict", ...gate } : {}),
+      ...(keys.ruleCheck === "strict" ? { ruleCheck: "strict" } : {}),
+    }
     return [buildReviewPrompt(effective), buildSecurityPrompt(effective)]
   }
   const impact =
@@ -558,7 +563,15 @@ export function promptsDigest(
   keys: Partial<
     Pick<
       ReviewConfig,
-      "impact" | "guardrail" | "scopeGate" | "verifyEvidence" | "depth" | "lenses" | "runtime" | "holdback"
+      | "impact"
+      | "guardrail"
+      | "ruleCheck"
+      | "scopeGate"
+      | "verifyEvidence"
+      | "depth"
+      | "lenses"
+      | "runtime"
+      | "holdback"
     >
   > = {},
 ): string {
@@ -566,6 +579,7 @@ export function promptsDigest(
   const key = [
     keys.impact === "graph" ? "impact:graph" : "",
     strict ? "guardrail:strict" : "",
+    keys.ruleCheck === "strict" ? "ruleCheck:strict" : "",
     strict && keys.scopeGate === "introduced" ? "scopeGate:introduced" : "",
     strict && keys.verifyEvidence === "certificate" ? "verifyEvidence:certificate" : "",
     keys.depth === "auto" && keys.lenses === "high" ? "lenses:high" : "",
@@ -641,6 +655,7 @@ export function evidenceScope(input: {
     // The impact block and the strict schemas enter the prompts only once a runner applies their key (it leaves
     // UNAPPLIED_REVIEW_KEYS), and VS-42's and VS-44's schema changes only once both their key and strict are applied.
     prompts: promptsDigest({
+      ...(input.config.ruleCheck === "strict" ? { ruleCheck: "strict" as const } : {}),
       ...(input.adapter === "engine" && input.config.impact === "graph" ? { impact: "graph" as const } : {}),
       ...(input.adapter === "engine" && input.config.guardrail === "strict" ? { guardrail: "strict" as const } : {}),
       ...(input.adapter === "engine" && input.config.guardrail === "strict" && input.config.scopeGate === "introduced"

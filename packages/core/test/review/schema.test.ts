@@ -371,7 +371,7 @@ function keywords(schema: unknown): string[] {
 }
 
 // Every field set, so a field added to the type without the schema, or the other way round, fails below.
-const STRICT_FINDING: Required<StrictFinding> = {
+const STRICT_FINDING: Required<Omit<StrictFinding, "linkedRule">> = {
   id: "3f9a1c07be21",
   class: "crash",
   mechanism: "logic",
@@ -398,6 +398,14 @@ const STRICT_RESULT: Required<StrictResult> = {
 }
 
 describe("the strict schemas (VS-27a)", () => {
+  test("the ruleCheck result carries a checked rule only under its own key", () => {
+    const linkedRule = { source: "paths[0]", quote: "Preserve FIFO order.", rulesSource: "working tree" } as const
+    const withRule: Required<StrictFinding> = { ...STRICT_FINDING, linkedRule }
+    const schema = strictResultJsonSchema({ guardrail: "strict", ruleCheck: "strict" })!
+    expect(schema.properties.findings.items.properties.linkedRule?.required).toEqual(Object.keys(withRule.linkedRule))
+    expect(strictResultJsonSchema(STRICT)!.properties.findings.items.properties).not.toHaveProperty("linkedRule")
+  })
+
   test("exist only under guardrail: strict", () => {
     // VS-42's scopeGate is ignored without strict, by the schemas as by the guardrail.
     for (const keys of [

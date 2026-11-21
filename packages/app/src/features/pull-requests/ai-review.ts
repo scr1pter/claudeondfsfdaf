@@ -19,9 +19,10 @@ import {
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
-  rulesForPaths,
+  rulePromptInput,
   type SourcedReviewKey,
 } from "@vectordevai/core/review/config"
+import { safeRulePrompt, trustedRules } from "@vectordevai/core/review/citation"
 import {
   anchorText,
   applyPatch,
@@ -106,12 +107,13 @@ import {
   decodeReport,
   decodeVerify,
   REVIEW_REPORT_JSON_SCHEMA,
+  strictReportJsonSchema,
   VERIFY_JSON_SCHEMA,
   type VerifyResult,
 } from "@vectordevai/core/review/schema"
 import { changedSymbols } from "@vectordevai/core/review/symbols"
 import { checkedLabs, checkedLine, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
-import { selectFindings, wantsNits } from "@vectordevai/core/review/select"
+import { checkedRuleFindings, ruleCheckNotes, selectFindings, wantsNits } from "@vectordevai/core/review/select"
 import {
   SEVERITIES,
   type CostKind,
@@ -147,6 +149,11 @@ const CHARS_PER_TOKEN = 3.5
 const RISKS: Risk[] = ["low", "medium", "high"]
 const FORMAT = { type: "json_schema" as const, schema: REVIEW_REPORT_JSON_SCHEMA, retryCount: 0 }
 const VERIFY_FORMAT = { type: "json_schema" as const, schema: VERIFY_JSON_SCHEMA, retryCount: 0 }
+
+function reviewReportFormat(ruleCheck?: "strict") {
+  const schema = ruleCheck && strictReportJsonSchema({ ruleCheck })
+  return schema ? { ...FORMAT, schema } : FORMAT
+}
 // Call sites: up to 10 symbols the change declares, 15 hits each, as `vector review` gathers with git grep.
 const MAX_SYMBOLS = 10
 const MAX_HITS = 15
@@ -346,7 +353,7 @@ export type ReviewRunInput = ReviewRequest & {
     scope: Scope
     rules: PermissionRule[]
     text: string
-    format: typeof FORMAT | typeof VERIFY_FORMAT
+    format: ReturnType<typeof reviewReportFormat> | typeof VERIFY_FORMAT
     candidateLimit?: number
     signal: AbortSignal
   }) => Promise<number | undefined>
@@ -813,6 +820,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         trigger: "desktop",
       })
   const config = merged.config
+  const ruleCheck = config.ruleCheck === "strict" ? ("strict" as const) : undefined
   input.onSettings?.({ config: structuredClone(config), warnings: [...merged.warnings] })
   // The settings' warnings about privacy, holdback and attestations (a value read as the stricter setting, an
   // attestation dropped) say why a review was raised to zdr or refused, so the outcome and a refusal carry them. The
@@ -834,6 +842,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       ...rulesTexts,
       instructions,
       ...(input.preferredModels ?? []),
+      ...(ruleCheck ? ["ruleCheck:strict"] : []),
       // Only when either is set, so the key is what it was for every review without them.
       ...(config.privacy || config.holdback
         ? [`privacy:${config.privacy ?? ""}`, `holdback:${config.holdback ?? ""}`]
@@ -964,11 +973,47 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       "The desktop session API does not provide this estimate for maxInputTokens. No model request was sent.",
     ])
 
+  const rulesText = rulesTexts.find((text) => text?.trim())
+  const ruleInput = rulePromptInput(
+    parseReviewRules(rulesText ?? ""),
+    review.map((file) => file.path),
+    config,
+  )
+  const safeBlocks = safeRulePrompt({ ...ruleInput, instructions }, config)
+  const rulePrompt = {
+    rules: safeBlocks.rules,
+    rulesSource: "working tree" as const,
+    ...(safeBlocks.instructions
+      ? { instructions: safeBlocks.instructions, instructionsSource: "working tree" as const }
+      : {}),
+    ...(ruleCheck ? { ruleCheck, instructionsSource: "working tree" as const } : {}),
+  }
+  const trusted = ruleCheck ? trustedRules({ ...rulePrompt, parts: safeBlocks.ruleParts, anchors: sent }) : undefined
+  const sameDiff =
+    previous && unchanged.size === review.length && Object.keys(previous.fileKeys ?? {}).length === review.length
+  const oldFindings = previous ? previousFindings(previous.selection) : []
+  const carried = oldFindings.filter((finding) => (trusted && sameDiff) || unchanged.has(finding.path))
+  const carriedRules = trusted ? checkedRuleFindings(carried, trusted) : undefined
+  // A saved finding is displayed as-is on a cache hit. Re-review if its authority or held-file eligibility changed.
+  if (
+    carriedRules &&
+    (carriedRules.stripped ||
+      carriedRules.dropped ||
+      carried.some(
+        (finding, index) =>
+          heldPaths.has(finding.path) ||
+          finding.rule !== carriedRules.findings[index]?.rule ||
+          finding.rulesSource !== carriedRules.findings[index]?.rulesSource ||
+          finding.severity !== carriedRules.findings[index]?.severity,
+      ))
+  )
+    unchanged.clear()
   // Nothing changed since the last review, so its findings stand. The checkout is the one read just now: the user may
   // have switched branches since, and Apply fix and Ask the agent follow it.
-  if (previous && unchanged.size === review.length && Object.keys(previous.fileKeys ?? {}).length === review.length)
+  if (previous && sameDiff && unchanged.size === review.length)
     return {
       ...previous,
+      ...(carriedRules ? { report: { ...previous.report, findings: carriedRules.findings } } : {}),
       head,
       checkout,
       label,
@@ -1079,7 +1124,6 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         { held: hold.held },
       )
     : undefined
-  const rulesText = rulesTexts.find((text) => text?.trim())
   const prompt: PromptInput = {
     mode: focus ? "incremental" : "full",
     trust: checkout.trust,
@@ -1096,13 +1140,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     headFiles: heads ? packed.headFiles : undefined,
     ...(focus ? { focus, settled: packed.settled } : {}),
     nits: wantsNits(config),
-    rules: rulesForPaths(
-      parseReviewRules(rulesText ?? ""),
-      review.map((file) => file.path),
-      config.paths,
-    ),
-    rulesSource: "working tree",
-    ...(instructions ? { instructions, instructionsSource: "working tree" as const } : {}),
+    ...rulePrompt,
     ...((quoted?.related ?? related).length ? { related: quoted?.related ?? related } : {}),
     ...(checks.length ? { checks: quoted?.checks ?? checks } : {}),
     humanComments: quoted?.humanComments ?? humanComments,
@@ -1150,7 +1188,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         rules,
         directory,
         parentID: input.parentID,
-        format: pass === "verify" || pass === "judge" ? VERIFY_FORMAT : FORMAT,
+        format: pass === "verify" || pass === "judge" ? VERIFY_FORMAT : reviewReportFormat(ruleCheck),
         signal: controller.signal,
         ...(candidateLimit !== undefined ? { candidateLimit } : {}),
       })
@@ -1325,6 +1363,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         name,
         title: `${REVIEW_SESSION_TITLE_PREFIX}${subject} · ${name}`,
         text: texts[name],
+        ruleCheck,
         scope,
         model: first,
         rules,
@@ -1350,11 +1389,12 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
 
   const index = buildAnchorIndex(files)
   // A finding on a held path is never quoted to the double-check or the judge, and is not shown.
-  const proposed = reports
+  const fresh = reports
     .flatMap(({ source, report }) => report.findings.map((finding) => toFinding(finding, source, index)))
     .filter((finding) => !heldPaths.has(finding.path))
-  // What the last review found in files that did not change since. They were double-checked then, if at all.
-  const carried = previous ? previousFindings(previous.selection).filter((finding) => unchanged.has(finding.path)) : []
+  const freshRules = trusted ? checkedRuleFindings(fresh, trusted) : undefined
+  const proposed = freshRules?.findings ?? fresh
+  const ruleCounts = freshRules ? [freshRules, ...(unchanged.size && carriedRules ? [carriedRules] : [])] : []
 
   // The double-check: a second session re-reads the code behind each finding of concern or above and answers
   // confirmed or rejected; rejected findings are dropped. It is what keeps a reviewer's guesses off the pull request.
@@ -1441,7 +1481,8 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     .map((finding) => (verdicts.get(finding.id) === "confirmed" ? { ...finding, verified: true } : finding))
   const rejected = proposed.length - kept.length
   const unconfirmed = kept.length - checked.length
-  const findings = [...checked, ...carried]
+  const retained = unchanged.size ? (carriedRules?.findings ?? carried) : []
+  const findings = [...checked, ...retained]
   // What the panel says about the double-check. The shared policy (plan.ts) accounts for every candidate left without a
   // verdict, whether or not the pass finished, in the engine's words. The legacy rule gives one note for a pass that did
   // not finish.
@@ -1496,6 +1537,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
 
   const selection = selectFindings({
     findings,
+    ...(trusted ? { trustedRules: trusted, ruleCounts } : {}),
     anchors: files,
     head,
     trust: checkout.trust,
@@ -1622,7 +1664,8 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     checkout,
     authored,
     label,
-    report,
+    // Saved desktop reports are also consumed outside the panel. Keep only the checked finding fields under VS-43.
+    report: ruleCheck ? { ...report, findings: previousFindings(selection) } : report,
     selection,
     anchored,
     cost: used
@@ -1656,6 +1699,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       ...holdNotes,
       ...(judge && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(modelName(judge))] : []),
       ...verifyNotes,
+      ...(trusted ? ruleCheckNotes(ruleCounts) : []),
       ...(config.triageModel && !triage && !named
         ? [
             `The triage model in .vector/review.json, ${config.triageModel}, is not connected, so the whole review ran on ${modelName(model)}.`,
@@ -1679,7 +1723,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       callers: related.reduce((total, entry) => total + entry.hits.length, 0),
       checks: checks.length,
       failing: checks.filter((check) => FAILED_CHECK.has(check.conclusion)).length,
-      instructions: Boolean(instructions),
+      instructions: Boolean(rulePrompt.instructions),
     },
     ...(verify
       ? {
@@ -1695,7 +1739,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     ...(dispatchNotes.length ? {} : { fileKeys, settingsKey }),
     ...(uncheckedPaths ? { partial: "budget" as const, unreviewed: uncheckedPaths } : {}),
     ...(dispatch ? { dispatch, shrink } : {}),
-    ...(carried.length ? { carried: carried.length } : {}),
+    ...(retained.length ? { carried: retained.length } : {}),
     ...(passes.length ? { passes } : {}),
     ...(triage ? { triage: modelName(triage) } : {}),
     ...(Object.keys(fixes).length ? { fixes } : {}),
@@ -1889,6 +1933,8 @@ function previousFindings(selection: Selection): Finding[] {
     confidence: finding.confidence,
     ...(finding.evidence ? { evidence: finding.evidence } : {}),
     ...(finding.rule ? { rule: finding.rule } : {}),
+    ...(finding.citation ? { citation: finding.citation } : {}),
+    ...(finding.rulesSource ? { rulesSource: finding.rulesSource } : {}),
     source: finding.source,
     ...(finding.verified ? { verified: true } : {}),
     ...(finding.also ? { also: finding.also } : {}),
@@ -2030,6 +2076,7 @@ async function runSpecialist(input: {
   name: Specialist
   title: string
   text: string
+  ruleCheck?: "strict"
   // The changed paths and the trust, which choose how the owner reviews; never the pull request's own text.
   scope: Scope
   model?: ReviewModel
@@ -2061,6 +2108,7 @@ async function runSpecialist(input: {
     }
   input.onSession(sessionID)
 
+  const format = reviewReportFormat(input.ruleCheck)
   const ask = (text: string) =>
     client.session
       .prompt({
@@ -2068,7 +2116,7 @@ async function runSpecialist(input: {
         directory,
         agent: name,
         ...(input.model ? { model: { providerID: input.model.providerID, modelID: input.model.modelID } } : {}),
-        format: FORMAT,
+        format,
         parts: [{ type: "text", text, metadata: { [SCOPE]: input.scope } }],
       })
       .then(
@@ -2098,7 +2146,7 @@ async function runSpecialist(input: {
 
   // A stopped session, or one that answered without a report, gets the finalize prompt in the same session: its
   // findings exist only in its own context.
-  let report = reportOf(message)
+  let report = reportOf(message, input.ruleCheck)
   if (!report) {
     const restrictionFailure = await client.session
       .update({ sessionID, directory, permission: [...input.rules, ...FINALIZE_RULES] })
@@ -2117,7 +2165,7 @@ async function runSpecialist(input: {
       }
     const answer = await within(ask(buildFinalizePrompt()), FINALIZE_MS)
     if (!answer) await client.session.abort({ sessionID, directory }).catch(() => undefined)
-    report = reportOf(answer)
+    report = reportOf(answer, input.ruleCheck)
   }
   const usage = await usageOf(client, sessionID, directory)
   if (report) return { name, status, sessionID, report, usage, ...(guarded ? { detail: guarded } : {}) }
@@ -2212,13 +2260,14 @@ function verdictsOf(message: ReviewMessage | undefined): VerifyResult[] | undefi
   return decodeVerify(message.info.structured) ?? (text ? decodeVerify(text) : undefined)
 }
 
-function reportOf(message: ReviewMessage | undefined): ModelReport | undefined {
+function reportOf(message: ReviewMessage | undefined, ruleCheck?: "strict"): ModelReport | undefined {
   if (!message) return undefined
   const text = message.parts
     .filter((part) => part.type === "text" && part.text)
     .map((part) => part.text)
     .join("\n")
-  return decodeReport(message.info.structured) ?? (text ? decodeReport(text) : undefined)
+  const keys = ruleCheck ? { ruleCheck } : undefined
+  return decodeReport(message.info.structured, keys) ?? (text ? decodeReport(text, keys) : undefined)
 }
 
 // The id is computed from the anchored code, as in the engine, so the same finding keeps its id across surfaces.

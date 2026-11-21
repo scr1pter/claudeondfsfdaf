@@ -40,7 +40,7 @@ import {
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
-  rulesForPaths,
+  rulePromptInput,
   SOURCED_REVIEW_KEYS,
   strictReviewConfig,
   type SourcedReviewKey,
@@ -880,10 +880,10 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     context: gathered,
     ...(item.pr ? { pr: item.pr } : {}),
     prior: [],
-    rules: rulesForPaths(
+    ...rulePromptInput(
       rules,
       files.map((file) => file.path),
-      config.paths,
+      config,
     ),
     config,
     model: input.model,
@@ -1403,6 +1403,7 @@ function variantProblem(input: ReplayInput) {
   // what applies it, and VS-34's holdback, which is no route setting, its own.
   const sourced = SOURCED_REVIEW_KEYS.filter(
     (key) =>
+      key !== "ruleCheck" &&
       key !== "holdback" &&
       input.config &&
       Object.hasOwn(input.config, key) &&
@@ -1410,6 +1411,8 @@ function variantProblem(input: ReplayInput) {
   )
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
+  if (input.config && Object.hasOwn(input.config, "ruleCheck"))
+    return "config sets ruleCheck, which a replay takes from the committed base or the engine:rule-strict variant."
   if (input.config && Object.hasOwn(input.config, "holdback"))
     return "config sets holdback, which a replay takes only from the case's own review.json or the engine:holdback-secrets variant."
   const unwired = UNAPPLIED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
@@ -1450,6 +1453,16 @@ function variantProblem(input: ReplayInput) {
     (variant.name !== "engine:impact-graph" || variant.keys.impact !== "graph" || keys.length !== 1 || variant.models)
   )
     return 'The engine:impact-graph variant sets only impact: "graph".'
+  if (variant.name === "engine:rule-strict" || Object.hasOwn(variant.keys, "ruleCheck")) {
+    if (
+      variant.name !== "engine:rule-strict" ||
+      Reflect.get(variant.keys, "ruleCheck") !== "strict" ||
+      keys.length !== 1 ||
+      variant.models
+    )
+      return 'The engine:rule-strict variant sets only ruleCheck: "strict".'
+    return undefined
+  }
   if (variant.name === "engine:scope-introduced" || variant.keys.scopeGate !== undefined) {
     if (
       variant.name !== "engine:scope-introduced" ||

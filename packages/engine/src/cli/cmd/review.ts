@@ -13,11 +13,12 @@ import { Effect, Option, Schema } from "effect"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
 import { Flock } from "@vectordevai/core/util/flock"
 import {
+  MAX_RULES_BYTES,
   mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
-  rulesForPaths,
+  rulePromptInput,
 } from "@vectordevai/core/review/config"
 import { parseUnifiedDiff, renderPatch, type DiffFile } from "@vectordevai/core/review/diff"
 import {
@@ -302,12 +303,20 @@ export function executeLocalReview<RunR, ModelR>(
           : trust === "trusted"
             ? readWorkingFile(root, file)
             : readBlob(git, root, base!.sha, file)
+    const settingsAt = options.context
+      ? options.context.settingsRef === base?.sha
+        ? "base"
+        : "snapshot"
+      : trust === "trusted"
+        ? "working-tree"
+        : "base"
+    const settingsText = yield* setting(REVIEW_CONFIG_PATH)
     const parsed = mergeReviewConfig({
       surface: "local",
       ...(global ? { global } : {}),
       json: {
-        at: options.context || trust !== "trusted" ? "base" : "working-tree",
-        text: yield* setting(REVIEW_CONFIG_PATH),
+        at: settingsAt,
+        text: settingsText,
       },
       env,
       trigger: "local",
@@ -319,8 +328,23 @@ export function executeLocalReview<RunR, ModelR>(
         ? { ...options, maxCost: Math.min(options.maxCost, parsed.config.maxCostUsd) }
         : options,
     )
+    // A service may pin its settings to the reviewed head. Only its pinned base can supply rule evidence.
+    const checkRules = config.ruleCheck === "strict"
+    const ruleSourceAvailable = !checkRules || settingsAt !== "snapshot"
+    // The regular config parser also supports linked files. They cannot establish path-specific citations.
+    const ruleConfig =
+      checkRules &&
+      settingsAt === "working-tree" &&
+      config.paths.length &&
+      (yield* readWorkingRule(root, REVIEW_CONFIG_PATH, 1024 * 1024)) !== settingsText
+        ? { ...config, paths: [] }
+        : config
+    const ruleFile = (file: string) =>
+      checkRules && settingsAt === "working-tree" && !denied(file) ? readWorkingRule(root, file) : setting(file)
+    if (!ruleSourceAvailable)
+      say("Rule citations are unavailable because the pinned settings commit is not the review base.")
     let rulesText: string | undefined
-    for (const file of REVIEW_RULES_PATHS) rulesText ??= yield* setting(file)
+    if (ruleSourceAvailable) for (const file of REVIEW_RULES_PATHS) rulesText ??= yield* ruleFile(file)
     const rules = parseReviewRules(rulesText ?? "")
     if (rules.truncated) say("Warning: .vector/review.md is over 16 KB; only the first 16 KB is used.")
     const attributesText = yield* setting(".gitattributes")
@@ -393,7 +417,10 @@ export function executeLocalReview<RunR, ModelR>(
           !base ||
           stored.state.base !== (yield* mergeBaseOf(git, root, base, current, "HEAD"))
         : stored.strict)
-    const fullRetry = retryFull || retryStrict === true
+    // Trusted instructions and their clipped, path-specific blocks are gathered after target resolution.
+    // Recheck all findings when entering or leaving this policy, including an unchanged branch.
+    const recheckRules = config.ruleCheck === "strict" || stored?.checkedRules === true
+    const fullRetry = retryFull || retryStrict === true || recheckRules
     const saved = !options.full || fullRetry ? stored?.state : undefined
     const range: Range =
       options.pr !== undefined
@@ -666,7 +693,7 @@ export function executeLocalReview<RunR, ModelR>(
       files: review,
       ignore: [...(config.ignoreDefaults ? DEFAULT_IGNORES.map((rule) => rule.glob) : []), ...config.ignore],
       ignored,
-      ...(options.context ? { instructions: setting } : {}),
+      ...((options.context || checkRules) && ruleSourceAvailable ? { instructions: ruleFile } : {}),
     })
     // The specs the change touches, with drift flags, so the reviewer can tell when it breaks one.
     const requirements = deps.requirements
@@ -778,11 +805,13 @@ export function executeLocalReview<RunR, ModelR>(
       context: { ...context, ...(requirements ? { requirements } : {}) },
       ...(pr ? { pr } : {}),
       prior,
-      rules: rulesForPaths(
-        rules,
-        review.map((file) => file.path),
-        config.paths,
-      ),
+      ...(ruleSourceAvailable
+        ? rulePromptInput(
+            rules,
+            review.map((file) => file.path),
+            ruleConfig,
+          )
+        : { rules: "", ruleParts: [] }),
       config,
       model,
       ...(resolved.triage ? { triage: resolved.triage } : {}),
@@ -876,7 +905,7 @@ export function executeLocalReview<RunR, ModelR>(
       moved: selection.inline,
     })
     if (retryFull && unfinishedCauses(outcome).length) next.retryFullAfterBudget = true
-    yield* writeLocalState(statePath, next, say, outcome, undefined, strictPolicy)
+    yield* writeLocalState(statePath, next, say, outcome, undefined, strictPolicy, config.ruleCheck === "strict")
 
     if (options.json)
       yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
@@ -1504,6 +1533,7 @@ interface LocalReviewRecord {
   text: string
   state: ReviewState
   strict: boolean
+  checkedRules: boolean
   strictPolicy?: string
   outcome?: ReviewOutcome
 }
@@ -1525,6 +1555,7 @@ function readLocalState(file: string, includeOutcome: boolean) {
       text,
       state,
       strict,
+      checkedRules: data.checkedRules === true,
       ...(typeof data.strictPolicy === "string" ? { strictPolicy: data.strictPolicy } : {}),
     }
     if (
@@ -1596,6 +1627,7 @@ function writeLocalState(
   outcome?: ReviewOutcome,
   unchangedRecord?: string,
   strictPolicy?: string,
+  checkedRules = false,
 ) {
   if (!file) return Effect.void
   return Effect.promise(() =>
@@ -1613,6 +1645,7 @@ function writeLocalState(
                 state: encoded,
                 ...(outcome ? { outcome } : {}),
                 ...(strictPolicy ? { strictPolicy } : {}),
+                ...(checkedRules ? { checkedRules: true } : {}),
               }
             : { ...JSON.parse(unchangedRecord), state: encoded }
         const temporary = `${file}.${crypto.randomUUID()}.tmp`
@@ -1628,6 +1661,30 @@ function writeLocalState(
       say(`Warning: could not save this review for next time: ${error instanceof Error ? error.message : error}`),
     ),
   )
+}
+
+// Only repository-relative, regular instruction files can establish a local rule. A linked file or directory
+// must not let a reviewed checkout quote material from another project or the owner's home.
+function readWorkingRule(root: string, file: string, maxBytes = MAX_RULES_BYTES + 1) {
+  return Effect.tryPromise(async () => {
+    const directory = await fsp.realpath(root)
+    const name = path.join(directory, file)
+    const before = await fsp.lstat(name)
+    if (!before.isFile() || before.nlink !== 1 || (await fsp.realpath(name)) !== name) return undefined
+    const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants
+    const handle = await fsp.open(name, O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0))
+    try {
+      const info = await handle.stat()
+      if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino || info.nlink !== 1) return undefined
+      const buffer = Buffer.alloc(Math.min(info.size, maxBytes))
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+      const bytes = buffer.subarray(0, bytesRead)
+      if ((await fsp.realpath(name)) !== name || bytes.includes(0)) return undefined
+      return bytes.toString("utf8")
+    } finally {
+      await handle.close()
+    }
+  }).pipe(Effect.orElseSucceed(() => undefined))
 }
 
 function readWorkingFile(root: string, file: string) {
