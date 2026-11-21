@@ -170,7 +170,8 @@ import { ReviewRoutes } from "./route"
 import { ReviewTrivial } from "./trivial"
 import { ReviewImpact } from "./impact"
 import { ReviewDepth } from "./depth"
-import { riskFeatures, riskOf } from "@vectordevai/core/review/risk"
+import { activeReviewBatch, exceedsBatchLimits, finishReviewBatch, type ReviewBatchStore } from "./batch"
+import { orderByRiskDensity, riskFeatures, riskOf } from "@vectordevai/core/review/risk"
 import {
   checkStrict,
   decodeStrictVerify,
@@ -180,6 +181,13 @@ import {
 } from "./strict"
 
 export interface RunInput {
+  batchStore?: ReviewBatchStore
+  /** A prior durable batch still owns this target’s cumulative spend. */
+  accountBatchSpend?: true
+  /** A trusted same-head checkpoint keeps its cost and coverage checks even if new size caps fit everything. */
+  continuingBatch?: true
+  /** Only an explicit new batch run discards its cursor; another policy may require a full diff. */
+  restartBatch?: boolean
   parentID?: SessionID
   directory: string
   trigger: Trigger
@@ -578,8 +586,8 @@ export const run: (
       }
     }
   }
-  const priceOf = (model: ResolvedModel) =>
-    model.costKind === "priced" && config.maxCostUsd > 0 ? model.price : undefined
+  let dollarLimit = config.maxCostUsd
+  const priceOf = (model: ResolvedModel) => (model.costKind === "priced" && dollarLimit > 0 ? model.price : undefined)
   // VS-23b: under privacy "zdr" every model a pass may use needs a route the rules allow (route.ts), checked before any
   // session: the models' own refusals first, before the Codium listing or review.json's judgeModel is looked up, then
   // where each chosen model sends. Each pass's session and every provider attempt are checked again below.
@@ -651,7 +659,7 @@ export const run: (
       entry.result.decision.allowed ? [] : [{ model: nameOf(entry.chosen), refusal: entry.result.decision.refusal }],
     )[0]
   // The dollar cap applies when any pass runs on a priced model.
-  const capped =
+  let capped =
     priceOf(model) !== undefined ||
     priceOf(triage) !== undefined ||
     (judgeModel !== undefined && priceOf(judgeModel) !== undefined)
@@ -677,6 +685,7 @@ export const run: (
       ? input.admittedReads.patternsFor((yield* InstanceState.context).worktree)
       : authority?.patterns,
   })
+  let sessionRules = rules
   const reviewed = {
     paths: input.files.map((file) => file.path),
     trust: input.trust,
@@ -755,7 +764,7 @@ export const run: (
       0,
     )
     if (
-      state.spent + state.uncertain + others + turn + finalize > config.maxCostUsd &&
+      state.spent + state.uncertain + others + turn + finalize > dollarLimit &&
       !lift({ pass: pass.name, ...lensField(pass), estimateUsd: turn + finalize, ...at })
     )
       return false
@@ -947,7 +956,7 @@ export const run: (
     title: `Vectorscope review · ${input.head.slice(0, 7)} · ${passKey(pass)}`,
     internal: `${input.instructionsFromContext ? PINNED_SESSION_PREFIX : "vectorscope."}${pass.lens ? `lens.${pass.lens}` : pass.name}`,
     parentID: input.parentID,
-    permission: rules,
+    permission: sessionRules,
   })
   const passPrompt = (spec: Pick<Spec<unknown>, "name" | "model" | "schema">, text: string) => ({
     agent: input.identity === VECTORSCOPE_AGENT ? VECTORSCOPE_AGENT : spec.name === "security" ? "security" : "review",
@@ -1237,6 +1246,12 @@ export const run: (
                   : {}),
               })
               state.spent += result.cost
+              if (
+                (batch || input.accountBatchSpend) &&
+                !result.complete &&
+                (spec.model.costKind === "priced" || spec.model.costKind === "unknown")
+              )
+                state.incomplete = true
               if (track.price && !result.complete) {
                 // No usage, partial usage, and unpriced usage cannot turn an accepted attempt into free capacity.
                 state.uncertain += Math.max(
@@ -1322,7 +1337,7 @@ export const run: (
       }
       track.finalizing = true
       track.denied = false
-      yield* sessions.setPermission({ sessionID: session.id, permission: [...rules, DENY_ALL, ALLOW_OUTPUT] })
+      yield* sessions.setPermission({ sessionID: session.id, permission: [...sessionRules, DENY_ALL, ALLOW_OUTPUT] })
       const last = yield* send(buildFinalizePrompt(), FINALIZE_MS)
       if (!last.timedOut && last.contextError) return done(undefined, "failed", undefined, last.contextError)
       const final = last.timedOut ? undefined : last.message
@@ -1350,13 +1365,18 @@ export const run: (
     )
   }
 
+  const fullInput = input
+  let batch: ReturnType<typeof activeReviewBatch> | undefined
+  let batchMayCharge = false
+  let unavailable: string[] = []
+  let batchRefusal: string | undefined
   const body = Effect.gen(function* () {
-    const files = hold?.files ?? input.files
-    const headFiles = hold ? hold.headFiles : input.headFiles
-    const focus = hold ? input.focus?.filter((hunk) => !heldPaths.has(hunk.path)) : input.focus
+    let files = hold?.files ?? input.files
+    let headFiles = hold ? hold.headFiles : input.headFiles
+    let focus = hold ? input.focus?.filter((hunk) => !heldPaths.has(hunk.path)) : input.focus
     // Nothing to send: holdback held every changed file back or, in an incremental review, every hunk new since the
     // last one, so no pass runs (the files sent would carry nothing new and go out as a full review).
-    const nothingToSend =
+    let nothingToSend =
       hold !== undefined && (!files.length || (input.mode === "incremental" && !!input.focus?.length && !focus?.length))
     // A finding on a held path is never quoted to the verify or judge pass; selection drops it.
     const sendable = (finding: { path: string }) => !heldPaths.has(finding.path)
@@ -1367,14 +1387,15 @@ export const run: (
     const context = Math.min(model.context, triage.context)
     const graph =
       config.impact === "graph" && !nothingToSend && files.length > 0 && !refusedUpFront && !input.stopSignal?.aborted
-    const layout = (ranks?: ReadonlyMap<string, number>) => {
-      const ranked = ranks ? orderImpactFiles(files, ranks) : files
+    const layout = (ranks?: ReadonlyMap<string, number>, dependents?: ReadonlyMap<string, number>) => {
+      const ranked =
+        config.depth === "auto" ? orderByRiskDensity(files, dependents) : ranks ? orderImpactFiles(files, ranks) : files
       const ordered =
         input.mode === "incremental"
           ? [...ranked.filter((file) => focused.has(file.path)), ...ranked.filter((file) => !focused.has(file.path))]
           : ranked
       const split = budgetDiff(ordered, diffBudgetChars(context, config.maxDiffChars))
-      const overBudget = new Set(graph || strictMode ? split.notInlined.map((file) => file.path) : [])
+      const overBudget = new Set(graph || strictMode || batch ? split.notInlined.map((file) => file.path) : [])
       // Each changed file once: annotated when its pull request text is at hand, and only its changed lines when an
       // incremental review has nothing new in it.
       const packed = packChanges({
@@ -1406,6 +1427,14 @@ export const run: (
           excluded.add(file.oldPath)
         }
       }
+    const maxBatchChars = Math.max(0, diffBudgetChars(context, config.maxDiffChars) - 1)
+    const needsBatch =
+      config.largeChanges === "batch" &&
+      input.trigger === "local" &&
+      !refusedUpFront &&
+      !nothingToSend &&
+      !input.stopSignal?.aborted &&
+      (input.continuingBatch || exceedsBatchLimits(files, { ...config, maxDiffChars: maxBatchChars }))
     const collectImpact = Effect.gen(function* () {
       const admitted = files.filter((file) => !denied(file.path) && (!file.oldPath || !denied(file.oldPath)))
       const remaining = deadline - Date.now()
@@ -1415,10 +1444,11 @@ export const run: (
         base: input.base,
         head: input.head,
         files: admitted,
+        ...((needsBatch && !batch) || config.depth === "auto" ? { batchClusters: true as const } : {}),
         context,
         ...(input.stopSignal ? { signal: input.stopSignal } : {}),
-        promptView(ranks) {
-          const { split, packed } = layout(ranks)
+        promptView(ranks, dependents) {
+          const { split, packed } = layout(ranks, dependents)
           const full = new Set(packed.headFiles.filter((file) => file.exact).map((file) => file.path))
           const shown = new Set(split.inline.map((file) => file.path))
           return { inline: (file) => full.has(file), diffShown: (file) => shown.has(file) }
@@ -1434,8 +1464,113 @@ export const run: (
         ),
       )
     })
-    const impact = graph && !uncommitted ? yield* collectImpact : undefined
-    const { ordered, split, overBudget, packed } = layout(impact?.changedRanks)
+    const plannable =
+      !needsBatch ||
+      (!uncommitted &&
+        [input.base, input.head].every((id) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) &&
+        new Set(files.map((file) => file.path)).size === files.length)
+    const cardBatch = needsBatch && (!!input.selectedCards || (config.cards === "brain" && !input.batchStore))
+    let impact = graph && !uncommitted && !cardBatch && (!needsBatch || plannable) ? yield* collectImpact : undefined
+    if (needsBatch && (!plannable || cardBatch)) {
+      batchRefusal = cardBatch
+        ? "Not reviewed. Resumable batches cannot reuse a review that uses Brain cards."
+        : "Not reviewed. Resumable batches require a committed change and a trusted review-state store."
+      unavailable = [...new Set(input.files.map((file) => file.path))]
+      nothingToSend = true
+    } else if (needsBatch) {
+      const eligible = files.filter((file) => !denied(file.path) && (!file.oldPath || !denied(file.oldPath)))
+      batch = activeReviewBatch(
+        { ...input, model, triage, judge: judgeModel },
+        eligible,
+        maxBatchChars,
+        impact?.batchClusters,
+        impact?.dependentsByFile,
+      )
+      const routes = [model, triage, judgeModel].filter((choice): choice is ResolvedModel => !!choice)
+      batchMayCharge = routes.some((choice) => choice.costKind === "priced" || choice.costKind === "unknown")
+      const spent = input.batchStore?.spent
+        ? input.batchStore.spent(batch.plan, config.maxCostUsdPerMonth > 0, config.maxCostUsd > 0)
+        : batch.cursor.completed
+          ? undefined
+          : 0
+      const remaining = remainingUsd(config, input.spent ? { ...input.spent, trigger: input.trigger } : undefined)
+      const planLimit =
+        config.maxCostUsd > 0 && batchMayCharge
+          ? spent === undefined || !Number.isFinite(spent) || spent < 0
+            ? 0
+            : Math.max(0, config.maxCostUsd - spent)
+          : undefined
+      const unknownSpend =
+        batchMayCharge && remaining !== undefined && (spent === undefined || !Number.isFinite(spent) || spent < 0)
+      const budget = unknownSpend
+        ? 0
+        : batchMayCharge
+          ? Math.min(remaining ?? Infinity, planLimit ?? Infinity)
+          : Infinity
+      const unknownPrice =
+        Number.isFinite(budget) &&
+        routes.some((choice) => choice.costKind === "unknown" || (choice.costKind === "priced" && !choice.price))
+      if (!input.batchStore)
+        batchRefusal = "Not reviewed. Resumable batches require a committed change and a trusted review-state store."
+      else if (batch.mismatch)
+        batchRefusal =
+          "Not reviewed. The saved batch plan no longer matches this change. Run a full review to begin a new plan."
+      else if (unknownPrice)
+        batchRefusal = "Not reviewed. The selected model has no confirmed price for this batch budget."
+      else if (budget <= 0)
+        batchRefusal =
+          "Not reviewed. The remaining review budget is exhausted or its prior spend could not be confirmed."
+      else if (Number.isFinite(budget)) {
+        dollarLimit = budget
+        capped = routes.some((choice) => priceOf(choice) !== undefined)
+      }
+      const selected = batchRefusal ? new Set<string>() : batch.paths
+      const eligiblePaths = new Set(eligible.map((file) => file.path))
+      unavailable = fullInput.files.filter((file) => !eligiblePaths.has(file.path)).map((file) => file.path)
+      const deferred = files
+        .filter((file) => !selected.has(file.path))
+        .flatMap((file) => (file.oldPath ? [file.path, file.oldPath] : [file.path]))
+      for (const path of deferred) excluded.add(path)
+      if (selected.size && deferred.length) {
+        // These are committed repository names, never paths resolved by following live forks' symlinks.
+        // The existing restricted review tool policy checks the session's read rules for aliases/query results.
+        const worktree = (yield* InstanceState.context).worktree
+        const spellings =
+          deferred.length > 256
+            ? ["*"]
+            : [
+                ...new Set(
+                  deferred.flatMap((file) => {
+                    const absolute = path.resolve(input.directory, file)
+                    return [file, absolute, path.relative(worktree, absolute)].map((name) => name.replaceAll("\\", "/"))
+                  }),
+                ),
+              ]
+        sessionRules = [
+          ...rules,
+          ...spellings.map((pattern) => ({ permission: "read", pattern, action: "deny" as const })),
+        ]
+        reviewed.restrictedReads = true
+      }
+      files = eligible.filter((file) => selected.has(file.path))
+      headFiles = headFiles?.filter((file) => selected.has(file.path))
+      focus = undefined
+      nothingToSend = !files.length
+      input = {
+        ...input,
+        mode: "full",
+        focus: undefined,
+        since: undefined,
+        files: input.files.filter((file) => selected.has(file.path)),
+        anchors: input.anchors.filter((file) => selected.has(file.path)),
+        headFiles,
+        prior: input.prior.filter((entry) => selected.has(entry.path)),
+        knownPath: (file) => (excluded.has(file) ? Promise.resolve(false) : fullInput.knownPath(file)),
+      }
+      reviewed.paths = files.map((file) => file.path)
+      impact = graph && files.length ? yield* collectImpact : undefined
+    }
+    const { ordered, split, overBudget, packed } = layout(impact?.changedRanks, impact?.dependentsByFile)
     const index = buildAnchorIndex(input.anchors)
     const strictDenied = (file: string) => {
       if (!ReadOnlyGit.repositoryPath(file) || ESCAPING_PATH.test(file) || denied(file)) return true
@@ -1454,7 +1589,8 @@ export const run: (
         (denied(changed.path) || overBudget.has(changed.path) || (!!changed.oldPath && denied(changed.oldPath)))
       )
     }
-    const earlier = hold?.context.prior ?? input.prior
+    const allEarlier = hold?.context.prior ?? input.prior
+    const earlier = batch ? allEarlier.filter((entry) => batch!.paths.has(entry.path)) : allEarlier
     const prior = strictMode
       ? earlier.filter((entry) => !strictDenied(entry.path) && (!hold || !containsHeldValue(entry)))
       : earlier
@@ -1496,6 +1632,15 @@ export const run: (
       ...input.context,
       ...(cards.length ? { contextCards: cards.map((row) => row.text) } : {}),
       ...hold?.context,
+      ...(batch
+        ? {
+            batchContext: batch.coverage.context,
+            related: (hold?.context.related ?? input.context.related)
+              ?.filter((entry) => batch!.paths.has(entry.path))
+              .map((entry) => ({ ...entry, hits: entry.hits.filter((hit) => !excluded.has(hit.path)) })),
+            history: (hold?.context.history ?? input.context.history)?.filter((entry) => batch!.paths.has(entry.path)),
+          }
+        : {}),
       ...(impact ? { impact: impact.slice } : {}),
       ...(hold ? { inputsRedacted: true as const } : {}),
       rules: ruleInput.rules,
@@ -1841,7 +1986,10 @@ export const run: (
         observe,
         limits: {
           maxInputTokens: config.maxInputTokens,
-          remainingUsd: remainingUsd(config, input.spent ? { ...input.spent, trigger: input.trigger } : undefined),
+          remainingUsd: remainingUsd(
+            batch && dollarLimit > 0 ? { ...config, maxCostUsd: dollarLimit } : config,
+            input.spent ? { ...input.spent, trigger: input.trigger } : undefined,
+          ),
         },
       })
       // Codium exposes plan usage as a percentage. Per-pass token and dollar figures stay in the observation.
@@ -1961,6 +2109,18 @@ export const run: (
     const ruleCounts: RuleCounts[] = []
     recordImpact(!input.stopSignal?.aborted && !previewTimedOut)
     // 1–5. The specialists fan out only after the opted-in plan fits.
+    if (requests.length && batch && batchMayCharge) {
+      // Even an uncapped request can be interrupted. A later retry may enable a cap on this same head.
+      const journal = input.batchStore?.begin?.(batch.plan, batch.cursor)
+      const recorded = journal
+        ? yield * journal.pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }))
+        : false
+      if (!recorded) {
+        batchRefusal = "Not reviewed. The batch checkpoint could not be recorded before dispatch."
+        nothingToSend = true
+        requests = []
+      }
+    }
     const asked = yield* Effect.forEach(requests, (spec) => ask(spec), {
       concurrency: lenses.length ? LENS_LIMITS.parallel : 2,
     })
@@ -1974,7 +2134,13 @@ export const run: (
         ruleCounts.push(checked)
         report = { ...report, findings: checked.findings }
       }
-      return [{ source: entry.name === "security" ? ("security" as const) : ("review" as const), report, ...lensField(entry) }]
+      return [
+        {
+          source: entry.name === "security" ? ("security" as const) : ("review" as const),
+          report,
+          ...lensField(entry),
+        },
+      ]
     })
     const report = mergeReports(reports.map((entry) => entry.report))
     const hidden = new Set<string>()
@@ -2093,7 +2259,7 @@ export const run: (
       verifyStop === "budget" ||
       (yield* overTokenStop(verifyText)) ||
       (capped &&
-        state.spent + state.uncertain + estimate > config.maxCostUsd &&
+        state.spent + state.uncertain + estimate > dollarLimit &&
         !(verifyText !== "" && !late && lift({ pass: "verify", phase: "turn", site: "verify", estimateUsd: estimate })))
     if (verifyText && (unaffordable || late)) {
       observe({ type: "pass", pass: "verify", model: nameOf(model), text: verifyText, maxSteps: verifySteps })
@@ -2109,9 +2275,10 @@ export const run: (
     // A verifier can introduce secret-shaped text into its reason. Exclude such a row before a panel can
     // relay it; the ordinary strict unanswered bookkeeping keeps the claim open for another review.
     const candidateIds = new Set(candidates.map((finding) => finding.id))
-    const verifyDecoder = strictMode || lensChecks.length > 0
-      ? (value: unknown) => decodeStrictVerify(value)?.filter((row) => !hold || !containsHeldValue(row))
-      : decodeVerify
+    const verifyDecoder =
+      strictMode || lensChecks.length > 0
+        ? (value: unknown) => decodeStrictVerify(value)?.filter((row) => !hold || !containsHeldValue(row))
+        : decodeVerify
     const verify: Asked<CertificateAnswer[]> | undefined = !verifyText
       ? undefined
       : unaffordable || late
@@ -2165,7 +2332,7 @@ export const run: (
       judgeStop === "budget" ||
       (yield* overTokenStop(judgeText)) ||
       (capped &&
-        state.spent + state.uncertain + judgeEstimate > config.maxCostUsd &&
+        state.spent + state.uncertain + judgeEstimate > dollarLimit &&
         !(
           judgeText !== "" &&
           !judgeLate &&
@@ -2284,9 +2451,12 @@ export const run: (
         : primaryStop && primaryStop !== "model-error"
           ? yield* uncovered(asked.flatMap((entry) => (entry.value && entry.sessionID ? [entry.sessionID] : [])))
           : []
-    const missedCoverage = noRequestSent
-      ? [...new Set([...input.anchors, ...input.files, ...input.skipped].map((file) => file.path))]
-      : [...new Set([...missed, ...overBudget, ...conditionalUnreviewed])]
+    const missedCoverage =
+      batchRefusal && !batch
+        ? unavailable
+        : noRequestSent
+          ? [...new Set([...input.anchors, ...input.files, ...input.skipped].map((file) => file.path))]
+          : [...new Set([...missed, ...overBudget, ...conditionalUnreviewed])]
 
     const skippedFiles = hold?.held.length
       ? [...input.skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))]
@@ -2450,7 +2620,10 @@ export const run: (
       verified: verify?.status === "ok",
       judged: judged?.status === "ok",
     })
-    const cost = yield* measure()
+    const measuredCost = yield* measure()
+    // Missing settlement of one admitted attempt cannot turn into an exact receipt just because
+    // another attempt recorded priced tokens. Keep normal outcomes unchanged outside batch mode.
+    const cost = (batch || input.accountBatchSpend) && state.incomplete ? { ...measuredCost, partial: true } : measuredCost
     // Model evidence (VS-07), only when review.json opts in: notes on what VectorScope's evaluation says about the
     // models, after the replies are known. It never changes which model ran. Under "zdr" the review ran on zero data
     // retention routes only, which admission, the transport and the session runtime enforce (VS-23c), so its scope is
@@ -2569,6 +2742,24 @@ export const run: (
   })
 
   return yield* body.pipe(
+    Effect.map((outcome) =>
+      batch
+        ? finishReviewBatch(
+            fullInput,
+            batch,
+            outcome,
+            unavailable,
+            batchRefusal,
+            [...tracks.values()].some((track) => track.attempts > 0 || track.finalizeAttempts > 0),
+          )
+        : batchRefusal
+          ? {
+              ...outcome,
+              selection: { ...outcome.selection, diffIncomplete: true as const },
+              notes: [...outcome.notes, batchRefusal],
+            }
+          : outcome,
+    ),
     Effect.ensuring(
       Effect.sync(() => input.stopSignal?.removeEventListener("abort", stop)).pipe(
         Effect.andThen(unsubscribe),

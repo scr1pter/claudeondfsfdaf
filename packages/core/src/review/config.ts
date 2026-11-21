@@ -251,10 +251,6 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  largeChanges: {
-    applies: (config) => config.largeChanges === "batch",
-    warning: '"largeChanges": "batch" is not applied yet: reviews still use the existing size limits.',
-  },
   // A sourced key (TRUSTED_ONLY): settle never sees it, so mergeReviewConfig gives this warning.
   runtime: {
     applies: (config) => config.runtime === "ask",
@@ -532,6 +528,12 @@ function settle(
       warnings.push(github ? "Brain context cards are available in local CLI reviews. GitHub reviews omit them." : DESKTOP_CARDS_NOTICE)
     delete config.cards
   }
+  if (config.largeChanges === "batch" && (github || trigger === "desktop"))
+    warnings.push(
+      github
+        ? "GitHub reviews still use the existing size limits. Resumable batches run in the local CLI."
+        : "Desktop reviews use ordinary diff coverage. Resumable batches run in the local CLI.",
+    )
   if (!github && trigger === "desktop" && config.impact === "graph")
     warnings.push('Desktop reviews use grep for related code. The engine review supports "impact": "graph".')
   if (!github && trigger === "desktop" && config.guardrail === "strict") warnings.push(DESKTOP_STRICT_NOTICE)

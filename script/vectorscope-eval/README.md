@@ -802,6 +802,9 @@ word, so only the registry keeps model ids out.
   registry name; anything else, a mistyped runner such as `Engine:` or
   `engine :` included, is refused with `resolveVariant`'s detail rather
   than matching no runs.
+- Local CLI batch coverage is available through `largeChanges: "batch"`. The
+  registry has no named batch candidate. Desktop reviews use ordinary diff
+  coverage and GitHub uses its existing size limits.
 - **The flip rule.** A runner's half turns built only in the package that
   makes its keys change what that runner does, with that package's D3 parity
   test, and that package adds the keys to that runner's `VARIANT_KEYS`.

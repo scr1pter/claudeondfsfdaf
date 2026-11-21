@@ -63,6 +63,8 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/connect/adapters/vectorscope.ts",
   "packages/core/src/connect/policy.ts",
   "packages/engine/src/review/run.ts",
+  "packages/engine/src/review/batch.ts",
+  "packages/engine/src/review/batch-local.ts",
   "packages/engine/src/review/trivial.ts",
   "packages/engine/src/review/card-access.ts",
   "packages/engine/src/review/card-sources.ts",
@@ -692,7 +694,7 @@ describe("scope", () => {
     expect(promptsDigest({ ...cards, ...graph, ...depth, ...held, ...strict })).toBe("d3b656ce92a51856")
   })
 
-  test("SF-27 size-skip defaults keep the evidence scope and the pending batch planner has no model scope", () => {
+  test("size-skip keeps the default scope and batch coverage changes only the engine policy", () => {
     const standard = parseReviewConfig({})
     const skip = parseReviewConfig({ json: '{"largeChanges":"skip"}' })
     const batch = parseReviewConfig({ json: '{"largeChanges":"batch"}' })
@@ -701,8 +703,11 @@ describe("scope", () => {
     for (const adapter of ["engine", "desktop"] as const) {
       const baseline = evidenceScope({ adapter, config: standard.config })
       expect(evidenceScope({ adapter, config: { ...skip.config, largeChanges: "skip" } })).toEqual(baseline)
-      if (adapter === "desktop" || (UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("largeChanges")) {
-        expect(evidenceScope({ adapter, config: batch.config })).toEqual(baseline)
+      const configured = evidenceScope({ adapter, config: batch.config })
+      if (adapter === "desktop") expect(configured).toEqual(baseline)
+      else {
+        expect(configured.policy).not.toBe(baseline.policy)
+        expect(configured.prompts).toBe(baseline.prompts)
       }
     }
   })

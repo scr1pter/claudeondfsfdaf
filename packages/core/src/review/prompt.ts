@@ -69,6 +69,14 @@ export interface PromptInput {
   uncommitted?: boolean // the change is the working tree's uncommitted changes against base, not a commit
   since?: string // the last reviewed head, in incremental mode
   pr?: { number?: number; title: string; body: string; author?: string; commits?: string[] }
+  batchContext?: {
+    completedBatches: number
+    totalBatches: number
+    coveredFiles: number
+    remainingFiles: number
+    related: readonly { path: string; batch: number; covered: boolean }[]
+    moreRelated: number
+  }
   diff: string // the rendered PR diff, already budgeted
   notInlined?: { path: string; additions: number; deletions: number }[]
   focus?: FocusHunk[]
@@ -588,6 +596,12 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
         ),
       ),
     )
+  if (input.batchContext) {
+    out.push(
+      "This is one batch of a larger review. The coverage record describes related files in other batches; it does not confirm any finding.",
+    )
+    out.push(wrapUntrusted("batch_context", JSON.stringify(input.batchContext)))
+  }
   // Empty when every inlined file is shown as an annotated file instead.
   if (input.diff.trim()) out.push(wrapUntrusted("diff", input.diff))
   if (notInlined.length)

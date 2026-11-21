@@ -96,6 +96,7 @@ export interface ChangedFiles {
 }
 
 export interface BuildInput {
+  batchClusters?: true
   directory: string
   base: string
   head: string
@@ -118,7 +119,10 @@ export interface BuildInput {
   inline?: (path: string) => boolean // a changed file the prompt shows whole; by default none
   diffShown?: (path: string) => boolean // a changed file whose diff the prompt carries; by default every one
   // Tier packing needs the exact diff layout calculated after ranking and before the prompts are built.
-  promptView?: (ranks: ReadonlyMap<string, number>) => {
+  promptView?: (
+    ranks: ReadonlyMap<string, number>,
+    dependents?: ReadonlyMap<string, number>,
+  ) => {
     inline: (path: string) => boolean
     diffShown: (path: string) => boolean
   }
@@ -186,6 +190,8 @@ export interface BuildResult {
   slice: ImpactSlice
   changed: ChangedFiles
   changedRanks?: ReadonlyMap<string, number>
+  batchClusters?: ReadonlyMap<string, string>
+  dependentsByFile?: ReadonlyMap<string, number>
 }
 
 const buildFrom = Effect.fnUntraced(function* (
@@ -203,6 +209,8 @@ const buildFrom = Effect.fnUntraced(function* (
   const tiered = input.packing ? impactPacking(input.packing) : undefined
   // The tokens are counted here, from the block as rendered with its note, once `incomplete` and `unsearched` are known.
   // A tiered slice that stopped before packing still carries its (empty) tiers, so it reads as tiered.
+  let batchClusters: Map<string, string> | undefined
+  let dependentsByFile: Map<string, number> | undefined
   const finish = (
     slice: Partial<ImpactSlice>,
     changed: ChangedFiles,
@@ -236,7 +244,12 @@ const buildFrom = Effect.fnUntraced(function* (
       ...(incomplete.size ? { incomplete: IMPACT_INCOMPLETE.filter((reason) => incomplete.has(reason)) } : {}),
       ...(scan.unsearched ? { unsearched: scan.unsearched } : {}),
     }
-    return { slice: { ...done, tokens: impactTokens(done) }, changed, ...(changedRanks ? { changedRanks } : {}) }
+    return {
+      slice: { ...done, tokens: impactTokens(done) },
+      changed,
+      ...(changedRanks ? { changedRanks } : {}),
+      ...(batchClusters ? { batchClusters, dependentsByFile } : {}),
+    }
   }
   const given = input.changed ?? noFiles()
   const packOnly = (changed: ChangedFiles) => {
@@ -452,6 +465,34 @@ const buildFrom = Effect.fnUntraced(function* (
     workspace,
     ignored: input.ignored,
   })
+  if (input.batchClusters) {
+    // A gated importer reaches these exact changed modules in the verified commit.
+    // Connected components group files sharing an importer; raw graph labels never enter prompts/state.
+    batchClusters = new Map()
+    dependentsByFile = new Map()
+    const parent = batchClusters
+    const representative = (path: string) => {
+      let root = path
+      while (parent.has(root) && parent.get(root) !== root) root = parent.get(root)!
+      while (path !== root && parent.has(path)) {
+        const next = parent.get(path)!
+        parent.set(path, root)
+        path = next
+      }
+      return root
+    }
+    for (const candidate of selection.confirm) {
+      for (const path of candidate.reaches) dependentsByFile.set(path, (dependentsByFile.get(path) ?? 0) + 1)
+      const [first, ...rest] = candidate.reaches
+      if (!first) continue
+      for (const path of rest) {
+        const left = representative(first),
+          right = representative(path)
+        if (left !== right) parent.set(left < right ? right : left, left < right ? left : right)
+      }
+    }
+    for (const file of input.files) parent.set(file.path, representative(file.path))
+  }
 
   // 7. Confirm in rank order, at most IMPACT_LIMITS.confirm files, before the deadline. A file's call sites are those
   // of the names the changed modules it reaches give, so a same-named local or a name from a module it does not import
@@ -543,7 +584,7 @@ const buildFrom = Effect.fnUntraced(function* (
       unread: outbound?.unread ?? [],
       external: outbound?.external ?? 0,
       packing: tiered,
-      ...views(input, selection.changedRanks),
+      ...views(input, selection.changedRanks, dependentsByFile),
     })
     return finish(
       {
@@ -1338,8 +1379,9 @@ function changedFallback(files: readonly DiffFile[], changed: ChangedFiles): Imp
 function views(
   input: Pick<BuildInput, "inline" | "diffShown" | "promptView">,
   ranks: ReadonlyMap<string, number> = new Map(),
+  dependents?: ReadonlyMap<string, number>,
 ) {
-  if (input.promptView) return input.promptView(ranks)
+  if (input.promptView) return input.promptView(ranks, dependents)
   return {
     ...(input.inline ? { inline: input.inline } : {}),
     ...(input.diffShown ? { diffShown: input.diffShown } : {}),

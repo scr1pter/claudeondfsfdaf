@@ -1418,7 +1418,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  largeChanges: "VS-19 batch runner wiring",
   runtime: "the VS-30 executor",
 }
 

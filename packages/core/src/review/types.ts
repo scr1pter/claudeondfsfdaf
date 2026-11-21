@@ -640,7 +640,6 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
 // with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
-  "largeChanges",
   "runtime",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 

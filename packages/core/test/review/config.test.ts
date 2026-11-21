@@ -1673,13 +1673,13 @@ test("SF-26 cards honor ordinary local JSON and environment precedence and keep 
   ).toBe("brain")
 })
 
-test("largeChanges defaults to the existing size skip and batch remains visibly unapplied", () => {
+test("largeChanges defaults to the existing size skip and opts into batches in the local CLI", () => {
   const standard = parseReviewConfig({})
   expect(parseReviewConfig({ json: '{"largeChanges":"skip"}' })).toEqual(standard)
   expect(parseReviewConfig({ json: '{"largeChanges":"batch"}' })).toEqual({
     config: { ...standard.config, largeChanges: "batch" },
-    warnings: ['"largeChanges": "batch" is not applied yet: reviews still use the existing size limits.'],
+    warnings: [],
   })
-  expect(UNAPPLIED_REVIEW_KEYS).toContain("largeChanges")
+  expect(UNAPPLIED_REVIEW_KEYS as readonly string[]).not.toContain("largeChanges")
   expect(parseReviewConfig({ json: '{"largeChanges":"forever"}' }).config).toEqual(standard.config)
 })
