@@ -146,7 +146,7 @@ const INVENTORY = {
   },
   "packages/core/src/local-mode/hardware.ts": {
     stance: "fixed-helper",
-    why: "Vector Local's hardware read (run()): vm_stat or nvidia-smi with fixed arguments, found with which outside the repository, with the engine's environment.",
+    why: "Vector Local's hardware read (run()): vm_stat or nvidia-smi with fixed arguments, found with which outside the repository, with the untrusted-child environment.",
   },
   "packages/engine/src/lsp/launch.ts": {
     stance: "type-only",
@@ -213,6 +213,22 @@ const INVENTORY = {
     why: "Re-exports StdioClientTransport for mcp/index.ts's instanceof check; only mcp/stdio.ts constructs it.",
   },
 } as const satisfies Record<string, { stance: Stance; why: string }>
+
+// Dependencies that start processes inside themselves, which the scan above cannot see (F10; v2-spawn-review.md,
+// "Dependency-internal spawns"), and every core and engine source file that loads one. A new importer fails here until
+// its stance is reviewed and listed.
+const DEPENDENCY_SPAWNERS = {
+  // GoogleAuth runs `gcloud config config-helper` for a missing project id, and a pluggable executable source only
+  // with GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1.
+  "google-auth-library": ["packages/core/src/plugin/provider/google-vertex.ts", "packages/engine/src/provider/provider.ts"],
+  // fromNodeProviderChain runs a profile's credential_process from the person's own AWS config.
+  "@aws-sdk/credential-providers": [
+    "packages/core/src/plugin/provider/amazon-bedrock.ts",
+    "packages/engine/src/provider/provider.ts",
+  ],
+  // Arborist runs lifecycle scripts unless ignoreScripts, which npm.ts always sets.
+  "@npmcli/arborist": ["packages/core/src/npm.ts"],
+} as const
 
 // Calls in a launch file that start something other than the planned file, excused one by one.
 const HELPER_CALLS = [
@@ -562,6 +578,28 @@ describe("direct process spawn inventory (spawn review §4, principle 5)", () =>
         .filter((source) => /(["'`])taskkill(?:\.exe)?[\s"'`]/i.test(source.code))
         .map((source) => source.file),
     ).toEqual(["packages/core/src/windows-system.ts"])
+  })
+
+  // F9: Vector Local's hardware read runs vm_stat or nvidia-smi without Vector's own secrets.
+  test("the hardware read starts its tool with the untrusted-child environment", async () => {
+    const source = (await scanned).find((item) => item.file === "packages/core/src/local-mode/hardware.ts")
+    expect(source?.code).toMatch(/\bexecFile\(executable, command\.slice\(1\), \{[^{}]*\benv: untrustedChildEnvironment\(\)/)
+  })
+
+  test("every file that loads a dependency which spawns inside itself is listed (F10)", async () => {
+    const sources = await scanned
+    expect(
+      Object.fromEntries(
+        Object.keys(DEPENDENCY_SPAWNERS).map((specifier) => [
+          specifier,
+          sources
+            .filter((source) =>
+              new RegExp(`(["'\`])${specifier.replace(/[./]/g, "\\$&")}\\1`).test(source.code),
+            )
+            .map((source) => source.file),
+        ]),
+      ),
+    ).toEqual(DEPENDENCY_SPAWNERS)
   })
 
   test("only cross-spawn-spawner.ts builds Effect's ChildProcessSpawner service", async () => {

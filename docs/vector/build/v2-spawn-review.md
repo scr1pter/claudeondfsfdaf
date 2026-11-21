@@ -648,3 +648,26 @@ by this addendum.
   PATH change would not reach it; a probe under `/tmp/vector-v2/engine-core-fixes/probe/` showed Node does honour it)
   calls foreground(its own pid): the answer is a positive integer and the fake's marker is absent. On the old
   `execFileSync("ps", …)` the marker appears (1 pass, 1 fail). Pids -1 and 0 come back unchanged.
+
+## Addendum, 21 November 2026: F9 (hardware read environment) and F10 (dependency-internal spawns)
+
+**F9, closed.** `packages/core/src/local-mode/hardware.ts` `run()` (vm_stat, nvidia-smi) now passes
+`env: untrustedChildEnvironment()`, so Vector's vault, bridge and Actions secrets no longer reach it; PATH and
+SystemRoot stay, so nvidia-smi on Windows is unaffected. The stricter minimal environment (as `config/managed.ts` uses)
+was not chosen: Windows GPU detection has no CI runner and would fail quietly to "no GPU". The inventory row says so,
+and `spawn-inventory.test.ts` "the hardware read starts its tool with the untrusted-child environment" is red without
+the option.
+
+**F10, Dependency-internal spawns (inventory).** The direct-spawn lint cannot see processes a dependency starts inside
+itself. These are the ones core and the engine load, read from the installed packages:
+
+| Dependency | Spawning file | What starts it | Vector call sites | Stance |
+|---|---|---|---|---|
+| `google-auth-library` 10.5.0 | `build/src/auth/googleauth.js:606` (`exec("gcloud config config-helper --format json")`) | `getDefaultServiceProjectId`, from `findAndCacheProjectId` when no project id comes from the environment, the key file or the metadata server | `core/plugin/provider/google-vertex.ts:45`, `engine/provider/provider.ts:806` (`GoogleAuth` for Vertex's OpenAI-compatible fetch) | The person's own Google Cloud setup, in the engine's environment; it runs only for a configured Vertex provider. Not isolated; record before any hosted use. |
+| `google-auth-library` 10.5.0 | `build/src/auth/pluggable-auth-handler.js:68` (`spawn` of the configured executable) | A pluggable (executable-sourced) external account credential, and only with `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1` (`pluggable-auth-client.js:170`) | as above | The person opts in twice (credential file and the variable). |
+| `@aws-sdk/credential-provider-process` 3.972.41 | `dist-cjs/index.js:43` (`exec(credential_process)`) | `fromNodeProviderChain` reading a profile whose config names `credential_process` | `core/plugin/provider/amazon-bedrock.ts:100`, `engine/provider/provider.ts:601` (`@aws-sdk/credential-providers`) | The person's own AWS config; only for a configured Bedrock provider. |
+| `@npmcli/arborist` 9.4.0 | lifecycle scripts through `@npmcli/run-script`; git specs through pacote's git fetcher | `reify` of a plugin or package install | `core/npm.ts:159` | `ignoreScripts: true` is always set (`npm.ts:176`), so no lifecycle script runs; a git dependency still runs `git` for its fetch. |
+
+`spawn-inventory.test.ts` "every file that loads a dependency which spawns inside itself is listed (F10)" pins the set
+of core and engine source files that load these specifiers (`DEPENDENCY_SPAWNERS`); an unlisted importer, or a listed
+file that stops loading one, makes it red (checked by emptying the arborist row).
