@@ -143,7 +143,8 @@ const NAMES: Record<string, string> = {
 // Sources Vector Local keeps off in this release without offering Allow…, each with why in its own words. External
 // agents are programs that make their own connections, which no allow entry could cover, so Vector does not start them.
 // Jobs for this computer stay off with no Allow… until the owner approves showing them and their GitHub calls are
-// labelled (vector-everywhere-deviations.md, "2026-11-16, EV-15", (h)).
+// labelled (vector-everywhere-deviations.md, "2026-11-16, EV-15", (h)); `offInLocal` lists them only once the local
+// engine's `everywhere.enabled` is written.
 const KEPT_OFF: Record<string, string> = {
   everywhere:
     "Jobs for this computer come from vectordev.ai and report back to it, so this computer takes none while Vector Local is on.",
@@ -295,10 +296,15 @@ export type OffItem = {
   readonly allowed?: Policy["allow"][number]
 }
 
-/** Every source Vector Local restricts, from the registry, so nothing it turns off disappears without a word. */
-export function offInLocal(status: LocalStatus): OffItem[] {
+/**
+ * Every source Vector Local restricts, from the registry, so nothing it turns off disappears without a word. Jobs for
+ * this computer are listed only once `everywhere` says the local engine's `everywhere.enabled` is written: with the
+ * block off nothing in the app names them (lead ruling, VECTOR_EVERYWHERE_ENABLED off changes nothing user-visible).
+ */
+export function offInLocal(status: LocalStatus, options: { everywhere?: boolean } = {}): OffItem[] {
   return status.sources
     .filter((source) => RESTRICTED.has(source.local) && source.purpose !== "unknown")
+    .filter((source) => source.id !== "everywhere" || options.everywhere === true)
     .map((source) => {
       const allowed = status.policy.allow.find((entry) => entry.source === source.id)
       return {
