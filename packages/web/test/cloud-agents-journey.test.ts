@@ -728,6 +728,7 @@ function journey() {
           rid: minted.runId,
           artifactId: "55",
           publicRepository,
+          historicalPublicRepository: publicRepository,
         },
       })
       expect(owner.body.key).toBe(download.artifactKey?.key)

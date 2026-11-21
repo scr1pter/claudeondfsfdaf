@@ -2,6 +2,8 @@ import { ApiError, handleApiError, json, type ApiRequest, type ApiResponse } fro
 import { modelPlanRequireMarkedTokens } from "../_lib/model-plan-config.js"
 import { opsRateLimit, readOpsBody, requireOpsCaller } from "../_lib/ops-api.js"
 import { listIncidents, snoozeIncident, startIncidentFix, unsnoozeIncident } from "../_lib/ops-incidents.js"
+// A59: "Fix it" reads the registered @vector binding and starts the run through the registered starter.
+import "../_lib/ops-registration.js"
 
 export const maxDuration = 30
 

@@ -1172,7 +1172,16 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
   concurrent watches; that limit is unverified here (developers.cloudflare.com is outside this session's network). The
   Worker's own bounds (100 releases a day, 120 minutes) do not keep the row under it. If it were exceeded, `release()`
   would answer 500 and the API 503, and a failing save in a wake skips the wake count, so the account wakes once per
-  25 s. Lane follow-up: move watches to their own table if the repository cap grows.
+  25 s. Lane follow-up: move watches to their own table if the repository cap grows. **Bounded in the Worker 21 Nov
+  2026 (`codium-api-fixes`):** `OPS_LIMITS.maxRunStateBytes` 1,900,000 and `maxConcurrentWatches` 31, derived from
+  the worst watch (`limits.ts`); `release()` records a release past the cap as skipped and answers 200
+  `{accepted: false, reason: "daily-limit"}` (a reason the API already records), and `save()` drops the cached DNS
+  answers and then ends the oldest watches (stopped) instead of writing a row over the bound. Test: an Ultra account
+  with 10 monitors and 10 domains at 2,048-character URLs and 31 watches of five such paths, each with a passed
+  baseline and a failure per path, stores a run row above 80 % and below the bound, and a 32nd release answers 200
+  unwatched (dropping the cap fails it). `test/ops-worker-contract.test.ts` pins `OPS_SETTINGS_LIMITS.repos` (20) at
+  or below the cap. The trim in `save()` is a backstop: at these limits the API cannot reach it. Needs the owner's
+  Worker deploy to take effect; no API change.
 - A `release` to a fresh object that is accepted or refused with 200 stores `meta.account` and nothing else (`:231`);
   an erasure in between now refuses it (R46-20).
 - Running watches continue after `releaseGuard` becomes null (paused) until they end, matching "no new watches".
@@ -1198,7 +1207,9 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
     `handleRequest` and `offeredTicket` (`:32`, `:41`), which workerd accepts.
   - `api/_lib/ops-cleanup.ts:94` skips the Worker's erase silently when `!opsErasable()`: if the Worker's address or
     secret was removed after an account used ops, deletion finishes while the Worker may still hold its data.
-    Proposed: keep the erase pending for accounts in `ops:accounts`.
+    Proposed: keep the erase pending for accounts in `ops:accounts`. **Fixed 21 Nov 2026 (`codium-api-fixes`):** an
+    account on `ops:accounts` in either mode now throws 503 `OPS_UNAVAILABLE` before any erase step, so the ops part
+    fails and the deletion is retried; codium-deviations "A46 tombstone".
   - `github-webhook-handlers/ops.ts:276` could forward `repo.environment`; after R46-23 that only changes display, and
     the incident record stores the lower-case environment either way.
   - P5 on the API side of R46-20: `api/_lib/ops-incidents.ts:328-357`. A report already in flight in the Worker's
@@ -1209,8 +1220,11 @@ API". `protocol.ts` (still importing nothing) names the case-folded release dedu
     (`api/_lib/codium-erase.ts:566`) probably removes them, but only if it runs after the late report lands. Proposed:
     before any write, drop the events of a report whose account has a tombstone (`accountDeleting(report.account)`,
     `api/_lib/codium-tombstone.ts:106`) and answer 2xx so the Worker stops resending, with a root test in
-    `test/account-delete.test.ts`. A48/A57 code, outside R46b's files; not fixed here.
-- R46-17's row bound (above) if the repository cap grows.
+    `test/account-delete.test.ts`. A48/A57 code, outside R46b's files; not fixed here. **Fixed 21 Nov 2026
+    (`codium-api-fixes`)** as proposed: `handleOpsReport` answers `{taken: 0, duplicates: 0, skipped: n}` before the
+    loop when the tombstone is set; codium-deviations "A46 tombstone".
+- R46-17's row bound (above) if the repository cap grows. (21 Nov 2026: the Worker now bounds it itself; the contract
+  test fails if the cap grows past `maxConcurrentWatches`.)
 
 ### Review round (15 Nov 2026)
 

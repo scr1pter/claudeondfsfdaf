@@ -5705,11 +5705,21 @@ The H1c review's findings, each read against the code before it was changed. Sti
   while writing the new status case, whose id is now replaced before the check. The existing A53 and H1a callers keep
   that rare false failure; fixing the helper is left to a later package, since this one must not loosen a test. The
   review confirmed it (F9): the fix must keep the check exactly as strict (fixed placeholders for session ids, or
-  deterministic ids that cannot spell the words), never check fewer fields.
+  deterministic ids that cannot spell the words), never check fewer fields. **Fixed 21 Nov 2026
+  (`codium-api-fixes`):** `expectNoAmounts` replaces every `hs_[a-z2-7]{26}` with `hs_session` before the unchanged
+  regex, over the same JSON; the ad-hoc replace in the H1c status case is gone. No other random value (run token,
+  presigned URL) is in the bodies these callers check.
 - O2, the status does not read the account's deletion tombstone, so an account being deleted whose snapshot is not yet
-  `closing` may show `open`; the start then refuses with `MODEL_PLAN_ACCOUNT_CLOSING`'s words.
+  `closing` may show `open`; the start then refuses with `MODEL_PLAN_ACCOUNT_CLOSING`'s words. **Fixed 21 Nov 2026
+  (`codium-api-fixes`):** after its early returns `keptDisks` reads the tombstone (`accountDeleting`) and answers
+  undefined when it is set or cannot be read (fail closed: the offer is hidden, the status itself still answers).
+  Test "absent for an account being deleted, whose download-only start is refused (O2)": `open` before
+  `markAccountDeleting`, no `kept` after, and the start answers 409 `MODEL_PLAN_ACCOUNT_CLOSING`; dropping the read
+  fails it. hosted-sessions-api: 60 pass, 1 skip.
 - O3, cost: `keptDisks` adds at most two store reads (the deletion date, then the computers) per status read, only for
-  accounts whose plan answer is not `live`, `frozen` or `closing`; accounts with no date stop after the first.
+  accounts whose plan answer is not `live`, `frozen` or `closing`; accounts with no date stop after the first. Since
+  21 Nov 2026 (O2's fix) at most three: the tombstone `GET` comes after the date, so only accounts with a disk date
+  still ahead pay it.
 
 **Not built**
 
@@ -7301,3 +7311,54 @@ Its commit message and the entry it appends to `connected-workspace-deviations.m
   `1d944dd9`), then with PR #36 (`b5cbad1c`, which holds `d93b40b8`). `connected-workspace-deviations.md` on main has
   one copy of the hub.test.ts entry. This record does not check the Linux 4/4 and Windows 12/12 step durations asked
   for above; main now runs six Linux shards (`9506de79`), so those shard numbers no longer apply.
+
+## A46 tombstone: late Worker reports and a Worker that cannot erase, codium-api-fixes lane (21 Nov 2026)
+
+Closes the two A46 follow-ups codium-p7-repairs records under R46b (the P5 side of R46-20, and `eraseAccountOps`
+skipping the Worker silently).
+
+- **Late reports.** `handleOpsReport` (`api/_lib/ops-incidents.ts`) reads the account's tombstone before the loop. When
+  it is set, the report answers `{taken: 0, duplicates: 0, skipped: <events>}` (200 through `POST /api/ops/worker`)
+  with no incident, events-set or alert write, so the Worker stops resending. A tombstone read failure throws like any
+  store failure, so the Worker retries. One extra `GET` per report.
+- **A Worker that cannot be called.** `eraseAccountOps` (`api/_lib/ops-cleanup.ts`) without `opsErasable()` now
+  ZSCOREs the account in `ops:accounts` for both Stripe modes (as `forgetOpsAccount` removes it). Present: 503
+  `OPS_UNAVAILABLE` before any erase step, so `finishAccountDeletion`'s ops part fails (with `codium` and `keys`, which
+  require it) and the deletions cron retries. Absent: erased as before, so a deployment whose accounts never used ops
+  still deletes with the Worker unconfigured. The lost-dispute erase in the daily cleanup and the provisioner's
+  `closing` erase take the same path and are retried the same way.
+- **Review note (21 Nov 2026): the gap the list leaves.** `ops:accounts` is not a record of every account that ever
+  used ops: the daily cleanup (`cleanAccount` in `ops-cleanup.ts`) drops an account from it when nothing is left to
+  expire and no plan gives the Worker work, while the Worker may still hold that account's config, releases and
+  baselines. Such an account's deletion without the Worker's settings still finishes without the Worker's erase, as it
+  did before this lane. The `eraseAccountOps` comment now says "an account on the ops account list". Left for the
+  morning list: keep a separate record of accounts the Worker holds, or stop the cleanup dropping them.
+- **Tests** (`test/account-delete.test.ts`, describe "ops after the tombstone (A46)"): a late signed report after a
+  finished deletion answers 200 `{taken: 0, skipped: 1}` with no incident, no events set and no alert, while the same
+  report for an open account writes its incident and alerts; with `VECTOR_OPS_WORKER_URL` unset an account with ops
+  history stays pending at `erase` with failed `["ops", "codium", "keys"]` and its ops records kept, and once the
+  address is back the cron's retry calls the Worker's erase and finishes; an account without ops history still
+  finishes with the Worker unset. Mutations: dropping the tombstone check fails the first case, and short-circuiting the
+  `ops:accounts` check fails the second. `ops-payment-pipeline.test.ts`'s "account deletion erases every ops record at
+  once" (`:390`) and the media-down case (`:407`) still pass: their Worker is configured. File counts: account-delete
+  44 pass, 1 skip.
+
+## R46-17: the ops Worker bounds its run row, codium-api-fixes lane (21 Nov 2026)
+
+- **Built.** `packages/ops-worker/src/limits.ts`: `maxRunStateBytes` 1,900,000 (Cloudflare's 2 MB per string or row
+  for SQLite-backed Durable Objects, with a 5 % margin) and `maxConcurrentWatches`, derived as
+  `floor((1,900,000 − 100,000 reserve) / 56,384)` = 31, where 56,384 bytes is a watch at its largest (five paths at
+  2,048 characters in `urls`, `streaks`, `last`, `failures` and `baseline.ok`, with JSON overhead and DNS answers).
+  `ops-account.ts` `release()`: with 31 watches running, the release is inserted as `skipped` and answered
+  `{accepted: false, reason: "daily-limit"}` with 200, like the day's cap, so the API (which already handles that
+  reason) records it as skipped and nothing answers 500. `save()`: over the bound, the cached DNS answers are dropped,
+  then the oldest watches end as `stopped`, so a wake can always write its row.
+- **Deviation.** No new answer reason: a new one would need the API's decoder first and a two-step deploy
+  (hosted-ops.md), so the cap reuses `daily-limit`. For the lead if a distinct reason is wanted.
+- **Tests.** `packages/ops-worker/test/release-watch.test.ts` "the run state's size (R46-17)" (worst case above 80 %
+  and below the bound; the 32nd release answers 200 unwatched; mutation: without the cap it is accepted and the case
+  fails); `test/ops-worker-contract.test.ts` (the API's 20 repositories fit the cap). ops-worker suites
+  release-watch 17, schedule 13, internal 23, on-call 16, check 16; contract 9; ops-worker typecheck clean.
+- **Not run here.** The miniflare smoke (`e2e/ops-smoke.mjs`) and a real Durable Object's 2 MB refusal (CI and the
+  owner's deploy).
+
