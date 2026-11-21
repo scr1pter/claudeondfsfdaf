@@ -1597,6 +1597,27 @@ describe("ops after the tombstone (A46)", () => {
     for (const mode of ["live", "test"] as const) expect(w.fakes.store.zset(opsWorkerAccountsKey(mode)).size).toBe(0)
   })
 
+  test("a Worker call whose record the store cannot take is refused before it reaches the Worker", async () => {
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_ENABLED: "true" })
+    const w = deletionWorld()
+    const plan: OpsPlan = { version: 2, domains: 0, onCall: null, releaseGuard: null, validUntil: w.clock() }
+    w.fakes.store.down = true
+    await expect(opsCall("plan", { account: ACCOUNT, plan }, w.fetcher, w.clock())).rejects.toMatchObject({
+      statusCode: 503,
+      code: "OPS_UNAVAILABLE",
+    })
+    expect(w.services.worker).toEqual([])
+    w.fakes.store.down = false
+    await opsCall("plan", { account: ACCOUNT, plan }, w.fetcher, w.clock())
+    expect(w.services.worker).toEqual([`${OPS_INTERNAL_PREFIX}plan`])
+    // NX: a later call keeps the first one's time.
+    const first = w.clock()
+    advance(w, MINUTE)
+    await opsCall("plan", { account: ACCOUNT, plan: { ...plan, version: 3 } }, w.fetcher, w.clock())
+    expect(w.fakes.store.zset(opsWorkerAccountsKey()).get(ACCOUNT)).toBe(first)
+  })
+
   test("without the Worker's address, an account that never used ops is still deleted", async () => {
     restore()
     restore = deletionEnvironment({ VECTOR_OPS_WORKER_URL: undefined })

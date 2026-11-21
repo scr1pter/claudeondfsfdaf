@@ -8,6 +8,7 @@ import {
   OPS_LOST_DISPUTE_ERASE_MS,
   opsAccountsKey,
   opsEraseDueKey,
+  opsWorkerAccountsKey,
   readEraseDue,
   readOpsAccounts,
   rosterPlan,
@@ -42,7 +43,9 @@ import {
  * - An account whose dispute was lost has every ops record erased 30 days after the loss: the Worker's data, settings,
  *   incidents, Release Guard records, cards with their images, domain health and the crons' own records (§4.4 keeps
  *   frozen accounts' cards hidden, not deleted, while a dispute is open).
- * - An account with nothing left to clean and no plan giving the Worker work is dropped from the cleanup's list.
+ * - An account with nothing left to clean and no plan giving the Worker work is dropped from the cleanup's list. The
+ *   Worker's own record of the account (`ops:worker`) stays until the account is erased, so its deletion still waits
+ *   for the Worker's erase.
  *
  * It answers counts only, and stops within its time budget, leaving the rest for the next day.
  */
@@ -88,14 +91,13 @@ async function indexMembers(key: string, fetcher: typeof fetch) {
  * set, even with VECTOR_OPS_ENABLED off), the ops settings, incidents and Release Guard records, Ship Desk's cards with
  * their images, domain health, and the guard's and cleanup's own records. Account deletion (A57) calls this one
  * function; the ops provisioner does the same on `closing`. Throws when a part cannot be reached, so the caller tries
- * again. Without the Worker's address and secret, an account on the ops account list in either Stripe mode is refused
- * with 503 before anything is erased, so its deletion stays pending until the Worker can erase it; an account not on
- * that list is erased as before. The daily cleanup drops an idle account from the list while the Worker may still hold
- * its config, releases and baselines, so such an account is not covered.
+ * again. Without the Worker's address and secret, an account the Worker may hold data for (on the ops account list or
+ * the Worker's own record, in either Stripe mode) is refused with 503 before anything is erased, so its deletion stays
+ * pending until the Worker can erase it; any other account is erased as before.
  */
 export async function eraseAccountOps(account: string, fetcher: typeof fetch = fetch, now = Date.now()) {
   if (opsErasable()) await opsCall("erase", { account }, fetcher, now)
-  else if (await usedOps(account, fetcher))
+  else if (await owesWorkerErase(account, fetcher))
     throw new ApiError(503, "OPS_UNAVAILABLE", "Vector's production checks cannot erase this account yet.")
   await eraseAccountOpsSettings(account, fetcher)
   await eraseAccountOpsRecords(account, fetcher, now)
@@ -105,10 +107,15 @@ export async function eraseAccountOps(account: string, fetcher: typeof fetch = f
   await forgetOpsAccount(account, fetcher)
 }
 
-/** Whether the account is on the ops account list in either Stripe mode (as `forgetOpsAccount` removes it). */
-async function usedOps(account: string, fetcher: typeof fetch) {
+/**
+ * Whether the Worker may hold data for the account: it is on the ops account list or on the Worker's own record
+ * (`ops:worker`, which `opsCall` writes and the cleanup never drops), in either Stripe mode, as `forgetOpsAccount`
+ * removes them (OPS-WORKER-ERASE-GAP).
+ */
+async function owesWorkerErase(account: string, fetcher: typeof fetch) {
   for (const mode of ["live", "test"] as const)
-    if ((await persistentStore(["ZSCORE", opsAccountsKey(mode), account], fetcher)) !== null) return true
+    for (const key of [opsAccountsKey(mode), opsWorkerAccountsKey(mode)])
+      if ((await persistentStore(["ZSCORE", key, account], fetcher)) !== null) return true
   return false
 }
 
