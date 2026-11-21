@@ -829,6 +829,9 @@ open branch at the time. No numbers yet: the step had not run in CI when this no
 configure and build seconds and the headroom from at least two windows-build jobs (one slow-group job if one occurs),
 added here as a later dated note, plus a data-based recommendation for phase 2 (a per-phase budget or precompiled
 headers, a helperVersion bump and a macOS lock re-measure), which stays the lead's call.
+Also owed: the test.yml x64 cross-check step. No open PR changes test.yml any more (#56 and #59 merged, #58 does
+not touch it), but the sibling branch `hands-stop-guardian` edits the same Hands workflows, so the step is added on a
+later branch once that one merges.
 
 ## 2026-11-20: Windows region observer at deadline_compile on a cold PowerShell 7 compiler
 
