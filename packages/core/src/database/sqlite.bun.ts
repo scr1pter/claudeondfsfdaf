@@ -187,6 +187,9 @@ const nativeLayer = (config: Config) =>
         create: config.create ?? true,
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
+      // Bun opens with no busy timeout, and another process may be running WAL recovery on this file
+      // (SQLITE_BUSY_RECOVERY). Set the database layers' 5 s busy timeout before the WAL switch so the open waits.
+      native.run("PRAGMA busy_timeout = 5000;")
       if (config.disableWAL !== true) native.run("PRAGMA journal_mode = WAL;")
       return native
     }),
