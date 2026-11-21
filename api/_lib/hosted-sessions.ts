@@ -5,7 +5,7 @@ import { Hosted } from "../../packages/schema/src/hosted.js"
 import { codiumKey } from "./codium-keys.js"
 import { readSwitch } from "./codium-switches.js"
 import { readSnapshot } from "./codium-snapshot.js"
-import { deletingRefusal, requireAccountOpen } from "./codium-tombstone.js"
+import { accountDeleting, deletingRefusal, requireAccountOpen } from "./codium-tombstone.js"
 import {
   hostedAccess,
   hostedBrowserAllowed,
@@ -1784,7 +1784,8 @@ export async function hostedStatus(account: string, snapshot: EntitlementSnapsho
  * than a block and an hour is left (`DOWNLOAD_START_MARGIN_MS`), and `closed` otherwise, sent only while some session
  * has packed files to offer: `requestDownload` still gives their link. The money and the lease are the start's to
  * decide (S1). Each computer comes with its preferred session (`Hosted.KeptDisks`); a job session's packed files count,
- * since they are a copy of the same disk (H1a R11), until a later job session starts on that computer.
+ * since they are a copy of the same disk (H1a R11), until a later job session starts on that computer. An account being
+ * deleted gets none (its tombstone, read only on this path; a tombstone that cannot be read hides the offer too).
  */
 async function keptDisks(
   account: string,
@@ -1800,6 +1801,8 @@ async function keptDisks(
   if (!r2Configured("media")) return undefined
   const due = await readDiskDue(account, fetcher)
   if (due === undefined || due <= now) return undefined
+  // A download-only start and the file link refuse an account being deleted (`requireFilesAllowed`): offer nothing.
+  if (await accountDeleting(account, fetcher).catch(() => true)) return undefined
   // `listHostedSessions` answers live sessions first, then the newest first.
   const disks = (await knownComputers(account, fetcher)).map((computer) => {
     const mine = sessions.filter((session) => session.computer === computer)

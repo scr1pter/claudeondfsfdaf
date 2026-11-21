@@ -114,7 +114,8 @@ async function started(w: HostedWorld, body: Record<string, unknown> = {}) {
 
 /** No amount anywhere in an answer (P1): no currency, no money words, and numbers only as counts, shares or times. */
 function expectNoAmounts(value: unknown) {
-  const text = JSON.stringify(value)
+  // A session id is random base32 and could spell one of the words by chance, so each becomes a fixed placeholder.
+  const text = JSON.stringify(value).replace(/hs_[a-z2-7]{26}/g, "hs_session")
   expect(text).not.toMatch(/\$|usd|price|credit|cents|micro|cost|charge/i)
 }
 
@@ -1342,8 +1343,17 @@ describe("status, computers and the owner's flags", () => {
       expect(after.sessions).toEqual([])
       expect(after.kept.disks[0].session).toMatchObject({ id: started.id, state: "ended", reason: "finished" })
       expect(after.kept.disks[0].session.download.readyAt).toBeGreaterThan(0)
-      // The random session id is not copy: it could spell one of the words by chance.
-      expectNoAmounts(JSON.parse(JSON.stringify(after).replaceAll(started.id, "hs_session")))
+      expectNoAmounts(after)
+    })
+
+    test("absent for an account being deleted, whose download-only start is refused (O2)", async () => {
+      const w = await hostedWorld(ledger)
+      const due = (await endedWithDisk(w))!
+      expect((await status(w)).kept).toEqual({ state: "open", until: due, disks: [{ computer: 1 }] })
+      await markAccountDeleting(ACCOUNT_ID, w.fakes.clock.now, w.fakes.clock.now + DAY, w.fetcher)
+      expect((await status(w)).kept).toBeUndefined()
+      const refused = await startDownload(w)
+      expect([refused.status, refused.body.error?.code]).toEqual([409, "MODEL_PLAN_ACCOUNT_CLOSING"])
     })
 
     test("a plan without a cloud computer gets it too, from its current period", async () => {

@@ -5705,11 +5705,21 @@ The H1c review's findings, each read against the code before it was changed. Sti
   while writing the new status case, whose id is now replaced before the check. The existing A53 and H1a callers keep
   that rare false failure; fixing the helper is left to a later package, since this one must not loosen a test. The
   review confirmed it (F9): the fix must keep the check exactly as strict (fixed placeholders for session ids, or
-  deterministic ids that cannot spell the words), never check fewer fields.
+  deterministic ids that cannot spell the words), never check fewer fields. **Fixed 21 Nov 2026
+  (`codium-api-fixes`):** `expectNoAmounts` replaces every `hs_[a-z2-7]{26}` with `hs_session` before the unchanged
+  regex, over the same JSON; the ad-hoc replace in the H1c status case is gone. No other random value (run token,
+  presigned URL) is in the bodies these callers check.
 - O2, the status does not read the account's deletion tombstone, so an account being deleted whose snapshot is not yet
-  `closing` may show `open`; the start then refuses with `MODEL_PLAN_ACCOUNT_CLOSING`'s words.
+  `closing` may show `open`; the start then refuses with `MODEL_PLAN_ACCOUNT_CLOSING`'s words. **Fixed 21 Nov 2026
+  (`codium-api-fixes`):** after its early returns `keptDisks` reads the tombstone (`accountDeleting`) and answers
+  undefined when it is set or cannot be read (fail closed: the offer is hidden, the status itself still answers).
+  Test "absent for an account being deleted, whose download-only start is refused (O2)": `open` before
+  `markAccountDeleting`, no `kept` after, and the start answers 409 `MODEL_PLAN_ACCOUNT_CLOSING`; dropping the read
+  fails it. hosted-sessions-api: 60 pass, 1 skip.
 - O3, cost: `keptDisks` adds at most two store reads (the deletion date, then the computers) per status read, only for
-  accounts whose plan answer is not `live`, `frozen` or `closing`; accounts with no date stop after the first.
+  accounts whose plan answer is not `live`, `frozen` or `closing`; accounts with no date stop after the first. Since
+  21 Nov 2026 (O2's fix) at most three: the tombstone `GET` comes after the date, so only accounts with a disk date
+  still ahead pay it.
 
 **Not built**
 
