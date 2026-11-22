@@ -42,7 +42,9 @@ function fixture() {
     owned: true,
     viewed: true,
     auto: false as boolean | Promise<boolean>,
-    session: session as (typeof session & { internal?: string }) | undefined,
+    session: session as
+      | (typeof session & { internal?: string; parentID?: string; metadata?: Record<string, unknown> })
+      | undefined,
     preferences: { agent: true, permissions: true, permissionSound: true },
     sounds: 0,
     notifications: [] as { title: string; href: string }[],
@@ -197,6 +199,34 @@ test("paired-phone alerts share the observed-ask cooldown without duplicating de
   fake.controller.close()
   await fake.controller.observe(question("que_closed"))
   expect(fake.state.phones).toHaveLength(2)
+})
+
+test("lifecycle helpers keep local ask alerts while their root-titled phone path owns the push", async () => {
+  const fake = fixture()
+  fake.state.viewed = false
+  fake.state.session = {
+    ...session,
+    parentID: "ses_parent",
+    metadata: { subagent: { rootSessionID: "ses_parent" } },
+  }
+  await fake.controller.observe(permission("per_helper", "bash"))
+  fake.state.now += 5000
+  await fake.controller.observe(question("que_helper"))
+  expect(fake.state.phones).toEqual([])
+  expect(fake.state.notifications.map((item) => item.title)).toEqual(["permission", "question"])
+  expect(fake.state.sounds).toBe(1)
+  expect(fake.state.toasts).toHaveLength(2)
+  fake.controller.close()
+})
+
+test("a child without lifecycle metadata keeps the ordinary ask phone alert", async () => {
+  for (const subagent of [undefined, null, [], "not a helper"]) {
+    const fake = fixture()
+    fake.state.session = { ...session, parentID: "ses_parent", metadata: { subagent } }
+    await fake.controller.observe(question("que_child"))
+    expect(fake.state.phones).toEqual([sessionID])
+    fake.controller.close()
+  }
 })
 
 test("replacing an unviewed toast preserves the new alert's phone cooldown", async () => {

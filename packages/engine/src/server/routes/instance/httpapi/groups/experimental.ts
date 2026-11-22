@@ -109,7 +109,7 @@ export const TaskDiscardInput = Schema.Struct({
 export const SessionStopInput = Schema.Struct({
   helpers: Schema.Boolean,
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-})
+}).annotate({ parseOptions: { onExcessProperty: "error" } })
 
 export const TaskWaitInput = Schema.Struct({
   taskIDs: Schema.Array(Schema.String).check(Schema.isMinLength(1), Schema.isMaxLength(200)),
