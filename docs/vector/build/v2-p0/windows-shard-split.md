@@ -54,3 +54,39 @@ From each package, through the serial lock: `packages/cloud` `src/workflow-compl
   close to 45 minutes. If it ever crosses, the next step is to give `isolation.test.ts` its own job, not a longer
   limit.
 - Six more Windows jobs per run, about 3.5 minutes of setup each.
+
+## First PR run (44984266486, 22 Nov)
+
+Every Windows shard step ran in 1.9 to 17.9 minutes. Two shards failed.
+
+**Shard 1/18: a leak the new grouping exposed (fixed here).** Both failures were in
+`test/server/local-app-models.test.ts`, in its afterEach check `expect(guard.outside()).toEqual([])`, which received
+one refused `github.com:443` attempt of kind `proxied`. The source is `test/server/httpapi-reference.test.ts`, which
+now runs directly before it in the same Bun process (sorted files 432 and 450). Its git reference forks a clone of
+`github.com/Effect-TS/effect` into the server's location services. The file's afterEach only ran
+`disposeAllInstances`, which does not end those services (they idle for an hour), so the clone outlived the file.
+Its `git` copies the proxy variables when it starts; on a slow runner it started after `local-app-models` had
+installed its own strict network guard, and that guard recorded the refused CONNECT. Under 12 shards the next file
+had no guard of its own, so the leak never showed.
+
+Fix: `httpapi-reference.test.ts`'s afterEach now first posts `/global/dispose` (as `test/server/local.test.ts`
+already does) and expects 200. That invalidates the location services and interrupts the clone. Test-only; nothing
+skipped, loosened or lengthened.
+
+Proof, on Linux, the two files run together in one process from `packages/engine` through the serial lock:
+without the fix 3 of 6 runs failed with the same `github.com` `proxied` entry, with it 6 of 6 passed. A stand-in that
+holds the repository-cache lock for 1.5 s after the reference file ends (to mimic the slow runner) failed without
+the fix and passed with it. `bun typecheck` in `packages/engine` exits 0.
+
+Left for later: the shared `disposeAllInstances` fixture never ends the server's location services, so other
+location-scoped background work could leak across files the same way.
+
+**Shard 2/18: runner speed, not the grouping (not changed).** `test/session/prompt.test.ts` "running task tool
+preserves metadata after tool-call transition" timed out in its 5-second `pollWithTimeout` (5.3 s). That poll also
+covers the engine instance's cold start. Under 12 shards the same test took 1.8 to 4.2 s on Windows. This runner was
+about 1.3 times slower than main's across the whole file and before any test ran (its build step too), while 8/18 and
+14/18, built from the same old shards, ran at main's speed. Waiting for the first model request before the poll would
+pass, but it moves the cold start out of the 5-second window, which in effect lengthens the deadline, so it is not
+done here. The push that carries the shard 1 fix re-runs it; a second failure is real, and then the fix is a cheaper
+instance cold start in the engine. Its sibling "running subtask preserves metadata" passed at 4.7 s against a 5 s
+test timeout and has the same thin margin.
