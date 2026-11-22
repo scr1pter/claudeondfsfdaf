@@ -1098,14 +1098,16 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
         request(computer, reviewStartRequest(directory, sessionID, target, passkey), timing.reviewStartMs).then(
           (answer) => {
             // The computer waits 3 minutes for a start (REVIEW_START_MS), longer than for any other request, and stops
-            // a review still waiting by then. Its window ends before this phone's, so it is the one that says so.
+            // a review still waiting by then. Its window normally ends before this phone's, so it is normally the one
+            // that says so (PHONE_REVIEW_START_MS says when it is not).
             const body = answer.body as { error?: { code?: unknown } | null } | null
             if (body?.error?.code === "REMOTE_REVIEW_TIMEOUT")
               throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
             return answer
           },
           (error: unknown) => {
-            // This phone's own window, 15 s longer, ended first: the computer or the relay went quiet.
+            // This phone's own window, 15 s longer, ended first: the computer or the relay went quiet, or the
+            // computer's engine was slow on the folder or connected-tools check (PHONE_REVIEW_START_MS).
             if (error instanceof RemoteError && error.code === "REMOTE_TIMEOUT")
               throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
             throw error

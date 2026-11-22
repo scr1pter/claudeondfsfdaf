@@ -383,8 +383,9 @@ export function createRemoteRoutes(deps: RouteDependencies) {
         body: { to: "vectorscope", target: input.target, background: true },
         timeoutMs: REVIEW_START_MS,
       },
-      // This computer's window ends before the phone's (PHONE_REVIEW_START_MS, app client.ts), so the phone hears of
-      // the timeout from here, in the words it uses for its own. Any other failure stays REMOTE_ENGINE_UNAVAILABLE.
+      // This computer's window normally ends before the phone's (PHONE_REVIEW_START_MS, app client.ts, says when it
+      // does not), so the phone normally hears of the timeout from here, in the words it uses for its own. Any other
+      // failure stays REMOTE_ENGINE_UNAVAILABLE.
       refuse(
         504,
         "REMOTE_REVIEW_TIMEOUT",
