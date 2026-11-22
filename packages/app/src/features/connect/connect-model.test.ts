@@ -87,6 +87,24 @@ describe("Connected tools presentation", () => {
     expect(destinationLabel("vector-codium")).toBe("Vector Codium")
   })
 
+  test("a cloud workspace's member destination names that environment instead of this computer", () => {
+    const cloud = memberRows([{ ...member, place: "vector-cloud", sendsTo: "this-computer" }])[0]!
+    expect(cloud.placeLabel).toBe("Vector's servers")
+    expect(cloud.destinationLabel).toBe("This Vector cloud workspace")
+    expect(cloud.destinationLabel).not.toBe("This computer")
+  })
+
+  test("destination wording keeps local and unknown execution locations and other model destinations unchanged", () => {
+    expect(memberRows([{ ...member, place: "local", sendsTo: "this-computer" }])[0]?.destinationLabel).toBe(
+      "This computer",
+    )
+    expect(destinationLabel("this-computer")).toBe("This computer")
+    expect(destinationLabel("vector-codium", "vector-cloud")).toBe("Vector Codium")
+    expect(destinationLabel("model-server:localhost:8080", "vector-cloud")).toBe("Your model server: localhost:8080")
+    expect(destinationLabel("provider:configured-model", "vector-cloud")).toBe("Your provider: configured-model")
+    expect(destinationLabel(undefined, "vector-cloud")).toBe("No destination reported")
+  })
+
   test("desktop discovery cannot replace engine members or add a connect action", () => {
     expect(memberRows([member], [{ ...member, title: "Replacement" }])[0]?.title).toBe("VectorScope")
     expect(memberRows([], [{ ...member, id: "external:unsafe" }])).toEqual([])
