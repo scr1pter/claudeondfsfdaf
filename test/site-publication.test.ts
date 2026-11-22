@@ -48,14 +48,16 @@ test.each([
     ),
   )
   await Promise.all(
-    [
-      ["index.html", "<html><head><title>Vector</title></head></html>"],
-      ["docs/index.html", "<html><head><title>Docs</title></head></html>"],
-      ["download/index.html", "<html><head><title>Download</title></head></html>"],
-      // /dev is not on the keep list, so the prune deletes this page even though it is indexable.
-      ["dev/account-preview/index.html", "<html><head><title>Preview</title></head></html>"],
-      ["investors/index.html", '<html><head><meta name="robots" content="noindex, nofollow"></head></html>'],
-    ].map(([file, html]) => writeFile(path.join(directory, file), html)),
+    (
+      [
+        ["index.html", "<html><head><title>Vector</title></head></html>"],
+        ["docs/index.html", "<html><head><title>Docs</title></head></html>"],
+        ["download/index.html", "<html><head><title>Download</title></head></html>"],
+        // /dev is not on the keep list, so the prune deletes this page even though it is indexable.
+        ["dev/account-preview/index.html", "<html><head><title>Preview</title></head></html>"],
+        ["investors/index.html", '<html><head><meta name="robots" content="noindex, nofollow"></head></html>'],
+      ] satisfies [string, string][]
+    ).map(([file, html]) => writeFile(path.join(directory, file), html)),
   )
   const url = (page: string) => `<url><loc>https://vectordev.ai/${page}</loc></url>`
   await writeFile(
