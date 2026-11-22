@@ -565,8 +565,8 @@ export function connectCard(
 
 /**
  * Whether an event may have changed the open conversation's runs: its turn ended, a `connect` part changed, or one of
- * its runs did. The computer does not stream `connect.run.updated` yet, so until it does a review started from the
- * phone, which has no part, changes only on Refresh.
+ * its runs did. The computer streams `connect.run.updated` (desktop remote-link.ts `STREAMED`), so a review started
+ * from the phone, which has no part, changes as its run does.
  */
 export function connectRunsChanged(event: EngineEvent, sessionID: string) {
   const properties = fieldsOf(event.properties) ?? {}

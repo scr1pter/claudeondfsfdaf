@@ -56,7 +56,10 @@ const state = {
   thread: "dispatch-42" as string | undefined,
   generation: "1",
   rebind: false,
-  brain: false,
+  // Desktop runs record their Brain context (BT03 D3); a record without it is refused before any GitHub read.
+  brain: true,
+  brainPublic: "0",
+  publicNow: true,
   reads: 0,
   stores: 0,
   fetches: 0,
@@ -90,7 +93,7 @@ const api = createOwnerArtifactReadApi({
         ...record,
         account: state.foreign ? "22222222-2222-4222-8222-222222222222" : account,
         triggerSource: state.source,
-        ...(state.brain ? { brainSha: "a".repeat(64), brainPublic: "0" } : {}),
+        ...(state.brain ? { brainSha: "a".repeat(64), brainPublic: state.brainPublic } : {}),
         ...(state.thread === undefined ? {} : { thread: state.thread }),
       })
         .filter(([key]) => state.thread !== undefined || key !== "thread")
@@ -107,7 +110,7 @@ const api = createOwnerArtifactReadApi({
       expect(run).toMatchObject({ repositoryId: "123", thread: "dispatch-42", runId: "42" })
       expect(artifactId).toBe("55")
       if (state.rebind) state.generation = "2"
-      return { repositoryId: "123", generation: 1, publicRepository: true }
+      return { repositoryId: "123", generation: 1, publicRepository: state.publicNow }
     },
   },
   limit: async () => {
@@ -150,27 +153,55 @@ test("a marked owner reads a completed exact artifact without acquiring model au
   const response = await post()
   expect(response.status).toBe(200)
   expect(await response.json()).toEqual({
-    ...cloudRunArtifactKey({ sub: account, repo: "123", gen: 1, thr: "dispatch-42" }, env),
+    ...cloudBrainArtifactKey(
+      { sub: account, repo: "123", gen: 1, thr: "dispatch-42" },
+      { sha256: "a".repeat(64), publicRepository: false },
+      env,
+    ),
     repositoryId: "123",
     thread: "dispatch-42",
     rid,
     artifactId: "55",
     publicRepository: true,
+    historicalPublicRepository: false,
   })
 })
 
 test("completed Brain results derive the immutable stored Brain domain rather than an ordinary live conversation key", async () => {
-  state.brain = true
+  const response = await post()
+  expect(response.status).toBe(200)
+  const body = await response.json()
+  const claims = { sub: account, repo: "123", gen: 1, thr: "dispatch-42" }
+  expect(body.key).toBe(cloudBrainArtifactKey(claims, { sha256: "a".repeat(64), publicRepository: false }, env).key)
+  expect(body.key).not.toBe(cloudRunArtifactKey(claims, env).key)
+  expect(body.publicRepository).toBe(true)
+})
+
+test("a completed desktop record without recorded Brain context is refused before the binding or any GitHub read", async () => {
+  Object.assign(state, { brain: false, reads: 0, stores: 0 })
+  try {
+    const response = await post()
+    expect(response.status).toBe(503)
+    expect((await response.json()).error.code).toBe("ARTIFACT_READ_UNAVAILABLE")
+    expect(state.reads).toBe(0)
+    // Only the run record was read.
+    expect(state.stores).toBe(1)
+  } finally {
+    state.brain = true
+  }
+})
+
+test("a run recorded public in a repository that is private now answers both visibilities", async () => {
+  Object.assign(state, { brainPublic: "1", publicNow: false })
   try {
     const response = await post()
     expect(response.status).toBe(200)
     const body = await response.json()
+    expect(body).toMatchObject({ publicRepository: false, historicalPublicRepository: true })
     const claims = { sub: account, repo: "123", gen: 1, thr: "dispatch-42" }
-    expect(body.key).toBe(cloudBrainArtifactKey(claims, { sha256: "a".repeat(64), publicRepository: false }, env).key)
-    expect(body.key).not.toBe(cloudRunArtifactKey(claims, env).key)
-    expect(body.publicRepository).toBe(true)
+    expect(body.key).toBe(cloudBrainArtifactKey(claims, { sha256: "a".repeat(64), publicRepository: true }, env).key)
   } finally {
-    state.brain = false
+    Object.assign(state, { brainPublic: "0", publicNow: true })
   }
 })
 

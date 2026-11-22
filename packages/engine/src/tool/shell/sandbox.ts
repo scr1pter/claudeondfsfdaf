@@ -82,7 +82,13 @@ const SECRETS = [
 
 // Vector's own credential stores inside a data directory. A CLI user without the
 // desktop vault key keeps these as plaintext, so they are worth as much as ~/.ssh.
-const CREDENTIAL_FILES = ["auth.json", "mcp-auth.json", "cli-auth.json", "plugin-oauth-approvals.json"]
+const CREDENTIAL_FILES = [
+  "auth.json",
+  "mcp-auth.json",
+  "cli-auth.json",
+  "plugin-oauth-approvals.json",
+  path.join("vault", "vault.json"),
+]
 
 // The desktop app keeps its vault key beside its user data. Electron puts
 // that under Application Support on macOS and $XDG_CONFIG_HOME (default ~/.config) on

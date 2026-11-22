@@ -1460,6 +1460,62 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
 })
 
+test("both Windows dispatch lanes warm the protected PowerShell 7 compiler right before their unchanged overlay proofs", () => {
+  const reference = steps(job("windows-build")).find(
+    (step) => step.name === "Warm the protected PowerShell 7 compiler",
+  )!
+  const lanes = [
+    {
+      job: "computer-helper-windows-overlay",
+      after: "Install the exact pinned Electron runtime",
+      before: "Run real Electron overlay properties and controller lifecycle",
+      if: undefined,
+    },
+    {
+      job: "computer-helper-windows-units",
+      after: "Build the source-bound x64 native overlay diagnostic stage",
+      before: "Run the actual medium-token staged overlay diagnostic",
+      if: "${{ success() && steps.required_protocol.outcome == 'success' }}",
+    },
+  ]
+  for (const lane of lanes) {
+    const current = steps(record(record(main.document.jobs)[lane.job]))
+    const index = (name: string) => current.findIndex((step) => step.name === name)
+    const warm = index("Warm the protected PowerShell 7 compiler")
+    expect(
+      current.filter((step) => step.name === "Warm the protected PowerShell 7 compiler"),
+      lane.job,
+    ).toHaveLength(1)
+    expect(warm, lane.job).toBe(index(lane.after) + 1)
+    expect(index(lane.before), lane.job).toBe(warm + 1)
+    const step = current[warm]!
+    expect(step.run, lane.job).toBe(reference.run)
+    expect(step.run, lane.job).toBe("bun --no-env-file ./scripts/computer-overlay-smoke-region-warm.ts")
+    expect(step["timeout-minutes"], lane.job).toBe(2)
+    expect(step["continue-on-error"], lane.job).toBeUndefined()
+    expect(step.env, lane.job).toBeUndefined()
+    expect(step.shell, lane.job).toBeUndefined()
+    expect(step.if, lane.job).toBe(lane.if)
+  }
+  // The units lane's warm-up runs on both matrix legs whenever the required protocol checks passed.
+  const units = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
+  const warm = units.find((step) => step.name === "Warm the protected PowerShell 7 compiler")!
+  for (const mode of ["baseline", "move-probe"])
+    for (const successful of [false, true])
+      for (const outcome of ["success", "failure", "skipped", "cancelled"])
+        expect(
+          expression(
+            String(warm.if),
+            {},
+            "workflow_dispatch",
+            "refs/heads/hands",
+            {},
+            { success: successful, steps: { required_protocol: { outcome } }, matrix: { diagnostic: mode } },
+          ),
+        ).toBe(successful && outcome === "success")
+  expect(main.source.match(/computer-overlay-smoke-region-warm\.ts/g)).toHaveLength(2)
+})
+
 test("a fresh-VM movement probe cannot contaminate or waive the independent unchanged baseline Stop", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
   const current = steps(diagnostic)

@@ -3,6 +3,7 @@ export * as LocalHardware from "./hardware"
 import { execFile } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import os from "node:os"
+import { untrustedChildEnvironment } from "../child-environment"
 import { which } from "../util/which"
 
 // This computer's memory and GPUs, for two things: whether a model about to load fits in the memory that is free,
@@ -143,13 +144,17 @@ export async function read(): Promise<Hardware> {
 }
 
 // A command's output, or undefined when it is missing, fails or takes over two seconds. The program is found the way
-// Vector finds every program, never in the repository it runs in. Node's API, since the desktop's engine runs on Node.
+// Vector finds every program, never in the repository it runs in, and gets the untrusted-child environment, without
+// Vector's own secrets (F9). Node's API, since the desktop's engine runs on Node.
 async function run(command: readonly string[]) {
   const executable = command[0] && which(command[0])
   if (!executable) return undefined
   return new Promise<string | undefined>((resolve) =>
-    execFile(executable, command.slice(1), { timeout: 2_000, windowsHide: true }, (error, stdout) =>
-      resolve(error ? undefined : stdout),
+    execFile(
+      executable,
+      command.slice(1),
+      { timeout: 2_000, windowsHide: true, env: untrustedChildEnvironment() },
+      (error, stdout) => resolve(error ? undefined : stdout),
     ),
   )
 }

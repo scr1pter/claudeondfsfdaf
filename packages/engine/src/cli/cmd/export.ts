@@ -127,6 +127,7 @@ function part(part: ArchivePart) {
                 : {
                     ...part.state,
                     input: data("tool-input", part.id, part.state.input) ?? part.state.input,
+                    error: redact("tool-error", part.id, part.state.error),
                     metadata: data("tool-state-metadata", part.id, part.state.metadata),
                   },
       }
@@ -161,12 +162,47 @@ function part(part: ArchivePart) {
               value: redact("agent-source", part.id, part.source.value),
             },
       }
+    case "retry":
+      return { ...part, error: redactError(part.id, part.error) }
     default:
-      return part
+      // A part kind this list does not name (compaction, or one a newer version adds) keeps only its identity and kind
+      // and loses every string, so a new kind fails closed instead of passing through whole (F44b).
+      return Object.fromEntries(
+        Object.entries(part).map(([key, value]) => [
+          key,
+          key === "type" || IDENTITY.test(key) ? value : redactStrings("part", part.id, value),
+        ]),
+      )
+  }
+}
+
+// Keys that hold an id, which a sanitized part keeps so the archive still decodes and links up.
+const IDENTITY = /^(?:id|sessionID|messageID)$|_id$/
+
+// An error's text can quote the prompt, a file or a provider's response. Its name, codes, flags and figures stay; its
+// message, body and reference are redacted, and its header and metadata maps become markers (F44b).
+const ERROR_TEXT = new Set(["message", "responseBody", "ref"])
+const ERROR_MAPS = new Set(["responseHeaders", "metadata"])
+
+function redactError<T extends { readonly name: string; readonly data: object }>(id: string, error: T): T {
+  return {
+    ...error,
+    data: Object.fromEntries(
+      Object.entries(error.data).map(([key, value]) => [
+        key,
+        ERROR_TEXT.has(key) && typeof value === "string"
+          ? redact(`error-${key}`, id, value)
+          : ERROR_MAPS.has(key) && isRecord(value)
+            ? data(`error-${key}`, id, value)
+            : value,
+      ]),
+    ),
   }
 }
 
 const partFn = part
+// sanitizeLegacy names its archive `data`, which hides the marker helper there.
+const dataFn = data
 
 export function sanitizeLegacy(data: SessionArchive.Legacy) {
   const codiumMessages = new Set(
@@ -181,6 +217,9 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
   const info = { ...data.info }
   if (data.info.tokensOwnOnly !== true) delete info.tokens
   if (data.info.subagentTokensOwnOnly !== true) delete info.subagentTokens
+  // A share link and a workspace id name places outside the archive; a sanitized copy carries neither (F44b).
+  delete info.share
+  delete info.workspaceID
   const archive = { ...data }
   // Receipt records can include Codium title and memory tokens. Sanitized output is not a receipt backup.
   delete archive.ancillaryUsage
@@ -205,6 +244,12 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
           }),
       title: redact("session-title", data.info.id, data.info.title),
       directory: redact("session-directory", data.info.id, data.info.directory),
+      path: data.info.path === undefined ? undefined : redact("session-path", data.info.id, data.info.path),
+      // A rule's pattern can name a path or a command; its tool and action stay.
+      permission: data.info.permission?.map((rule, i) => ({
+        ...rule,
+        pattern: redact("permission-pattern", `${data.info.id}-${i}`, rule.pattern),
+      })),
       summary: !data.info.summary
         ? data.info.summary
         : {
@@ -231,6 +276,10 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
           ? {
               ...msg.info,
               system: msg.info.system === undefined ? undefined : redact("system", msg.info.id, msg.info.system),
+              format:
+                msg.info.format?.type === "json_schema"
+                  ? { ...msg.info.format, schema: dataFn("format-schema", msg.info.id, msg.info.format.schema) }
+                  : msg.info.format,
               summary: !msg.info.summary
                 ? msg.info.summary
                 : {
@@ -248,6 +297,13 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
             }
           : {
               ...withoutTokens(msg.info, codiumMessages.has(msg.info.id), Billing.hasOwnIdentity(msg.info)),
+              error: msg.info.error === undefined ? undefined : redactError(msg.info.id, msg.info.error),
+              structured:
+                msg.info.structured === undefined
+                  ? undefined
+                  : isRecord(msg.info.structured)
+                    ? dataFn("structured", msg.info.id, msg.info.structured)
+                    : redactStrings("structured", msg.info.id, msg.info.structured),
               path: {
                 cwd: redact("cwd", msg.info.id, msg.info.path.cwd),
                 root: redact("root", msg.info.id, msg.info.path.root),

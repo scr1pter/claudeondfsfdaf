@@ -3157,6 +3157,12 @@ under two minutes), but the run is not green under the lane rule, because of the
      reaches `Provider.use.defaultModel()` (`:155`). Run locally here it picked `amazon-bedrock`, not `openai` (the file
      11 pass, 1 fail); it passed in CI (12/0, engine (linux, shard 4/4) job 132574289024). It should clear the other
      provider variables or run with an isolated `Env`. The file is outside this lane; this package does not fix it.
+     21 Nov 2026: closed on branch `engine-core-fixes`. Both GitHub-token cases now run with
+     `{ trusted: true, config: { enabled_providers: ["openai", "github-copilot"] } }`, the provider allow-list
+     provider.test.ts uses, so Bedrock, Vertex and other host-derived providers cannot take the default while
+     github-copilot stays allowed; the assertions are unchanged. With `AWS_WEB_IDENTITY_TOKEN_FILE` and
+     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` set the file gave 11 pass, 1 fail (`amazon-bedrock`) before and 12 pass
+     after; 12 pass without them too. The CI job is recorded when the branch's PR runs.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 - 15 Nov 2026, post-push CI and For the lead item 1. Vector Codium run 43665227929 (codium-finish 7c479924): Codium
   tests job 132662998717 stopped at "Codium: 119/120" on `packages/web/test/model-plan-gateway-hooks.test.ts` with the
@@ -3324,6 +3330,16 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
   billing literals would fail the same way, and a failed read returns `invalid` with a reconnect message. VectorScope's
   `packages/core/src/review/local-result.ts:26` decodes a retained result's cost kind with its own closed literal. Both
   are recorded readings, not changed; each is a package of its own if the lead wants downgrade tolerance there.
+  - 21 Nov 2026 (branch `engine-core-fixes`): the desktop task-bridge half is closed. `read()` in
+    `packages/engine/src/task/desktop.ts` maps a string `costKind` that `RunBudget.CostKind` rejects to "unknown" on
+    each stored task and each of its `budgetScopes` before the decode (`knownCostKinds`, below the layer), so a record
+    a newer engine wrote no longer reads as damaged. Strings only: a non-string cost kind, or any other malformed
+    field, still returns `invalid` (tasks are not decoded one at a time; the "damaged record" contract is unchanged).
+    Tests in `packages/engine/test/task/bridge-decode.test.ts` write raw records through `Storage.Service`: the
+    parent's list reads `unknown` for the task and its scope, a child's record read with the parent's descendants
+    does not break the listing, and a numeric cost kind still gives `invalid`. The first is red on the old `read()`
+    ("The desktop task record is damaged"). The other closed literals named here (status, source, billing) and
+    `local-result.ts:26` (VectorScope's) are unchanged.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 
 ## Codium finish: F44 sanitized lifecycle text (15 Nov 2026)
@@ -3590,6 +3606,19 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
      - `info.workspaceID` (`session.ts:613`).
 
      Each is a privacy reading of `--sanitize` outside F44's lifecycle scope.
+     21 Nov 2026: repaired on branch `engine-core-fixes`, all in `packages/engine/src/cli/cmd/export.ts`. The tool
+     error state's `error` is redacted (`tool-error`); retry parts and the assistant `error` go through one
+     `redactError` helper that keeps the name, codes, flags and figures, redacts `message`, `responseBody` and `ref`,
+     and turns `responseHeaders`/`metadata` into markers (literal fields such as `code`/`reason` stay, so the union
+     still decodes); `structured` becomes a `structured` marker (or redacted strings when it is not a record); the
+     user `format`'s JSON schema becomes a `format-schema` marker; `info.path` is redacted, each permission rule's
+     `pattern` is redacted (tool and action stay), and `share` and `workspaceID` are deleted. The `default` branch now
+     fails closed: an unnamed part kind keeps its type and id keys (`id`, `sessionID`, `messageID`, `*_id`) and every
+     other string is redacted. Tests: `packages/engine/test/cli/export-sanitize.test.ts` "sanitized export
+     pass-throughs (F44b)" seeds one private value per field, checks the source holds all eleven, then that the
+     sanitized archive holds none, decodes as `SessionArchive.Legacy`, and carries the exact markers; red on the old
+     `export.ts` (21 pass, 1 fail). `import.test.ts` 6 pass. The CLI child-lifecycle case in
+     `import.test.ts` followed later the same day (item 3 below).
   2. **F6's CI receipt is missing from the records.** F6's Vector Codium run 43674652525, on `5f19b0c9`, completed with
      conclusion failure (`get_workflow_run`). This package's review fixes read its jobs (`list_workflow_jobs`) and the
      failing job's log tail (`get_job_logs`, 140 lines):
@@ -3607,6 +3636,15 @@ open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the 
   3. **A CLI-level export check.** T5 runs `localArchive`, not the CLI. `packages/engine/test/cli/import.test.ts`
      could assert that a plain `vector export` output contains a child's title and mailbox text, and a `--sanitize`
      output does not. It starts `vector serve`, so it runs only in CI. It is left for the lead or a later package.
+     21 Nov 2026: added on branch `engine-core-fixes`. `import.test.ts` "a sanitized CLI export of a child session
+     redacts its lifecycle title and mailbox text" starts a real `vector serve`, creates a parent and a child whose
+     `metadata.subagent` record holds a title and one mailbox entry, then runs the CLI: a plain `vector export` holds
+     both strings, and `vector export --sanitize` holds neither and carries the `subagent-title` and
+     `subagent-mailbox-text` markers. It runs locally (7 pass, 0 fail, 58 s for the file). Mutation: the LIFECYCLE
+     rule's mailbox `text` set to `true` makes only this case red (the mailbox text leaks); restored from a copy. It
+     uses the file's `PROCESSES` budget, like the other multi-process cases. Seen while writing it: `POST /session`
+     passes a caller's `metadata.subagent` through `Session.create` unfiltered, while `PATCH` keeps it lifecycle-owned
+     (`SubagentLifecycle.setPublicMetadata`). Left as a follow-up for the lead; not changed here.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
 
 **F44's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
@@ -3888,10 +3926,12 @@ and F28 used it too.
 
   The F28 CI receipt (`codium-p6-repairs.md`, and item 10 of the F28 section above) is a separate record from R45a's.
 - **For the lead:** R45-4(b) (`packages/core/src/vault/github.ts:115-118`: drop git's stderr line or strip paths and
-  URLs from it); R45-18 (`packages/core/src/child-environment.ts:5-14`: add `VECTOR_VAULT_RECOVERY_CODE` to
-  `PRIVATE_RUNTIME_ENVIRONMENT`); R45-19 (`packages/engine/src/tool/shell/sandbox.ts:83`, `:496-514`: deny
+  URLs from it; repaired 21 Nov 2026 on branch `engine-core-fixes` by dropping it, see `codium-p7-repairs.md` R45-4); R45-18 (`packages/core/src/child-environment.ts:5-14`: add `VECTOR_VAULT_RECOVERY_CODE` to
+  `PRIVATE_RUNTIME_ENVIRONMENT`; repaired 21 Nov 2026 on branch `engine-core-fixes`, see `codium-p7-repairs.md`
+  R45-18); R45-19 (`packages/engine/src/tool/shell/sandbox.ts:83`, `:496-514`: deny
   `<data>/vault/vault.json`); R45-20 (`packages/engine/src/cli/cmd/vault.ts:168` or the sandbox: move the CLI's copy
-  out of the cache, or deny it); R45-22 (`packages/desktop/src/main/remote-runtime.ts:43-45`, for A41's next review).
+  out of the cache, or deny it; repaired 21 Nov 2026 on branch `engine-core-fixes` by moving it to the data folder and
+  passing no-hooks to every ref-writing git, see `codium-p7-repairs.md` R45-20); R45-22 (`packages/desktop/src/main/remote-runtime.ts:43-45`, for A41's next review).
   For the owner's A60 legal read: backups now carry `skills` and `insights` sections (the A45 notes still say memory
   only); no privacy text changed.
 - **Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`: desktop `vault-backup.test.ts`
@@ -4270,6 +4310,13 @@ below.
     20 restored was in use. With the brain's order put back, `:269` fails.
   - The spec's "restored as drafts for review" names no number. Whether a restore should take more drafts is a product
     decision (For the lead).
+  - 21 Nov 2026 (branch `engine-core-fixes`): the backup line no longer calls learned files memory. The CLI
+    (`cli/cmd/vault.ts`), the desktop (`vault-backup.ts`) and Settings → Memory → Backup's last line
+    (`memory-backup-model.ts`) say "Backed up N file(s)" / "N file(s)"; `last.files` stays the total. New cases: desktop
+    `vault-backup.test.ts` backs up one memory, one skills and one insights file and expects "Backed up 3 files to …"
+    (red on the old copy), and app `memory-backup-model.test.ts` checks a three-file last line names no memory file
+    (red on the old copy); the e2e fixture's message follows. The cap is unchanged: a restore still brings back at most
+    `LIMIT.pending` 20 skills per repository. Proposed for the lead to record as accepted; not decided here.
 - **B10-4. Confirmed: "Show versions" on a new computer could fail in git.**
   - Cause: the desktop's `versions()` reads `store.list()` and `store.readKey()` at once (`vault-backup.ts:467`). Core's
     GitHub store did not share an overlapping read (`vault/github.ts`, `sync`), so a new computer's empty copy was set
@@ -5705,11 +5752,21 @@ The H1c review's findings, each read against the code before it was changed. Sti
   while writing the new status case, whose id is now replaced before the check. The existing A53 and H1a callers keep
   that rare false failure; fixing the helper is left to a later package, since this one must not loosen a test. The
   review confirmed it (F9): the fix must keep the check exactly as strict (fixed placeholders for session ids, or
-  deterministic ids that cannot spell the words), never check fewer fields.
+  deterministic ids that cannot spell the words), never check fewer fields. **Fixed 21 Nov 2026
+  (`codium-api-fixes`):** `expectNoAmounts` replaces every `hs_[a-z2-7]{26}` with `hs_session` before the unchanged
+  regex, over the same JSON; the ad-hoc replace in the H1c status case is gone. No other random value (run token,
+  presigned URL) is in the bodies these callers check.
 - O2, the status does not read the account's deletion tombstone, so an account being deleted whose snapshot is not yet
-  `closing` may show `open`; the start then refuses with `MODEL_PLAN_ACCOUNT_CLOSING`'s words.
+  `closing` may show `open`; the start then refuses with `MODEL_PLAN_ACCOUNT_CLOSING`'s words. **Fixed 21 Nov 2026
+  (`codium-api-fixes`):** after its early returns `keptDisks` reads the tombstone (`accountDeleting`) and answers
+  undefined when it is set or cannot be read (fail closed: the offer is hidden, the status itself still answers).
+  Test "absent for an account being deleted, whose download-only start is refused (O2)": `open` before
+  `markAccountDeleting`, no `kept` after, and the start answers 409 `MODEL_PLAN_ACCOUNT_CLOSING`; dropping the read
+  fails it. hosted-sessions-api: 60 pass, 1 skip.
 - O3, cost: `keptDisks` adds at most two store reads (the deletion date, then the computers) per status read, only for
-  accounts whose plan answer is not `live`, `frozen` or `closing`; accounts with no date stop after the first.
+  accounts whose plan answer is not `live`, `frozen` or `closing`; accounts with no date stop after the first. Since
+  21 Nov 2026 (O2's fix) at most three: the tombstone `GET` comes after the date, so only accounts with a disk date
+  still ahead pay it.
 
 **Not built**
 
@@ -6376,6 +6433,17 @@ These are pointers only; nothing is fixed here.
     alone: deleting branches is not this lane's call;
   - confirm the Windows run of the "dispatch's inputs reach the picker only as step environment" compliance case in the
     end-of-lane test.yml.
+    21 Nov 2026 (v2-closeout-ci): corrected premise. No Windows job ran this case: `packages/cloud` has no turbo test
+    task, so the unit job never ran `workflow-compliance.test.ts`, and the comment that said it did was wrong. test.yml's
+    unit job now has a Windows-only step, "Run the Codium dispatch-input compliance case" (5 minutes, `packages/cloud`,
+    `--test-name-pattern "reach the picker only as step environment"`), and the case asserts that the step exists.
+    Locally the pattern selects that one case (1 pass); with the step removed the case fails. The Windows job ID is to
+    be recorded after the first PR run; a failure there is fixed in the pass-through list, never skipped.
+    21 Nov 2026 (v2-closeout-ci, review fix): the first pattern, "only as step environment", also matched the A58
+    rollback case added later on this branch ("rolls back only to a full SHA on main, passed to the preflight only as
+    step environment"), so the step ran 2 cases, and the rollback one starts bash and git without Windows' system
+    variables. The pattern is now "reach the picker only as step environment", and the case also checks that the
+    step's pattern matches no other test title in the file (with the old pattern it fails, listing the rollback case).
 - TB ("Codium finish: Track B receipts and P4 closings", For the lead):
   - item 1 is closed on this branch by `31ddb43b`, but the same change is still needed on `release-finish`;
     16 Nov 2026: superseded. Main's `9be63d68` (`api/_lib/cloud-agents-epoch.ts`) is the one copy; `bc8cad48` drops
@@ -6384,6 +6452,11 @@ These are pointers only; nothing is fixed here.
   - item 3: the engine (linux) shard step limits;
     21 Nov 2026: superseded. PR #38 (`7e440a27`) split the Linux engine suite into six shards (`9506de79`), and
     `test.yml` on main runs `--shard=<n>/6`. The 30-minute step limit is unchanged;
+    21 Nov 2026 (v2-closeout-ci): closed. Green 6-shard main runs took 16.3/8.1/8.9/13.2/15.0/12.5 min (run
+    44848275007, `f3d7ac74`), 14.4/8.2/10.4/18.1/10.6/11.8 (44822880542, `3670461a`) and 11.4/7.8/9.7/10.5/15.5/8.1
+    (44869120445, `3e90df62`). The largest shard reached 15.5-18.1 min, so the Linux engine job now runs the same
+    round-robin over eight shards (`--shard=<n>/8`, required checks in `policy-199113.json` renamed to match) and keeps
+    the 30-minute step limit. The 8-shard times are to be added after the first PR run;
   - item 4: the app `memory-*-model` suites, which no visible log shows;
   - item 5: the review-memory MISS lines, fixed upstream by 0f6fce89 and 225905e2;
     16 Nov 2026: closed. Vector Codium run 43844651835 at `34c20b62` (main `b362fdf6` merged), Codium tests (shard
@@ -6393,11 +6466,14 @@ These are pointers only; nothing is fixed here.
     21 Nov 2026: closed. `dbfca832` is an ancestor of main (through #33), and this lane merged main before PR #36
     merged as `b5cbad1c`, so no conflict is left;
   - item 7: the non-hermetic `upstream-free.test.ts:148`, which reads host provider variables.
+    21 Nov 2026: closed on branch `engine-core-fixes` (the provider allow-list; see item 7 above).
 - F6 ("Codium finish: F6 cost kind on read", For the lead): the desktop task-bridge store's closed literals
   (`packages/engine/src/task/desktop.ts:24-33`), and `packages/core/src/review/local-result.ts:26`'s own closed
-  cost-kind literal.
+  cost-kind literal. 21 Nov 2026: the task-bridge cost kinds are closed on branch `engine-core-fixes` (see "Codium
+  finish: F6 cost kind on read", For the lead); `local-result.ts` stays open with VectorScope.
 - F44 ("Codium finish: F44 sanitized lifecycle text", For the lead):
   - item 1, F44b's `sanitizeLegacy` pass-throughs (`export.ts:127-131`, `:250` and the parts listed there);
+    21 Nov 2026: repaired on branch `engine-core-fixes` (see the F44b item above);
   - item 3, a CLI-level export check. Item 2 is completed above.
 - P6 review addendum (For the lead):
   - item 1, an allowlist module out of `packages/core/src/brain/skill.ts`;
@@ -6441,6 +6517,13 @@ These are pointers only; nothing is fixed here.
     "The image floor").
 - Track B (checkpoint):
   - B01's combined final checks;
+    - 21 Nov 2026 (v2-closeout-ci): still open. Main's first test.yml push run after #56 (every lane but VectorScope),
+      44885765033 at `153f9a22`, concluded failure: 31 of its 32 jobs that ran passed (unit, e2e, the desktop bundle,
+      all six Linux and twelve Windows engine shards, and the other computer-helper jobs), and computer-helper mac-test
+      (macos-15-intel) job 136798635643 failed at "Run required grant-free native checks" with
+      `channel-eof: supervisor-pgrep-timeout` (30 passed, 1 skipped, 1 failed). That signature is not on the
+      known-flake list, so it needs a root cause before B01 can close; the next push run, 44889277281 at `4fc245b6`, was
+      still queued when this was written. Read through GitHub MCP.
   - B02 to B03 and B05, open on the PR #33 CI lanes;
   - B10-3, as recorded;
   - "validate all lanes together", with the lead's end-of-lane test.yml run.
@@ -7254,6 +7337,12 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   same 10 tests fail on `34def03b`'s `isolation.ts`): `ReadOnlyGit.inspect` reports "this host has no supported
   unprivileged Git verifier", a limit of this container, not of the code. The Windows and Linux engine shards in CI
   still have to confirm the change.
+  21 Nov 2026 (v2-closeout-ci): confirmed on main. test.yml run 44848275007 at `f3d7ac74`, conclusion success:
+  engine (windows, shard 5/12) job 136673698347 and engine (linux, shard 5/6) job 136673698352 both succeeded, with
+  `isolation.test.ts` at 87/0/0 on Windows and 94/0/0 on Linux as read from their logs (three earlier main runs'
+  Windows shard 5/12 jobs are listed in ci-harness-repairs.md). The uncaptured failure belonged only to the removed
+  stress test and has no successor test; if the new deterministic tests ever go red, their log carries the full
+  `Cause.pretty` text. The item is closed with no root cause found for that one failure.
 
 ## Codium finish: TUI runtime plugin port for spawn-inventory, codium-finish lane (16 Nov 2026)
 
@@ -7292,6 +7381,9 @@ Its commit message and the entry it appends to `connected-workspace-deviations.m
   the likelier cause (the slowdown sits in a few long tests), but the scoped resolver adds one `import.meta.resolve` per
   catch-all resolve. Compare this PR's Linux 4/4 and Windows 12/12 step durations with run 43929693613 (Linux 4/4 took
   802 s). If either nears 30 minutes, profile the wrapper's extra resolve. The timeout is not to be raised.
+  21 Nov 2026 (v2-closeout-ci): checked. No 6-shard main run came near 30 minutes (largest shard 18.1 min, run
+  44822880542; 16.3 in 44848275007; 15.5 in 44869120445), so the resolver was not profiled. The Linux engine suite now
+  runs in eight shards under the same 30-minute limit (TB item 3 above).
 - **Merge note.** The pick appends connect-finish's "2026-11-16 — connect-finish lane: root cause and fix for the
   hub.test.ts load error on Linux shard 2" entry at the end of `connected-workspace-deviations.md` (about line 235
   here, about 2134 on connect-finish), and it cites connect-finish jobs and commits (`a320bdbe`, `973895e3`) that are
@@ -7301,3 +7393,54 @@ Its commit message and the entry it appends to `connected-workspace-deviations.m
   `1d944dd9`), then with PR #36 (`b5cbad1c`, which holds `d93b40b8`). `connected-workspace-deviations.md` on main has
   one copy of the hub.test.ts entry. This record does not check the Linux 4/4 and Windows 12/12 step durations asked
   for above; main now runs six Linux shards (`9506de79`), so those shard numbers no longer apply.
+
+## A46 tombstone: late Worker reports and a Worker that cannot erase, codium-api-fixes lane (21 Nov 2026)
+
+Closes the two A46 follow-ups codium-p7-repairs records under R46b (the P5 side of R46-20, and `eraseAccountOps`
+skipping the Worker silently).
+
+- **Late reports.** `handleOpsReport` (`api/_lib/ops-incidents.ts`) reads the account's tombstone before the loop. When
+  it is set, the report answers `{taken: 0, duplicates: 0, skipped: <events>}` (200 through `POST /api/ops/worker`)
+  with no incident, events-set or alert write, so the Worker stops resending. A tombstone read failure throws like any
+  store failure, so the Worker retries. One extra `GET` per report.
+- **A Worker that cannot be called.** `eraseAccountOps` (`api/_lib/ops-cleanup.ts`) without `opsErasable()` now
+  ZSCOREs the account in `ops:accounts` for both Stripe modes (as `forgetOpsAccount` removes it). Present: 503
+  `OPS_UNAVAILABLE` before any erase step, so `finishAccountDeletion`'s ops part fails (with `codium` and `keys`, which
+  require it) and the deletions cron retries. Absent: erased as before, so a deployment whose accounts never used ops
+  still deletes with the Worker unconfigured. The lost-dispute erase in the daily cleanup and the provisioner's
+  `closing` erase take the same path and are retried the same way.
+- **Review note (21 Nov 2026): the gap the list leaves.** `ops:accounts` is not a record of every account that ever
+  used ops: the daily cleanup (`cleanAccount` in `ops-cleanup.ts`) drops an account from it when nothing is left to
+  expire and no plan gives the Worker work, while the Worker may still hold that account's config, releases and
+  baselines. Such an account's deletion without the Worker's settings still finishes without the Worker's erase, as it
+  did before this lane. The `eraseAccountOps` comment now says "an account on the ops account list". Left for the
+  morning list: keep a separate record of accounts the Worker holds, or stop the cleanup dropping them.
+- **Tests** (`test/account-delete.test.ts`, describe "ops after the tombstone (A46)"): a late signed report after a
+  finished deletion answers 200 `{taken: 0, skipped: 1}` with no incident, no events set and no alert, while the same
+  report for an open account writes its incident and alerts; with `VECTOR_OPS_WORKER_URL` unset an account with ops
+  history stays pending at `erase` with failed `["ops", "codium", "keys"]` and its ops records kept, and once the
+  address is back the cron's retry calls the Worker's erase and finishes; an account without ops history still
+  finishes with the Worker unset. Mutations: dropping the tombstone check fails the first case, and short-circuiting the
+  `ops:accounts` check fails the second. `ops-payment-pipeline.test.ts`'s "account deletion erases every ops record at
+  once" (`:390`) and the media-down case (`:407`) still pass: their Worker is configured. File counts: account-delete
+  44 pass, 1 skip.
+
+## R46-17: the ops Worker bounds its run row, codium-api-fixes lane (21 Nov 2026)
+
+- **Built.** `packages/ops-worker/src/limits.ts`: `maxRunStateBytes` 1,900,000 (Cloudflare's 2 MB per string or row
+  for SQLite-backed Durable Objects, with a 5 % margin) and `maxConcurrentWatches`, derived as
+  `floor((1,900,000 − 100,000 reserve) / 56,384)` = 31, where 56,384 bytes is a watch at its largest (five paths at
+  2,048 characters in `urls`, `streaks`, `last`, `failures` and `baseline.ok`, with JSON overhead and DNS answers).
+  `ops-account.ts` `release()`: with 31 watches running, the release is inserted as `skipped` and answered
+  `{accepted: false, reason: "daily-limit"}` with 200, like the day's cap, so the API (which already handles that
+  reason) records it as skipped and nothing answers 500. `save()`: over the bound, the cached DNS answers are dropped,
+  then the oldest watches end as `stopped`, so a wake can always write its row.
+- **Deviation.** No new answer reason: a new one would need the API's decoder first and a two-step deploy
+  (hosted-ops.md), so the cap reuses `daily-limit`. For the lead if a distinct reason is wanted.
+- **Tests.** `packages/ops-worker/test/release-watch.test.ts` "the run state's size (R46-17)" (worst case above 80 %
+  and below the bound; the 32nd release answers 200 unwatched; mutation: without the cap it is accepted and the case
+  fails); `test/ops-worker-contract.test.ts` (the API's 20 repositories fit the cap). ops-worker suites
+  release-watch 17, schedule 13, internal 23, on-call 16, check 16; contract 9; ops-worker typecheck clean.
+- **Not run here.** The miniflare smoke (`e2e/ops-smoke.mjs`) and a real Durable Object's 2 MB refusal (CI and the
+  owner's deploy).
+

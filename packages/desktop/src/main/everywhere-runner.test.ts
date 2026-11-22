@@ -157,7 +157,66 @@ test("deadline expiry during an admitted push cannot abort the publishing git si
   expect(signals).toHaveLength(2)
   expect(f.results).toHaveLength(1)
   expect(f.results[0]?.outcome).toBe("changes")
+  // EV-03 suppresses the draft PR only after a cancel; a deadline (over-budget) still opens it.
+  expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(1)
+  expect(f.results[0]?.prUrl).toBe("https://github.com/acme/app/pull/4")
 })
+
+test("a lease that runs out during an admitted push still opens the draft PR, since only a cancel suppresses it (EV-03)", async () => {
+  const f = fixture()
+  // A job longer than the lease, so the lease (interrupted), not the deadline, ends it.
+  f.settings({ minutes: 30 })
+  const signals: AbortSignal[] = []
+  f.git.push = async (_, __, branch) => {
+    f.calls.push({ kind: "push", value: branch })
+    await f.tick(TIMING.leaseMs)
+    return true
+  }
+  await createEverywhereRunner({ ...f.deps, git: (_, __, signal) => { signals.push(signal); return f.git } }).offer("fixture-offer")
+  expect(signals.map((signal) => signal.aborted)).toEqual([true, false])
+  expect(f.calls.some((call) => call.kind === "abort")).toBe(true)
+  expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(1)
+  expect(f.results).toEqual([{
+    jid: f.job.jid, lease: f.job.lease.id, outcome: "changes", summary: "Fixed retry handling.", branch: branchFor(f.job.jid),
+    headSha: "c".repeat(40), files: 1, checks: "skipped", prUrl: "https://github.com/acme/app/pull/4",
+  }])
+})
+
+// EV-03: the runner's timer keeps running after an abort, and a later deadline or lease abort overwrites the outcome.
+// A stop heard first must still suppress the draft PR.
+for (const [later, minutes, wait] of [
+  ["the deadline passes", 5, 4 * 60_000],
+  ["the lease runs out", 30, TIMING.leaseMs],
+] as const) {
+  test(`a stop heard during an admitted push still opens no draft PR when ${later} before the push ends (EV-03)`, async () => {
+    const f = fixture()
+    f.settings({ minutes })
+    f.git.push = async (_, __, branch) => {
+      f.calls.push({ kind: "push", value: branch })
+      // The heartbeat a minute in hears the stop; then the job's deadline or its lease runs out before git returns.
+      await f.tick(TIMING.heartbeatMs)
+      await f.tick(wait)
+      return true
+    }
+    await createEverywhereRunner({
+      ...f.deps,
+      jobs: {
+        ...f.deps.jobs,
+        report: async (job, seq, milestone, files) => {
+          await f.deps.jobs.report(job, seq, milestone, files)
+          return milestone === "heartbeat" ? "stop" : "continue"
+        },
+      },
+    }).offer("fixture-offer")
+    expect(f.calls.filter((call) => call.kind === "report").map((call) => (call.value as { milestone: string }).milestone)).toEqual(["started", "pushing", "heartbeat"])
+    expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(0)
+    expect(f.results).toEqual([{
+      jid: f.job.jid, lease: f.job.lease.id, outcome: "changes", summary: "Fixed retry handling.", branch: branchFor(f.job.jid),
+      headSha: "c".repeat(40), files: 1, checks: "skipped",
+    }])
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
 
 test("a deadline reached while journaling still prevents admission of the remote push", async () => {
   const f = fixture()
@@ -509,6 +568,29 @@ test("secret-bearing staged changes are held before any commit or push", async (
   expect(f.results[0]?.outcome).toBe("held")
   expect(f.calls.some((call) => call.kind === "commit" || call.kind === "push")).toBe(false)
 })
+
+// EV-16-home: $HOME stays readable to the job's commands, so another project's env file can be copied into the
+// checkout. The posting check answers clean; the push gate alone keeps it here.
+for (const [copied, diff] of [
+  ["an env secret in a text file", "diff --git a/notes.txt b/notes.txt\nnew file mode 100644\n--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1,2 @@\n+# copied from another project\n+STRIPE_SECRET_KEY=hunter2hunter2\n"],
+  ["another project's env file", "diff --git a/config/.env.production b/config/.env.production\nnew file mode 100644\n--- /dev/null\n+++ b/config/.env.production\n@@ -0,0 +1 @@\n+FOO=bar\n"],
+] as const) {
+  test(`a staged diff carrying ${copied} stays on the computer and settles held`, async () => {
+    const f = fixture()
+    let checked = 0
+    f.engine.posting = async (parts) => { checked++; return { status: "clean", parts } }
+    f.git.stage = async () => ({ held: [], files: 1, diff })
+    await createEverywhereRunner(f.deps).offer("fixture-offer")
+    expect(f.results).toEqual([
+      { jid: f.job.jid, lease: f.job.lease.id, outcome: "held", summary: "Fixed retry handling.", branch: branchFor(f.job.jid), checks: "skipped" },
+    ])
+    // Only the summary reached the posting check; the diff never did.
+    expect(checked).toBe(1)
+    expect(f.calls.some((call) => ["commit", "push", "open-pr"].includes(call.kind))).toBe(false)
+    expect(f.calls.filter((call) => call.kind === "report").map((call) => (call.value as { milestone: string }).milestone)).toEqual(["started"])
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
 
 test("a posting-check error uses fixed summary text and never opens a dialog", async () => {
   const f = fixture()
@@ -955,7 +1037,6 @@ for (const push of ["confirmed", "ambiguous"] as const) {
             ...published,
             outcome: "changes",
             summary: "Fixed retry handling.",
-            prUrl: "https://github.com/acme/app/pull/4",
           }
         : {
             ...published,
@@ -963,8 +1044,9 @@ for (const push of ["confirmed", "ambiguous"] as const) {
             summary: "Publication was not confirmed. Check the remote branch before retrying this task.",
           },
     )
-    // Pinned current behaviour, an open question for the lead: the draft PR still opens after the stop.
-    expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(push === "confirmed" ? 1 : 0)
+    // EV-03 (lead ruling): the admitted push finishes, but no draft PR opens after the stop, so the result names the
+    // branch and carries no PR link.
+    expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(0)
     expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
     await createEverywhereRunner(deps).recover()
     expect(server.requests).toHaveLength(4)
@@ -1012,13 +1094,14 @@ for (const answer of ["stop", "lost", 404, 409] as const) {
         files: 1,
         checks: "skipped",
       }
+      // EV-03: the job was cancelled during the push (a stop, a lost answer, or the server disowning the lease), so the
+      // confirmed receipt carries no PR link.
       const receipt =
         push === "confirmed"
           ? {
               ...published,
               outcome: "changes",
               summary: "Fixed retry handling.",
-              prUrl: "https://github.com/acme/app/pull/4",
             }
           : {
               ...published,
@@ -1033,7 +1116,7 @@ for (const answer of ["stop", "lost", 404, 409] as const) {
         ...settles.map(() => ["settle", undefined, refused]),
       ])
       expect(server.requests.slice(3)).toEqual(settles)
-      expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(push === "confirmed" ? 1 : 0)
+      expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(0)
       expect(logged).toEqual(["Vector everywhere could not acknowledge a job result."])
       // The slot is free, but the refused receipt stays pending: it is never replaced by "nothing published".
       expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [receipt] })

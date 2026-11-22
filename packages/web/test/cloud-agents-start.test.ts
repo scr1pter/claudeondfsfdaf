@@ -5,7 +5,7 @@ import { createServer } from "node:http"
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { createCloudAgentsApi } from "../../../api/_lib/cloud-agents-api"
 import { cloudBrainArtifactKey, cloudRunArtifactKey } from "../../../api/_lib/cloud-agents-artifact"
-import { bindingFor, createBindCode, redeemAndBind } from "../../../api/_lib/cloud-agents-binding"
+import { bindingFor, createBindCode, redeemAndBind, suspendBinding } from "../../../api/_lib/cloud-agents-binding"
 import { bindBrainUpload, commitBrainUpload, prepareBrainUpload } from "../../../api/_lib/cloud-agents-brain"
 import { createDesktopCloudAgentApi } from "../../../api/_lib/cloud-agents-desktop"
 import type { CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitlement"
@@ -26,6 +26,11 @@ import {
   type CloudRunTrigger,
 } from "../../../api/_lib/cloud-agents-start"
 import type { RunTrigger } from "../../../api/_lib/cloud-agents-entitlement"
+import { ApiError } from "../../../api/_lib/http"
+import { opsRunStarter } from "../../../api/_lib/ops-incidents"
+import "../../../api/_lib/ops-registration"
+import { createOpsRunStarter } from "../../../api/_lib/ops-run-starter"
+import { repoBindingsAvailable, repositoryBinding } from "../../../api/_lib/ops-settings"
 import { persistentStore } from "../../../api/_lib/persistent-store"
 import { createJobId } from "../../../packages/schema/src/everywhere"
 import { githubAppFixture } from "./github-app-fixture"
@@ -42,7 +47,7 @@ function integrationTests() {
   if (!["127.0.0.1", "localhost"].includes(url.hostname)) throw new Error("Ticket tests require loopback Redis")
   const redis = new RedisClient(url.href, { connectionTimeout: 1000, enableOfflineQueue: false })
   const keys = new Set<string>()
-  const state = { down: false }
+  const state = { down: false, commands: 0 }
   const upstream = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -50,6 +55,7 @@ function integrationTests() {
       expect(new URL(request.url).pathname).toBe("/")
       expect(request.headers.get("authorization")).toBe("Bearer mint-fixture-kv")
       const command = (await request.json()) as (string | number)[]
+      state.commands += 1
       const count = command[0] === "EVAL" ? Number(command[2]) : 1
       command
         .slice(command[0] === "EVAL" ? 3 : 1, command[0] === "EVAL" ? 3 + count : 2)
@@ -489,6 +495,83 @@ function integrationTests() {
       expect(await f.start()).toEqual({ ok: false, reason: "dispatch-failed" })
       expect(f.github.tokens.size).toBe(0)
     } finally {
+      await f.close()
+    }
+  })
+
+  // WP A59: the binding reader and "Fix it" starter that api/_lib/ops-registration.ts registers for Codium's ops. Each
+  // case sets VECTOR_GITHUB_BRAIN_ENABLED itself and puts back this file's value.
+  test("ops reads the bound account through the registered reader, never a suspended one, and nothing while off", async () => {
+    const f = await fixture()
+    try {
+      const starter = opsRunStarter()
+      expect(repoBindingsAvailable()).toBe(true)
+      expect(typeof starter).toBe("function")
+      await import("../../../api/_lib/ops-registration")
+      expect(opsRunStarter()).toBe(starter)
+      expect(await repositoryBinding(Number(f.github.repositoryId))).toEqual({
+        account: f.account,
+        repository: "fixture-owner/project",
+        installationId: 600,
+      })
+      delete process.env.VECTOR_GITHUB_BRAIN_ENABLED
+      const before = state.commands
+      expect(await repositoryBinding(Number(f.github.repositoryId))).toBeUndefined()
+      expect(await starter!(f.trigger).catch((error) => error)).toMatchObject({
+        statusCode: 503,
+        code: "OPS_FIX_UNAVAILABLE",
+      })
+      expect(state.commands).toBe(before)
+      process.env.VECTOR_GITHUB_BRAIN_ENABLED = "true"
+      await suspendBinding(f.binding, "transferred")
+      expect(await repositoryBinding(Number(f.github.repositoryId))).toBeUndefined()
+      expect(f.github.state.dispatches).toHaveLength(0)
+    } finally {
+      process.env.VECTOR_GITHUB_BRAIN_ENABLED = "true"
+      await f.close()
+    }
+  })
+
+  test("the ops fix starter maps every refusal to fixed text and dispatches a started run exactly once", async () => {
+    const f = await fixture()
+    const refused = async (change: Partial<RunTrigger> = {}) => {
+      const error = await createOpsRunStarter(f.deps)({ ...f.trigger, ...change }).catch((error) => error)
+      expect(error).toBeInstanceOf(ApiError)
+      expect(error.message).not.toMatch(/not-bound|not-binder|app-required|dispatch-failed|payment|dispute|fraud/)
+      return [error.statusCode, error.code, error.message]
+    }
+    const notBound = [409, "OPS_REPO_NOT_BOUND", "Connect this repository to your Vector account first."]
+    try {
+      process.env.VECTOR_GITHUB_BRAIN_ENABLED = "true"
+      expect(await refused({ target: { kind: "github-run", repositoryId: 999 } })).toEqual(notBound)
+      expect(await refused({ account: crypto.randomUUID() })).toEqual(notBound)
+      f.github.state.enabled = false
+      expect(await refused()).toEqual([
+        503,
+        "OPS_FIX_APP_REQUIRED",
+        "Install Vector's GitHub App on this repository to start a fix run.",
+      ])
+      f.github.state.enabled = true
+      const active = f.policy.allowance
+      for (const reason of ["none", "payment", "dispute", "fraud", "closing", "service-off", "not-in-plan"] as const) {
+        f.policy.allowance = { active: false, reason }
+        expect(await refused()).toEqual([
+          403,
+          "OPS_FIX_NOT_ALLOWED",
+          "Your Vector Codium plan does not allow a fix run right now.",
+        ])
+      }
+      f.policy.allowance = active
+      expect(f.github.state.dispatches).toHaveLength(0)
+      f.github.state.dispatchStatus = 503
+      expect(await refused()).toEqual([503, "OPS_FIX_UNAVAILABLE", "The fix run could not start. Try again shortly."])
+      expect(f.github.state.dispatches).toHaveLength(1)
+      f.github.state.dispatchStatus = 204
+      expect(await createOpsRunStarter(f.deps)(f.trigger)).toEqual({})
+      expect(f.github.state.dispatches).toHaveLength(2)
+      expect(f.github.state.dispatches.at(-1)?.inputs.ticket).toMatch(/^vtk_/)
+    } finally {
+      process.env.VECTOR_GITHUB_BRAIN_ENABLED = "true"
       await f.close()
     }
   })

@@ -117,6 +117,18 @@ done in A20 ([codium-a20-plan-ui-notes.md](codium-a20-plan-ui-notes.md)). The se
 - Server hardening (A16 files, not changed here): a purpose-stripped code is minted and consumed as a desktop grant,
   which the CLI refuses to keep but which stays valid until it expires. Checking the expected purpose before consuming
   the code would close that.
+  **Built 21 Nov 2026 (`codium-api-fixes`):** `consumeDesktopCode` takes an optional body field `expect`
+  (`sign-in`, `cli` or `delete`; a new name, so the existing `purpose: "desktop"` field still grants nothing). Any
+  other value is refused 400 before a store call. The consume script compares it with the saved purpose (none saved
+  reads as `sign-in`) after the state, challenge and expiry checks and before `DEL`, so a mismatch answers 400
+  `DESKTOP_CODE_INVALID` with the code kept and nothing minted; left out, it accepts as before (older CLIs and
+  desktops). It only narrows: the credential is still chosen by the saved purpose. `vector login` sends `cli`; the
+  desktop sends `delete` for its deletion confirmation and `sign-in` otherwise. Tests: `test/model-plan-cli-tokens.test.ts`
+  (invalid values refused with no store command; on Valkey, a purpose-stripped code is not consumed by `cli` or
+  `delete` and then works with `sign-in`, and a deletion code refuses `sign-in` and works with `delete`; 21 pass
+  against a loopback `redis-server`), the fixture stores in that file and `packages/web/test/desktop-account.test.ts`
+  read `ARGV[4]` as the script does, and the desktop's sign-in and deletion flows pass through it (12 pass).
+  Mutations: without the script's check the Valkey case fails; without the value check the store-free case fails.
 
 ## Remaining gates
 

@@ -271,9 +271,14 @@ test("credential stores cover the data directory, the CLI default, the earlier p
   ]
 
   directories.forEach((directory) =>
-    ["auth.json", "mcp-auth.json", "cli-auth.json", "plugin-oauth-approvals.json"].forEach((file) =>
-      expect(paths).toContain(path.join(directory, file)),
-    ),
+    [
+      "auth.json",
+      "mcp-auth.json",
+      "cli-auth.json",
+      "plugin-oauth-approvals.json",
+      // `vector vault` keeps its local vault file at <data>/vault/vault.json (cli/cmd/vault.ts).
+      path.join("vault", "vault.json"),
+    ].forEach((file) => expect(paths).toContain(path.join(directory, file))),
   )
   // The database keeps integration keys in plain JSON, on every channel and in WAL mode.
   directories.forEach((directory) =>

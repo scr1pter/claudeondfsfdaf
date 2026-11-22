@@ -27,43 +27,37 @@ const theme = {
 }
 
 describe("DiffViewerFileTree", () => {
-  test.skip("renders sorted hierarchical file rows", async () => {
-    const app = await testRender(
-      () =>
-        withTheme(() => (
-          <DiffViewerFileTree
-            width={32}
-            files={[
-              { file: "z-file.ts" },
-              { file: "b/file.ts" },
-              { file: "a/zeta.ts" },
-              { file: "b/alpha.ts" },
-              { file: "a/alpha.ts" },
-            ]}
-            loading={false}
-            error={undefined}
-            theme={theme}
-            focused={true}
-          />
-        )),
+  test("renders sorted hierarchical file rows", async () => {
+    const frame = await renderFrame(
+      () => (
+        <DiffViewerFileTree
+          width={32}
+          files={[
+            { file: "z-file.ts" },
+            { file: "b/file.ts" },
+            { file: "a/zeta.ts" },
+            { file: "b/alpha.ts" },
+            { file: "a/alpha.ts" },
+          ]}
+          loading={false}
+          error={undefined}
+          theme={theme}
+          focused={true}
+        />
+      ),
       { width: 40, height: 20 },
     )
 
-    try {
-      await renderOnceSettled(app)
-      const lines = visibleLines(app.captureCharFrame())
-
-      expect(lines).toEqual([
-        "▾ a",
-        "│  ├─ alpha.ts               ?",
-        "│  └─ zeta.ts                ?",
-        "├─ ▾ b",
-        "│  ├─ alpha.ts               ?",
-        "│  └─ file.ts                ?",
-      ])
-    } finally {
-      app.renderer.destroy()
-    }
+    expect(visibleLines(frame)).toEqual([
+      "▾ a",
+      "│  ├─ alpha.ts               ?",
+      "│  └─ zeta.ts                ?",
+      "├─ ▾ b",
+      "│  ├─ alpha.ts               ?",
+      "│  └─ file.ts                ?",
+    ])
+    // visibleLines drops rows starting with └ as the panel border, so the root file row is checked on the raw frame.
+    expect(frame).toContain("└─ z-file.ts")
   })
 
   test("keeps loading and error quiet while rendering an empty settled state", async () => {
@@ -152,8 +146,8 @@ describe("DiffViewerFileTree", () => {
   })
 })
 
-async function renderFrame(component: () => JSX.Element) {
-  const app = await testRender(() => withTheme(component), { width: 40, height: 10 })
+async function renderFrame(component: () => JSX.Element, size = { width: 40, height: 10 }) {
+  const app = await testRender(() => withTheme(component), size)
   try {
     await renderOnceSettled(app)
     return await captureSettledFrame(app)

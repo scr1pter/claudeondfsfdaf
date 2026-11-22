@@ -49,6 +49,12 @@ Run these from `packages/ops-worker`, signed in with `wrangler login` to the Clo
 
 Without its two secrets the Worker answers the API's calls with 503 and checks nothing.
 
+## Roll back a Worker
+
+Leave `commit` empty for an ordinary deploy. To roll back, run the same workflow on `main` with `commit` set to the full 40-character SHA of the earlier commit on `main` whose Worker you want back. The preflight refuses anything else (a short or uppercase SHA, a commit not on `main`, any other text) and the input reaches it only as step environment, never as shell text. The deploy job checks out that commit, checks again that `main` contains it, and runs the same checks, dry run and secret-name check before deploying, after your approval in `hosted-production`. The workflow's steps come from the dispatched `main`, but the Worker's code, `wrangler.jsonc` and package scripts come from the earlier commit.
+
+**Check compatibility first.** The API keeps deploying from `main` on every merge, so an older Worker can refuse a field the current API sends in `plan`, `config` or `release` (see step 6): roll back no further than the commit that first accepted every field the deployed API sends, or roll the API back too, and check that the namespace id and the secret names that commit expects still match steps 2 to 4.
+
 ## Turning it off
 
 - **Normally:** the `ops` switch on `/owner/codium`. It stops new settings, release watches, reverts, cards and fix runs in the API (a regression the Worker still reports while its flag spreads is recorded, with Undo left to the person) and copies itself to the Worker's kill flag (`flags`). If the answer says `worker: "failed"`, apply the switch again or set the flag directly as below.
@@ -132,7 +138,7 @@ Ship Desk makes a private card of each pull request a Codium run of Vector's Git
   The cron's answer carries counts and a share only; dollar figures are only in your email.
 - **The cleanup** (`/api/ops/cleanup`, daily at 04:40 UTC) deletes Ship Desk cards past their keep days with their images, removes list entries whose incident or card already expired, leaves a frozen account's cards alone, and erases every ops record of an account 30 days after it lost a dispute (unless the loss was reversed or the block cleared by then). It keeps `ops:accounts` (accounts that had ops caps) and `ops:erase:due` under the Codium prefix, beside the guard's `ops:roster:<plan>`, `ops:guard:held` and `ops:guard:checked`. These hold account ids and times only.
 - **Domain health** (part of the daily `/api/ops/domains` job, after re-verification): for each verified domain of a roster account, within the plan's domain count, the certificate's expiry and trust (a TLS handshake to a public address), the registration's expiry (RDAP, from IANA's bootstrap file) and DNS drift (the zone's name servers and the domain's CNAME, over DNS-over-HTTPS). The screens show the dates; the phone gets a title-only alert 14 and 3 days before a certificate ends, 30 and 7 days before a registration ends, once when a certificate is expired or not trusted, and once per DNS change. Kept under `ops:health:<account>` (dates, name servers and the CNAME target) for 40 days.
-- **Account deletion** (A57) calls `eraseAccountOps(account)` in `api/_lib/ops-cleanup.ts`, which erases the Worker's data, the settings, incidents, Release Guard records, cards and images, domain health and these records in both Stripe modes. The `ops` provisioner already calls it on `closing`.
+- **Account deletion** (A57) calls `eraseAccountOps(account)` in `api/_lib/ops-cleanup.ts`, which erases the Worker's data, the settings, incidents, Release Guard records, cards and images, domain health and these records in both Stripe modes. The `ops` provisioner already calls it on `closing`. Since 21 Nov 2026: while `VECTOR_OPS_WORKER_URL` or `VECTOR_OPS_SHARED_SECRET` is missing, the deletion of an account on `ops:accounts` (either mode) stays pending at its ops step and the deletions cron retries it with its usual backoff; restore both settings and the next retry erases the Worker's data and finishes the deletion. An account that never used ops is deleted as before. A Worker report that arrives after an account's deletion started is answered 200 with nothing written, so the Worker stops resending it.
 
 ## What it costs
 

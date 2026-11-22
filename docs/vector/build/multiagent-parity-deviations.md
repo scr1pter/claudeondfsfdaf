@@ -1607,6 +1607,17 @@ Also unrecorded until now:
   - Both e2e jobs passed in run [41963481022](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41963481022) (jobs `127035021598` and `127035021606`).
 - `47e97a94` ("fix(multiagent): CI after Phase 8", 14:29, before the Phase 9 review above) raised one test's own deadline from the 30-second default to 60 s: manager-workflow.test.ts's 300-agent stop case. No assertion changed. Its body gives 15-23 s for that case on CI before Phase 8. It is recorded here as fact and not reviewed. Where this entry says no test deadline changed, it means only `62aacab9`, `020c3458` and `d624e760`.
 - Run [41925753700](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41925753700), the baseline below, is on `47e97a94`. Attempt 1's engine (linux, shard 2/4) job `126909620047` crashed ("panic: Segmentation fault at address 0xFFFFFFFFFFFFFFF8", "Bun has crashed", exit code 132). Attempt 2 re-ran only that job, and it passed. The crash was not diagnosed.
+  - 21 Nov 2026 follow-up (branch `engine-core-fixes`, log read with get_job_logs): the crash is the #49
+    scrollback.surface cause in `ci-harness-repairs.md` ("2026-11-20: Bun 1.3.14 crash in scrollback.surface"). Job
+    `126909620047` crashed in `test/cli/run/scrollback.surface.test.ts` right after "does not emit blank patch
+    snapshots between edit and task", with Features `workers_spawned(19) workers_terminated`, and its bun.report
+    string `ngEz7339/D4j+hvE+ypR82oiwC4u41hDiytzhD2szqyD40w/uCm4lnB2svqCA2DR` has frames identical to the CI trace
+    that entry decodes (`D4j+hvE+…qCA2DR`); only the platform prefix differs. The opentui TreeSitterClient patch
+    there is the repair.
+  - Watch list, no code change: Windows engine shard 11/12 job `136673698455` (main run 44848275007) passed
+    `test/tool/registry.test.ts` "tool.registry > preserves Zod arg descriptions from older config-scoped plugin
+    packages" in 4,111.02 ms, against about 1 s for its neighbours. Read as a one-off slow VM, well inside its budget;
+    record it again if it recurs.
 
 1. Windows step deadline (`62aacab9`: `.github/workflows/test.yml` only; the Windows engine step's `timeout-minutes` went from 30 to 45, with a comment).
 
@@ -2169,7 +2180,7 @@ Remaining (left to CI and to later packages):
 - Judge the refusals test against both predictions: 10.2 s by method (i) and 13.5 s by method (ii). If it takes more than about 80% of its deadline (24 s), or fails, the next step is the test-only lever above. That step splits the refusals in two: the merge refusals with one child, and the discard refusals with the other.
 - SE-4's own record of that run, as a dated "Update (SE-4 push)" under this continuation, in a docs-only commit. Its own run is a further CI12 sample, which the next package records, as SE-3's was recorded here.
 - Follow-ups, not done: isolation git-call reductions (R9; above), and a harness that interrupts or awaits a body Bun has timed out (test/lib/effect.ts; Bun passes no AbortSignal).
-- Follow-up, not done: a test in test/task/isolation.test.ts that merges one isolated child and then discards its sibling of the same parent. That is the sequence the split no longer runs and no other test runs (Repair, above).
+- Follow-up, done 21 Nov 2026 (branch `engine-core-fixes`): a test in test/task/isolation.test.ts that merges one isolated child and then discards its sibling of the same parent. That is the sequence the split no longer runs and no other test runs (Repair, above). "an isolated child merges, then its sibling of the same parent is discarded: the discard keeps its reason and patch and leaves the merged parent files untouched" (60_000 budget, as its neighbours) checks the record's `discardReason` (and the stored record's), the saved patch (holds `+sibling change`, not the merged change), the parent's merged and untouched files, the sibling's removed checkout and the merged child's state. The sibling has its own finalizer mirroring the fixture's. 1 pass locally (6.6 s); with the `discardReason` spread in `discard` removed it fails (`Received: undefined`).
 - Left open by choice: no test pins the order of a refused merge's errors for a task that is not "changed". The part-only manager mutants change only that (Mutations, above).
 - The merge plan's "being diagnosed" lines stay with SE-8, under SE-2's Deferred.
 - No macOS runner.
@@ -2383,7 +2394,7 @@ This is the native Windows CI evidence that this entry's independent-review para
 
 ## 2026-11-16 CI14 - Add server refused a slow Ollama fake on Windows (local.test.ts:413)
 
-Status: cause inferred, not proven, and fixed in core. The test is unchanged. The timeout mechanism below was inferred from the code and reproduced locally against the real fake with a delayed GET /api/version (the mechanism script under Tests), but it was not seen in the failing job: the CI log shows neither the 400 body nor any timing inside the probe, and why Windows goes over 400 ms was never measured. A rejection from `Egress.checking` (or a blocked `Egress.fetch` inside it), which local-settings.ts:594-596 also turns into `server: null` and so the same 400, is ruled out only by reading the code, not by the log. The fix stands on its own, because Detect's 400 ms default was wrong for one typed or listed address whatever caused this run. "local.test.ts probe 400" stays on the known-flake lists (RULES-v2.md, v2-handoff.md:51, v2-master-prompt.md:40, connected-workspace-handoff.md:180 and vector-everywhere-handoff.md:124) until several Windows engine shards that hold local.test.ts pass on the fix. One green shard proves little for a failure this rare. RULES-v2.md is the lead's to edit.
+Status: cause inferred, not proven, and fixed in core. The test is unchanged. The timeout mechanism below was inferred from the code and reproduced locally against the real fake with a delayed GET /api/version (the mechanism script under Tests), but it was not seen in the failing job: the CI log shows neither the 400 body nor any timing inside the probe, and why Windows goes over 400 ms was never measured. A rejection from `Egress.checking` (or a blocked `Egress.fetch` inside it), which local-settings.ts:594-596 also turns into `server: null` and so the same 400, is ruled out only by reading the code, not by the log. The fix stands on its own, because Detect's 400 ms default was wrong for one typed or listed address whatever caused this run. "local.test.ts probe 400" stays on the known-flake lists (RULES-v2.md, v2-handoff.md "Rules (binding)", v2-master-prompt.md "1. The product and the repository", and the "How CI runs on this branch" section of connected-workspace-handoff.md and of vector-everywhere-handoff.md; cited by heading on 21 Nov 2026, as the line numbers had moved) until several Windows engine shards that hold local.test.ts pass on the fix. One green shard proves little for a failure this rare. RULES-v2.md is the lead's to edit.
 
 What failed:
 - Run 42159471110, engine (windows, shard 12/12), job `127701423208`, on `f062bcce` (2026-11-06): "the Local API > a new identity pin for a server on the list, or none, needs confirm; Add server says what changed", 1,612.27 ms, at local.test.ts:413. It was handed to CI14 in the CI11 entry and not diagnosed then.
@@ -2420,3 +2431,71 @@ Remaining:
 - After several Windows engine shards that hold local.test.ts pass on the fix, remove "local.test.ts probe 400" from the four handoff docs above. The lead removes it from RULES-v2.md. 21 Nov 2026: removed from `v2-master-prompt.md`, `v2-handoff.md`, `connected-workspace-handoff.md` and `vector-everywhere-handoff.md`.
 - Follow-up, not in this change: `ollamaModels` (probe.ts, the model read for a listed loopback Ollama server with no pin before a model call) still defaults to the 400 ms loopback wait. On a busy Windows machine it can miss the same slow /api/version; `read` then returns false, so `holds` never learns which models that server passes on and `passesOn` sees only models whose names look like cloud models. This is the same class of budget mismatch, on the forwarding check rather than a refusal. Decide whether an unpinned listed loopback server should also get `IDENTIFY_TIMEOUT.remote`, and add a slow-version regression test for model calls (like the new probe.test.ts case) with it. If a CI failure ever traces back to an unpinned loopback model read, do this then.
 - Do not re-run job `133439824061` on its own. It failed inside a test body, so the re-run policy does not cover it.
+- 21 Nov 2026 (branch `engine-core-fixes`): the `ollamaModels` follow-up above is done. Decision: an unpinned listed
+  server on this computer is one address the person or company listed, not a Detect scan, so `ollamaModels` now
+  defaults to `options.timeout ?? IDENTIFY_TIMEOUT.remote` (3 s). A missed read lets a server that forwards to
+  ollama.com pass as local, which is worse than holding the first model call to a slow or silent server; the check is
+  cached per policy and origin, so only the first call waits (a refused connection still fails at once on Linux, and
+  takes about 2 s on Windows). The `IDENTIFY_TIMEOUT` comment now says `loopback` is for Detect only. Test: probe.test.ts
+  "gives a listed server with no pin on this computer the long wait, so a slow Ollama still says which models it passes
+  on": an unpinned 127.0.0.1 Ollama fake answers /api/version `IDENTIFY_TIMEOUT.loopback + 200` ms late and lists
+  `mymodel` with `remote_host`, and `forwards`/`passesOn` are true; with `makeHolds({ timeout: 100 })` they are false.
+  Red on the old default (0 pass, 1 fail). probe.test.ts 62 pass and detect.test.ts 6 pass after the change.
+
+## 2026-11-21 CI-ISOLATION-PLACE - merge writes into the parent retry Windows' open-handle refusal
+
+A short cross-reference also sits under ci-harness-repairs.md "2026-11-20: Windows isolated save renamed over an open
+record" (added once PR #59, which held that file, had merged).
+
+- Gap: the 2026-11-20 change gave record saves (`privateJSON`) and reads (`privateRead`) `cleared()`, the win32-only
+  retry over LockFs's transient window, but `place()` (merges and their rollback, writing into the parent project)
+  still renamed once. An editor, an indexer or an antivirus scan holding the parent file open would fail the merge on
+  Windows with EPERM.
+- Change (`packages/engine/src/task/isolation.ts`): `place()` runs `rename(temp, target)` and the win32 symlink
+  pre-`unlink(target)` through `cleared(...)` (the unlink keeps its `missing` ignore), and the outer catch still removes
+  the temp file. `cleared()`'s comment names the third caller. Off Windows every error is still reported at once.
+- Tests (`packages/engine/test/task/isolation.test.ts`, beside "a merge's link that cannot be made leaves the parent's
+  file in place"): "a merge write over a parent file another handle holds open waits for the handle and then replaces
+  it" and "a merge write held open past the retry window fails on Windows, keeping the parent file and no temp file",
+  mirroring the record-save pair. Every OS runs them; on Linux the rename replaces the open file at once, so both pass
+  before and after locally (4 pass with the place filter). The Windows engine shard holding isolation.test.ts is the
+  red/green proof: before the change the first case fails at once with EPERM instead of waiting.
+
+## 2026-11-21 Spec §7.2 shard counts
+
+- `multiagent-parity-spec.md` §7.2 item 1 said "Linux 4, Windows 6". `.github/workflows/test.yml` runs
+  `engine (linux, shard n/6)` (`shard: [1, 2, 3, 4, 5, 6]`, `--shard=n/6`) and `engine (windows, shard n/12)`
+  (`shard: [1 … 12]`). The spec line now says Linux 6 and Windows 12 and names test.yml as the source. No other §7.2
+  text changed.
+
+## 2026-11-21 CI15 - Verify's packet capture counted sudo's own host lookup (fixed by 67ec3a60)
+
+Status: cause shown by the fix commit's reading and the identical failure signature; fixed in main since `67ec3a60`
+(2026-11-16, an ancestor of main). Logs read with get_job_logs; the 30-minute capture artifacts were not downloaded.
+
+What failed (Verify, "Vector Local desktop packet capture (30 minutes)"):
+- Job `127701422434` (run 42159471068, self-evolving `f062bcce`, 2026-11-06; its attempt 2 passed): the workload ran
+  its 60 cycles (6,190 packets, 120 model requests), then the audit gave `"passed": false`, "4 packets used an
+  unexpected address, port or protocol". All four are UDP from 198.18.0.1 to 198.18.0.53:53 with 0 bytes, from two
+  source ports, and the log shows `sudo: unable to resolve host ip-10-0-143-174: Temporary failure in name
+  resolution` just before the result.
+- Job `132636679557` (run 43656695924, `cf2373c4`, 2026-11-15) and job `133146519456` (run 43821856711, `b0752dda`,
+  2026-11-16): the same audit failure, every unexpected entry UDP 198.18.0.1 to 198.18.0.53:53, 0 bytes.
+
+Cause: `sudo -n -u` inside the capture namespace resolves the runner's own host name. Hosted runners do not always list
+it in /etc/hosts, so the lookup falls through to the namespace's DNS sink (198.18.0.53) and the audit counts it as
+unexpected traffic. It is not Vector's traffic.
+
+Fix (`67ec3a60`, "keep sudo's own host lookup off the packet-capture DNS sink"):
+`packages/desktop/scripts/local-mode-capture-linux.sh` binds, inside the already private mount namespace, a hosts file
+that adds only this machine's name (127.0.1.1), as resolv.conf is bound; any other DNS attempt still reaches the sink
+and fails the audit. `docs/vector/local-packet-capture.md` says so.
+
+After the fix: main's Verify runs 44791067357, 44800897569, 44822880272, 44848274927, 44869121325, 44877844011 and
+44885764885 (2026-11-20 to 2026-11-21) all concluded success. Run 44686202767 (branch `windows-engine-timeouts`,
+2026-11-20) failed, but its packet-capture job `136121008104` stopped at "Build this commit's desktop engine", before
+any capture, so it is not a CI15 sample.
+
+For the lead (not edited here): the flake lists still carry "packet-capture DNS to 198.18.0.53:53"
+(`v2-handoff.md:52`, `v2-master-prompt.md:41`, and RULES-v2's known-flake line). With the cause fixed, a recurrence is a
+real failure; the lead decides whether to drop it from those lists.

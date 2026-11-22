@@ -1326,8 +1326,18 @@ export function codiumFakes(options: { now?: number } = {}) {
       return Response.json({ id: `email_${mail.sent.length}` })
     }
     if (url.origin === FAKE_KV_URL) {
+      // Upstash's path-style form, as the CLI token revocation (api/_lib/revocation.ts) sends it: `/set/<key>/<value>`
+      // with `?ex=<seconds>`, and `/get/<key>`.
+      const [, verb, ...parts] = url.pathname.split("/").map(decodeURIComponent)
+      const ex = url.searchParams.get("ex")
+      const command =
+        verb === "set" && parts.length === 2
+          ? ["SET", ...parts, ...(ex === null ? [] : ["PX", String(Number(ex) * 1000)])]
+          : verb === "get" && parts.length === 1
+            ? ["GET", ...parts]
+            : (JSON.parse(body) as unknown[])
       try {
-        return Response.json({ result: store.command(JSON.parse(body) as unknown[]) })
+        return Response.json({ result: store.command(command) })
       } catch (error) {
         if (store.down) return new Response("unavailable", { status: 503 })
         throw error
@@ -1360,6 +1370,9 @@ export function codiumFakes(options: { now?: number } = {}) {
 
 const ENVIRONMENT = [
   "MODEL_PLANS_ENABLED",
+  // The GitHub agent service's switch stays off unless a test turns it on, as the store and Stripe settings do, so a
+  // shell that exports it never reaches the real binding reader or the run service from a Codium fixture.
+  "VECTOR_GITHUB_BRAIN_ENABLED",
   "KV_REST_API_URL",
   "KV_REST_API_TOKEN",
   "UPSTASH_REDIS_REST_URL",

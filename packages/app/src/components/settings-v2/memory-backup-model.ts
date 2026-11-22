@@ -64,7 +64,7 @@ export function lastLine(status: VaultStatus, now: number) {
   if (status.running === "backup") return "Backing up…"
   if (status.running === "restore") return "Restoring…"
   if (status.last)
-    return `Last backup ${when(status.last.at, now)}: ${status.last.files} memory file${status.last.files === 1 ? "" : "s"}, ${bytes(status.last.sentBytes)} sent.`
+    return `Last backup ${when(status.last.at, now)}: ${status.last.files} file${status.last.files === 1 ? "" : "s"}, ${bytes(status.last.sentBytes)} sent.`
   return status.hasVault
     ? "No backup from this computer yet."
     : "Back up once to create your vault and get its recovery code."

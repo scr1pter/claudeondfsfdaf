@@ -1,5 +1,11 @@
 import { describe, expect } from "bun:test"
+import { $ } from "bun"
+import { rm } from "node:fs/promises"
+import os from "node:os"
 import { SessionV1 } from "@vectordevai/core/v1/session"
+import { fetchRef } from "@vectordevai/core/everywhere/git"
+import { branchFor } from "@vectordevai/core/everywhere/publish"
+import { createJobId } from "@vectordevai/schema/everywhere"
 import path from "path"
 import { Effect, FileSystem, Layer } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
@@ -21,6 +27,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { Config } from "@/config/config"
 import { Brain } from "@vectordevai/core/brain/brain"
+import { InstanceState } from "@/effect/instance-state"
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem, InstanceStore.node]), [
@@ -509,6 +516,86 @@ describe("Instruction.systemPaths global config", () => {
           )
           expect(owner.map((item) => item.content).join("\n")).toContain("back off with jitter")
         }),
+    ),
+  )
+})
+
+// EV-21: an instruction file a Vector everywhere job changed is held only in the job's checkout, at exactly the place
+// Worktree.createUnattended puts it, and only while the owner has not trusted that folder. Real git: each checkout is a
+// linked worktree of one repository at the job's branch, with the job's base in refs/vector-everywhere/<jid>, as a job's
+// is (test/everywhere/instruction-hold.test.ts makes one through the real route).
+describe("Instruction in a Vector everywhere job's checkout", () => {
+  const BASE = "BASE RULES: ev21 unit"
+  const JOB = "JOB RULES: ev21 unit"
+  const trust = (trusted: boolean, home: string) =>
+    AppNodeBuilder.build(LayerNode.group([Instruction.node, Brain.node]), [
+      [
+        Config.node,
+        Layer.succeed(
+          Config.Service,
+          TestConfig.make({
+            trust: () => Effect.succeed({ workspace: "", fingerprint: "", trusted, ignored: !trusted, settings: true }),
+          }),
+        ),
+      ],
+      [Global.node, Global.layerWith({ home, config: home })],
+      [RuntimeFlags.node, RuntimeFlags.layer({})],
+    ])
+  const git = (cwd: string, ...args: string[]) =>
+    Effect.promise(() => $`git -c core.hooksPath=${os.devNull} ${args}`.cwd(cwd).quiet().text()).pipe(
+      Effect.map((text) => text.trim()),
+    )
+
+  it.live("holds it only in an untrusted checkout at <data>/everywhere-worktree/<project id>/<jid>", () =>
+    provideTmpdirInstance(
+      (repo) =>
+        Effect.gen(function* () {
+          const ctx = yield* InstanceState.context
+          // The user's own folders, with no instruction file of their own.
+          const home = yield* tmpdirScoped()
+          yield* writeFiles(repo, { "AGENTS.md": BASE })
+          yield* git(repo, "add", ".")
+          yield* git(repo, "commit", "-m", "base")
+          const base = yield* git(repo, "rev-parse", "HEAD")
+          const elsewhere = `${repo}-elsewhere`
+          const roots = [path.join(Global.Path.data, "everywhere-worktree", ctx.project.id), elsewhere]
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(() =>
+              Promise.all(
+                roots.map((root) => rm(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 })),
+              ),
+            ),
+          )
+          // A job at `root`: its base fetched, its checkout at <root>/<jid> on its branch, and AGENTS.md rewritten there.
+          let made = 0
+          const job = (root: string) =>
+            Effect.gen(function* () {
+              const jid = createJobId(Date.now() + made++)
+              yield* git(repo, "update-ref", fetchRef(jid), base)
+              const checkout = path.join(root, jid)
+              yield* git(repo, "worktree", "add", "-b", branchFor(jid), "--", checkout, base)
+              yield* write(path.join(checkout, "AGENTS.md"), JOB)
+              yield* git(checkout, "commit", "-am", "job")
+              return checkout
+            })
+          const exact = yield* job(roots[0]!)
+          const named = yield* job(path.join(elsewhere, "everywhere-worktree", ctx.project.id))
+          const system = (directory: string, trusted: boolean) =>
+            Instruction.Service.use((svc) => svc.system()).pipe(
+              Effect.map((texts) => texts.join("\n")),
+              provideInstance(directory),
+              Effect.provide(trust(trusted, home)),
+            )
+
+          const held = yield* system(exact, false)
+          expect(held).not.toContain(JOB)
+          expect(held).not.toContain(BASE)
+          // The owner trusted the folder: what is in it is theirs to load.
+          expect(yield* system(exact, true)).toContain(JOB)
+          // Named like a job's checkout, but not where Vector puts one: not a job's checkout.
+          expect(yield* system(named, false)).toContain(JOB)
+        }),
+      { git: true },
     ),
   )
 })

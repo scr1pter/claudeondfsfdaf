@@ -72,7 +72,9 @@ function fixture() {
         saved.state !== command[4] ||
         saved.challenge !== command[5] ||
         saved.expiresAt <= Number(command[6]) ||
-        (saved.purpose !== undefined && saved.purpose !== "cli" && saved.purpose !== "delete")
+        (saved.purpose !== undefined && saved.purpose !== "cli" && saved.purpose !== "delete") ||
+        // A16's expected purpose, ARGV[4], as the script reads it ("" when the client sent none).
+        (command[7] !== "" && (saved.purpose ?? "sign-in") !== command[7])
       )
         return Response.json({ result: null })
       records.delete(codeKey)
@@ -305,6 +307,23 @@ describe("A16 account-scoped token revocation", () => {
   })
 })
 
+describe("A16 expected purpose", () => {
+  test("an invalid expected purpose is refused before any store call", async () => {
+    const fakes = fixture()
+    const input = binding()
+    const minted = await mintDesktopCode(user, { ...input, purpose: "cli" }, fakes.fetcher, now)
+    const before = fakes.commands.length
+    for (const value of ["desktop", "", 1, null, ["cli"]])
+      await expect(
+        consumeDesktopCode({ ...input, code: minted.code, expect: value }, fakes.fetcher, now),
+      ).rejects.toMatchObject({ statusCode: 400 })
+    expect(fakes.commands.length).toBe(before)
+    expect((await consumeDesktopCode({ ...input, code: minted.code, expect: "cli" }, fakes.fetcher, now)).purpose).toBe(
+      "cli",
+    )
+  })
+})
+
 const valkeyURL = process.env.VECTOR_TEST_REDIS_URL
 describe.skipIf(!valkeyURL)("A16 PKCE purpose Lua on Valkey", () => {
   test("a malformed saved purpose cannot consume its code, and concurrent valid exchanges have one winner", async () => {
@@ -327,6 +346,30 @@ describe.skipIf(!valkeyURL)("A16 PKCE purpose Lua on Valkey", () => {
       await redis.send("SET", [key, JSON.stringify({ ...JSON.parse(raw), purpose: "invalid" }), "EX", "300"])
       await expect(consumeDesktopCode({ ...input, code: minted.code }, fetcher, now)).rejects.toThrow()
       expect(await redis.send("GET", [key])).not.toBeNull()
+      await redis.send("SET", [key, raw, "EX", "300"])
+      // A16 expected purpose, on the real script: a code saved without a purpose (a sign-in) is not consumed by an
+      // exchange that expects a CLI grant or a deletion, and then works for the sign-in it was saved for.
+      const stripped = JSON.parse(raw)
+      delete stripped.purpose
+      await redis.send("SET", [key, JSON.stringify(stripped), "EX", "300"])
+      for (const expected of ["cli", "delete"]) {
+        await expect(
+          consumeDesktopCode({ ...input, code: minted.code, expect: expected }, fetcher, now),
+        ).rejects.toMatchObject({ statusCode: 400 })
+        expect(await redis.send("GET", [key])).not.toBeNull()
+      }
+      expect((await consumeDesktopCode({ ...input, code: minted.code, expect: "sign-in" }, fetcher, now)).purpose).toBe(
+        "sign-in",
+      )
+      expect(await redis.send("GET", [key])).toBeNull()
+      // A deletion code refuses a sign-in exchange and still buys its deletion grant.
+      await redis.send("SET", [key, JSON.stringify({ ...stripped, purpose: "delete" }), "EX", "300"])
+      await expect(
+        consumeDesktopCode({ ...input, code: minted.code, expect: "sign-in" }, fetcher, now),
+      ).rejects.toMatchObject({ statusCode: 400 })
+      expect((await consumeDesktopCode({ ...input, code: minted.code, expect: "delete" }, fetcher, now)).purpose).toBe(
+        "delete",
+      )
       await redis.send("SET", [key, raw, "EX", "300"])
       const results = await Promise.allSettled([
         consumeDesktopCode({ ...input, code: minted.code }, fetcher, now),

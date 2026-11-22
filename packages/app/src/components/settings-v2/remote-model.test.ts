@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import type { RemoteStatus } from "@/context/platform"
 import {
+  JOBS_ONLY_LINE,
   minutesAndSeconds,
   pairedCountLine,
   phoneLine,
@@ -19,6 +20,7 @@ import { filterSettingsGroups } from "./settings-registry"
 const status = (fields: Partial<ModelPlanStatus.Status>) =>
   ({ signedIn: true, enabled: true, active: true, ...fields }) as unknown as ModelPlanStatus.Status
 
+const PHONE = { device: "dev_1", name: "Phone", pairedAt: 1, connected: true, watching: false }
 const local = (fields: Partial<RemoteStatus> = {}): RemoteStatus => ({
   enabled: false,
   state: "off",
@@ -86,7 +88,19 @@ describe("what Settings → Remote says", () => {
       expect(line.text.length).toBeGreaterThan(5)
       expect(line.text).not.toMatch(/\$|credit|top-?up|guarantee|soon/i)
     }
-    expect(stateLine(local({ state: "online", viewers: 2 })).text).toBe("Connected. 2 phones are open now.")
+    expect(stateLine(local({ state: "online", viewers: 2, phones: [PHONE] })).text).toBe(
+      "Connected. 2 phones are open now.",
+    )
+    // Online with no phone and no pairing open, the link is up only for Vector everywhere jobs.
+    for (const pairing of [{ state: "idle" }, { state: "failed", message: "Pairing ran out of time." }] as const)
+      expect(stateLine(local({ state: "online", pairing }))).toEqual({ text: JOBS_ONLY_LINE, problem: false })
+    expect(stateLine(local({ state: "online", pairing: { state: "waiting", link: "x", expiresAt: 1 } })).text).toBe(
+      "Connected. Your paired phones can reach this computer.",
+    )
+    expect(stateLine(local({ state: "online", phones: [PHONE] }))).toEqual({
+      text: "Connected. Your paired phones can reach this computer.",
+      problem: false,
+    })
     expect(stateLine(local({ state: "paused" })).problem).toBe(true)
     expect(stateLine(local({ state: "ready" })).problem).toBe(false)
     // The main process's own message wins where it has one.

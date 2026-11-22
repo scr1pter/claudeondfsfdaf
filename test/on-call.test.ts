@@ -3,6 +3,7 @@ import { RedisClient } from "bun"
 import { handleCodiumOwner } from "../api/_lib/codium-owner-api"
 import { codiumKeyIn } from "../api/_lib/codium-keys"
 import { opsCall, syncOpsKillFlag } from "../api/_lib/ops-worker"
+import { forgetOpsAccount, opsWorkerAccountsKey } from "../api/_lib/ops-accounts"
 import { checkDomain, opsHostname, normalizeDomain, txtValue, type DomainCheck } from "../api/_lib/ops-domains"
 import {
   dropOpsRepositories,
@@ -831,6 +832,11 @@ describe("erasing and dropping", () => {
     world.fakes.store.set(opsSettingsKey(MAX, "live"), world.fakes.store.get(opsSettingsKey(MAX))!)
     world.fakes.store.members(codiumKeyIn("live", "ops", "repo", 42)).add(MAX)
     await eraseAccountOpsSettings(MAX, world.fetcher())
+    // OPS-WORKER-ERASE-GAP: the Worker's record of the account, written by the config calls, outlives its settings
+    // until the account's erasure forgets it (ops-cleanup.ts `eraseAccountOps` ends with `forgetOpsAccount`).
+    expect(world.fakes.store.keys().filter((key) => key.includes(":ops:"))).toEqual([opsWorkerAccountsKey()])
+    expect([...world.fakes.store.zset(opsWorkerAccountsKey()).keys()]).toEqual([MAX])
+    await forgetOpsAccount(MAX, world.fetcher())
     const left = world.fakes.store.keys().filter((key) => key.includes(":ops:"))
     expect(left).toEqual([])
     expect(world.fakes.store.live(opsDomainsDueKey())).toBeUndefined()

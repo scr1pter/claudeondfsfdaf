@@ -31,7 +31,6 @@ on:
       - packages/web/src/drafts/everywhere*
       - packages/web/src/drafts/everywhere/**
       - packages/web/src/drafts/docs/everywhere.astro
-      - packages/web/src/components/everywhere/**
       - packages/web/src/components/marketing/everywhere/**
       - integrations/slack/**
       - integrations/jira-forge/**

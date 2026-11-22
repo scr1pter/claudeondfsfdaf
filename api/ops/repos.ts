@@ -12,6 +12,8 @@ import {
 } from "../_lib/ops-api.js"
 import { requireOpsPerk } from "../_lib/ops-listing.js"
 import { requireOpsService } from "../_lib/ops-worker.js"
+// A59: whether a repository is bound comes from the registered @vector binding reader.
+import "../_lib/ops-registration.js"
 
 export default function handler(request: ApiRequest, response: ApiResponse) {
   return handleOpsRepos(request, response)

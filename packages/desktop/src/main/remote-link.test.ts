@@ -1049,16 +1049,19 @@ describe("paired phones", () => {
     // Events of other folders and of other kinds stay on this computer.
     env.fake.push({ directory: "/elsewhere", payload: { type: "session.status", properties: { sessionID: "x" } } })
     env.fake.push({ directory: "/repo", payload: { type: "pty.created", properties: {} } })
+    // A Connect run's updates reach the phone too, so a review started there refreshes without its own part.
+    env.fake.push({ directory: "/repo", payload: { type: "connect.run.updated", properties: { sessionID: "ses_1" } } })
     await until(
       async () =>
         (await read())
           .filter((item) => (item as { t?: string }).t === "events")
-          .flatMap((item) => (item as { events: unknown[] }).events).length === 30,
+          .flatMap((item) => (item as { events: unknown[] }).events).length === 31,
     )
     const batches = inbox.filter((item) => (item as { t?: string }).t === "events")
-    expect(batches.length).toBeLessThan(30)
+    expect(batches.length).toBeLessThan(31)
     expect(JSON.stringify(batches)).not.toContain("/elsewhere")
     expect(JSON.stringify(batches)).not.toContain("pty.created")
+    expect(JSON.stringify(batches)).toContain("connect.run.updated")
     await send({ t: "unwatch" })
     await until(() => env.fake.open() === 0)
     expect(env.link.watching()).toBe(false)

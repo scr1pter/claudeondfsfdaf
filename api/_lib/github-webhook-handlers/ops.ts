@@ -20,6 +20,8 @@ import { hostPage, releaseIntake } from "../release-guard.js"
 // A59: the webhook function bundles this handler, so Ship Desk's intake (registered by api/github/webhook.ts) reads
 // the registered @vector run records there.
 import "../cloud-agents-run-registration.js"
+// A59: Release Guard and Ship Desk find a repository's account through the registered @vector binding reader.
+import "../ops-registration.js"
 
 /*
  * Codium's ops handler on the shared GitHub webhook router (WP A47). It takes:

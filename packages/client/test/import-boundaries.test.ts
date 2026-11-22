@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
-import { join, resolve, sep } from "node:path"
+import { dirname, join, resolve, sep } from "node:path"
 
 const directory = resolve(import.meta.dir, "..")
-const effect = realpathSync(resolve(import.meta.dir, "../node_modules/effect"))
+// Resolve effect the way the client package does: Windows CI installs with the hoisted linker, so the package
+// has no local node_modules there and effect lives only in the workspace root.
+const effect = realpathSync(dirname(Bun.resolveSync("effect/package.json", directory)))
 const schema = resolve(import.meta.dir, "../../schema")
 const protocol = resolve(import.meta.dir, "../../protocol")
 const core = resolve(import.meta.dir, "../../core")

@@ -41,12 +41,20 @@ const LOCAL_FILE = () => path.join(Global.Path.data, "vault", "vault.json")
 /** The vault's own requests (the Vault API, its signed links, GitHub's privacy check), labelled brain-vault. */
 export const send = (url: string, init: RequestInit) => Egress.fetch("brain-vault", url, init)
 
+/**
+ * The local bare copy of a GitHub vault, beside vault.json in the data folder (R45-20). The shell sandbox lets commands
+ * write the cache, where a planted config or hook would run in the next backup's git; it never makes the data folder
+ * writable.
+ */
+export const githubCopy = (repo: { readonly owner: string; readonly name: string }) =>
+  path.join(Global.Path.data, "vault", "github", repo.owner, `${repo.name}.git`)
+
 /** git for the GitHub backend, through the engine's Git.run, which Vector Local decides for each command that connects. */
 export function gitRunner(git: Git.Interface): VaultGitHub.Git {
   return (args, options) =>
     Effect.runPromise(
       git.run([...args], {
-        cwd: Global.Path.cache,
+        cwd: Global.Path.data,
         ...(options?.env ? { env: { ...options.env } } : {}),
         ...(options?.input !== undefined
           ? {
@@ -159,13 +167,15 @@ const storeFor = Effect.fnUntraced(function* (input: {
   if (backend.type === "github") {
     const repo = VaultGitHub.parseRepo(backend.repo)
     if (!repo) return yield* fail("Name the repository as owner/repo, for example --github octocat/brain-vault.")
-    yield* Effect.promise(() => fs.mkdir(Global.Path.cache, { recursive: true }))
+    yield* Effect.promise(() => fs.mkdir(Global.Path.data, { recursive: true }))
+    // A copy kept in the cache before R45-20 may hold config or hooks a sandboxed command planted: never reuse it.
+    yield* Effect.promise(() => fs.rm(path.join(Global.Path.cache, "vault"), { recursive: true, force: true }))
     const runGit = gitRunner(yield* Git.Service)
     const store = VaultGitHub.store({
       repo: repo.full,
       remote: `https://github.com/${repo.owner}/${repo.name}.git`,
       api: GITHUB_API,
-      dir: path.join(Global.Path.cache, "vault", "github", repo.owner, `${repo.name}.git`),
+      dir: githubCopy(repo),
       git: runGit,
       send,
     })
@@ -309,7 +319,7 @@ export const VaultBackupCommand = effectCmd({
     )
     UI.println(
       UI.Style.TEXT_SUCCESS_BOLD +
-        `Backed up ${files.length} memory file${files.length === 1 ? "" : "s"} to ${store.label}` +
+        `Backed up ${files.length} file${files.length === 1 ? "" : "s"} to ${store.label}` +
         UI.Style.TEXT_NORMAL,
     )
     UI.println(

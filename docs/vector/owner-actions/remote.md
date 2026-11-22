@@ -55,6 +55,12 @@ Run these from `packages/relay`, signed in with `wrangler login` to the Cloudfla
 
 Without its three secrets the relay answers 503 and admits no one; with a malformed `TICKET_PUBLIC_KEYS` it admits no one either.
 
+## Roll back a Worker
+
+Leave `commit` empty for an ordinary deploy. To roll back, run the same workflow on `main` with `commit` set to the full 40-character SHA of the earlier commit on `main` whose Worker you want back. The preflight refuses anything else (a short or uppercase SHA, a commit not on `main`, any other text) and the input reaches it only as step environment, never as shell text. The deploy job checks out that commit, checks again that `main` contains it, and runs the same checks, dry run and secret-name check before deploying, after your approval in `hosted-production`. The workflow's steps come from the dispatched `main`, but the Worker's code, `wrangler.jsonc` and package scripts come from the earlier commit.
+
+**Check compatibility first.** An older relay serves whatever the desktop and phone builds out in the field expect of it only if that commit already spoke their protocol; roll back no further than the last commit before the change you are undoing, and check that the namespace id and the secret names that commit expects still match what steps 2 to 5 set up.
+
 ## Turning it off
 
 - **Normally:** the `remote` switch on `/owner/codium`. The API then stops minting tickets and sets the relay's kill flag. The answer says `relay: "updated"`; `relay: "failed"` means the relay could not be reached: apply the switch again, or set the flag directly as below.

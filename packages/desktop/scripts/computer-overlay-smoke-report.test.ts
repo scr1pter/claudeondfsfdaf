@@ -901,6 +901,17 @@ test("the Windows guardian child sends UPs only from its hookless release thread
   expect(caught).toContain("const bool inline_release=!state->releaser.started();")
   expect(caught).toContain("if (inline_release) try { (void)state->releaser.drain(2); } catch (...) {}")
   expect(caught).toContain("const auto deadline=GetTickCount64()+300;")
+  // Once state exists the function's own catch block ends the process after the 300 ms pump and the unhooks,
+  // so no detached release or fuse thread meets CRT teardown; `return 1;` stays as the unreachable fallback.
+  const teardown = runner.slice(runner.indexOf("if (state) state->stop();"))
+  expect(runner.match(/if \(state\) state->stop\(\);/g)).toHaveLength(1)
+  expect(teardown).toContain("const bool inline_release=!state->releaser.started();")
+  const terminate = teardown.indexOf("if (state) (void)TerminateProcess(GetCurrentProcess(),1);")
+  expect(terminate).toBeGreaterThan(teardown.indexOf("} while (GetTickCount64()<deadline);"))
+  expect(terminate).toBeGreaterThan(teardown.indexOf("if (mouse) UnhookWindowsHookEx(mouse);"))
+  expect(terminate).toBeLessThan(teardown.indexOf("return 1;"))
+  expect(teardown.match(/TerminateProcess\(/g)).toHaveLength(1)
+  expect(guardian.match(/\(void\)TerminateProcess\(/g)).toHaveLength(3)
   expect(guardian).toContain("ledger.retire(ticket,request->down); releaser.notify(); reply.ok=true;")
   expect(guardian).toContain("try { (void)(stopping.load() ? drain(5) : drain(1,true)); } catch (...) {}")
   expect(guardian).toContain("try { wait(seen,2); } catch (...) { Sleep(2); }")
@@ -911,7 +922,15 @@ test("the Windows guardian child sends UPs only from its hookless release thread
   // The release lock is the only lock held across the release; the ledger and wake locks never are.
   expect(drain.match(/release_\(/g)).toHaveLength(1)
   expect(drain).not.toMatch(/lock_guard|changed_mutex_|ledger_\.mutex/)
-  expect(drain).toContain("std::unique_lock lock(drain_mutex_,std::try_to_lock); if (!lock.owns_lock()) return 0;")
+  // A concurrent drain waits for the release lock only up to its own budget, computed before the wait.
+  expect(drain.indexOf("const auto deadline=GetTickCount64()+")).toBeLessThan(drain.indexOf("std::unique_lock lock("))
+  expect(drain).toContain("std::unique_lock lock(drain_mutex_,std::defer_lock); const auto now=GetTickCount64();")
+  expect(drain).toContain("if (now>=deadline || !lock.try_lock_for(std::chrono::milliseconds(deadline-now))) return 0;")
+  expect(drain).not.toContain("try_to_lock")
+  expect(drain).not.toContain("lock.lock()")
+  const header = await readFile(path.join(native, "input_guardian.h"), "utf8")
+  expect(header).toContain("std::timed_mutex drain_mutex_;")
+  expect(header).toContain("std::mutex changed_mutex_;")
   expect(drain).toContain("std::clamp<uint32_t>(milliseconds,1,300)")
 })
 
