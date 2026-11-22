@@ -86,7 +86,14 @@ export type PhoneRemoteDependencies = {
   /** This phone's plain name ("iPhone"), shown on the computer and in Devices. */
   phoneName: () => string
   now?: () => number
-  timing?: Partial<{ heartbeatMs: number; requestMs: number; channelMs: number; refreshEarlyMs: number; retryMs: number }>
+  timing?: Partial<{
+    heartbeatMs: number
+    requestMs: number
+    reviewStartMs: number
+    channelMs: number
+    refreshEarlyMs: number
+    retryMs: number
+  }>
 }
 
 export type RemoteState =
@@ -224,6 +231,15 @@ export class RemoteError extends Error {
 
 const HEARTBEAT_MS = 25_000
 const REQUEST_MS = 30_000
+/**
+ * A review start's window (CW-23b), the one request given longer than REQUEST_MS: the computer's 3 minutes
+ * (REVIEW_START_MS, desktop remote-routes.ts) and 15 s for the relay both ways and the computer's own checks, so the
+ * phone never gives up on a start the computer still waits on.
+ */
+export const PHONE_REVIEW_START_MS = 3 * 60_000 + 15_000
+/** A review start that ran out of time, at the computer (its REMOTE_REVIEW_TIMEOUT answer) or on this phone. */
+const REVIEW_TIMEOUT =
+  "Your computer did not answer within 3 minutes. A review still waiting for an approval stops then; answer its approval right away."
 const CHANNEL_MS = 10_000
 const REFRESH_EARLY_MS = 60_000
 /** A kill lands in whole seconds at the relay, so the one retry after REMOTE_REVOKED waits past the second. */
@@ -293,6 +309,7 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
   const timing = {
     heartbeatMs: HEARTBEAT_MS,
     requestMs: REQUEST_MS,
+    reviewStartMs: PHONE_REVIEW_START_MS,
     channelMs: CHANNEL_MS,
     refreshEarlyMs: REFRESH_EARLY_MS,
     retryMs: RETRY_MS,
@@ -856,14 +873,14 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
     return link
   }
 
-  const request = async (computer: string, input: RemoteRequest): Promise<EngineAnswer> => {
+  const request = async (computer: string, input: RemoteRequest, ms = timing.requestMs): Promise<EngineAnswer> => {
     const link = await waitOpen(computer)
     const id = ++link.next
     const answer = new Promise<EngineAnswer>((resolve, reject) => {
       const timer = setTimeout(() => {
         link.requests.delete(id)
         reject(new RemoteError("REMOTE_TIMEOUT", "The computer did not answer in time."))
-      }, timing.requestMs)
+      }, ms)
       link.requests.set(id, { resolve, reject, timer })
     })
     answer.catch(() => {})
@@ -1034,7 +1051,8 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
     cancelPairing() {
       endPairing({ state: "idle" })
     },
-    request,
+    /** One request to a paired computer, within the plain request window; only startReview waits longer. */
+    request: (computer: string, input: RemoteRequest) => request(computer, input),
     /** Live events from a computer while this phone watches it. */
     async watch(computer: string, on: boolean) {
       const link = state.links.get(computer)
@@ -1068,19 +1086,26 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
      * Starts a VectorScope review of a conversation's changes (CW-23c): the computer issues a challenge for exactly that
      * conversation, folder and target, this phone's passkey signs it, and the computer checks it before the engine
      * hears of the review. The start answers once the review's own questions are behind it, so they are answered
-     * from the phone while it waits.
+     * from the phone while it waits, within the start's own longer window (reviewStartMs).
      */
     startReview(computer: string, directory: string, sessionID: string, target: ReviewTarget): Promise<ApprovalResult> {
       return challenged(computer, reviewChallengeRequest(directory, sessionID, target), (passkey) =>
-        request(computer, reviewStartRequest(directory, sessionID, target, passkey)).catch((error: unknown) => {
-          // The computer gives a start the same window as any request, and stops a review still waiting by then.
-          if (error instanceof RemoteError && error.code === "REMOTE_TIMEOUT")
-            throw new RemoteError(
-              "REMOTE_REVIEW_TIMEOUT",
-              "Your computer did not answer in time. A review still waiting for an approval stops then; answer its approval right away.",
-            )
-          throw error
-        }),
+        request(computer, reviewStartRequest(directory, sessionID, target, passkey), timing.reviewStartMs).then(
+          (answer) => {
+            // The computer waits 3 minutes for a start (REVIEW_START_MS), longer than for any other request, and stops
+            // a review still waiting by then. Its window ends before this phone's, so it is the one that says so.
+            const body = answer.body as { error?: { code?: unknown } | null } | null
+            if (body?.error?.code === "REMOTE_REVIEW_TIMEOUT")
+              throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
+            return answer
+          },
+          (error: unknown) => {
+            // This phone's own window, 15 s longer, ended first: the computer or the relay went quiet.
+            if (error instanceof RemoteError && error.code === "REMOTE_TIMEOUT")
+              throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
+            throw error
+          },
+        ),
       )
     },
     deny(computer: string, directory: string, requestID: string, message?: string) {
