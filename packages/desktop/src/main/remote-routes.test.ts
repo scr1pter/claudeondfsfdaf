@@ -46,7 +46,7 @@ async function setup() {
     }
     if (request.path === "/experimental/session/ses_fail/connect") return { status: 400, body: { error: "bad" } }
     if (request.path === "/experimental/session/ses_down/connect") throw new Error("timed out")
-    // As this computer's fetch rejects once its own window ends (remote-runtime.ts), and once something else aborts it.
+    // As this computer's fetch rejects once its own window ends (remote-engine.ts), and once something else aborts it.
     if (request.path.includes("/ses_late/"))
       throw new DOMException("The operation was aborted due to timeout", "TimeoutError")
     if (request.path.includes("/ses_cut/")) throw new DOMException("This operation was aborted", "AbortError")
@@ -772,7 +772,7 @@ describe("connected tools from a phone (CW-23b)", () => {
     ])
   })
 
-  test("this computer's fetch waits REVIEW_START_MS for a review start and 30 s for anything else (remote-runtime.ts)", async () => {
+  test("this computer's fetch waits REVIEW_START_MS for a review start and 30 s for anything else (remote-engine.ts)", async () => {
     // Only a window startReview set changes it: a request shaped as a start without one keeps 30 s.
     expect(engineWindowMs({ method: "GET", path: "/project", query: {} })).toBe(30_000)
     expect(engineWindowMs({ method: "POST", path: START, query: { directory: "/repo" }, body: {} })).toBe(30_000)

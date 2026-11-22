@@ -46,7 +46,7 @@ export type RouteAnswer = { status: number; body: unknown }
  */
 export const REVIEW_START_MS = 3 * 60_000
 
-/** How long this computer's fetch waits for the engine (remote-runtime.ts): a request's own window, else 30 s. */
+/** How long this computer's fetch waits for the engine (remote-engine.ts): a request's own window, else 30 s. */
 export function engineWindowMs(request: EngineRequest) {
   return request.timeoutMs ?? 30_000
 }
@@ -245,7 +245,7 @@ export function createRemoteRoutes(deps: RouteDependencies) {
 
   /**
    * `timedOut` answers instead of a 502 when this computer's own window for the request ended: its fetch then rejects
-   * with a TimeoutError (remote-runtime.ts).
+   * with a TimeoutError (remote-engine.ts).
    */
   const send = async (request: EngineRequest, timedOut?: RouteAnswer): Promise<RouteAnswer> => {
     const answer = await deps

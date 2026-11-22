@@ -19,7 +19,7 @@ The dated entry lives here so that parallel PRs do not conflict. Fold it into `c
 **The fix.**
 
 - Desktop. `EngineRequest` has an optional `timeoutMs` (remote-routes.ts:34). It is read by `engineRequest` alone and never sent to the engine: the URL is built from the path and query, and the body from `body`. The new constant `REVIEW_START_MS = 3 * 60_000` (remote-routes.ts:46) is set only on `startReview`'s POST `/experimental/session/:sessionID/connect` (:369). The generic tail and every other connect route are unchanged. `engineRequest` uses `AbortSignal.timeout(request.timeoutMs ?? 30_000)` (remote-runtime.ts:157).
-- Phone. `request()` takes an optional window (client.ts:873), which defaults to `timing.requestMs`. The new `timing.reviewStartMs` defaults to `PHONE_REVIEW_START_MS = 3 * 60_000 + 15_000` (client.ts:239). The extra 15 s covers the relay both ways and the computer's own checks, so the phone never gives up on a start the computer is still waiting on. `startReview` passes it (:1090). The public `remote.request` keeps its two-argument form (:1051), so no other caller can choose a longer window. The `REMOTE_REVIEW_TIMEOUT` mapping stays; its comment and message now name the 3 minutes.
+- Phone. `request()` takes an optional window (client.ts:873), which defaults to `timing.requestMs`. The new `timing.reviewStartMs` defaults to `PHONE_REVIEW_START_MS = 3 * 60_000 + 15_000` (client.ts:239). The extra 15 s covers the relay both ways and the computer's own checks while those take under 15 s, so the computer's window then ends first. Review round two, below, says what the margin does not cover. `startReview` passes it (:1090). The public `remote.request` keeps its two-argument form (:1051), so no other caller can choose a longer window. The `REMOTE_REVIEW_TIMEOUT` mapping stays; its comment and message now name the 3 minutes.
 
 **Why 3 minutes.** The plan offered 5 minutes, or 2 to 3 minutes aligned with `APPROVAL_TTL_MS`. I chose 3 minutes for these reasons:
 
@@ -40,7 +40,7 @@ The engine sets no limit of its own on a phone review's question: a phone cannot
   - :406 and :516 expect `timeoutMs: REVIEW_START_MS` on the start.
   - Test fixtures: `phone()` takes `reviewStartMs`, which defaults to 6 s at test scale. The fake engine has a `slow` map (path to delay). The fake start's wait for its question is now bounded at 20 s instead of `until`'s default 3 s. The real engine sets no bound there, and the new case waits longer than 3 s. No test deadline or `--timeout` changed.
 - The plan suggested client.test.ts. It was not extended, because its harness has no open channel to a paired computer. The per-call window is tested end to end with the real client, in remote-phone-app.test.ts.
-- The desktop's `AbortSignal` is not exercised by a test: remote-runtime.ts imports Electron, and no test drives `engineRequest`. The change there is one expression. (Review round one, below, moves the window choice into a tested function.)
+- At first no test exercised the desktop's `AbortSignal`: `engineRequest` lived in remote-runtime.ts, which imports Electron. Review round one moved the window choice into a tested function. Review round two moved `engineRequest` into the Electron-free remote-engine.ts and drives it against a loopback server.
 
 **Evidence.**
 
@@ -99,3 +99,39 @@ The engine sets no limit of its own on a phone review's question: a phone cannot
 - Mutation M5 (`engineWindowMs` always 30 s): remote-routes.test.ts gave 33 pass and 1 fail (:775 expected 180000).
 - After each run, the fixed files were restored, and `sha256sum -c` was OK for all five changed source and test files.
 - Green: remote-routes 34/34, remote-phone-app 22/22, remote-routes-combined 13/13, remote-link 33/33, app phone/remote/client.test.ts 12/12, app phone/remote/model.test.ts 34/34. `bun typecheck` exited 0 in packages/desktop and packages/app. Prettier finds no new drift in the changed files.
+
+### Review round two
+
+Dated 2026-11-22. Built on the local branch `phone-window-followup`, from `phone-review-window` at `c5454587`. Not pushed.
+
+**What the re-review found.**
+
+1. (Nit.) The call site that applies the window was still untested. remote-runtime.ts:157 was the only production caller of `engineWindowMs`, and no test loads remote-runtime.ts, because it imports Electron (:2). `engineRequest` itself does not need Electron.
+2. (Nit.) The comment on `PHONE_REVIEW_START_MS` (client.ts:234) said the phone never gives up on a start the computer still waits on. That is not strictly true. Before its 3-minute start, the computer can read the engine twice, each time within the plain 30 s window. One read is whether connected tools are on (`connectionsOff`, remote-routes.ts:370), after the passkey check and `saveCredential` (:369). The other is the folder list, read only when the computer's copy is more than 30 s old (`directoryOf`, :423; `DIRECTORIES_MS`, remote-link.ts:69). The re-review named the first read. The second was found while checking the claim. So the computer can still be waiting up to about 240 s after the phone sent the start. That is about 45 s after the phone's 195 s, not the 210 s you get by counting only the first read.
+
+**The fix.**
+
+- Desktop. `engineRequest` moved from remote-runtime.ts into a new Electron-free module, remote-engine.ts, next to remote-link.ts and remote-routes.ts. It is now exported, and it takes an optional fourth argument, `timeout`, which makes a window's signal. That argument defaults to `AbortSignal.timeout` (remote-engine.ts:16). The body is unchanged except for the signal line, which is now `signal: timeout(engineWindowMs(request))` (:29). remote-runtime.ts imports the function and calls it with three arguments as before (:95), so the app still runs the real `AbortSignal.timeout`. The file pointers in remote-routes.ts (:49, :248), remote-routes.test.ts (:49, and the name of :775) and remote-phone-app.test.ts (:134) now name remote-engine.ts.
+- Phone. The comment on `PHONE_REVIEW_START_MS` (client.ts:234-243) now says what the 15 s is for: the relay both ways, plus the folder check, the passkey check and the connected-tools check. While all of those take under 15 s, the computer's window ends first. The comment also says what the margin does not cover. If the engine is slow to answer those two reads, the computer can still be waiting on the start about 45 s after the phone gives up. The phone then shows its own `REMOTE_REVIEW_TIMEOUT` and drops the late answer. A review whose question is answered during that time still starts. The number did not change.
+
+**Tests** (each file run alone, `--timeout 30000`). The new file is remote-engine.test.ts. Both cases drive the real `engineRequest` and the real fetch against a loopback `Bun.serve` engine that accepts each request and never answers.
+
+- :74 "a review start's fetch still waits when the 30 s window ends, and gives up at REVIEW_START_MS". A start with `timeoutMs: REVIEW_START_MS` and a runs read with no window are sent together. An injected clock replaces `AbortSignal.timeout`. Moving the clock to 30 s ends the read with a `TimeoutError`, and the start is still waiting 500 ms of real time later. The start is also still waiting at `REVIEW_START_MS - 1`, and it ends at `REVIEW_START_MS`. The fetches asked for exactly `[REVIEW_START_MS, 30_000]`.
+- :96 "when its window ends, the fetch rejects with the TimeoutError a review start is answered 504 for". This case uses the default `timeout`, the real `AbortSignal.timeout` that remote-runtime.ts runs, with `timeoutMs: 500`. The fetch rejects with an `Error` named `TimeoutError`. That is exactly what `send` matches (remote-routes.ts:254) to answer 504 `REMOTE_REVIEW_TIMEOUT`. The engine received the start with the authorization header and the `directory` query. The body it received was exactly the request's `body`, so `timeoutMs` reached the engine in neither the URL nor the body.
+- No test deadline or `--timeout` changed. No existing assertion changed. Only the test name at remote-routes.test.ts:775 changed its file pointer.
+
+**What is and is not covered.**
+
+- Covered: the real fetch takes its signal from the request's own window (`engineWindowMs`). A start's window is `REVIEW_START_MS` and every other request's is 30 s. With the real `AbortSignal.timeout`, the fetch rejects with an `Error` named `TimeoutError`. remote-routes.test.ts:1079 already covers `send` turning that rejection into 504, using a `DOMException` with the same name.
+- Not covered by a test:
+  - The real 3-minute and 30 s timers. :74 uses the injected clock, because 30 s and 180 s do not fit in `--timeout 30000`, and :96 uses a 500 ms window. The injected clock aborts with a `TimeoutError` that the test builds itself. The real reason is checked only in :96.
+  - Node's fetch, which Electron's main process uses. The tests run Bun's fetch. A one-off check by hand, not a test, gave the same result in Node v22.23.4: a fetch with `AbortSignal.timeout(300)` to a loopback `node:http` server that never answers rejected after 304 ms with `name: "TimeoutError"` and `instanceof Error` true.
+  - One test that chains the real fetch through `send` to the 504.
+  - That remote-runtime.ts passes no `timeout`, so the default applies. No test loads remote-runtime.ts. The call site is the one line at :95.
+
+**Evidence.**
+
+- Red-before: only the guarded line (remote-engine.ts:29) was put back to the line before this PR, `signal: AbortSignal.timeout(30_000)`. Result: 0 pass, 2 fail. :74 failed at :86 because the read was still "waiting" 5 s after the clock passed 30 s: the fetch no longer took its signal from the request's window or from the injected clock. :96 failed at :101 because it was still "waiting" after 10 s. The line was restored, and `sha256sum -c` was OK for remote-engine.ts, remote-engine.test.ts and remote-runtime.ts.
+- Mutation M6 (for :74): `signal: timeout(30_000)`, which keeps the injected clock but ignores the request's window. Result: 0 pass, 2 fail. :74 failed at :87 because the start ended at the 30 s mark ("TimeoutError" where "waiting" was expected). :96 also failed. Restored, `sha256sum -c` OK.
+- Mutation M7 (for :96): the default `timeout` became an `AbortController` aborted by `setTimeout`, with no reason. Result: 1 pass, 1 fail. :96 got `AbortError`, which `send` would answer as 502 `REMOTE_ENGINE_UNAVAILABLE`. :74 passed because it injects its own clock. Restored, `sha256sum -c` OK.
+- Green after all edits: remote-engine 2/2 (8 expect calls), remote-routes 34/34 (593), remote-phone-app 22/22 (136), remote-routes-combined 13/13 (1063), remote-link 33/33 (199), and app phone/remote/client.test.ts 12/12 (80). `bun typecheck` exited 0 in packages/desktop and packages/app. Prettier passes the two new files and remote-runtime.ts. The other four changed files have the same Prettier drift as at `c5454587`, so this change adds none.

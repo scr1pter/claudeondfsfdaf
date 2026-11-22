@@ -131,7 +131,7 @@ function computer(relay: MemoryRelay) {
     socket: (url, protocols) => relay.socket(url, protocols) as never,
     engine: {
       events: fake.api.events,
-      // As remote-runtime.ts's fetch: once the window ends, the call rejects with its AbortSignal.timeout's reason, a
+      // As remote-engine.ts's fetch: once the window ends, the call rejects with its AbortSignal.timeout's reason, a
       // TimeoutError, while the engine still waits.
       request: (request) => {
         const window = windows.get(request.path)
