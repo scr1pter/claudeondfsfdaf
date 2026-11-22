@@ -11,10 +11,19 @@ import { persistentStore } from "./persistent-store.js"
  *
  * - `ops:roster:<plan>` (one sorted set per plan with ops caps, account → since when): accounts whose plan gives the ops
  *   Worker work now (active, renewing or paused). The guard counts them for its budget and reads their usage.
- * - `ops:accounts` (sorted set, account → last change): every account that ever had ops caps, so the cleanup finds
- *   cards and incidents that outlive the plan (§4.4: cards stay readable until they expire after a plan ends).
+ * - `ops:accounts` (sorted set, account → last change): the cleanup's work list, every account a snapshot change showed
+ *   with ops caps, so the cleanup finds cards and incidents that outlive the plan (§4.4: cards stay readable until they
+ *   expire after a plan ends). The cleanup drops an account once nothing is left to expire and no plan gives the
+ *   Worker work (a later change with ops caps adds it back), so it is not a record of every account that used ops.
  * - `ops:erase:due` (sorted set, account → when): an account whose dispute was lost, due for erasure 30 days later
  *   (§4.4's cloud computer row, which A50's cleanup applies to the ops data too).
+ *
+ * The Worker may still hold a dropped account's config, releases and baselines, so a fourth set, written by `opsCall`
+ * (ops-worker.ts) rather than by the provisioner, records whom it holds:
+ *
+ * - `ops:worker` (sorted set, account → first call): every account the Worker was sent a `plan`, `config`, `release`
+ *   or `suspend` for, written before the call. Only the account's erasure (`forgetOpsAccount`) removes it, so account
+ *   deletion knows the Worker's erase is owed (ops-cleanup.ts `eraseAccountOps`). The cleanup never touches it.
  *
  * They hold account ids and times only.
  */
@@ -32,6 +41,8 @@ function key(mode: StripeMode | undefined, ...parts: string[]) {
 export const opsRosterKey = (plan: PlanId, mode?: StripeMode) => key(mode, "ops", "roster", plan)
 export const opsAccountsKey = (mode?: StripeMode) => key(mode, "ops", "accounts")
 export const opsEraseDueKey = (mode?: StripeMode) => key(mode, "ops", "erase", "due")
+/** OPS-WORKER-ERASE-GAP: the accounts the Worker may hold data for, until their erasure. */
+export const opsWorkerAccountsKey = (mode?: StripeMode) => key(mode, "ops", "worker")
 
 function unavailable(): never {
   throw new ApiError(503, "OPS_RECORDS_UNAVAILABLE", "Vector's production check records could not be read.")
@@ -75,6 +86,7 @@ export async function forgetOpsAccount(account: string, fetcher: typeof fetch = 
     for (const plan of OPS_PLANS) await persistentStore(["ZREM", opsRosterKey(plan, mode), account], fetcher)
     await persistentStore(["ZREM", opsAccountsKey(mode), account], fetcher)
     await persistentStore(["ZREM", opsEraseDueKey(mode), account], fetcher)
+    await persistentStore(["ZREM", opsWorkerAccountsKey(mode), account], fetcher)
   }
 }
 

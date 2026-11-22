@@ -59,7 +59,9 @@ import {
 import { cardIndexKey, cardKey } from "../api/_lib/ship-desk"
 import { incidentIndexKey, incidentKey, monitorIncidentId, opsEventsKey } from "../api/_lib/ops-incidents"
 import { signInternal } from "../api/_lib/hosted-internal"
-import { opsAccountsKey } from "../api/_lib/ops-accounts"
+import { opsAccountsKey, opsWorkerAccountsKey } from "../api/_lib/ops-accounts"
+import { cleanupOps } from "../api/_lib/ops-cleanup"
+import { opsCall } from "../api/_lib/ops-worker"
 import { opsHealthKey } from "../api/_lib/ops-health"
 import { runTokensRevokedKey } from "../api/_lib/codium-provisioners"
 import { everywhereKeys } from "../api/_lib/everywhere/keys"
@@ -86,6 +88,7 @@ import {
   vaultBucket,
 } from "./brain-vault-fixture"
 import { registerRecordScripts } from "./ops-fixture"
+import { OPS_INTERNAL_PREFIX, type OpsPlan } from "../packages/ops-worker/src/protocol"
 
 const original = {
   SUPABASE_URL: process.env.SUPABASE_URL,
@@ -1556,6 +1559,90 @@ describe("ops after the tombstone (A46)", () => {
     expect(w.services.identities).toEqual([ACCOUNT])
     expect(w.fakes.store.get(opsSettingsKey(ACCOUNT))).toBeUndefined()
     expect(w.fakes.store.get(incidentKey(ACCOUNT, INCIDENT))).toBeUndefined()
+  })
+
+  test("without the Worker's address, an account the daily cleanup dropped from the ops list still waits for the Worker's erase", async () => {
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_ENABLED: "true" })
+    const w = deletionWorld()
+    // The account had ops caps (the provisioner's record), and its plan ended: the Worker was sent the plan that stops
+    // its work, and still holds its config, releases and baselines.
+    w.fakes.store.zset(opsAccountsKey()).set(ACCOUNT, w.clock())
+    const ended: OpsPlan = { version: 2, domains: 0, onCall: null, releaseGuard: null, validUntil: w.clock() }
+    await opsCall("plan", { account: ACCOUNT, plan: ended }, w.fetcher, w.clock())
+    expect(w.services.worker).toEqual([`${OPS_INTERNAL_PREFIX}plan`])
+    // Nothing left to expire and no plan giving the Worker work: the daily cleanup drops it from the ops list.
+    expect(await cleanupOps({ fetcher: w.fetcher, clock: w.clock, budgetMs: MINUTE })).toMatchObject({
+      accounts: 1,
+      dropped: 1,
+      failures: 0,
+    })
+    expect(w.fakes.store.zset(opsAccountsKey()).has(ACCOUNT)).toBe(false)
+
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_WORKER_URL: undefined })
+    const answer = await deleteRoute(w)
+    expect(answer.status).toBe(503)
+    expect(answer.body.error).toMatchObject({ code: "ACCOUNT_ERASE_PENDING", pending: true, stage: "erase" })
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({ stage: "erase", failed: ["ops", "codium", "keys"] })
+    expect(w.services.worker.filter((path) => path.endsWith("/erase"))).toEqual([])
+    expect(w.services.identities).toEqual([])
+
+    restore()
+    restore = deletionEnvironment()
+    advance(w, deletionRetryMs(1))
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, deleted: 1, pending: 0 })
+    expect(w.services.worker.filter((path) => path.endsWith("/erase"))).toHaveLength(1)
+    expect(w.services.identities).toEqual([ACCOUNT])
+    for (const mode of ["live", "test"] as const) expect(w.fakes.store.zset(opsWorkerAccountsKey(mode)).size).toBe(0)
+  })
+
+  test("a Worker call whose record the store cannot take is refused before it reaches the Worker", async () => {
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_ENABLED: "true" })
+    const w = deletionWorld()
+    const plan: OpsPlan = { version: 2, domains: 0, onCall: null, releaseGuard: null, validUntil: w.clock() }
+    w.fakes.store.down = true
+    await expect(opsCall("plan", { account: ACCOUNT, plan }, w.fetcher, w.clock())).rejects.toMatchObject({
+      statusCode: 503,
+      code: "OPS_UNAVAILABLE",
+    })
+    expect(w.services.worker).toEqual([])
+    w.fakes.store.down = false
+    await opsCall("plan", { account: ACCOUNT, plan }, w.fetcher, w.clock())
+    expect(w.services.worker).toEqual([`${OPS_INTERNAL_PREFIX}plan`])
+    // NX: a later call keeps the first one's time.
+    const first = w.clock()
+    advance(w, MINUTE)
+    await opsCall("plan", { account: ACCOUNT, plan: { ...plan, version: 3 } }, w.fetcher, w.clock())
+    expect(w.fakes.store.zset(opsWorkerAccountsKey()).get(ACCOUNT)).toBe(first)
+  })
+
+  test("every call that can leave data at the Worker records its account first, even a refused one; state, erase and flags record none", async () => {
+    restore()
+    restore = deletionEnvironment({ VECTOR_OPS_ENABLED: "true" })
+    const w = deletionWorld()
+    const at = w.clock()
+    // One account per action, so a missing record names the action that stopped writing it.
+    const holding = { plan: randomUUID(), config: randomUUID(), release: randomUUID(), suspend: randomUUID() }
+    const plan: OpsPlan = { version: 2, domains: 0, onCall: null, releaseGuard: null, validUntil: at }
+    await opsCall("plan", { account: holding.plan, plan }, w.fetcher, at)
+    await opsCall("config", { account: holding.config, domains: [], monitors: [] }, w.fetcher, at)
+    // The Worker refuses this one: it may still have applied part of it, so the record stays.
+    w.services.workerDown = true
+    const release = { account: holding.release, repositoryId: 1, environment: "production", sha: "a".repeat(40), deployment: "1", at, urls: [] }
+    await expect(opsCall("release", release, w.fetcher, at)).rejects.toMatchObject({ statusCode: 503, code: "OPS_UNAVAILABLE" })
+    w.services.workerDown = false
+    await opsCall("suspend", { account: holding.suspend, suspended: true, reason: "guard", at }, w.fetcher, at)
+    const reader = randomUUID()
+    await opsCall("state", { account: reader }, w.fetcher, at)
+    await opsCall("erase", { account: reader }, w.fetcher, at)
+    await opsCall("flags", { kill: false }, w.fetcher, at)
+    expect(w.services.worker).toEqual(
+      ["plan", "config", "release", "suspend", "state", "erase", "flags"].map((action) => `${OPS_INTERNAL_PREFIX}${action}`),
+    )
+    expect([...w.fakes.store.zset(opsWorkerAccountsKey()).keys()].sort()).toEqual(Object.values(holding).sort())
+    expect(w.fakes.store.zset(opsWorkerAccountsKey()).get(holding.release)).toBe(at)
   })
 
   test("without the Worker's address, an account that never used ops is still deleted", async () => {
