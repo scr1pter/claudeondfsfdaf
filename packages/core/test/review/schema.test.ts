@@ -37,6 +37,9 @@ import {
   type StrictResult,
 } from "@vectordevai/core/review/types"
 import { isRecord, violations } from "./fixtures/json-schema"
+import type { DiagnosticProvenance } from "../../src/review/diagnostic"
+import type { Lab } from "../../src/model-lab"
+import type { Finding, ReviewOutcome } from "../../src/review/types"
 
 // Every key used anywhere in a schema, at any depth.
 function keys(value: unknown): string[] {
@@ -666,6 +669,13 @@ describe("the strict schemas (VS-27a)", () => {
     expect(source).not.toMatch(/\brequire\s*\(|\bimport\s*\(/)
     // The matcher is anchored: prose that says "from" is not an import.
     expect(source).toContain("copied out of a file")
+  })
+
+  test("self-contained annotations retain the diagnostic and model-lab domains", () => {
+    type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
+    const diagnostics: Same<NonNullable<Finding["diagnostics"]>[number], DiagnosticProvenance> = true
+    const labs: Same<NonNullable<ReviewOutcome["claimedAuthor"]>[number]["lab"], Lab> = true
+    expect([diagnostics, labs]).toEqual([true, true])
   })
 })
 

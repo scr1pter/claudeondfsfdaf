@@ -59,12 +59,17 @@ export interface ModelReport {
   priorStatus?: { id: string; status: "fixed" | "open"; reason: string }[]
 }
 
+export interface DiagnosticProvenance {
+  readonly source: "offline-v1"
+  readonly rule: "secret-added" | "manifest-without-lock" | "integrity-removed"
+}
+
 export interface Finding extends ModelFinding {
   id: string
   side: Side
   source: "review" | "security"
   // Versioned offline rules observed at an anchor this model finding cites. They do not confirm the finding.
-  diagnostics?: import("./diagnostic").DiagnosticProvenance[]
+  diagnostics?: DiagnosticProvenance[]
   verified?: boolean
   // Who confirmed it (VS-27a). `verified` stays a boolean, so every `verified === true` check keeps its meaning: a
   // runtime confirmation sets both `verified: true` and `verifiedBy: "runtime"`. No runner sets it before VS-27c or VS-30.
@@ -395,10 +400,23 @@ export interface ReviewCost {
   model: string
 }
 
+export type ClaimedAuthorLab =
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "deepseek"
+  | "moonshot"
+  | "xai"
+  | "mistral"
+  | "alibaba"
+  | "zhipu"
+  | "minimax"
+  | "meta"
+
 export interface ReviewOutcome {
   report: ModelReport
   // Local metadata only. These bounded claims cannot choose a reviewer.
-  claimedAuthor?: { source: "branch" | "pr-body" | "trailer"; lab: import("../model-lab").Lab }[]
+  claimedAuthor?: { source: "branch" | "pr-body" | "trailer"; lab: ClaimedAuthorLab }[]
   selection: Selection
   skipped: SkippedFile[]
   cost?: ReviewCost
