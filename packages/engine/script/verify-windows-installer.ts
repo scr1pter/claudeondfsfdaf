@@ -169,11 +169,22 @@ const statusWriter = (await Bun.file(installer).text()).match(
   /^function Write-OperationStatus\([^\n]+\) \{[\s\S]*?^\}/m,
 )?.[0]
 assert.ok(statusWriter, "The installer status writer must be present")
-const statusTransitions = await ps(
-  `$ErrorActionPreference = 'Stop'; $stage = ${quote(root)}; $statusPath = ${quote(path.join(root, "status-transition.json"))}; $script:statusCreated = $false; $Version = '1.99.42'; $utf8 = New-Object System.Text.UTF8Encoding($false); ${statusWriter}; foreach ($state in @('preparing', 'prepared', 'failed')) { Write-OperationStatus $state ('fixture ' + $state); $status = [IO.File]::ReadAllText($statusPath) | ConvertFrom-Json; if ($status.state -cne $state -or $status.message -cne ('fixture ' + $state) -or $status.version -cne $Version -or $status.schemaVersion -ne 1) { throw 'The actual installer status writer did not preserve the transition.' } }`,
-)
+// The writer JSON-escapes values itself, so its literals hold double quotes and backslashes; an encoded command keeps
+// them out of command-line quoting. The fourth transition's message holds each kind of character the writer escapes
+// (quote, backslash, CR, LF, TAB, a control) and non-ASCII text it writes as UTF-8; ConvertFrom-Json must return it.
+const statusTransitions = await run([
+  powershell,
+  "-NoProfile",
+  "-NonInteractive",
+  "-EncodedCommand",
+  Buffer.from(
+    `$ErrorActionPreference = 'Stop'; $stage = ${quote(root)}; $statusPath = ${quote(path.join(root, "status-transition.json"))}; $script:statusCreated = $false; $Version = '1.99.42'; $utf8 = New-Object System.Text.UTF8Encoding($false); ${statusWriter}; foreach ($state in @('preparing', 'prepared', 'failed')) { Write-OperationStatus $state ('fixture ' + $state); $status = [IO.File]::ReadAllText($statusPath) | ConvertFrom-Json; if ($status.state -cne $state -or $status.message -cne ('fixture ' + $state) -or $status.version -cne $Version -or $status.schemaVersion -ne 1) { throw 'The actual installer status writer did not preserve the transition.' } }; $escaped = 'quote ' + [char]34 + ' backslash ' + [char]92 + ' CR ' + [char]13 + ' LF ' + [char]10 + ' TAB ' + [char]9 + ' SOH ' + [char]1 + ' non-ASCII ' + [char]0xe9 + [char]0x65e5; Write-OperationStatus 'failed' $escaped; $status = [IO.File]::ReadAllText($statusPath) | ConvertFrom-Json; if ($status.state -cne 'failed' -or $status.message -cne $escaped -or $status.version -cne $Version -or $status.schemaVersion -ne 1) { throw 'The actual installer status writer did not return the escaped message exactly.' }`,
+    "utf16le",
+  ).toString("base64"),
+])
 assert.equal(statusTransitions.code, 0, statusTransitions.stderr + statusTransitions.stdout)
 evidence.atomicStatusTransitions = true
+evidence.statusMessageEscaping = true
 
 await checkpoint("temporary certificate trust")
 const certificate = path.join(root, "certificate.pem")
