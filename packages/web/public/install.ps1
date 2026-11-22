@@ -41,16 +41,20 @@ $handler.AllowAutoRedirect = $false
 $client = New-Object System.Net.Http.HttpClient($handler)
 $client.Timeout = [TimeSpan]::FromMinutes(5)
 
+# The status writer, the hashes and the deferred waits use operators and .NET only: a cmdlet sends Windows PowerShell
+# 5.1 through command discovery and module auto-load first, which stalled a deferred worker on CI.
 function Write-OperationStatus([string]$state, [string]$message) {
   if (-not $statusPath) { return }
-  $json = @{ schemaVersion = 1; state = $state; version = $Version; message = $message } | ConvertTo-Json -Compress
+  # JSON-escape quotes, backslashes and control characters as \uXXXX without a serializer cmdlet.
+  $escape = { param($found) '\u{0:x4}' -f [int][char]$found.Value }
+  $json = '{"schemaVersion":1,"state":"' + [regex]::Replace($state, '[\\"\x00-\x1f]', $escape) + '","version":"' + [regex]::Replace($Version, '[\\"\x00-\x1f]', $escape) + '","message":"' + [regex]::Replace($message, '[\\"\x00-\x1f]', $escape) + '"}'
   if (-not $script:statusCreated) {
     $stream = [IO.File]::Open($statusPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
     try { $bytes = $utf8.GetBytes($json); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
     $script:statusCreated = $true
     return
   }
-  $temporary = Join-Path $stage 'status.json'
+  $temporary = [IO.Path]::Combine($stage, 'status.json')
   [IO.File]::WriteAllText($temporary, $json, $utf8)
   # PowerShell converts ordinary $null to an empty string for .NET string arguments.
   [IO.File]::Replace($temporary, $statusPath, [System.Management.Automation.Language.NullString]::Value)
@@ -89,6 +93,21 @@ function Assert-Regular([string]$path) {
   if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'An installation file is a link or is not a regular file.' }
 }
 
+# parentTicks returns $null once the waiting process is gone and '' while it is exiting or its start time cannot be
+# read, so every identity check compares strings instead of calling a method on a null-valued start time.
+function parentTicks {
+  try { $process = [Diagnostics.Process]::GetProcessById($WaitForProcessId) } catch { if ($_.Exception.GetBaseException() -is [ArgumentException]) { return $null }; throw }
+  try { return $process.StartTime.ToUniversalTime().Ticks.ToString() } catch { return '' } finally { $process.Dispose() }
+}
+
+function fileSha256([string]$path) {
+  $stream = [IO.File]::OpenRead($path)
+  try {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+  } finally { $stream.Dispose() }
+}
+
 try {
   [IO.Directory]::CreateDirectory($stage) | Out-Null
   if ($OperationId) { Write-OperationStatus 'preparing' 'Downloading and verifying the requested Vector release.' }
@@ -102,7 +121,7 @@ try {
     $fields = $row.TrimEnd("`n").Split("`t")
     if ($fields[2].Length -gt 100 -or $fields[2] -cnotmatch $versionPattern -or $fields[3] -cnotmatch '^(darwin-(arm64|x64(-baseline)?)|linux-(arm64|x64(-baseline)?)(-musl)?|windows-(arm64|x64(-baseline)?))$') { throw 'Invalid receipt version or target.' }
     $priorChannel = $fields[4]
-    if ($fields[5] -cne $BinaryName -or (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -cne $fields[6]) { throw 'Existing executable differs from its standalone receipt; it was not overwritten.' }
+    if ($fields[5] -cne $BinaryName -or (fileSha256 $destination) -cne $fields[6]) { throw 'Existing executable differs from its standalone receipt; it was not overwritten.' }
     $names = @(Get-ChildItem -LiteralPath $metadata -Force | ForEach-Object { $_.Name } | Sort-Object)
     if (($names -join '|') -cne 'DEPENDENCY_NOTICES.md|LICENSE|receipt.tsv|THIRD_PARTY_NOTICES.md') { throw 'Standalone metadata contains unrelated files; preserve or move them first.' }
     foreach ($name in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'DEPENDENCY_NOTICES.md')) { Assert-Regular (Join-Path $metadata $name) }
@@ -121,7 +140,7 @@ try {
   if ($uri.Scheme -cne 'https' -or $uri.Host -cnotmatch '^[a-z0-9]+\.public\.blob\.vercel-storage\.com$' -or $release.url -cne "https://$($uri.Host)/$expectedPath" -or $release.pathname -cne $expectedPath -or $release.filename -cne "vector-$target.zip") { throw 'Invalid archive URL.' }
   $archive = Join-Path $stage 'archive.zip'
   Download-VectorFile $release.url $archive ([long]$release.size)
-  if ((Get-Item -LiteralPath $archive).Length -ne [long]$release.size -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $release.sha256) { throw 'Archive checksum or size did not match; existing installation is unchanged.' }
+  if ((Get-Item -LiteralPath $archive).Length -ne [long]$release.size -or (fileSha256 $archive) -cne $release.sha256) { throw 'Archive checksum or size did not match; existing installation is unchanged.' }
   $extracted = Join-Path $stage 'extracted'
   [IO.Directory]::CreateDirectory($extracted) | Out-Null
   $zip = [IO.Compression.ZipFile]::OpenRead($archive)
@@ -145,26 +164,26 @@ try {
   [IO.Directory]::CreateDirectory($newMetadata) | Out-Null
   foreach ($name in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'DEPENDENCY_NOTICES.md')) { [IO.File]::Move((Join-Path $extracted $name), (Join-Path $newMetadata $name)) }
   $channel = if ($Version -eq 'beta' -or $release.version.Contains('-') -or ($Version -ne 'latest' -and $priorChannel -eq 'beta')) { 'beta' } else { 'latest' }
-  $binaryHash = (Get-FileHash -LiteralPath $stagedBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+  $binaryHash = fileSha256 $stagedBinary
   [IO.File]::WriteAllText((Join-Path $newMetadata 'receipt.tsv'), "vector-standalone`t1`t$($release.version)`t$target`t$channel`t$BinaryName`t$binaryHash`t$($release.sha256)`n", $utf8)
   if ($WaitForProcessId -gt 0) {
-    $parent = Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue
-    if ($null -eq $parent -or $parent.StartTime.ToUniversalTime().Ticks -ne $WaitForStartTicks) { throw 'The upgrading process identity changed before preparation.' }
+    $expected = $WaitForStartTicks.ToString()
+    if ((parentTicks) -ne $expected) { throw 'The upgrading process identity changed before preparation.' }
     Write-OperationStatus 'prepared' 'Verified update is waiting for Vector to exit.'
     $acknowledgement = "$statusPath.ready"
     $ackDeadline = [DateTime]::UtcNow.AddSeconds(10)
-    while (-not (Test-Path -LiteralPath $acknowledgement)) {
-      $parent = Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue
-      if ($null -eq $parent -or $parent.StartTime.ToUniversalTime().Ticks -ne $WaitForStartTicks -or [DateTime]::UtcNow -gt $ackDeadline) { throw 'Vector did not acknowledge the prepared update; the existing installation remains unchanged.' }
-      Start-Sleep -Milliseconds 50
+    while (-not [IO.File]::Exists($acknowledgement)) {
+      if ((parentTicks) -ne $expected -or [DateTime]::UtcNow -gt $ackDeadline) { throw 'Vector did not acknowledge the prepared update; the existing installation remains unchanged.' }
+      [Threading.Thread]::Sleep(50)
     }
-    Assert-Regular $acknowledgement
+    if ([IO.File]::GetAttributes($acknowledgement) -band [IO.FileAttributes]::ReparsePoint) { throw 'An installation file is a link or is not a regular file.' }
     if ([IO.File]::ReadAllText($acknowledgement) -cne "ready`n") { throw 'Invalid prepared-update acknowledgement.' }
     $deadline = [DateTime]::UtcNow.AddMinutes(15)
-    while ($null -ne ($parent = Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue)) {
-      if ($parent.StartTime.ToUniversalTime().Ticks -ne $WaitForStartTicks) { throw 'The upgrading process identity changed.' }
+    while ($null -ne ($ticks = parentTicks)) {
+      # Exiting: no start time to compare, so it waits for the process to be gone.
+      if ($ticks -ne '' -and $ticks -ne $expected) { throw 'The upgrading process identity changed.' }
       if ([DateTime]::UtcNow -gt $deadline) { throw 'Timed out waiting for Vector to exit; the old version remains installed.' }
-      Start-Sleep -Milliseconds 200
+      [Threading.Thread]::Sleep(200)
     }
   }
   $replaced = $true

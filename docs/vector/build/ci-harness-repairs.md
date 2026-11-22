@@ -338,6 +338,11 @@ upgrade wait has the same exposure (`Get-FileHash` :105, :124, :148; `Get-Proces
 `windows-powershell.ts` environment boundary and its native-discovery regression test stay as they are: the installer
 needs cmdlets such as `Expand-Archive`.
 
+Follow-up (2026-11-21, branch `install-ps1-cmdlets`, CI-INSTALL-PS1): the install.ps1 exposure flagged above is handled
+in `v2-p0/install-ps1-cmdlets.md`. The status writer, the three hashes and the deferred identity, acknowledgement and
+exit waits now use operators and .NET only, guarded by `test/installation/windows-installer-script.test.ts`; the
+auto-loads at the top of the script and the receipt and download cmdlets stay, by the lead's minimal-change ruling.
+
 Validation (Linux, Bun 1.3.14, one workload at a time through the serial lock): `packages/engine`
 `bun test --timeout 30000 test/installation/ownership.test.ts` 6 pass, 2 skip (the Windows cases), 0 fail;
 `packages/engine` `bun typecheck` exit 0; `bun turbo typecheck --concurrency=2` 27 of 27 tasks successful. No PowerShell
