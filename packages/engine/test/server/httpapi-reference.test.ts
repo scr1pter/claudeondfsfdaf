@@ -8,6 +8,10 @@ import { Effect } from "effect"
 import { pollWithTimeout } from "../lib/effect"
 
 afterEach(async () => {
+  // The git reference starts a clone of github.com/Effect-TS/effect in the background of the location's services, which
+  // disposeAllInstances leaves running (they idle for an hour). Ending them here interrupts that clone, so its git never
+  // starts after this file, under the next file's network guard.
+  expect((await Server.Default().app.request("/global/dispose", { method: "POST" })).status).toBe(200)
   await disposeAllInstances()
   await resetDatabase()
 })
