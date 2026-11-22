@@ -426,6 +426,7 @@ struct PipeFrameWriter::State {
   std::shared_ptr<Job> queued;
   std::shared_ptr<Job> active;
   std::atomic_bool failed{false};
+  std::once_flag failure_once;
   std::function<void()> failure;
 
   State(HANDLE destination, HANDLE external_stop, std::function<void()> on_failure) : failure(std::move(on_failure)) {
@@ -462,9 +463,15 @@ struct PipeFrameWriter::State {
     if (cancel) SetEvent(cancel.get());
     if (thread) CancelSynchronousIo(thread.get());
   }
+  // Invariant: write() returning false implies the fatal transport_error stop is already recorded. The worker
+  // and the writing thread can both reach this; call_once makes the later caller block until the first caller's
+  // callback returns, so no writer can report failure, close and lose the stop race to a clean shutdown first.
+  // The callback only records the lifecycle request and takes no Dispatcher lock, so waiting here is deadlock-free.
   void notify_failure() noexcept {
     request_cancel();
-    if (!failed.exchange(true) && failure) { try { failure(); } catch (...) {} }
+    failed.store(true);
+    try { std::call_once(failure_once, [this] { if (failure) { try { failure(); } catch (...) {} } }); }
+    catch (...) {}
   }
   WriteResult chunk(std::span<const uint8_t> bytes, ProtocolDeadline deadline) {
     if (stopped() || ProtocolClock::now() >= deadline || bytes.empty() || bytes.size() > 65'536U) return {};

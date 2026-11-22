@@ -355,9 +355,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               )
           }
           // The budget is armed in memory before admission, so the drain that promotes this input runs under it. A guest's
-          // budget can only tighten the limits the owner's run has.
+          // budget, or one the owner sent with tightenBudget, can only tighten the limits the run has.
           if (ctx.payload.budget)
-            yield* owner
+            yield* owner && !ctx.payload.tightenBudget
               ? guard.arm(ctx.params.sessionID, ctx.payload.budget)
               : guard.tighten(ctx.params.sessionID, ctx.payload.budget)
           return {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Hosted } from "@vectordevai/schema/hosted"
-import { Daemon, type DaemonDeps, type Job } from "../src/daemon"
+import { Daemon, PackTooLarge, type DaemonDeps, type Job } from "../src/daemon"
 import type { Report } from "../src/run-api"
 
 // WP A54 (with WP A53's heartbeat): hostd starts the job from the first answer and reports `booted`; pauses everything
@@ -378,6 +378,49 @@ describe("download-only sessions (H1b)", () => {
     expect(w.lines).toEqual(expect.arrayContaining(["packing the files failed", "uploading the files failed"]))
     expect(w.log).toEqual(["pack", `upload ${files}`, `discard ${files}`])
     expect(w.reports.at(-1)).toMatchObject({ archiveBytes: 2048, uploaded: true })
+  })
+
+  test("a work folder over the limit is reported too large once and never packed again (O2)", async () => {
+    let packs = 0
+    const w = world([download({ pack: true })], {
+      beforePack: () => {
+        packs++
+        throw new PackTooLarge()
+      },
+    })
+    await w.daemon.tick()
+    for (let i = 0; i < 5; i++) await settle()
+    // The answers keep asking (an older server would): nothing is packed again.
+    for (let beat = 0; beat < 3; beat++) await w.daemon.tick()
+    await settle()
+    expect(packs).toBe(1)
+    expect(w.log).toEqual([])
+    expect(w.lines).toContain("the files are too large to pack")
+    expect(w.lines).not.toContain("packing the files failed")
+    // From the failure on, every report says so, with no size and no upload.
+    const first = w.reports.findIndex((report) => report.packFailed === "too-large")
+    expect(first).toBeGreaterThan(0)
+    expect(w.reports.slice(0, first).some((report) => "packFailed" in report)).toBe(false)
+    expect(w.reports.length - first).toBeGreaterThanOrEqual(3)
+    for (const report of w.reports.slice(first)) {
+      expect(report.packFailed).toBe("too-large")
+      expect(report).not.toHaveProperty("archiveBytes")
+      expect(report).not.toHaveProperty("uploaded")
+    }
+    // A job session latches the same way.
+    let jobPacks = 0
+    const job = world([answer({ job: { prompt: "p" } }), answer({ pack: true })], {
+      beforePack: () => {
+        jobPacks++
+        throw new PackTooLarge()
+      },
+    })
+    await job.daemon.tick()
+    for (let i = 0; i < 5; i++) await settle()
+    for (let beat = 0; beat < 3; beat++) await job.daemon.tick()
+    expect(jobPacks).toBe(1)
+    expect(job.reports.at(-1)).toMatchObject({ booted: true, packFailed: "too-large" })
+    expect(job.daemon.acting()).toBe(true)
   })
 
   test("it ends only when the session is over, then reports done; nothing is packed after that", async () => {

@@ -217,7 +217,11 @@ export type SessionView = {
   endedAt?: number
   wrapBy?: number
   takeover?: { since: number; until: number }
-  download?: { requestedAt: number; readyAt?: number }
+  /**
+   * The person asked for the session's files: when, when they were ready, and `failed: "too-large"` once the computer
+   * reported that they pack to more than one upload takes (5 GiB, O2), so they are never ready in this session.
+   */
+  download?: { requestedAt: number; readyAt?: number; failed?: PackFailure }
   /** Sent only for a download-only session (H1a): its files are packed for download and nothing else runs. */
   mode?: "download"
   /**
@@ -255,10 +259,16 @@ export const HANDOFFS = ["credential", "payment_details", "captcha", "other"] as
 export type Handoff = (typeof HANDOFFS)[number]
 
 /**
+ * Why the computer cannot pack a session's files (O2): `too-large`, the work folder packs to more than one upload takes
+ * (5 GiB, S3's and R2's largest single PUT). Packing is never tried again in that session.
+ */
+export type PackFailure = "too-large"
+
+/**
  * The computer's daemon's report (`POST …/heartbeat`). Counters are cumulative for the session; the server works out
- * what changed. `archiveBytes` answers a download request with the size of the packed files. `generation` is the base
- * image generation the computer's disk was made from (WP A54), and `handoff` the latest hand-over the person has not
- * taken yet.
+ * what changed. `archiveBytes` answers a download request with the size of the packed files, and `packFailed` says
+ * they cannot be packed (sent on every beat once known). `generation` is the base image generation the computer's disk
+ * was made from (WP A54), and `handoff` the latest hand-over the person has not taken yet.
  */
 export type Heartbeat = {
   cpu?: number
@@ -269,6 +279,7 @@ export type Heartbeat = {
   done?: boolean
   archiveBytes?: number
   uploaded?: boolean
+  packFailed?: PackFailure
   generation?: number
   handoff?: Handoff
   /**

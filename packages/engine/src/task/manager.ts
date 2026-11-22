@@ -1969,6 +1969,12 @@ const layer = Layer.effect(
       )
         return yield* new Error({ code: "invalid", message: "Wait timeout must be between 0 and 60000 milliseconds." })
       const timeout = input.timeout ?? 30_000
+      // A selected task that starts waiting on the user ends the wait early, so the agent can tell the user (D.4). One
+      // already waiting does not, or every wait on it would return at once. Listening starts before anything is read,
+      // the session's background commands included: one that starts waiting meanwhile has not been waiting all along,
+      // and still ends the wait. Every selected subagent is heard, an ended one too, so one resumed during an "all"
+      // wait that starts waiting on the user ends it as well.
+      const asking = yield* signals.listen(input.taskIDs.filter((id) => !ShellJobs.isID(id) && !DesktopTasks.owns(id)))
       // Background commands named by `shl_…` IDs wait beside the subagents, and come back in `shells` (5.H).
       const chosen = yield* commands(input.sessionID, input.taskIDs)
       if (chosen.service && input.taskIDs.length > MAX_TASKS)
@@ -2025,11 +2031,6 @@ const layer = Layer.effect(
       const finished = (
         input.mode === "all" ? Effect.all(waits, { concurrency: "unbounded", discard: true }) : Effect.raceAll(waits)
       ).pipe(Effect.as<string[]>([]))
-      // A selected task that starts waiting on the user ends the wait early, so the agent can tell the user (D.4). One
-      // already waiting does not, or every wait on it would return at once.
-      const asking = signals.next(
-        before.filter((task) => ACTIVE.has(task.status) && !DesktopTasks.owns(task.id)).map((task) => task.id),
-      )
       const done = yield* Effect.raceFirst(finished, asking).pipe(Effect.timeoutOption(timeout))
       const tasks = yield* pick()
       const shells = yield* commandsNow()
@@ -2040,7 +2041,7 @@ const layer = Layer.effect(
         Option.isNone(done) || (attention.length === 0 && !settled(tasks, shells)),
         attention,
       )
-    })
+    }, Effect.scoped)
 
     return Service.of({
       list: list as Interface["list"],

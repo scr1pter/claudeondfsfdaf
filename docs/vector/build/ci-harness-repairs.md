@@ -886,6 +886,23 @@ since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows exe hash ch
 did not wait for this merge: the fix was ported into it as merge commit `a3fe7af1`, and both merged (#52 as
 `c776fb60`, #51 as `15f3ba77`).
 
+21 Nov 2026, measurement step added (branch `hands-native-diag`, commit `d2a1c918`; phase 1 only). windows-build in
+`computer-helper.yml` now runs "Report the per-architecture native build window" right after "Build both channel
+helper architectures" (`if: always()`, `continue-on-error: true`, `timeout-minutes: 1`, `shell: pwsh`). For x64 and
+arm64 it reads file times under `packages/desktop/native/build/win32-<arch>`, the tree `buildWindows` passes to
+`cmake -B`, and prints one `computer-helper-build-window {...}` JSON line with `configureSeconds`, `buildSeconds`
+(newest `.sln`/`.vcxproj` write to newest `Release` `.exe`/`.lib`/`.pdb`, the `cmake --build` window),
+`firstObjectSeconds` and `buildHeadroomSeconds` against the 300 s per-call cap. It writes nothing; a restored attempt
+reports `restored: true`. `build-computer-helper.ts`, `CMakeLists.txt`, the 300 s cap, the 20 and 15 minute limits and
+every digest input are unchanged. The test.yml x64 cross-check step was not added, because test.yml belonged to another
+open branch at the time. No numbers yet: the step had not run in CI when this note was written. Owed: the per-arch
+configure and build seconds and the headroom from at least two windows-build jobs (one slow-group job if one occurs),
+added here as a later dated note, plus a data-based recommendation for phase 2 (a per-phase budget or precompiled
+headers, a helperVersion bump and a macOS lock re-measure), which stays the lead's call.
+Also owed: the test.yml x64 cross-check step. No open PR changes test.yml any more (#56 and #59 merged, #58 does
+not touch it), but the sibling branch `hands-stop-guardian` edits the same Hands workflows, so the step is added on a
+later branch once that one merges.
+
 ## 2026-11-20: Windows region observer at deadline_compile on a cold PowerShell 7 compiler
 
 Branch `region-compile-budget` from `15f3ba77`. Changes: `packages/desktop/scripts/computer-overlay-smoke-window-region.ts`
@@ -900,12 +917,13 @@ Failure. main's push run 44791067930 of test.yml (head `c776fb60`) failed only i
 then overlay-bounds and computer-smoke-failure assertion_failed. Both follow from the region line, because on Windows
 `boundsMatch` is the region proof.
 
-Cause (inferred, not measured). Consistent with a cold first Add-Type; launch versus compile is not yet measured, and
-contention with the first Electron launch is not excluded. Step 15 is the job's first Roslyn use: the only Add-Type in
-`.github` and `packages/desktop/scripts` is the observer's (`computer-overlay-smoke-window-region.ts:306` at
-`15f3ba77`), and it runs while PowerShell 7's compiler and reference assemblies are still cold on a fresh VM. The
-observer arms one 15 s timer at spawn; it fired after the `compile` marker and before `input`, which is exactly
-`deadline_compile`.
+Cause (inferred when written; measured on 2026-11-21, see "2026-11-21: warm-up evidence" below, which supports the cold
+first Add-Type and not the Electron first-launch alternative). As written on 2026-11-20: consistent with a cold first
+Add-Type; launch versus compile was not yet measured, and contention with the first Electron launch was not excluded. Step 15 is the job's first
+Roslyn use: the only Add-Type in `.github` and `packages/desktop/scripts` is the observer's
+(`computer-overlay-smoke-window-region.ts:306` at `15f3ba77`), and it runs while PowerShell 7's compiler and reference
+assemblies are still cold on a fresh VM. The observer arms one 15 s timer at spawn; it fired after the `compile` marker
+and before `input`, which is exactly `deadline_compile`.
 
 Evidence (job log timestamps):
 
@@ -996,6 +1014,45 @@ fresh-VM overlay smoke without this warm-up and can still hit the same deadline_
 `computer-helper-windows-units` (`computer-overlay-smoke.ts --native-stage`). Neither is changed here; if either is
 used for evidence, add the same fixed warm-up step there as its own reviewed change, with no `continue-on-error` and a
 bounded timeout.
+
+### 2026-11-21: warm-up evidence
+
+Read through the GitHub MCP job logs: six computer-helper / windows-build jobs that ran the warm-up step (the four
+named in the lane plan plus runs 44806289578 and 44829529636), each of whose log shows the `computer-smoke-region-warm`
+line and both the step 16 and step 19 `computer-smoke-window-region` lines. This is a sample, not every run. In
+these jobs the warm-up is step 15, "Run real Electron overlay properties and controller lifecycle" is step 16 (step 15
+in the table above) and "Run actual isolated medium-token Windows overlay Stop" is step 19 (step 18 above). Launch is
+`elapsed.compile`, Add-Type is `elapsed.input - elapsed.compile` and total is `elapsed.output`, all in ms. Every region
+line is `ok` 4/4/4/4.
+
+| Job (run, attempt)                | Head                             | Warm-up ms | Step 16 launch / Add-Type / total | Step 19 launch / Add-Type / total |
+| --------------------------------- | -------------------------------- | ---------- | --------------------------------- | --------------------------------- |
+| 136565585657 (44806289578, 2)     | `region-compile-budget` 5002a8ce | 12262      | 355 / 1935 / 2332                 | 334 / 855 / 1239                  |
+| 136588816103 (44822880542, 1)     | `main` 3670461a                  | 3876       | 321 / 1313 / 1682                 | 366 / 912 / 1330                  |
+| 136611151009 (44829529636, 1) (1) | `windows-test-budgets` 2da94b5f  | 2733       | 289 / 1056 / 1394                 | 331 / 806 / 1188                  |
+| 136658215090 (44837525118, 2)     | `windows-test-budgets` 625153c7  | 3760       | 199 / 962 / 1197                  | 222 / 511 / 766                   |
+| 136673869016 (44848275007, 1)     | `main` f3d7ac74                  | 3815       | 264 / 1279 / 1584                 | 270 / 683 / 993                   |
+| 136714734266 (44860782743, 1) (1) | `everywhere-finish` 741aa2af     | 4301       | 313 / 1287 / 1666                 | 358 / 927 / 1339                  |
+
+(1) The job failed later, in step 19, with the HF-7 (1) Stop signature (`uia-runtime-id` and `uia-root-element`
+respectively, `lookup` first, `call` root, `actor` retired, `core_failure:no_ui_tree`). Its region lines are `ok`, so
+that failure is not this one.
+
+- The cold-Roslyn cause is supported. Launch is small in every proof span (199-366 ms), so the 15 s was never spent
+  starting pwsh. The proof's own Add-Type in step 16 is now 0.96-1.94 s and its whole observer 1.2-2.3 s, close to the
+  1.15-1.41 s that step 18 took before the warm-up and far from the 10.9-15.6 s first spans tabled above. The cold
+  cost moved into the warm-up, which paid 2.7-12.3 s (3.76-4.30 s in the four jobs first read; 12.26 s on
+  `region-compile-budget`, a cold VM where the proof still finished in 2.33 s).
+- The Electron first-launch alternative is not supported. Step 16 still launches the job's first Electron before its
+  observer spawns, and that observer's Add-Type is about 1-1.9 s. If contention with the first Electron launch were
+  the cost, it would still be paid there. The 5.1 warm-up result above stays consistent with Windows PowerShell 5.1's
+  out-of-process csc.exe simply not warming PowerShell 7's in-process Roslyn; no run measured that directly.
+- Margin: the slowest proof span here is 2.33 s against the unchanged 15 s observer limit. No deadline, limit or
+  script byte changed.
+- Still open: these are all computer-helper.yml windows-build jobs. The two test.yml dispatch lanes named in the last
+  paragraph above get the same warm-up step on branch `hands-stop-guardian` (`hands-progress.md`, 2026-11-21); their
+  dispatch runs (`computer_helper_target=windows-overlay` and `windows-units`) need that branch pushed and are not
+  recorded yet.
 
 ## 2026-11-20: Windows engine tests running close to their 30 s budget
 
@@ -1184,6 +1241,57 @@ Validation, one file at a time through the Bun lock: `request-store.test.ts` 20 
 `brain/database.test.ts`, `background-job-store.test.ts` and `engine/test/storage/storage.test.ts` passed (the last
 does not open SQLite; there is no `core/test/database/` folder). `packages/core` `bun typecheck` passes. The
 change has not run on Windows CI yet.
+
+## 2026-11-21: Mac helper channel-eof pgrep past its 500 ms budget on a cold Intel runner
+
+Branch `helper-pgrep-warmup` from `4fc245b6`. A harness change in the macOS selftest fixture setup only. The 500 ms
+pgrep/ps inspection budgets, the 1000 ms lifecycle deadline, the topology assertions, the ESRCH/zombie logic and
+`runObservedNativeCommand`'s single deadline are unchanged.
+
+Evidence. main push test.yml run 44885765033 on `153f9a22` (#56 merge, which touched no native, helper or selftest
+file), job 136798635643 `computer-helper / mac-test (macos-15-intel)`, step "Run required grant-free native checks":
+"Computer helper checks: 30 passed, 1 skipped, 1 failed", `FAILED channel-eof: supervisor-pgrep-timeout`. The same
+job passed on `3e90df62` and `5a5b5619` (job 136775468212), and the macos-26 job on the same run passed. The
+"standalone unit diagnostics could not complete" line after it comes from the separate continue-on-error diagnose
+step that runs on any failure; the unit check itself passed. hands-progress.md (Helper13, Intel) records the same
+check failing in pgrep before EOF once before.
+
+Cause. `channel-eof` runs `pgrep -P <caller>` and then `pgrep -P <supervisor>` before EOF, to find the PIDs the
+post-EOF ps/ESRCH loop must see die. These are the only pgrep calls in the selftest, so the supervisor call is always
+pgrep's first exec on the runner, and nothing earlier runs `/bin/ps` either. `runObservedNativeCommand` starts its
+clock before `spawn()`, so the 500 ms covers exec, the code-signature check, dyld and page-in from the system volume.
+On a cold x86 macOS VM that first exec can take hundreds of milliseconds and now and then crosses 500 ms. In the
+failing job the worker call never ran, because the supervisor timeout ended the check first; by design it would have
+run warm. This cause is inferred, not measured: the report records no inspection elapsed time. It is an inspection-tool start-up cost, not a helper lifecycle failure; pgrep's time
+never counted toward the 1000 ms lifecycle window.
+
+Change. `packages/desktop/scripts/computer-helper-selftest.ts` adds `warmLifecycleInspection`, which runs
+`/usr/bin/pgrep -P <own pid>` and `/bin/ps -p <own pid> -o stat=` once each under a 5000 ms setup bound (the same
+bound as the fixture's probe command). `createVerifiedFixture` calls it after the codesign and bundle-digest checks
+and before any lifecycle closure is built, so the first-exec cost lands outside every timed window. pgrep may exit 0
+or 1 (this process may have no children); ps must exit 0. A timeout or other exit fails closed through the existing
+fixture-setup path (`verified-caller-unavailable`). In CI a warm-up failure therefore shows as every remaining check
+reporting `verified-caller-unavailable`, not as a `<role>-pgrep-*` or `<role>-ps-*` reason.
+
+Regression tests in `computer-helper-selftest.test.ts`: one checks that the warm-up runs exactly pgrep then ps
+against this process with a 5000 ms bound and rejects a timeout, a pgrep exit other than 0/1, a null exit, or a ps
+exit other than 0; one checks from the source that the single warm-up call sits after the last codesign and
+`bundleDigest` call and before `open`, the 500 ms ps and pgrep inspections and the lifecycle closure, and that the
+1000 ms deadline is still there. Against `origin/main`'s selftest source the file fails (no export). Mutations, each
+red and then restored: the call removed; the call moved after the inspection closures; ps exit 1 accepted; the
+warm-up pgrep bound set to 500 ms.
+
+Validation, through the Bun lock: `scripts/computer-helper-selftest.test.ts` 52 pass; `packages/desktop`
+`bun typecheck` passes. The fixture runs only on darwin, so the real proof is CI: `computer-helper / mac-test
+(macos-15-intel)` must report `channel-eof` passed with "31 passed, 1 skipped" (or the run's usual skip count) and no
+`*-pgrep-timeout` or `*-ps-timeout` reason, and macos-26 must stay green. The failure was intermittent, so one green run
+does not by itself prove the cause; a recurrence after this change would point at real contention rather than a cold
+first exec.
+
+Not changed. On the same run, `engine (windows, shard 7/12)` job 136791583207 passed in 36 min 52 s (1041 tests,
+0 failures) against its 45-minute bound. #56 added four `test/everywhere` files, which moved Bun's modulo shard
+assignment and grouped heavy files into shard 7. Rebalancing the Windows shards is a separate decision; no test or
+workflow change is made for it here.
 
 ## 2026-11-21: four footer view tests re-enabled; one stays skipped with its exact reason
 
