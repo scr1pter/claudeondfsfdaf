@@ -58,6 +58,27 @@ describe("Connected tools presentation", () => {
     expect(() => parseReviewSettings({ ...draft, after_run: "always" })).toThrow()
   })
 
+  test("unavailable automatic repair cannot be selected from off or report", () => {
+    const draft = { after_run: "repair", before_commit: "offer", max_rounds: "2", max_cost_usd: "0.5" }
+    for (const after_run of ["off", "report"] as const) {
+      const saved = readReviewSettings({ connect: { review: { after_run } } })
+      expect(() => parseReviewSettings(draft, saved)).toThrow("Automatic repair is unavailable.")
+    }
+    expect(() => parseReviewSettings(draft)).toThrow("Automatic repair is unavailable.")
+  })
+
+  test("an existing saved repair setting survives an unrelated save and can be turned off", () => {
+    const saved = readReviewSettings({
+      connect: { review: { after_run: "repair", before_commit: "offer", max_rounds: 1, max_cost_usd: 2 } },
+    })
+    const draft = { after_run: saved.after_run, before_commit: "run", max_rounds: "2", max_cost_usd: "0.5" }
+    expect(reviewSettingsPatch(parseReviewSettings(draft, saved))).toEqual({
+      connect: { review: { after_run: "repair", before_commit: "run", max_rounds: 2, max_cost_usd: 0.5 } },
+    })
+    for (const after_run of ["off", "report"] as const)
+      expect(parseReviewSettings({ ...draft, after_run }, saved).after_run).toBe(after_run)
+  })
+
   test("separates where code runs from where the review model sends it", () => {
     const row = memberRows([member])[0]!
     expect(row.placeLabel).toBe("This computer")

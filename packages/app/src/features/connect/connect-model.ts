@@ -19,16 +19,21 @@ export function readReviewSettings(config?: Pick<Config, "connect">): ReviewSett
   }
 }
 
-export function parseReviewSettings(draft: {
-  after_run: string
-  before_commit: string
-  max_rounds: string
-  max_cost_usd: string
-}): ReviewSettings {
+export function parseReviewSettings(
+  draft: {
+    after_run: string
+    before_commit: string
+    max_rounds: string
+    max_cost_usd: string
+  },
+  saved?: Pick<ReviewSettings, "after_run">,
+): ReviewSettings {
   const after_run = draft.after_run
   const before_commit = draft.before_commit
   if (after_run !== "off" && after_run !== "report" && after_run !== "repair")
     throw new Error("Choose when to review completed work.")
+  // Automatic repair is held by the engine. Preserve an owner's saved choice without admitting a new one here.
+  if (after_run === "repair" && saved?.after_run !== "repair") throw new Error("Automatic repair is unavailable.")
   if (before_commit !== "off" && before_commit !== "offer" && before_commit !== "run")
     throw new Error("Choose what to do before a commit.")
   const max_rounds = Number(draft.max_rounds)
