@@ -886,6 +886,23 @@ since `VECTOR_COMPUTER_SOURCE_DIGEST` is a build define, the Windows exe hash ch
 did not wait for this merge: the fix was ported into it as merge commit `a3fe7af1`, and both merged (#52 as
 `c776fb60`, #51 as `15f3ba77`).
 
+21 Nov 2026, measurement step added (branch `hands-native-diag`, commit `d2a1c918`; phase 1 only). windows-build in
+`computer-helper.yml` now runs "Report the per-architecture native build window" right after "Build both channel
+helper architectures" (`if: always()`, `continue-on-error: true`, `timeout-minutes: 1`, `shell: pwsh`). For x64 and
+arm64 it reads file times under `packages/desktop/native/build/win32-<arch>`, the tree `buildWindows` passes to
+`cmake -B`, and prints one `computer-helper-build-window {...}` JSON line with `configureSeconds`, `buildSeconds`
+(newest `.sln`/`.vcxproj` write to newest `Release` `.exe`/`.lib`/`.pdb`, the `cmake --build` window),
+`firstObjectSeconds` and `buildHeadroomSeconds` against the 300 s per-call cap. It writes nothing; a restored attempt
+reports `restored: true`. `build-computer-helper.ts`, `CMakeLists.txt`, the 300 s cap, the 20 and 15 minute limits and
+every digest input are unchanged. The test.yml x64 cross-check step was not added, because test.yml belonged to another
+open branch at the time. No numbers yet: the step had not run in CI when this note was written. Owed: the per-arch
+configure and build seconds and the headroom from at least two windows-build jobs (one slow-group job if one occurs),
+added here as a later dated note, plus a data-based recommendation for phase 2 (a per-phase budget or precompiled
+headers, a helperVersion bump and a macOS lock re-measure), which stays the lead's call.
+Also owed: the test.yml x64 cross-check step. No open PR changes test.yml any more (#56 and #59 merged, #58 does
+not touch it), but the sibling branch `hands-stop-guardian` edits the same Hands workflows, so the step is added on a
+later branch once that one merges.
+
 ## 2026-11-20: Windows region observer at deadline_compile on a cold PowerShell 7 compiler
 
 Branch `region-compile-budget` from `15f3ba77`. Changes: `packages/desktop/scripts/computer-overlay-smoke-window-region.ts`

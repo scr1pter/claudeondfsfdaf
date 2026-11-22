@@ -1748,6 +1748,80 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
   expect(emitted.join("")).not.toContain("PRIVATE")
 })
 
+test("the per-architecture native build window report runs after the build, reads only and cannot fail the job", () => {
+  const current = steps(job("windows-build"))
+  const build = current.findIndex((step) => step.name === "Build both channel helper architectures")
+  const report = current[build + 1]
+  expect(build).toBeGreaterThan(-1)
+  expect(report?.name).toBe("Report the per-architecture native build window")
+  expect(report!.if).toBe("always()")
+  expect(report!["continue-on-error"]).toBe(true)
+  expect(report!["timeout-minutes"]).toBe(1)
+  expect(report!.shell).toBe("pwsh")
+  expect(record(report!.env)).toEqual({ VECTOR_HELPER_RESTORED: "${{ steps.restore.outputs.restored == 'true' }}" })
+  const script = String(report!.run)
+  expect(script).toContain('foreach ($arch in "x64", "arm64") {')
+  expect(script).toContain('$tree = "native/build/win32-$arch"')
+  expect(script).toContain('Write-Output ("computer-helper-build-window " + ($window | ConvertTo-Json -Compress))')
+  // Measurement only: no write, no output variable, no native/out path, no build or digest input.
+  expect(script).not.toMatch(
+    /native\/out|Out-File|Set-Content|Add-Content|New-Item|Remove-Item|Copy-Item|Move-Item|GITHUB_OUTPUT|GITHUB_ENV|>>|cmake|bun |exit|throw/,
+  )
+  // The digest-bound build step itself keeps its deadline, parallelism and command.
+  expect(current[build]!["timeout-minutes"]).toBe(20)
+  expect(lines(current[build]!.run)).toEqual([
+    'Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"',
+    "bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32",
+    'if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }',
+  ])
+})
+
+test("each Windows architecture prints its helper identity right after its version check, logging only", () => {
+  for (const [name, arch, check] of [
+    ["windows-build", "x64", "Run Windows unit and fresh version/probe checks"],
+    ["windows-arm64-test", "arm64", "Run ARM64 unit and fresh version/probe checks"],
+  ] as const) {
+    const current = steps(job(name))
+    const label = arch === "x64" ? "x64" : "ARM64"
+    const print = current.find((step) => step.name === `Print the Windows ${label} helper identity`)
+    expect(print, name).toBeDefined()
+    // Before the staged Stop or any later step can skip it, and only once the version check passed.
+    expect(current.indexOf(print!)).toBe(current.findIndex((step) => step.name === check) + 1)
+    for (const key of ["if", "continue-on-error", "id"]) expect(print![key], `${name} ${key}`).toBeUndefined()
+    expect(print!["timeout-minutes"]).toBe(1)
+    expect(print!.shell).toBe("bash")
+    const body = String(print!.run)
+      .split("<<'NODE'\n")[1]!
+      .replace(/\nNODE\s*$/, "")
+      .replace(/^import .*$/gm, "")
+    expect(body).not.toMatch(/throw|exit|GITHUB_OUTPUT|GITHUB_STEP_SUMMARY|spawnSync/)
+    const written: string[] = []
+    const read: string[] = []
+    runInNewContext(
+      body,
+      {
+        readFileSync(file: string) {
+          read.push(file)
+          // The real Windows toolchain is multi-line (cmake, msvc, vc-tools, windows-sdk).
+          return JSON.stringify({
+            helperVersion: "1.0.15",
+            sourceDigest: "fixture-digest",
+            toolchain: "cmake version 3.31.6\nmsvc:19.44\nvc-tools:14.44\nwindows-sdk:10.0.26100.0",
+          })
+        },
+        process: { stdout: { write: (text: string) => written.push(text) } },
+      },
+      { timeout: 1000 },
+    )
+    expect(read).toEqual([`native/out/win32/${arch}/computer-helper.json`])
+    // One log line: the multi-line toolchain stays JSON-quoted on it.
+    expect(written).toEqual([
+      `vector-helper-identity platform=win32 arch=${arch} version=1.0.15 sourceDigest=fixture-digest toolchain="cmake version 3.31.6\\nmsvc:19.44\\nvc-tools:14.44\\nwindows-sdk:10.0.26100.0"\n`,
+    ])
+    expect(written.join("").split("\n")).toHaveLength(2)
+  }
+})
+
 test("the fast macOS certificate lane shares the real fixture and cleanup without native build or release credit", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-macos-signing"])
   expect(diagnostic["runs-on"]).toBe("macos-15")
