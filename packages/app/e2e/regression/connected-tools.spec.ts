@@ -83,7 +83,8 @@ test("Connected tools offers report mode but cannot newly select automatic repai
   const tools = settings.locator('[data-component="connected-tools"]')
   const mode = tools.getByRole("combobox", { name: "After-run review", exact: true })
   await expect(mode).toHaveValue("off")
-  await expect(mode.locator('option[value="repair"]')).toBeDisabled()
+  // Playwright's disabled matcher follows the enclosing label to the select.
+  await expect(mode.locator('option[value="repair"]')).toHaveJSProperty("disabled", true)
   await mode.selectOption("report")
   await tools.getByRole("button", { name: "Save review settings", exact: true }).click()
   await expect
@@ -106,7 +107,7 @@ test("Connected tools retains a saved repair setting when another review setting
   const tools = settings.locator('[data-component="connected-tools"]')
   const mode = tools.getByRole("combobox", { name: "After-run review", exact: true })
   await expect(mode).toHaveValue("repair")
-  await expect(mode.locator('option[value="repair"]')).toBeDisabled()
+  await expect(mode.locator('option[value="repair"]')).toHaveJSProperty("disabled", true)
   await tools.getByRole("textbox", { name: "Review cap", exact: true }).fill("1.25")
   await tools.getByRole("button", { name: "Save review settings", exact: true }).click()
   await expect
