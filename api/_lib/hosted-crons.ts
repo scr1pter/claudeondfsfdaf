@@ -345,8 +345,9 @@ export async function reapSession(id: string, options: CronOptions = {}): Promis
 /**
  * A download-only session's pass (H1a): it ends when the switch stops it, when the plan can no longer download (frozen,
  * closing, paused or refused; an ended plan whose final period was kept, or a live plan, keeps it), once its files are
- * uploaded or the daemon says it is done, at the end of its one block, or when its heartbeat is lost. No idle or
- * fair-use check, wrap-up, renewal or token refresh applies: it runs no agent and its token outlives its block.
+ * uploaded, the computer reported them too large to pack (O2) or the daemon says it is done, at the end of its one
+ * block, or when its heartbeat is lost. No idle or fair-use check, wrap-up, renewal or token refresh applies: it runs
+ * no agent and its token outlives its block.
  */
 async function reapDownload(
   record: SessionRecord,
@@ -362,7 +363,9 @@ async function reapDownload(
   if (access === "paused" || access === "refused") return end("plan")
   if (record.state === "starting") return "kept"
   const beat = await readBeat(record.id, fetcher)
-  if (record.download?.readyAt !== undefined || beat?.done) return end("finished")
+  // Files too large to pack end it at once, "finished"; the session's `download.failed` says why (O2).
+  if (record.download?.readyAt !== undefined || record.download?.failed !== undefined || beat?.done)
+    return end("finished")
   if (now >= record.endsAt) return end("deadline")
   const lastBeat = beat?.at ?? (record.runningAt ?? record.createdAt) + Hosted.BOOT_GRACE_MS - Hosted.HEARTBEAT_LOST_MS
   if (now - lastBeat >= Hosted.HEARTBEAT_LOST_MS) return end("heartbeat")
@@ -421,8 +424,9 @@ function liveHosted(snapshot: EntitlementSnapshot | undefined) {
  * - paused: running sessions wrap up, snapshot and stop within five minutes;
  * - frozen: every session stopped now; the disks are kept with no deletion date until the dispute closes;
  * - ended, or a plan without a cloud computer: every session stopped; the disks are kept 14 days for download (H1a's
- *   download-only start, whose first run on each computer charges that retention to the final period, shorter when it
- *   cannot cover it), then deleted; after a lost dispute they are kept 30 days at Vector's cost, with no download.
+ *   download-only start, whose first confirmed upload on each computer charges that retention to the final period,
+ *   shorter when it cannot cover it), then deleted; after a lost dispute they are kept 30 days at Vector's cost, with no
+ *   download.
  * A download-only session is left running while the plan still lets it download, and ended otherwise.
  */
 export async function applyHostedTransition(t: Transition, options: SessionOptions = {}) {
@@ -463,9 +467,10 @@ export async function applyHostedTransition(t: Transition, options: SessionOptio
   if (to.state === "frozen" || liveHosted(to)) return
   if (from && !liveHosted(from) && from.state !== "frozen") return
   // The plan no longer keeps the disks: set when they are deleted, once (the first date stands). §4.4 keeps an ended
-  // plan's disks 14 days for download, then deletes them. Nothing is charged here: the first download-only start of
-  // each computer (H1a, hosted-sessions.ts) charges that retention to the final period, once (`chargeRetention`), and
-  // the disks nobody downloads are kept at Vector's cost, for a subscriber who comes back (codium-deviations.md).
+  // plan's disks 14 days for download, then deletes them. Nothing is charged here: the first download-only upload
+  // confirmed for each computer (H1a, PR3, hosted-sessions.ts) charges that retention to the final period, once
+  // (`chargeDownloadRetention`), and the disks nobody downloads are kept at Vector's cost, for a subscriber who comes
+  // back (codium-deviations.md).
   const computers = await accountComputers(t.account, fetcher)
   if (!computers.length) return
   const until =
