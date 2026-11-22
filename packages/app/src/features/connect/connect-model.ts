@@ -65,9 +65,9 @@ export function placeLabel(place: Connect.Place) {
   return { local: "This computer", "your-cloud": "Your accounts", "vector-cloud": "Vector's servers" }[place]
 }
 
-export function destinationLabel(destination?: Connect.SendsTo) {
+export function destinationLabel(destination?: Connect.SendsTo, place?: Connect.Place) {
   if (!destination) return "No destination reported"
-  if (destination === "this-computer") return "This computer"
+  if (destination === "this-computer") return place === "vector-cloud" ? "This Vector cloud workspace" : "This computer"
   if (destination === "vector-codium") return "Vector Codium"
   if (destination.startsWith("model-server:")) return `Your model server: ${destination.slice(13)}`
   return `Your provider: ${destination.slice(9)}`
@@ -90,7 +90,7 @@ export function memberRows(members: readonly Connect.Member[], desktop: readonly
       off: "Off",
       "not-installed": "Not installed",
     }[member.state],
-    destinationLabel: destinationLabel(member.sendsTo),
+    destinationLabel: destinationLabel(member.sendsTo, member.place),
     reason: member.reason ?? (member.state === "ready" ? undefined : "This member is not ready."),
   }))
 }
