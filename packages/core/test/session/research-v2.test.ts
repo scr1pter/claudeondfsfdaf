@@ -607,6 +607,37 @@ describe("Deep research on the V2 runner", () => {
       }),
   )
 
+  // A Codium scheduled run sends its dollar fence with tightenBudget, and the server arms it with tighten() before it
+  // admits the prompt (server/handlers/session.ts). The runner's research turn must still move the run to research's
+  // default caps, held to the fence.
+  it.live(
+    "a budget armed with tighten, as a Codium scheduled fence is, keeps research's default caps and takes the stricter of each",
+    () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const session = yield* SessionV2.Service
+        const spend = yield* SpendGuard.Service
+        chosen.model = codium
+        expect(ResearchPlan.budget(ResearchPlan.LIMITS.focused)).toEqual({ usd: 1, steps: 80 })
+        const researched = (arm: Effect.Effect<void>) =>
+          Effect.gen(function* () {
+            turns.push({ events: say("Researching.") })
+            yield* arm
+            yield* session.prompt({ sessionID, prompt: research("Research heat pumps."), resume: false })
+            yield* session.resume(sessionID)
+            return (yield* spend.snapshot(sessionID))?.budget
+          })
+
+        // A fence wider than research's $1 keeps research's $1 and 80 steps.
+        expect(yield* researched(spend.tighten(sessionID, { usd: 5 }))).toEqual({ usd: 1, steps: 80 })
+        // A fence tighter than $1 wins for dollars, and the 80 steps stay.
+        expect(yield* researched(spend.tighten(sessionID, { usd: 0.5 }))).toEqual({ usd: 0.5, steps: 80 })
+        // The owner's own budget, armed as the server arms one sent without tightenBudget, still replaces them.
+        expect(yield* researched(spend.arm(sessionID, { usd: 5 }))).toEqual({ usd: 5 })
+        expect(requests).toHaveLength(3)
+      }).pipe(Effect.ensuring(Effect.sync(() => (chosen.model = model)))),
+  )
+
   it.live("a cap the owner armed stays theirs in the drain after it stops, whatever research's default caps are", () =>
     Effect.gen(function* () {
       yield* setup()

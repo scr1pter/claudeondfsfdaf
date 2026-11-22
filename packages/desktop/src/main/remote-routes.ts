@@ -46,7 +46,7 @@ export type RouteAnswer = { status: number; body: unknown }
  */
 export const REVIEW_START_MS = 3 * 60_000
 
-/** How long this computer's fetch waits for the engine (remote-runtime.ts): a request's own window, else 30 s. */
+/** How long this computer's fetch waits for the engine (remote-engine.ts): a request's own window, else 30 s. */
 export function engineWindowMs(request: EngineRequest) {
   return request.timeoutMs ?? 30_000
 }
@@ -245,7 +245,7 @@ export function createRemoteRoutes(deps: RouteDependencies) {
 
   /**
    * `timedOut` answers instead of a 502 when this computer's own window for the request ended: its fetch then rejects
-   * with a TimeoutError (remote-runtime.ts).
+   * with a TimeoutError (remote-engine.ts).
    */
   const send = async (request: EngineRequest, timedOut?: RouteAnswer): Promise<RouteAnswer> => {
     const answer = await deps
@@ -383,8 +383,9 @@ export function createRemoteRoutes(deps: RouteDependencies) {
         body: { to: "vectorscope", target: input.target, background: true },
         timeoutMs: REVIEW_START_MS,
       },
-      // This computer's window ends before the phone's (PHONE_REVIEW_START_MS, app client.ts), so the phone hears of
-      // the timeout from here, in the words it uses for its own. Any other failure stays REMOTE_ENGINE_UNAVAILABLE.
+      // This computer's window normally ends before the phone's (PHONE_REVIEW_START_MS, app client.ts, says when it
+      // does not), so the phone normally hears of the timeout from here, in the words it uses for its own. Any other
+      // failure stays REMOTE_ENGINE_UNAVAILABLE.
       refuse(
         504,
         "REMOTE_REVIEW_TIMEOUT",

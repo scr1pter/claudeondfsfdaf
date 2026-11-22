@@ -233,8 +233,13 @@ const HEARTBEAT_MS = 25_000
 const REQUEST_MS = 30_000
 /**
  * A review start's window (CW-23b), the one request given longer than REQUEST_MS: the computer's 3 minutes
- * (REVIEW_START_MS, desktop remote-routes.ts) and 15 s for the relay both ways and the computer's own checks, so the
- * phone never gives up on a start the computer still waits on.
+ * (REVIEW_START_MS, desktop remote-routes.ts) and 15 s. The 15 s is for the relay both ways and the computer's steps
+ * before its 3 minutes begin: the folder check, the passkey check and the connected-tools check. While those take
+ * under 15 s in all, the computer's window ends first and this phone hears its REMOTE_REVIEW_TIMEOUT. The margin does
+ * not cover a slow engine there: the folder check (when the computer's list is over 30 s old) and the connected-tools
+ * check each read the engine within the plain 30 s window, so the computer can still wait on the start up to about
+ * 45 s after this phone gives up. This phone then shows its own REMOTE_REVIEW_TIMEOUT and drops the late answer, and a
+ * review whose question is answered in that time still starts.
  */
 export const PHONE_REVIEW_START_MS = 3 * 60_000 + 15_000
 /** A review start that ran out of time, at the computer (its REMOTE_REVIEW_TIMEOUT answer) or on this phone. */
@@ -1093,14 +1098,16 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
         request(computer, reviewStartRequest(directory, sessionID, target, passkey), timing.reviewStartMs).then(
           (answer) => {
             // The computer waits 3 minutes for a start (REVIEW_START_MS), longer than for any other request, and stops
-            // a review still waiting by then. Its window ends before this phone's, so it is the one that says so.
+            // a review still waiting by then. Its window normally ends before this phone's, so it is normally the one
+            // that says so (PHONE_REVIEW_START_MS says when it is not).
             const body = answer.body as { error?: { code?: unknown } | null } | null
             if (body?.error?.code === "REMOTE_REVIEW_TIMEOUT")
               throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
             return answer
           },
           (error: unknown) => {
-            // This phone's own window, 15 s longer, ended first: the computer or the relay went quiet.
+            // This phone's own window, 15 s longer, ended first: the computer or the relay went quiet, or the
+            // computer's engine was slow on the folder or connected-tools check (PHONE_REVIEW_START_MS).
             if (error instanceof RemoteError && error.code === "REMOTE_TIMEOUT")
               throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
             throw error
