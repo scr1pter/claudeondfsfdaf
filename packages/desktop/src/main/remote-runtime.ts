@@ -154,7 +154,7 @@ async function engineRequest(base: string, authorization: string, request: Engin
     },
     ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}),
     redirect: "error",
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(request.timeoutMs ?? 30_000),
   })
   const text = await response.text()
   let body: unknown = null

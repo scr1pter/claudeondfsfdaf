@@ -10,6 +10,7 @@ import {
   matchRoute,
   projectDirectories,
   REMOTE_ROUTES,
+  REVIEW_START_MS,
   type EngineAnswer,
   type EngineRequest,
 } from "./remote-routes"
@@ -689,7 +690,8 @@ describe("connected tools from a phone (CW-23b)", () => {
       expect(t.turns.has(["ses_1"])).toBe(false)
       const answer = await start(t, assertion, { target })
       expect(answer.status).toBe(200)
-      // Only VectorScope's review of that target goes on, always as the background run the phone can follow.
+      // Only VectorScope's review of that target goes on, always as the background run the phone can follow, and this
+      // computer waits on it for the start's own window.
       expect(t.calls.slice(-2)).toEqual([
         CAPABILITIES,
         {
@@ -697,6 +699,7 @@ describe("connected tools from a phone (CW-23b)", () => {
           path: START,
           query: { directory: "/repo" },
           body: { to: "vectorscope", target, background: true },
+          timeoutMs: REVIEW_START_MS,
         },
       ])
       // Held before the engine was asked to start, so no ask the review raises reaches the app's auto-accept.
@@ -711,6 +714,57 @@ describe("connected tools from a phone (CW-23b)", () => {
     }
     expect(t.connectCalls().length).toBe(targets.length)
     expect(t.credentials.get(PHONE)?.signCount).toBe(targets.length)
+  })
+
+  test("only a review start waits longer than 30 s for the engine; every other request keeps the plain window", async () => {
+    // Longer than the plain window, and under the 300 s headers timeout of Node's fetch, so it is the one that applies.
+    expect(REVIEW_START_MS).toBeGreaterThan(30_000)
+    expect(REVIEW_START_MS).toBeLessThan(300_000)
+    const t = await setup()
+    const requests = [
+      { method: "GET", path: "/project" },
+      { method: "GET", path: "/session", query: { roots: "true" } },
+      { method: "GET", path: "/session/ses_1/message" },
+      { method: "POST", path: "/session/ses_1/prompt_async", body: { parts: [{ type: "text", text: "Go" }] } },
+      { method: "POST", path: "/session/ses_1/abort", body: {} },
+      { method: "POST", path: "/permission/per_1/reply", body: { reply: "reject" } },
+      { method: "POST", path: "/question/que_1/reply", body: { answers: [["Yes"]] } },
+      { method: "GET", path: "/experimental/connect", query: { sessionID: "ses_1" } },
+      { method: "GET", path: "/experimental/connect/runs", query: { sessionID: "ses_1" } },
+      { method: "GET", path: "/experimental/connect/runs/cr_1", query: { sessionID: "ses_1" } },
+      { method: "POST", path: "/experimental/connect/runs/cr_1/cancel", query: { sessionID: "ses_1" }, body: {} },
+    ]
+    for (const request of requests)
+      expect({ path: request.path, status: (await t.ask({ ...request, directory: "/repo" })).status }).toEqual({
+        path: request.path,
+        status: 200,
+      })
+    const permission = await t.ask({
+      method: "POST",
+      path: "/remote/approval",
+      directory: "/repo",
+      body: { requestID: "per_1" },
+    })
+    const once = await t.ask({
+      method: "POST",
+      path: "/permission/per_1/reply",
+      directory: "/repo",
+      body: { reply: "once", passkey: await t.passkey.get(challengeOf(permission)) },
+    })
+    expect(once.status).toBe(200)
+    const assertion = await t.passkey.get(await issue(t, { sessionID: "ses_1", target: UNCOMMITTED }))
+    expect((await start(t, assertion)).status).toBe(200)
+    // Of every engine call (the routes above, the capability and permission reads this computer makes for them, the
+    // allowed permission and the start), only the start carries a window of its own.
+    expect(t.calls.filter((call) => call.timeoutMs !== undefined)).toEqual([
+      {
+        method: "POST",
+        path: START,
+        query: { directory: "/repo" },
+        body: { to: "vectorscope", target: UNCOMMITTED, background: true },
+        timeoutMs: REVIEW_START_MS,
+      },
+    ])
   })
 
   test("fixes, other members, extra fields and other targets are refused before the engine", async () => {

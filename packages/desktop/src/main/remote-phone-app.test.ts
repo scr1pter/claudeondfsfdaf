@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { CLOSE } from "@vectordevai/relay/protocol"
-import { createPhoneRemote, type EngineEvent, type PhoneRemote } from "../../../app/src/phone/remote/client"
+import {
+  createPhoneRemote,
+  PHONE_REVIEW_START_MS,
+  type EngineEvent,
+  type PhoneRemote,
+} from "../../../app/src/phone/remote/client"
 import { PasskeyError, type PasskeyAdapter } from "../../../app/src/phone/remote/passkey"
 import { memoryRemoteStore, type RemoteStore } from "../../../app/src/phone/remote/store"
 import { createRemoteLink, type EngineEvent as DesktopEvent } from "./remote-link"
 import { softPasskey } from "./remote-phone.fixture"
 import { createMemoryRelay, ticketFor, type MemoryRelay } from "./remote-relay.fixture"
-import type { EngineRequest } from "./remote-routes"
+import { REVIEW_START_MS, type EngineRequest } from "./remote-routes"
 import { fromBase64url } from "./remote-crypto"
 
 // WP A42: Vector Remote end to end. The phone app's real client (packages/app/src/phone/remote/client.ts) pairs with
@@ -33,10 +38,13 @@ function engine() {
   const permissions: { id: string; sessionID: string; permission: string; patterns: string[] }[] = []
   // Whether connected tools are on, and the id of a `connect` question a review start raises and waits on.
   const connect: { connections: boolean; ask?: string } = { connections: true }
+  // Paths the engine answers only after this many milliseconds.
+  const slow = new Map<string, number>()
   return {
     requests,
     permissions,
     connect,
+    slow,
     push(event: DesktopEvent) {
       queue.push(event)
       wake?.()
@@ -44,6 +52,8 @@ function engine() {
     api: {
       async request(request: EngineRequest) {
         requests.push(request)
+        const delay = slow.get(request.path)
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
         if (request.path === "/project")
           return { status: 200, body: [{ id: "prj_1", worktree: "/repo", name: "repo", sandboxes: [] }] }
         if (request.path === "/session") return { status: 200, body: [{ id: "ses_1", title: "Fix the login" }] }
@@ -54,11 +64,12 @@ function engine() {
         if (request.path === "/experimental/connect/runs")
           return { status: 200, body: [{ id: "cr_01", status: "running" }] }
         if (request.path === "/experimental/session/ses_1/connect") {
-          // As the engine's background start: it answers once the review's own question has been answered.
+          // As the engine's background start: it answers once the review's own question has been answered. The engine
+          // sets no bound of its own on that wait; this fake gives up after 20 s, past every window the tests use.
           const ask = connect.ask
           if (ask) {
             permissions.push({ id: ask, sessionID: "ses_1", permission: "connect", patterns: ["vectorscope"] })
-            await until(() => !permissions.some((item) => item.id === ask))
+            await until(() => !permissions.some((item) => item.id === ask), 20_000)
           }
           return { status: 200, body: { id: "cr_02", status: "running" } }
         }
@@ -125,7 +136,10 @@ function computer(relay: MemoryRelay) {
   return { link, fake, stored, enabled }
 }
 
-function phone(relay: MemoryRelay, options: { store?: RemoteStore; passkeyOrigin?: string; requestMs?: number } = {}) {
+function phone(
+  relay: MemoryRelay,
+  options: { store?: RemoteStore; passkeyOrigin?: string; requestMs?: number; reviewStartMs?: number } = {},
+) {
   const store = options.store ?? memoryRemoteStore()
   const key = softPasskey({ origin: options.passkeyOrigin ?? ORIGIN, rpId: "remote.vectordev.ai" })
   const alertKeys = new Map<string, Uint8Array>()
@@ -167,7 +181,13 @@ function phone(relay: MemoryRelay, options: { store?: RemoteStore; passkeyOrigin
       forget: async () => alertKeys.clear(),
     },
     phoneName: () => "iPhone",
-    timing: { heartbeatMs: 1_000, channelMs: 300, requestMs: options.requestMs ?? 3_000, retryMs: 20 },
+    timing: {
+      heartbeatMs: 1_000,
+      channelMs: 300,
+      requestMs: options.requestMs ?? 3_000,
+      reviewStartMs: options.reviewStartMs ?? 6_000,
+      retryMs: 20,
+    },
   })
   return {
     remote,
@@ -424,6 +444,7 @@ describe("using a paired computer from the phone", () => {
         path: start.path,
         query: { directory: "/repo" },
         body: { to: "vectorscope", target, background: true },
+        timeoutMs: REVIEW_START_MS,
       },
     ])
     // The review's questions wait for a person, as a phone's turn does.
@@ -512,6 +533,7 @@ describe("using a paired computer from the phone", () => {
         path: "/experimental/session/ses_1/connect",
         query: { directory: "/repo" },
         body: { to: "vectorscope", target: { kind: "branch", base: "main" }, background: true },
+        timeoutMs: REVIEW_START_MS,
       },
     ])
     expect(mobile.gets()).toBe(2)
@@ -544,15 +566,60 @@ describe("using a paired computer from the phone", () => {
     mobile.remote.disconnect()
   })
 
-  test("a review start whose question is not answered in time says so (CW-23c)", async () => {
+  test("a review start may wait past the plain request window, which every other request keeps (CW-23b)", async () => {
+    // The phone gives up on a start only after the computer would have.
+    expect(PHONE_REVIEW_START_MS).toBeGreaterThan(REVIEW_START_MS)
+    // The plain window is long enough for pairing and the challenge on a loaded runner; the start's is longer.
+    const { desktop, mobile, computerID } = await paired({ requestMs: 1_500, reviewStartMs: 10_000 })
+    desktop.fake.connect.ask = "per_slow"
+    const started = mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "uncommitted" })
+    await until(() => desktop.fake.permissions.some((item) => item.id === "per_slow"))
+    // The person answers the review's question only after the plain window has passed; the start still waits.
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    expect(await mobile.remote.approve(computerID, "/repo", "per_slow")).toMatchObject({
+      kind: "answered",
+      answer: { status: 200 },
+    })
+    expect(await started).toEqual({
+      kind: "answered",
+      answer: { status: 200, body: { id: "cr_02", status: "running" } },
+    })
+    // The computer gave the start, and only the start, its own window.
+    expect(desktop.fake.requests.filter((request) => request.timeoutMs !== undefined)).toEqual([
+      {
+        method: "POST",
+        path: "/experimental/session/ses_1/connect",
+        query: { directory: "/repo" },
+        body: { to: "vectorscope", target: { kind: "uncommitted" }, background: true },
+        timeoutMs: REVIEW_START_MS,
+      },
+    ])
+    // Any other request still ends at the plain window.
+    desktop.fake.slow.set("/experimental/connect/runs", 2_000)
+    await expect(
+      mobile.remote.request(computerID, {
+        method: "GET",
+        path: "/experimental/connect/runs",
+        directory: "/repo",
+        query: { sessionID: "ses_1" },
+      }),
+    ).rejects.toMatchObject({ code: "REMOTE_TIMEOUT" })
+    desktop.link.stop()
+    mobile.remote.disconnect()
+  })
+
+  test("a review start whose question is not answered in time says so, and the conversation stays held (CW-23c)", async () => {
     // Long enough for pairing and the challenge on a loaded runner; the start alone waits until the ask is answered.
-    const { desktop, mobile, computerID } = await paired({ requestMs: 1_500 })
+    const { desktop, mobile, computerID } = await paired({ requestMs: 1_500, reviewStartMs: 2_500 })
     desktop.fake.connect.ask = "per_late"
     const started = mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "uncommitted" })
     await expect(started).rejects.toMatchObject({
       code: "REMOTE_REVIEW_TIMEOUT",
-      message: expect.stringContaining("did not answer in time"),
+      message: expect.stringContaining("did not answer within 3 minutes"),
     })
+    // Fail-closed: the review's question still waits for a person, and the conversation is still held.
+    expect(desktop.fake.permissions.map((item) => item.id)).toEqual(["per_late"])
+    expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(true)
     // Answered at the computer afterwards, so the fake engine's start returns.
     desktop.fake.permissions.splice(0)
     desktop.link.stop()
