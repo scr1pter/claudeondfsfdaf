@@ -110,6 +110,34 @@ describe("SpendGuard.afterStep", () => {
     expect(result.run).toMatchObject({ spentUsd: 0, steps: 1, unpricedSteps: 0, codiumSteps: 1 })
   })
 
+  // A Codium scheduled run carries its dollar headroom, or $0.01 when none is left, as a fence against a switch to a
+  // priced model. Its own steps must never warn about or name that cap.
+  test("the scheduled fence's smallest cap never warns a Codium-only run, and its stops name no dollars", () => {
+    const price = { input: 3, output: 15 }
+    // Continuing priced-looking steps would predict the next step's cost if the dollar rules saw Codium.
+    const codium = Array.from({ length: 45 }, () => step({ costKind: "codium", costUsd: 100, continues: true, price }))
+    const fenced = play({ usd: 0.01 }, codium)
+    expect(fenced.verdicts).toEqual(codium.map(() => ({ state: "ok" })))
+    expect(fenced.run).toMatchObject({ spentUsd: 0, warned: false, codiumSteps: 45 })
+    expect(fenced.run.stopped).toBeUndefined()
+    const limited = play({ usd: 0.01, steps: 3 }, codium.slice(0, 3))
+    const looped = play(
+      { usd: 0.01 },
+      Array.from({ length: 3 }, () => step({ costKind: "codium", tools: [bash("pwd")] })),
+    )
+    expect([limited.verdicts[2]?.reason, looped.verdicts[2]?.reason]).toEqual(["steps", "loop"])
+    for (const verdict of [limited.verdicts[2], looped.verdicts[2]]) expect(verdict?.message).not.toMatch(/\$|\bcap\b/i)
+    // The first priced step under the same cap is the one it stops.
+    const switched = play({ usd: 0.01 }, [...codium.slice(0, 2), step({ costUsd: 0.03, continues: true, price })])
+    expect(switched.verdicts.slice(0, 2)).toEqual([{ state: "ok" }, { state: "ok" }])
+    expect(switched.verdicts[2]).toMatchObject({
+      state: "stopped",
+      reason: "cap",
+      message:
+        "Spend cap reached: $0.03 spent against a $0.01 cap for this run. Vector stopped after the step that crossed it.",
+    })
+  })
+
   test("warns once at 80% of the cap", () => {
     const result = play({ usd: 5 }, [step({ costUsd: 4.1 }), step({ costUsd: 0.1 })])
     expect(result.verdicts[0]).toEqual({

@@ -29,6 +29,7 @@ import { Database } from "@vectordevai/core/database/database"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@vectordevai/core/session/sql"
 import { SessionMessage } from "@vectordevai/core/session/message"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { ResearchPlan } from "@vectordevai/core/research/plan"
 import { RunBudget } from "@vectordevai/schema/run-budget"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -669,6 +670,52 @@ describe("session HttpApi", () => {
           body: JSON.stringify({ prompt: { text: "hello" }, budget: { usd: -1 }, resume: false }),
         })
         expect(invalid.status).toBe(400)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  // A Codium scheduled run sends its dollar headroom as a fence with tightenBudget. On a research session the fence
+  // must narrow research's default caps, never replace them.
+  it.instance(
+    "a v2 prompt budget sent with tightenBudget keeps research's default caps and takes the stricter of each",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-vector-directory": test.directory }
+        const guard = yield* SpendGuard.Service
+        // The caps the V2 runner moves a research root run to on its research turn (core/session/runner/llm.ts).
+        const focused = ResearchPlan.budget(ResearchPlan.LIMITS.focused)
+        expect(focused).toEqual({ usd: 1, steps: 80 })
+        const researched = (budget: RunBudget.Info, tightenBudget?: boolean) =>
+          Effect.gen(function* () {
+            const session = yield* createSession({ title: "fenced research" })
+            const admitted = yield* request(`/api/session/${session.id}/prompt`, {
+              method: "POST",
+              headers: { ...headers, "content-type": "application/json" },
+              body: JSON.stringify({
+                prompt: { text: "Research heat pumps.", agent: "research" },
+                budget,
+                tightenBudget,
+                resume: false,
+              }),
+            })
+            expect(admitted.status).toBe(200)
+            // The drain begins the run, and its research turn moves the run to research's caps where it may.
+            yield* guard.begin(session.id)
+            yield* guard.replaceFallback(session.id, focused)
+            const spend = yield* requestJson<{ data: RunBudget.Snapshot }>(`/api/session/${session.id}/spend`, {
+              headers,
+            })
+            yield* guard.end(session.id)
+            return spend.data.budget
+          })
+
+        // A fence wider than research's $1 keeps research's $1 and 80 steps.
+        expect(yield* researched({ usd: 5 }, true)).toEqual({ usd: 1, steps: 80 })
+        // A fence tighter than $1 wins for dollars, and the 80 steps stay.
+        expect(yield* researched({ usd: 0.5 }, true)).toEqual({ usd: 0.5, steps: 80 })
+        // The owner's own budget, sent without it, still replaces research's caps.
+        expect(yield* researched({ usd: 5 })).toEqual({ usd: 5 })
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
