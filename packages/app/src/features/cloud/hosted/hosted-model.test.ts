@@ -470,6 +470,31 @@ describe("download-only start (H1c)", () => {
     expect(reasonLine({ state: "ended", reason: "finished" })).toBe("Vector finished the job.")
   })
 
+  test("a download whose files are too large to pack says so, from the session's own field (O2)", () => {
+    const tooLarge = download({
+      state: "ended",
+      reason: "finished",
+      download: { requestedAt: NOW - 60_000, failed: "too-large" },
+    })
+    const decoded = decodeSession(tooLarge)!
+    expect(decoded.download).toEqual({ requestedAt: NOW - 60_000, failed: "too-large" })
+    const line = "This computer's files are over 5 GB, too large to pack for download."
+    expect(reasonLine(decoded)).toBe(line)
+    // Anything else in the field is dropped, and the line falls back to the reason's.
+    const other = decodeSession(
+      download({ state: "ended", reason: "finished", download: { requestedAt: NOW, failed: "slow" } }),
+    )!
+    expect(other.download).toEqual({ requestedAt: NOW })
+    expect(reasonLine(other)).toBe("The computer stopped before its files were ready.")
+    // The kept disk's offer says why its last download ended without files, and offers another start.
+    const until = NOW + 5 * DAY
+    const kept = keptView(hosted({ state: "open", until, disks: [{ computer: 1, session: tooLarge }] }), NOW)!
+    expect(kept.computers[0]).toEqual({ computer: 1, busy: false, ended: line, start: true })
+    // A job session's end keeps its own reason.
+    const job = session({ state: "ended", reason: "stopped", download: { requestedAt: NOW, failed: "too-large" } })
+    expect(reasonLine(decodeSession(job)!)).toBe("You stopped it.")
+  })
+
   test("progress: busy while its download runs, ready once packed, and why it ended without files", () => {
     const until = NOW + 5 * DAY
     const view = (sessionOn1: unknown) =>

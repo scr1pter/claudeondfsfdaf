@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createHmac } from "node:crypto"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import type { ChildProcess } from "node:child_process"
+import { EventEmitter } from "node:events"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { request } from "node:http"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { PassThrough } from "node:stream"
-import { agentCommand, agentEnv, browserCommand, cpuReader, createAgentApi, parseArgs, parseEgressCounter, tiePipe, type ApiDeps } from "../src/hostd"
+import { agentCommand, agentEnv, browserCommand, cpuReader, createAgentApi, packWork, parseArgs, parseEgressCounter, tiePipe, type ApiDeps } from "../src/hostd"
 import { CdpPipe } from "../src/guard"
-import { Daemon } from "../src/daemon"
+import { Daemon, PackTooLarge } from "../src/daemon"
 import { GitError } from "../src/git"
 import { HeartbeatError, RunApi, type Transport } from "../src/run-api"
 import { Hosted } from "@vectordevai/schema/hosted"
@@ -183,6 +185,67 @@ describe("reports to Vector (S7)", () => {
   test("the run-API host must be a host name", () => {
     expect(() => new RunApi("http://hosted-run.vectordev.ai", SESSION)).toThrow()
     expect(() => new RunApi("10.0.0.1", SESSION)).toThrow()
+  })
+})
+
+describe("packing the work folder (O2)", () => {
+  /**
+   * A packer that writes `chunks` of 512 bytes to its output, then exits with `code`, unless killed first (then it ends
+   * by the signal, as tar does). Records the signal it was killed with.
+   */
+  function fakePacker(chunks: number, code = 0) {
+    const seen: { killed?: NodeJS.Signals | number } = {}
+    const packer = () => {
+      const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; kill(signal?: NodeJS.Signals | number): boolean }
+      child.stdout = new PassThrough()
+      let ended = false
+      const end = (exit: number | null, signal: NodeJS.Signals | number | null) => {
+        if (ended) return
+        ended = true
+        child.stdout.end()
+        setImmediate(() => child.emit("close", exit, signal))
+      }
+      child.kill = (signal) => {
+        seen.killed = signal
+        end(null, signal ?? "SIGTERM")
+        return true
+      }
+      setImmediate(() => {
+        for (let i = 0; i < chunks && !ended; i++) child.stdout.write(Buffer.alloc(512, 1))
+        end(code, null)
+      })
+      return child as unknown as ChildProcess
+    }
+    return { packer, seen }
+  }
+
+  function packDir() {
+    const dir = mkdtempSync(path.join(tmpdir(), "vector-pack-"))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    return dir
+  }
+
+  test("past one upload's limit the packer is killed, PackTooLarge rejects and no file is left", async () => {
+    const dir = packDir()
+    const over = fakePacker(8)
+    const error = await packWork({ maxBytes: 2048, packer: over.packer, dir }).catch((reason: unknown) => reason)
+    expect(error).toBeInstanceOf(PackTooLarge)
+    expect(over.seen.killed).toBe("SIGKILL")
+    expect(readdirSync(dir)).toEqual([])
+    // At the limit the same packing is the file.
+    const fits = fakePacker(4)
+    const packed = await packWork({ maxBytes: 2048, packer: fits.packer, dir })
+    expect(packed).toEqual({ file: path.join(dir, "files.tar.gz"), bytes: 2048 })
+    expect(readFileSync(packed.file).length).toBe(2048)
+    expect(fits.seen.killed).toBeUndefined()
+  })
+
+  test("a packer that fails for another reason rejects with an ordinary error, so it is tried again, and leaves no file", async () => {
+    const dir = packDir()
+    const error = await packWork({ maxBytes: 2048, packer: fakePacker(2, 2).packer, dir }).catch((reason: unknown) => reason)
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toBeInstanceOf(PackTooLarge)
+    expect(readdirSync(dir)).toEqual([])
   })
 })
 
