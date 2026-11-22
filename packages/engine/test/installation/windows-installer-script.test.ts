@@ -51,11 +51,12 @@ function block(code: string, from: number) {
 }
 
 // Every word in code that PowerShell could resolve as a command: any Verb-Noun word, whatever its case or verb, and any
-// bare word where PowerShell expects a command (line start, after ; { } ( | = &, return or throw).
+// bare word where PowerShell expects a command (line start, after ; { } ( | = &, return or throw). The symbol aliases
+// % (ForEach-Object) and ? (Where-Object) and the dot-source operator count as words there too.
 function commands(code: string) {
   return [
     ...(code.match(/\b[a-z]\w*-[a-z]\w*/gi) ?? []),
-    ...[...code.matchAll(/(?<=(?:^|[;{}(|=&]|\breturn|\bthrow)[ \t]*)(?<![\w-])([a-z_][\w-]*)/gim)].map(
+    ...[...code.matchAll(/(?<=(?:^|[;{}(|=&]|\breturn|\bthrow)[ \t]*)(?<![\w-])([a-z_][\w-]*|[%?.](?=[ \t]))/gim)].map(
       (found) => found[1],
     ),
   ]
@@ -191,7 +192,7 @@ test("install.ps1's status writer escapes JSON the way JSON.parse reads it back"
     {
       state: "failed",
       version: "1.99.43-beta.1",
-      message: "Could not replace C:\\Program Files\\Vector \"beta\"\\it's\\vector.exe\r\n\tretry",
+      message: 'Could not replace C:\\Program Files\\Vector "beta"\\it\'s\\vector.exe\r\n\tretry',
     },
     {
       state: "complete",
