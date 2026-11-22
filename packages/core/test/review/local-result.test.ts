@@ -90,7 +90,213 @@ const info = async (value = result(), status: ReviewRun.Status = "completed"): P
 const expectedRun = { parentID: "ses_result_parent", request: { requestID: "request_result_1", target } }
 const decode = (value: unknown) => decodeLocalRun(value, expectedRun)
 
+const stoppedOutcome = (extra: Partial<ReviewOutcome> = {}): ReviewOutcome => ({
+  ...outcome(),
+  report: { summary: "", risk: "low", files: [], findings: [] },
+  cost: undefined,
+  sessions: [],
+  specialists: [],
+  passes: undefined,
+  unreviewed: ["src/file.ts"],
+  ...extra,
+})
+const failedResult = (value: ReviewOutcome, error: string): LocalResult => ({ ...result(value), exitCode: 2, error })
+const decodeStop = (value: unknown) => decodeLocalResult(JSON.parse(JSON.stringify(value)), target)
+async function retainedStop(value: LocalResult) {
+  const stored: LocalResult = JSON.parse(JSON.stringify(value))
+  const decoded = decodeLocalResult(stored, target)
+  expect(decoded).toBeDefined()
+  expect(decoded?.error).toBe(value.error)
+  expect(decoded?.verdict).toEqual(value.verdict)
+  expect(decoded?.verdict.verdict).not.toBe("clean-complete")
+  expect(decoded?.verdict.verdict).not.toBe("policy-skip")
+  for (const status of ["completed", "failed"] as const) {
+    const run = await decode(await info(stored, status))
+    expect(run?.result).toEqual(decoded)
+    expect(run?.verdict.verdict).not.toBe("clean-complete")
+  }
+  return { stored, decoded }
+}
+
 describe("retained local review result decoding", () => {
+  test("a pre-review privacy refusal round-trips its error and zero-attempt outcome", async () => {
+    const value = stoppedOutcome({ partial: "privacy" })
+    const { decoded } = await retainedStop(failedResult(value, "No approved zero data retention route is available."))
+    expect(decoded?.outcome?.sessions).toEqual([])
+    expect(decoded?.outcome?.specialists).toEqual([])
+    expect(decoded?.verdict).toEqual({ verdict: "not-reviewed", causes: ["privacy"], notes: [] })
+  })
+
+  test("a privacy refusal preserves prior finding state without inventing new evidence", async () => {
+    const prior: ReviewOutcome["selection"]["stillOpen"][number] = {
+      id: "prior-open",
+      where: "inline",
+      path: "src/file.ts",
+      line: 1,
+      side: "RIGHT",
+      severity: "blocking",
+      category: "bug",
+      title: "Existing issue",
+      sha: base,
+      status: "open",
+    }
+    const selection = {
+      ...outcome().selection,
+      stillOpen: [prior],
+      fixed: [{ ...prior, id: "prior-fixed", status: "fixed" as const }],
+      dismissed: [{ ...prior, id: "prior-dismissed", status: "dismissed" as const }],
+    }
+    const value = stoppedOutcome({ partial: "privacy", selection })
+    const { decoded } = await retainedStop(failedResult(value, "No approved model route."))
+    expect(decoded?.outcome?.selection).toEqual(selection)
+  })
+
+  test("a privacy stop after dispatch retains sessions and actual spend without fresh usage proof", async () => {
+    const original = outcome()
+    const value = stoppedOutcome({
+      partial: "privacy",
+      cost: { ...original.cost!, partial: true },
+      sessions: ["ses_review_child", "ses_security_child"],
+      specialists: [
+        { name: "review", status: "ok", steps: 1 },
+        { name: "security", status: "skipped", steps: 0, detail: "privacy" },
+      ],
+      passes: original.passes,
+    })
+    const { decoded } = await retainedStop(failedResult(value, "The remaining model route could not satisfy privacy."))
+    expect(decoded?.outcome?.cost).toEqual({ ...value.cost!, tokensOwnOnly: false })
+    expect(decoded?.outcome?.sessions).toEqual(value.sessions)
+    expect(decoded?.outcome?.passes).toEqual(value.passes)
+  })
+
+  test("all held-back changes round-trip their zero-review outcome and held paths", async () => {
+    const value = stoppedOutcome({
+      unreviewed: [],
+      skipped: [{ path: ".env", reason: "held-back" }],
+      held: [{ path: ".env", status: "modified", reason: "env-file" }],
+      cost: { ...outcome().cost!, costUsd: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    })
+    const { decoded } = await retainedStop(failedResult(value, "Every changed file was held back from the model."))
+    expect(decoded?.outcome?.held).toEqual(value.held)
+    expect(decoded?.verdict.verdict).toBe("incomplete")
+    expect(decoded?.verdict.causes).toContain("held-back")
+  })
+
+  test("a stopped batch round-trips incomplete coverage without crediting the unreviewed paths", async () => {
+    const value = stoppedOutcome({
+      selection: { ...outcome().selection, diffIncomplete: true },
+      notes: ["Partial batch coverage: 0 of 2 batches complete; 1 changed file remains unreviewed."],
+    })
+    const { decoded } = await retainedStop(failedResult(value, value.notes[0]))
+    expect(decoded?.outcome?.unreviewed).toEqual(["src/file.ts"])
+    expect(decoded?.outcome?.selection.diffIncomplete).toBe(true)
+    expect(decoded?.verdict.verdict).toBe("incomplete")
+  })
+
+  test("every failed reviewer round-trips the failure and spend instead of losing its result", async () => {
+    const value = stoppedOutcome({
+      partial: "model-error",
+      cost: { ...outcome().cost!, partial: true },
+      sessions: ["ses_review_child", "ses_security_child"],
+      specialists: [
+        { name: "review", status: "failed", steps: 1, detail: "No report" },
+        { name: "security", status: "failed", steps: 1, detail: "Invalid report" },
+      ],
+      passes: outcome().passes,
+    })
+    const { decoded } = await retainedStop(failedResult(value, "Vector could not finish this review: no report."))
+    expect(decoded?.outcome?.specialists).toEqual(value.specialists)
+    expect(decoded?.outcome?.cost?.costUsd).toBe(0.02)
+    expect(decoded?.outcome?.cost?.tokensOwnOnly).toBe(false)
+  })
+
+  test("retained service stops reject invented success, mismatched identity and contradictory completeness", () => {
+    const stopped = failedResult(stoppedOutcome({ partial: "privacy" }), "No approved model route.")
+    const strict = { version: 1, head, complete: true, findings: [], dropped: [], fixUnchecked: 0 }
+    for (const changed of [
+      { error: "" },
+      { error: " \n " },
+      { exitCode: 0 },
+      { exitCode: 1 },
+      { target: undefined },
+      { target: { ...stopped.target, mergeBase: head } },
+      { verdict: result().verdict },
+      { outcome: { ...stopped.outcome, strict } },
+      { outcome: { ...stopped.outcome, trivial: true } },
+      { outcome: { ...stopped.outcome, authorized: true } },
+      {
+        outcome: {
+          ...stopped.outcome,
+          report: { ...outcome().report, files: [{ path: "file.ts", note: "Reviewed" }] },
+        },
+      },
+    ])
+      expect(decodeLocalResult(JSON.parse(JSON.stringify({ ...stopped, ...changed })), target)).toBeUndefined()
+    const staged = { ...stopped, target: { ...stopped.target!, kind: "staged" as const } }
+    expect(decodeLocalResult(JSON.parse(JSON.stringify(staged)), { ...target, kind: "staged" })?.error).toBe(
+      stopped.error,
+    )
+  })
+
+  test("zero-review holdback and batch stops cannot hide model work or manufactured coverage", () => {
+    const held = stoppedOutcome({
+      skipped: [{ path: ".env", reason: "held-back" }],
+      held: [{ path: ".env", status: "modified", reason: "env-file" }],
+    })
+    const batch = stoppedOutcome({ selection: { ...outcome().selection, diffIncomplete: true } })
+    for (const value of [held, batch])
+      for (const changed of [
+        { cost: outcome().cost },
+        { passes: outcome().passes },
+        { sessions: ["ses_hidden_model_work"] },
+        { specialists: [{ name: "review", status: "ok", steps: 1 }] },
+      ]) {
+        const altered = { ...value, ...changed } as ReviewOutcome
+        expect(decodeStop(failedResult(altered, "Not reviewed."))).toBeUndefined()
+      }
+    expect(decodeStop(failedResult({ ...held, skipped: [] }, "Not reviewed."))).toBeUndefined()
+    expect(decodeStop(failedResult({ ...held, held: [...held.held!, ...held.held!] }, "Not reviewed."))).toBeUndefined()
+    expect(decodeStop(failedResult({ ...batch, unreviewed: [] }, "Not reviewed."))).toBeUndefined()
+    expect(decodeStop(failedResult({ ...batch, selection: outcome().selection }, "Not reviewed."))).toBeUndefined()
+  })
+
+  test("failed-reviewer stops require actual failed reviewers rather than a successful or verifier-only pass", () => {
+    for (const specialists of [
+      [{ name: "verify", status: "failed", steps: 1 }],
+      [{ name: "review", status: "skipped", steps: 0 }],
+      [
+        { name: "review", status: "failed", steps: 1 },
+        { name: "security", status: "ok", steps: 1 },
+      ],
+    ] satisfies ReviewOutcome["specialists"][]) {
+      const value = stoppedOutcome({ partial: "model-error", specialists })
+      expect(decodeStop(failedResult(value, "Vector could not finish this review."))).toBeUndefined()
+    }
+  })
+
+  test("an empty reviewer failure retains its zero-attempt result without pretending a reviewer ran", async () => {
+    const value = stoppedOutcome({ unreviewed: [], notes: ["Completed all 2 review batches (1 files)."] })
+    const { decoded } = await retainedStop(
+      failedResult(value, "Vector could not finish this review: the model returned no report"),
+    )
+    expect(decoded?.verdict).toEqual({ verdict: "incomplete", causes: ["no-reviewer"], notes: [] })
+  })
+
+  test("empty-evidence stops cannot manufacture new selection or strict-drop bookkeeping", () => {
+    const privacy = stoppedOutcome({ partial: "privacy" })
+    for (const selection of [
+      { ...privacy.selection, raised: [{ id: "invented", was: "concern" as const }] },
+      { ...privacy.selection, reappeared: ["invented"] },
+      { ...privacy.selection, dropped: [{ reason: "duplicate" as const, count: 1 }] },
+    ])
+      expect(decodeStop(failedResult({ ...privacy, selection }, "No approved model route."))).toBeUndefined()
+    const strict = { version: 1 as const, head, complete: false, findings: [], dropped: [], fixUnchecked: 0 }
+    for (const changed of [{ fixUnchecked: 1 }, { dropped: [{ reason: "cap" as const, count: 1 }] }])
+      expect(
+        decodeStop(failedResult({ ...privacy, strict: { ...strict, ...changed } }, "No approved model route.")),
+      ).toBeUndefined()
+  })
+
   test("only an exact completed strict outcome can supply a branch-cache verdict", () => {
     const original = outcome()
     const strict = { version: 1, head, complete: true, findings: [], dropped: [], fixUnchecked: 0 }

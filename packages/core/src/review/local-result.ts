@@ -513,6 +513,67 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
       outcome.selection.reappeared.length
     )
       return undefined
+  } else if (outcome && result.exitCode === 2) {
+    // These are retained service failures, not successful reviews with an error attached.
+    // Match the service's stop classes without using its display text as authority or losing actual spend.
+    const noCurrentEvidence =
+      !outcome.report.findings.length &&
+      !outcome.report.files.length &&
+      !outcome.report.priorStatus?.length &&
+      !outcome.selection.inline.length &&
+      !outcome.selection.overflow.length &&
+      !outcome.selection.outsideDiff.length &&
+      !outcome.selection.elsewhere.length &&
+      !outcome.selection.nits.length &&
+      !outcome.selection.raised.length &&
+      !outcome.selection.reappeared.length &&
+      !outcome.selection.dropped.length &&
+      !outcome.strict?.findings.length &&
+      !outcome.strict?.dropped.length &&
+      !outcome.strict?.fixUnchecked
+    const noAttempt =
+      noCurrentEvidence &&
+      !outcome.specialists.length &&
+      !outcome.sessions.length &&
+      !outcome.passes?.length &&
+      (!outcome.cost ||
+        [
+          outcome.cost.costUsd,
+          outcome.cost.input,
+          outcome.cost.output,
+          outcome.cost.reasoning,
+          outcome.cost.cacheRead,
+          outcome.cost.cacheWrite,
+        ].every((value) => value === 0))
+    const heldPaths = new Set(outcome.held?.map((file) => file.path))
+    const held =
+      noAttempt &&
+      !!outcome.held?.length &&
+      heldPaths.size === outcome.held.length &&
+      outcome.held.every((file) =>
+        outcome.skipped.some((skip) => skip.reason === "held-back" && skip.path === file.path),
+      ) &&
+      outcome.skipped.filter((file) => file.reason === "held-back").every((file) => heldPaths.has(file.path))
+    const batch = noAttempt && outcome.selection.diffIncomplete === true && outcome.unreviewed.length > 0
+    const privacy = outcome.partial === "privacy" && noCurrentEvidence
+    // An already-complete batch cursor can select no files and reach the service's empty-reviewer failure.
+    const noReviewer =
+      noAttempt &&
+      outcome.partial === undefined &&
+      !outcome.held?.length &&
+      !outcome.unreviewed.length &&
+      !outcome.selection.diffIncomplete &&
+      !outcome.skipped.length
+    const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
+    const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
+    if (
+      !result.error?.trim() ||
+      outcome.trivial ||
+      outcome.base !== result.target?.mergeBase ||
+      outcome.strict?.complete ||
+      !(privacy || held || batch || failed || noReviewer)
+    )
+      return undefined
   } else {
     if (result.error !== undefined && (result.outcome || result.exitCode !== 2)) return undefined
     if (result.outcome && result.exitCode === 2) return undefined
