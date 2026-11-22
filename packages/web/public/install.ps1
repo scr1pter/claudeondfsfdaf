@@ -100,10 +100,12 @@ function parentTicks {
   try { return $process.StartTime.ToUniversalTime().Ticks.ToString() } catch { return '' } finally { $process.Dispose() }
 }
 
+# Windows PowerShell 5.1's own file hash command uses the CryptoServiceProvider class, which is FIPS-validated;
+# SHA256::Create() gives SHA256Managed, which throws on a machine whose policy allows only FIPS algorithms.
 function fileSha256([string]$path) {
   $stream = [IO.File]::OpenRead($path)
   try {
-    $sha = [Security.Cryptography.SHA256]::Create()
+    $sha = [Security.Cryptography.SHA256CryptoServiceProvider]::new()
     try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
   } finally { $stream.Dispose() }
 }

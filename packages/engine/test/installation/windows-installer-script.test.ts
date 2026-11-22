@@ -163,6 +163,10 @@ test("install.ps1's deferred upgrade path runs no cmdlet that needs command disc
   expect(spans.fileSha256!.text).toContain(
     "[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()",
   )
+  // The FIPS-validated class Windows PowerShell 5.1's own file hash command uses. SHA256::Create() and
+  // HashAlgorithm::Create('SHA256') give SHA256Managed, which throws where policy allows only FIPS algorithms.
+  expect(spans.fileSha256!.text).toContain("$sha = [Security.Cryptography.SHA256CryptoServiceProvider]::new()")
+  expect(code).not.toMatch(/SHA256\]::Create|SHA256Managed|HashAlgorithm\]::Create/i)
 
   // The Windows CI checkpoint still finds the same status writer.
   expect(await Bun.file(verifierPath).text()).toContain(String(writerPattern))
