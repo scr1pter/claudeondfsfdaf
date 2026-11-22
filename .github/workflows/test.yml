@@ -867,11 +867,11 @@ jobs:
   engine-windows:
     needs: validate-dispatch
     if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
-    name: engine (windows, shard ${{ matrix.shard }}/12)
+    name: engine (windows, shard ${{ matrix.shard }}/18)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     runs-on: windows-latest
     defaults:
       run:
@@ -912,10 +912,14 @@ jobs:
         # The shard holding isolation, task sizing and the prompt loop ran its tests in 19 minutes in run 41925753700.
         # In runs 41943664010 and 41959395503 the same files ran 1.5 to 2 times slower and hit 30 minutes, the second
         # with every test it reached passing. 45 leaves room for a slow Windows runner; no test's own deadline changes.
+        # Eighteen shards since 22 November 2026: main runs 44937950225 (b87cc462) and 44957526120 (23d09a96) hit this
+        # limit in shard 7/12 with every test passing. In green run 44968700872 the twelve shards took 5.3-25.9 min of
+        # test time (isolation.test.ts alone 17.7); replaying that run's per-file times over Bun's round-robin gives a
+        # largest shard of 20.9 min and a next-largest of 12.5 min at 18 shards. The limit and deadlines stay as they are.
         timeout-minutes: 45
         working-directory: packages/engine
         # Whole-file shards retain the configured preloads and per-test deadlines; print passes to locate any stall.
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/12
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/18
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
 
