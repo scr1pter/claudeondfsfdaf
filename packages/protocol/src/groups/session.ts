@@ -268,6 +268,9 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           delivery: SessionInput.Delivery.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
           budget: RunBudget.Info.pipe(Schema.optional),
+          // True makes `budget` only tighten the run's limits, as a guest's does: each limit becomes the stricter of
+          // this one and the one the run has, such as an agent's default caps, instead of replacing them.
+          tightenBudget: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
         error: [ConflictError, SessionNotFoundError],
