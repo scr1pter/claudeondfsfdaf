@@ -7,6 +7,7 @@ import { softPasskey } from "./remote-phone.fixture"
 import {
   createRemoteRoutes,
   createRemoteTurns,
+  engineWindowMs,
   matchRoute,
   projectDirectories,
   REMOTE_ROUTES,
@@ -45,6 +46,10 @@ async function setup() {
     }
     if (request.path === "/experimental/session/ses_fail/connect") return { status: 400, body: { error: "bad" } }
     if (request.path === "/experimental/session/ses_down/connect") throw new Error("timed out")
+    // As this computer's fetch rejects once its own window ends (remote-runtime.ts), and once something else aborts it.
+    if (request.path.includes("/ses_late/"))
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError")
+    if (request.path.includes("/ses_cut/")) throw new DOMException("This operation was aborted", "AbortError")
     if (request.path.endsWith("/connect")) {
       await starts.gate
       if (starts.refuse) return { status: 400, body: { error: "busy" } }
@@ -767,6 +772,30 @@ describe("connected tools from a phone (CW-23b)", () => {
     ])
   })
 
+  test("this computer's fetch waits REVIEW_START_MS for a review start and 30 s for anything else (remote-runtime.ts)", async () => {
+    // Only a window startReview set changes it: a request shaped as a start without one keeps 30 s.
+    expect(engineWindowMs({ method: "GET", path: "/project", query: {} })).toBe(30_000)
+    expect(engineWindowMs({ method: "POST", path: START, query: { directory: "/repo" }, body: {} })).toBe(30_000)
+    const t = await setup()
+    await t.ask({ method: "GET", path: "/session/ses_1/message", directory: "/repo" })
+    await t.ask({
+      method: "GET",
+      path: "/experimental/connect/runs",
+      directory: "/repo",
+      query: { sessionID: "ses_1" },
+    })
+    const assertion = await t.passkey.get(await issue(t, { sessionID: "ses_1", target: UNCOMMITTED }))
+    expect((await start(t, assertion)).status).toBe(200)
+    expect(t.calls.map((call) => [call.method, call.path, engineWindowMs(call)])).toEqual([
+      ["GET", "/session/ses_1/message", 30_000],
+      ["GET", "/experimental/capabilities", 30_000],
+      ["GET", "/experimental/connect/runs", 30_000],
+      ["GET", "/experimental/capabilities", 30_000],
+      ["GET", "/experimental/capabilities", 30_000],
+      ["POST", START, REVIEW_START_MS],
+    ])
+  })
+
   test("fixes, other members, extra fields and other targets are refused before the engine", async () => {
     const t = await setup()
     const base = { to: "vectorscope", action: "review", target: UNCOMMITTED }
@@ -1045,6 +1074,35 @@ describe("connected tools from a phone (CW-23b)", () => {
     t.starts.refuse = true
     expect((await review("ses_1")).status).toBe(400)
     expect(t.turns.has(["ses_1"])).toBe(true)
+  })
+
+  test("a start this computer stopped waiting on is answered as a review timeout; every other failure as before", async () => {
+    const t = await setup()
+    const review = async (session: string) =>
+      start(t, await t.passkey.get(await issue(t, { sessionID: session, target: UNCOMMITTED })), { session })
+    // The phone shows these words for this code, as for its own timeout (app client.ts startReview).
+    expect(await review("ses_late")).toEqual({
+      status: 504,
+      body: {
+        error: {
+          code: "REMOTE_REVIEW_TIMEOUT",
+          message:
+            "Your computer did not answer within 3 minutes. A review still waiting for an approval stops then; answer its approval right away.",
+        },
+      },
+    })
+    expect(t.calls.at(-1)).toMatchObject({ path: "/experimental/session/ses_late/connect", timeoutMs: REVIEW_START_MS })
+    // Fail-closed: held until the conversation is idle, as after any start the engine did not take.
+    expect(t.turns.has(["ses_late"])).toBe(true)
+    // A start that failed any other way, and any other request this computer stopped waiting on, are still an engine
+    // that did not answer.
+    const unavailable = {
+      status: 502,
+      body: { error: { code: "REMOTE_ENGINE_UNAVAILABLE", message: "Vector on this computer did not answer." } },
+    }
+    expect(await review("ses_down")).toEqual(unavailable)
+    expect(await review("ses_cut")).toEqual(unavailable)
+    expect(await t.ask({ method: "GET", path: "/session/ses_late/message", directory: "/repo" })).toEqual(unavailable)
   })
 
   test("a phone's turn that starts while a review start waits keeps its hold, whether the start succeeds or is refused", async () => {

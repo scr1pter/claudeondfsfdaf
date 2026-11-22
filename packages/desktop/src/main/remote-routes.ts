@@ -30,7 +30,7 @@ export type EngineRequest = {
   path: string
   query: Record<string, string>
   body?: unknown
-  /** How long this computer waits for the engine's answer; 30 s when unset (remote-runtime.ts). Never sent on. */
+  /** How long this computer waits for the engine's answer; 30 s when unset (engineWindowMs). Never sent on. */
   timeoutMs?: number
 }
 export type EngineAnswer = { status: number; body: unknown }
@@ -41,9 +41,15 @@ export type RouteAnswer = { status: number; body: unknown }
  * than 30 s. The engine answers a background start only once the review's own `connect` and `connect_model` questions
  * are answered, so the start allows one full passkey challenge for such a question (APPROVAL_TTL_MS, 2 minutes) and a
  * minute more. It stays under the 300 s headers timeout of Node's fetch, so this is the window that applies. When it
- * ends, the request is dropped and the engine cancels a review still waiting; the conversation stays held.
+ * ends, the request is dropped, the engine cancels a review still waiting, the phone hears REMOTE_REVIEW_TIMEOUT, and
+ * the conversation stays held.
  */
 export const REVIEW_START_MS = 3 * 60_000
+
+/** How long this computer's fetch waits for the engine (remote-runtime.ts): a request's own window, else 30 s. */
+export function engineWindowMs(request: EngineRequest) {
+  return request.timeoutMs ?? 30_000
+}
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/
 const QUERY_VALUE = 512
@@ -237,8 +243,16 @@ export function createRemoteRoutes(deps: RouteDependencies) {
     return allowed.has(value) && value !== "/" ? value : undefined
   }
 
-  const send = async (request: EngineRequest): Promise<RouteAnswer> => {
-    const answer = await deps.engine(request).catch(() => undefined)
+  /**
+   * `timedOut` answers instead of a 502 when this computer's own window for the request ended: its fetch then rejects
+   * with a TimeoutError (remote-runtime.ts).
+   */
+  const send = async (request: EngineRequest, timedOut?: RouteAnswer): Promise<RouteAnswer> => {
+    const answer = await deps
+      .engine(request)
+      .catch((error: unknown) =>
+        timedOut && error instanceof Error && error.name === "TimeoutError" ? timedOut : undefined,
+      )
     if (!answer) return refuse(502, "REMOTE_ENGINE_UNAVAILABLE", "Vector on this computer did not answer.")
     if (JSON.stringify(answer.body ?? null).length > ANSWER_LIMIT)
       return refuse(413, "REMOTE_ANSWER_TOO_LARGE", "That answer is too large to send to your phone.")
@@ -360,14 +374,23 @@ export function createRemoteRoutes(deps: RouteDependencies) {
     // hold, even after a start the engine did not take: a phone turn begun while the start waited may hold it too, and
     // `RemoteTurns` cannot tell the two apart here. A hold kept too long only leaves more questions to a person.
     if (!deps.turns.has([sessionID])) deps.turns.mark(sessionID)
-    return send({
-      method: "POST",
-      path: `/experimental/session/${sessionID}/connect`,
-      query: { directory },
-      // Always the background run, so the engine answers once the review's questions are behind it.
-      body: { to: "vectorscope", target: input.target, background: true },
-      timeoutMs: REVIEW_START_MS,
-    })
+    return send(
+      {
+        method: "POST",
+        path: `/experimental/session/${sessionID}/connect`,
+        query: { directory },
+        // Always the background run, so the engine answers once the review's questions are behind it.
+        body: { to: "vectorscope", target: input.target, background: true },
+        timeoutMs: REVIEW_START_MS,
+      },
+      // This computer's window ends before the phone's (PHONE_REVIEW_START_MS, app client.ts), so the phone hears of
+      // the timeout from here, in the words it uses for its own. Any other failure stays REMOTE_ENGINE_UNAVAILABLE.
+      refuse(
+        504,
+        "REMOTE_REVIEW_TIMEOUT",
+        "Your computer did not answer within 3 minutes. A review still waiting for an approval stops then; answer its approval right away.",
+      ),
+    )
   }
 
   return {

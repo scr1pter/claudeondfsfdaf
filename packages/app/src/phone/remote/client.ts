@@ -237,6 +237,9 @@ const REQUEST_MS = 30_000
  * phone never gives up on a start the computer still waits on.
  */
 export const PHONE_REVIEW_START_MS = 3 * 60_000 + 15_000
+/** A review start that ran out of time, at the computer (its REMOTE_REVIEW_TIMEOUT answer) or on this phone. */
+const REVIEW_TIMEOUT =
+  "Your computer did not answer within 3 minutes. A review still waiting for an approval stops then; answer its approval right away."
 const CHANNEL_MS = 10_000
 const REFRESH_EARLY_MS = 60_000
 /** A kill lands in whole seconds at the relay, so the one retry after REMOTE_REVOKED waits past the second. */
@@ -1087,15 +1090,19 @@ export function createPhoneRemote(deps: PhoneRemoteDependencies) {
      */
     startReview(computer: string, directory: string, sessionID: string, target: ReviewTarget): Promise<ApprovalResult> {
       return challenged(computer, reviewChallengeRequest(directory, sessionID, target), (passkey) =>
-        request(computer, reviewStartRequest(directory, sessionID, target, passkey), timing.reviewStartMs).catch(
-          (error: unknown) => {
+        request(computer, reviewStartRequest(directory, sessionID, target, passkey), timing.reviewStartMs).then(
+          (answer) => {
             // The computer waits 3 minutes for a start (REVIEW_START_MS), longer than for any other request, and stops
-            // a review still waiting by then.
+            // a review still waiting by then. Its window ends before this phone's, so it is the one that says so.
+            const body = answer.body as { error?: { code?: unknown } | null } | null
+            if (body?.error?.code === "REMOTE_REVIEW_TIMEOUT")
+              throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
+            return answer
+          },
+          (error: unknown) => {
+            // This phone's own window, 15 s longer, ended first: the computer or the relay went quiet.
             if (error instanceof RemoteError && error.code === "REMOTE_TIMEOUT")
-              throw new RemoteError(
-                "REMOTE_REVIEW_TIMEOUT",
-                "Your computer did not answer within 3 minutes. A review still waiting for an approval stops then; answer its approval right away.",
-              )
+              throw new RemoteError("REMOTE_REVIEW_TIMEOUT", REVIEW_TIMEOUT)
             throw error
           },
         ),

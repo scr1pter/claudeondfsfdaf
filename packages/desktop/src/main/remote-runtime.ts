@@ -8,7 +8,7 @@ import { engineEventSource } from "./keep-awake"
 import { createRemoteLink, type RemoteLink, type RemoteSocket, type RemoteStatus } from "./remote-link"
 import { createRemoteNotify, type RemoteNotify } from "./remote-notify"
 import { computerName, phoneAppOrigin, relayName } from "./remote-host"
-import type { EngineRequest } from "./remote-routes"
+import { engineWindowMs, type EngineRequest } from "./remote-routes"
 import { getStore } from "./store"
 import { vaultSecrets } from "./vault-secrets"
 import { onVectorAccountChanged, vectorAccount } from "./vector-account-runtime"
@@ -154,7 +154,7 @@ async function engineRequest(base: string, authorization: string, request: Engin
     },
     ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}),
     redirect: "error",
-    signal: AbortSignal.timeout(request.timeoutMs ?? 30_000),
+    signal: AbortSignal.timeout(engineWindowMs(request)),
   })
   const text = await response.text()
   let body: unknown = null

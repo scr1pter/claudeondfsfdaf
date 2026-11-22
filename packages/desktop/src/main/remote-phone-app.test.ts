@@ -104,6 +104,8 @@ function computer(relay: MemoryRelay) {
   const fake = engine()
   const stored: { value?: unknown } = {}
   const enabled = { value: false }
+  // Paths whose engine call this computer stops waiting on after this many milliseconds, at test scale.
+  const windows = new Map<string, number>()
   const link = createRemoteLink({
     store: {
       read: async () => stored.value,
@@ -127,13 +129,24 @@ function computer(relay: MemoryRelay) {
     },
     allowed: () => true,
     socket: (url, protocols) => relay.socket(url, protocols) as never,
-    engine: fake.api,
+    engine: {
+      events: fake.api.events,
+      // As remote-runtime.ts's fetch: once the window ends, the call rejects with its AbortSignal.timeout's reason, a
+      // TimeoutError, while the engine still waits.
+      request: (request) => {
+        const window = windows.get(request.path)
+        if (window === undefined) return fake.api.request(request)
+        const signal = AbortSignal.timeout(window)
+        const ended = new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)))
+        return Promise.race([fake.api.request(request), ended])
+      },
+    },
     origin: ORIGIN,
     computerName: () => "Studio Mac",
     relayName: () => "Mac",
     timing: { heartbeatMs: 1_000, refreshMs: 60_000, batchMs: 10, retryMs: 10 },
   })
-  return { link, fake, stored, enabled }
+  return { link, fake, stored, enabled, windows }
 }
 
 function phone(
@@ -619,6 +632,30 @@ describe("using a paired computer from the phone", () => {
     })
     // Fail-closed: the review's question still waits for a person, and the conversation is still held.
     expect(desktop.fake.permissions.map((item) => item.id)).toEqual(["per_late"])
+    expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(true)
+    // Answered at the computer afterwards, so the fake engine's start returns.
+    desktop.fake.permissions.splice(0)
+    desktop.link.stop()
+    mobile.remote.disconnect()
+  })
+
+  test("a review start the computer stops waiting on shows the same 3-minute message, before the phone's own window ends (CW-23b)", async () => {
+    // As a real start, the computer's window (REVIEW_START_MS) ends well before the phone's; here at test scale.
+    const { desktop, mobile, computerID } = await paired({ requestMs: 1_500, reviewStartMs: 10_000 })
+    desktop.fake.connect.ask = "per_wait"
+    desktop.windows.set("/experimental/session/ses_1/connect", 500)
+    const began = Date.now()
+    const started = mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "uncommitted" })
+    // What the phone's review card shows (session-tasks.tsx `errorText`), as for its own timeout.
+    await expect(started).rejects.toMatchObject({
+      code: "REMOTE_REVIEW_TIMEOUT",
+      message:
+        "Your computer did not answer within 3 minutes. A review still waiting for an approval stops then; answer its approval right away.",
+    })
+    // The computer's answer, not the phone's own timer.
+    expect(Date.now() - began).toBeLessThan(10_000)
+    // Fail-closed: the review's question still waits for a person, and the conversation is still held.
+    expect(desktop.fake.permissions.map((item) => item.id)).toEqual(["per_wait"])
     expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(true)
     // Answered at the computer afterwards, so the fake engine's start returns.
     desktop.fake.permissions.splice(0)
