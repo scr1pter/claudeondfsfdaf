@@ -700,7 +700,8 @@ describe("session HttpApi", () => {
               }),
             })
             expect(admitted.status).toBe(200)
-            // The drain begins the run, and its research turn moves the run to research's caps where it may.
+            // These two calls stand in for the drain and its research turn, only to read what the route armed: tighten()
+            // leaves the fallback movable and arm() does not. research-v2.test.ts in packages/core drives the real runner.
             yield* guard.begin(session.id)
             yield* guard.replaceFallback(session.id, focused)
             const spend = yield* requestJson<{ data: RunBudget.Snapshot }>(`/api/session/${session.id}/spend`, {

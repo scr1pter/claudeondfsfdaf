@@ -92,3 +92,61 @@ The engine compares a run's dollar cap with priced and unknown steps only (`chec
 
 - Red before. With HEAD's protocol and server files put back, the engine file gave 26 pass and 1 fail: the new case received `{ usd: 5 }` for the $5 fence. With HEAD's `scheduled-agents.ts` put back, the desktop file gave 68 pass and 3 fail: the three Codium cases that expect `tightenBudget: true`. All three fixed files were restored, and their sha256 matched.
 - Green after. Engine `httpapi-session.test.ts` 27 of 27. Desktop `scheduled-agents.test.ts` 71 of 71, `spend-limits.test.ts` 38 of 38. Core `spend-guard.test.ts` 81 of 81. The guest budget case in `auth-guest.test.ts` passed. `bun typecheck` passed in protocol, server, client, desktop and engine. Prettier was clean.
+
+## Review round two, 2026-11-22
+
+The re-review rated the PR merge-when-green and left three nits. They are built as local commits on branch `spend-cap-runner-test`, cut from `spend-cap-follow` at `05fa5518`, and not pushed: a push would send the PR's CI to the back of the runner queue. The lead decides when they ride. Only test files and this doc changed. No source, protocol or generated file changed.
+
+### 1. Research's caps under a tightened fence, tested through the real V2 runner
+
+**The nit.** The engine test (`httpapi-session.test.ts:680`) calls `guard.begin` and `guard.replaceFallback` itself. That repeats the runner's research-caps step (`packages/core/src/session/runner/llm.ts:241-247`) instead of running it.
+
+**The test.** `packages/core/test/session/research-v2.test.ts:614`, "a budget armed with tighten, as a Codium scheduled fence is, keeps research's default caps and takes the stricter of each". It uses that file's real-runner harness: the V2 `SessionRunnerLLM` with a scripted provider, the real `SpendGuard`, and the file's Codium model. Each case arms the budget the way the server does before admission, then prompts research and resumes. The drain's own `begin` and the research turn's own `replaceFallback` do the rest.
+
+- `guard.tighten({ usd: 5 })`, as the handler arms a budget sent with `tightenBudget` (`packages/server/src/handlers/session.ts:360-362`): `{ usd: 1, steps: 80 }`.
+- `guard.tighten({ usd: 0.5 })`: `{ usd: 0.5, steps: 80 }`.
+- Control, `guard.arm({ usd: 5 })`, as the handler arms an owner's budget: `{ usd: 5 }`.
+- Three provider turns ran.
+
+**The engine route test is kept, and nothing was trimmed.** It is the only test of the wiring from the route to the guard, and the core test does not reach the route. Its `begin` and `replaceFallback` pair is the only way a route test can tell whether the route armed with tighten or arm: after `begin` alone, both give `{ usd: 5 }`. Its $0.50 case is not redundant either. A route that dropped the budget whenever `tightenBudget` was set would still pass the $5 case and the control, and only the $0.50 case catches that. The only change is its comment (`:703`). It now says the two calls stand in for the drain only to read what the route armed, and it points to the core test.
+
+**Evidence.** Each file was run alone through vector-serial with `--timeout 30000`. The logs are in `/tmp/vector-v2/spend-cap-runner-test/`.
+
+- Green. Core `research-v2.test.ts` 22 of 22 (21 before). Engine `httpapi-session.test.ts` 27 of 27 after its comment change. `bun typecheck` passed in packages/core and packages/engine. Prettier was clean on both test files.
+- Red. The tighten-movable logic in `begin` (`packages/core/src/spend-guard.ts:829`) was reverted to `const movable = held ? undefined : …`, so any armed budget pins the run. The core file gave 21 pass and 1 fail: only the new test, whose $5 case received `{ usd: 5 }`. Restored with `git checkout`, and `sha256sum -c` matched (`9915233f…`).
+- Mutation. The runner's research-caps step was turned off (`if (false && agent.id === AgentV2.researchID …` at `llm.ts:241`). The core file gave 20 pass and 2 fail: the new test (its $5 case received `{ usd: 5 }`) and the older default-caps test at :584. Under the same mutation the engine route test gave 27 of 27, which confirms the nit: it never ran the runner. Restored, and `sha256sum -c` matched (`63851d1f…`).
+
+### 2. The legacy SDK and `packages/sdk/openapi.json` lag the protocol (record only)
+
+**What lags.** The protocol's V2 prompt body has `tightenBudget` (`packages/protocol/src/groups/session.ts`), and `packages/client` was regenerated. The legacy JS SDK was not regenerated. `client.v2.session.prompt` (class `Session3` in both `packages/sdk/js/src/gen/sdk.gen.ts` and `src/v2/gen/sdk.gen.ts`) and `V2SessionPromptData` have no `tightenBudget`. In `packages/sdk/openapi.json`, the `v2.session.prompt` body lists `id`, `prompt`, `delivery`, `resume` and `budget`, with `additionalProperties: false`. The legacy build (`./packages/sdk/js/script/build.ts`) was not run, as instructed. It belongs to the next regeneration.
+
+**Does any shipped caller use the legacy SDK to post the V2 prompt with a budget? No.**
+
+- Outside generated files, `git grep` finds `v2.session.prompt` in only three places: the protocol's identifier, the code sample in `openapi.json`, and the engine's HTTP exercise test (`packages/engine/test/server/httpapi-exercise/index.ts:2400`, a raw POST).
+- Every shipped caller of `POST /api/session/{id}/prompt` is desktop main code using raw `engineRequest`. None of them reads the SDK or `openapi.json`. `scheduled-agents.ts:498` sends a budget, with `tightenBudget` only on a Codium fence. `parallel-workspaces.ts:1200` and `:2847` send an owner's budget. `swarm-orchestrator.ts:1004` sends no budget.
+- The budgets that do go through the legacy SDK use V1 routes. The app's Budget stop Continue (`packages/app/src/components/budget-stop.tsx:36`) calls `client.session.promptAsync` (`/session/{id}/prompt_async`). `vector run` (`packages/engine/src/cli/cmd/run.ts:1463` and `:1489`) calls `client.session.command` and `client.session.prompt` (`/session/{id}/message`).
+- The CLI's `api` command (`packages/cli/src/commands/handlers/api.ts`) reads the running server's `/openapi.json`, not this file, and it sends the body without checking it.
+
+**A trap for later.** Suppose a fence were sent through the legacy SDK before it is regenerated. `src/v2/gen`'s `prompt(parameters)` would drop `tightenBudget` without an error, because `buildClientParams` copies only the listed keys into the body. The fence would then arm as the owner's budget, which is the bug that round one fixed. `src/gen`'s `prompt(options)` passes the body through, but its type does not include the field. Regenerate the legacy SDK before any caller moves onto it.
+
+### 3. Priced scheduled research runs replace research's caps (owner decision, unchanged on purpose)
+
+**Today.** A priced scheduled run sends its reserved headroom (`allowance.budgetUsd`, `scheduled-agents.ts:605`) as `budget.usd` (`:507`), without `tightenBudget` (`:510` sets it for a Codium fence only). The server arms it with `guard.arm` (`packages/server/src/handlers/session.ts:360-361`), so it is the owner's budget. On a research session, it replaces research's Focused caps, `{ usd: 1, steps: 80 }`, and any `research.limits.focused` the user set. The parallel-workspace agents' headroom (`parallel-workspaces.ts:1213` and `:2862`) is armed the same way. This was left as it is on purpose. It needs the owner's choice.
+
+**Option A: keep it.** The spend-limit headroom stays the owner's own cap for the run.
+
+- A priced scheduled research run may spend all of its reserved headroom, for example $5 of a $10 day with no per-run limit. Its budget has no step cap.
+- The user's own Focused research limits do not apply to it.
+- The reservation matches what the run may spend.
+- A scheduled prompt that lands while a run on that session is active replaces that run's limits, and that can loosen them.
+- A recurrence after a stopped run takes the new headroom, not the stopped run's cap.
+- No change.
+
+**Option B: tighten priced runs too.** Send `tightenBudget: true` with every scheduled budget, not only a Codium fence.
+
+- On a research session, the run gets the stricter of the headroom and research's caps (or the user's Focused limits): `{ usd: min(headroom, 1), steps: 80 }`.
+- Other agents get the headroom as their cap, the same as today, because only research moves the fallback on the V2 runner.
+- The desktop still reserves the whole headroom until the run ends. Other runs can be refused headroom that this run can no longer spend, beyond $1 plus one step.
+- A prompt that lands on an active run tightens that run's limits and never loosens them.
+- A recurrence after a stopped run keeps the stricter of that run's cap and the new headroom. If the user had stopped their own run at a lower cap, the scheduled run is held to that cap.
+- Cost: one desktop line. The priced-headroom case in `scheduled-agents.test.ts`, which expects no `tightenBudget`, would change. The same question then applies to the parallel-workspace agents.
