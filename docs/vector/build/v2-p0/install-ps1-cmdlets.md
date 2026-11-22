@@ -17,7 +17,7 @@ Files: `packages/web/public/install.ps1`, the new `packages/engine/test/installa
    - the ReparsePoint attribute check in place of `Assert-Regular`, because that function runs `Get-Item`;
    - the exit wait, using `Sleep(200)`.
 
-   The deadlines stay the same (10 s for the acknowledgement, 15 min for the exit), and so do all six messages. The link check on the acknowledgement keeps `Assert-Regular`'s message, and the identity and timeout throws stay separate, so no message changed. There are two small behaviour changes, and both leave the installation unchanged:
+   The deadlines stay the same (10 s for the acknowledgement, 15 min for the exit), and so do all six messages. The link check on the acknowledgement keeps `Assert-Regular`'s message, and the identity and timeout throws stay separate, so no message changed. There are three small behaviour changes, and all three leave the installation unchanged:
    - In the exit wait, a process that is exiting (its start time cannot be read) now counts as still running until it is gone, as in #47. Before, reading its start time threw, so the upgrade failed. Before `prepared` and during the acknowledgement wait, it still fails, with the identity message.
    - A directory at the acknowledgement path used to pass `Test-Path` and then be refused by `Assert-Regular`. `[IO.File]::Exists` is false for a directory, so the wait now runs to its 10 s deadline and fails with the "did not acknowledge" message.
    - (Verifier note.) The same `''` rule covers a reused process id whose start time this user cannot read: during the exit wait it counts as still running, so the upgrade waits for it to go or fails at the 15 min deadline, as #47's worker does. Before, reading its start time threw at once. Either way nothing is replaced.
@@ -94,3 +94,10 @@ Merged origin/main `edbc4a8c3` (#74; it touches `startup.test.ts` and its doc, n
 - Prettier: the test file and this doc are clean. `ci-harness-repairs.md` has two lines Prettier would change; they are on main already, not in this branch's lines.
 - Not run here: Windows PowerShell 5.1 (T3 and the existing deferred-upgrade checkpoints run in the `windows` job of `vector-standalone-installers.yml`; `windows-native` must pass too). T1 and T2 also run in the engine (windows) shards of `test.yml`. A new engine test file moves Bun's round-robin `--shard` assignment of the files sorted after it, so a Windows shard can change size; watch the shard times on the PR.
 - Still open (owner or PR): push with `git push -u origin install-ps1-cmdlets`, open the PR as a draft, record the Windows run and job ids and the "atomic status transitions" checkpoint time here, re-run `windows` once, a reviewer reads the whole `install.ps1` diff for 5.1 parse safety, then the owner merges and checks the deploy.
+
+## 2026-11-21, finalize
+
+- The independent review returned ok with no must-fix items. Its one doc nit is fixed above: the behaviour-change list now says three, counting the verifier's note.
+- origin/main was still `edbc4a8c3` at finalize (checked with `git fetch` and the GitHub API), so no new merge was needed. No open PR (#68, #73, #75, #77, #78, #79, #80, #81) touches this branch's five files.
+- Re-run on macOS, Bun 1.3.14, one Bun process at a time: `packages/engine` `bun test --timeout 30000 test/installation/windows-installer-script.test.ts` 2 pass, 0 fail; `test/installation/ownership.test.ts` 6 pass, 2 skip (the Windows cases), 0 fail; `bun typecheck` exit 0; root `test/no-personal-paths.test.ts` 1 pass.
+- The branch is pushed and the PR is open as a draft. The Windows jobs of `vector-standalone-installers.yml` (`windows`, `windows-native`, then one re-run of `windows`) and the engine (windows) shards of `test.yml` are still to be recorded here from the PR's CI. The merge and the post-deploy check stay the owner's.
