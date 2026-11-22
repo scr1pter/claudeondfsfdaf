@@ -1076,7 +1076,6 @@ jobs:
     if: ${{ !inputs['windows-only'] && (needs.plan.outputs.desktop == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    continue-on-error: true
     defaults:
       run:
         shell: bash

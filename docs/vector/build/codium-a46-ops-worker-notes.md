@@ -148,3 +148,12 @@ These are in `owner-actions/hosted-ops.md`:
   (Codium tests job 132848987130 failed only at the exerciser, with the four baseline MISS lines and `fail=0`).
   typecheck.yml run 43726319195 and vector-hosted-ci.yml run 43726762155 concluded success, all at `dfef44e3`. See
   `codium-deviations.md` "Lane status (15 Nov 2026, codium-finish)".
+- **Status on 21 Nov 2026 (branch `erase-gap-fixes`, OPS-WORKER-ERASE-GAP).** This closes the 21 Nov review note in
+  `codium-deviations.md` ("the gap the list leaves"), using the lead's option 1, a separate record. Before it sends a
+  `plan`, `config`, `release` or `suspend`, `opsCall` now records the account in `ops:worker`
+  (`opsWorkerAccountsKey`), with NX keeping the first call's time. A store failure refuses the call before the Worker
+  hears it. The daily cleanup never touches that set, and `forgetOpsAccount` removes it in both Stripe modes. Without
+  the Worker's address, `eraseAccountOps` refuses with 503 an account on `ops:accounts` or `ops:worker` (`usedOps` is
+  now `owesWorkerErase`), so a deletion stays pending until the Worker can erase. Tests, mutations and evidence are
+  in `v2-p0/erase-gap-fixes.md`. The `codium-deviations.md` and `owner-actions/hosted-ops.md` follow-ups wait for
+  v2-closeout-ci.

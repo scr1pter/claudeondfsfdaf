@@ -900,12 +900,13 @@ Failure. main's push run 44791067930 of test.yml (head `c776fb60`) failed only i
 then overlay-bounds and computer-smoke-failure assertion_failed. Both follow from the region line, because on Windows
 `boundsMatch` is the region proof.
 
-Cause (inferred, not measured). Consistent with a cold first Add-Type; launch versus compile is not yet measured, and
-contention with the first Electron launch is not excluded. Step 15 is the job's first Roslyn use: the only Add-Type in
-`.github` and `packages/desktop/scripts` is the observer's (`computer-overlay-smoke-window-region.ts:306` at
-`15f3ba77`), and it runs while PowerShell 7's compiler and reference assemblies are still cold on a fresh VM. The
-observer arms one 15 s timer at spawn; it fired after the `compile` marker and before `input`, which is exactly
-`deadline_compile`.
+Cause (inferred when written; measured on 2026-11-21, see "2026-11-21: warm-up evidence" below, which supports the cold
+first Add-Type and not the Electron first-launch alternative). As written on 2026-11-20: consistent with a cold first
+Add-Type; launch versus compile was not yet measured, and contention with the first Electron launch was not excluded. Step 15 is the job's first
+Roslyn use: the only Add-Type in `.github` and `packages/desktop/scripts` is the observer's
+(`computer-overlay-smoke-window-region.ts:306` at `15f3ba77`), and it runs while PowerShell 7's compiler and reference
+assemblies are still cold on a fresh VM. The observer arms one 15 s timer at spawn; it fired after the `compile` marker
+and before `input`, which is exactly `deadline_compile`.
 
 Evidence (job log timestamps):
 
@@ -996,6 +997,45 @@ fresh-VM overlay smoke without this warm-up and can still hit the same deadline_
 `computer-helper-windows-units` (`computer-overlay-smoke.ts --native-stage`). Neither is changed here; if either is
 used for evidence, add the same fixed warm-up step there as its own reviewed change, with no `continue-on-error` and a
 bounded timeout.
+
+### 2026-11-21: warm-up evidence
+
+Read through the GitHub MCP job logs: six computer-helper / windows-build jobs that ran the warm-up step (the four
+named in the lane plan plus runs 44806289578 and 44829529636), each of whose log shows the `computer-smoke-region-warm`
+line and both the step 16 and step 19 `computer-smoke-window-region` lines. This is a sample, not every run. In
+these jobs the warm-up is step 15, "Run real Electron overlay properties and controller lifecycle" is step 16 (step 15
+in the table above) and "Run actual isolated medium-token Windows overlay Stop" is step 19 (step 18 above). Launch is
+`elapsed.compile`, Add-Type is `elapsed.input - elapsed.compile` and total is `elapsed.output`, all in ms. Every region
+line is `ok` 4/4/4/4.
+
+| Job (run, attempt)                | Head                             | Warm-up ms | Step 16 launch / Add-Type / total | Step 19 launch / Add-Type / total |
+| --------------------------------- | -------------------------------- | ---------- | --------------------------------- | --------------------------------- |
+| 136565585657 (44806289578, 2)     | `region-compile-budget` 5002a8ce | 12262      | 355 / 1935 / 2332                 | 334 / 855 / 1239                  |
+| 136588816103 (44822880542, 1)     | `main` 3670461a                  | 3876       | 321 / 1313 / 1682                 | 366 / 912 / 1330                  |
+| 136611151009 (44829529636, 1) (1) | `windows-test-budgets` 2da94b5f  | 2733       | 289 / 1056 / 1394                 | 331 / 806 / 1188                  |
+| 136658215090 (44837525118, 2)     | `windows-test-budgets` 625153c7  | 3760       | 199 / 962 / 1197                  | 222 / 511 / 766                   |
+| 136673869016 (44848275007, 1)     | `main` f3d7ac74                  | 3815       | 264 / 1279 / 1584                 | 270 / 683 / 993                   |
+| 136714734266 (44860782743, 1) (1) | `everywhere-finish` 741aa2af     | 4301       | 313 / 1287 / 1666                 | 358 / 927 / 1339                  |
+
+(1) The job failed later, in step 19, with the HF-7 (1) Stop signature (`uia-runtime-id` and `uia-root-element`
+respectively, `lookup` first, `call` root, `actor` retired, `core_failure:no_ui_tree`). Its region lines are `ok`, so
+that failure is not this one.
+
+- The cold-Roslyn cause is supported. Launch is small in every proof span (199-366 ms), so the 15 s was never spent
+  starting pwsh. The proof's own Add-Type in step 16 is now 0.96-1.94 s and its whole observer 1.2-2.3 s, close to the
+  1.15-1.41 s that step 18 took before the warm-up and far from the 10.9-15.6 s first spans tabled above. The cold
+  cost moved into the warm-up, which paid 2.7-12.3 s (3.76-4.30 s in the four jobs first read; 12.26 s on
+  `region-compile-budget`, a cold VM where the proof still finished in 2.33 s).
+- The Electron first-launch alternative is not supported. Step 16 still launches the job's first Electron before its
+  observer spawns, and that observer's Add-Type is about 1-1.9 s. If contention with the first Electron launch were
+  the cost, it would still be paid there. The 5.1 warm-up result above stays consistent with Windows PowerShell 5.1's
+  out-of-process csc.exe simply not warming PowerShell 7's in-process Roslyn; no run measured that directly.
+- Margin: the slowest proof span here is 2.33 s against the unchanged 15 s observer limit. No deadline, limit or
+  script byte changed.
+- Still open: these are all computer-helper.yml windows-build jobs. The two test.yml dispatch lanes named in the last
+  paragraph above get the same warm-up step on branch `hands-stop-guardian` (`hands-progress.md`, 2026-11-21); their
+  dispatch runs (`computer_helper_target=windows-overlay` and `windows-units`) need that branch pushed and are not
+  recorded yet.
 
 ## 2026-11-20: Windows engine tests running close to their 30 s budget
 
