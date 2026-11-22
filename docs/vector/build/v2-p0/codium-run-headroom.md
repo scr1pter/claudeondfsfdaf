@@ -1,16 +1,18 @@
-# codium-run-headroom: A23-model-edit-race
+# codium-run-headroom: A23-model-edit-race (parallel half)
 
-Branch `codium-run-headroom`, cut from origin/main `609763f72`. It covers one Vector v2 leftover P0 item,
-A23-model-edit-race, under lead ruling R2 option 1 (rulings file, 21 Nov 2026). Desktop only: no engine, protocol,
-generated client or budget file changes, and every flag stays off.
+Branch `codium-run-headroom`, cut from origin/main `609763f72` and merged up to `edbc4a8c3`. It covers the parallel
+half of one Vector v2 leftover P0 item, A23-model-edit-race, under lead ruling R2 option 1 (rulings file, 21 Nov 2026).
+The scheduled half of the same ruling is open PR #78 (`spend-cap-follow`), which owns `scheduled-agents.ts` and its
+test; this branch leaves both files as main has them. Desktop only: no engine, protocol, generated client or budget
+file changes, and every flag stays off.
 
 Files: the new `packages/desktop/src/main/codium-run-headroom.ts` and `codium-run-headroom.test.ts`,
-`scheduled-agents.ts`, `parallel-workspaces.ts`, `scheduled-agents.test.ts`, `parallel-workspaces.spend.test.ts`, and
-these docs. Short dated pointers are in `codium-deviations.md`, `codium-p4-repairs.md` (under F19) and
-`codium-a23-guard-usage-notes.md`, which no open PR touches. `spend-limits.ts`, `run-budget.ts` and `spend-guard.ts`
-are read, not changed: the helper is named `codium-run-headroom.ts`, as the plan asks, to stay apart from them.
+`parallel-workspaces.ts`, `parallel-workspaces.spend.test.ts`, and these docs. Short dated pointers are in
+`codium-deviations.md`, `codium-p4-repairs.md` (under F19) and `codium-a23-guard-usage-notes.md`, which no open PR
+touches. `spend-limits.ts`, `run-budget.ts` and `spend-guard.ts` are read, not changed: the helper is named
+`codium-run-headroom.ts`, as the plan asks, to stay apart from them.
 
-## 2026-11-21, A23 model edit race: a run admitted as Codium carries the own-key headroom
+## 2026-11-21, A23 model edit race: a parallel run admitted as Codium carries the own-key headroom
 
 **The gap.** A desktop run admitted as Codium (`checkAllowance({ billing: "codium" })`) skipped the local dollar
 windows, reserved nothing and was sent no engine budget (`budgetUsd` undefined), which F19 recorded as accepted. A
@@ -18,7 +20,8 @@ Codium run can still take own-key steps:
 
 - a scheduled run that continues a session reads that session's model (`scheduled-agents.ts`, `runTarget`) and then
   admits its prompt with no model in the body, so a model the owner switches in between the read and the admission
-  runs with no budget (A23's "concurrent owner-edit race", left open in `codium-a23-guard-usage-notes.md`);
+  runs with no budget (A23's "concurrent owner-edit race", left open in `codium-a23-guard-usage-notes.md`). PR #78
+  closes this half;
 - a parallel run's session model can be switched while it runs;
 - a subagent can run on its own configured model (`packages/engine/src/tool/task.ts`, `next.model`).
 
@@ -28,8 +31,9 @@ Those steps spend the same account-wide own-key dollars the windows protect. The
 **The ruling taken (R2, option 1).** A run admitted as Codium also carries the own-key headroom as its engine budget.
 Codium steps stay exempt (D-3): `SpendGuard.afterStep` adds no dollars for a `codium` step, and `checkLimits` checks
 the dollar cap only on `priced` or `unknown` steps, so the budget is spent and enforced on own-key steps only. The
-Codium check itself is unchanged: it still returns `{ allowed: true, state: "ok", unmeasuredRuns: 0 }`, reserves
-nothing and never blocks the run.
+engine prices a Codium step at 0 (`session.ts`, the `Billing.isCodium` branch), so the desktop's `spentSoFar` for a
+later prompt counts own-key spend only. The Codium check itself is unchanged: it still returns
+`{ allowed: true, state: "ok", unmeasuredRuns: 0 }`, reserves nothing and never blocks the run.
 
 **The fix.**
 
@@ -41,14 +45,15 @@ nothing and never blocks the run.
   gateway caps its Codium steps, and its own-key steps stop it at their first cent. `RunBudget.Info.usd` must be above
   zero, which is why the floor is 1 cent and not 0 (the A23 decision's reason for sending no `usd: 0` budget). With no
   dollar limit in force it answers undefined, so no budget is sent, as for an own-key run.
-- `scheduled-agents.ts` `runTarget`: when the Codium check admitted the run, `budgetUsd` comes from
-  `codiumRunHeadroom(ledger, { runId, source: "scheduled" })`; an own-key run keeps its reserving check's
-  `allowance.budgetUsd`. `promptTarget` sends it as `budget: { usd }` exactly as before.
-- `parallel-workspaces.ts` `executeParallelWorkspace`: the same with `source: "parallel"`, stored as
-  `launched.spend.budgetUsd`. Every later prompt of the run (`admitVectorPrompt`, `messageParallelWorkspace`) already
-  sends `promptBudgetUsd`, the headroom less the run's measured own-key spend (Codium steps cost 0 there), so a later
-  prompt after the own-key headroom is spent is refused with the existing "Spend limit reached" message, and a
+- `parallel-workspaces.ts` `executeParallelWorkspace`: when the Codium check admitted the run, `budgetUsd` comes from
+  `codiumRunHeadroom(ledger, { runId, source: "parallel" })` and is stored as `launched.spend.budgetUsd`; an own-key
+  run keeps its reserving check's `allowance.budgetUsd`. Every later prompt of the run (`admitVectorPrompt`,
+  `messageParallelWorkspace`) already sends `promptBudgetUsd`, the headroom less the run's measured own-key spend, so
+  a later prompt after the own-key headroom is spent is refused with the existing "Spend limit reached" message, and a
   Codium-only run keeps its whole budget.
+- PR #78's `codiumFence` in `scheduled-agents.ts` gives the same three answers (headroom, 1 cent when blocked or at
+  zero, none without a limit). Once both land, the scheduled call site can use `codiumRunHeadroom` instead, so the
+  floor lives in one place; that is a follow-up for after #78 merges, not part of either branch.
 
 **Reverses F19 by lead ruling.** F19 (`codium-p4-repairs.md`) and the deviations entry "Known-Codium desktop runs carry
 no desktop budget (F19)" read D-3 and C8 as asking for no budget at all. R2 reverses that reading. The A25 assertion
@@ -59,13 +64,13 @@ the Codium check neither blocks such a run nor reserves `budgetUsd`.
 **A consequence for the reviewer (no change made).** A budget sent with a prompt is armed by the engine's guard
 (`SpendGuard.arm`) and takes the place of `begin()`'s fallback, the config `budget.run` or research's default caps
 (`session/prompt.ts`, the `guard.begin(sessionID, caps?.budget ?? own)` call). Own-key desktop runs already work this
-way whenever a dollar limit is in force. A Codium desktop run now does too: under the default unattended policy
-($5 a run, $25 a day) every scheduled Codium run arms `{ usd }`, so a config `budget.run.steps` or research's default
-step cap no longer applies to it, while loop limits and the gateway still do. D-3 (label plan) says only the step and
-loop limits stop a Codium run; with a dollar limit in force, the step limit from config or research's defaults is now
-the one an own-key desktop run already loses. The owner's prompt route always arms (`tightenBudget` is set only for an
-invited guest), so the desktop has no way to tighten instead. If that is not wanted, the follow-up is engine-side (a
-tightening budget field for the owner, or option 3's model fence) and is out of this ruling's scope.
+way whenever a dollar limit is in force. A Codium parallel run under an interactive dollar limit now does too, so a
+config `budget.run.steps` or research's default step cap no longer applies to it, while loop limits and the gateway
+still do. Interactive work ships with no dollar limit, so by default a Codium parallel run is sent no budget and keeps
+those caps. The owner's prompt route always arms (`tightenBudget` is set only for an invited guest), so the desktop
+has no way to tighten instead. If that is not wanted, the follow-up is engine-side (a tightening budget field for the
+owner, or option 3's model fence) and is out of this ruling's scope. PR #78 records the same consequence for
+scheduled runs.
 
 **Tests.**
 
@@ -78,17 +83,6 @@ tightening budget field for the owner, or option 3's model fence) and is out of 
   - "is a 1-cent floor under an explicit zero limit".
   - "is absent when no dollar limit applies, as for an own-key run".
   - "never moves the Codium check itself, which still reserves nothing and skips the windows".
-- `packages/desktop/src/main/scheduled-agents.test.ts`, describe "a scheduled run admitted as Codium carries the
-  own-key headroom" (the harness gains `sessionModelOnRead`, the model each read of a session's route answers):
-  - "a fresh Codium session is sent the headroom an ordinary check gives, and nothing is held": budget `{ usd: 5 }`,
-    checks `[["codium", true], [undefined, undefined]]` on one run id, nothing reserved.
-  - "an own-key model switched in after the Codium read is admitted under the own-key headroom": the race itself.
-    The session reads as Codium for the admission check and as `provider-own` from the next read on; the prompt
-    carries `{ usd: 2.5 }` and the ledger records the run under `provider-own`.
-  - "a Codium run whose own-key dollars are spent still starts, with a 1-cent budget": completed, budget
-    `{ usd: 0.01 }`.
-  - "a Codium run with no dollar limit is sent no budget, as an own-key run would be" (guard).
-  - "an own-key run still takes one reserving check and its own headroom" (guard).
 - `packages/desktop/src/main/parallel-workspaces.spend.test.ts`:
   - "Codium-only parallel usage reaches the persisted card without a fake zero charge" and its "mixed" twin: the A25
     assertion above, now `{ usd: headroom / 2 }`.
@@ -96,27 +90,47 @@ tightening budget field for the owner, or option 3's model fence) and is out of 
     set to $0, an own-key check is blocked, the Codium run still runs with `{ usd: 0.01 }`, settles as `codium` and
     leaves no ledger event; the $10 limit is put back in a `finally`.
 
-**Evidence.** Not run by the drafter, who did not hold the Bun turn (no bun, test runner or typecheck was run). Run
-each file alone from `packages/desktop`, one at a time:
+## 2026-11-21, verification (codium-run-headroom verifier)
 
-- `bun test --timeout 30000 src/main/codium-run-headroom.test.ts`
-- `bun test --timeout 30000 src/main/scheduled-agents.test.ts`
-- `bun test --timeout 30000 src/main/parallel-workspaces.spend.test.ts`
-- `bun typecheck` in `packages/desktop` (the helper and both call sites; test files are excluded from the desktop
-  tsconfig).
+Run on this branch at the merge with origin/main `edbc4a8c3`, after `bun install --ignore-scripts`. Each file ran
+alone from `packages/desktop` with `bun --no-env-file test --timeout 30000 <file>`, as `scripts/test.ts` runs it in CI.
 
-Expected red-before, with `scheduled-agents.ts` and `parallel-workspaces.ts` put back to origin/main (save the diff,
-`git checkout --` both, restore with `git apply`, compare sha256): in `scheduled-agents.test.ts` the fresh-session,
-switched-model and 1-cent cases fail on `budget` (received undefined); in `parallel-workspaces.spend.test.ts` both
-A25 cases and the new 1-cent case fail on `budget` (received undefined). `codium-run-headroom.test.ts` fails to load
-without `codium-run-headroom.ts`.
+**Scheduled half dropped from this branch.** The drafter's commit `9dd990079` also changed `scheduled-agents.ts` and
+`scheduled-agents.test.ts`. Open PR #78 (`spend-cap-follow`, not this branch) touches both files with the same fix
+for the scheduled path, so this branch's edits there were put back to main's version in a new commit. Nothing of the
+scheduled half is lost: #78 sends the same budget for the same cases and tests the race itself.
 
-Mutation checks to run:
+**Green.**
 
-1. In `codium-run-headroom.ts`, return `undefined` instead of `CODIUM_RUN_HEADROOM_FLOOR_USD` for a blocked check:
-   the two floor cases in the helper's file, the scheduled 1-cent case and the parallel 1-cent case go red.
-2. In `codium-run-headroom.ts`, pass `reserve: true` to the ordinary check: "is the budget an ordinary run would get,
-   and holds none of it" goes red (the own-key run sees $3, not $6).
-3. In `scheduled-agents.ts`, send `allowance.budgetUsd` for a Codium run again: the three scheduled cases go red.
+| File                                              | Result            |
+| ------------------------------------------------- | ----------------- |
+| `src/main/codium-run-headroom.test.ts`            | 6 pass, 0 fail    |
+| `src/main/parallel-workspaces.spend.test.ts`      | 11 pass, 0 fail   |
+| `bun typecheck` in `packages/desktop` (`tsgo -b`) | passed, no errors |
 
-Restore each file after its mutation and compare its sha256 with the saved one.
+Existing files that cover the changed modules, each run alone, all green: `parallel-workspaces.follow-up.test.ts` 45,
+`parallel-workspaces.environment.test.ts` 1, `parallel-workspaces.merge.test.ts` 12, `spend-limits.test.ts` 38,
+`team-delivery.test.ts` 20, `swarm-orchestrator.test.ts` 36, `agent-task-model.test.ts` 8, `store-cache.test.ts` 5,
+and `scheduled-agents.test.ts` 67 (main's version, unchanged here). The root `test/no-personal-paths.test.ts` passes
+with these docs.
+
+**Red before.** With `parallel-workspaces.ts` put back to origin/main (`git checkout origin/main --`) and the tests
+unchanged, `parallel-workspaces.spend.test.ts` gave 8 pass, 3 fail: both A25 cases (line 423) and the new 1-cent case
+(line 469), each on `body.budget` (expected the budget, received `undefined`). With `codium-run-headroom.ts` removed,
+`codium-run-headroom.test.ts` fails to load ("Cannot find module './codium-run-headroom'"). Both files were restored
+with `git checkout HEAD --`, their sha256 matched the saved ones and `git status` showed nothing else changed.
+
+**Mutations.** Each restored with `git checkout HEAD --`, sha256 matched afterwards.
+
+1. `codium-run-headroom.ts` returns `undefined` instead of the floor for a blocked check: the helper file gave 3 pass,
+   3 fail (both floor cases and "never moves the Codium check itself"), and `parallel-workspaces.spend.test.ts` gave
+   10 pass, 1 fail (the 1-cent case).
+2. `codium-run-headroom.ts` passes `reserve: true` to the ordinary check: "is the budget an ordinary run would get, and
+   holds none of it" went red (expected 6, received 3). `parallel-workspaces.spend.test.ts` stays green under this
+   mutation, because it reads other runs' headroom only after the run has settled; the helper's own case is the guard.
+
+**CI.** Nothing in this branch needs Valkey, Linux bubblewrap, Windows or macOS-only tooling, so every result above is
+local evidence. The ordinary `test.yml` unit lane runs only desktop main's computer-use files (turbo has no desktop
+test task), so these files run in CI in `vector-desktop-release.yml`'s "Test (desktop)" job (`bun run test` in
+`packages/desktop`), and `codium-run-headroom.test.ts`, whose path names Codium, also runs in `vector-codium.yml`'s
+"Codium tests" shards on a push to main.

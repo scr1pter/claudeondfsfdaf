@@ -64,10 +64,12 @@ still do. Nothing earlier in this record was changed.
 
 ## Status on 21 Nov 2026 (codium-run-headroom)
 
-The concurrent owner-edit race under "Review and limits" is closed on the desktop by lead ruling R2 (option 1): a
-desktop run admitted as Codium also carries the own-key headroom as its engine budget, from a second, non-reserving
-ordinary check in `packages/desktop/src/main/codium-run-headroom.ts`, with a 1-cent floor once the own-key dollars are
-spent. Own-key steps the run takes (a model switched in before admission or mid-run, or a subagent on its own model)
-stop at that budget; Codium steps stay exempt. The Codium allowance itself still returns no `budgetUsd` and reserves
-nothing, as "Behavior" says; the budget comes from the second check. No atomic model fence was added. The build record
-is `v2-p0/codium-run-headroom.md`. Nothing earlier in this record was changed.
+Lead ruling R2 (option 1) answers the concurrent owner-edit race under "Review and limits": a desktop run admitted as
+Codium also carries the own-key headroom as its engine budget, from a second, non-reserving ordinary check, with a
+1-cent floor once the own-key dollars are spent. Own-key steps the run takes (a model switched in before admission or
+mid-run, or a subagent on its own model) stop at that budget; Codium steps stay exempt. Branch `codium-run-headroom`
+builds it for parallel runs (`packages/desktop/src/main/codium-run-headroom.ts`); the scheduled half, which is the
+race itself, is open PR #78 (`spend-cap-follow`), so the race stays open here until that PR merges. The Codium
+allowance itself still returns no `budgetUsd` and reserves nothing, as "Behavior" says; the budget comes from the second
+check. No atomic model fence was added. The build record is `v2-p0/codium-run-headroom.md`. Nothing earlier in this
+record was changed.

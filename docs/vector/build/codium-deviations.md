@@ -7444,14 +7444,14 @@ skipping the Worker silently).
 - **Not run here.** The miniflare smoke (`e2e/ops-smoke.mjs`) and a real Durable Object's 2 MB refusal (CI and the
   owner's deploy).
 
-
 ## A23 model edit race: Codium runs carry the own-key headroom, codium-run-headroom lane (21 Nov 2026)
 
-- **Built (lead ruling R2, option 1).** A desktop run admitted as Codium (scheduled or parallel) also carries the
-  own-key headroom as its engine budget: `codiumRunHeadroom` (`packages/desktop/src/main/codium-run-headroom.ts`) runs
-  a second, ordinary, non-reserving `checkAllowance` and answers its `budgetUsd`, or 1 cent when that check is blocked,
+- **Built (lead ruling R2, option 1), parallel half.** A parallel run admitted as Codium also carries the own-key
+  headroom as its engine budget: `codiumRunHeadroom` (`packages/desktop/src/main/codium-run-headroom.ts`) runs a
+  second, ordinary, non-reserving `checkAllowance` and answers its `budgetUsd`, or 1 cent when that check is blocked,
   so the run still starts and its first own-key cent stops it. Codium steps stay exempt (D-3); the Codium check still
-  neither blocks nor reserves (C8).
+  neither blocks nor reserves (C8). The scheduled half is open PR #78 (`spend-cap-follow`), which gives the same
+  answers.
 - **Reverses F19's reading** ("Known-Codium desktop runs carry no desktop budget (F19)" above) by lead ruling. A25's
   assertion in `parallel-workspaces.spend.test.ts` now expects the budget, with a dated comment.
 - **For the lead.** An armed prompt budget replaces the config `budget.run` and research's default caps, as it already
