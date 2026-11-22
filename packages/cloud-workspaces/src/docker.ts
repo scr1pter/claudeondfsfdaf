@@ -77,9 +77,12 @@ env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/data/home', 'TMPDIR': '
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
        'GIT_TERMINAL_PROMPT': '0', 'GIT_LFS_SKIP_SMUDGE': '1'}
 credential = pathlib.Path('/run/git-credential')
+# No automatic maintenance: newer git starts a detached repack after a fetch, which races the next deepen fetch
+# for shallow.lock and dies, half done, with this container.
 git = ['git', '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null',
        '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never',
-       '-c', 'http.followRedirects=false', '-c', 'submodule.recurse=false']
+       '-c', 'http.followRedirects=false', '-c', 'submodule.recurse=false',
+       '-c', 'maintenance.auto=false', '-c', 'gc.auto=0']
 def valid_branch(name):
     # protocol.ts validBranch; git check-ref-format --branch also runs before the name reaches a refspec.
     return (len(name) <= 180 and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', name) is not None

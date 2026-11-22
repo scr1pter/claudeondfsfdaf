@@ -533,6 +533,9 @@ async function initializeClone(root: string, ref: string) {
   substitute("pathlib.Path('/run/git-credential')", `pathlib.Path(${JSON.stringify(join(root, "git-credential"))})`)
   substitute("'https://github.com/'", JSON.stringify(pathToFileURL(join(root, "remote")).href + "/"))
   substitute("'-c', 'protocol.file.allow=never', ", "")
+  // Every git process the program starts, children included, appends its trace2 events here.
+  const trace = join(root, "trace2.json")
+  substitute("'GIT_LFS_SKIP_SMUDGE': '1'", `'GIT_LFS_SKIP_SMUDGE': '1', 'GIT_TRACE2_EVENT': ${JSON.stringify(trace)}`)
   const result = spawnSync("python3", ["-c", source], {
     input: JSON.stringify({ repository: { owner: "vector", repository: "example", ref }, model: input.model }),
     encoding: "utf8",
@@ -553,6 +556,14 @@ async function initializeClone(root: string, ref: string) {
       const file = join(repository, ".git", "refs", "remotes", "origin", "HEAD")
       return existsSync(file) ? readFileSync(file, "utf8") : undefined
     },
+    /** The git command name of every traced process, in order. */
+    commands: () =>
+      (existsSync(trace) ? readFileSync(trace, "utf8") : "")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { event: string; name?: string })
+        .filter((event) => event.event === "cmd_name")
+        .map((event) => event.name),
   }
 }
 
@@ -588,6 +599,21 @@ test.skipIf(!canInitialize)(
       // depth 64, then four rounds of 256 and no more
       expect(clone.git("rev-list", "--count", "HEAD").stdout.trim()).toBe(String(64 + 4 * 256))
       expect(clone.git("rev-parse", "--is-shallow-repository").stdout.trim()).toBe("true")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+)
+
+test.skipIf(!canInitialize)(
+  "the clone's fetches start no automatic git maintenance, which would race the next fetch and die with the container",
+  async () => {
+    const root = mkdtempSync(join(tmpdir(), "vector-ws-clone-"))
+    try {
+      remote(root, history({ main: 80, forkBack: 40, feature: 1200 }), "refs/heads/main")
+      const commands = (await initializeClone(root, "refs/heads/feature")).commands()
+      expect(commands).toContain("fetch")
+      expect(commands.filter((name) => name === "maintenance" || name === "gc" || name === "repack")).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
