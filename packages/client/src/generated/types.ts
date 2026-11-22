@@ -802,6 +802,7 @@ export type SessionsPromptInput = {
       readonly warnAt?: number
       readonly unpricedSteps?: number
     } | null
+    readonly tightenBudget?: boolean | null
   }["id"]
   readonly prompt: {
     readonly id?: string | null
@@ -827,6 +828,7 @@ export type SessionsPromptInput = {
       readonly warnAt?: number
       readonly unpricedSteps?: number
     } | null
+    readonly tightenBudget?: boolean | null
   }["prompt"]
   readonly delivery?: {
     readonly id?: string | null
@@ -852,6 +854,7 @@ export type SessionsPromptInput = {
       readonly warnAt?: number
       readonly unpricedSteps?: number
     } | null
+    readonly tightenBudget?: boolean | null
   }["delivery"]
   readonly resume?: {
     readonly id?: string | null
@@ -877,6 +880,7 @@ export type SessionsPromptInput = {
       readonly warnAt?: number
       readonly unpricedSteps?: number
     } | null
+    readonly tightenBudget?: boolean | null
   }["resume"]
   readonly budget?: {
     readonly id?: string | null
@@ -902,7 +906,34 @@ export type SessionsPromptInput = {
       readonly warnAt?: number
       readonly unpricedSteps?: number
     } | null
+    readonly tightenBudget?: boolean | null
   }["budget"]
+  readonly tightenBudget?: {
+    readonly id?: string | null
+    readonly prompt: {
+      readonly text: string
+      readonly files?: ReadonlyArray<{
+        readonly uri: string
+        readonly name?: string
+        readonly description?: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+      readonly agents?: ReadonlyArray<{
+        readonly name: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+      readonly agent?: string
+    }
+    readonly delivery?: "steer" | "queue" | null
+    readonly resume?: boolean | null
+    readonly budget?: {
+      readonly usd?: number
+      readonly steps?: number
+      readonly warnAt?: number
+      readonly unpricedSteps?: number
+    } | null
+    readonly tightenBudget?: boolean | null
+  }["tightenBudget"]
 }
 
 export type SessionsPromptOutput = {

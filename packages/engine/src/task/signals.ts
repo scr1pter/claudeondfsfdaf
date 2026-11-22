@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Layer, Scope } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 
 /*
@@ -11,8 +11,11 @@ export type Kind = "attention"
 export interface Interface {
   /** Ends every wait that selected `taskID`. */
   readonly publish: (taskID: string, kind: Kind) => Effect.Effect<void>
-  /** Waits for the next signal on any of `taskIDs`, sent after this call began; returns the IDs signalled. */
-  readonly next: (taskIDs: readonly string[]) => Effect.Effect<string[]>
+  /**
+   * Listens on `taskIDs` until the scope closes. The effect it returns waits for the next signal on any of them sent
+   * after the listening began, and returns the IDs signalled.
+   */
+  readonly listen: (taskIDs: readonly string[]) => Effect.Effect<Effect.Effect<string[]>, never, Scope.Scope>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/TaskSignals") {}
@@ -32,15 +35,15 @@ const layer = Layer.sync(Service, () => {
           Deferred.doneUnsafe(waiter.done, Effect.void)
         }
       }),
-    next: (taskIDs) =>
-      Effect.suspend(() => {
-        const waiter: Waiter = { ids: new Set(taskIDs), hit: new Set(), done: Deferred.makeUnsafe<void>() }
-        waiters.add(waiter)
-        return Deferred.await(waiter.done).pipe(
-          Effect.map(() => [...waiter.hit]),
-          Effect.ensuring(Effect.sync(() => waiters.delete(waiter))),
-        )
-      }),
+    listen: (taskIDs) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const waiter: Waiter = { ids: new Set(taskIDs), hit: new Set(), done: Deferred.makeUnsafe<void>() }
+          waiters.add(waiter)
+          return waiter
+        }),
+        (waiter) => Effect.sync(() => waiters.delete(waiter)),
+      ).pipe(Effect.map((waiter) => Deferred.await(waiter.done).pipe(Effect.map(() => [...waiter.hit])))),
   })
 })
 

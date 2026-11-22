@@ -557,6 +557,7 @@ export function make(options: ClientOptions) {
               delivery: input["delivery"],
               resume: input["resume"],
               budget: input["budget"],
+              tightenBudget: input["tightenBudget"],
             },
             successStatus: 200,
             declaredStatuses: [400, 401, 403, 404, 409],
