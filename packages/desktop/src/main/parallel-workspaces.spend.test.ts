@@ -46,6 +46,8 @@ const {
   getParallelWorkspace,
   listParallelWorkspaces,
   runParallelWorkspace,
+  messageParallelWorkspace,
+  parallelWorkspaceCanMessage,
   sweepTeamOutboxes,
 } = await import("./parallel-workspaces")
 const { addTeamMember, createAgentTeam, postTeamMessage } = await import("./agent-teams")
@@ -55,7 +57,7 @@ const { spendLedger } = await import("./spend-limits")
 // A stand-in for the engine's HTTP API: a session costs $0.42 once prompted,
 // is busy for one poll and then idle, and answers the spend route with
 // whatever the test says.
-type PromptBody = { prompt: { text: string }; budget?: { usd?: number } }
+type PromptBody = { prompt: { text: string }; budget?: { usd?: number }; tightenBudget?: boolean }
 const engineState = {
   prompts: [] as { sessionId: string; body: PromptBody }[],
   prompted: new Set<string>(),
@@ -210,6 +212,7 @@ describe("a Vector-runtime parallel agent's spend", () => {
 
     // No per-run limit is set, so the run holds half of the day's headroom.
     expect(engineState.prompts[0]?.body).toMatchObject({ resume: true, budget: { usd: headroom / 2 } })
+    expect(engineState.prompts[0]?.body.tightenBudget).toBeUndefined()
     expect(record.status).toBe("failed")
     expect(record.logs.join("\n")).toContain("Stopped by spend guard: Spend cap reached")
     expect(record.actualCost).toBe("$0.42")
@@ -421,6 +424,7 @@ for (const mixed of [false, true]) {
     // carries the own-key headroom as its engine budget, here half of the day's, as an ordinary run without a per-run
     // limit gets. Codium steps stay exempt, so only own-key steps spend it, and the Codium check still holds nothing.
     expect(engineState.prompts[0]?.body.budget).toEqual({ usd: headroom / 2 })
+    expect(engineState.prompts[0]?.body.tightenBudget).toBe(true)
     expect(record.billing).toBe("codium")
     expect(record.measuredCost).toBe(engineState.cost)
     expect(record.actualCost).toBe(mixed ? "$0.12" : undefined)
@@ -467,9 +471,65 @@ test("a Codium parallel run started after the own-key dollars are spent carries 
     const record = await settle(created.id)
 
     expect(engineState.prompts[0]?.body.budget).toEqual({ usd: 0.01 })
+    expect(engineState.prompts[0]?.body.tightenBudget).toBe(true)
     expect(record.status).not.toBe("failed")
     expect(record.costKind).toBe("codium")
     expect(await ledgerEventsFor(created.id)).toHaveLength(0)
+  } finally {
+    await ledger.setPolicy({ interactive: { perDay: { usd: 10 } } })
+  }
+})
+
+for (const codium of [false, true]) {
+  test(`${codium ? "Codium" : "own-key"} parallel messages preserve the run's tightening policy`, async () => {
+    engineState.provider = codium ? "vector-plan" : "provider-test"
+    engineState.cost = 0
+    engineState.tokens = { input: 0, output: 0 }
+    engineState.codiumSteps = codium ? 1 : undefined
+    let busy = true
+    engineState.busy = () => busy
+    engineState.spend = (sessionId) =>
+      engineState.prompted.has(sessionId)
+        ? {
+            data: {
+              sessionID: sessionId,
+              state: "ok",
+              budget: { usd: engineState.prompts[0]?.body.budget?.usd },
+              spentUsd: 0,
+              steps: 1,
+              unpricedSteps: 0,
+              codiumSteps: codium ? 1 : 0,
+              costKind: codium ? "codium" : "priced",
+            },
+          }
+        : {}
+    const created = await launch(codium ? "codium-fence-message" : "own-key-message")
+    try {
+      while (!parallelWorkspaceCanMessage(created.id)) await new Promise((resolve) => setTimeout(resolve, 10))
+      await messageParallelWorkspace(created.id, "Continue with the next check.")
+      const message = engineState.prompts.find((entry) => entry.body.prompt.text === "Continue with the next check.")
+      expect(message).toBeDefined()
+      expect(message?.body.budget?.usd).toBeGreaterThan(0)
+      expect(message?.body.tightenBudget).toBe(codium ? true : undefined)
+    } finally {
+      busy = false
+      await settle(created.id)
+    }
+  })
+}
+
+test("an unlimited Codium run sends neither a dollar cap nor a tightening instruction", async () => {
+  const ledger = await spendLedger()
+  await ledger.setPolicy({ interactive: {} })
+  try {
+    engineState.provider = "vector-plan"
+    engineState.cost = 0
+    engineState.tokens = { input: 0, output: 0 }
+    engineState.codiumSteps = 1
+    const created = await launch("unlimited-codium-fence")
+    await settle(created.id)
+    expect(engineState.prompts[0]?.body.budget).toBeUndefined()
+    expect(engineState.prompts[0]?.body.tightenBudget).toBeUndefined()
   } finally {
     await ledger.setPolicy({ interactive: { perDay: { usd: 10 } } })
   }

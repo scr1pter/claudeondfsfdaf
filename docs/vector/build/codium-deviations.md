@@ -7457,3 +7457,10 @@ skipping the Worker silently).
 - **For the lead.** An armed prompt budget replaces the config `budget.run` and research's default caps, as it already
   does for own-key desktop runs, so a Codium desktop run under a dollar limit loses those step caps; loop limits and
   the gateway remain. The build record is `v2-p0/codium-run-headroom.md`.
+
+## 22 Nov 2026: Codium parallel headroom tightens existing caps
+
+After merging main with #78, `codium-run-headroom` sends `tightenBudget: true` with each bounded Codium parallel
+prompt and live message. This supersedes the 21 Nov consequence above: the fence keeps stricter engine and research
+caps. Own-key arming, unreserved Codium headroom, the one-cent floor and all flags remain unchanged. Verification
+and the red-before/green-after regressions are in `v2-p0/codium-run-headroom.md`.

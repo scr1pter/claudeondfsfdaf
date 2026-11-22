@@ -421,6 +421,9 @@ finding says otherwise.
   own-key dollars are spent; open PR #78 (`spend-cap-follow`) does the same for scheduled runs. Codium steps stay
   exempt and the Codium check still neither blocks nor reserves. See `v2-p0/codium-run-headroom.md`. The text above
   is left as it was.
+- 22 Nov 2026 integration: #78 is merged and adds the owner's `tightenBudget` route. Codium parallel headroom
+  now uses that tightening field at both prompt paths, preserving stricter fallback caps; the earlier no-tightening
+  consequence is historical. The scheduled fence stays as merged in #78. See `v2-p0/codium-run-headroom.md`.
 
 **F20. Check-ins might carry `vector-plan`, Codium tokens or Codium cost.** Not confirmed.
 

@@ -1,5 +1,28 @@
 # codium-run-headroom: A23-model-edit-race (parallel half)
 
+## Current integration, 22 Nov 2026
+
+PR #78 is merged in main and supplies the owner's `tightenBudget` prompt field. This branch now uses that field for
+Codium parallel fences too. The active run captures whether it was admitted as Codium; both ordinary run prompts
+and live messages send `tightenBudget: true` with a finite headroom budget. The engine therefore keeps stricter
+configured and research limits. Own-key prompts retain their existing arming behavior, and an unlimited Codium run
+sends neither a budget nor a tightening instruction. The older consequence below about replacing fallback caps is
+historical and superseded by this integration. The ledger's limits, reservations, one-cent floor and billing rules
+are unchanged; no engine, protocol, generated, budget-data or flag file changes are needed.
+
+Merged main `c515de62465db817ff309f4237023f9704fe7983` cleanly into this branch with merge commit
+`1ea0d41373dc67d20585df216d3bb5a1f46bc01c`. The existing parallel spend file passed 11 tests before adding the
+integration regressions. With production source unchanged, the expanded file then gave **10 pass / 4 fail**, all
+on missing `tightenBudget`: Codium-only and mixed admissions, the one-cent-floor admission, and a live Codium
+message. After the fix it gave **14 pass / 0 fail** (80 assertions). Own-key prompt/message and unlimited-Codium
+controls remain green. The live-message fixtures wait inside the unchanged 30-second test deadline and always let
+the controlled local engine settle.
+
+Other checks ran individually through `/workspace/.tools/vector-serial`, with `--timeout 30000` and fake services:
+`codium-run-headroom.test.ts` 6/6, `spend-limits.test.ts` 38/38, `scheduled-agents.test.ts` 71/71, and
+`parallel-workspaces.follow-up.test.ts` 45/45. Desktop `bun typecheck` passed. No real Codium, payment, model-vendor
+or customer GitHub API was called.
+
 Branch `codium-run-headroom`, cut from origin/main `609763f72` and merged up to `edbc4a8c3`. It covers the parallel
 half of one Vector v2 leftover P0 item, A23-model-edit-race, under lead ruling R2 option 1 (rulings file, 21 Nov 2026).
 The scheduled half of the same ruling is open PR #78 (`spend-cap-follow`), which owns `scheduled-agents.ts` and its

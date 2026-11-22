@@ -73,3 +73,10 @@ race itself, is open PR #78 (`spend-cap-follow`), so the race stays open here un
 allowance itself still returns no `budgetUsd` and reserves nothing, as "Behavior" says; the budget comes from the second
 check. No atomic model fence was added. The build record is `v2-p0/codium-run-headroom.md`. Nothing earlier in this
 record was changed.
+
+## Status on 22 Nov 2026 (integration with #78)
+
+The scheduled half is merged. Codium parallel prompts and live messages now send a bounded headroom fence with
+`tightenBudget: true`, using #78's owner prompt contract, so stricter configured and research caps continue to apply.
+Own-key and unlimited-Codium behavior is unchanged. This supersedes the earlier open-#78 and fallback-cap consequence
+notes; exact validation is recorded in `v2-p0/codium-run-headroom.md`.
