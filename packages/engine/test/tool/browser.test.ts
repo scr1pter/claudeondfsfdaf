@@ -5,7 +5,7 @@ import { Agent } from "../../src/agent/agent"
 import { Config } from "@/config/config"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
-import { BrowserTool, describeSensitiveBrowserAction, isLocalUrl } from "../../src/tool/browser"
+import { BrowserTool, describeSensitiveBrowserAction, isLocalUrl, NOT_WEB } from "../../src/tool/browser"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
 import { FakeBridge } from "../lib/fake-bridge"
@@ -512,6 +512,33 @@ describe("browser tool", () => {
       expect((yield* run({ action: "hover", ref: "ref_1" })).asked).toEqual([])
       expect((yield* run({ action: "select_option", ref: "ref_1", values: ["a"] })).asked).toEqual([])
     }),
+  )
+
+  it.instance(
+    "an address that is not http or https is refused before anything is asked or sent, not asked under origin null",
+    () =>
+      Effect.gen(function* () {
+        bridge.answer(showing("http://localhost:3000/"))
+        // Each has the origin "null", or does not parse at all: the desktop opens none of them.
+        for (const params of [
+          { action: "open_url", url: "file:///etc/passwd" },
+          { action: "open_url", url: "javascript:alert(document.cookie)" },
+          { action: "open_tab", url: "data:text/html,<h1>hi</h1>" },
+          { action: "open_url", url: "localhost:3000" },
+          { action: "open_url", url: "example.com/login" },
+        ] as const) {
+          const refused = yield* run(params)
+          expect({ url: params.url, output: refused.result.output, sent: refused.sent, asked: refused.asked }).toEqual(
+            { url: params.url, output: NOT_WEB, sent: [], asked: [] },
+          )
+          expect(refused.result.title).toBe("Not done")
+        }
+        // A full https address still asks for its origin and opens.
+        const opened = yield* run({ action: "open_url", url: "https://docs.example.com/guide" })
+        expect(opened.commands).toEqual(["openUrl"])
+        expect(opened.asked).toEqual(["browser_external"])
+        expect(asked[0]).toMatchObject({ patterns: ["https://docs.example.com"] })
+      }),
   )
 
   it.instance("fields a model left empty are absent, so the desktop sees no bad ref or tab (B15, B19)", () =>

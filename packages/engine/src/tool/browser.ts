@@ -269,6 +269,19 @@ export function isLocalUrl(rawUrl: string) {
   }
 }
 
+export const NOT_WEB =
+  "The browser opens only http and https addresses, written in full, such as https://example.com/. Nothing was opened or asked."
+
+// The desktop opens only http and https pages (desktop browser-agent.ts, safeUrl). Any other address is refused here,
+// before anything is asked: a file:, data: or javascript: address, or one with no scheme (localhost:3000), has the
+// origin "null", so its ask would offer to always allow every such address at once, and one that does not parse
+// (example.com) would end the call with an error.
+function webAddress(url: string) {
+  if (!URL.canParse(url)) return false
+  const { protocol } = new URL(url)
+  return protocol === "http:" || protocol === "https:"
+}
+
 function bridgeRequest(input: Record<string, unknown>, signal: AbortSignal) {
   return BrowserBridge.command<BrowserReport>(input, signal)
 }
@@ -566,6 +579,12 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
           const lead = ctx.agent === ResearchRun.LEAD
           if (lead && !RESEARCH_ACTIONS.has(params.action))
             return { title: "Not done", output: RESEARCH_ONLY, metadata: { url: "", action: params.action } }
+          if (
+            (params.action === "open_url" || params.action === "open_tab" || params.action === "handoff") &&
+            params.url !== undefined &&
+            !webAddress(params.url)
+          )
+            return { title: "Not done", output: NOT_WEB, metadata: { url: "", action: params.action } }
           const model = ctx.extra?.model as Provider.Model | undefined
           if (params.action === "screenshot" && model?.capabilities.input.image !== true)
             return { title: "No screenshot", output: NO_IMAGES, metadata: { url: "", action: params.action } }
