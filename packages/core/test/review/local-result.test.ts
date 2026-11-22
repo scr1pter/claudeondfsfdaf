@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { hash } from "../../src/util/encode"
-import { parseUnifiedDiff } from "../../src/review/diff"
+import { fromGitHubFiles, parseUnifiedDiff } from "../../src/review/diff"
+import { classifyFiles, parseGitAttributes } from "../../src/review/ignore"
 import {
   completeStrictReview,
   decodeLocalResult,
@@ -280,6 +281,41 @@ describe("retained local review result decoding", () => {
       failedResult(value, "Vector could not finish this review: the model returned no report"),
     )
     expect(decoded?.verdict).toEqual({ verdict: "incomplete", causes: ["no-reviewer"], notes: [] })
+  })
+
+  test("a completed cursor retains genuinely classified generated and vendored skips", async () => {
+    const files = fromGitHubFiles(
+      ["src/file.ts", "generated.ts", "vendor/lib.ts"].map((filename) => ({
+        filename,
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-old()\n+new()",
+      })),
+    )
+    const classified = classifyFiles(files, {
+      config: DEFAULT_REVIEW_CONFIG,
+      attributes: parseGitAttributes("generated.ts linguist-generated\nvendor/** linguist-vendored"),
+    })
+    expect(classified.review.map((file) => file.path)).toEqual(["src/file.ts"])
+    expect(classified.skipped).toEqual([
+      { path: "generated.ts", reason: "generated" },
+      { path: "vendor/lib.ts", reason: "vendored" },
+    ])
+    const value = stoppedOutcome({
+      skipped: classified.skipped,
+      unreviewed: [],
+      notes: ["Completed all 2 review batches (1 files)."],
+    })
+    const { decoded } = await retainedStop(failedResult(value, "Vector could not finish this review: no report"))
+    expect(decoded?.outcome?.skipped).toEqual(classified.skipped)
+    expect(decoded?.verdict).toEqual({ verdict: "incomplete", causes: ["no-reviewer"], notes: [] })
+    for (const reason of ["held-back", "size-limit"] as const)
+      expect(
+        decodeStop(
+          failedResult(stoppedOutcome({ unreviewed: [], skipped: [{ path: "src/file.ts", reason }] }), "No report."),
+        ),
+      ).toBeUndefined()
   })
 
   test("empty-evidence stops cannot manufacture new selection or strict-drop bookkeeping", () => {

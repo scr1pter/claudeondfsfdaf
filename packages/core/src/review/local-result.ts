@@ -563,7 +563,16 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
       !outcome.held?.length &&
       !outcome.unreviewed.length &&
       !outcome.selection.diffIncomplete &&
-      !outcome.skipped.length
+      outcome.skipped.every(
+        (file) =>
+          file.reason === "ignored" ||
+          file.reason === "lockfile" ||
+          file.reason === "generated" ||
+          file.reason === "vendored" ||
+          file.reason === "build-output" ||
+          file.reason === "binary" ||
+          file.reason === "deleted",
+      )
     const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
     const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
     if (
