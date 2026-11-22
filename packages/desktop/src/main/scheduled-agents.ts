@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 
 import { getStore } from "./store"
 import { nextRun, type Recurrence } from "@vectordevai/app/schedule"
+import { codiumRunHeadroom } from "./codium-run-headroom"
 import type { SpendLedger } from "./spend-limits"
 import { measuredRun, newSpend, readSpend, type EngineSessionResponse } from "./run-usage"
 
@@ -571,19 +572,23 @@ export function createScheduledAgents(
             .then((response) => response?.data?.model)
             .catch(() => undefined)
         : record?.model
+      const codium = Billing.isCodium(model?.providerID)
       const allowance = await ledger.checkAllowance({
         runId,
         source: "scheduled",
-        billing: Billing.isCodium(model?.providerID) ? "codium" : undefined,
+        billing: codium ? "codium" : undefined,
         // Every target of this launch is checked at once, so the hold has to
         // be taken inside the check, not after it.
         reserve: true,
       })
       if (!allowance.allowed) throw new Error(allowance.reason || "A spend limit blocked this scheduled run.")
+      // The session's model can still change before the prompt is admitted, so a run admitted as Codium carries the
+      // own-key headroom as its budget, which only its own-key steps spend (codium-run-headroom.ts).
+      const budgetUsd = codium ? await codiumRunHeadroom(ledger, { runId, source: "scheduled" }) : allowance.budgetUsd
       // recordRunCost releases the reservation on the normal path. This covers a
       // run that failed before it reached the engine.
-      return promptTarget(engine, id, index, target, prompt, record?.model, ledger, runId, allowance.budgetUsd).finally(
-        () => ledger.release(runId),
+      return promptTarget(engine, id, index, target, prompt, record?.model, ledger, runId, budgetUsd).finally(() =>
+        ledger.release(runId),
       )
     })
     const outcome = await execution.then(

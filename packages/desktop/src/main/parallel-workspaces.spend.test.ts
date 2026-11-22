@@ -416,7 +416,11 @@ for (const mixed of [false, true]) {
     expect(created.billing).toBe("codium")
     expect(created.measuredCost).toBeUndefined()
     const record = await settle(created.id)
-    expect(engineState.prompts[0]?.body.budget).toBeUndefined()
+    // 21 Nov 2026, lead ruling R2 (A23's model edit race): this assertion was `toBeUndefined()`, A25's reading of F19
+    // ("known-Codium desktop runs carry no desktop budget"). The ruling reverses that reading: a run admitted as Codium
+    // carries the own-key headroom as its engine budget, here half of the day's, as an ordinary run without a per-run
+    // limit gets. Codium steps stay exempt, so only own-key steps spend it, and the Codium check still holds nothing.
+    expect(engineState.prompts[0]?.body.budget).toEqual({ usd: headroom / 2 })
     expect(record.billing).toBe("codium")
     expect(record.measuredCost).toBe(engineState.cost)
     expect(record.actualCost).toBe(mixed ? "$0.12" : undefined)
@@ -430,3 +434,43 @@ for (const mixed of [false, true]) {
     expect(await headroomSeenByAnotherRun()).toBeCloseTo(headroom - engineState.cost)
   })
 }
+
+// 21 Nov 2026, lead ruling R2 (A23's model edit race): a Codium run still starts once the own-key dollars are spent,
+// because the gateway caps its Codium steps, but it carries a 1-cent budget, so an own-key step (a model switched in
+// mid-run, or a subagent on its own model) stops it at its first cent.
+test("a Codium parallel run started after the own-key dollars are spent carries a 1-cent budget", async () => {
+  const ledger = await spendLedger()
+  await ledger.setPolicy({ interactive: { perDay: { usd: 0 } } })
+  try {
+    engineState.provider = "vector-plan"
+    engineState.cost = 0
+    engineState.tokens = { input: 0, output: 0 }
+    engineState.codiumSteps = 2
+    engineState.spend = (sessionId) =>
+      engineState.prompted.has(sessionId)
+        ? {
+            data: {
+              sessionID: sessionId,
+              state: "ok",
+              budget: { usd: 0.01 },
+              spentUsd: 0,
+              steps: 2,
+              unpricedSteps: 0,
+              codiumSteps: 2,
+              costKind: "codium",
+            },
+          }
+        : {}
+    expect((await ledger.checkAllowance({ runId: "someone-else", source: "parallel" })).allowed).toBe(false)
+
+    const created = await launch("spent-codium")
+    const record = await settle(created.id)
+
+    expect(engineState.prompts[0]?.body.budget).toEqual({ usd: 0.01 })
+    expect(record.status).not.toBe("failed")
+    expect(record.costKind).toBe("codium")
+    expect(await ledgerEventsFor(created.id)).toHaveLength(0)
+  } finally {
+    await ledger.setPolicy({ interactive: { perDay: { usd: 10 } } })
+  }
+})

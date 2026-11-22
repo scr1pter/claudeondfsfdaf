@@ -415,6 +415,11 @@ finding says otherwise.
   `scheduled-agents.ts:515-524`, and the parallel drain measurement), counts in the windows and blocks later own-key
   runs; the engine's own caps (`budget.run`, `--max-cost`, research limits) still stop it. This is what D-3, C8
   ("neither blocks such a run … nor reserves `budgetUsd`") and the A23 decision ask; no change.
+- 21 Nov 2026 (branch `codium-run-headroom`): this reading is reversed by lead ruling R2 (A23 model edit race). A
+  desktop run admitted as Codium now also carries the own-key headroom as its engine budget, from a second,
+  non-reserving ordinary check (`packages/desktop/src/main/codium-run-headroom.ts`), with a 1-cent floor once the
+  own-key dollars are spent. Codium steps stay exempt and the Codium check still neither blocks nor reserves. See
+  `v2-p0/codium-run-headroom.md`. The text above is left as it was.
 
 **F20. Check-ins might carry `vector-plan`, Codium tokens or Codium cost.** Not confirmed.
 

@@ -46,6 +46,7 @@ import { formatValidationForRepair, validateWorkspace, type WorkspaceValidationR
 import { whileDesktopWorks } from "./keep-awake"
 import { parseUnifiedDiff, selectUnifiedDiff, type UnifiedDiffSelection } from "./unified-diff"
 import { scanChangedSecrets } from "./secret-scanner"
+import { codiumRunHeadroom } from "./codium-run-headroom"
 import { spendLedger } from "./spend-limits"
 import {
   combineSpend,
@@ -2154,13 +2155,14 @@ async function executeParallelWorkspace(id: string, engine: ParallelWorkspaceEng
     const persisted = readRecords().find((record) => record.id === id)
     if (!persisted) throw new Error("Parallel workspace was not found.")
     const ledger = await spendLedger()
+    const codium = persisted.runtime === "vector" && Billing.isCodium(persisted.provider)
     // The headroom is held inside the check, so agents launched beside this
     // one cannot be handed the same dollars.
     const allowance = await ledger.checkAllowance({
       runId,
       source: "parallel",
       reserve: true,
-      billing: persisted.runtime === "vector" && Billing.isCodium(persisted.provider) ? "codium" : undefined,
+      billing: codium ? "codium" : undefined,
     })
     // Blocked means the money is already spent, so the agent must never start.
     // Throwing lands in the catch below, which is the same failed-record shape
@@ -2168,9 +2170,11 @@ async function executeParallelWorkspace(id: string, engine: ParallelWorkspaceEng
     if (!allowance.allowed) {
       throw new Error(allowance.reason || "A spend limit blocked this parallel agent run.")
     }
+    // The session's model can change while the run goes, and a subagent can run on its own model, so a run admitted as
+    // Codium carries the own-key headroom as its budget, which only its own-key steps spend (codium-run-headroom.ts).
+    const budgetUsd = codium ? await codiumRunHeadroom(ledger, { runId, source: "parallel" }) : allowance.budgetUsd
     const launched = activeRuns.get(id)
-    if (launched)
-      launched.spend = { projectPath: persisted.sourcePath, budgetUsd: allowance.budgetUsd, draining: false }
+    if (launched) launched.spend = { projectPath: persisted.sourcePath, budgetUsd, draining: false }
     // A warning is information, not a gate: the run proceeds and the user gets
     // told how close the cap is.
     const warning = allowance.state === "warn" ? allowance.reason : undefined

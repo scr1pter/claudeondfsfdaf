@@ -61,3 +61,13 @@ kind (F18) is handed to P4d. The "Validation" section above describes its own da
 superseded by "Completed CI evidence", whose run 41256437634 (push, head `ad187830`, success) was checked again by id
 under `scr1pter/vectordev.ai`; the link above names the repository `scr1pter/claudeondfsfdaf`, as GitHub's run records
 still do. Nothing earlier in this record was changed.
+
+## Status on 21 Nov 2026 (codium-run-headroom)
+
+The concurrent owner-edit race under "Review and limits" is closed on the desktop by lead ruling R2 (option 1): a
+desktop run admitted as Codium also carries the own-key headroom as its engine budget, from a second, non-reserving
+ordinary check in `packages/desktop/src/main/codium-run-headroom.ts`, with a 1-cent floor once the own-key dollars are
+spent. Own-key steps the run takes (a model switched in before admission or mid-run, or a subagent on its own model)
+stop at that budget; Codium steps stay exempt. The Codium allowance itself still returns no `budgetUsd` and reserves
+nothing, as "Behavior" says; the budget comes from the second check. No atomic model fence was added. The build record
+is `v2-p0/codium-run-headroom.md`. Nothing earlier in this record was changed.
