@@ -68,3 +68,16 @@ Fold these entries into the lane docs (`vector-at-mention-deviations.md`, `codiu
 - Green (the diff re-applied, sha256 matched): 7 pass, 0 fail.
 - Mutation 1, a dispatch accepts any thread: 2 fail. Mutation 2, artifact-key's review gate removed: 1 fail. Mutation 3, a schedule accepts any thread: 2 fail. Each restored, sha256 matched.
 - `cd packages/engine && bun typecheck --project ../../tsconfig.json` (the hosted API): clean. `cd packages/web && bun typecheck`: 0 errors, 0 warnings.
+
+## 2026-11-22, CI fix: the INV-P1 tests left `process.exitCode` at 1
+
+**The failure.** PR #75's `engine (windows, shard 11/12)` job ended with exit code 1 although it reported 1018 pass and 0 fail, on both attempts. On main at the merge base `6601d963d`, the same 56 files passed with exit 0 (1015 pass). The only difference was the three new INV-P1 tests in `packages/engine/test/cli/ship.test.ts`. Their `both()` helper saved `process.exitCode` (unset, so `undefined`), ran `vector ship capture`, which sets it to 1 on a refusal, and restored it with `process.exitCode = exitCode`. Bun 1.3.14 ignores an assignment of `undefined`, so the code stayed 1 and `bun test` exited 1 when the run finished. The Linux shard passed only because a later file in that shard (`test/cli/github.agent-codium.test.ts`) resets the code to 0. Run alone on this computer, the file failed the same way: 14 pass, 0 fail, exit 1.
+
+**The fix** (test only, `packages/engine/test/cli/ship.test.ts`): restore with `process.exitCode = exitCode ?? 0`, the pattern `github.agent-codium.test.ts` and `everywhere/github-agent-body.test.ts` already use. Both INV-P1 command tests now also assert that the capture's exit code was 1 and that `process.exitCode ?? 0` is back to 0 after `both()`, so a leaked code shows up as a named failure instead of a bare exit 1. The product code (`ship.ts`) is unchanged, and no assertion was removed or loosened.
+
+**Runs** (`cd packages/engine && bun test --timeout 30000 test/cli/ship.test.ts`):
+
+- Before the fix: 14 pass, 0 fail, exit 1.
+- With the fix: 14 pass, 0 fail, exit 0.
+- Mutation (the restore set back to `process.exitCode = exitCode`): 12 pass, 2 fail. Both INV-P1 command tests expected 0 and got 1. Restored afterwards.
+- `cd packages/engine && bun typecheck`: clean (exit 0).

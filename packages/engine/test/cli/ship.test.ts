@@ -463,7 +463,9 @@ describe("INV-P1: refusals in GitHub Actions", () => {
       const capture = await ship(["capture", "--pr", "12", "--chrome", process.execPath])
       return { ticket, capture, exitCode: process.exitCode, asked }
     } finally {
-      process.exitCode = exitCode
+      // Bun ignores `process.exitCode = undefined`, so the capture's 1 would outlive the test and fail the whole
+      // `bun test` run with 0 failures; 0 is the code an unset one stands for.
+      process.exitCode = exitCode ?? 0
       for (const name of NAMES)
         if (saved[name] === undefined) delete process.env[name]
         else process.env[name] = saved[name]
@@ -477,6 +479,8 @@ describe("INV-P1: refusals in GitHub Actions", () => {
     expect(out.ticket).not.toMatch(/plan|payment|Codium/i)
     expect(out.capture).not.toMatch(/plan|payment|Codium/i)
     expect(out.exitCode).toBe(1)
+    // The refusal's exit code is the command's, not the test run's.
+    expect(process.exitCode ?? 0).toBe(0)
     // Off Windows the capture reaches vectordev.ai, which refuses its card; on Windows it refuses on this computer first.
     if (process.platform !== "win32") {
       expect(out.asked).toEqual(["ticket", "card"])
@@ -487,6 +491,8 @@ describe("INV-P1: refusals in GitHub Actions", () => {
   test("outside Actions, the server's reason follows the fixed line", async () => {
     const out = await both(undefined)
     expect(out.ticket).toContain(`Ship Desk: no capture ticket. ${PLAN}`)
+    expect(out.exitCode).toBe(1)
+    expect(process.exitCode ?? 0).toBe(0)
     if (process.platform !== "win32")
       expect(out.capture).toContain(`Error: Ship Desk: vectordev.ai refused this capture. ${HOLD}`)
   })
