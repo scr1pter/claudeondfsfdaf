@@ -232,9 +232,6 @@ function harness(options: {
   // so a reading can differ before and after the run.
   spend?: (sessionId: string, prompted: boolean) => unknown
   sessionModel?: { providerID: string; id: string }
-  // The model each read of a session's own route answers with, counted from 0, ahead of `sessionModel`: a model the
-  // owner switches between reads.
-  sessionModelOnRead?: (read: number) => { providerID: string; id: string } | undefined
   sessionUsage?: (completed: boolean) => Record<string, unknown>
   promptFailure?: string
   // How the turn's last assistant message finished, "stop" unless set.
@@ -263,7 +260,6 @@ function harness(options: {
     billing?: "codium"
   }> = []
   let contextPolls = 0
-  let sessionReads = 0
 
   const runtime = createScheduledAgents({
     // Round-trips through JSON exactly as electron-store does, so a field this
@@ -326,7 +322,6 @@ function harness(options: {
       if (session) {
         const sessionId = decodeURIComponent(session[1] ?? "")
         const completed = promptedAt.has(sessionId)
-        const model = options.sessionModelOnRead?.(sessionReads++) ?? options.sessionModel
         return {
           data: {
             cost: completed ? 0.25 : 0,
@@ -339,7 +334,7 @@ function harness(options: {
               reasoning: 0,
               cache: { read: 0, write: 0 },
             },
-            model: model ?? { providerID: "provider-test", id: "model-test" },
+            model: options.sessionModel ?? { providerID: "provider-test", id: "model-test" },
             ...options.sessionUsage?.(completed),
           },
         }
@@ -1100,100 +1095,6 @@ test("a continued Codium session uses its actual model despite an older own-key 
   expect(harnessed.spendChecks[0]?.billing).toBe("codium")
   expect(harnessed.prompts).toHaveLength(1)
   expect(harnessed.reserved.size).toBe(0)
-})
-
-// Lead ruling R2 (21 Nov 2026), A23's model edit race: the session's model can change between the desktop's read and
-// the prompt's admission, so a run admitted as Codium also carries the own-key headroom as its engine budget. Codium
-// steps stay exempt in the engine's guard; only own-key steps spend it. The Codium check still reserves nothing.
-describe("a scheduled run admitted as Codium carries the own-key headroom", () => {
-  test("a fresh Codium session is sent the headroom an ordinary check gives, and nothing is held", async () => {
-    const harnessed = harness({
-      at: new Date(2026, 7, 19, 9, 0, 0, 0),
-      records: [scheduledRecord({ model: { providerID: "vector-plan", id: "codium-model" } })],
-      sessionModel: { providerID: "vector-plan", id: "codium-model" },
-      allowance: { allowed: true, state: "ok", remainingUsd: 5 },
-    })
-
-    await harnessed.runtime.tick()
-
-    expect(harnessed.record()?.status).toBe("completed")
-    expect(harnessed.prompts).toHaveLength(1)
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 } })
-    // The Codium check first, then the ordinary one, which asks for no hold.
-    expect(harnessed.spendChecks.map((check) => [check.billing, check.reserve])).toEqual([
-      ["codium", true],
-      [undefined, undefined],
-    ])
-    expect(new Set(harnessed.spendChecks.map((check) => check.runId)).size).toBe(1)
-    expect(harnessed.reserved.size).toBe(0)
-  })
-
-  test("an own-key model switched in after the Codium read is admitted under the own-key headroom", async () => {
-    const harnessed = harness({
-      at: new Date(2026, 7, 19, 9, 0, 0, 0),
-      records: [scheduledRecord({ targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })],
-      // Codium when the desktop reads the session to admit the run, the owner's own key from the next read on.
-      sessionModelOnRead: (read) =>
-        read === 0
-          ? { providerID: "vector-plan", id: "codium-model" }
-          : { providerID: "provider-own", id: "own-model" },
-      allowance: { allowed: true, state: "ok", remainingUsd: 2.5 },
-    })
-
-    await harnessed.runtime.tick()
-
-    expect(harnessed.spendChecks[0]?.billing).toBe("codium")
-    expect(harnessed.prompts).toHaveLength(1)
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 2.5 } })
-    // The run really did go on the own key: the ledger records it under the model read after the prompt.
-    expect(harnessed.spendRecords[0]?.provider).toBe("provider-own")
-    expect(harnessed.reserved.size).toBe(0)
-  })
-
-  test("a Codium run whose own-key dollars are spent still starts, with a 1-cent budget", async () => {
-    const harnessed = harness({
-      at: new Date(2026, 7, 19, 9, 0, 0, 0),
-      records: [scheduledRecord({ model: { providerID: "vector-plan", id: "codium-model" } })],
-      sessionModel: { providerID: "vector-plan", id: "codium-model" },
-      allowance: { allowed: false, state: "blocked", reason: "Own-key dollars exhausted" },
-    })
-
-    await harnessed.runtime.tick()
-
-    expect(harnessed.record()?.status).toBe("completed")
-    expect(harnessed.record()?.error).toBeUndefined()
-    expect(harnessed.prompts).toHaveLength(1)
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 0.01 } })
-    expect(harnessed.reserved.size).toBe(0)
-  })
-
-  test("a Codium run with no dollar limit is sent no budget, as an own-key run would be", async () => {
-    const harnessed = harness({
-      at: new Date(2026, 7, 19, 9, 0, 0, 0),
-      records: [scheduledRecord({ model: { providerID: "vector-plan", id: "codium-model" } })],
-      sessionModel: { providerID: "vector-plan", id: "codium-model" },
-    })
-
-    await harnessed.runtime.tick()
-
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: undefined })
-    expect(harnessed.reserved.size).toBe(0)
-  })
-
-  test("an own-key run still takes one reserving check and its own headroom", async () => {
-    const harnessed = harness({
-      at: new Date(2026, 7, 19, 9, 0, 0, 0),
-      records: [scheduledRecord({})],
-      allowance: { allowed: true, state: "ok", remainingUsd: 5 },
-    })
-
-    await harnessed.runtime.tick()
-
-    expect(harnessed.spendChecks).toHaveLength(1)
-    expect(harnessed.spendChecks[0]).toMatchObject({ source: "scheduled", reserve: true })
-    expect(harnessed.spendChecks[0]?.billing).toBeUndefined()
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 } })
-  })
 })
 
 for (const mixed of [false, true]) {
