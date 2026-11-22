@@ -746,6 +746,7 @@ jobs:
           status=0
           GITHUB_ACTIONS=false bun test --timeout 30000 test/cloud-workspaces-page.test.ts || status=1
           GITHUB_ACTIONS=false bun test --timeout 30000 test/account-page.test.ts || status=1
+          GITHUB_ACTIONS=false bun test --timeout 30000 test/support-report.test.ts || status=1
           exit $status
 
       # script/ is not a workspace either, so turbo skips the VectorScope eval tooling's tests: the dataset contract,
