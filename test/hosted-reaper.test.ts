@@ -4,7 +4,13 @@ import { codiumKey } from "../api/_lib/codium-keys"
 import { HOSTED_ABUSE } from "../api/_lib/codium-limits"
 import { switchKey } from "../api/_lib/codium-switches"
 import { hostedMinutesKey } from "../api/_lib/hosted-entitlement"
-import { handleHostedBudget, handleHostedCron, handleHostedHeartbeat, handleHostedSessions } from "../api/_lib/hosted-api"
+import {
+  handleHostedBudget,
+  handleHostedCron,
+  handleHostedHeartbeat,
+  handleHostedSessionAction,
+  handleHostedSessions,
+} from "../api/_lib/hosted-api"
 import {
   RENEW_AHEAD_MS,
   checkHostedDrift,
@@ -191,6 +197,48 @@ describe("download-only sessions (H1a)", () => {
     held.advance(MINUTE)
     await reap(held)
     expect(await record(held, other.id)).toMatchObject({ state: "ended", reason: "frozen" })
+  })
+
+  test("a download too large to pack is not asked again, ends at the next reap and says why", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const session = (await startDownload(w)).body.session as Hosted.SessionView
+    expect((await beat(w, session.id)).body.pack).toBe(true)
+    // hostd's packer went past one upload's limit (O2): it says so, and nothing more is asked of it.
+    const failed = await beat(w, session.id, { packFailed: "too-large" })
+    expect(failed.status).toBe(200)
+    expect([failed.body.pack, failed.body.upload]).toEqual([undefined, undefined])
+    for (const body of [{}, { archiveBytes: 2048 }, { archiveBytes: 2048, uploaded: true }]) {
+      const after = await beat(w, session.id, body)
+      expect([after.body.pack, after.body.upload]).toEqual([undefined, undefined])
+    }
+    expect((await record(w, session.id)).download).toMatchObject({ failed: "too-large" })
+    expect((await record(w, session.id)).download?.readyAt).toBeUndefined()
+    // The next reap ends it, well before its block's end.
+    w.advance(MINUTE)
+    await reap(w)
+    expect(await record(w, session.id)).toMatchObject({ state: "ended", reason: "finished" })
+    expect(w.provider.computers.get(NAME())!.status).toBe("stopped")
+    // It says why: on the session the screens read, and when the person asks for its files.
+    const listed = await invoke((request, response) => handleHostedSessions(request, response, w.options), {
+      method: "GET",
+      authorization: w.desktopToken(),
+    })
+    const view = (listed.body.sessions as Hosted.SessionView[]).find((item) => item.id === session.id)
+    expect(view?.download).toEqual({ requestedAt: session.download!.requestedAt, failed: "too-large" })
+    const asked = await invoke((request, response) => handleHostedSessionAction(request, response, "download", w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: {},
+      query: { id: session.id },
+    })
+    expect(asked.status).toBe(409)
+    expect(asked.body.error).toMatchObject({
+      code: "HOSTED_DOWNLOAD_UNAVAILABLE",
+      message: "This computer's files are over 5 GB, too large to pack for download.",
+    })
+    // It delivered nothing, so the kept disk's retention is not charged (PR3).
+    expect((await ledger.rows()).filter((row) => row.kind === "retention")).toEqual([])
   })
 })
 

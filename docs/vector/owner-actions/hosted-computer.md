@@ -130,8 +130,8 @@ and an hour is left before that date, each one block with no agent, browser or l
 uploads its disk, and the session's download link then works while the media bucket keeps the packed files (step 4's
 rule removes them; the person then starts another download-only session), never past the deletion date, and never
 while the plan is frozen, after a lost dispute or while the account is being deleted. Each block is held from the
-plan's final period (after a move to a plan without a cloud computer, from the current one), and the first start on
-each computer charges that disk's retention to the same period, once. Vector pays the uploads' egress up to one
+plan's final period (after a move to a plan without a cloud computer, from the current one), and the first upload
+confirmed on each computer charges that disk's retention to the same period, once. Vector pays the uploads' egress up to one
 archive's worth per computer until the deletion date; further uploads are charged as ordinary egress. At the deletion
 date the nightly job deletes the disks and their packed files. It is reachable only when `VECTOR_HOSTED_PROVIDER` is
 set, the `hosted` switch is on, and either `computer` is listed or the account is on `VECTOR_HOSTED_ALLOW_ACCOUNTS`.
@@ -141,12 +141,16 @@ start", R2-R4):
 - who pays a download-only block (today: the final period, or the current one after a move to a plan without a cloud
   computer) and its upload's egress (today: Vector, up to one archive's worth per computer until the deletion date;
   the rest as ordinary egress);
-- the retention: charged at the first download start, after the block's hold, so a tight final period grants fewer
-  paid days while the disk stays kept the whole window (the first deletion date stands); a start that fails after the
-  hold keeps its retention charge; after a move to a plan without a cloud computer it is charged to the current plan's
-  period. 16 Nov 2026 (codium-finish lane, phase review round three): it is charged once per computer and kept window,
-  named by the disk's deletion date, so a later start in the same window held from another period (after a renewal,
-  or after an ended plan came back on a plan without a cloud computer) charges nothing more for it;
+- the retention: charged when a download-only session's upload is first confirmed, while the block's hold is still
+  placed, so a tight final period grants fewer paid days while the disk stays kept the whole window (the first deletion
+  date stands); after a move to a plan without a cloud computer it is charged to the current plan's period. 16 Nov 2026
+  (codium-finish lane, phase review round three): it is charged once per computer and kept window, named by the disk's
+  deletion date, so a later start in the same window held from another period (after a renewal, or after an ended plan
+  came back on a plan without a cloud computer) charges nothing more for it. 21 Nov 2026 (v2 leftover P0, branch
+  `hosted-download-billing`, PR3): it moved from the start to the first confirmed upload. A start that fails, or a
+  session that delivers no files, charges no retention. The daily share is checked at the confirmation now, and a day
+  that cannot fit it leaves the disk kept at Vector's cost while the files are still delivered (before, it refused the
+  start);
 - which ended plans may download: today canceled and uncollected renewals (`payment_failed`, `action_required`,
   `payment_pending`) may; refunded, lost-dispute, fraud-warning and Vector-ended plans may not;
 - before listing, confirm with OpenRouter that a key that expired and was switched off can still be read (its usage)
@@ -171,7 +175,12 @@ start", R2-R4):
   (`codium-deviations.md` "Codium finish: H1 computer", O4 and O6). Before `computer` is listed, a server package
   should charge the retention only once the first upload is confirmed, or give it back when no signed beat arrives
   during the block. It should also answer a definite mismatch with a new pack or upload. The retention is now held
-  and settled from the same pool as the block (M2), and that does not change this gate;
+  and settled from the same pool as the block (M2), and that does not change this gate.
+  21 Nov 2026 (v2 leftover P0, branch `hosted-download-billing`): the server side of this gate is built. The retention
+  is charged only once the first upload is confirmed, and a definite mismatch (the bucket answers 404, or another size)
+  answers `pack`, so the computer packs and uploads again; a check that cannot tell is tried again on the next beat. A
+  disk made before signed heartbeats now costs its one block and no retention. The minutes the computer ran are still
+  charged (M8). Whether such a start should be refused or its block left unpaid is still yours (above);
 - computers above a live plan's cap (16 Nov 2026, codium-finish lane, phase review PR1; `codium-deviations.md` R13):
   after a move to a plan with fewer computers, the computers above the new plan's count keep their disks only as long
   as the provider keeps them, which is the disk days of the plan that last ran them. Nothing offers their files: a

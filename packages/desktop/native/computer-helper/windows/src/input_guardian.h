@@ -2,6 +2,7 @@
 #include "input_events.h"
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -133,8 +134,10 @@ class InputGuardianReleaser final {
   using Callbacks = std::function<uint64_t(InputReleaseKind)>;
   using Spawn = std::function<void(std::function<void()>)>;
   InputGuardianReleaser(InputGuardianLedger&, Release, Callbacks = {});
-  // Bounded to 300 ms. Returns 0 at once while another drain holds the release lock. At most one
-  // accepted UP per ticket is in flight, and only an observed DOWN is ever released.
+  // Bounded to 300 ms. A concurrent drain waits for the release lock, bounded by its own budget, then
+  // continues; it returns 0 if the lock stays held for the whole budget. It never sends a second release
+  // for an in-flight ticket. At most one accepted UP per ticket is in flight, and only an observed DOWN
+  // is ever released.
   uint32_t drain(uint32_t milliseconds, bool retired_only = false);
   // Safe for hook callbacks: it takes the wake lock only for an instant, never across SendInput.
   // A wake before or during a wait is not lost.
@@ -153,7 +156,8 @@ class InputGuardianReleaser final {
   InputGuardianLedger& ledger_;
   Release release_;
   Callbacks callbacks_;
-  std::mutex drain_mutex_, changed_mutex_;
+  std::timed_mutex drain_mutex_;
+  std::mutex changed_mutex_;
   std::condition_variable changed_;
   std::atomic<uint64_t> generation_{0};
   std::atomic<bool> started_{false}, halted_{false};

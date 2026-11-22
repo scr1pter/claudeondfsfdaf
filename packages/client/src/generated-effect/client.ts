@@ -216,6 +216,7 @@ type Endpoint3_12Input = {
   readonly delivery?: Endpoint3_12Request["payload"]["delivery"]
   readonly resume?: Endpoint3_12Request["payload"]["resume"]
   readonly budget?: Endpoint3_12Request["payload"]["budget"]
+  readonly tightenBudget?: Endpoint3_12Request["payload"]["tightenBudget"]
 }
 const Endpoint3_12 = (raw: RawClient["server.session"]) => (input: Endpoint3_12Input) =>
   raw["session.prompt"]({
@@ -226,6 +227,7 @@ const Endpoint3_12 = (raw: RawClient["server.session"]) => (input: Endpoint3_12I
       delivery: input["delivery"],
       resume: input["resume"],
       budget: input["budget"],
+      tightenBudget: input["tightenBudget"],
     },
   }).pipe(
     Effect.mapError(mapClientError),

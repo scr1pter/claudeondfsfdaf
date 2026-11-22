@@ -19,24 +19,38 @@ const write = (file: string, text: string) => {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, text)
 }
-// Policy semantics use an ACL reader limited to this fixture's existing managed files on Windows. Calls without
-// trusted() still exercise the real owner/access checks; POSIX mode and owner checks remain in place throughout.
+// On Windows no case here starts PowerShell. trusted() and plantedTrust() each answer with a fixture ACL reader that
+// knows only this fixture's managed folder and its policy files that exist: a real read on a busy runner came back
+// empty after 15.7 s and failed the planted case closed (job 136883105861). The real owner and access checks still
+// judge what the reader answers, POSIX mode and owner checks stay real throughout, and the real PowerShell reader keeps
+// its own tests in engine test/config/managed-trust.test.ts.
 function trusted(root: string) {
   if (process.platform !== "win32") return { trust: { user: true } }
+  return { trust: { user: true, acl: managedAcl(root, { owner: "S-1-5-18", rules: [] }) } }
+}
+// A company file a standard user could have written, as Windows would describe it: any user may create
+// C:\ProgramData\vector and the files in it, and owns and fully controls what they create. Off Windows the real POSIX
+// checks judge it.
+function plantedTrust(root: string) {
+  if (process.platform !== "win32") return {}
+  return { trust: { acl: plantedAcl(root) } }
+}
+// A standard user's SID: the user running Vector, who planted the file.
+const PLANTER = "S-1-5-21-1000000000-1000000000-1000000000-1001"
+const FULL_CONTROL = 0x1f01ff
+function plantedAcl(root: string) {
+  return managedAcl(root, { owner: PLANTER, rules: [{ sid: PLANTER, rights: FULL_CONTROL, allow: true }] }, PLANTER)
+}
+// One owner and set of rules for the managed folder and each of its policy files that exists, and no other path.
+function managedAcl(root: string, acl: ConfigManaged.Acl, user?: string): ConfigManaged.AclReader {
   const managed = path.join(root, "managed")
   const owned = new Set([managed, path.join(managed, "vector.json"), path.join(managed, "vector.jsonc")])
-  return {
-    trust: {
-      user: true,
-      acl: (paths: readonly string[]) => ({
-        entries: Object.fromEntries(
-          paths
-            .filter((file) => owned.has(file) && fs.existsSync(file))
-            .map((file) => [file, { owner: "S-1-5-18", rules: [] }]),
-        ),
-      }),
-    },
-  }
+  return (paths) => ({
+    ...(user ? { user } : {}),
+    entries: Object.fromEntries(
+      paths.filter((file) => owned.has(file) && fs.existsSync(file)).map((file) => [file, acl]),
+    ),
+  })
 }
 const COMPANY = {
   lock: true,
@@ -195,7 +209,7 @@ describe("LocalStartup.policy", () => {
     const company = path.join(input.managed[0]!, "vector.json")
     write(company, JSON.stringify({ local: COMPANY }))
     // The user running the test owns it: in C:\ProgramData any user may create such a file.
-    const planted = LocalStartup.policy({ ...input, env: {} })
+    const planted = LocalStartup.policy({ ...input, ...plantedTrust(dir.path), env: {} })
     expect(planted).toMatchObject({ enabled: false, lock: false, endpoints: [], allow: [] })
     expect(planted.updates).toBeUndefined()
     expect(planted.warnings.some((warning) => warning.startsWith(ConfigManaged.UNTRUSTED))).toBe(true)
@@ -212,6 +226,41 @@ describe("LocalStartup.policy", () => {
       enabled: true,
       lock: true,
     })
+  })
+
+  test("a planted company file is left out on Windows without PowerShell, and a failed or timed-out ACL read turns Vector Local on", async () => {
+    await using dir = await tmpdir()
+    const input = folders(dir.path)
+    const managed = input.managed[0]!
+    write(path.join(input.config, "vector.json"), JSON.stringify({ local: { web: "ask" } }))
+    write(path.join(managed, "vector.json"), JSON.stringify({ local: COMPANY }))
+    // The Windows checks on any computer, with the fixture's reader in PowerShell's place: the user running Vector owns
+    // the managed folder and its file, and may change both.
+    const planted = LocalStartup.policy({ ...input, trust: { platform: "win32", acl: plantedAcl(dir.path) }, env: {} })
+    expect(planted).toMatchObject({ enabled: false, lock: false, endpoints: [], allow: [] })
+    expect(planted.updates).toBeUndefined()
+    expect(planted.warnings).toEqual([
+      `${ConfigManaged.UNTRUSTED} ${managed} is not owned by Administrators or SYSTEM.`,
+    ])
+    // The reader answers only for the managed folder and its policy files that exist.
+    const theirs = { owner: PLANTER, rules: [{ sid: PLANTER, rights: FULL_CONTROL, allow: true }] }
+    expect(
+      plantedAcl(dir.path)([
+        managed,
+        path.join(managed, "vector.json"),
+        path.join(managed, "vector.jsonc"),
+        path.join(managed, "other.json"),
+      ]),
+    ).toEqual({ user: PLANTER, entries: { [managed]: theirs, [path.join(managed, "vector.json")]: theirs } })
+    // What the real reader returns when PowerShell fails or runs past its timeout: no entries. The file may hold the
+    // company's policy, so Vector Local stays on with Web access None, as job 136883105861 saw.
+    const empty = LocalStartup.policy({
+      ...input,
+      trust: { platform: "win32", acl: () => ({ entries: {} }) },
+      env: {},
+    })
+    expect(empty).toMatchObject({ enabled: true, web: "none", lock: false, endpoints: [] })
+    expect(empty.warnings).toEqual([`Vector could not read who may change ${managed}.`])
   })
 
   test("lets an override and the confirmed block only turn it on and tighten Web access", async () => {
@@ -280,7 +329,7 @@ describe("LocalStartup.managed", () => {
     write(company, JSON.stringify({ share: "disabled" }))
     expect(LocalStartup.managed({ ...input, env: {} })).toBe(true)
     // A file any user could have made, such as a "{}" in C:\ProgramData\vector, is not company policy.
-    expect(LocalStartup.managed({ ...folders(dir.path), env: {} })).toBe(false)
+    expect(LocalStartup.managed({ ...folders(dir.path), ...plantedTrust(dir.path), env: {} })).toBe(false)
     if (process.platform !== "win32") {
       fs.chmodSync(company, 0o666)
       expect(LocalStartup.managed({ ...input, env: {} })).toBe(false)
@@ -343,7 +392,7 @@ describe("LocalStartup.ca", () => {
     const company = path.join(input.managed[0]!, "vector.json")
     // A file the user running Vector owns, as anyone can create one in C:\ProgramData\vector.
     write(company, JSON.stringify({ local: { lock: true, ca: { files: ["evil.pem"] } } }))
-    expect(LocalStartup.ca({ ...input, env: {} })).toEqual([user])
+    expect(LocalStartup.ca({ ...input, ...plantedTrust(dir.path), env: {} })).toEqual([user])
     // One another user could change, though only an administrator may own the folder's files.
     if (process.platform !== "win32") {
       fs.chmodSync(company, 0o664)

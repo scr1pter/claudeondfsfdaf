@@ -11,7 +11,9 @@ import type { Report } from "./run-api"
  *   resume;
  * - `wrapping` with `wrapBy`: the agent is asked to finish (SIGTERM) and ended shortly before `wrapBy`;
  * - `browser: false`: the browser is closed (and not opened);
- * - `pack` and `upload`: the agent's work is packed for the person's download link and uploaded;
+ * - `pack` and `upload`: the agent's work is packed for the person's download link and uploaded. A work folder that
+ *   packs to more than one upload takes (`PackTooLarge`) is reported as `packFailed: "too-large"` on every beat from
+ *   then on and never packed again in the session (O2); any other failed pack is tried again when asked again;
  * - `recording` (a Done by Morning job, WP A55): finished recording segments are reported and uploaded to the signed
  *   links the next answers carry, as the job runs, so the report keeps the last minutes even if the session ends
  *   abruptly; when the job ends, the last segments are flushed before `done` (for at most `RECORDING_FLUSH_MS`);
@@ -30,6 +32,17 @@ import type { Report } from "./run-api"
 
 /** How long the end of a job waits for its last recording segments to upload before it reports `done`. */
 export const RECORDING_FLUSH_MS = 60_000
+
+/**
+ * The work folder packs to more than one upload takes (5 GiB, S3's and R2's largest single PUT). `packWork` rejects
+ * with it, and the daemon then reports `packFailed: "too-large"` and never packs again in the session (O2).
+ */
+export class PackTooLarge extends Error {
+  constructor() {
+    super("The packed files are larger than one upload takes.")
+    this.name = "PackTooLarge"
+  }
+}
 
 export type Job = { prompt: string; title?: string }
 
@@ -107,6 +120,8 @@ export class Daemon {
   private handoff: Hosted.Handoff | undefined
   private archive: { file: string; bytes: number } | undefined
   private packing = false
+  /** The work folder was too large to pack (O2): reported on every beat from then on, and nothing is packed again. */
+  private packFailed: Hosted.PackFailure | undefined
   private uploading = false
   private uploaded = false
   private ticking: Promise<Hosted.HeartbeatAnswer | undefined> | undefined
@@ -162,6 +177,7 @@ export class Daemon {
       ...(this.done ? { done: true } : {}),
       ...(this.archive ? { archiveBytes: this.archive.bytes } : {}),
       ...(this.uploaded ? { uploaded: true } : {}),
+      ...(this.packFailed ? { packFailed: this.packFailed } : {}),
       generation: this.deps.generation,
       ...(this.handoff ? { handoff: this.handoff } : {}),
       ...(await this.recordingReport()),
@@ -344,9 +360,12 @@ export class Daemon {
     }
   }
 
-  /** Packs the agent's work (WP A54) when asked and nothing is packed yet; the next report gives its size. */
+  /**
+   * Packs the agent's work (WP A54) when asked and nothing is packed yet; the next report gives its size. A work folder
+   * too large to pack is reported at once and never packed again (O2); another failure is tried again when asked again.
+   */
   private packWhenAsked(asked: boolean | undefined) {
-    if (!asked || this.archive || this.packing) return
+    if (!asked || this.archive || this.packing || this.packFailed) return
     this.packing = true
     void this.deps
       .pack()
@@ -355,7 +374,12 @@ export class Daemon {
         this.uploaded = false
         void this.tick()
       })
-      .catch(() => this.deps.log?.("packing the files failed"))
+      .catch((error: unknown) => {
+        if (!(error instanceof PackTooLarge)) return this.deps.log?.("packing the files failed")
+        this.packFailed = "too-large"
+        this.deps.log?.("the files are too large to pack")
+        void this.tick()
+      })
       .finally(() => {
         this.packing = false
       })

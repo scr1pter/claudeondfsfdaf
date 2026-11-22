@@ -224,6 +224,20 @@ export function lifecycleDescendants(role: "supervisor" | "worker", result: Comm
   return result.code === 1 ? [] : result.stdout.trim().split(/\s+/).filter(Boolean).map(Number)
 }
 
+/**
+ * The first exec of pgrep/ps on a cold macOS VM (exec, code-signature check, page-in) can exceed the 500 ms
+ * lifecycle inspection budget. Pay that once against this process under a setup bound, outside every timed window.
+ */
+export async function warmLifecycleInspection(
+  command: (command: Command) => Promise<CommandResult> = runNativeCommand,
+) {
+  const pgrep = await command({ executable: "/usr/bin/pgrep", args: ["-P", String(process.pid)], timeoutMs: 5000 })
+  const ps = await command({ executable: "/bin/ps", args: ["-p", String(process.pid), "-o", "stat="], timeoutMs: 5000 })
+  // pgrep -P exits 1 when this process has no children; ps -p must find this process.
+  if (pgrep.timedOut || (pgrep.code !== 0 && pgrep.code !== 1) || ps.timedOut || ps.code !== 0)
+    throw new Error("The process inspection tools are unavailable.")
+}
+
 /** A failed ps inspection cannot establish death; an intervening exit requires a fresh ESRCH witness. */
 export async function lifecycleProcessAlive(
   role: "supervisor" | "worker",
@@ -907,6 +921,7 @@ async function createVerifiedFixture(options: SelfTestOptions, files?: NativeTes
       if ((await runNativeCommand(command)).code !== 0) throw new Error("The fixture signature did not verify.")
     if ((await bundleDigest(bundle)) !== (await bundleDigest(destination)))
       throw new Error("Copying or signing changed the shipped helper.")
+    await warmLifecycleInspection()
     const open = async () => nativeChannel(executable, ["--stdio"])
     const alive = (pid: number, role: "supervisor" | "worker") =>
       lifecycleProcessAlive(
