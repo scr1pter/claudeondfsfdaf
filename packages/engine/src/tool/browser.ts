@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises"
 import { Effect, Option, Schema } from "effect"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { WebFence } from "@vectordevai/core/research/fence"
 import { ResearchOutbound } from "@vectordevai/core/research/outbound"
@@ -561,6 +562,8 @@ export const INSIDE =
 export const HANDOFF_QUESTION = "Sign in or get past the paywall yourself in Preview, then press Continue."
 export const CONTINUE = "Continue"
 export const NO_IMAGES = "This model does not read images, so no screenshot was taken."
+export const GUESTED =
+  "In a session an invited guest has acted in, Vector does not use the browser: it is the user's own, signed in to their sites, and what it shows would reach the transcript the guest sees. Use webfetch for a public page."
 
 export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
   "browser",
@@ -570,12 +573,21 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
     const question = Option.getOrUndefined(yield* Effect.serviceOption(Question.Service))
     const research = Option.getOrUndefined(yield* Effect.serviceOption(ResearchRun.Service))
     const store = Option.getOrUndefined(yield* Effect.serviceOption(ResearchStore.Service))
+    // Present wherever the registry builds the tools (the terminal tool requires it there).
+    const guests = Option.getOrUndefined(yield* Effect.serviceOption(FreeModelGuests.Service))
     return {
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (input, ctx) =>
         Effect.gen(function* () {
           const params = normalize(input)
+          // The browser is the user's own: one profile for Preview and every session, which keeps the sign-ins a
+          // handoff or the user's own browsing leave there. In a session an invited guest has acted in, what it reads
+          // would reach the transcript the guest sees, and Full access would answer its asks alone, as the terminal
+          // tool keeps the user's terminals from such a session and the computer tool refuses it. Only close runs
+          // there: it reads nothing and stops what is open.
+          if (params.action !== "close" && guests && (yield* guests.marked(ctx.sessionID)))
+            return { title: "Not done", output: GUESTED, metadata: { url: "", action: params.action } }
           const lead = ctx.agent === ResearchRun.LEAD
           if (lead && !RESEARCH_ACTIONS.has(params.action))
             return { title: "Not done", output: RESEARCH_ONLY, metadata: { url: "", action: params.action } }
