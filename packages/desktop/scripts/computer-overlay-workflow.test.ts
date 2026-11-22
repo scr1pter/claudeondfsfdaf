@@ -86,7 +86,7 @@ test("Linux desktop lanes honor the actual plan and Windows-only routing", () =>
     expect(job(name)["runs-on"]).toBe("ubuntu-24.04")
   }
   expect(job("overlay-linux")["continue-on-error"]).toBeUndefined()
-  expect(job("desktop-e2e-linux")["continue-on-error"]).toBe(true)
+  expect(job("desktop-e2e-linux")["continue-on-error"]).toBeUndefined()
 })
 
 test("native overlay stages are separately restored, source-bound and archived without shipping substitutions", () => {
