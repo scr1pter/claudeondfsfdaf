@@ -99,3 +99,76 @@ confirmation. A refusal there leaves the disk kept at Vector's cost instead of r
   `test/hosted-reaper.test.ts`, `test/hosted-copy.test.ts`, `test/hosted-clients.test.ts` and
   `test/account-delete.test.ts`, all green.
 - `bun typecheck --project ../../tsconfig.json` from `packages/engine`: clean.
+
+## 2026-11-21, O2: a work folder too large to pack is reported once, and the download ends and says why
+
+**The gap.** `packWork` refused a work folder over 5 GiB with an ordinary error, so no size was reported and the
+server kept answering `pack`. hostd packed again on every answer until the block ended, and a download-only session
+paid its block with nothing to download and nothing saying why. This reaches computers only after the owner rebuilds
+the image and a computer's disk is made from it (H1b's R4(d)).
+
+**The fix.**
+- Schema (`packages/schema/src/hosted.ts`): `PackFailure = "too-large"`, `Heartbeat.packFailed?` and
+  `SessionView.download.failed?`.
+- `packages/hosted-computer/src/daemon.ts`: exports `PackTooLarge`. On it, the daemon sets `packFailed`, which every
+  later `report()` carries, and `packWhenAsked` returns early from then on. Other failures stay retryable.
+- `packages/hosted-computer/src/hostd.ts`: `packWork({maxBytes, packer, dir})` rejects with `new PackTooLarge()` past
+  the limit, kills the packer, waits for the file to close and removes it. The default packer is today's `setpriv` +
+  `tar`.
+- Server (`api/_lib/hosted-sessions.ts`, `api/_lib/hosted-crons.ts`): `parseHeartbeat` keeps only `"too-large"`; the
+  record's `Download` gains `failed`, mapped in `sessionView`; once it is set the files block does nothing;
+  `requestDownload` answers 409 `HOSTED_DOWNLOAD_UNAVAILABLE` with the over-5-GB message; `reapDownload` ends the
+  session as `finished` when it is set.
+- App (`packages/app/src/features/cloud/hosted/hosted-model.ts`): `decodeSession` keeps `download.failed:
+  "too-large"` only, and `reasonLine` shows the 5 GB sentence for a download-only session. A job session's end keeps
+  its own reason.
+- Checked, no change needed: `packages/hosted-computer/test/image.test.ts` and `script/bake-snapshot.ts` pin the
+  base image digest, the generations and `BINARIES`, not hostd's or the daemon's source.
+
+**Tests.**
+- `packages/hosted-computer/test/daemon.test.ts`, "a work folder over the limit is reported too large once and never
+  packed again (O2)": one pack attempt across repeated `pack` answers; every report from the failure on carries
+  `packFailed` with no size or upload; a job session latches the same way and keeps acting.
+- `packages/hosted-computer/test/hostd.test.ts`, "packing the work folder (O2)": with a fake packer, past the limit
+  `packWork` rejects with `PackTooLarge`, the packer is killed with SIGKILL and the folder is empty, while a packing at
+  the limit is the file; another failure rejects with an ordinary error and leaves no file.
+- `test/hosted-reaper.test.ts`, "a download too large to pack is not asked again, ends at the next reap and says why":
+  no `pack` or link after the report, whatever later beats say; the next reap ends it `finished`; the session list
+  shows `download.failed`, the person's request answers 409 with the sentence, and no retention is charged.
+- `test/hosted-sessions-api.test.ts`, "files too large to pack (O2)": `parseHeartbeat` keeps only `"too-large"`; a job
+  session is not asked again, its request answers 409 with the sentence, and the job keeps running.
+- `packages/app/src/features/cloud/hosted/hosted-model.test.ts`, "a download whose files are too large to pack says
+  so, from the session's own field (O2)": the field is decoded, anything else dropped, the reason line and the kept
+  disk's `ended` line show the sentence, and a job session keeps its own reason.
+
+**Evidence.**
+- Red-before, with all six source files reverted in the working tree (saved diff, `git checkout --`, restored with
+  `git apply`, sha256 compared): `hosted-sessions-api` 64 pass and 1 fail (the new O2 case), `hosted-reaper` 26 pass
+  and 1 fail (the new case), `hosted-model` 23 pass and 1 fail (the new case). `daemon.test.ts` and `hostd.test.ts` did
+  not load (`PackTooLarge` is not exported on main). A second red run kept only an empty `PackTooLarge` class in
+  main's `daemon.ts`: the daemon case failed at the pack count (expected 1, received 4) and the hostd case at
+  `toBeInstanceOf(PackTooLarge)` (main's `packWork` takes no options; it rejected before spawning anything, and no
+  system folder was created).
+- Green: `hosted-sessions-api` 65 pass and 1 skip, `hosted-reaper` 27 pass, `daemon` 18 pass, `hostd` 19 pass,
+  `hosted-model` 24 pass.
+- Mutations, each restored with its sha256 compared:
+  - the `packFailed` latch dropped from `packWhenAsked`: the daemon case went red (17 pass, 1 fail);
+  - the `download.failed` check dropped from `reapDownload`: the reaper case went red at the session's state;
+  - the server's `download.failed` latch dropped from the files block: the sessions-api O2 case and the reaper case
+    went red.
+- Regressions, all green, one file at a time: `test/hosted-lifecycle`, `test/hosted-ledger`, `test/hosted-copy`,
+  `test/hosted-clients`, `test/hosted-jobs`, `test/account-delete`, `test/no-personal-paths`, and in
+  `packages/hosted-computer` `source`, `bake-snapshot` and `recording`.
+- Typecheck clean: the api check (`bun typecheck --project ../../tsconfig.json` from `packages/engine`),
+  `packages/schema`, `packages/hosted-computer` and `packages/app`. `bun run build` in `packages/hosted-computer`
+  bundled hostd (dist removed afterwards); no Node is installed on this machine, so `node --check` was not run.
+
+**CI only.** `packages/hosted-computer/test/image.test.ts` and its Docker job run in `vector-hosted-ci.yml`. Nothing
+here is verified on a real microVM: that needs the owner's image rebuild and a disk made from it.
+
+## What could go wrong (all three)
+
+- PR3 lead call: a retention the daily share refuses at the confirmation is kept at Vector's cost.
+- A rejected download upload packs and uploads up to 5 GiB again; a check that stays unknown is retried every beat.
+- O2's field is safe beside older hostds: `parseHeartbeat` drops unknown fields, and an older hostd never sends it.
+- `computer` is unlisted, so no customer is affected.

@@ -126,6 +126,8 @@ export const START_STALE_MS = 10 * 60_000
 export const STOP_GIVE_UP_MS = 30 * 60_000
 /** S3's largest single upload, which R2 shares: the packed files must fit one PUT. */
 const ARCHIVE_MAX_BYTES = 5 * 1024 ** 3
+/** Why files the computer could not pack (O2) are not offered: they pack to more than `ARCHIVE_MAX_BYTES`. */
+const TOO_LARGE_MESSAGE = "This computer's files are over 5 GB, too large to pack for download."
 /**
  * A download-only start needs this long before the disk's deletion date (H1a): its one block, and an hour for the
  * person to fetch the files before the disk and its packed copy are deleted.
@@ -176,6 +178,11 @@ const Download = Schema.Struct({
    * (`eraseHostedComputer`). No link is given or followed after it.
    */
   erasedAt: Schema.optional(Schema.Number),
+  /**
+   * The computer reported that the files pack to more than one upload takes (`packFailed`, O2): they are never ready in
+   * this session, nothing more is asked of it, and a download-only session ends at the reaper's next pass.
+   */
+  failed: Schema.optional(Schema.Literal("too-large")),
 })
 const SessionRecord = Schema.Struct({
   v: Schema.Literal(1),
@@ -337,6 +344,7 @@ export function sessionView(record: SessionRecord): Hosted.SessionView {
           download: {
             requestedAt: record.download.requestedAt,
             ...(record.download.readyAt !== undefined ? { readyAt: record.download.readyAt } : {}),
+            ...(record.download.failed ? { failed: record.download.failed } : {}),
           },
         }
       : {}),
@@ -1291,7 +1299,8 @@ function publicOrigin() {
  * and marks its sessions' packed files the same way. No link is given, and none leads anywhere, while the plan's
  * disks are kept with no download (`requireFilesAllowed`). A link also leads nowhere once the media bucket's own rule
  * removed the packed files (owner-actions/hosted-computer.md); the person then asks a running session again. Files
- * that are gone answer 410 `HOSTED_DOWNLOAD_UNAVAILABLE` here and on the link; a request that cannot be served, 409.
+ * that are gone answer 410 `HOSTED_DOWNLOAD_UNAVAILABLE` here and on the link; a request that cannot be served, 409,
+ * and files the computer reported too large to pack (`download.failed`, O2) 409 with that reason.
  */
 export async function requestDownload(account: string, id: unknown, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -1300,6 +1309,8 @@ export async function requestDownload(account: string, id: unknown, options: Ses
   const record = await requireOwnSession(account, id, fetcher)
   await requireFilesAllowed(account, fetcher)
   const now = clock()
+  if (record.download?.failed === "too-large")
+    throw new ApiError(409, "HOSTED_DOWNLOAD_UNAVAILABLE", TOO_LARGE_MESSAGE)
   if (record.download?.readyAt !== undefined) {
     const due = await readDiskDue(account, fetcher)
     if (record.download.erasedAt !== undefined || (due !== undefined && due <= now))
@@ -1506,6 +1517,7 @@ export function parseHeartbeat(input: unknown): Hosted.Heartbeat {
     ...(body.done === true ? { done: true } : {}),
     ...(archiveBytes !== undefined && archiveBytes > 0 ? { archiveBytes } : {}),
     ...(body.uploaded === true ? { uploaded: true } : {}),
+    ...(body.packFailed === "too-large" ? { packFailed: "too-large" as const } : {}),
     ...(generation !== undefined && generation > 0 ? { generation } : {}),
     ...(handoff ? { handoff } : {}),
   }
@@ -1624,7 +1636,9 @@ async function signUpload(record: SessionRecord, key: string, bytes: number, now
  * ready, and only then is a download-only session's kept disk charged its retention (`chargeDownloadRetention`, PR3).
  * For a job session a check that cannot tell gets a fresh link, so its hostd keeps the copy, and a rejected upload gets
  * no answer, so hostd drops the copy and its next beat is asked to pack again. For a download-only session a rejected
- * upload is answered `pack`, so hostd packs the disk again, and a check that cannot tell gets no answer.
+ * upload is answered `pack`, so hostd packs the disk again, and a check that cannot tell gets no answer. A beat that
+ * says the files are too large to pack (`packFailed`, O2) marks the session's request `failed`, and nothing about the
+ * files is asked again.
  */
 export async function recordHeartbeat(
   claims: HostedRunClaims,
@@ -1722,9 +1736,21 @@ export async function recordHeartbeat(
     }
   } else if (record.mode !== "download" && beat.booted) await store(["DEL", hostedJobKey(id)], fetcher)
   const download = record.download
-  if (download && download.readyAt === undefined && r2Configured("media")) {
+  // Files too large to pack (O2) are never asked for again.
+  if (download && download.readyAt === undefined && download.failed === undefined && r2Configured("media")) {
     const key = archiveKey(record.account, id)
-    if (beat.uploaded && next.archiveBytes !== undefined) {
+    if (beat.packFailed === "too-large") {
+      // O2: the work folder packs to more than one upload takes. A download-only session ends at the reaper's next
+      // pass and says why; the person's request for a job session's files answers why.
+      await updateSessionRecord(
+        id,
+        (value) =>
+          value.download && value.download.readyAt === undefined && value.download.failed === undefined
+            ? { ...value, download: { ...value.download, failed: "too-large" as const } }
+            : undefined,
+        { fetcher, clock },
+      )
+    } else if (beat.uploaded && next.archiveBytes !== undefined) {
       // The upload is checked against the size it was signed for, which the beat that reports it may leave out.
       const check = await checkUpload(key, next.archiveBytes, now, fetcher)
       if (check === "unknown" && record.mode !== "download") {

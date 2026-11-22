@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { Hosted } from "@vectordevai/schema/hosted"
 import { parseToolInput, PROTOCOL, type HandoffReason } from "./actions"
 import { Computer, type ImageFormat } from "./computer"
-import { Daemon, type AgentControl, type BrowserControl, type Job } from "./daemon"
+import { Daemon, PackTooLarge, type AgentControl, type BrowserControl, type Job } from "./daemon"
 import { checkRepository, GitError, HostGit, type Access, type Repository, type TokenSource } from "./git"
 import { BrowserGuard, CdpPipe, guardView } from "./guard"
 import {
@@ -335,21 +335,40 @@ export function cpuReader(read: () => string = () => readFileSync("/proc/stat", 
   }
 }
 
-/** Packs the agent's work (read as the agent, so nothing it cannot read is packed) into root's pack folder. */
-export async function packWork(maxBytes = 5 * 1024 ** 3): Promise<{ file: string; bytes: number }> {
-  await mkdir(PACK_DIR, { recursive: true, mode: 0o700 })
-  const file = path.join(PACK_DIR, "files.tar.gz")
-  await rm(file, { force: true })
+/** What packs the work folder: a process whose standard output is the gzipped tar of it. */
+export type Packer = () => ChildProcess
+
+/** The agent's work folder as a gzipped tar, read as the agent, so nothing it cannot read is packed. */
+const tarAsAgent: Packer = () => {
   const [setpriv, ...rest] = dropTo(AGENT_UID, AGENT_UID, [], [BINARIES.tar, "-C", WORK_DIR, "--exclude=./.vector-push-*", "-czf", "-", "."])
-  const child = spawn(setpriv!, rest, { env: { PATH: "/usr/bin:/bin", LANG: "C" }, stdio: ["ignore", "pipe", "ignore"] })
+  return spawn(setpriv!, rest, { env: { PATH: "/usr/bin:/bin", LANG: "C" }, stdio: ["ignore", "pipe", "ignore"] })
+}
+
+/**
+ * Packs the agent's work into root's pack folder (`dir`). Past `maxBytes`, one upload's limit, the packer is killed,
+ * the partial file removed and the promise rejected with `PackTooLarge`, which the daemon reports and never retries
+ * (O2); any other failure removes the file too and rejects with an ordinary error, which it retries when asked again.
+ * A test passes its own `packer` and `dir`.
+ */
+export async function packWork(
+  options: { maxBytes?: number; packer?: Packer; dir?: string } = {},
+): Promise<{ file: string; bytes: number }> {
+  const maxBytes = options.maxBytes ?? 5 * 1024 ** 3
+  const dir = options.dir ?? PACK_DIR
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  const file = path.join(dir, "files.tar.gz")
+  await rm(file, { force: true })
+  const child = (options.packer ?? tarAsAgent)()
   const out = createWriteStream(file, { mode: 0o600 })
+  // Listened for at once, so a failure can wait for the file to be closed (or opened and closed) before removing it.
+  const closed = new Promise<void>((resolve) => out.once("close", () => resolve()))
   let bytes = 0
   await new Promise<void>((resolve, reject) => {
     child.stdout!.on("data", (chunk: Buffer) => {
       bytes += chunk.length
       if (bytes > maxBytes) {
         child.kill("SIGKILL")
-        reject(new Error("too large"))
+        reject(new PackTooLarge())
       }
     })
     child.stdout!.pipe(out)
@@ -357,6 +376,9 @@ export async function packWork(maxBytes = 5 * 1024 ** 3): Promise<{ file: string
     child.on("error", reject)
     child.on("close", (code) => (code === 0 && bytes <= maxBytes ? resolve() : reject(new Error("tar failed"))))
   }).catch(async (error) => {
+    child.stdout?.unpipe(out)
+    out.destroy()
+    await closed
     await rm(file, { force: true })
     throw error
   })

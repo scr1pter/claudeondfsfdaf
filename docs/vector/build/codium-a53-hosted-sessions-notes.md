@@ -221,3 +221,11 @@ on the server. The build record, with its red and green runs and mutations, is `
   now the confirmation's), `api/_lib/hosted-entitlement.ts` (`hostedDiskPolicy`) and `api/_lib/hosted-ledger.ts`'s
   header still say the first download-only start charges it, `test/hosted-lifecycle.test.ts:176` says the same, and
   `MODEL-PLANS.md`'s Provisioner bullet says "once a download-only start runs on them".
+- O2's server half is built. A beat may carry `packFailed: "too-large"` (`Hosted.Heartbeat`; `parseHeartbeat` keeps
+  that value only). It marks the session's request `download.failed` (shown on `SessionView.download.failed`), after
+  which the files flow asks nothing more. `requestDownload` answers 409 `HOSTED_DOWNLOAD_UNAVAILABLE`, "This computer's
+  files are over 5 GB, too large to pack for download.", and the reaper's `reapDownload` ends a download-only session
+  as `finished` at its next pass instead of at its block's end, with no retention charged. The app's `reasonLine` shows
+  the same sentence. Computers report it only once their disk is made from a rebuilt image (the a54 line, R4(d)); an
+  older hostd keeps being asked to pack until its block ends, as before. `test/hosted-copy.test.ts`'s field list has no
+  `failed` because none of its answers carries it; add it there if a case ever does.

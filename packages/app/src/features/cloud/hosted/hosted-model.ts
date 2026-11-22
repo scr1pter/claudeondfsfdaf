@@ -131,7 +131,8 @@ export type HostedSession = {
   endedAt?: number
   wrapBy?: number
   takeover?: { since: number; until: number }
-  download?: { requestedAt: number; readyAt?: number }
+  /** `failed: "too-large"`: the computer's files pack to more than one upload takes, so they are never ready (O2). */
+  download?: { requestedAt: number; readyAt?: number; failed?: "too-large" }
   /** A download-only session (H1a): it only packs the computer's files; no job, live view or take-over. */
   mode?: "download"
   handoff?: { reason: Handoff; since: number }
@@ -152,6 +153,7 @@ export function decodeSession(value: unknown): HostedSession | undefined {
       ? {
           requestedAt: value.download.requestedAt,
           ...(time(value.download.readyAt) ? { readyAt: value.download.readyAt } : {}),
+          ...(value.download.failed === "too-large" ? { failed: "too-large" as const } : {}),
         }
       : undefined
   const handoffReason = isRecord(value.handoff) ? oneOf(HANDOFFS, value.handoff.reason) : undefined
@@ -430,10 +432,15 @@ const END_REASONS: Record<string, string> = {
   lapsed: "Vector could not keep the job running.",
 }
 
+/** Why a download-only session ended without files that pack to more than one upload takes (O2). */
+const TOO_LARGE_LINE = "This computer's files are over 5 GB, too large to pack for download."
+
 export function reasonLine(session: Pick<HostedSession, "state" | "reason" | "mode" | "download">) {
   // A download-only session's line follows its files, not only its reason: the reaper also ends one "finished" when
   // the computer said it was done without uploading.
   if (session.mode === "download" && session.download?.readyAt !== undefined) return "Your files are ready."
+  // The reaper ends it "finished" as soon as the computer reports the files too large to pack (O2).
+  if (session.mode === "download" && session.download?.failed === "too-large") return TOO_LARGE_LINE
   if (session.mode === "download" && session.reason === "finished")
     return "The computer stopped before its files were ready."
   if (session.mode === "download" && session.reason === "deadline")

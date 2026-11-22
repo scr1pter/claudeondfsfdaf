@@ -980,6 +980,34 @@ describe("the session's files", () => {
   })
 })
 
+describe("files too large to pack (O2)", () => {
+  test("only the computer's too-large report is kept; a job session is not asked again and says why", async () => {
+    expect(parseHeartbeat({ packFailed: "too-large" })).toEqual({ packFailed: "too-large" })
+    for (const packFailed of ["tar failed", true, 1, { reason: "too-large" }]) expect(parseHeartbeat({ packFailed })).toEqual({})
+    const w = await hostedWorld(ledger)
+    const session = await started(w)
+    await action(w, session.id, "download")
+    expect((await beat(w, session.id, {})).body.pack).toBe(true)
+    const failed = await beat(w, session.id, { packFailed: "too-large" })
+    expect([failed.body.pack, failed.body.upload]).toEqual([undefined, undefined])
+    // Nothing about the files is asked again, whatever later beats say.
+    for (const body of [{}, { archiveBytes: 4096 }, { archiveBytes: 4096, uploaded: true }]) {
+      const after = await beat(w, session.id, body)
+      expect([after.body.pack, after.body.upload]).toEqual([undefined, undefined])
+    }
+    expect((await readSessionRecord(session.id, w.fetcher))!.download).toMatchObject({ failed: "too-large" })
+    // The person's request answers why, and the job keeps running.
+    const asked = await action(w, session.id, "download")
+    expect(asked.status).toBe(409)
+    expect(asked.body.error).toMatchObject({
+      code: "HOSTED_DOWNLOAD_UNAVAILABLE",
+      message: "This computer's files are over 5 GB, too large to pack for download.",
+    })
+    expectNoAmounts(asked.body)
+    expect((await readSessionRecord(session.id, w.fetcher))!.state).toBe("running")
+  })
+})
+
 /** The bucket key an answer's upload link names. */
 function objectKey(answer: Answer) {
   return decodeURIComponent(new URL(answer.body.upload.url).pathname.split("/").slice(2).join("/"))

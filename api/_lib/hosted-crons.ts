@@ -345,8 +345,9 @@ export async function reapSession(id: string, options: CronOptions = {}): Promis
 /**
  * A download-only session's pass (H1a): it ends when the switch stops it, when the plan can no longer download (frozen,
  * closing, paused or refused; an ended plan whose final period was kept, or a live plan, keeps it), once its files are
- * uploaded or the daemon says it is done, at the end of its one block, or when its heartbeat is lost. No idle or
- * fair-use check, wrap-up, renewal or token refresh applies: it runs no agent and its token outlives its block.
+ * uploaded, the computer reported them too large to pack (O2) or the daemon says it is done, at the end of its one
+ * block, or when its heartbeat is lost. No idle or fair-use check, wrap-up, renewal or token refresh applies: it runs
+ * no agent and its token outlives its block.
  */
 async function reapDownload(
   record: SessionRecord,
@@ -362,7 +363,9 @@ async function reapDownload(
   if (access === "paused" || access === "refused") return end("plan")
   if (record.state === "starting") return "kept"
   const beat = await readBeat(record.id, fetcher)
-  if (record.download?.readyAt !== undefined || beat?.done) return end("finished")
+  // Files too large to pack end it at once, "finished"; the session's `download.failed` says why (O2).
+  if (record.download?.readyAt !== undefined || record.download?.failed !== undefined || beat?.done)
+    return end("finished")
   if (now >= record.endsAt) return end("deadline")
   const lastBeat = beat?.at ?? (record.runningAt ?? record.createdAt) + Hosted.BOOT_GRACE_MS - Hosted.HEARTBEAT_LOST_MS
   if (now - lastBeat >= Hosted.HEARTBEAT_LOST_MS) return end("heartbeat")
