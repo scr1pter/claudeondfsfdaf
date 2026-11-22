@@ -469,6 +469,7 @@ export function createScheduledAgents(
     ledger: Pick<SpendLedger, "recordRunCost">,
     runId: string,
     budgetUsd: number | undefined,
+    fence: boolean,
   ) {
     // An existing session is continued, not duplicated: that is what lets a
     // recurring task keep appending to one established thread.
@@ -504,6 +505,9 @@ export function createScheduledAgents(
           prompt: { text: prompt },
           resume: true,
           budget: budgetUsd === undefined ? undefined : { usd: budgetUsd },
+          // A fence only tightens the run's limits: an agent's own default caps, such as research's, still hold, and
+          // the stricter of each limit applies. A budget the owner arms would replace them.
+          tightenBudget: fence && budgetUsd !== undefined ? true : undefined,
         },
       },
     ).then(
@@ -601,8 +605,8 @@ export function createScheduledAgents(
         : allowance.budgetUsd
       // recordRunCost releases the reservation on the normal path. This covers a
       // run that failed before it reached the engine.
-      return promptTarget(engine, id, index, target, prompt, record?.model, ledger, runId, budgetUsd).finally(() =>
-        ledger.release(runId),
+      return promptTarget(engine, id, index, target, prompt, record?.model, ledger, runId, budgetUsd, codium).finally(
+        () => ledger.release(runId),
       )
     })
     const outcome = await execution.then(

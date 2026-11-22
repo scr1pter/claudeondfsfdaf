@@ -750,6 +750,8 @@ describe("unattended spend limits", () => {
     await harnessed.runtime.tick()
 
     expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 } })
+    // A priced run's reserved headroom is the owner's own budget, not one that only tightens.
+    expect((harnessed.prompts[0] as { tightenBudget?: boolean }).tightenBudget).toBeUndefined()
     expect([...harnessed.reserved.values()]).toEqual([5])
     expect(harnessed.released).toEqual([...harnessed.reserved.keys()])
   })
@@ -1153,7 +1155,7 @@ test("an own scheduled recurrence does not inherit Codium billing from earlier t
 
 // The owner can switch a Codium session to a priced model between the model read and the prompt, or during the run.
 // A Codium run therefore carries the ordinary dollar headroom as a cap the engine applies to priced steps only, and
-// holds none of it.
+// holds none of it. The cap is sent to tighten the run's limits only, so an agent's own default caps still hold.
 describe("a Codium run's priced-only dollar fence", () => {
   const directories: string[] = []
   afterEach(async () => {
@@ -1192,6 +1194,7 @@ describe("a Codium run's priced-only dollar fence", () => {
       [undefined, false],
     ])
     expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: undefined })
+    expect((harnessed.prompts[0] as { tightenBudget?: boolean }).tightenBudget).toBeUndefined()
     expect(harnessed.record()?.results?.[0]?.status).toBe("completed")
   })
 
@@ -1211,7 +1214,7 @@ describe("a Codium run's priced-only dollar fence", () => {
       },
     })
     await harnessed.runtime.tick()
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 } })
+    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 }, tightenBudget: true })
     expect(beside?.budgetUsd).toBe(5)
     expect(harnessed.record()?.results?.[0]?.status).toBe("completed")
     expect(harnessed.spendRecords[0]).toMatchObject({ totalCostUsd: 0, billing: "codium" })
@@ -1230,7 +1233,7 @@ describe("a Codium run's priced-only dollar fence", () => {
       ledger,
     })
     await harnessed.runtime.tick()
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 0.01 } })
+    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 0.01 }, tightenBudget: true })
     expect(harnessed.record()?.results?.[0]?.status).toBe("completed")
   })
 
@@ -1266,7 +1269,7 @@ describe("a Codium run's priced-only dollar fence", () => {
     })
     await harnessed.runtime.tick()
     expect(harnessed.spendChecks[0]?.billing).toBe("codium")
-    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 } })
+    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 }, tightenBudget: true })
     expect(harnessed.record()?.results?.[0]).toMatchObject({ status: "failed", error: message })
     expect(harnessed.spendRecords[0]).toMatchObject({
       provider: "provider-own",
