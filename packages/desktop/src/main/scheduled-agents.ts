@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 
 import { getStore } from "./store"
 import { nextRun, type Recurrence } from "@vectordevai/app/schedule"
-import type { SpendLedger } from "./spend-limits"
+import type { SpendAllowance, SpendLedger } from "./spend-limits"
 import { measuredRun, newSpend, readSpend, type EngineSessionResponse } from "./run-usage"
 
 const STORE_NAME = "scheduled-agents"
@@ -254,6 +254,18 @@ function assistantFailure(response: EngineMessageResponse, afterMessageId?: stri
 }
 
 const failureMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+// The cap a Codium run takes when its dollar windows have no headroom left. RunBudget.usd must be greater than 0, so
+// an exhausted window cannot be sent as a zero cap; one cent stops a switched priced model within one step instead.
+const CODIUM_FENCE_FLOOR_USD = 0.01
+
+// What a Codium run carries from the ordinary dollar check: its headroom, the floor when there is none left, and no
+// cap when nothing is limited.
+function codiumFence(dollars: SpendAllowance) {
+  if (!dollars.allowed) return CODIUM_FENCE_FLOOR_USD
+  if (dollars.budgetUsd === undefined) return undefined
+  return dollars.budgetUsd > 0 ? dollars.budgetUsd : CODIUM_FENCE_FLOOR_USD
+}
 
 export function createScheduledAgents(
   deps: {
@@ -571,19 +583,26 @@ export function createScheduledAgents(
             .then((response) => response?.data?.model)
             .catch(() => undefined)
         : record?.model
+      const codium = Billing.isCodium(model?.providerID)
       const allowance = await ledger.checkAllowance({
         runId,
         source: "scheduled",
-        billing: Billing.isCodium(model?.providerID) ? "codium" : undefined,
+        billing: codium ? "codium" : undefined,
         // Every target of this launch is checked at once, so the hold has to
         // be taken inside the check, not after it.
         reserve: true,
       })
       if (!allowance.allowed) throw new Error(allowance.reason || "A spend limit blocked this scheduled run.")
+      // A Codium run holds no dollars, but its owner can still switch the session to a priced model after the read
+      // above. The engine compares a run's dollar cap with priced and unknown steps only, so the ordinary headroom
+      // goes with a Codium run as an unreserved cap: its Codium steps never feel it, and a priced step stops it.
+      const budgetUsd = codium
+        ? codiumFence(await ledger.checkAllowance({ runId, source: "scheduled", reserve: false }))
+        : allowance.budgetUsd
       // recordRunCost releases the reservation on the normal path. This covers a
       // run that failed before it reached the engine.
-      return promptTarget(engine, id, index, target, prompt, record?.model, ledger, runId, allowance.budgetUsd).finally(
-        () => ledger.release(runId),
+      return promptTarget(engine, id, index, target, prompt, record?.model, ledger, runId, budgetUsd).finally(() =>
+        ledger.release(runId),
       )
     })
     const outcome = await execution.then(

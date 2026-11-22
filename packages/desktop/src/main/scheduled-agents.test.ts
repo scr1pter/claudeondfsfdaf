@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import {
   advanceSchedule,
@@ -9,6 +12,7 @@ import {
   type ScheduledAgentEngine,
   type ScheduledAgentRecord,
 } from "./scheduled-agents"
+import { createSpendLedger, type SpendAllowance, type SpendLedger, type SpendPolicy } from "./spend-limits"
 
 const once = { kind: "once", at: "2026-08-20T10:00:00.000Z" } as const
 const daily = { kind: "daily", time: "09:00" } as const
@@ -217,7 +221,8 @@ function harness(options: {
   records?: ScheduledAgentRecord[]
   failing?: string[]
   sessions?: Record<string, string>
-  onActivePoll?: () => void
+  // Awaited while the run is still active, so a check made here sees every hold the run took.
+  onActivePoll?: () => void | Promise<void>
   legacyShape?: boolean
   staleAssistantPolls?: number
   incompleteAssistantPolls?: number
@@ -229,9 +234,14 @@ function harness(options: {
     budgetUsd?: number
   }
   // `prompted` says whether this session has been prompted in this harness,
-  // so a reading can differ before and after the run.
-  spend?: (sessionId: string, prompted: boolean) => unknown
+  // so a reading can differ before and after the run. `budget` is the cap its
+  // prompt armed, if any.
+  spend?: (sessionId: string, prompted: boolean, budget?: { usd: number }) => unknown
   sessionModel?: { providerID: string; id: string }
+  // The owner's concurrent edit: every read of the session after the first reports this model instead.
+  switchedModel?: { providerID: string; id: string }
+  // A real ledger in place of the fake allowance, so its holds and headroom are the ones under test.
+  ledger?: SpendLedger
   sessionUsage?: (completed: boolean) => Record<string, unknown>
   promptFailure?: string
   // How the turn's last assistant message finished, "stop" unless set.
@@ -249,6 +259,7 @@ function harness(options: {
   const reserved = new Map<string, number>()
   const released: string[] = []
   const prompts: unknown[] = []
+  const armed = new Map<string, { usd: number }>()
   const spendRecords: Array<{
     projectPath: string
     runId: string
@@ -260,6 +271,8 @@ function harness(options: {
     billing?: "codium"
   }> = []
   let contextPolls = 0
+  let sessionReads = 0
+  const ledger = options.ledger
 
   const runtime = createScheduledAgents({
     // Round-trips through JSON exactly as electron-store does, so a field this
@@ -277,6 +290,7 @@ function harness(options: {
     spend: async () => ({
       checkAllowance: async (input) => {
         spendChecks.push(input)
+        if (ledger) return ledger.checkAllowance(input)
         if (input.billing === "codium") return { allowed: true, state: "ok", unmeasuredRuns: 0 }
         const allowance = {
           unmeasuredRuns: 0,
@@ -289,10 +303,11 @@ function harness(options: {
       },
       recordRunCost: async (input) => {
         spendRecords.push(input)
-        return undefined
+        return ledger?.recordRunCost(input)
       },
       release: (runId) => {
         released.push(runId)
+        ledger?.release(runId)
       },
     }),
     request: async (_engine, path, init) => {
@@ -308,7 +323,7 @@ function harness(options: {
         return { data: { id } }
       }
       if (path === "/api/session/active") {
-        options.onActivePoll?.()
+        await options.onActivePoll?.()
         // A prompted session stays in the registry until the clock moves, which
         // it only does inside the injected delay — so every run is observed
         // active exactly once and then settles.
@@ -322,6 +337,8 @@ function harness(options: {
       if (session) {
         const sessionId = decodeURIComponent(session[1] ?? "")
         const completed = promptedAt.has(sessionId)
+        sessionReads += 1
+        const switched = sessionReads > 1 ? options.switchedModel : undefined
         return {
           data: {
             cost: completed ? 0.25 : 0,
@@ -334,16 +351,19 @@ function harness(options: {
               reasoning: 0,
               cache: { read: 0, write: 0 },
             },
-            model: options.sessionModel ?? { providerID: "provider-test", id: "model-test" },
+            model: switched ?? options.sessionModel ?? { providerID: "provider-test", id: "model-test" },
             ...options.sessionUsage?.(completed),
           },
         }
       }
       const match = /^\/api\/session\/([^/]+)\/([a-z]+)/.exec(path)
       const sessionId = decodeURIComponent(match?.[1] ?? "")
-      if (match?.[2] === "spend") return options.spend?.(sessionId, promptedAt.has(sessionId)) ?? {}
+      if (match?.[2] === "spend")
+        return options.spend?.(sessionId, promptedAt.has(sessionId), armed.get(sessionId)) ?? {}
       if (match?.[2] === "prompt") {
         prompts.push(init?.body)
+        const budget = (init?.body as { budget?: { usd: number } } | undefined)?.budget
+        if (budget) armed.set(sessionId, budget)
         if (options.promptFailure) throw new Error(options.promptFailure)
         promptedAt.set(sessionId, clock.at.getTime())
         return { data: { id: "msg_0001" } }
@@ -1129,6 +1149,135 @@ test("an own scheduled recurrence does not inherit Codium billing from earlier t
   await harnessed.runtime.tick()
   expect(harnessed.spendRecords[0]).toMatchObject({ totalCostUsd: 0.25, totalTokens: 15 })
   expect(harnessed.spendRecords[0]?.billing).toBeUndefined()
+})
+
+// The owner can switch a Codium session to a priced model between the model read and the prompt, or during the run.
+// A Codium run therefore carries the ordinary dollar headroom as a cap the engine applies to priced steps only, and
+// holds none of it.
+describe("a Codium run's priced-only dollar fence", () => {
+  const directories: string[] = []
+  afterEach(async () => {
+    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+  })
+
+  async function ledgerWith(unattended: SpendPolicy["unattended"]) {
+    const directory = await mkdtemp(join(tmpdir(), "vector-scheduled-spend-"))
+    directories.push(directory)
+    const ledger = createSpendLedger({ userDataPath: directory })
+    await ledger.setPolicy({ unattended })
+    return ledger
+  }
+
+  const codiumModel = { providerID: "vector-plan", id: "codium-model" }
+  const codiumRecord = () =>
+    scheduledRecord({ model: codiumModel, targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })
+  // A Codium turn spends no own dollars or tokens, only Codium steps.
+  const codiumUsage = (completed: boolean) => ({
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    codiumSteps: completed ? 3 : 0,
+  })
+
+  test("sends no budget when no dollar limit is set", async () => {
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [codiumRecord()],
+      sessionModel: codiumModel,
+      sessionUsage: codiumUsage,
+      ledger: await ledgerWith({}),
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.spendChecks.map((check) => [check.billing, check.reserve])).toEqual([
+      ["codium", true],
+      [undefined, false],
+    ])
+    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: undefined })
+    expect(harnessed.record()?.results?.[0]?.status).toBe("completed")
+  })
+
+  test("carries the day's headroom as its cap and holds none of it", async () => {
+    // Without a per-run limit a run is handed half the headroom, so a $10 day gives $5.
+    const ledger = await ledgerWith({ perDay: { usd: 10 } })
+    let beside: SpendAllowance | undefined
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [codiumRecord()],
+      sessionModel: codiumModel,
+      sessionUsage: codiumUsage,
+      ledger,
+      // A run checked while this one is going would be handed $2.50 if this one held its $5.
+      onActivePoll: async () => {
+        beside ??= await ledger.checkAllowance({ runId: "beside", source: "scheduled" })
+      },
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 } })
+    expect(beside?.budgetUsd).toBe(5)
+    expect(harnessed.record()?.results?.[0]?.status).toBe("completed")
+    expect(harnessed.spendRecords[0]).toMatchObject({ totalCostUsd: 0, billing: "codium" })
+  })
+
+  test("still runs when the day has no headroom, under the smallest positive cap", async () => {
+    const ledger = await ledgerWith({ perDay: { usd: 10 } })
+    // Another run still going holds the whole day.
+    ledger.reserve("task-other:run:0", 10)
+    expect((await ledger.checkAllowance({ runId: "probe", source: "scheduled" })).allowed).toBe(false)
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [codiumRecord()],
+      sessionModel: codiumModel,
+      sessionUsage: codiumUsage,
+      ledger,
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 0.01 } })
+    expect(harnessed.record()?.results?.[0]?.status).toBe("completed")
+  })
+
+  test("a switch to a priced model after the read is stopped by the fence and charged", async () => {
+    const ledger = await ledgerWith({ perDay: { usd: 10 } })
+    const message =
+      "Spend cap reached: $5.02 spent against a $5.00 cap for this run. Vector stopped after the step that crossed it."
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [codiumRecord()],
+      sessionModel: codiumModel,
+      switchedModel: { providerID: "provider-own", id: "own-model" },
+      ledger,
+      // Like the engine's guard, the fake stops the switched model's priced steps only under a dollar cap.
+      spend: (sessionId, prompted, budget) =>
+        prompted && budget
+          ? {
+              data: {
+                sessionID: sessionId,
+                state: "stopped",
+                reason: "cap",
+                message,
+                budget,
+                spentUsd: 5.02,
+                steps: 4,
+                unpricedSteps: 0,
+                costKind: "priced",
+              },
+            }
+          : {},
+      // The stopped turn's last step asked for another one.
+      finish: "tool-calls",
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.spendChecks[0]?.billing).toBe("codium")
+    expect(harnessed.prompts[0]).toMatchObject({ resume: true, budget: { usd: 5 } })
+    expect(harnessed.record()?.results?.[0]).toMatchObject({ status: "failed", error: message })
+    expect(harnessed.spendRecords[0]).toMatchObject({
+      provider: "provider-own",
+      model: "own-model",
+      totalCostUsd: 5.02,
+    })
+    expect(harnessed.spendRecords[0]?.billing).toBeUndefined()
+    expect((await ledger.recentEvents()).map((event) => [event.provider, event.costUsd])).toEqual([
+      ["provider-own", 5.02],
+    ])
+  })
 })
 
 for (const proof of [undefined, false]) {
