@@ -337,6 +337,31 @@ describe("the engine server's hold on the desktop's review sessions (VS-23d)", (
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
+  it.live("a V1 command cannot reopen a recorded zdr review under standard privacy", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const desktop = yield* project(llm)
+      yield* setReview({ privacy: "standard" })
+      yield* llm.reset
+      yield* llm.text("ok", { usage: { input: 1, output: 1 } })
+      const session = yield* desktop.create()
+      const sessionID = SessionID.make(session.id)
+      yield* Session.use.setMetadata({ sessionID, metadata: { "vector.review.zdr": true } }).pipe(
+        provideInstanceEffect(desktop.directory),
+      )
+      expect(ReviewRoutes.known(sessionID)).toBe(false)
+
+      const response = yield* send(desktop.at(`/session/${sessionID}/command`), {
+        command: "recheck",
+        arguments: "",
+      })
+      expect(response.status).toBe(500)
+      yield* desktop.idle(sessionID)
+      expect(ReviewRoutes.known(sessionID)).toBe(false)
+      expect(yield* llm.calls).toBe(0)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
   it.live("a zdr session its review released is not adopted again, and stays refused", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer

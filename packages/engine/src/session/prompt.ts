@@ -100,6 +100,7 @@ import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectord
 import { REVIEW_LENSES } from "@vectordevai/core/review/types"
 import { holdbackText } from "@vectordevai/core/review/holdback"
 import { holdsBack } from "@vectordevai/core/review/permission"
+import { ReviewSessionAdmission } from "@vectordevai/core/review/session-admission"
 import { ReviewRoutes } from "@/review/route"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
@@ -2613,15 +2614,16 @@ const layer = Layer.effect(
         // replace the exact base instructions supplied by the owning service.
         if (pinnedReview && tasks.some((task) => task.type === "compaction"))
           throw new ReviewContextUnavailable("Compaction would discard the provided review context.")
-        // VS-23d (SF-15): a review session no review holds sends nothing while the user config's review privacy, or the
-        // review scope it was prompted with, says "zdr": the desktop's sessions are held when their HTTP prompt adopts
-        // them (handlers/session.ts), so this is one forgotten past ReviewRoutes' bound, one from before a restart, or
-        // one run by a command or a summary, which adopts nothing. Any other session takes the path it took before.
+        // VS-23d (SF-15): a recorded review hold still requires a live ZDR policy after cache eviction or restart.
+        // The desktop's HTTP prompt can adopt the policy. A command or summary cannot.
+        const recordedHold = session.metadata?.[ReviewSessionAdmission.ZDR_METADATA] === true
         if (
           session.internal?.startsWith(VECTORSCOPE) &&
-          !ReviewRoutes.known(sessionID) &&
-          (reviewScope(msgs).privacy === "zdr" ||
-            ReviewRoutes.serverPolicy((yield* config.getGlobal()).review).privacy === "zdr")
+          (recordedHold
+            ? !ReviewRoutes.zdr(sessionID)
+            : !ReviewRoutes.known(sessionID) &&
+              (reviewScope(msgs).privacy === "zdr" ||
+                ReviewRoutes.serverPolicy((yield* config.getGlobal()).review).privacy === "zdr"))
         )
           throw new ReviewContextUnavailable(
             'This review\'s privacy is "zdr", and no review holds this session to a zero data retention route, so nothing was sent.',
