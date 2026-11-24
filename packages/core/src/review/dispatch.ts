@@ -1,5 +1,5 @@
 // The pre-dispatch estimate and decision (VectorScope upgrade contract §1.2 and §4 VS-24 item 4), with addendum A's
-// VS-40 estimate v2 recorded beside it. Pure and browser-safe. Nothing calls it yet: VS-24 wiring builds every planned
+// VS-40 estimate v2 recorded beside it. Pure and browser-safe. Under the opt-in, Review.run builds every planned
 // pass's first prompt before the specialists fan out in Review.run, estimates them here, shrinks while decideDispatch
 // names a lever, and stops with "budget-estimate" and zero attempts when none is left.
 //
@@ -97,6 +97,7 @@ export interface PassPlan {
   model: string // "provider/model"
   promptTokens: number // its first request: prompt, system prompt, tools and output schema
   maxSteps: number
+  extraOutputTokens?: number // An optional one-time allowance for a structured evidence response.
   price?: ReviewPrice // absent for a free, plan or local model, or one without a price snapshot
   // The route reads each step's prompt as the next step's cached prefix (a caching provider, or a last-message
   // breakpoint). v2 prices a cache-read share only when this is true and the price lists a cache read; otherwise it uses
@@ -269,6 +270,9 @@ function estimatePass(plan: PassPlan, fits: readonly OutputFit[]): PassEstimate 
     : { low: 0, high: 0 }
   const fit = calibratedOutputPerStep(plan.model, plan.effort, fits)
   const output = fit.tokens
+  const extra = plan.extraOutputTokens ?? 0
+  const withEvidence = (range: Range, low: number, high = low): Range =>
+    extra ? { low: range.low + (extra * low) / 1_000_000, high: range.high + (extra * high) / 1_000_000 } : range
   const legacy = price
     ? estimateCostUsd({ promptTokens: plan.promptTokens, maxSteps: plan.maxSteps, price })
     : undefined
@@ -312,26 +316,36 @@ function estimatePass(plan: PassPlan, fits: readonly OutputFit[]): PassEstimate 
           },
         }
       : undefined
+  const addTierEvidence = (range: Range, price: ReviewPrice) => {
+    const rate = (band: EstimateBand) => priceAt(price, plan.promptTokens + (band.steps - 1) * band.growth).output
+    return withEvidence(range, rate(bands.low), rate(bands.high))
+  }
   return {
     pass: plan.pass,
     model: plan.model,
     promptTokens: plan.promptTokens,
     maxSteps: plan.maxSteps,
+    ...(extra ? { extraOutputTokens: extra } : {}),
     ...(price ? { price } : {}),
     ...(plan.cached === undefined ? {} : { cached: plan.cached }),
     ...(plan.effort === undefined ? {} : { effort: plan.effort }),
     inputTokens: perBand(bands, (band) => passInputTokens(plan.promptTokens, band)),
-    outputTokens: perBand(bands, (band) => band.steps * OUTPUT_PER_STEP),
+    outputTokens: perBand(bands, (band) => band.steps * OUTPUT_PER_STEP + extra),
     ...(legacy && price
-      ? { usd: legacy, firstStepUsd: nextStepCostUsd(plan.promptTokens + NEXT_STEP_SLACK, price) }
+      ? {
+          usd: withEvidence(legacy, price.output),
+          firstStepUsd: nextStepCostUsd(plan.promptTokens + NEXT_STEP_SLACK, price),
+        }
       : {}),
     v2: {
       cacheReadShare: share,
-      outputTokens: perBand(bands, (band) => band.steps * output),
-      ...(v2 ? { usd: v2 } : {}),
+      outputTokens: perBand(bands, (band) => band.steps * output + extra),
+      ...(v2 && price ? { usd: withEvidence(v2, price.output) } : {}),
       ...("effort" in fit ? { fit } : {}),
     },
-    ...(tiered ? { tiered } : {}),
+    ...(tiered && price
+      ? { tiered: extra ? { usd: addTierEvidence(tiered.usd, price), v2: addTierEvidence(tiered.v2, price) } : tiered }
+      : {}),
   }
 }
 
@@ -362,6 +376,7 @@ function planOf(estimate: PassEstimate): PassPlan {
     model: estimate.model,
     promptTokens: estimate.promptTokens,
     maxSteps: estimate.maxSteps,
+    ...(estimate.extraOutputTokens ? { extraOutputTokens: estimate.extraOutputTokens } : {}),
     ...(estimate.price ? { price: estimate.price } : {}),
     ...(estimate.cached === undefined ? {} : { cached: estimate.cached }),
     ...(estimate.effort === undefined ? {} : { effort: estimate.effort }),

@@ -123,6 +123,9 @@ export const layerWith = (options?: { fetch?: typeof fetch }) =>
         db
           .transaction(() =>
             Effect.gen(function* () {
+              // A remote write may have captured public history immediately before the family was fenced.
+              // Its acknowledgement can commit without producing another public snapshot of this private session.
+              if (yield* audience.isPrivate(SessionSchema.ID.make(row.session_id))) return
               const latest = yield* archive.preview({
                 sessionID: SessionSchema.ID.make(row.session_id),
                 engine: row.engine,

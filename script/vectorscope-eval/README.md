@@ -275,7 +275,7 @@ With `pipeline: replay` the workflow runs the dataset's cases through the
 engine's own review pipeline instead of the fixtures, for each variant named in
 `variants` (registry names built for the engine; empty means `engine` and
 `engine:shared-verify`). `ci.ts` refuses a malformed, unknown, pending,
-desktop or repeated name, quoting what it refuses, and refuses `fixtures` with
+desktop, local-only or repeated name, quoting what it refuses, and refuses `fixtures` with
 it. `max_tokens` applies to the smoke pipeline only.
 
 - **Mirrors.** Both jobs first install ripgrep and run `ci.ts mirrors`, which
@@ -571,9 +571,14 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     name. Match the two by pass name: the artifact lists every planned pass,
     and a verify pass planned and skipped for budget or time has none of the
     four; the outcome lists only the passes that reported usage;
-  - `tier1` and `shrink`, typed for VS-25b's impact slice and VS-24's
-    pre-dispatch shrink, and absent until those packages' wiring fills them.
-    `tier1` is core `impact.ts`'s `ImpactRecord`: `stages` (candidates and
+  - `dispatch` records the runner's initial pre-dispatch estimate when the
+    budget gate runs. `shrink` lists each applied lever and its new estimate,
+    in order. Each estimate includes first-turn tokens and per-pass legacy
+    and v2 figures. A stop before dispatch records zero attempts, zero
+    reviewed files and the budget note. The projection preserves the
+    estimates separately from requests the fake provider actually receives.
+  - When the graph builder runs, `tier1` records its code-free
+    `ImpactRecord`. Results include `stages` (candidates and
     gated files, confirmed and packed call sites), `dropped` (ignored,
     unchecked, gate, cap, time, budget and definitions), `plan`,
     `gitVersion`, `clone`, `grepMs`, `parseMs`, `ms`, `tokens` (what the
@@ -587,10 +592,16 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     diff), `tokens` per tier, `shown` (the line ranges each tier's blocks
     show, so every arm's slice recall is measured on ranges), `external`
     (used imports that name no repository file) and `dropped` (per tier,
-    plus tier b's unread targets as `reason:path` and the call sites past
-    top-k). The scopes and outbound signatures themselves are code text, so
-    the record leaves them out. Once VS-25b wiring builds the slice in
-    `Review.run`, `context.locations` also gains the slice's locations.
+    plus tier b's unread targets as `reason:path`, since VS-37c also the
+    same-package Go files it looked declarations up in, and the call sites
+    past top-k). A same-package file is a speculative lookup, so one left
+    unread is named there but never counted in `fallback`. The scopes and
+    outbound signatures themselves are code text, so the record leaves them
+    out. `context.locations` includes the graph locations quoted by an
+    admitted reviewer. Incomplete graph context is recorded separately
+    from changed files omitted from review. When the dispatch gate trims graph
+    context, `tier1` describes the retained slice and `shrink` records each
+    applied reduction with its resulting request estimate.
   - `utilisation`, typed for VS-49's slice utilisation (core `eval.ts`
     `SliceUtilisation`) and absent until the VS-49 wiring observer fills it
     from the passes' session events, at zero tokens. It enters no digest.
@@ -629,6 +640,34 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `admitReplay`, `report.ts` and `certify.ts`. `ReplayInput.config`'s type
   leaves `VARIANT_KEYS.engine` out, so a typed caller cannot set one there;
   the refusal is the backstop for an untyped one.
+- `VARIANT_KEYS.engine` holds `verifyPolicy`, since VS-23c `privacy`, and
+  since VS-34 `holdback`. A variant's keys go over the base's `review.json`,
+  whose `privacy` and `holdback` are raise-only (`config.ts`), so `replay()`
+  refuses a variant that sets `privacy` to anything but `"zdr"` or
+  `holdback` to anything but `"secrets"`. `privacy` in `config` is still
+  refused as a route setting a replay cannot apply, and `holdback` in
+  `config` with its own message: it comes from the case's `review.json` or
+  the variant.
+- Under `engine:holdback-secrets` (or a base `review.json` that sets
+  `holdback: "secrets"`) `Review.run` holds credential files back from the
+  prompt and redacts secret-shaped values in what it sends, and its review
+  sessions' rules deny the read tool the credential files and every held
+  path, while the read, grep and glob tools redact what they return and grep
+  withholds a matching line that redaction would change. The artifact's
+  scope carries `promptsDigest({ holdback: "secrets" })`, which counts the
+  tool half too, so evidence from a run before the tool half applied does
+  not match it.
+- Under `engine:privacy-zdr` (or a base `review.json` that sets
+  `privacy: "zdr"`) `Review.run` enforces the route rules at admission, at
+  the transport and in the session runtime, and the artifact's
+  `scope.route` is `"zdr"`. A replay reads no operator's user config: the
+  hidden `review` block that raises privacy and holdback for `vector review`
+  (VS-23d) never reaches `replay()`, so a variant's name fixes its keys on
+  every machine; its `zdrAttested` is not read either. The eval attests no
+  route (owner Q7, D7), so only a model server on this computer is
+  admitted: on any other route the run is a `privacy` stop, refused before
+  anything is sent. A replay under this name says nothing about quality on a
+  ZDR route (Q9).
 - The verify policy (VS-06) is measured as the variant `engine:shared-verify`,
   `{ "verifyPolicy": "shared" }`, against the frozen pipeline's default
   (`"legacy"`). The replay reads it as a repository that opted in would be: the
@@ -668,13 +707,15 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `variant: { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" } }`.
   The desktop reads no environment, so the variant reaches it as the case's own
   `.vector/review.json` would carry it: the base's file with the variant's keys
-  set, its `verify` kept. Only the runner's settings read gets that text; any
+  set, its `verify` kept. Like `replay()`, it reads no operator's user config:
+  the runner gets the client without its `global` route. Only the runner's settings read gets that text; any
   later read of the file gets the file as it is. The runner never takes
   settings from a `review.json` the change itself edits, so for such a case,
   decided from the diff before the runner starts, the driver does not touch
   the file, the artifact's scope is the defaults' and `variant.applied` is
   `false`. A variant with no key, or with a key outside `VARIANT_KEYS.desktop`
-  (keys the desktop runner does not act on until its half lands), is not
+  (keys the desktop runner does not act on until its half lands; since
+  VS-23d it holds `verifyPolicy` and `holdback`), is not
   handed to the runner either, and is recorded `applied: false`. Such a case
   ran without the variant and must be left out of a comparison: `report.ts`
   loads desktop artifacts (VS-21c) and leaves such a run out, listing it, and
@@ -730,24 +771,26 @@ its model in `report.ts --candidate` and `--baseline`. The grammar is
 `VARIANT_NAME` in core `review/eval.ts`; it cannot tell a model id from a
 word, so only the registry keeps model ids out.
 
-| Suffix             | Sets                                                                         | Engine                | Desktop                            |
-| ------------------ | ---------------------------------------------------------------------------- | --------------------- | ---------------------------------- |
-| `shared-verify`    | `verifyPolicy: "shared"`                                                     | built (VS-06)         | built (VS-06)                      |
-| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run` and at the transport              | pending VS-23c        | pending VS-23d                     |
-| `trivial-skip`     | `trivial: "skip"`                                                            | pending VS-24 wiring  | pending VS-24 wiring               |
-| `impact-graph`     | `impact: "graph"`                                                            | pending VS-25b wiring | pending, after VS-10               |
-| `cards-brain`      | `cards: "brain"`, local-only eval                                            | pending VS-26         | pending, after VS-10               |
-| `guardrail-strict` | `guardrail: "strict"`                                                        | pending VS-27c        | pending VS-27c                     |
-| `depth-auto`       | `depth: "auto"`                                                              | pending VS-28 wiring  | pending, after VS-10               |
-| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                         | pending VS-28 wiring  | pending, after VS-10               |
-| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`) | built (VS-29a)        | pending, after VS-10               |
-| `precise`          | `mode: "precise"`                                                            | pending VS-31         | pending VS-31                      |
-| `holdback-secrets` | `holdback: "secrets"`                                                        | pending VS-34 wiring  | pending VS-34 wiring               |
-| `team-guarded`     | `teamMemory: "guarded"`                                                      | pending VS-35 wiring  | pending, documented difference     |
-| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                          | pending VS-42 wiring  | pending VS-42 wiring, after VS-27c |
-| `rule-strict`      | `ruleCheck: "strict"`                                                        | pending VS-43 wiring  | pending VS-43 wiring               |
-| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                    | pending VS-44 wiring  | pending VS-44 wiring, after VS-27c |
-| `explore-slice`    | `explore: "slice"`                                                           | pending VS-49 wiring  | pending, documented difference     |
+| Suffix             | Sets                                                                                    | Engine                      | Desktop                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| `shared-verify`    | `verifyPolicy: "shared"`                                                                | built (VS-06)               | built (VS-06)                                                                 |
+| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run`, at the transport and in the session runtime | built (VS-23c)              | pending, documented difference (VS-23d: the engine server holds the sessions) |
+| `trivial-skip`     | `trivial: "skip"`                                                                       | VS-24, trusted committed checkout | pending: desktop has no private Git proof                                 |
+| `impact-graph`     | `impact: "graph"`                                                                       | built (VS-25b)              | pending, after VS-10                                                          |
+| `cards-brain`      | `cards: "brain"`, committed base-scoped context cards | built for trusted local engine replay (SF-26) | unavailable on desktop; reviews identify cards as local-CLI-only |
+| `guardrail-strict` | `guardrail: "strict"`                                                                   | built (SF-19)               | pending: desktop lacks immutable base and head file reads                     |
+| `depth-auto`       | `depth: "auto"`                                                                         | built, VS-28                | pending, desktop uses fixed review depth                                      |
+| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                    | built, VS-28                | pending, desktop uses fixed review depth                                      |
+| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)            | built (VS-29a)              | pending, after VS-10                                                          |
+| `precise`          | `mode: "precise"`                                                                       | pending VS-31               | pending VS-31                                                                 |
+| `holdback-secrets` | `holdback: "secrets"`, in the prompt and the reviewer's read and grep results           | built (VS-34)               | built (VS-34, desktop half)                                                   |
+| `team-guarded`     | `teamMemory: "guarded"`                                                                 | pending VS-35 wiring        | pending, documented difference                                                |
+| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                     | built, VS-42                | pending, desktop lacks immutable base and head evidence                        |
+| `rule-strict`      | `ruleCheck: "strict"`                                                                   | built, VS-43                | built, VS-43                                                                  |
+| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                               | built, VS-44                | pending, desktop lacks immutable base/head evidence                            |
+| `explore-slice`    | `explore: "slice"`                                                                      | pending VS-49 wiring        | pending, documented difference                                                |
+| `receipt-json`     | `receipt: "json"`, built only from recorded execution facts                             | pending VS-47 runner wiring | pending VS-47 desktop wiring                                                  |
+| `verify-isolated`  | no key: the top 3 blocking candidates verified blind, one call each, the rest batched   | pending VS-44c wiring (R3)  | pending, documented difference until VS-27's desktop guardrail (after VS-27c) |
 
 - `resolveVariant(name)` gives a built variant's keys, or refuses the name as
   malformed, unknown (prototype names such as `constructor` included) or
@@ -759,6 +802,9 @@ word, so only the registry keeps model ids out.
   registry name; anything else, a mistyped runner such as `Engine:` or
   `engine :` included, is refused with `resolveVariant`'s detail rather
   than matching no runs.
+- Local CLI batch coverage is available through `largeChanges: "batch"`. The
+  registry has no named batch candidate. Desktop reviews use ordinary diff
+  coverage and GitHub uses its existing size limits.
 - **The flip rule.** A runner's half turns built only in the package that
   makes its keys change what that runner does, with that package's D3 parity
   test, and that package adds the keys to that runner's `VARIANT_KEYS`.
@@ -769,19 +815,31 @@ word, so only the registry keeps model ids out.
   a key (`models`, so far `cross-family` alone) flips in the package that
   supplies its models to the replay, since the runner already runs them and
   nothing about the runner changes.
+- `engine:cards-brain` runs only in a trusted local replay with an authenticated repository-only card grant.
+  The synthetic acceptance fixture seeds the Brain from committed base documents. The GitHub Actions eval
+  dispatcher rejects this variant before model work. Ordinary CLI reviews keep cards off by default.
 - `lenses-high` sets `depth: "auto"` too, because lenses run only on the high
   band under depth `auto`; its ablation baseline is `engine:depth-auto`.
-  VS-28 may revise this before it flips. `scope-introduced` and `verify-cert`
+  `scope-introduced` and `verify-cert`
   set `guardrail: "strict"` for the same reason (their keys act only inside
   the strict guardrail); VS-42 and VS-44 wiring may revise them before they
   flip.
-- The last six rows are addendum A's (§1a, pending Q18), registered once each
-  package's first part landed here, so their names are refused as pending
-  rather than unknown. Addendum names whose package has not begun here
-  (`rereview-focused`, `receipt-json`, `instructions-scoped`, `depth-rules`)
+- The seven rows after `precise` are addendum A's (§1a, pending Q18),
+  registered once each package's first part landed here, so their names are
+  refused as pending rather than unknown; `holdback-secrets`' engine half is
+  built since VS-34's tool half, and its desktop half since SF-15 (VS-23d),
+  which brought the desktop runner onto `mergeReviewConfig` and the same core
+  holdback functions. Addendum names whose package has
+  not begun here (`rereview-focused`, `instructions-scoped`, `depth-rules`)
   are registered by that package's first part, and until then read as
   unknown. A desktop half that §1a calls a documented difference stays
   pending: its runner would record `variant.applied: false`.
+- The last row is addendum B's (§1.10, VS-44c), registered with its planner,
+  core `plan.ts` `planIsolatedVerify`. It sets no key, no runner calls the
+  planner before runner-wiring R3, and it is an ablation candidate only (Q9),
+  never a default. The class it orders by and the failure fields a blind
+  verifier sees exist only under `guardrail: "strict"`, so R3 or VS-44 wiring
+  may revise it to set that too before it flips, as `verify-cert` does.
 - There are no aliases: every older name (`engine`, `engine:shared-verify`,
   `desktop`, `desktop:shared-verify`) is a registry name, and an artifact
   written before VS-21a holds VS-06's `{ verifyPolicy }`, which
@@ -991,6 +1049,25 @@ calls it, for `ci.ts` with `PIPELINE=replay` (VS-21c).
   its zero outside measured nothing), any connection outside, no pass for a
   case with reviewed files, and its variant record's `variantProblems`.
   `cap.over` is never a problem.
+- **Narrative invariance (VS-22d item 2).**
+  `packages/engine/test/review/narrative-invariance.test.ts` is the "Now"
+  recording test, the zero-spend I-2 check over what a record holds today. On
+  one synthetic checkout it projects a neutral, non-empty `pr.body`, five
+  framings of it (prior approval, false coverage, misleading hardening, an
+  agent-authored claim that tries to reopen and close its block, open a
+  trusted one and set invocation fields, and evidence dilution) and the neutral body again as a control. Each
+  framing must give the neutral run's scope (policy digest included), models,
+  passes, `maxSteps`, statuses and phases, and review and security wire bodies
+  that are byte for byte the same outside the one `<untrusted_pr_body>` block;
+  verify's bodies are the same whole. A second case does the same for an
+  untrusted case under the GitHub job's isolation with three framings. A run
+  that crosses midnight is run again, since the system prompt carries the
+  day. The depth plan and lenses (VS-28 wiring), the privacy decision
+  (VS-23b/c) and the runtime decision (VS-30) get the same comparison with
+  their wiring packages; the paid comparison of findings and verdicts across
+  framings is Later (L8, Q9). The 10 to 20 reversed-security-fix dataset
+  cases are not part of it: item 2's dataset half stays with the benchmark
+  agent and the owner.
 
 - **Cost by pass and token kind (VS-21e).** `report.ts --cost-split` and the
   entry point's `--cost-split` split each pass's `estimateCostUsd` bands by
@@ -1201,7 +1278,18 @@ How it works:
     tokens per review, wall time end to end and per pass (each with its mean,
     median and p90; a desktop pass from its first call's start to its last
     call's end), cache reads and writes, the zero-token rate, early stops by
-    reason and route refusals (VS-23's `privacy` stops, 0 until it lands)
+    reason and route refusals (VS-23's `privacy` stops: where a case's base
+    review.json sets `privacy: "zdr"` (VS-23b), and in runs of the
+    `engine:privacy-zdr` variant, `{ "privacy": "zdr" }`, since VS-23c). A
+    request the transport or the session runtime refuses after admission
+    (`ReviewRoutes.Refused`, VS-23c), and a "zdr" pass that would compact, end
+    that pass as a failed one (`partial: "model-error"`), not as a `privacy`
+    stop, so they are not counted here; the pass's detail gives the reason.
+    The session runtime gives every refusal of its own (a title, helper or
+    compaction request, a child or released session, a GitLab Duo workflow
+    model) the code `unknown-destination`, so a count by code cannot tell
+    them from a destination the rules refused; only `Refused.site`
+    (`"session"` or `"transport"`) and its message do
   - the estimate error, `|projected low - settled| / settled`, for each run
     joined with a projection record of the same variant, case and model id
     after its provider; a projection over its dollar cap is counted apart and
@@ -1264,9 +1352,13 @@ How it works:
   context-line anchor passes offline, which strict would refuse), S6 from the
   recorded suggestion rule, S7 by id or `sameFinding`, and S8 at the
   artifact's `maxComments`; it leaves out S2's class half, S4's quotes and S5,
-  and VS-42's S9 (`scopeGate: "introduced"`), since an artifact records no base
-  blobs.
-  Only findings the original posted are candidates. Unreadable verdicts are
+  VS-42's S9 (`scopeGate: "introduced"`), and S1's certificate check. The artifact has no private base or head
+  blobs to verify the trace independently.
+  Strict engine replays record the verified and unverified candidates the runner passed
+  into strict selection, their diff anchors and suggestion eligibility, and the IDs
+  whose verdicts it could not read. Re-selection
+  reports how many candidates never reached a recorded post. Only the posted findings
+  can reuse the original judgements. For older artifacts, unreadable verdicts are
   worked out from the recorded verify rule (a finding recorded as verified,
   or as `verified: false`, had its verdict read); after a triage pass,
   unconfirmed findings are missing from the artifact, so the run reads
@@ -1376,7 +1468,7 @@ cd packages/core && bun test test/review/model-evidence.test.ts
 cd script/vectorscope-eval && bun test certify.test.ts
 ```
 
-## Outcome ledger (VS-46a)
+## Outcome ledger (VS-46a; schema 2, VS-46c and VS-46d)
 
 `outcomes.ts` reads what the review job already recorded on merged pull
 requests (the sticky state and the finding markers, through core
@@ -1389,7 +1481,8 @@ ledger data is committed (I-13).
 ```
 bun script/vectorscope-eval/outcomes.ts collect --repository <owner/name> --repo-dir <clone> --since <YYYY-MM-DD> \
   --out <dir> [--until <YYYY-MM-DD>] [--branch <name>] [--bot <login>]... [--agent-prs <file>]
-bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <directory> [--ledger]
+bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <directory> [--ledger] [--audit] \
+  [--labels <file>]
 ```
 
 - **What it reads.** GitHub through `gh api` only: GET requests under
@@ -1423,11 +1516,81 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   a line it also names, escaped, left unreviewed or skipped). Per finding:
   its id, severity, category, outcome,
   stratum, whether someone other than the author and the bots engaged, the
-  resolver's role and a hashed dismisser. No login, title, body, path or code.
-  Logins are hashed with a random per-run key that is never stored, which
-  hides them in the file only: the PR numbers it keeps identify the people
-  involved to anyone who can read the repository, and two ledgers can be
-  joined on them.
+  resolver's role and a hashed dismisser. No login, title, body, path or code
+  in the clear. Logins are hashed with a random per-run key that is never
+  stored, which hides them in the file only: the PR numbers it keeps identify
+  the people involved to anyone who can read the repository, and two ledgers
+  can be joined on them.
+- **Schema 2 (VS-46c and VS-46d).** Collection writes `vectorscope-outcomes/2`
+  only: every v1 field with its v1 value, plus what the VS-46c and VS-46d
+  report sections need, as one schema change (addendum B §1.8 and §1.9).
+  - Per PR: `added` and `deleted` (the reviewed files' lines, as
+    `riskFeatures` counts them for the band, so present exactly when `band`
+    is, and so is `score`); for a reviewed PR, `unreviewedFiles` (the state's
+    last run) and `humanComments` (issue comments, review-thread comments and
+    reviews with a body by someone other than the author and the bots).
+  - Per unfiltered fix (`fixes`): `commit`, the fix commit's index in
+    `fixCommits` (a link inside this ledger, not a new name), and `deleted`,
+    which splits that fix's blamed lines on the PR into `code` (still the PR's
+    under `-w -M -C`), `blank` and `comment` (dropped by the filter),
+    `whitespace` (put elsewhere by `-w` alone) and `moved` (kept by `-w` alone,
+    put elsewhere by `-M` and `-C`). The five sum to `lines`.
+  - `fixesFiltered`, the filtered label beside the unfiltered one: each fix's
+    deleted code lines blamed again with `-w -M -C`, skipping blank and
+    comment-only lines by a fixed prefix table per language (by extension, or
+    by name for Dockerfile, Makefile, `.gitignore` and the like; no block
+    tracking, so a `* ` continuation reads as a comment; `#` is never a
+    comment in C, C++, C# or Rust, and a shebang is code; a backslash is part
+    of a file's name on every system). An entry has the filtered `lines`
+    (never 0), the same `commit` link, and the hashed `location` (path and
+    git's hunk funcname) holding most of them. Every place the fix edited is
+    on its `fixCommits` entry.
+  - `sameAgent`, on both labels of an agent-stratum PR only: the fix's PR is
+    in the trusted `--agent-prs` record too, by the same author. The record
+    names PRs, not agents, and an untrusted marker never sets it. When the
+    call cap stopped the lookup of the fix commit's own PR, the answer is
+    unknown, not false: that fix's entries carry no `sameAgent`, and the PR
+    is marked `sameAgentIncomplete`.
+  - Ledger level: `subjects` (the base branch's first-parent commits in the
+    merge window, and how many are fix-prefixed or revert-prefixed, with
+    core's word lists anchored at the start, unlike `risk.ts`'s history count;
+    a GitHub merge commit is read by its PR title line) and `fixCommits`
+    (every fix commit the scan labelled: its day, kind, deleted lines by kind,
+    and at most 32 distinct hashed locations, `capped` beyond), which the
+    fix entries of both labels name by `commit`. A fix commit with no deleted
+    line blames no PR, so only `fixCommits` shows it (VS-46d item 2). And
+    `rule`, VS-46c's measurement rule as the report config
+    (`MEASUREMENT_RULE`) had it at collection: the margin, the overhead the
+    verdict reads, the bootstrap seed and its replicates (100 to 10,000). The
+    report applies the sealed rule, not the config's, and says when they
+    differ. SF-03's collection sealed schema-2 ledgers without a rule: those
+    still open, under the config's rule, and the verdict section says that no
+    rule was sealed.
+  - Paths and funcnames are hashed like logins, under the same per-run key
+    and separated by kind. They are pseudonyms, not secrets: a PR number, its
+    merge time and a fix's days name the fix commit to anyone who can read the
+    repository, and its diff then links those hashes to their paths across
+    the whole ledger.
+  - The filtered blame covers the whole file at the fix's first parent: git
+    blames a moved line on its original commit over the whole file, but on
+    its mover when `-L` names only that line. It costs one whole-file blame per
+    fix commit and file with a deleted code line, plus one `-w` blame where the
+    two disagree, and a line count first (`git diff --numstat` against the
+    empty tree). A file the default skip rules leave out (lockfiles,
+    generated and vendored files), or one longer than 5,000 lines there, is
+    blamed by its deleted code lines' runs instead, as v1's own blame is, so
+    its cost is bounded as v1's is; a line moved into such a file may stay on
+    its mover. Its lookups share the 4,000 call cap after every v1 read, so
+    every v1 field but `problems` is as v1 collected it. A fix whose filtered
+    lookups the cap stopped gets no kinds or filtered entry, every PR in its
+    label window is marked `filteredIncomplete`, and one more line in
+    `problems` (and so in the report's Problems section) says so.
+  - A schema-2 ledger holds at most 3,000 PRs, the most the merged-PR
+    listing reads (30 pages of 100). With the replicate bound, that bounds
+    the bootstrap `open` runs on a payload anyone with the public key could
+    seal.
+  - Before sealing, `collect` checks the ledger against the same schema-2
+    rules `open` checks, and refuses, writing nothing, when it fails them.
 - **Outcomes.** A fix is confirmed only when its thread was resolved by
   someone who is neither a bot nor the PR author; the author's own resolve is
   `fixed-self-resolved` and the job's is `fixed-model-only`. Dismissals are
@@ -1448,19 +1611,241 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   `outcomes-report.md` (and the
   ledger itself only with `--ledger`) and prints the expiry: delete the files
   by then. `ci.ts unseal` refuses a ledger, because it does not check expiry.
+  A `vectorscope-outcomes/1` ledger still opens, read-only and as v1, against
+  VS-46a's own checks: `--ledger` writes it back as read, never upgraded.
+  With `--audit`, `open` also writes `outcomes-audit.json` (0600) beside the
+  report, and refuses, writing nothing, when anything by that name already
+  exists, a symbolic link included (even a dangling one), since it may hold
+  the owner's answers. The file is created exclusively, so one that appears
+  meanwhile is not overwritten or followed either. It, and any labels file
+  made from it, name PRs and carry the ledger's expiry: delete them by then,
+  as the report. `--labels <file>` is only read, must be outside this
+  checkout and every git work tree, may be at most 4 MiB, and is refused
+  once its own expiry has passed.
 - **The report.** Internal (D12): it claims no accuracy and compares
-  nothing. Every rate is paired with cycle time over its own PRs. A rate
+  nothing outside the repository's own PRs (the risk band against size and
+  random order). Every rate is paired with cycle time over its own PRs. A rate
   needs 50 settled findings (or 50 PRs or reviews); smaller cells show counts
   and intervals. With fewer than 200 settled
   human-stratum findings on PRs merged in the 90 days before collection, only
   the severity gradient (VS-45's `severityGradient` over the confirmed-fix
   share, with a sensitivity row counting every fix) is reported. The band
-  check needs 200 matured PRs with a band; overlapping low and high intervals
-  mean `riskOf` is documented as a size, reach and sensitivity heuristic for
-  that repository, and history risk areas are never enabled there.
+  check needs 200 matured PRs with a band. It compares the low and high
+  bands' Wilson intervals on one label: reverts within 90 days when both
+  bands expect at least 10 (a band's PRs times the rate pooled over every
+  banded matured PR), else the unfiltered follow-up fix over the PRs not
+  reverted, flagged SZZ-based, size-biased and unaudited. Under 10 expected
+  positives in either band it reads `underpowered`, with no verdict. Overlap
+  alone is not a verdict. Every v1 section is the same on a schema-1 and a
+  schema-2 ledger: the band check reads v1 fields only.
+- **The measurement (VS-46c).** A schema-2 ledger in the full decision gets
+  five more sections. The 200-finding volume rule applies, so a schema-2
+  report in the gradient-only decision adds none.
+  - "Outcome base rates" and "Minimum detectable effect" come before the
+    severity gradient. They cover the matured PRs with a band: the
+    base-branch subjects (fix-prefixed and revert-prefixed shares of
+    first-parent commits), reverts over every PR, the unfiltered fix over
+    those not reverted, the filtered fix over those not reverted and not
+    marked `filteredIncomplete` (how many were marked is printed), and each
+    label's expected positives in the low and high bands. Reverts decide when
+    both bands expect at least 10. Otherwise the filtered label decides,
+    flagged SZZ-based, size-biased and unaudited. VS-46d's audit (below)
+    lifts that mark for the filtered label only; both fix lines carry their
+    own mark.
+    The minimum detectable effect (two-sided 95%, 80% power) is in rate
+    points: low against high, and the moved PRs against the label's rate.
+  - "Capture against size", after the band table. For the top 10%, 20% and
+    50% of PRs it ranks by final band (ties by score, then PR number)
+    against added plus deleted lines (then PR number) and against a random
+    order's expectation. It gives the positives captured, their share and
+    the share of changed lines, and a seeded paired bootstrap of band minus
+    size in capture-share points (2.5th to 97.5th percentile; replicates with
+    no positive are skipped and counted, and a label with no PR runs none).
+    It states what this tests: only the
+    floors (sensitive, deletion-heavy; the wide-reach floor cannot fire
+    without dependents), the test-only rule and the tie-breakers. It also
+    counts the PRs a floor or the test-only rule moved: their band is not the
+    one their score gives at the default cutpoints, so tie-breaker reordering
+    is compared but not counted. The low-band miss rate follows, and
+    Effort@20% reads unavailable.
+  - "Measurement verdict", on the deciding label at the rule's overhead. A
+    deciding filtered label is flagged SZZ-based, size-biased and unaudited
+    in the verdict line itself and in its capture table's heading.
+    `underpowered` comes first: under 200 PRs, under 10 expected positives in
+    the low or high band or among the moved PRs, or no interval. Then
+    `beats-size` when the interval lies above 0, `no-better-than-size` when it
+    lies wholly below the rule's margin, and `undecided` otherwise.
+    Underpowered and undecided mean not yet. No verdict decides history risk
+    areas: VS-46 item 6's gate stands.
+  - "Depth and reach": outcomes are a monitor, not a gate, for depth and lens
+    decisions. No depth row is shown until VS-46 item 7's assignment exists,
+    and then only with at least 10 expected positives per depth, each row
+    with its MDE. Reach is untested, because the band is computed without
+    dependents.
+  - A schema-1 ledger prints each of the five headings with
+    "unavailable: a /1 ledger has no added or deleted counts", whatever the
+    volume decision. The spec withholds them for /1; for the base rates the
+    revert and fix fields exist, but the subjects and sizes do not.
+- **Label quality (VS-46d items 1 to 4).** A schema-2 ledger in the full
+  decision gets four more sections after "Depth and reach". Like the
+  measurement, they follow the 200-finding volume rule, so a gradient-only
+  report adds none and its header line ("only the severity gradient is
+  reported") stays true; `open` says so when `--audit` or `--labels` meets a
+  gradient-only ledger, whose labels are still checked. A schema-1 ledger
+  prints each heading with the unavailable line, and `open` refuses `--audit`
+  and `--labels` on it.
+  - "Label audit" (item 1). The population is the filtered label's own
+    (matured, banded, not reverted within 90 days, not `filteredIncomplete`):
+    positives have a filtered fix within 90 days, negatives none. With
+    `--audit`, `open` writes up to 60 PRs of each label to `outcomes-audit.json`,
+    ordered by an audit id and cut there (bottom-k), so each cut is a uniform
+    random sample to anyone without the key. The id is the first 16 hex
+    characters of an HMAC-SHA256 of the lowercased repository and the PR
+    number, under an audit key `open` derives in memory with HKDF-SHA256 from
+    the owner's private key (its PKCS#8 DER, so any PEM encoding of the key
+    gives the same key) and never stores or prints. So the sample is the same
+    on every open, a PR keeps its id in every ledger of the repository sealed
+    to that key, and nobody holding only the public key or these files can
+    tell which PRs a sample will draw. A new owner key draws a new sample,
+    whose answers are given anew. The id is a join key, not a de-identifier:
+    each entry keeps its PR number and its fixes' days and dates.
+  - The owner answers each entry's `fixInducing` with true or false, or
+    leaves it null to skip (at most 10 per label), as the file's `question`
+    says, and passes the file back with `open --labels <file>`. Only
+    `schema`, `repository`, `expires` and each entry's `id` and
+    `fixInducing` are read. The file is refused when it is not JSON, is
+    malformed, is another repository's, has expired, or names one PR twice.
+    Only answers to this ledger's own sample count; the rest are counted as
+    ignored. `--audit` with `--labels` carries the answers into the new
+    sample, which then expires no later than the labels file; `open` says how
+    many answers name no PR in the new sample and were left behind (the
+    labels file still holds them).
+  - Precision (fix-inducing among the answered positives) and the miss rate
+    (among the answered negatives) carry 95% Wilson intervals. Recall is
+    weighted by the population's positives and negatives, because the sample
+    is stratified, and its interval is composed from each label's 97.5%
+    Wilson interval, so both hold at once with at least 95% (Bonferroni). The
+    filtered label is audited once at least 50 of each label are answered:
+    its marks (the filtered base-rate line, the deciding line, the verdict
+    and its capture heading, the kLOC table's filtered columns) then read
+    audited. With labels but too few answers, the deciding line says so
+    rather than that the audit has not run. The unfiltered label is not
+    sampled, so its rates stay unaudited. Without labels, or with too few
+    answers, every follow-up-fix rate is unaudited, and the section names the
+    rates that carry no mark of their own (the band table's fix columns, the
+    escapes, the later-fixed shares, the filtered label's MDE row and capture
+    table).
+  - "Untraceable fixes" (item 2): of every fix commit the scan labelled, the
+    share that deleted no line, which the unfiltered label cannot trace, and
+    the share that deleted no code line (add-only, or only blank or comment
+    lines), which the filtered label cannot. These count fix commits, not
+    PRs, so they carry no cycle time.
+  - "Filter reattribution" (item 3): over the filtered population, the five
+    kinds of every line the unfiltered label blamed there, with shares; the
+    spec's split into whitespace (`whitespace`, put elsewhere by `-w`),
+    comment and move (`moved`), with blank lines on their own, because the
+    filter drops them and `-w` does not move them; the reattributed or
+    dropped total; and the lines the filtered label blames there, with those
+    it gained from other commits. No interval: lines cluster within fix
+    commits.
+  - "Fix-edited lines per kLOC" (item 4): each label's fix-edited lines per
+    1,000 lines added, by band and over all bands. Lines added count only
+    reviewed files, while a fix's blamed lines count every file it edited,
+    so fixes in lockfiles or generated files read higher.
+  - Internal (D12): no rate here is comparable with published SZZ figures or
+    with any other population. The owner's hand labels stay on the owner's
+    machine and are never committed; keeping them past their expiry is the
+    owner's decision (Q30, Q43), and nothing here is built for it.
+- **Outcome strata (VS-46d items 5 to 11).** A schema-2 ledger in the full
+  decision gets seven more sections after "Fix-edited lines per kLOC". They
+  follow the same 200-finding volume rule, so a gradient-only report adds
+  none. A schema-1 ledger prints each heading with the unavailable line,
+  whatever the decision, even where v1 fields could fill a section, as the
+  spec's compatibility paragraph asks.
+  - "Verdict against outcome" (item 5): revert and filtered follow-up-fix
+    rates within 90 days for "reviewed, nothing posted, complete" against
+    "reviewed with findings", over the human-stratum matured PRs with a band.
+    The verdict is a proxy, labelled as one in the text and in every column
+    that names a group: clean means the sticky state was found with a
+    completed review, no ledger finding is on the PR in any stratum or
+    outcome, the state was not pruned (a pruned state may have lost summary
+    findings, so it reads incomplete), and `unreviewedFiles` is 0 (a missing
+    count is not clean). The
+    exact `clean-complete` value replaces it only after SF-39 records
+    `reviewVerdict` in `ReviewState` and a later ledger field reads it (a
+    /3). Unreviewed and incomplete PRs are left out and counted; agent PRs
+    are left out and counted because same-agent iteration confounds the label
+    (item 9 reports them); agent-signal PRs only exclude. Rows go within each
+    band and within each size tercile (cuts at the ceil(n/3)-th and
+    ceil(2n/3)-th smallest added plus deleted lines over every matured PR with
+    a band, so ties share a tercile and can leave one empty); the two are
+    separate stratifications, not a grid. A difference (clean less findings,
+    Newcombe's 95% interval) shows only when each group has 50 PRs and 10
+    expected positives at the row's pooled rate; otherwise it reads
+    underpowered. The last row pools every compared PR, is labelled
+    "confounded by size", and shows its difference only when a stratified row
+    of its table does. There is no depth stratum until VS-46 item 7.
+  - "Dismissal reasons by severity" (item 6): schema 2 keeps each
+    dismissal's role, not its reason, so the reasons read unavailable, and
+    the section points to the Resolution table's per-severity
+    dismissed-writer, dismissed-author and dismissed-unattributed counts.
+    VS-35b's classifier (`dismissalWhy`) needs reply text the ledger does not
+    keep, and has no caller until an owner-repository precision sample of at
+    least 0.9 qualifies it.
+  - "Addressed rate" (item 7): confirmed fixes over settled human-stratum
+    findings, every severity together, with its definition and population,
+    cycle time and the human-comment volume (`humanComments`) on those PRs.
+    The text says it is comparable only within this population and
+    definition, as a paired or A/B comparison, and not with any vendor's or
+    other population's rate (D12).
+  - "Human review by band" (item 8): `humanReview` over every PR with a band
+    that no read cut short, matured or not, every stratum (P3-2, Q28).
+  - "Agent-authored split" (item 9): agent PRs from the owner's trusted
+    record against human PRs, within item 5's terciles, on reverts, the
+    filtered label, and the filtered label with same-agent follow-ups
+    removed (an agent PR whose only remaining fixes have no `sameAgent` flag
+    is left out and counted). Agent-signal PRs enter neither group. It gives
+    the same-agent share of fix entries on agent PRs for both labels, with
+    unknown flags left out and counted, marked SZZ-based and unaudited
+    because the audit samples PRs, not fix entries. Evidence for Q41, which
+    is the owner's; nothing is decided.
+  - "Recurrence" (item 10), descriptive only: the share of matured fix
+    entries with an earlier fix commit, other than their own, in the same
+    file, or the same file and function (a funcname on both sides), dated
+    from 365 days before the merge day to the day before it. Fix commits keep
+    only their day, so one on the merge day is left out. Filtered entries use
+    their own location, unfiltered ones every location of their fix commit.
+    The scan keeps fix commits only after the ledger's first merge, so the
+    lookback is truncated for PRs merged within 365 days of it: full-lookback
+    columns count the rest, and capped fix commits are counted. It gates
+    nothing; L6 waits on the Q9 ablation.
+  - "Latent forecasts" (item 11): precision of VS-42 pre-existing drops at
+    90 days, from local eval artifacts only. `latentForecast` scores drops
+    already joined to later fixes: one fingerprint counts once at its
+    earliest drop, a drop matures 90 days after it was recorded, a fix more
+    than 0 and at most 90 days later is a hit, and the kill criterion
+    (precision under 10% on at least 100 matured drops) is reported as met or
+    not, the decision being the owner's. `latentDrops` reads an artifact's
+    `drops` (path, base span, class as a finding category, base SHA,
+    fingerprint and a per-drop `at`, a UTC instant as `toISOString` writes
+    it). The engine emits a record only when the immutable base verifies its span. `latentForecast`
+    checks every outcome first (the drop as `latentDrops` reads it, and
+    `fixedDays` a finite number of days at or above 0) and refuses them all
+    on one malformed outcome. No package joins drops to later fixes yet, so
+    `open` reads no eval artifact, passes none, and the section prints "no
+    drops read: open reads no eval artifact and no join is built"; "no drops
+    recorded" is only for outcomes given and holding none.
+  - Shares over fix entries and drops carry no interval, because those units
+    cluster within PRs, fix commits and reviews.
 - **Deferred.** Proxy validation (VS-46b), history risk areas and the depth
   assignment (runner wiring and Q30), and the re-review share of spend (the
-  state keeps only a PR's total). Run on a real repository only after Q30.
+  state keeps only a PR's total). Depth rows and the depth stratum wait on
+  VS-46 item 7. Schema 2 does not carry per-file fix data for Effort@20% or
+  a per-finding dismissal reason, so those read unavailable on it; adding
+  either is a /3. The exact verdict needs SF-39 and a ledger field (/3). The
+  latent join (following a drop's base lines through later history, and
+  where its result is kept) still has no owner. SF-21 supplies the local drop records.
+  Run on a real repository only after Q30.
 
 The tests use a fake GitHub client and git repositories they build, and
 spawn no `gh`:
@@ -1474,9 +1859,12 @@ cd script/vectorscope-eval && bun test ci.test.ts
 
 `research/` holds the scripts behind round two's own measurements (the
 ApacheJIT models, the Tier 1 grep, parse and slice timings, and the AACR-Bench
-band analysis), limited to inputs that are D8-clean today (VS-21d). They are
-Python, Node and shell, not TypeScript, so this folder's tsconfig, `test.yml`
-and the eval workflow never load them. Their numbers are internal diagnostics
-(D12) and their outputs are never committed (I-13). Inputs, pins, the finding
-each script backs and the scripts that stay gated are in
+band analysis), limited to inputs that are D8-clean today (VS-21d). Most are
+Python, Node and shell, which this folder's tsconfig, `test.yml` and the eval
+workflow never load. The one TypeScript file, VS-48a's
+`research/instructions.ts`, is outside the eval tsconfig's non-recursive
+`include` too: core's `test/review/instruction-count-script.test.ts` imports
+it, so core's typecheck and unit job cover it. Their numbers are internal
+diagnostics (D12) and their outputs are never committed (I-13). Inputs, pins,
+the finding each script backs and the scripts that stay gated are in
 [`research/README.md`](research/README.md).

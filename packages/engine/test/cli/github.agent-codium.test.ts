@@ -16,7 +16,6 @@ import path from "node:path"
 import { APICallError } from "ai"
 import { Clock, Context, Duration, Effect, Exit, Fiber, Layer, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js"
 import { Brain } from "@vectordevai/core/brain/brain"
 import type { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainRunBundle } from "@vectordevai/core/brain/run-bundle"
@@ -68,7 +67,6 @@ import { UNTRUSTED_DATA_RULE, untrustedJson } from "../../src/cli/cmd/github.pol
 import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { allowConversationRestore, decryptConversation, encryptConversation } from "../../src/cli/cmd/github.session"
-import { InstanceRef } from "../../src/effect/instance-ref"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Provider } from "../../src/provider/provider"
 import { Instruction } from "../../src/session/instruction"
@@ -113,6 +111,7 @@ import {
   type FakeArtifact,
   type GatewayAction,
 } from "./github.agent-fixture"
+import { artifactZip, sessionArchive } from "./github.session-fixture"
 
 const guard = NetworkGuard.use()
 const web = FakeWeb.start({ sites: {} })
@@ -193,43 +192,12 @@ const noBundle = (dir: string) =>
 const taskRequests = () => codium.state.requests.filter((request) => !request.title)
 const writeNotes = (dir: string) => ({ filePath: path.join(dir, "NOTES.md"), content: "notes\n" })
 
-/** The artifact's download as the runner uploads it: a zip that holds session.vsa. */
-const artifactZip = async (bytes: Uint8Array) => {
-  const writer = new ZipWriter(new Uint8ArrayWriter())
-  await writer.add(GithubAgents.SESSION_FILE, new Uint8ArrayReader(Uint8Array.from(bytes)), {
-    level: 0,
-    useWebWorkers: false,
-    useCompressionStream: false,
-  })
-  return writer.close()
-}
-
 /**
  * The real SessionArchive over this runtime's database behind a share service whose other methods die: the save and
  * the restore may use only its export and import. Projects resolve to this instance's own.
  */
 const archiveShare = Effect.fn("AgentCodiumTest.archiveShare")(function* () {
-  const ctx = yield* InstanceRef
-  if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
-  const bridge = yield* EventV2Bridge.Service
-  const built = yield* Layer.build(
-    SessionArchive.node.implementation as Layer.Layer<
-      SessionArchive.Service,
-      never,
-      Database.Service | EventV2.Service | ProjectV2.Service
-    >,
-  ).pipe(
-    Effect.provideService(EventV2.Service, bridge),
-    Effect.provideService(
-      ProjectV2.Service,
-      ProjectV2.Service.of({
-        directories: () => Effect.die(new Error("The archive's import resolves only the project.")),
-        resolve: (directory) => Effect.succeed({ id: ctx.project.id, directory }),
-        commit: () => Effect.die(new Error("The archive's import resolves only the project.")),
-      }),
-    ),
-  )
-  const archive = Context.get(built, SessionArchive.Service)
+  const archive = yield* sessionArchive()
   const unused = () =>
     Effect.die(new Error("The conversation save and restore use only the archive's export and import."))
   return PublicSessionShare.Service.of({

@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto"
+import { findingItem } from "../../packages/core/src/review/format"
+import { emptyState, findingMarker, stateMarker, toSummaryFinding } from "../../packages/core/src/review/state"
 import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -513,6 +516,50 @@ describe("saved replay artifacts", () => {
       [],
     )
     expect(failed).toMatchObject({ status: "failed", detail: "model error", posted: [] })
+    const trivial = fromArtifact(
+      artifact(
+        { files: { reviewed: [], skipped: [] }, posted: [], attempts: [] },
+        { trivial: true, specialists: [], unreviewed: [], passes: [] },
+      ),
+      seed,
+      [],
+    )
+    expect(trivial.status).toBe("not-sent")
+    expect(trivial.detail).toContain("Not reviewed")
+    expect(trivial.detail).toContain("trivial")
+    const stopped = fromArtifact(
+      artifact(
+        { files: { reviewed: [], skipped: [] }, attempts: [], posted: [] },
+        { partial: "budget-estimate", specialists: [], unreviewed: ["a.py"], passes: [] },
+      ),
+      seed,
+      [],
+    )
+    expect(stopped).toMatchObject({
+      status: "not-sent",
+      stop: "budget-estimate",
+      attempts: 0,
+      proposed: [],
+      posted: [],
+    })
+    expect(stopped.detail).toContain("Not reviewed")
+    expect(stopped.detail).toContain("estimate")
+    const unavailable = "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+    expect(
+      fromArtifact(
+        artifact(
+          { attempts: [], posted: [] },
+          {
+            partial: "budget-estimate",
+            notes: [unavailable],
+            unreviewed: ["a.py"],
+            specialists: [],
+          },
+        ),
+        seed,
+        [],
+      ),
+    ).toMatchObject({ status: "not-sent", attempts: 0, detail: unavailable })
     const empty = fromArtifact(
       artifact({
         outcome: undefined,
@@ -524,6 +571,67 @@ describe("saved replay artifacts", () => {
     )
     expect(empty).toMatchObject({ status: "partial", proposed: [], posted: [], spend: { admitted: true } })
     expect(empty.detail).toContain("nothing was reviewed")
+  })
+
+  test("a strict pre-dispatch budget stop carries no finding or posting credit into offline re-selection", () => {
+    const shape = artifact()
+    const proposed = shape.outcome!.selection.inline[0]!
+    const value = artifact(
+      {
+        config: { digest: "strict-budget", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, guardrail: "strict" } },
+        files: { reviewed: [], skipped: [] },
+        attempts: [],
+        passes: [],
+        posted: [{ write: "createIssueComment", pr: 1, body: "Not reviewed" }],
+      },
+      {
+        partial: "budget-estimate",
+        unreviewed: [proposed.path],
+        specialists: [],
+        sessions: [],
+        strict: {
+          version: 1,
+          head: shape.source.head,
+          complete: false,
+          incomplete: ["budget-estimate", "unreviewed", "no-reviewer"],
+          findings: [],
+          dropped: [],
+          fixUnchecked: 0,
+        },
+      },
+    )
+    const run = fromArtifact(value, seed, [])
+    expect(run).toMatchObject({ status: "not-sent", attempts: 0, proposed: [], posted: [], stop: "budget-estimate" })
+    expect(reselectRun(value, run).reselection).toMatchObject({ candidates: 0, unposted: 0, complete: false })
+  })
+
+  test("a graph budget stop before reviewer admission supplies no review credit", () => {
+    const shape = {
+      files: { reviewed: [], skipped: [] },
+      attempts: [{ seq: 1, pass: "review", phase: "turn", admitted: false, stop: "budget", estimateUsd: 0.25 }],
+    }
+    const outcome = {
+      partial: "budget",
+      unreviewed: [labelled.path],
+      specialists: [{ name: "review", status: "stopped", steps: 0 }],
+    }
+    const graph = { ...shape, config: { digest: "d", warnings: [], value: { impact: "graph" } } }
+    expect(fromArtifact(artifact(graph, outcome), seed, [])).toMatchObject({
+      status: "not-sent",
+      stop: "budget",
+      attempts: 0,
+      proposed: [],
+      posted: [],
+      detail: "Not reviewed. No reviewer request was admitted.",
+    })
+    // Once a reviewer was admitted, unfinished changed files retain normal partial-review and spend accounting.
+    const sent = fromArtifact(artifact({ ...graph, attempts: [artifact().attempts[0]!] }, outcome), seed, [])
+    expect(sent).toMatchObject({ status: "partial", attempts: 1, spend: { costUsd: 0.05 } })
+    expect(fromArtifact(artifact(shape, outcome), seed, [])).toMatchObject({
+      status: "partial",
+      stop: "budget",
+      attempts: 0,
+    })
   })
 
   test("a refused summary leaves its findings unposted", () => {
@@ -654,7 +762,7 @@ describe("report.ts", () => {
     )
     writeFileSync(
       join(dir, "pending.json"),
-      JSON.stringify(artifact({ label: "pending", variant: { name: "engine:trivial-skip", keys: {} } })),
+      JSON.stringify(artifact({ label: "pending", variant: { name: "engine:receipt-json", keys: {} } })),
     )
     writeFileSync(
       join(dir, "mismatched.json"),
@@ -662,11 +770,11 @@ describe("report.ts", () => {
         artifact({ label: "mismatched", variant: { name: "engine:shared-verify", keys: { verifyPolicy: "legacy" } } }),
       ),
     )
-    // A pending name carrying a built variant's keys: ReviewEval.replay, which cannot see the registry, would run it.
+    // A built graph variant with another variant's keys cannot supply graph evidence.
     writeFileSync(
       join(dir, "mislabeled.json"),
       JSON.stringify(
-        artifact({ label: "mislabeled", variant: { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" } } }),
+        artifact({ label: "mislabeled", variant: { name: "engine:impact-graph", keys: { verifyPolicy: "shared" } } }),
       ),
     )
     // A hand-edited record that is not an object is listed, not thrown on.
@@ -678,11 +786,12 @@ describe("report.ts", () => {
     const problems = loaded.problems.filter((problem) => problem.startsWith(dir))
     expect(problems).toHaveLength(4)
     expect(problems[0]).toStartWith(join(dir, "mislabeled.json"))
-    expect(problems[0]).toContain("engine:privacy-zdr is registered for VS-23c, which has not landed")
+    expect(problems[0]).toContain("not the registry's")
+    expect(problems[0]).toContain('{"keys":{"impact":"graph"}}')
     expect(problems[1]).toStartWith(join(dir, "mismatched.json"))
     expect(problems[1]).toContain("not the registry's")
     expect(problems[2]).toStartWith(join(dir, "pending.json"))
-    expect(problems[2]).toContain("registered for VS-24 wiring, which has not landed")
+    expect(problems[2]).toContain("registered for VS-47 runner wiring, which has not landed")
     expect(problems[3]).toBe(`${join(dir, "primitive.json")}: its variant record is not an object`)
     // The record that is not an object names the frozen pipeline, as VS-06's reader took it.
     expect(loaded.runs.find((run) => run.case === "primitive")?.variant).toBe("engine")
@@ -705,7 +814,8 @@ describe("report.ts", () => {
     // A pending, unknown or malformed variant cannot be the candidate or the baseline, a mistyped runner included;
     // only single-prompt and the empty control pass as given.
     for (const [flag, value, detail] of [
-      ["--candidate", "engine:trivial-skip=vendor/reviewer-large", "registered for VS-24 wiring"],
+      ["--candidate", "engine:receipt-json=vendor/reviewer-large", "registered for VS-47 runner wiring"],
+      ["--candidate", "engine:verify-isolated=vendor/reviewer-large", "registered for VS-44c wiring (R3)"],
       ["--baseline", "engine:verify=vendor/reviewer-large", "not a registered variant"],
       ["--candidate", "engine:Shared=vendor/reviewer-large", "is not a variant name"],
       ["--candidate", "Engine:shared-verify=vendor/reviewer-large", '"Engine:shared-verify" is not a variant name'],
@@ -995,6 +1105,106 @@ describe("VS-21c outputs", () => {
     expect(fromDesktopArtifact(variant, seed)!.variant).toBe("desktop:shared-verify")
   })
 
+  test("a conditional budget stop preserves primary attempts, findings and spend in both adapters", () => {
+    const engine = artifact()
+    const partial = fromArtifact(
+      artifact(
+        { attempts: [engine.attempts[0]!] },
+        {
+          partial: "budget",
+          unreviewed: [labelled.path],
+          specialists: [
+            { name: "review", status: "ok", steps: 1 },
+            { name: "verify", status: "skipped", steps: 0, detail: "first-request-budget" },
+          ],
+        },
+      ),
+      seed,
+      [],
+    )
+    expect(partial).toMatchObject({
+      status: "partial",
+      stop: "budget",
+      attempts: 1,
+      detail: "stopped early (budget), 1 file(s) unreviewed",
+      tokens: { input: 5000, output: 500 },
+      spend: { costUsd: 0.05, uncertainUsd: 0 },
+    })
+    expect(partial.proposed.map((finding) => finding.title)).toContain("The default argument may be None")
+    expect(partial.posted.map((finding) => finding.title)).toContain("The default argument may be None")
+
+    const base = desktop()
+    const primary = { ...base.attempts[0]!, costUsd: 0.02 }
+    const verification = { status: "skipped" as const, checked: 0, rejected: 0 }
+    const result = fromDesktopArtifact(
+      desktop({
+        attempts: [primary],
+        outcome: { ...base.outcome!, verification, partial: "budget", unreviewed: [labelled.path] },
+      }),
+      seed,
+    )!
+    expect(result).toMatchObject({
+      status: "partial",
+      stop: "budget",
+      attempts: 1,
+      detail: "stopped early (budget), 1 file(s) unreviewed",
+      tokens: { input: 4000, output: 300 },
+      spend: { costUsd: 0.02, admitted: false },
+    })
+    expect(result.proposed.map((finding) => finding.title)).toContain("The default argument may be None")
+    expect(result.posted.map((finding) => finding.title)).toContain("The default argument may be None")
+
+    // A checker legitimately skipped for an ordinary review doesn't make that review partial.
+    expect(
+      fromDesktopArtifact(
+        desktop({
+          attempts: [primary],
+          outcome: { ...base.outcome!, verification },
+        }),
+        seed,
+      )!.status,
+    ).toBe("completed")
+    expect(
+      fromArtifact(
+        artifact(
+          {},
+          {
+            specialists: [
+              { name: "review", status: "ok", steps: 1 },
+              { name: "verify", status: "skipped", steps: 0 },
+            ],
+          },
+        ),
+        seed,
+        [],
+      ).status,
+    ).toBe("completed")
+  })
+
+  test("a desktop pre-dispatch stop stays unreviewed and preserves an unavailable-estimate reason", () => {
+    const base = desktop()
+    const reason = "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+    const stopped = desktop({
+      attempts: [],
+      outcome: {
+        ...base.outcome!,
+        partial: "budget-estimate",
+        unreviewed: ["a.py"],
+        specialists: [],
+        sessions: [],
+        notes: [reason],
+      },
+    })
+    expect(fromDesktopArtifact(stopped, seed)).toMatchObject({
+      status: "not-sent",
+      detail: reason,
+      stop: "budget-estimate",
+      attempts: 0,
+      proposed: [],
+      posted: [],
+    })
+  })
+
   test("a desktop run whose variant never reached its runner is left out and listed, and its case stays planned", async () => {
     const dir = join(root, "desktop-replays")
     mkdirSync(dir)
@@ -1166,6 +1376,104 @@ describe("--reselect strict (VS-27b)", () => {
     expect(RESELECT_SUFFIX).toBe("+reselect-strict")
   })
 
+  test("strict artifacts retain the original pool and count only individual comments that survived posting", () => {
+    const first = { ...inline, id: "aa0011223344" }
+    const removed = { ...inline, id: "bb0011223344", line: inline.line + 5, title: "Comment removed by posting check" }
+    const unanswered = {
+      ...inline,
+      id: "cc0011223344",
+      line: inline.line + 9,
+      title: "Unanswered",
+      verified: undefined,
+    }
+    const marker = findingMarker({
+      id: first.id,
+      severity: first.severity,
+      category: first.category,
+      sha: "abcdef1",
+      status: "open",
+      words: [],
+    })
+    const write = base.posted.find((entry) => entry.write === "createReview")!
+    const value = strict(
+      {
+        config: { digest: "s", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, guardrail: "strict" } },
+        posted: [
+          { ...write, payload: { ...write.payload, comments: [{ ...write.payload.comments[0], body: marker }] } },
+        ],
+        strictCandidates: {
+          findings: [first, removed, unanswered].map((finding) => ({ ...finding, anchored: true })),
+          unanswered: [unanswered.id],
+        },
+      },
+      {
+        strict: {
+          version: 1,
+          head: base.source.head,
+          complete: false,
+          incomplete: ["verdict-unreadable"],
+          findings: [],
+          dropped: [],
+          fixUnchecked: 0,
+        },
+        selection: { ...original, inline: [first, removed], elsewhere: [] },
+      },
+    )
+    const run = fromArtifact(value, seed, [])
+    expect(run.status).toBe("partial")
+    expect(run.proposed.map((finding) => finding.title)).toEqual([first.title, removed.title, unanswered.title])
+    expect(run.posted.map((finding) => finding.title)).toEqual([first.title])
+    const result = reselectRun(value, run)
+    expect(result.reselection).toMatchObject({
+      candidates: 1,
+      unposted: 2,
+      complete: false,
+      incomplete: ["verdict-unreadable"],
+    })
+    expect(result.run.posted.map((finding) => finding.key)).toEqual(run.posted.map((finding) => finding.key))
+    expect(result.run.spend).toEqual({ uncertainUsd: 0, usageMissing: false, admitted: true })
+    expect(value.strictCandidates?.unanswered).toEqual([unanswered.id])
+    expect(value.outcome?.strict?.incomplete).toEqual(["verdict-unreadable"])
+    const refused = { ...value, posted: [], refused: "check refused the write" }
+    expect(reselect(refused).reselection).toMatchObject({ candidates: 0, unposted: 3, complete: false })
+  })
+
+  test("strict summary scoring requires the visible row after clipping and the posting check", () => {
+    const finding = { ...inline, id: "aa0011223344" }
+    const row = findingItem(finding, undefined)
+    const state = stateMarker({ ...emptyState(), findings: [toSummaryFinding(finding, base.source.head)] })
+    const value = strict(
+      {
+        config: { digest: "s", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, guardrail: "strict" } },
+        strictCandidates: {
+          findings: [{ ...finding, anchored: true }],
+          unanswered: [],
+          summaryRows: [{ id: finding.id, digest: createHash("sha256").update(row).digest("hex") }],
+        },
+      },
+      {
+        strict: { version: 1, head: base.source.head, complete: true, findings: [], dropped: [], fixUnchecked: 0 },
+        selection: { ...original, inline: [], overflow: [finding], elsewhere: [] },
+      },
+    )
+    const checked = (text: string): ReplayArtifact => ({
+      ...value,
+      posted: [
+        {
+          write: "createIssueComment",
+          pr: 0,
+          body: ["<details><summary>More findings (1)</summary>", "", text, "</details>", state].join("\n"),
+        },
+      ],
+    })
+    const visible = checked(row)
+    expect(fromArtifact(visible, seed, []).posted.map((item) => item.title)).toEqual([finding.title])
+    expect(reselect(visible).reselection).toMatchObject({ candidates: 1, unposted: 0 })
+    const clipped = checked("- …and 1 more")
+    expect(fromArtifact(clipped, seed, []).posted).toEqual([])
+    expect(reselect(clipped).reselection).toMatchObject({ candidates: 0, unposted: 1 })
+  })
+
   test("only what the replay posted is a candidate, so every re-selected finding was judged", () => {
     // The summary write never went out: the overflow and the concern were never posted.
     const review = reselect(strict({ posted: [base.posted[0]] }))
@@ -1297,7 +1605,7 @@ describe("--reselect strict (VS-27b)", () => {
       { from: runKey(run), to: runKey(loaded.runs[1]), reselection: reselectRun(value, run).reselection },
     ])
     expect(loaded.sources.reselect).toBe(
-      "strict re-selection of 1 engine replay(s), offline; applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8; left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), and S9 (no base blobs are recorded); kept 2 of 3 posted finding(s), 0 selected but never posted left out; dropped: unverified 1; 1 fix(es) unchecked; 0 run(s) incomplete; copies carry no spend, tokens or timing",
+      "strict re-selection of 1 engine replay(s), offline; applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8; left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), S9 (no base blobs are recorded), and S1's certificate check (private trace blobs are not recorded); kept 2 of 3 posted finding(s), 0 selected but never posted left out; dropped: unverified 1; 1 fix(es) unchecked; 0 run(s) incomplete; copies carry no spend, tokens or timing",
     )
     const out = join(root, "reselect-report.json")
     const result = await main(["--outputs", dir, "--judgements", judgements, "--reselect", "strict", "--out", out])
