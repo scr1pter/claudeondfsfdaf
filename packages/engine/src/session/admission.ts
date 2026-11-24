@@ -11,7 +11,21 @@ export interface Settlement {
   readonly complete: boolean
 }
 
+/** The first admitted provider request can be compared with its dispatch reservation once it has been prepared. */
+export interface ReviewFirstRequest {
+  readonly maxTokens: number
+  readonly checked: (tokens: number | undefined) => void
+}
+
+export class ReviewFirstRequestBudget extends Error {
+  constructor() {
+    super("The complete first review request no longer fits its reserved input budget.")
+    this.name = "ReviewFirstRequestBudget"
+  }
+}
+
 export interface Lease {
+  readonly reviewFirstRequest?: ReviewFirstRequest
   readonly tools?: readonly string[]
   // Cumulative known cost can exceed its estimate before the attempt finishes persisting its response.
   // Observation must not release a reservation or count the same cost again at settlement.

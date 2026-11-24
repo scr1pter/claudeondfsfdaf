@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
+import { parseUnifiedDiff, renderPatch } from "@vectordevai/core/review/diff"
 import { cacheReadShare } from "@vectordevai/core/review/dispatch"
 import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
 import {
@@ -15,22 +16,30 @@ import {
   OUTPUT_PER_STEP,
   passInputTokens,
   planDepth,
+  planReviewBatches,
+  planIsolatedVerify,
   planSpecialists,
   priceAt,
   tierProblems,
   verifyCandidates,
   verifyUnanswered,
   verifyUnconfirmed,
+  type BlindCandidate,
   type CacheReads,
   type DepthInput,
   type EstimateBand,
+  type IsolatedVerifyInput,
+  type PlannedVerifyCall,
   type ReviewPrice,
   type ReviewTier,
   type VerifyRule,
 } from "@vectordevai/core/review/plan"
-import { RISK_BANDS } from "@vectordevai/core/review/risk"
+import { buildVerifyPrompt } from "@vectordevai/core/review/prompt"
+import { orderByRiskDensity, RISK_BANDS } from "@vectordevai/core/review/risk"
 import {
   REVIEW_LENSES,
+  type FailureClass,
+  type FailureMechanism,
   type Finding,
   type ReviewConfig,
   type Severity,
@@ -789,5 +798,445 @@ describe("long-context tiers (VS-40a)", () => {
     // A cache-only tier is still unpriced; a zero cache rate is a rate.
     expect(tierProblems([tier(100_000, { input: 0, output: 0, cacheRead: 1 })])).toHaveLength(1)
     expect(tierProblems([tier(100_000, { cacheRead: 0, cacheWrite: 0 })])).toEqual([])
+  })
+})
+
+// VS-44c (addendum B §1.10). No runner calls the planner before runner-wiring R3, so these cases are its whole contract.
+describe("isolated verification planner (VS-44c)", () => {
+  const SONNET = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+  const SMALL = { input: 1.1, output: 4.4 }
+  const blind = (
+    id: string,
+    path: string,
+    line: number,
+    severity: Severity,
+    failure?: FailureClass,
+  ): BlindCandidate => ({
+    id,
+    path,
+    line,
+    side: "RIGHT",
+    severity,
+    ...(failure
+      ? { failure: { class: failure, mechanism: "logic", trigger: "an empty list", impact: "the request fails" } }
+      : {}),
+  })
+  const entry = <C extends BlindCandidate>(
+    candidate: C,
+    promptTokens = 2_000,
+    price: ReviewPrice = SONNET,
+    maxSteps = 10,
+  ): IsolatedVerifyInput<C> => ({ candidate, promptTokens, maxSteps, price })
+  // The batched call's token count, with every argument it was given.
+  const counter = () => {
+    const seen: (readonly BlindCandidate[])[] = []
+    return {
+      seen,
+      batched: {
+        promptTokens: (rest: readonly BlindCandidate[]) => {
+          seen.push(rest)
+          return 1_000 + 400 * rest.length
+        },
+        maxSteps: 10,
+        price: SONNET,
+      },
+    }
+  }
+  const shape = (plan: readonly PlannedVerifyCall[]) =>
+    plan.map((call) => ({ kind: call.kind, ids: call.candidates.map((candidate) => candidate.id) }))
+  const covered = (plan: readonly PlannedVerifyCall[]) =>
+    plan.flatMap((call) => call.positions).toSorted((a, b) => a - b)
+
+  // Every blocking class, an unclassed and an unknown class, and a concern and a nit that would sort first if
+  // severity were not the first key.
+  const mixed = [
+    blind("leak-b5", "b.ts", 5, "blocking", "leak"),
+    blind("concern-a1", "a.ts", 1, "concern", "crash"),
+    blind("crash-z1", "z.ts", 1, "blocking", "crash"),
+    blind("plain-a1", "a.ts", 1, "blocking"),
+    blind("auth-y1", "y.ts", 1, "blocking", "auth-bypass"),
+    blind("crash-a9", "a.ts", 9, "blocking", "crash"),
+    blind("nit-a1", "a.ts", 1, "nit", "crash"),
+    blind("meltdown-a1", "a.ts", 1, "blocking", "meltdown" as string as FailureClass),
+    blind("crash-a2", "a.ts", 2, "blocking", "crash"),
+  ]
+
+  test("isolates the top k blocking candidates by class, path, line and id, and batches the rest in the order given", () => {
+    const count = counter()
+    const plan = planIsolatedVerify(
+      mixed.map((candidate) => entry(candidate)),
+      { batched: count.batched },
+    )
+    expect(shape(plan)).toEqual([
+      { kind: "isolated", ids: ["crash-a2"] },
+      { kind: "isolated", ids: ["crash-a9"] },
+      { kind: "isolated", ids: ["crash-z1"] },
+      { kind: "batched", ids: ["leak-b5", "concern-a1", "plain-a1", "auth-y1", "nit-a1", "meltdown-a1"] },
+    ])
+    expect(plan.map((call) => call.positions)).toEqual([[8], [5], [2], [0, 1, 3, 4, 6, 7]])
+    expect(covered(plan)).toEqual(mixed.map((_, index) => index))
+    expect(count.seen.map((rest) => rest.map((candidate) => candidate.id))).toEqual([
+      ["leak-b5", "concern-a1", "plain-a1", "auth-y1", "nit-a1", "meltdown-a1"],
+    ])
+    // The whole order: the classes in FAILURE_CLASSES order, then an unknown class with the unclassed (by path, line,
+    // then id), and never a concern or a nit.
+    expect(
+      planIsolatedVerify(
+        mixed.map((candidate) => entry(candidate)),
+        { k: 7, batched: count.batched },
+      ).flatMap((call) => (call.kind === "isolated" ? call.candidates.map((candidate) => candidate.id) : [])),
+    ).toEqual(["crash-a2", "crash-a9", "crash-z1", "leak-b5", "auth-y1", "meltdown-a1", "plain-a1"])
+    // A known class with a mechanism the enum does not name is no failure either, as decodeFailure reads it, so it
+    // ranks with the unclassed.
+    const odd: BlindCandidate = {
+      ...blind("odd-mechanism", "a.ts", 1, "blocking"),
+      failure: {
+        class: "crash",
+        mechanism: "telepathy" as string as FailureMechanism,
+        trigger: "an empty list",
+        impact: "the request fails",
+      },
+    }
+    expect(
+      shape(
+        planIsolatedVerify([entry(odd), entry(blind("leak-z1", "z.ts", 1, "blocking", "leak"))], {
+          k: 1,
+          batched: counter().batched,
+        }),
+      ),
+    ).toEqual([
+      { kind: "isolated", ids: ["leak-z1"] },
+      { kind: "batched", ids: ["odd-mechanism"] },
+    ])
+    // The order given does not move the isolated calls; the batched call follows it.
+    const reversed = planIsolatedVerify(
+      mixed.toReversed().map((candidate) => entry(candidate)),
+      { batched: count.batched },
+    )
+    expect(shape(reversed)).toEqual([
+      { kind: "isolated", ids: ["crash-a2"] },
+      { kind: "isolated", ids: ["crash-a9"] },
+      { kind: "isolated", ids: ["crash-z1"] },
+      { kind: "batched", ids: ["meltdown-a1", "nit-a1", "auth-y1", "plain-a1", "concern-a1", "leak-b5"] },
+    ])
+    expect(covered(reversed)).toEqual(mixed.map((_, index) => index))
+  })
+
+  test("compares paths by code unit, then lines, then ids, and keeps the order given for a full tie", () => {
+    const isolatedIds = (candidates: BlindCandidate[], k: number) =>
+      planIsolatedVerify(
+        candidates.map((candidate) => entry(candidate)),
+        { k, batched: counter().batched },
+      ).flatMap((call) => (call.kind === "isolated" ? call.candidates.map((candidate) => candidate.id) : []))
+    // By code unit "B.ts" sorts before "a.ts"; localeCompare would put "a.ts" first.
+    expect("B.ts" < "a.ts").toBe(true)
+    expect(
+      isolatedIds([blind("lower", "a.ts", 1, "blocking", "crash"), blind("upper", "B.ts", 1, "blocking", "crash")], 1),
+    ).toEqual(["upper"])
+    expect(
+      isolatedIds([blind("later", "a.ts", 30, "blocking", "leak"), blind("earlier", "a.ts", 4, "blocking", "leak")], 1),
+    ).toEqual(["earlier"])
+    expect(
+      isolatedIds([blind("y", "a.ts", 3, "blocking", "crash"), blind("x", "a.ts", 3, "blocking", "crash")], 1),
+    ).toEqual(["x"])
+    // Two entries with one id (the desktop's legacy rule does not merge them) keep the order given.
+    const twins = planIsolatedVerify(
+      [entry(blind("same", "a.ts", 3, "blocking", "crash")), entry(blind("same", "a.ts", 3, "blocking", "crash"))],
+      { k: 1, batched: counter().batched },
+    )
+    expect(twins.map((call) => call.positions)).toEqual([[0], [1]])
+  })
+
+  test("a k larger than the candidates isolates every blocking one and never a concern or a nit", () => {
+    for (const k of [10, Number.POSITIVE_INFINITY]) {
+      const count = counter()
+      const plan = planIsolatedVerify(
+        mixed.map((candidate) => entry(candidate)),
+        { k, batched: count.batched },
+      )
+      expect(plan.filter((call) => call.kind === "isolated")).toHaveLength(7)
+      expect(plan.at(-1)).toMatchObject({ kind: "batched", positions: [1, 6] })
+      expect(shape(plan).at(-1)).toEqual({ kind: "batched", ids: ["concern-a1", "nit-a1"] })
+      expect(count.seen).toHaveLength(1)
+    }
+    // Blocking candidates alone leave nothing to batch: no batched call, and its count is never asked for.
+    const count = counter()
+    const blocking = mixed.filter((candidate) => candidate.severity === "blocking")
+    const plan = planIsolatedVerify(
+      blocking.map((candidate) => entry(candidate)),
+      { k: 10, batched: count.batched },
+    )
+    expect(plan.map((call) => call.kind)).toEqual(Array(blocking.length).fill("isolated"))
+    expect(covered(plan)).toEqual(blocking.map((_, index) => index))
+    expect(count.seen).toHaveLength(0)
+  })
+
+  test("a k of zero, below zero or not a number isolates none, a fraction rounds down, and no candidates plan no call", () => {
+    for (const k of [0, -1, Number.NEGATIVE_INFINITY, Number.NaN]) {
+      const plan = planIsolatedVerify(
+        mixed.map((candidate) => entry(candidate)),
+        { k, batched: counter().batched },
+      )
+      expect(shape(plan)).toEqual([{ kind: "batched", ids: mixed.map((candidate) => candidate.id) }])
+      expect(plan[0].positions).toEqual(mixed.map((_, index) => index))
+    }
+    expect(
+      shape(
+        planIsolatedVerify(
+          mixed.map((candidate) => entry(candidate)),
+          { k: 2.9, batched: counter().batched },
+        ),
+      ).map((call) => call.kind),
+    ).toEqual(["isolated", "isolated", "batched"])
+    const count = counter()
+    expect(planIsolatedVerify([], { batched: count.batched })).toEqual([])
+    expect(count.seen).toHaveLength(0)
+  })
+
+  // Whole findings, which are structurally blind candidates: the projection, not the type, keeps their text out.
+  const SENTINEL = "SENTINEL-reviewer-text"
+  const finding = (id: string, severity: Severity, over: Partial<Finding> = {}): Finding => ({
+    id,
+    path: "src/cart.ts",
+    line: 12,
+    side: "RIGHT",
+    source: "review",
+    severity,
+    category: "bug",
+    title: `The cart total of ${id} skips the discount`,
+    body: `The loop in ${id} exits before the discount line is added.`,
+    confidence: 0.9,
+    ...over,
+  })
+
+  test("no reviewer text reaches any planned call, and each holds fresh copies of the blind fields alone", () => {
+    // trigger and impact are the reviewer's words and reach the verifier by design (VS-44 item 1), so they carry no
+    // sentinel here. A field the schema does not have, such as `note`, is still dropped.
+    const failure = {
+      class: "crash" as const,
+      mechanism: "logic" as const,
+      trigger: "an empty cart",
+      impact: "checkout throws",
+      note: SENTINEL,
+    }
+    const text = {
+      title: SENTINEL,
+      body: SENTINEL,
+      suggestion: SENTINEL,
+      rule: SENTINEL,
+      patch: SENTINEL,
+      duplicateOf: SENTINEL,
+      also: [SENTINEL],
+      quotes: [{ path: "src/cart.ts", line: 12, side: "RIGHT" as const, code: SENTINEL }],
+      endLine: 14,
+      verified: true,
+      verifiedBy: "model" as const,
+      scope: "introduced" as const,
+      failure,
+    }
+    const findings = [
+      finding("a", "blocking", {
+        ...text,
+        evidence: ["src/a.ts:12", "src/b.ts:3-9", `${SENTINEL} trust me`, "src/c.ts"],
+      }),
+      finding("b", "blocking", { ...text, evidence: [`${SENTINEL} trust me`] }),
+      finding("c", "concern", text),
+      finding("d", "nit", { ...text, evidence: ["src/d.ts:1"] }),
+      // A class and a mechanism the enums do not name.
+      finding("e", "concern", { ...text, failure: { ...failure, class: "meltdown" as string as FailureClass } }),
+      finding("f", "nit", { ...text, failure: { ...failure, mechanism: "telepathy" as string as FailureMechanism } }),
+    ]
+    const seen: (readonly Finding[])[] = []
+    const plan = planIsolatedVerify(
+      findings.map((candidate) => entry(candidate)),
+      {
+        k: 1,
+        batched: {
+          promptTokens: (rest) => {
+            seen.push(rest)
+            return 1_000
+          },
+          maxSteps: 10,
+          price: SONNET,
+        },
+      },
+    )
+    expect(shape(plan)).toEqual([
+      { kind: "isolated", ids: ["a"] },
+      { kind: "batched", ids: ["b", "c", "d", "e", "f"] },
+    ])
+    expect(JSON.stringify(plan)).not.toContain(SENTINEL)
+    expect(JSON.stringify(plan)).not.toContain("meltdown")
+    expect(JSON.stringify(plan)).not.toContain("telepathy")
+    const BLIND = ["evidence", "failure", "id", "line", "path", "severity", "side"]
+    const planned = plan.flatMap((call) => call.candidates)
+    for (const candidate of planned) {
+      for (const key of Object.keys(candidate)) expect(BLIND).toContain(key)
+      expect(candidate.failure).not.toBe(failure)
+      expect(findings).not.toContain(candidate)
+    }
+    // The four FailureInfo fields alone, and no failure at all for a class or a mechanism the enums do not name.
+    const FAILURE = ["class", "impact", "mechanism", "trigger"]
+    expect(planned.map((candidate) => Object.keys(candidate.failure ?? {}).toSorted())).toEqual([
+      FAILURE,
+      FAILURE,
+      FAILURE,
+      FAILURE,
+      [],
+      [],
+    ])
+    expect(planned.map((candidate) => Object.hasOwn(candidate, "failure"))).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ])
+    const isolated = plan[0].candidates[0]
+    expect(isolated.evidence).toEqual(["src/a.ts:12", "src/b.ts:3-9"])
+    expect(isolated.evidence).not.toBe(findings[0].evidence)
+    expect(plan[1].candidates.map((candidate) => Object.hasOwn(candidate, "evidence"))).toEqual([
+      false,
+      false,
+      true,
+      false,
+      false,
+    ])
+    expect(plan[1].candidates[2].evidence).not.toBe(findings[3].evidence)
+    // The batched count is the caller's own: it gets its own findings, unprojected, so it can count the prompt it
+    // would send (run.ts's batched prompt has each finding's title, body and suggestion).
+    expect(seen).toHaveLength(1)
+    expect(seen[0].length).toBe(5)
+    for (const [index, item] of seen[0].entries()) expect(item).toBe(findings[index + 1])
+  })
+
+  test("at k = 0 the one batched estimate is today's verify estimate, and each isolated call is priced on its own entry", () => {
+    // run.ts today: estimateCostUsd({ promptTokens: Math.ceil(verifyText.length / 3.5), maxSteps: VERIFY_STEPS (10),
+    // price }) over buildVerifyPrompt's text for every candidate.
+    const HEAD = "0123456789abcdef0123456789abcdef01234567"
+    const tokens = (candidates: readonly Finding[]) =>
+      Math.ceil(buildVerifyPrompt({ trust: "untrusted", head: HEAD, candidates: [...candidates] }).length / 3.5)
+    const findings = [
+      finding("a", "blocking", {
+        suggestion: "  total += discount",
+        failure: { class: "data-corruption", mechanism: "logic", trigger: "a discount", impact: "a wrong total" },
+      }),
+      finding("b", "concern", { path: "src/tax.ts", line: 40 }),
+      finding("c", "blocking", { path: "src/auth.ts", line: 3 }),
+      finding("d", "nit", { path: "src/cart.ts", line: 90 }),
+    ]
+    const today = estimateCostUsd({ promptTokens: tokens(findings), maxSteps: 10, price: SONNET })
+    const batched = { promptTokens: tokens, maxSteps: 10, price: SONNET }
+    const plan = planIsolatedVerify(
+      findings.map((candidate) => entry(candidate, 0)),
+      { k: 0, batched },
+    )
+    expect(plan).toHaveLength(1)
+    expect(plan[0].kind).toBe("batched")
+    expect(plan[0].positions).toEqual([0, 1, 2, 3])
+    expect(plan[0].estimate.low).toBe(today.low)
+    expect(plan[0].estimate.high).toBe(today.high)
+    expect(plan.reduce((sum, call) => sum + call.estimate.low, 0)).toBe(today.low)
+    expect(plan.reduce((sum, call) => sum + call.estimate.high, 0)).toBe(today.high)
+
+    // At k = 3 each isolated call takes its own entry's tokens, steps and price, and the batched call the count of the
+    // rest alone.
+    const calls = [
+      entry(findings[0], 1_500, SONNET),
+      entry(findings[1], 900, SONNET),
+      entry(findings[2], 2_500, SMALL, 6),
+      entry(findings[3], 700, SMALL),
+    ]
+    const split = planIsolatedVerify(calls, { k: 3, batched })
+    expect(shape(split)).toEqual([
+      { kind: "isolated", ids: ["a"] },
+      { kind: "isolated", ids: ["c"] },
+      { kind: "batched", ids: ["b", "d"] },
+    ])
+    for (const call of split.filter((item) => item.kind === "isolated")) {
+      const own = calls[call.positions[0]]
+      expect(call.estimate).toEqual(
+        estimateCostUsd({ promptTokens: own.promptTokens, maxSteps: own.maxSteps, price: own.price }),
+      )
+    }
+    expect(split[1].estimate).toEqual(estimateCostUsd({ promptTokens: 2_500, maxSteps: 6, price: SMALL }))
+    expect(split[2].estimate).toEqual(
+      estimateCostUsd({ promptTokens: tokens([findings[1], findings[3]]), maxSteps: 10, price: SONNET }),
+    )
+    // A count that is not a number is never priced as free.
+    const unknown = planIsolatedVerify([entry(findings[0], Number.NaN), entry(findings[1])], {
+      batched: { promptTokens: () => Number.NaN, maxSteps: 10, price: SONNET },
+    })
+    expect(unknown.map((call) => call.kind)).toEqual(["isolated", "batched"])
+    for (const call of unknown) {
+      expect(call.estimate.low).toBeNaN()
+      expect(call.estimate.high).toBeNaN()
+    }
+  })
+})
+
+describe("large review batch planner (VS-19)", () => {
+  const one = (path: string, after = "new") =>
+    parseUnifiedDiff(`diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${after}\n`)[0]!
+  const base = "1".repeat(40)
+  const head = "2".repeat(40)
+  const limits = { maxFiles: 2, maxChangedLines: 4, maxDiffChars: 8_000 }
+  test("orders by risk density and preserves fitting impact clusters independently of input and cluster labels", () => {
+    const files = ["b.ts", "c.ts", "z.ts", "src/auth/login.ts"].map((path) => one(path))
+    const clusters = new Map([
+      ["b.ts", "PRIVATE_LABEL"],
+      ["z.ts", "PRIVATE_LABEL"],
+    ])
+    const plan = planReviewBatches({ base, head, files, clusters, limits })
+    expect(plan.batches.map((batch) => batch.paths)).toEqual([["src/auth/login.ts"], ["b.ts", "z.ts"], ["c.ts"]])
+    expect(
+      planReviewBatches({
+        base,
+        head,
+        files: files.toReversed(),
+        clusters: new Map([
+          ["z.ts", "other"],
+          ["b.ts", "other"],
+        ]),
+        limits,
+      }),
+    ).toEqual(plan)
+    expect(JSON.stringify(plan)).not.toContain("PRIVATE_LABEL")
+    expect(new Set(plan.batches.map((batch) => batch.id)).size).toBe(3)
+    expect(plan.omitted).toEqual([])
+    expect(() => planReviewBatches({ base, head, files: [files[0]!, files[0]!], limits })).toThrow("Duplicate")
+    expect(() => planReviewBatches({ base, head: "HEAD", files, limits })).toThrow("commit")
+  })
+  test("risk per line distinguishes concentrated changes from sheer file size", () => {
+    const bulk = { path: "bulk.ts", additions: 1000, deletions: 0 }
+    const small = { path: "z.ts", additions: 2, deletions: 0 }
+    const auth = { ...small, path: "src/auth/login.ts" }
+    expect(orderByRiskDensity([bulk, small, auth])).toEqual([auth, small, bulk])
+  })
+  test("accounts exact diff separators and refuses individual oversized, truncated or binary changes", () => {
+    const files = [one("a.ts"), one("b.ts")]
+    const exact = renderPatch(files).length
+    const withChars = (maxDiffChars: number) =>
+      planReviewBatches({ base, head, files, limits: { ...limits, maxDiffChars } })
+    expect(withChars(exact).batches).toHaveLength(1)
+    expect(withChars(exact).batches[0]!.diffChars).toBe(exact)
+    expect(withChars(exact - 1).batches.map((batch) => batch.paths)).toEqual([["a.ts"], ["b.ts"]])
+    const missing = { ...one("truncated.ts"), additions: 20 }
+    const binary = { ...one("file.bin"), binary: true }
+    const huge = one("huge.ts", "x".repeat(10_000))
+    const plan = planReviewBatches({ base, head, files: [missing, binary, huge, ...files], limits })
+    expect(plan.omitted.toSorted()).toEqual(["file.bin", "huge.ts", "truncated.ts"])
+    expect(plan.batches.flatMap((batch) => batch.paths)).toEqual(["a.ts", "b.ts"])
+    expect(planReviewBatches({ base, head, files, limits: { ...limits, maxChangedLines: 1 } }).batches).toEqual([])
+    expect(planReviewBatches({ base, head, files, limits: { ...limits, maxFiles: 0 } }).omitted).toEqual([
+      "a.ts",
+      "b.ts",
+    ])
+    expect(() => withChars(Number.NaN)).toThrow("limit")
+    expect(withChars(exact).id).not.toBe(withChars(exact - 1).id)
+    expect(planReviewBatches({ base, head, files: [one("a.ts", "different"), files[1]!], limits }).id).not.toBe(
+      planReviewBatches({ base, head, files, limits }).id,
+    )
   })
 })

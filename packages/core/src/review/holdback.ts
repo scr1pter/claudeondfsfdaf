@@ -1,6 +1,6 @@
 // What of a change is held back from the model (VectorScope addendum A, VS-34, Now window). A changed file whose new or
-// old path names key material or credentials is held back whole: the read tool's secret and env patterns
-// (permission.ts) and a payload-only list of credential files, and so is a head file whose own path is one. Every
+// old path names key material or credentials is held back whole: the read tool's secret and env patterns and the
+// payload-only list of credential files (permission.ts), and so is a head file whose own path is one. Every
 // other changed file, and its head file, has the values a secret's own shape gives away replaced with `[redacted]` in
 // place (BrainScan read for shapes), so line numbers, hunks and anchors still line up. A gitignored file that was
 // committed is listed, never dropped.
@@ -10,28 +10,32 @@
 // this same function before runner-wiring adopts a tier. A reading that does not keep a text's lines (the generic one
 // replaces a key whole) has each line read on its own.
 //
-// Pure: it never reads process.env (`env` defaults to none) and makes no git call (the engine computes `ignored`). Its
-// imports are browser-safe, but `Wildcard.match` reads `process.platform` when called, which a sandboxed renderer has
-// to provide or the desktop half records as a difference. Nothing calls it yet. Runner-wiring calls it in Review.run
-// before prompt building under `holdback: secrets`, and only prompt rendering (the diff and the head files) may use
-// what it returns: skips, review state, anchors, suggestions and patch IDs keep the files as they are.
+// holdbackContext does the same for the other untrusted blocks a prompt quotes (design item 3): the pull request's
+// title, body and commit subjects, related-code hits, history, human comments, requirements, CI log excerpts and the
+// earlier findings the review prompt lists as open. What quotes a held path, or a path holdback would hold, is dropped,
+// and every other text has its values redacted.
+//
+// Pure: no function here reads process.env (`env` defaults to none) or makes a git call (the collector computes
+// `ignored`). Their imports are browser-safe, and `Wildcard.match` reads `process.platform` only where there is a
+// `process`, so the desktop renderer runs them too (SF-15). Review.run calls holdbackFiles and holdbackContext before
+// prompt building under `holdback: "secrets"` (SF-13b), and so does the desktop runner (ai-review.ts, SF-15, with no
+// gitignore check); only prompt rendering (the diff, the head files and the context blocks) may use what they return:
+// skips, review state, anchors, suggestions and patch IDs keep the files as they are.
+//
+// holdbackText and holdbackLines are the tool half (SF-14): the engine's read, grep and glob tools redact what they
+// return with them, in the same reading, only in a review session whose permission rules hold back (permission.ts
+// holdsBack). Those rules decide what the read tool may open (they deny the credential files and the held paths);
+// grep also reads heldReason, to withhold every line of a path this module holds back whatever the rules say.
 
 import { BrainScan } from "../brain/scan"
 import { Wildcard } from "../util/wildcard"
+import type { RulePart } from "./config"
 import { matchPostImage, parseUnifiedDiff, type DiffFile, type DiffHunk, type DiffLine } from "./diff"
 import { isCodePath } from "./ignore"
-import { ENV_FILES, SECRET_FILES } from "./permission"
-import type { HeadFile } from "./prompt"
+import { CREDENTIAL_FILES, ENV_FILES, SECRET_FILES } from "./permission"
+import type { HeadFile, PromptInput } from "./prompt"
 import { REDACTED } from "./redact"
-
-export type HoldbackReason = "secret-file" | "env-file" | "credential-file"
-
-export interface HeldFile {
-  path: string
-  oldPath?: string // only on renames
-  status: DiffFile["status"]
-  reason: HoldbackReason
-}
+import type { HeldFile, HoldbackReason, ReviewConfig } from "./types"
 
 // The `[redacted]` placeholders holdback added to one path: in its diff (hunk headers and lines) and in its head file.
 export interface HoldbackRedaction {
@@ -56,34 +60,18 @@ const ENV_TEMPLATES = ["*.example", "*.sample", "*.template", "*.dist", "*.defau
 const ENV_DOTFILES = [".env.*", "*/.env.*"]
 const ENV_SCRIPTS = ["*.sh", "*.bash", "*.zsh", "*.ps1", "*.sql"]
 
-// Credential files the read tool does not deny, each basename in a root and a nested form as SECRET_FILES writes
-// them. `id_ecdsa_sk` and `id_ed25519_sk` are OpenSSH's names for security-key private keys, beside the addendum's.
-const CREDENTIAL_NAMES = [
-  ".envrc",
-  ".netrc",
-  ".pypirc",
-  ".pgpass",
-  ".htpasswd",
-  "credentials",
-  "id_rsa",
-  "id_dsa",
-  "id_ecdsa",
-  "id_ecdsa_sk",
-  "id_ed25519",
-  "id_ed25519_sk",
-]
-const CREDENTIAL_FILES = [
-  ...CREDENTIAL_NAMES.flatMap((name) => [name, `*/${name}`]),
-  "*.ppk",
-  "*.pfx",
-  "*.jks",
-  "*.keystore",
-]
-
 const SHAPES = { shapes: true } as const
 
 // A text with its values redacted.
 type Read = (text: string) => string
+
+// The untrusted blocks holdbackContext reads. `impact` is not one: no runner sets it before VS-25b wiring, which
+// builds the slice from the files holdback sends and redacts it. `prior` is: an earlier finding's title is a model's
+// text from an earlier review, which may have been made without holdback and quote a value.
+export type HoldbackContext = Pick<
+  PromptInput,
+  "pr" | "related" | "history" | "humanComments" | "requirements" | "checks" | "prior"
+>
 
 export function holdbackFiles(
   files: readonly DiffFile[],
@@ -94,7 +82,7 @@ export function holdbackFiles(
     reading?: BrainScan.Reading
   },
 ): HoldbackResult {
-  const read = (text: string) => BrainScan.named(text, input.env ?? {}, input.reading ?? SHAPES).text
+  const read = reader(input)
   const held = files.flatMap((file): HeldFile[] => {
     const reason = heldReason(file.path) ?? (file.oldPath ? heldReason(file.oldPath) : undefined)
     if (!reason) return []
@@ -151,9 +139,118 @@ export function holdbackFiles(
   }
 }
 
+// The context blocks a prompt quotes, as holdbackFiles treats the diff: a related-code entry or hit, a history entry
+// (its blame quotes the lines), a human comment and an earlier finding anchored on a held path, or on a path holdback
+// would hold (an unchanged `config/prod/.envrc` a grep hit quotes), are dropped; every other text, the pull request's
+// title, body and commit subjects, requirements, CI log excerpts and earlier findings' titles included, has its values
+// redacted. Authors, paths, lines, symbols, check names and earlier findings' ids and statuses are kept. A block the
+// input leaves out stays out, and the result has only the input's keys.
+export function holdbackContext(
+  context: HoldbackContext,
+  input: {
+    held: readonly Pick<HeldFile, "path" | "oldPath">[]
+    env?: Record<string, string | undefined>
+    reading?: BrainScan.Reading
+  },
+): HoldbackContext {
+  const read = reader(input)
+  const paths = new Set(input.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
+  const dropped = (path: string) => paths.has(path) || heldReason(path) !== undefined
+  const pr = context.pr
+  return {
+    ...(pr
+      ? {
+          pr: {
+            ...pr,
+            title: read(pr.title),
+            body: read(pr.body),
+            ...(pr.commits ? { commits: pr.commits.map(read) } : {}),
+          },
+        }
+      : {}),
+    ...(context.related
+      ? {
+          related: context.related
+            .filter((entry) => !dropped(entry.path))
+            .map((entry) => ({
+              ...entry,
+              hits: entry.hits.filter((hit) => !dropped(hit.path)).map((hit) => ({ ...hit, text: read(hit.text) })),
+            })),
+        }
+      : {}),
+    ...(context.history
+      ? {
+          history: context.history
+            .filter((entry) => !dropped(entry.path))
+            .map((entry) => ({ ...entry, text: read(entry.text) })),
+        }
+      : {}),
+    ...(context.humanComments
+      ? {
+          humanComments: context.humanComments
+            .filter((comment) => comment.path === undefined || !dropped(comment.path))
+            .map((comment) => ({ ...comment, body: read(comment.body) })),
+        }
+      : {}),
+    ...(context.requirements !== undefined ? { requirements: read(context.requirements) } : {}),
+    ...(context.checks
+      ? {
+          checks: context.checks.map((check) =>
+            check.excerpt === undefined ? check : { ...check, excerpt: read(check.excerpt) },
+          ),
+        }
+      : {}),
+    ...(context.prior
+      ? {
+          prior: context.prior
+            .filter((entry) => !dropped(entry.path))
+            .map((entry) => ({ ...entry, title: read(entry.title) })),
+        }
+      : {}),
+  }
+}
+
+// A credential in trusted instructions is still a credential. Under ruleCheck "strict", omit the affected block as a
+// whole so clipping and source offsets on the remaining block agree with the transmitted text. Otherwise no citation
+// refers to these blocks, so their values are redacted in place, as the read tool redacts loaded instructions.
+export function safeRulePrompt(
+  input: { instructions?: string; rules?: string; ruleParts?: readonly RulePart[] },
+  config: Pick<ReviewConfig, "ruleCheck" | "holdback">,
+) {
+  if (config.holdback !== "secrets") return input
+  if (config.ruleCheck !== "strict")
+    return {
+      ...input,
+      ...(input.instructions ? { instructions: holdbackText(input.instructions) } : {}),
+      ...(input.rules ? { rules: holdbackText(input.rules) } : {}),
+      ...(input.ruleParts ? { ruleParts: input.ruleParts.map((part) => ({ ...part, text: holdbackText(part.text) })) } : {}),
+    }
+  return {
+    ...input,
+    ...(input.instructions && holdbackText(input.instructions) !== input.instructions ? { instructions: "" } : {}),
+    ...(input.rules && holdbackText(input.rules) !== input.rules ? { rules: "", ruleParts: [] } : {}),
+  }
+}
+
+// One text a read or grep tool returns, its values redacted as the prompt's are: by shape, with no environment.
+export function holdbackText(text: string) {
+  return reader({})(text)
+}
+
+// Lines a tool returns, redacted as one text so that a private key's header still marks the body lines after it, each
+// line kept where it was (redactTexts).
+export function holdbackLines(lines: readonly string[]) {
+  return redactTexts(lines, reader({}))
+}
+
+function reader(input: { env?: Record<string, string | undefined>; reading?: BrainScan.Reading }): Read {
+  return (text) => BrainScan.named(text, input.env ?? {}, input.reading ?? SHAPES).text
+}
+
 // Lowercased first, as every pattern is, so a path is judged alike on every platform: Wildcard ignores case only on
-// Windows, and the read tool's rules follow it.
-function heldReason(path: string): HoldbackReason | undefined {
+// Windows, and the read tool's rules follow it. The grep tool reads it too (SF-14): under holdback it withholds every
+// line from a path this holds back, whatever the session's rules say (design item 2's backstop).
+export function heldReason(path: string): HoldbackReason | undefined {
   const lower = path.toLowerCase()
   const matches = (patterns: readonly string[]) => patterns.some((pattern) => Wildcard.match(lower, pattern))
   if (matches(SECRET_FILES)) return "secret-file"
