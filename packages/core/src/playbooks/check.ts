@@ -1,7 +1,7 @@
 export * as PlaybookCheck from "./check"
 
 import { Playbooks } from "@vectordevai/schema/playbooks"
-import { SECRET_FILE } from "../brain/document/sniff"
+import { SECRET_FILE } from "../brain/document/secret-file"
 import { BrainScan } from "../brain/scan"
 import { allowed } from "./commands"
 import { WorkflowSpec } from "../orchestration/spec"
@@ -133,11 +133,8 @@ export function validate(input: {
   return { ok: true, name: input.name, commands: [...commands].sort(), files: [...files].sort() }
 }
 
-// A playbook runs on the plan of whoever installs it, so it names a model only as a Codium role, which the engine
-// resolves for that plan (packages/engine/src/orchestration/runs.ts holds the same pattern). Any other model would pin
-// one provider's model or one plan's model for everyone. A stage or verifier without a model is left to the runner.
-const ROLE = /^codium:(?:floor|default|ceiling)$/
-
+// The engine resolves Codium roles for the plan of whoever installs the playbook. A stage or verifier without a
+// model uses the runner's choice.
 function modelIssues(spec: WorkflowSpec.Spec): Issue[] {
   return [
     { path: "/defaults/model", model: spec.defaults?.model },
@@ -150,7 +147,7 @@ function modelIssues(spec: WorkflowSpec.Spec): Issue[] {
         : [],
     ),
   ].flatMap((entry) =>
-    entry.model === undefined || ROLE.test(entry.model)
+    entry.model === undefined || Playbooks.modelRole(entry.model) !== undefined
       ? []
       : [
           {

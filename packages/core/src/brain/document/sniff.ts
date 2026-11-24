@@ -4,13 +4,12 @@ import type { BrainSchema } from "../schema"
 import { refuse, type BrainLimits } from "./limits"
 import { BrainOoxml } from "./ooxml"
 import type { Input, ReadRefusal } from "./read"
+import { SECRET_FILE } from "./secret-file"
 
 // Which reader a file goes to: its first bytes decide, and its name only when the bytes say nothing (text formats).
 // A file is never read as something its bytes contradict, so a renamed executable or archive is refused, not parsed.
 
-/** Files whose content is a secret, never a document. */
-export const SECRET_FILE =
-  /(?:^|\/)(?:\.env(?:\.[\w.-]+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_[a-z0-9]+|[\w.-]+\.(?:pem|key|p12|pfx)|credentials(?:\.json)?|secrets?\.(?:json|ya?ml|toml|txt|env))$/i
+export { SECRET_FILE } from "./secret-file"
 
 export type Sniffed = {
   readonly type: "format"

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtemp, readdir, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { PlaybookCheck } from "@vectordevai/core/playbooks/check"
 import { PlaybookCommands } from "@vectordevai/core/playbooks/commands"
@@ -165,6 +168,47 @@ describe("the skill command allowlist (same cases as BrainSkill)", () => {
 })
 
 describe("the playbook publish check", () => {
+  test("validation can run without initializing Vector storage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "vector-playbook-check-"))
+    try {
+      const namespace = "vector-playbook-check"
+      const entry = new URL("../../src/playbooks/check.ts", import.meta.url).href
+      const input = JSON.stringify({ version: 1, title: "Check", stages: [{ id: "test", prompt: "Run `bun test`." }] })
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "--no-env-file",
+          "-e",
+          `const { PlaybookCheck } = await import(${JSON.stringify(entry)})
+const bytes = new TextEncoder().encode(${JSON.stringify(input)})
+if (!PlaybookCheck.validate({ name: "vector-check", bytes, env: {} }).ok) process.exit(1)`,
+        ],
+        {
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            VECTOR_APP_NAMESPACE: namespace,
+            XDG_CACHE_HOME: path.join(root, "cache"),
+            XDG_CONFIG_HOME: path.join(root, "config"),
+            XDG_DATA_HOME: path.join(root, "data"),
+            XDG_STATE_HOME: path.join(root, "state"),
+            TMPDIR: root,
+            TMP: root,
+            TEMP: root,
+          },
+          stdout: "ignore",
+          stderr: "pipe",
+        },
+      )
+      const [code, error] = await Promise.all([child.exited, new Response(child.stderr).text()])
+      expect({ code, error }).toEqual({ code: 0, error: "" })
+      const directories = await readdir(root, { recursive: true })
+      expect(directories.filter((entry) => path.basename(entry) === namespace)).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   const encode = (value: unknown) => new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value))
   const spec = (prompt: string, extra: Record<string, unknown> = {}) => ({
     version: 1,
