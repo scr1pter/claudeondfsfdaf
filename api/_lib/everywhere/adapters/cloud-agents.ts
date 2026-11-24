@@ -39,8 +39,8 @@ export type CloudPortsDeps = {
   readonly store?: typeof persistentStore
   /**
    * The live read with the App's single-repository token: github-app.ts attachmentRepository. GitHub's `private` is
-   * also true for an internal repository, so only a `visibility` of "private" is private; until the helper answers
-   * that field, a repository it does not call public reads "internal".
+   * also true for an internal repository, so only a `visibility` of "private" is private. Missing or unknown
+   * visibility for a nonpublic repository reads "internal".
    */
   readonly app?: {
     readonly attachmentRepository: (
@@ -130,6 +130,26 @@ export function createCloudPorts(
         },
       } satisfies PreparedDispatch
     },
+  }
+}
+
+/** Read live visibility using the same active GitHub App binding as the run's verified token. */
+export function createRunBodyVisibility(deps: Pick<CloudPortsDeps, "store" | "app"> = {}) {
+  return async (input: {
+    readonly account: string
+    readonly repositoryId: number
+    readonly generation: number
+    readonly fullName: string
+  }): Promise<RepoBinding["visibility"] | undefined> => {
+    const binding = await currentBinding(input.repositoryId, deps.store)
+    if (
+      !binding ||
+      binding.account !== input.account ||
+      binding.generation !== input.generation ||
+      binding.repository.toLowerCase() !== input.fullName.toLowerCase()
+    )
+      return undefined
+    return liveVisibility(binding, deps.app)
   }
 }
 
