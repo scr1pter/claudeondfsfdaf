@@ -106,7 +106,9 @@ export function observeComputerStop(result: SmokeProcess): Observation {
     if (check.skipped) return { ...empty, status: "skipped", reason: check.reason }
     if (check.ok) return { ...empty, status: "passed" }
     const hf7 =
-      (stop.stage === "uia-root-element" || stop.stage === "uia-runtime-id") &&
+      (stop.stage === "uia-root-element" ||
+        stop.stage === "uia-runtime-id" ||
+        stop.stage === "uia-prepare-connection") &&
       stop.cause === "core_failure:no_ui_tree" &&
       stop.uia?.lookup === "first" &&
       stop.uia.call === "root" &&

@@ -1290,6 +1290,12 @@ test("the macOS matrix can diagnose admitted artifacts after later fixture failu
   expect(helperRelease["continue-on-error"]).toBeUndefined()
 })
 
+test("ordinary desktop unit jobs run the Stop repeat collector regression test", () => {
+  const unit = record(record(main.document.jobs).unit)
+  const desktop = steps(unit).find((step) => step.name === "Run desktop computer-use tests")!
+  expect(String(desktop.run)).toMatch(/for file in [^\n]*\.\/scripts\/computer-overlay-smoke-repeat\.test\.ts(?: |;)/)
+})
+
 test("Windows unit and diagnostic lanes exercise the packed Main pin reader before native builds", () => {
   const all = record(main.document.jobs)
   const unit = record(all.unit)

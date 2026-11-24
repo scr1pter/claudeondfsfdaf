@@ -33,16 +33,15 @@ const failedReport = report({
   "native-capture-exclusion": { ok: false, reason: "native_proof_invalid" },
 })
 const uia = { lookup: "first", call: "root", actor: "retired", expiry: "caller-wait", hresult: "unobserved" }
-const failed = (stage: string, facts = uia, cause = "core_failure:no_ui_tree") => ({
-  stdout:
-    [driver({ ok: false, reason: "native_failure", stage, cause, uia: facts }, 1), failedReport].join("\n") + "\n",
+const failed = (stage: string, facts: typeof uia | null = uia, cause = "core_failure:no_ui_tree") => ({
+  stdout: `${driver({ ok: false, reason: "native_failure", stage, cause, ...(facts ? { uia: facts } : {}) }, 1)}\n${failedReport}\n`,
   stderr: failure("assertion_failed") + "\n",
   exitCode: 1,
 })
 
 test("counts only the closed, observed first-root signature and validated native passes", () => {
   expect(observeComputerStop(good)).toEqual({ status: "passed", stage: null, uia: null })
-  for (const stage of ["uia-root-element", "uia-runtime-id"]) {
+  for (const stage of ["uia-root-element", "uia-runtime-id", "uia-prepare-connection"]) {
     expect(observeComputerStop(failed(stage))).toEqual({
       status: "hf7",
       stage,
@@ -54,6 +53,12 @@ test("counts only the closed, observed first-root signature and validated native
     expect(observeComputerStop(failed(stage, { ...uia, actor: "healthy", expiry: "none" })).status).toBe("failed")
   }
   expect(observeComputerStop(failed("uia-root-element", uia, "core_failure:timeout")).status).toBe("failed")
+  expect(observeComputerStop(failed("post", null, "core_failure:changed"))).toMatchObject({
+    status: "failed",
+    stage: "post",
+    cause: "core_failure:changed",
+    uia: null,
+  })
 })
 
 test("skips, missing evidence, timeouts and malformed or inconsistent reports stay visible", () => {

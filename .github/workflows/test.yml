@@ -691,7 +691,7 @@ jobs:
         working-directory: packages/desktop
         run: |
           status=0
-          for file in ./scripts/computer-helper-identity.test.ts ./scripts/computer-overlay-workflow.test.ts ./scripts/computer-workflow.test.ts ./scripts/verify-computer-helper-windows.test.ts ./test/computer/*.test.ts ./src/main/computer-*.test.ts ./src/main/config-skew.test.ts ./src/main/ipc-security.test.ts ./src/main/keep-awake.test.ts; do
+          for file in ./scripts/computer-helper-identity.test.ts ./scripts/computer-overlay-smoke-repeat.test.ts ./scripts/computer-overlay-workflow.test.ts ./scripts/computer-workflow.test.ts ./scripts/verify-computer-helper-windows.test.ts ./test/computer/*.test.ts ./src/main/computer-*.test.ts ./src/main/config-skew.test.ts ./src/main/ipc-security.test.ts ./src/main/keep-awake.test.ts; do
             echo "Desktop computer-use test: $file"
             GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --only-failures "$file" || status=1
           done
