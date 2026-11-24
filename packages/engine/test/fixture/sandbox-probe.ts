@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
-import { probePtyDescriptors } from "./sandbox-pty-probe"
 import { probeToolProcesses } from "./sandbox-tool-probe"
 
 const execute = promisify(execFile)
@@ -164,6 +163,7 @@ if (process.argv[2] === "--module-load-check") {
 } else if (process.argv[2] === "--pty-fixture-check") {
   // An isolated build check can supply an empty temporary descriptor without entering the private channel.
   ProcessIsolation.requireIsolation()
+  const { probePtyDescriptors } = await import("./sandbox-pty-probe")
   await probePtyDescriptors(syntheticProofIdentity())
   console.log("Staged PTY descriptor check passed")
 } else if (process.argv[2] === "--crash-controls") {
@@ -341,7 +341,11 @@ if (process.argv[2] === "--module-load-check") {
     syntheticProof = syntheticProofIdentity()
   }
   const toolProcess = await probeToolProcesses(syntheticProof)
-  if (syntheticProof) await probePtyDescriptors(syntheticProof)
+  if (syntheticProof) {
+    // The PTY's Config graph snapshots flags and XDG paths; the tool probe installs its synthetic profile first.
+    const { probePtyDescriptors } = await import("./sandbox-pty-probe")
+    await probePtyDescriptors(syntheticProof)
+  }
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
   const scanner = ProcessIsolation.launch("/bin/bash", [
     "--noprofile",
