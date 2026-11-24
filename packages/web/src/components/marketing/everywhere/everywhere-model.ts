@@ -268,6 +268,7 @@ export const EVERYWHERE_COPY = {
       `Linked Linear user ${userId} in ${label}${hint ? ` to the Vector account ${hint}` : ""}.`,
     already: (userId: string, label: string) => `Linear user ${userId} in ${label} was already linked to this account.`,
     problem: {
+      cancelled: "This sign-in was canceled. Start again from Connect or Link.",
       "invalid-return": "This page was opened with an incomplete or changed sign-in. Start again from Connect or Link.",
       "signed-out": "Sign in to Vector first, then start again from Connect or Link.",
       session: "Your session ended before this finished. Start again from Connect or Link.",
@@ -387,8 +388,9 @@ export type EverywhereState = (
   readonly landing?: EverywhereLanding | undefined
 }
 
-/** What a Slack or Linear callback put in /everywhere's fragment (slack/install.ts, linear/install.ts). */
+/** The authorization code and state from a completed Slack or Linear callback. */
 export type EverywhereOAuthReturn = { readonly platform: OAuthPlatform; readonly code: string; readonly state: string }
+type EverywhereOAuthCallback = EverywhereOAuthReturn | { readonly platform: OAuthPlatform; readonly cancelled: true }
 export type EverywhereLandingProblem = keyof typeof EVERYWHERE_COPY.landing.problem
 export type EverywhereLanding =
   | { readonly kind: "finishing"; readonly platform: OAuthPlatform }
@@ -831,11 +833,11 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
      * The page was opened with an OAuth return (`takeOAuthReturn`). It is sent once there is a session; signed out,
      * refused or off, it is dropped and the landing says why.
      */
-    finishOAuth(back: EverywhereOAuthReturn | "invalid"): Promise<void> {
+    finishOAuth(back: EverywhereOAuthCallback | "invalid"): Promise<void> {
       pending = undefined
       pendingFor = undefined
-      if (back === "invalid") {
-        setLanding({ kind: "failed", problem: "invalid-return" })
+      if (back === "invalid" || "cancelled" in back) {
+        setLanding({ kind: "failed", problem: back === "invalid" ? "invalid-return" : "cancelled" })
         landingAtOpen = current.kind === "loading"
         return Promise.resolve()
       }
@@ -1093,18 +1095,19 @@ export function signInPath(pathname: string, focus?: string) {
 }
 
 /**
- * The OAuth return in /everywhere's fragment: exactly `platform`, `code` and `state`, each once, with Slack or Linear,
- * a code identity.ts would take and a state of the stored shape. Anything else is undefined.
+ * The OAuth callback in /everywhere's fragment is either `platform`, `code`, and `state`, or a fixed cancellation
+ * notice with `platform` and `error`. Each field appears once.
  */
-export function readOAuthReturn(hash: string): EverywhereOAuthReturn | undefined {
+export function readOAuthReturn(hash: string): EverywhereOAuthCallback | undefined {
   const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash)
   const keys = [...params.keys()]
+  const platform = params.get("platform")
+  if (platform !== "slack" && platform !== "linear") return undefined
+  if (keys.length === 2 && params.get("error") === "access_denied") return { platform, cancelled: true }
   if (keys.length !== 3 || !["platform", "code", "state"].every((key) => params.getAll(key).length === 1))
     return undefined
-  const platform = params.get("platform")
   const code = params.get("code") ?? ""
   const state = params.get("state") ?? ""
-  if (platform !== "slack" && platform !== "linear") return undefined
   if (!OAUTH_CODE_PATTERN.test(code) || !STATE_PATTERN.test(state)) return undefined
   return { platform, code, state }
 }
@@ -1115,10 +1118,10 @@ export function readOAuthReturn(hash: string): EverywhereOAuthReturn | undefined
  * the path and query stay. Answers the return, "invalid" for a malformed one, or undefined when there is none (and
  * then the address is left alone).
  */
-export function takeOAuthReturn(place: OAuthPlace): EverywhereOAuthReturn | "invalid" | undefined {
+export function takeOAuthReturn(place: OAuthPlace): EverywhereOAuthCallback | "invalid" | undefined {
   const hash = place.location.hash
   const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash)
-  if (!["platform", "code", "state"].some((key) => params.has(key))) return undefined
+  if (!["platform", "code", "state", "error"].some((key) => params.has(key))) return undefined
   place.history.replaceState(place.history.state, "", place.location.pathname + place.location.search)
   return readOAuthReturn(hash) ?? "invalid"
 }

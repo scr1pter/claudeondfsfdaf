@@ -1698,6 +1698,10 @@ describe("the OAuth landing (PUB-8)", () => {
       `platform=slack&code=&state=${STATE}`,
       `platform=slack&code=${"c".repeat(1025)}&state=${STATE}`,
       "code=only",
+      "platform=linear&error=server_error",
+      "platform=linear&error=access_denied&error=access_denied",
+      "platform=linear&error=access_denied&error_description=provider-details",
+      `platform=linear&code=A&state=${STATE}&error=access_denied`,
     ]
     for (const hash of malformed) {
       const page = standIn(`/everywhere#${hash}`)
@@ -1705,13 +1709,69 @@ describe("the OAuth landing (PUB-8)", () => {
       // Stripped all the same: a malformed code never stays in the address bar either.
       expect(page.replaced).toEqual(["/everywhere"])
     }
-    expect(readOAuthReturn(`#platform=slack&code=${"c".repeat(1024)}&state=${STATE}`)?.code).toHaveLength(1024)
+    expect(readOAuthReturn(`#platform=slack&code=${"c".repeat(1024)}&state=${STATE}`)).toMatchObject({
+      code: "c".repeat(1024),
+    })
     expect(readOAuthReturn(`platform=slack&code=x&state=${STATE}`)).toEqual({
       platform: "slack",
       code: "x",
       state: STATE,
     })
   })
+
+  test.each(["slack", "linear"] as const)(
+    "%s cancellation returns to a fixed notice without using the state or exchanging a code",
+    async (platform) => {
+      let exchanges = 0
+      const unexpectedPlatformRequest = () => {
+        exchanges++
+        throw new Error("A cancellation must not contact the platform")
+      }
+      mountNative(Object.assign(async () => unexpectedPlatformRequest(), { preconnect: unexpectedPlatformRequest }))
+      const { state } = await startState(alice, (model) => model.startInstall(platform))
+      const before = fake.commands.length
+      const endpoint = `${harness.origin}/api/${platform}/oauth`
+      const query = new URLSearchParams({
+        error: "access_denied",
+        state,
+        error_description: "provider explanation",
+        error_uri: "https://example.invalid/leave",
+      })
+      const response = await fetch(`${endpoint}?${query}`, { redirect: "manual" })
+      expect(response.status).toBe(303)
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      const location = response.headers.get("location")
+      expect(location).toBe(`/everywhere#platform=${platform}&error=access_denied`)
+      expect(fake.commands).toHaveLength(before)
+      const stand = standIn(location!)
+      const back = takeOAuthReturn(stand.place)
+      expect(back).toEqual({ platform, cancelled: true })
+      expect(stand.replaced).toEqual(["/everywhere"])
+
+      const b = browser()
+      await b.model.finishOAuth(back!)
+      expect(b.calls).toEqual([])
+      await b.model.setSession(as(alice))
+      expect(b.calls.filter((call) => call.path === EVERYWHERE_ROUTES.oauthFinish)).toEqual([])
+      expect(render(b.model)).toContain(EVERYWHERE_COPY.landing.problem.cancelled)
+      expect(exchanges).toBe(0)
+
+      for (const invalid of [
+        "error=access_denied",
+        "error=access_denied&state=invalid",
+        `error=server_error&state=${state}`,
+        `error=access_denied&error=server_error&state=${state}`,
+        `error=access_denied&state=${state}&state=${state}`,
+        `error=access_denied&state=${state}&code=`,
+        `code=one&code=two&state=${state}`,
+      ]) {
+        const denied = await fetch(`${endpoint}?${invalid}`, { redirect: "manual" })
+        expect(denied.status).toBe(400)
+        expect(denied.headers.get("location")).toBeNull()
+      }
+    },
+  )
 
   test("the OAuth landing posts {code, state} with the bearer token and never puts the code in a later URL", async () => {
     slackGrant()
