@@ -386,6 +386,22 @@ export async function listCloudRuns(
   })
 }
 
+/** The settled outcome of one exact run owned by this account, even when its history no longer lists it. */
+export async function readCloudRunOutcome(
+  account: string,
+  rid: string,
+  store = persistentStore,
+): Promise<GithubAgents.Outcome | undefined> {
+  if (!Schema.is(Account)(account)) throw invalidRequest()
+  // Everywhere's internal run ID format is broader. Only IDs Cloud Agents could issue have a record here.
+  if (!RID.test(rid)) return undefined
+  const values = fields(await command(["EVAL", RECORD, "1", runRecordKey(rid)], store))
+  if (!Object.keys(values).length) return undefined
+  const record = Option.getOrUndefined(decodeRecord(values))
+  if (!record || record.rid !== rid) throw unavailable()
+  return record.account === account ? record.outcome : undefined
+}
+
 /** Private completed-run provenance for explicit desktop data reads; never accepts a caller-selected thread. */
 export async function ownerCloudRun(account: string, rid: string, store = persistentStore) {
   if (!Schema.is(Account)(account) || !RID.test(rid)) throw invalidRequest()
