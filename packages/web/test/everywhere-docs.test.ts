@@ -149,7 +149,7 @@ const PAGE_DENY: { pattern: RegExp; guards: string }[] = [
   { pattern: /\bnow available\b|\bcoming soon\b|\bbeta\b|\bpreview\b/i, guards: "availability" },
   // Linear and Jira post no summary until `privateResult` exists (EV-23 (c)).
   { pattern: /\bIn Linear and Jira\b[^.]*\bsummar/i, guards: "EV-23 (c)" },
-  // The desktop page cannot write the settings yet, and older engines refuse a file with them (EV-21, Ruling on (a)).
+  // Keep shared settings files out of setup. Older engines refuse an unrecognized Everywhere key (EV-21).
   { pattern: /\bsettings file\b/i, guards: "EV-21 (a)" },
   // Owner rule: Vector has no projects.
   { pattern: /\bprojects?\b/i, guards: "no projects" },
@@ -512,8 +512,10 @@ describe("the owner's go-live guides", () => {
     // Tripwires: whoever changes either of these updates every guide's Before you start in the same change.
     expect(LAPTOP_ROUTE_WIRED).toBe(false)
     expect(Object.keys(OFFER_KEYS)).toEqual([])
-    const desktop = await read("packages/app/src/components/settings-v2/everywhere-model.ts")
-    const readOnly = desktop.includes("This page shows those settings and changes none of them.")
+    const desktop = await read("packages/app/src/components/settings-v2/everywhere.tsx")
+    expect(desktop).toContain("platform.everywherePreferences")
+    expect(desktop).toContain("Allow this computer to take jobs")
+    expect(desktop).toContain("Allow this folder")
     for (const platform of PLATFORMS) {
       const before = section(guide(platform), "Before you start")
       expect({
@@ -525,12 +527,14 @@ describe("the owner's go-live guides", () => {
         wired: true,
         keys: true,
       })
-      // While the desktop page writes nothing, every guide says so; when it writes, the gate goes.
-      expect({ platform, gate: before.includes("Ruling on (a)") }).toEqual({ platform, gate: readOnly })
+      expect(before).toContain("compatible built-in sidecar")
+      expect(before).toContain("Older builds keep the panel read-only")
     }
-    expect(page.includes('Rewrite "Set it up" when the write path lands.')).toBe(readOnly)
-    // Until EV-21 labels the desktop's GitHub calls, the runner's `github` guard declines every job under Vector Local,
-    // and the page says exactly that; when the guard goes, the page says what Vector Local must allow.
+    const setup = text.slice(text.indexOf("Set it up"), text.indexOf("Platforms", text.indexOf("Set it up")))
+    expect(setup).toContain("Allow this folder")
+    expect(setup).toContain("Allow this computer to take jobs")
+    expect(setup).toContain("Vector Remote turns on with your confirmation if it is off")
+    // Until production GitHub ports have job and repository authority, the runner keeps declining under Vector Local.
     const guarded = (await read("packages/desktop/src/main/everywhere-runner.ts")).includes(
       'if (need.source === "github" && policy.enabled) return false',
     )

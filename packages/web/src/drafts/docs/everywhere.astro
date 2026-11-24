@@ -4,11 +4,9 @@
 // src/drafts/everywhere/link.astro, and adds its docs-nav.ts entry after `automations` in the same change (spec §6.5,
 // docs/vector/owner-actions/vector-everywhere-*.md "At 2.0.0"). DocsPage throws at build for an id with no docs-nav
 // entry, so a forgotten entry fails loudly.
-// The set-up steps do not say how to turn jobs on or allow a folder: the desktop page cannot write those settings yet
-// (vector-everywhere-deviations.md, EV-21, "Ruling on (a)" and (aj)). Rewrite "Set it up" when the write path lands.
-// With Vector Local on, every job is declined until EV-21 labels the desktop's GitHub calls (the `github` guard in
-// desktop everywhere-runner.ts `localAllows`; spec §3.5, EV-15 note). When the guard goes, say what Vector Local must
-// allow.
+// Desktop setup requires the built-in sidecar preference capability. Leave the draft unavailable until go-live.
+// With Vector Local on, laptop jobs are declined while production GitHub ports lack job and repository authority
+// (the `github` guard in desktop everywhere-runner.ts `localAllows`). When the guard goes, say what Vector Local must allow.
 // The page names "the Vector everywhere page" in text and links it nowhere until both drafts move (EV-24 (c)).
 import DocsPage from "../../layouts/DocsPage.astro"
 
@@ -99,9 +97,10 @@ export const prerender = true
       key and choose <strong>Add repository</strong>.
     </li>
     <li>
-      On your computer, turn on Vector Remote, open the repository in Vector and trust it. Jobs reach a computer only
-      while its Vector everywhere settings say it takes jobs, and run only in a folder listed under
-      <strong>Allowed repositories</strong>. Nothing is listed by default.
+      Open the repository in Vector and trust it. In <strong>Settings → Vector everywhere</strong>, use
+      <strong>Allow this folder</strong> under <strong>Allowed repositories</strong>. Review the repository and job
+      limits, then choose <strong>Allow this computer to take jobs</strong>. Vector Remote turns on with your
+      confirmation if it is off. If the panel is read-only, use a compatible Desktop build.
     </li>
   </ol>
   <p>
