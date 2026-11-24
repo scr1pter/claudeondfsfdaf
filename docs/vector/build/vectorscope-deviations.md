@@ -14088,7 +14088,7 @@ result, ledger, sealed output or session record is committed (§0.5, I-13).
     - the repository paths (REPORT-3 lines 278 and 400 to 401, where
       `src/libs` is lvgl's own path; addendum B lines 26, 85, 121 and 162,
       the last naming VS-38a's future scratch clone);
-    - the worktree path `/home/user/wt/vectorscope` (REPORT-3 line 5,
+    - the worktree path `<worktree>` (REPORT-3 line 5,
       addendum B line 5, `notes-prediction.md` lines 5 and 424,
       `notes-tokenomics.md` line 5), as round two's committed notes
       already do.
@@ -14552,7 +14552,7 @@ tests and typechecks (Evidence) before the commit.
   stays 1: no runner applies the change (addendum B header).
   `promptsDigest` and the policy digest goldens do not move.
 - **Evidence.** Each test file ran alone from `packages/core` (the bundle
-  test from `packages/app`) through `/home/user/.tools/vector-serial` with
+  test from `packages/app`) through `~/.tools/vector-serial` with
   `--timeout 30000`, `GITHUB_ACTIONS=false`, and TMPDIR and XDG roots under
   `/tmp/vector-vectorscope/wp1/`.
 
@@ -14799,7 +14799,7 @@ quotes, so no slip is recorded there.
     Projection and the entry point's flags; `--cost-split` and
     `--severity-repeats` under the report. Additions only.
 - **Tests.** One test file at a time, from its package directory, through
-  `/home/user/.tools/vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
+  `~/.tools/vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
   TMPDIR and XDG roots under `/tmp/vector-vectorscope/wp2/env/`. Every
   existing test in the eight touched test files passes unchanged: their
   diffs remove 0 lines (1,333 added).
@@ -15070,7 +15070,7 @@ quotes, so no slip is recorded there.
     between the bands is mostly steps (5 against 30 for review, 20 for
     security and 10 for verify) and growth, not caching.
 
-- **Evidence.** Each test file ran alone through `/home/user/.tools/vector-serial`
+- **Evidence.** Each test file ran alone through `~/.tools/vector-serial`
   with `--timeout 30000` and `GITHUB_ACTIONS=false`; script tests from
   `packages/script` (`../../script/vectorscope-eval/<file>.test.ts`), as
   test.yml runs them.
@@ -15439,7 +15439,7 @@ did not exist yet: VS-24c landed the constant `CALIBRATED_OUTPUT_PER_STEP`
     tiers (VS-40a)" under Projection, and one bullet in the paid entry point's
     list. No model string is added (Q35).
 - **Tests.** One test file at a time, from its package directory, through
-  `/home/user/.tools/vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
+  `~/.tools/vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
   TMPDIR and XDG roots under `/tmp/vector-vectorscope/wp3/env/`. Every
   existing test of the four touched test files passes unchanged; their diffs
   remove 3 lines, one import and two lines of the VS-21e subprocess helper
@@ -15714,7 +15714,7 @@ did not exist yet: VS-24c landed the constant `CALIBRATED_OUTPUT_PER_STEP`
   - These are estimates from each pass's first request, not spend, and the
     gap between the bands is mostly steps and growth, not tiers.
 
-- **Evidence.** Each test file ran alone through `/home/user/.tools/vector-serial`
+- **Evidence.** Each test file ran alone through `~/.tools/vector-serial`
   with `--timeout 30000` and `GITHUB_ACTIONS=false`; the script test from
   `packages/script`, as test.yml runs it.
 
@@ -16258,7 +16258,7 @@ review are under "Review findings".
        missed; the core case asserts this with a later struct. Real Go files
        stay well inside both, and every existing case is unchanged.
      - Timings come from a scratch probe outside the repository
-       (`/tmp/vector-v2/scope/bench-same-package.ts`). It times the core
+       (`<scratch>/scope/bench-same-package.ts`). It times the core
        functions alone, under Bun 1.3.14 in this container, at 10,000 of
        each:
        - 10,000 one-line functions: 217 ms before, 28 ms after;
@@ -16654,7 +16654,7 @@ and the new variant name is refused everywhere.
       added to the refusal table);
     - `script/vectorscope-eval/outcomes.test.ts`: 40 pass, 0 fail;
     - engine `test/review/vectorscope-replay.test.ts`, with fresh
-      `XDG_{DATA,CONFIG,STATE,CACHE}_HOME` under `/tmp/vector-v2/scope/sf02/`:
+      `XDG_{DATA,CONFIG,STATE,CACHE}_HOME` under `<scratch>/scope/sf02/`:
       29 pass, 0 fail (assertions added to two existing tests). Not re-run
       after the review fixes, which touch neither it nor `replay.ts`.
   - `bun typecheck` in `packages/core`, `packages/engine` and `packages/app`,
@@ -16701,7 +16701,7 @@ and the new variant name is refused everywhere.
     `dispatch.test.ts` 31 pass; eval `replay.test.ts` 49 pass,
     `report.test.ts` 44 pass, `outcomes.test.ts` 40 pass; engine
     `test/review/vectorscope-replay.test.ts` 29 pass (fresh XDG roots under
-    `/tmp/vector-v2/scope/sf02-commit/`); 0 fail in each. `bun typecheck` in
+    `<scratch>/scope/sf02-commit/`); 0 fail in each. `bun typecheck` in
     core and engine, the eval tsconfig, and the full TURBO typecheck
     (27 of 27 tasks) are clean.
   - CI: the commit gate dispatches, on `scope-finish`, the lead's list for
@@ -16936,7 +16936,7 @@ VS-46c and VS-46d report sections are SF-04, SF-05a and SF-05b.
     filtered entries (the primary label). `sameAgent` is on both (critique
     11), because it depends on the fix and the PR, not on the filter.
   - (b) _Whole-file blame._ The plan's probe (git 2.43.0) was reproduced in
-    `/tmp/vector-v2/scope/sf03/probe` with block lines under git's
+    `<scratch>/scope/sf03/probe` with block lines under git's
     20-character move threshold and blocks above it: whole-file
     `-w -M -C` blames the moved line (within a file and to another file) on
     the original commit, and `-L n,n` leaves it on the mover. T6 uses such
@@ -17223,7 +17223,7 @@ VS-46c and VS-46d report sections are SF-04, SF-05a and SF-05b.
       and T6 and the decoder test do.
 - **Tests actually run** (each file alone from `packages/script`, through
   `vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
-  `TMPDIR=/tmp/vector-v2/scope/sf03/tmp`):
+  `TMPDIR=<scratch>/scope/sf03/tmp`):
   - At `f8543197`: `outcomes.test.ts` 40 pass, 0 fail. With T1 added at the
     base: 41 pass, 0 fail.
   - Before review round one: `outcomes.test.ts` 51 pass, 0 fail (40
@@ -17777,7 +17777,7 @@ README and this log. VS-46d's report sections are SF-05a and SF-05b.
 
 - **Tests actually run.** Each file was run alone from `packages/script`,
   through `vector-serial`, with `--timeout 30000` and
-  `TMPDIR=/tmp/vector-v2/scope/sf04/tmp`.
+  `TMPDIR=<scratch>/scope/sf04/tmp`.
   - At `a723ac92`: 54 pass, 0 fail (727 expect calls). With `pullOf`'s
     sizes and `BAND_TABLE` added, against the unedited source: 54 pass, 0
     fail (728).
@@ -17869,17 +17869,17 @@ README and this log. VS-46d's report sections are SF-05a and SF-05b.
       behaviour or line number. The final file is `7cbdde9902a0…`, and the
       test file, the eval typecheck, oxlint and prettier were re-run on it
       with the results above.
-  - The manual dry run: `/tmp/vector-v2/scope/sf04/dry-run.ts` sealed a
+  - The manual dry run: `<scratch>/scope/sf04/dry-run.ts` sealed a
     synthetic /2 ledger (400 banded PRs, five reverts) to a throwaway key it
     generated. `bun script/vectorscope-eval/outcomes.ts open` then exited 0
     and wrote only `outcomes-report.md` (mode 0600) to
-    `/tmp/vector-v2/scope/sf04/out`. Its headings, in order: Outcome base
+    `<scratch>/scope/sf04/out`. Its headings, in order: Outcome base
     rates, Minimum detectable effect, Severity gradient, Split out,
     Resolution, Risk band against post-merge outcomes, Capture against size,
     Measurement verdict, Depth and reach. Its verdict was `underpowered`:
     the high band, 38 PRs after two reverts, expects 9.4 filtered
     positives. After review round one it was run again into
-    `/tmp/vector-v2/scope/sf04/out-r1`, with the same headings and verdict.
+    `<scratch>/scope/sf04/out-r1`, with the same headings and verdict.
     The verdict line now names "filtered follow-up fix (SZZ-based,
     size-biased, unaudited)", and so does the filtered capture heading; 14
     revert replicates held no revert.
@@ -18334,7 +18334,7 @@ README and this log.
 
 - **Tests actually run.** Each file alone from `packages/script`, through
   `vector-serial`, with `--timeout 30000` and
-  `TMPDIR=/tmp/vector-v2/scope/sf05a/tmp`.
+  `TMPDIR=<scratch>/scope/sf05a/tmp`.
   - At `6e3c0e08`: `outcomes.test.ts` 66 pass, 0 fail (997 expect calls).
   - Before the review fixes: `outcomes.test.ts` 74 pass, 0 fail (1,595
     expect calls), run once with `GITHUB_ACTIONS=false` and once with
@@ -18418,7 +18418,7 @@ README and this log.
       the upper `?? 1` set to 0.5 (equivalent for any sample drawn from the
       ledger, review finding 7), and the audit file written without `wx`
       (only a race between the check and the write reaches it, finding 8).
-  - The manual dry run: `/tmp/vector-v2/scope/sf05a/dry-run.ts` (scratch,
+  - The manual dry run: `<scratch>/scope/sf05a/dry-run.ts` (scratch,
     not committed) sealed a synthetic full-decision /2 ledger (400 banded
     PRs, 100 filtered positives, 200 acknowledged findings on a PR merged
     30 days earlier, two fix commits) to a throwaway 3072-bit key it
@@ -18935,7 +18935,7 @@ eval README and this log.
 
 - **Tests actually run.** Each file alone from `packages/script`, through
   `vector-serial`, with `--timeout 30000` and
-  `TMPDIR=/tmp/vector-v2/scope/sf05b/tmp`.
+  `TMPDIR=<scratch>/scope/sf05b/tmp`.
   - At `14a4b60f`: `outcomes.test.ts` 74 pass, 0 fail (1,616 expect calls).
   - The new source against the unedited tests: 71 pass, 3 fail (1,580
     expect calls), as under "Test first".
@@ -19053,7 +19053,7 @@ eval README and this log.
     none recorded: 1; the not-read status worded "no drops recorded": 2
     (the dry run among them); the share line's audit sentence dropped: 2;
     human review dropping a band: 12 (its rendering throws).
-  - The manual dry run: `/tmp/vector-v2/scope/sf05b/dry-run.ts` (scratch,
+  - The manual dry run: `<scratch>/scope/sf05b/dry-run.ts` (scratch,
     not committed) sealed a synthetic full-decision /2 ledger that passes
     `ledgerProblem` (602 PRs: 600 banded PRs merged 200 days earlier, every
     other one with a finding, every eighth fixed, every 25th reverted, 20
@@ -19086,7 +19086,7 @@ eval README and this log.
   - Commit gate, before the commit: `outcomes.test.ts` 86 pass, 0 fail
     (1,908 expect calls); `bun typecheck` in `packages/script` and the eval
     tsconfig through `bun tsgo` from `packages/engine`, both clean; the full
-    TURBO typecheck (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`,
+    TURBO typecheck (`TURBO_CACHE_DIR=<worktree>/.turbo/cache`,
     `--concurrency=2`), 27 of 27 tasks successful. The gate commits the four
     paths with the title above as Vector <bot@vectordev.ai> with the two
     trailers, fetches `origin/scope-finish` and merges any new commits, and
@@ -19307,7 +19307,7 @@ and this log.
   rerun, inside 90 s. The file adds roughly 20 to 40 s to whichever Windows
   shard holds it.
 
-- **Tests run** (through `/home/user/.tools/vector-serial`, one file at a
+- **Tests run** (through `~/.tools/vector-serial`, one file at a
   time, `--timeout 30000`):
   - `packages/engine`: `test/review/narrative-invariance.test.ts`, the final
     file (2026-11-16, after the review round): 2 pass, 0 fail, 180 expect
@@ -19379,7 +19379,7 @@ and this log.
     licence files and overflow, a smaller export surface, the Windows
     `os.devNull` exposure and explicit oxlint. They pass to whoever builds
     item 5 under the owner's dataset gate.
-  - _Plan details changed._ The scratch folder is `/tmp/vector-v2/scope/sf06/`
+  - _Plan details changed._ The scratch folder is `<scratch>/scope/sf06/`
     (the task header's `scope/` over the lane note's `scope-finish/`). The
     framings are an array of `{ name, marker, body }` instead of a record,
     for lint. `projectAll` returns a `sameDay` flag instead of the two days.
@@ -19740,7 +19740,7 @@ progress record for SF-07.
     Vector agent fixes findings "until VectorScope has a fix mode of its
     own". SF-07 is not wired, so it replaces nothing; retiring or rerouting
     `ConnectFix` belongs to the wiring package and the connect lane.
-  - _Scratch._ `/tmp/vector-v2/scope/sf07/` (the task header's `scope/`, as
+  - _Scratch._ `<scratch>/scope/sf07/` (the task header's `scope/`, as
     SF-06 used), with each test's fixture under the engine test data folder.
 
 - **Citations at `f11f8b35` (working-tree lines where new).** Core
@@ -19778,7 +19778,7 @@ progress record for SF-07.
   StrictResult (`addendum-a.md:1077`), wait for the wiring package, which
   will consume `ReviewFix.Preview` and `Applied`.
 
-- **Tests run** (through `/home/user/.tools/vector-serial`, one file at a
+- **Tests run** (through `~/.tools/vector-serial`, one file at a
   time, `--timeout 30000`, from the package directory):
   - `packages/engine/test/review/fix.test.ts` (new), the final file after the
     review fixes: 16 pass, 1 skip, 0 fail, 243 expect calls, 24.00 s (the
@@ -20468,11 +20468,11 @@ is also the lane's progress record for SF-08.
     bubblewrap. Hands' `beforeSpawn` recheck does not apply: no model
     command runs, and the sandbox hides `/tmp` and `/run` (display and
     session sockets).
-  - _Scratch._ `/tmp/vector-v2/scope/sf08/` (the task header's `scope/`, as
-    SF-06 and SF-07 used); review round one used `/tmp/vector-v2/scope/sf08r1/`
-    (the repeated runs and mutations) and `/tmp/vector-v2/scope/race/` (the
+  - _Scratch._ `<scratch>/scope/sf08/` (the task header's `scope/`, as
+    SF-06 and SF-07 used); review round one used `<scratch>/scope/sf08r1/`
+    (the repeated runs and mutations) and `<scratch>/scope/race/` (the
     bubblewrap signal trials), with bubblewrap's public sources at
-    `/tmp/vector-v2/scope/bubblewrap.c`.
+    `<scratch>/scope/bubblewrap.c`.
 
 - **Citations at `1f5d62ad`.** Core `review/permission.ts`: `CHECK_COMMANDS`
   `:32`, `COVERAGE_COMMANDS` `:59`. Core `review/fix-proposal.ts`:
@@ -20519,7 +20519,7 @@ is also the lane's progress record for SF-08.
   consented steps to SF-09; both will show the exact operation before
   `policy.approve` and consume `Checked`, `Committed` and `Pushed`.
 
-- **Tests run** (through `/home/user/.tools/vector-serial`, one file at a
+- **Tests run** (through `~/.tools/vector-serial`, one file at a
   time, `--timeout 30000`, from the package directory; locally as root in a
   container where bubblewrap works, so the sandboxed cases ran here, and
   with capabilities dropped by `--cap-drop ALL`; CI's air-gap runner is
@@ -20527,7 +20527,7 @@ is also the lane's progress record for SF-08.
   - `packages/engine/test/review/fix.test.ts`, final file (33 cases: the
     17 SF-07 cases, unchanged but for the non-Linux one, and 16 new
     SF-08 cases), after review round one, run 10 times in a row from a
-    loop (`/tmp/vector-v2/scope/sf08r1/loop.sh`), each followed by a
+    loop (`<scratch>/scope/sf08r1/loop.sh`), each followed by a
     `/proc` scan for processes with a check token: every run 30 pass,
     3 skip, 0 fail, 553 expect calls (554 in one run: case 15 checks the
     group of each sandbox process its first sight shows, one or two),
@@ -20708,7 +20708,7 @@ is also the lane's progress record for SF-08.
     full TURBO typecheck (`--concurrency=2`) 27 of 27 tasks successful.
   - Mutations (each on the final files: copied to scratch, mutated, the one
     test run with `-t`, restored and compared byte for byte; the runner is
-    `/tmp/vector-v2/scope/sf08/mut/run.py`). Each failed its named case:
+    `<scratch>/scope/sf08/mut/run.py`). Each failed its named case:
     - M1 `extendEnv: true` -> case 10 fails;
     - M2 no `--unshare-net` -> case 11;
     - M3 no `/run` and `/var/run` tmpfs -> case 11 (the `/run` socket);
@@ -20728,7 +20728,7 @@ is also the lane's progress record for SF-08.
     - M13 a FIFO opened like a file (no kind check, no `O_NONBLOCK`) ->
       case 5 (by its 60 s limit: the read blocks);
     - M14 no `--cap-drop ALL` -> the sandbox.test.ts workspace argv case.
-    - Review round one (same runner, `/tmp/vector-v2/scope/sf08r1/mut/`):
+    - Review round one (same runner, `<scratch>/scope/sf08r1/mut/`):
       M16 `killSignal: "SIGTERM"` and `--new-session` back (the code
       before the round) -> case 15 fails, and the run left one orphaned
       sandbox on this host (its init and the `bun test` inside it),
@@ -20821,7 +20821,7 @@ is also the lane's progress record for SF-08.
      SIGTERM sent from outside the namespace (`pid_namespaces(7)`); SIGKILL
      is delivered. The release's SIGTERM to the group killed the outer
      bwrap, the release saw the leader close and stopped, and the init
-     ran on. Reproduced without Bun (`/tmp/vector-v2/scope/race/race.py`:
+     ran on. Reproduced without Bun (`<scratch>/scope/race/race.py`:
      the workspace argv started in its own session, its group signalled
      0 to 20 ms after the exec, survivors read from `/proc`):
      `--new-session` with SIGTERM (the old code) left one in 88 of 200
@@ -21259,7 +21259,7 @@ This entry is also the lane's progress record for SF-09.
     shows the step's `ReviewFix` is the runtime's own (the test's service
     reports the step's placement as `preview`). Mutation M7
     (`Layer.fresh(...)`) fails it.
-  - _Scratch._ `/tmp/vector-v2/scope/sf09/` (the task header's `scope/`, as
+  - _Scratch._ `<scratch>/scope/sf09/` (the task header's `scope/`, as
     SF-06 to SF-08 used).
 
 - **Default and parity proof.**
@@ -21291,7 +21291,7 @@ This entry is also the lane's progress record for SF-09.
   and push buttons are SF-10b's. The CLI has no app counterpart in this
   package.
 
-- **Tests run** (all through `/home/user/.tools/vector-serial`, one file at a
+- **Tests run** (all through `~/.tools/vector-serial`, one file at a
   time, `--timeout 30000`, from the package directory, on this Linux host):
   - `packages/engine/test/cli/review-fix.test.ts` (new): 17 pass, 1 skip
     (the off-Linux case), 0 fail, 169 `expect()` calls. After the
@@ -21362,7 +21362,7 @@ This entry is also the lane's progress record for SF-09.
         `c.txt`, the files kept are `a.txt` and `c.txt`. `b.txt` and
         `big.txt` are left out "over the proposal's size limit".
   - Mutations, each applied to a copy-backed source and restored
-    (`/tmp/vector-v2/scope/sf09/mutate.sh`; the restored files' md5 was
+    (`<scratch>/scope/sf09/mutate.sh`; the restored files' md5 was
     checked). Each failed exactly one case:
     - M1: drop the `verified` filter.
     - M2: let `--yes` through.
@@ -21891,7 +21891,7 @@ lane's progress record for SF-10a.
     byte-identical to `packages/sdk/openapi.json`), so the regenerated files
     carry only this package's routes and the capability. The lead's single
     final regeneration (v2-handoff item 6) stays the lead's.
-  - _Scratch._ `/tmp/vector-v2/scope/sf10a/` (the lane's `scope/` folder, as
+  - _Scratch._ `<scratch>/scope/sf10a/` (the lane's `scope/` folder, as
     SF-06 to SF-09 used).
 
 - **Default and parity proof.**
@@ -21923,7 +21923,7 @@ lane's progress record for SF-10a.
 - **Desktop half: a documented difference.** The app's apply, checks, commit
   and push actions, and its parsing of `vectorscopeLocalFixes`, are SF-10b's.
 
-- **Tests run** (all through `/home/user/.tools/vector-serial`, one file at a
+- **Tests run** (all through `~/.tools/vector-serial`, one file at a
   time, `--timeout 30000`, from the package directory, on this Linux host):
   - `packages/engine/test/server/httpapi-review-fix.test.ts` (new): 12 pass,
     1 skip (the off-Linux case), 0 fail, 305 `expect()` calls at the build;
@@ -22061,12 +22061,12 @@ lane's progress record for SF-10a.
     `packages/core`, `packages/engine`, `packages/client` and `packages/sdk/js`;
     so does `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
     `packages/engine`, and the full TURBO typecheck
-    (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`, `--concurrency=2`): 27 of
+    (`TURBO_CACHE_DIR=<worktree>/.turbo/cache`, `--concurrency=2`): 27 of
     27 tasks.
   - Prettier `--check` passes on the touched code files except
     `groups/experimental.ts` and `handlers/experimental.ts`, which were not
     Prettier-clean at HEAD either; only their two added lines changed.
-  - Mutations (`/tmp/vector-v2/scope/sf10a/mutate.py`: each edits one file, runs
+  - Mutations (`<scratch>/scope/sf10a/mutate.py`: each edits one file, runs
     the named case, restores the file and checks its md5). Each failed its
     case:
     - M1: `auth.ts` claims only the old review routes (fails the new auth
@@ -22292,13 +22292,13 @@ lane's progress record for SF-10a.
       `unavailable` ("The approval could not be checked. Nothing was changed;
       preview the step again."). No test drives it: `approve` returns typed
       refusals and nothing in the adapter can make it reject without a mock.
-  - Tests and checks after round one (`/home/user/.tools/vector-serial`, one
+  - Tests and checks after round one (`~/.tools/vector-serial`, one
     file at a time, `--timeout 30000`, from the package directory): see "Tests
     run" for the fix file. With the build's adapter swapped back in (and
     restored, md5 checked) the new file has 10 pass, 1 skip, 4 fail: cases 8
     and 14 on the note's 512-character encode (a 500), case 9 on the missing
     note and case 15 on the per-process message. Mutations
-    (`/tmp/vector-v2/scope/sf10a-r1/mutate.py`, each restored and md5
+    (`<scratch>/scope/sf10a-r1/mutate.py`, each restored and md5
     checked), each failing its case: MA, `sweep` does not forget fixes the
     executor dropped (case 15); MB, a deleted conversation is not evicted
     (case 15); MC, an archived one is not evicted (case 15); MD, base == head
@@ -22483,7 +22483,7 @@ is also the lane's progress record for SF-10b.
     rule through the shared `fixCandidates`: verified, committable inline
     suggestions, after the dismissed findings are removed (`withoutDismissed`).
   - _D2 the planner in core, and its byte-identical CLI proof._ Besides the
-    unchanged CLI test, a parity run (`/tmp/vector-v2/scope/sf10b/parity.ts`,
+    unchanged CLI test, a parity run (`<scratch>/scope/sf10b/parity.ts`,
     the HEAD file copied in beside the real one for the run only, then
     removed) compared HEAD's `planEdits` with core's over 4,000 seeded random
     cases (752 of them planned a file; every one had skips): files with
@@ -22561,7 +22561,7 @@ is also the lane's progress record for SF-10b.
     strings (`ReviewFixControlFile`, `types.gen.ts:8063-8067`). The desktop
     only modifies existing files, so the transport refuses a request with a
     null digest instead of casting; a hand-off for the lead's regeneration.
-  - _Scratch._ `/tmp/vector-v2/scope/sf10b/` (the planning receipt moved
+  - _Scratch._ `<scratch>/scope/sf10b/` (the planning receipt moved
     there as `walk-head.json`).
 
 - **Order of each action** (controller, `local-fix.ts:431-689`).
@@ -22634,16 +22634,16 @@ is also the lane's progress record for SF-10b.
   checkout, path traversal, symlinks, revoked consent and the unrelated work
   and base branch staying intact.
 
-- **Tests run** (all through `/home/user/.tools/vector-serial`, one file at a
+- **Tests run** (all through `~/.tools/vector-serial`, one file at a
   time, `--timeout 30000`, from the package directory, on this Linux host).
   - Baselines at `b6eaf122` before any edit
-    (`/tmp/vector-v2/scope/sf10b/baseline.log`): core `fix-proposal.test.ts`
+    (`<scratch>/scope/sf10b/baseline.log`): core `fix-proposal.test.ts`
     16 pass, 166 `expect()` calls; core `model-evidence.test.ts` 30 pass, 393;
     engine `review-fix.test.ts` 17 pass, 1 skip, 169; app
     `local-review.test.ts` 12 pass, 63; `engine-capabilities.test.ts` 12
     pass, 70; `browser-bundle.test.ts` 4 pass, 16;
     `test-browser/vectorscope-local.test.ts` 1 pass, 12.
-  - After (`/tmp/vector-v2/scope/sf10b/after.log`, 0 fail everywhere):
+  - After (`<scratch>/scope/sf10b/after.log`, 0 fail everywhere):
     - core `test/review/fix-plan.test.ts` (new): 4 pass, 19. Cases: the UTF-8
       rule equals `node:buffer` `isUtf8` over ASCII, multibyte, BOM-led (kept
       in the postimage), overlong `C0 AF`, surrogate `ED A0 80`, truncated
@@ -22713,7 +22713,7 @@ is also the lane's progress record for SF-10b.
     from `packages/engine`. Prettier `--check` passes on the twenty touched
     code files (each was Prettier-clean at HEAD). The full TURBO typecheck is
     left to the commit gate, before the push.
-  - Mutations (`/tmp/vector-v2/scope/sf10b/mutate.py`: each edits one file,
+  - Mutations (`<scratch>/scope/sf10b/mutate.py`: each edits one file,
     runs one case with `-t`, restores the file and checks its md5; results in
     `mutate.log`, `m2.log`, `m19.log`). Each was killed (0 pass, 1 fail):
     M1 commit enabled before apply; M2 a stale `operationDigest` in the echo;
@@ -22731,7 +22731,7 @@ is also the lane's progress record for SF-10b.
     render test's controller kept the default pause, so the click was refused
     for the wrong reason. Both tests were fixed and both mutations then
     failed.
-  - Review round mutations (`/tmp/vector-v2/scope/sf10b/mutate-r1.py` and
+  - Review round mutations (`<scratch>/scope/sf10b/mutate-r1.py` and
     `mutate-r1b.py`, same method, `mutate-r1.log`), each killed (0 pass, 1
     fail): R1 `cancel` gated by `actions().cancel` again (another fix's Cancel
     aborts the step); R2 no current check after `sameFix`; R3 the sent prepare
@@ -23740,7 +23740,7 @@ carries a parseable header) are SF-12b's.
 
 - **Tests run** (one file at a time through the lock, `bun test --timeout
   30000` from the package directory; scratch and `TMPDIR` under
-  `/tmp/vector-v2/scope/sf12a/`, so the engine preload's per-process XDG roots
+  `<scratch>/scope/sf12a/`, so the engine preload's per-process XDG roots
   are fresh under it, and each `it.instance` case gets its own temporary
   project directory). HEAD baseline at `43e21b48` -> after; pass, skip, fail,
   expects.
@@ -23801,7 +23801,7 @@ carries a parseable header) are SF-12b's.
   - Typecheck: `bun typecheck` in `packages/core` and `packages/engine` (test
     files included), and `bun tsgo -p ../../script/vectorscope-eval/
     tsconfig.json` from `packages/engine`: clean, in both rounds.
-  - Re-run after the review findings (scratch `/tmp/vector-v2/scope/sf12a/
+  - Re-run after the review findings (scratch `<scratch>/scope/sf12a/
     round2*`), with the counts above unless named: core
     `model-evidence.test.ts` 30, 0, 0, 393 (new pin) and `privacy.test.ts`;
     engine `zdr-route.test.ts` and `route.test.ts` (new counts above);
@@ -23894,7 +23894,7 @@ carries a parseable header) are SF-12b's.
     server, `catalogOrigins` []. The pass is ok and every model request
     carries the ZDR `provider` field.
 
-- **Mutation checks** (`/tmp/vector-v2/scope/sf12a/mutate.py`: each mutation
+- **Mutation checks** (`<scratch>/scope/sf12a/mutate.py`: each mutation
   applied alone, the named files run through the lock, the file restored and
   its checksum confirmed against the pre-mutation one). All 20 fail a test.
   1-15 ran in the first round; the review-findings round re-ran 6 with its
@@ -23944,7 +23944,7 @@ carries a parseable header) are SF-12b's.
   19. `release` remembering nothing: the same two cases;
   20. `register` not forgetting a released ID: the same two cases (the ID
       registered again).
-  - Results: `/tmp/vector-v2/scope/sf12a/mutations/results.json` (round
+  - Results: `<scratch>/scope/sf12a/mutations/results.json` (round
     one), `results-round2.json` (6) and `results-round2b.json` (16-20).
 
 - **Known limits.**
@@ -24024,7 +24024,7 @@ carries a parseable header) are SF-12b's.
   9. provider.ts pinning as the lead's choice: taken (deviation 4).
   10. More mutations: taken (below).
   11. The VS-33 wording: taken (known limits).
-  12. One scratch directory and XDG roots: taken (`/tmp/vector-v2/scope/
+  12. One scratch directory and XDG roots: taken (`<scratch>/scope/
       sf12a/`, under "Tests run").
 
 - **Review findings (round one)**, fixed in the working tree on 2026-11-17
@@ -24326,8 +24326,8 @@ engine runner; the desktop half is VS-23d (SF-15).
   (What landed). The build's text listed `:481` with `:1356` as "the app's scopes"; that was wrong.
 
 - **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory; scratch and
-  `TMPDIR` under `/tmp/vector-v2/scope/sf12b/`, so the engine preload's per-process XDG roots are fresh under it).
-  HEAD baseline at `fb441eae`, run in this build before any edit (`/tmp/vector-v2/scope/sf12b/baseline/`) -> after
+  `TMPDIR` under `<scratch>/scope/sf12b/`, so the engine preload's per-process XDG roots are fresh under it).
+  HEAD baseline at `fb441eae`, run in this build before any edit (`<scratch>/scope/sf12b/baseline/`) -> after
   (`after/`, `regress/`, and `final/` after Prettier); pass, skip, fail, expects.
   - Core (`packages/core`): `test/review/model-evidence.test.ts` 30, 0, 0, 393 -> 30, 0, 0, 393 (the pin; 29, 0, 1, 392
     with the old pin, which printed the new digest); `test/review/eval.test.ts` 55, 0, 0, 297 -> 55, 0, 0, 297;
@@ -24349,7 +24349,7 @@ engine runner; the desktop half is VS-23d (SF-15).
     0, 0, 657; `ci.test.ts` 39, 0, 0, 507 -> 39, 0, 0, 509; `report.test.ts` 44, 0, 0, 312 -> 44, 0, 0, 312;
     `certify.test.ts` 7, 0, 0, 46 -> 7, 0, 0, 46. Only which still-pending variant serves as the example moved
     (`engine:impact-graph`, "VS-25b wiring"); no assertion was loosened.
-  - Review round one (scratch `/tmp/vector-v2/scope/sf12b/fix/`): app (`packages/app`, `bun test --isolate --timeout
+  - Review round one (scratch `<scratch>/scope/sf12b/fix/`): app (`packages/app`, `bun test --isolate --timeout
     30000 --preload ./happydom.ts`, as `scripts/test-unit.mjs` runs it) `src/features/pull-requests/ai-review.test.ts`
     121, 0, 0, 507 at HEAD -> 121, 0, 0, 510 (one case extended, no new case); core
     `test/review/model-evidence.test.ts` 29, 0, 1, 392 with the build's pin (it printed `4a530700aa9a8f83`) -> 30, 0, 0,
@@ -24376,7 +24376,7 @@ engine runner; the desktop half is VS-23d (SF-15).
     1, 1, 11, 33; `local-admission.test.ts` 2, 1, 2, 35; `test/connect/vectorscope.test.ts` 7, 1, 19, 113.
   - Never run: `test/cli/review.test.ts` (lane rule).
   - Commit gate (2026-11-17, the final working tree, this entry's Status and CI text aside; scratch and `TMPDIR` under
-    `/tmp/vector-v2/scope/sf12b-gate/`), one file at a time through the lock; pass, skip, fail, expects:
+    `<scratch>/scope/sf12b-gate/`), one file at a time through the lock; pass, skip, fail, expects:
     - engine: `test/provider/zdr-route.test.ts` 20, 0, 0, 283; `test/review/route.test.ts` 35, 0, 0, 154;
       `test/review/eval.test.ts` 45, 0, 0, 528; `test/review/narrative-invariance.test.ts` 3, 0, 0, 293;
       `test/review/vectorscope-replay.test.ts` 29, 0, 0, 353; `test/review/run.test.ts` 75, 1, 4, 708 (the same four
@@ -24404,7 +24404,7 @@ engine runner; the desktop half is VS-23d (SF-15).
   - The regression files ran before Prettier rewrapped `llm.ts`'s `nativeComputer` expression; the changed test files,
     run.test.ts included, ran again after it with the counts above.
 
-- **Mutation checks** (`/tmp/vector-v2/scope/sf12b/mutate.py`, mutations in `mutations.json`: each applied alone, the
+- **Mutation checks** (`<scratch>/scope/sf12b/mutate.py`, mutations in `mutations.json`: each applied alone, the
   named test files run one at a time through the lock (run.test.ts with `-t` on the cases named), the source restored
   and its checksum confirmed against the pre-mutation one; results in `mutations/results.json` and each run's log in
   `mutations/`). A mutation is listed as caught only where a named test failed.
@@ -24646,7 +24646,7 @@ the tool rules SF-14, the hidden global source SF-15.
   gate commits it (planned title `feat(review): parse the opt-in holdback key and held-back skips`) and pushes it. A
   commit cannot name its own SHA, so the SHA and each dispatched run's ID and result go in a later entry. The commit
   gate re-ran every new or changed test file one at a time through the lock (fresh XDG roots under
-  `/tmp/vector-v2/scope/sf-13a/gate/xdg/`), with the counts under Tests run: core `config` 84/0, `model-evidence`
+  `<scratch>/scope/sf-13a/gate/xdg/`), with the counts under Tests run: core `config` 84/0, `model-evidence`
   31/0, `verdict` 46/0, `guardrail` 59/0, `local-result` 8/0, `format` 61/0, connect `findings` 16/0; engine
   `review.render` 12/0, `eval` 45/0, `run` 76 pass, 1 skip, 4 fail (the same four sandbox-only tests by name); app
   `ai-review` 122/0. `bun typecheck` in core, engine and app, the eval tsconfig, and the full TURBO typecheck (27 of
@@ -24796,8 +24796,8 @@ the tool rules SF-14, the hidden global source SF-15.
   7. Citation drift from the addendum's VS-34 text: `types.ts:157` is now `SkippedFile` at `:319`, `format.ts:61` is
      `:67`, `review.render.ts:44` is `:47`, `ai-review.ts:147` is `:151`, `skip.ts:66-67` is `:69-70`, and
      `state.unreviewed` (`types.ts:147`) is `ReviewState.unreviewed` at `:294`.
-  8. Scratch is `/tmp/vector-v2/scope/sf-13a/` (with XDG roots under `xdg/`), as the task text names
-     `/tmp/vector-v2/scope/`; the lane notes say `/tmp/vector-v2/scope-finish/` (critique point 8).
+  8. Scratch is `<scratch>/scope/sf-13a/` (with XDG roots under `xdg/`), as the task text names
+     `<scratch>/scope/`; the lane notes say `<scratch>/scope-finish/` (critique point 8).
 
 - **Critique points.** 1 taken in a refined form (decision 2). 2 taken (Silent-ignore surfaces; the claim is "every
   `mergeReviewConfig` surface warns"). 3 taken (Pin). 4 taken: Prettier ran on every changed file before the pin was
@@ -24810,7 +24810,7 @@ the tool rules SF-14, the hidden global source SF-15.
   hash was the same before and after the mutation run).
 
 - **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory, XDG roots
-  under `/tmp/vector-v2/scope/sf-13a/xdg/`; app files with `--isolate --preload ./happydom.ts`). HEAD baseline at
+  under `<scratch>/scope/sf-13a/xdg/`; app files with `--isolate --preload ./happydom.ts`). HEAD baseline at
   `16e398a6` before any edit -> the final working tree; pass, skip, fail, expects.
   - Core, new or changed: `test/review/config.test.ts` 75, 0, 0, 966 -> 84, 0, 0, 1224 (the new describe "VS-34's
     holdback key", nine tests: sourced and unapplied; `parseReviewConfig`'s silent ignore; review.json raises on both
@@ -24850,7 +24850,7 @@ the tool rules SF-14, the hidden global source SF-15.
     (`config.test.ts`, five rewraps; `findings.test.ts`, one). `vectorscope-deviations.md` and
     `v2-notes/vectorscope-v2-plan.md` are not Prettier-clean at HEAD and were not reformatted. oxlint on the twenty
     changed TypeScript files: 0 errors, and none of its warnings is on a line this package added.
-  - Mutation checks (`/tmp/vector-v2/scope/sf-13a/mut/mutate.py`, mutations in `mutations.json`; each applied alone,
+  - Mutation checks (`<scratch>/scope/sf-13a/mut/mutate.py`, mutations in `mutations.json`; each applied alone,
     the named file run, the file restored by copy and checked with `cmp`): 19 of 19 killed, each restored, and in
     review round one a twentieth by hand (`run.ts:889` drops `.netrc` from the prompt's files under "secrets"):
     `run.test.ts -t "D3: unset, off and secrets"` 0 pass, 1 fail (80 filtered out), `run.ts` restored and checked with
@@ -25168,10 +25168,10 @@ tool-output redaction are SF-14's, the desktop half and the hidden global source
       quoted form: octal bytes, escapes and a CRLF line end" (git's own output under `core.quotepath=true`, the port's
       setting, and a recorded one, through the exported `echoedPaths`); the fallback's raw UTF-8 and a quoted `"` name by
       the CLI test before it; and the bound view end to end by the service test (CI only).
-  16. Scratch: `/tmp/vector-v2/scope/sf-13b/`. The root volume was full (0 to 6 MB free) while this package ran, and an
-      engine test failed with ENOSPC, so test runs used `/tmp/vector-v2/scope/sf-13b/ram`, a symlink to `/dev/shm`
+  16. Scratch: `<scratch>/scope/sf-13b/`. The root volume was full (0 to 6 MB free) while this package ran, and an
+      engine test failed with ENOSPC, so test runs used `<scratch>/scope/sf-13b/ram`, a symlink to `/dev/shm`
       (tmpfs), for `TMPDIR` and fresh XDG roots. The volume had 11 GB free again by the end. Review findings round
-      one ran under `/tmp/vector-v2/scope/sf-13b/r1/` on the root volume (9.3 GB free).
+      one ran under `<scratch>/scope/sf-13b/r1/` on the root volume (9.3 GB free).
   17. **Earlier findings** (review findings round one, two findings on the same lines). `holdbackContext` takes `prior`
       as one more untrusted block: an earlier finding on a held path, or on a path holdback would hold, is left out of
       `<open_findings>`, and every other title is redacted (a title is an earlier model's text, from a review that may
@@ -25187,7 +25187,7 @@ tool-output redaction are SF-14's, the desktop half and the hidden global source
       platform in the system prompt, so it would differ per run and on the Windows and macOS legs. Default parity rests
       on unset == "off" at the wire, the unchanged `promptsDigest()` and `policyDigest` goldens, and `hold` being
       undefined unset (Default and parity proof). A one-off check stands in for the pin
-      (`/tmp/vector-v2/scope/sf-13b/r1/d3.py`): with a temporary print in the D3 case, the unset run's model-visible
+      (`<scratch>/scope/sf-13b/r1/d3.py`): with a temporary print in the D3 case, the unset run's model-visible
       texts (the last user message of every request) in its four scenarios hash the same with `run.ts` at `8c36d06b`
       swapped in (beside the working tree's core) as with the working tree's `run.ts`: ok `d8829be7a4637bf5`, retry
       `7b45bc7d39142404`, finalizer `cfbcbcd7fd669b87`, verify `1f1bbed358b059ee` (`Bun.hash` of the JSON list), and
@@ -25256,7 +25256,7 @@ tool-output redaction are SF-14's, the desktop half and the hidden global source
   `REVIEW_PIPELINE_REVISION`.
 
 - **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory; app files
-  with `--isolate --preload ./happydom.ts`; `TMPDIR` and XDG roots under `/tmp/vector-v2/scope/sf-13b/ram`). HEAD at
+  with `--isolate --preload ./happydom.ts`; `TMPDIR` and XDG roots under `<scratch>/scope/sf-13b/ram`). HEAD at
   `8c36d06b` -> the final working tree; pass, skip, fail (expects where recorded). HEAD counts are SF-13a's commit-gate
   counts on the same tree, except where re-run here.
   - Core: `test/review/holdback.test.ts` 16, 0, 0, 144 -> 21, 0, 0, 180 (describe "holdbackContext", five tests,
@@ -25295,9 +25295,9 @@ tool-output redaction are SF-14's, the desktop half and the hidden global source
   - Never run: `test/cli/review.test.ts` (lane rule).
   - Typecheck: `bun typecheck` in `packages/core`, `packages/engine` and `packages/app`, and `bun tsgo -p
     ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`: clean, on the first draft and again after
-    round one. The full TURBO typecheck (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`, `--concurrency=2`): 27 of 27
+    round one. The full TURBO typecheck (`TURBO_CACHE_DIR=<worktree>/.turbo/cache`, `--concurrency=2`): 27 of 27
     tasks successful on the first draft and again at the commit gate, after round one (24 cached).
-  - Commit gate (fresh `TMPDIR` and XDG roots per file under `/tmp/vector-v2/scope/sf-13b/gate/`, on the root
+  - Commit gate (fresh `TMPDIR` and XDG roots per file under `<scratch>/scope/sf-13b/gate/`, on the root
     volume, 14 GB free): every changed test file above re-run one at a time with the counts recorded here (core eight
     review files and `read-only-git.test.ts` 41, 9, 22 with the same failing names as at HEAD; engine
     `review-holdback.test.ts`, `eval.test.ts`, `run.test.ts` 83, 1, 4 with the four sandbox-only names,
@@ -25310,7 +25310,7 @@ tool-output redaction are SF-14's, the desktop half and the hidden global source
     sits in the source) and one `await-thenable` on `await expect(...).rejects` in `read-only-git.test.ts`, the
     file's existing pattern.
 
-- **Mutation checks** (`/tmp/vector-v2/scope/sf-13b/mut/mutate.py`, list in `mutations.json`; each applied alone, its
+- **Mutation checks** (`<scratch>/scope/sf-13b/mut/mutate.py`, list in `mutations.json`; each applied alone, its
   test file run filtered through the lock, the file restored by a temp-and-rename copy and checked with `cmp`; the
   tree's non-docs `git diff` hash was the same before and after): 27 of 27 killed, each restored. Review.run: the gate
   as `!== "off"`; held files left out of `skipped`; `unreviewed` from `input.files`; the raw context (no
@@ -25322,7 +25322,7 @@ tool-output redaction are SF-14's, the desktop half and the hidden global source
   `reviewed` unfiltered. git.ts: exit 128 read as none; global excludes not neutralised; no unquote; port-refused paths
   asked about. review.ts: `ignored` not passed; a held-only outcome failing (that `heldOnly` bypass is gone since
   round one; its replacement is mutated below). Not run here: `readOperation` accepting `--stdin` (the bound-view test
-  that kills it is CI only). Round one (`/tmp/vector-v2/scope/sf-13b/r1/mut.py`, the same method, the tree's files
+  that kills it is CI only). Round one (`<scratch>/scope/sf-13b/r1/mut.py`, the same method, the tree's files
   restored and checked with `cmp`): 10 of 10 killed. run.ts: the prompts given `input.prior`; the claims' `open` map
   from `input.prior`; the untriaged statuses unfiltered; no incremental nothing-to-send; nothing-to-send leaving the
   sent files unreviewed. review.render.ts: the risk headline for a held-only outcome. review.ts: the held-only branch
@@ -25593,7 +25593,7 @@ change made visible to the evidence scope (SF-13b critique point 13).
   14. **`hold` is computed before the session rules** in Review.run (it was computed inside `body`, after `ask` was
       defined): pure, the same value, needed for the held-path denies. The sessions are created inside `ask`, so they
       get the rules with the held paths.
-  15. Scratch: `/tmp/vector-v2/scope/sf-14/` (the task's path; each test file ran with a fresh `TMPDIR` and XDG roots
+  15. Scratch: `<scratch>/scope/sf-14/` (the task's path; each test file ran with a fresh `TMPDIR` and XDG roots
       under `runs/`); 14 GB free on the root volume.
   16. `review-http-regression.yml` (scope local) is owed (CI, below) although neither the review HttpApi nor
       `service.ts` changes (critique point 11): the local review service runs `Review.run`, whose session rules and
@@ -25632,7 +25632,7 @@ change made visible to the evidence scope (SF-13b critique point 13).
      and the tool test "refuses a held non-ASCII path in the other Unicode normal form, and grep does not search it"
      (an NFD file name with an NFC held path, and the reverse).
   - (6) Blocking, regex denial of service from held paths (`permission.ts`). Reproduced before the fix with the real
-     `reviewPermissionRules` and `Wildcard.match` (`/tmp/vector-v2/scope/sf-14/fix/redos.ts`): one evaluation of the
+     `reviewPermissionRules` and `Wildcard.match` (`<scratch>/scope/sf-14/fix/redos.ts`): one evaluation of the
      held path `a*a*a*a*a*a*a*a*a*a*a*a*a*/.envrc` took 17 ms at 32 characters and 59 ms at 34, growing about
      fivefold per two characters. Fixed: each held path's `*` becomes `?` before it is a pattern (decision 1 and the
      comment at `permission.ts:106-117` corrected); after the fix 0.1 ms at 64 characters. Test: `permission.test.ts`
@@ -25680,7 +25680,7 @@ change made visible to the evidence scope (SF-13b critique point 13).
   - Never run: `test/cli/review.test.ts` (lane rule).
   - Typecheck: `bun typecheck` in `packages/core` and `packages/engine`, and `bun tsgo -p
     ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`: clean. Full TURBO typecheck
-    (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`, `--concurrency=2`): 27 of 27 tasks successful (25 cached).
+    (`TURBO_CACHE_DIR=<worktree>/.turbo/cache`, `--concurrency=2`): 27 of 27 tasks successful (25 cached).
   - Prettier `--check` on the 25 changed TypeScript files and the eval README: clean. oxlint on the changed TypeScript
     files: 0 errors; on this package's lines the warnings left are `no-useless-concat` and
     `no-unnecessary-template-expression` on the run-time token and key-header assembly (the convention of
@@ -25712,7 +25712,7 @@ change made visible to the evidence scope (SF-13b critique point 13).
   tool tests' outputs for a glob of a token-named file, a listed path grep may search, an NFD-named held file and a
   search past the re-read budget. Seed cases are not claimed (owner-gated).
 
-- **Mutation checks** (`/tmp/vector-v2/scope/sf-14/mut/mutate.py`, list in `mutations.json`; each applied alone, its
+- **Mutation checks** (`<scratch>/scope/sf-14/mut/mutate.py`, list in `mutations.json`; each applied alone, its
   test file run filtered through the lock, the file restored by a temp-and-rename copy and checked with `cmp`; the
   tree's non-docs `git diff` hash was the same before and after, `c673dc2421584160`): 30 of 30 killed, each restored.
   permission.ts: the gate as `!== undefined`; nested forms dropped; held paths without their lowercase form;
@@ -25724,7 +25724,7 @@ change made visible to the evidence scope (SF-13b critique point 13).
   paths not passed; the note ignoring `checks`. model-evidence.ts: `promptsDigest` without the tool half. eval.ts:
   holdback "off" admitted as a variant. core eval.ts: `VARIANT_KEYS.engine` without holdback. replay.ts: the engine
   half pending. config.ts: a holdback warning reinstated. format.ts: the `--checks` wording always.
-  Round one (same harness; lists `/tmp/vector-v2/scope/sf-14/fix/mutations.json` and `remutations.json`; the tree's
+  Round one (same harness; lists `<scratch>/scope/sf-14/fix/mutations.json` and `remutations.json`; the tree's
   non-docs `git diff` hash `19da52ca876693bf` before and after each list): 14 of 14 new mutations killed, each
   restored. permission.ts: held paths' `*` kept; no NFC form among the denies; `holdbackSpelling` without NFC.
   read.ts and grep.ts: the second check lowercasing only. grep.ts: no `heldReason` drop; a 1 GiB budget; `stopped`
@@ -25779,7 +25779,7 @@ change made visible to the evidence scope (SF-13b critique point 13).
   each grep call (about half a second at the finding's 30 ms per MiB) and not a review's sum over calls; the
   held-path denies are linear Wildcard matches whose cost grows with the held paths times the files a directory grep
   checks (200 held paths against 5,000 files took 1.7 s for one pass of the rules, measured with
-  `/tmp/vector-v2/scope/sf-14/fix/scale.ts`, and grep under the key checks the rules twice); the fold is NFC and
+  `<scratch>/scope/sf-14/fix/scale.ts`, and grep under the key checks the rules twice); the fold is NFC and
   lowercase only, not NFKC or full case folding, so a compatibility form of a held non-ASCII name is not refused by
   the second check; Brain link rendering in read results (`Instruction.LINKS`, owner text rendered per request) is not
   redacted; held-path denies are relative to the review's worktree (the nested credential forms apply wherever it
@@ -26105,7 +26105,7 @@ the user config's privacy.
   `config.json`, the replay variants, `REVIEW_PIPELINE_REVISION`, and every default.
 
 - **Tests run** (one file at a time through the lock, `bun test --timeout 30000` from the package directory; app with
-  `--isolate --preload ./happydom.ts`; a fresh `TMPDIR` and XDG roots per file, `/tmp/vector-v2/scope/sf-15/bin/t.sh`).
+  `--isolate --preload ./happydom.ts`; a fresh `TMPDIR` and XDG roots per file, `<scratch>/scope/sf-15/bin/t.sh`).
   HEAD `86294f80` -> working tree, as pass, skip, fail, expects (HEAD counts run here at `86294f80` before any edit).
   - Core: `test/config/review.test.ts` new, 6, 0, 0, 46; `test/review/diff.test.ts` 52, 0, 0, 176 -> 59, 0, 0, 201
     (describe "revertPatch", seven tests); `test/review/model-evidence.test.ts` 33, 0, 0, 429 -> 33, 0, 0, 429 (32, 1
@@ -26142,11 +26142,11 @@ the user config's privacy.
     `tui.json` byte-identical (`cmp`).
   - Typecheck: `bun typecheck` in `packages/core`, `engine`, `app`, `client`, `sdk/js`, `desktop`, `web` and `script`,
     and `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`: clean (engine after two test
-    type fixes). Full TURBO typecheck (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`,
+    type fixes). Full TURBO typecheck (`TURBO_CACHE_DIR=<worktree>/.turbo/cache`,
     `--concurrency=2`): 27 of 27 tasks successful (0 cached).
   - Prettier `--check` on the 30 changed TypeScript files and the eval README: clean (seven files were formatted with
     `--write`; each was clean at HEAD, so the diff holds only this package's lines).
-  - Re-run after review findings round one (same script, scratch `/tmp/vector-v2/scope/sf-15/fix`), as pass, skip,
+  - Re-run after review findings round one (same script, scratch `<scratch>/scope/sf-15/fix`), as pass, skip,
     fail, expects: core `test/review/model-evidence.test.ts` 33, 0, 0, 429 (32, 1 before the pin moved),
     `test/config/review.test.ts` 6, 0, 0, 46; engine `test/server/httpapi-review-privacy.test.ts` 6, 0, 0, 50 (the
     `afterAll` assertions pass; bun does not count them), `test/review/route.test.ts` 40, 0, 0, 193 (one new),
@@ -26159,7 +26159,7 @@ the user config's privacy.
     and the full TURBO typecheck, which the commit gate runs before the push. Prettier `--check` on the eight changed
     TypeScript files: clean.
 
-- **Mutation checks** (`/tmp/vector-v2/scope/sf-15/mut/mutate.py`, list in `mutations.json`; each applied alone, its test
+- **Mutation checks** (`<scratch>/scope/sf-15/mut/mutate.py`, list in `mutations.json`; each applied alone, its test
   file run through the lock, filtered by `-t` for the engine config and app files, the file restored by a
   temp-and-rename copy and checked with `cmp`): 30 of 30 killed, each restored. Two survived the first run and were
   killed after the tests were strengthened: `app-global-missing` (the missing-data throw removed; a TypeError still

@@ -41,26 +41,26 @@ Remaining (28), in build order:
 
 ## Lane context (given to every package agent)
 
-- Lane name: `vectorscope-finish`; branch `scope-finish` (remote `scope-finish`); the lead's worktree was `/home/user/wt/sf`; scratch `/tmp/vector-v2/scope/`.
+- Lane name: `vectorscope-finish`; branch `scope-finish` (remote `scope-finish`); the lead's worktree was `<worktree>`; scratch `<scratch>/scope/`.
 - Workflows checked after every package: `typecheck.yml`, `scope-directory-identity.yml`, `review-memory-fence.yml`, `scope-app-validation.yml`, `vector-at-mention.yml`; dispatched on scope-finish after each push: `typecheck.yml`, `scope-directory-identity.yml`, `review-memory-fence.yml`, `scope-app-validation.yml`, `vector-at-mention.yml`; at the end: `test.yml`.
 - Review loop: up to 3 two-lens review rounds per package; up to 3 continue-agents if an implementer stops early; CI check before the first package: False.
 
 ### Documents to read
 
 docs/vector/build/vectorscope-lane-handoff.md (section "Binding rules"): the binding lane rules. Covers the never-list, vector-serial, running one test file at a time, pushes, CI flakes and the spawn hot spot.
-/home/user/wt/sf/AGENTS.md: the repo style guide. Covers dependency direction (Schema→Core/Protocol→Server), generators, and where tests and typecheck run.
-/home/user/wt/sf/docs/vector/build/v2-handoff.md: the owner's list under "After those merges" item 3. It names the VS-12 executor, VS-14, 15, 18, 19 and 26; the wiring of VS-23/24/25/27/28/34/42/43/44 with defaults unchanged; VS-05 and VS-13 plus the GitHub and Codium halves. It also has the owner-only items and item 6, the single regeneration step that belongs to the lead.
-/home/user/wt/sf/docs/vector/build/vectorscope-remaining.md: the source inventory of every VS-01–49 package, the software and acceptance that remain, and the external gates. It is dated 12 Nov and stale in places (see v2 plan §4).
-/home/user/wt/sf/docs/vector/build/v2-notes/vectorscope-v2-plan.md: §4 "What remains to build" has the build table (VS-12/14/15/18/19/26), the wiring table, the @vector/Codium waits and the owner list. §5 has the build order.
-/home/user/wt/sf/docs/vector/build/vectorscope-plan.md: the original plan. Covers Fix proposals and consent and MCP without PR-driven egress. The phased table rows VS-05..VS-20 are at :315-330. The reuse table at :395-410 names the VS-12 mechanisms: task/isolation.ts, FileLock/FileState/owned-path and workflow ledgers for VS-19.
-/home/user/wt/sf/docs/vector/build/vectorscope-upgrade.md: the upgrade contract. §0.3 lists the six items a behaviour-changing package carries, §0.5 is Never, §1 covers pipeline and route-check placement, §2 has invariants I-1..I-14, §3 the integration map, §4 the VS-23..VS-31 specs (VS-23b :422, VS-23c :430, VS-23d :440, VS-24 :450, VS-25b :517, VS-26 :534, VS-27c :588, VS-28 :602, VS-29b :645) and §5 sequencing.
-/home/user/wt/sf/docs/vector/build/vectorscope-upgrade-addendum-a.md: §1 has the new opt-in keys and their sources, §1a the replay variants and desktop halves, §2 the VS-32..VS-49 specs (VS-32 :81, VS-34 :207, VS-42 :592, VS-43 :641, VS-44 :682), :323-355 the I-8 amendment (cat-file --batch, owner Q18), and §3 the amendments to VS-12/13/18/19/26/27/28/29.
-/home/user/wt/sf/docs/vector/build/vectorscope-upgrade-addendum-b.md: §1 has the Now packages: VS-22d :102, VS-37c :132, VS-46c :185, VS-46d :206, VS-44c :229. VS-33b, VS-21e, VS-40a, VS-35b, VS-48a and VS-32b are already built. §2.1 has runner-wiring R1-R7 and §2.2 the Later items L1-L11.
-/home/user/wt/sf/docs/vector/build/vectorscope-continuation.md: the current qualified checkpoints and what each receipt does and does not prove.
-/home/user/wt/sf/docs/vector/build/vectorscope-deviations.md: dated deviation entries "## YYYY-MM-DD · VS-xx <title>". The last are VS-35b at :15891 and VS-11 physical scope at :15932. Line :16000 still says "routes and controls remain unregistered" and is stale. Every package appends an entry.
-/home/user/wt/sf/docs/vector/build/v2-scope-finish-2026-11-14.md: the latest integration repair note. Recompute the pipeline source pin after further pipeline changes. Runner Session fixtures must call the real SessionAudience.register.
-/home/user/wt/sf/docs/vector/build/v2-spawn-review.md: mandatory before touching cross-spawn-spawner.ts, task/shells.ts, core/pty.ts, tool/shell.ts, mcp/index.ts or the Windows holder. Applies to SF-08, SF-30a/b and SF-33.
-/home/user/wt/sf/script/vectorscope-eval/README.md: eval script conventions, how replay/outcomes tests run, and the VARIANTS registry rules. Halves are { pending } -> { from: "VS-xx" } plus keys.
+AGENTS.md: the repo style guide. Covers dependency direction (Schema→Core/Protocol→Server), generators, and where tests and typecheck run.
+docs/vector/build/v2-handoff.md: the owner's list under "After those merges" item 3. It names the VS-12 executor, VS-14, 15, 18, 19 and 26; the wiring of VS-23/24/25/27/28/34/42/43/44 with defaults unchanged; VS-05 and VS-13 plus the GitHub and Codium halves. It also has the owner-only items and item 6, the single regeneration step that belongs to the lead.
+docs/vector/build/vectorscope-remaining.md: the source inventory of every VS-01–49 package, the software and acceptance that remain, and the external gates. It is dated 12 Nov and stale in places (see v2 plan §4).
+docs/vector/build/v2-notes/vectorscope-v2-plan.md: §4 "What remains to build" has the build table (VS-12/14/15/18/19/26), the wiring table, the @vector/Codium waits and the owner list. §5 has the build order.
+docs/vector/build/vectorscope-plan.md: the original plan. Covers Fix proposals and consent and MCP without PR-driven egress. The phased table rows VS-05..VS-20 are at :315-330. The reuse table at :395-410 names the VS-12 mechanisms: task/isolation.ts, FileLock/FileState/owned-path and workflow ledgers for VS-19.
+docs/vector/build/vectorscope-upgrade.md: the upgrade contract. §0.3 lists the six items a behaviour-changing package carries, §0.5 is Never, §1 covers pipeline and route-check placement, §2 has invariants I-1..I-14, §3 the integration map, §4 the VS-23..VS-31 specs (VS-23b :422, VS-23c :430, VS-23d :440, VS-24 :450, VS-25b :517, VS-26 :534, VS-27c :588, VS-28 :602, VS-29b :645) and §5 sequencing.
+docs/vector/build/vectorscope-upgrade-addendum-a.md: §1 has the new opt-in keys and their sources, §1a the replay variants and desktop halves, §2 the VS-32..VS-49 specs (VS-32 :81, VS-34 :207, VS-42 :592, VS-43 :641, VS-44 :682), :323-355 the I-8 amendment (cat-file --batch, owner Q18), and §3 the amendments to VS-12/13/18/19/26/27/28/29.
+docs/vector/build/vectorscope-upgrade-addendum-b.md: §1 has the Now packages: VS-22d :102, VS-37c :132, VS-46c :185, VS-46d :206, VS-44c :229. VS-33b, VS-21e, VS-40a, VS-35b, VS-48a and VS-32b are already built. §2.1 has runner-wiring R1-R7 and §2.2 the Later items L1-L11.
+docs/vector/build/vectorscope-continuation.md: the current qualified checkpoints and what each receipt does and does not prove.
+docs/vector/build/vectorscope-deviations.md: dated deviation entries "## YYYY-MM-DD · VS-xx <title>". The last are VS-35b at :15891 and VS-11 physical scope at :15932. Line :16000 still says "routes and controls remain unregistered" and is stale. Every package appends an entry.
+docs/vector/build/v2-scope-finish-2026-11-14.md: the latest integration repair note. Recompute the pipeline source pin after further pipeline changes. Runner Session fixtures must call the real SessionAudience.register.
+docs/vector/build/v2-spawn-review.md: mandatory before touching cross-spawn-spawner.ts, task/shells.ts, core/pty.ts, tool/shell.ts, mcp/index.ts or the Windows holder. Applies to SF-08, SF-30a/b and SF-33.
+script/vectorscope-eval/README.md: eval script conventions, how replay/outcomes tests run, and the VARIANTS registry rules. Halves are { pending } -> { from: "VS-xx" } plus keys.
 
 ### Invariants
 
@@ -112,12 +112,12 @@ Wiring packages flip only the half they wire in script/vectorscope-eval/replay.t
 
 **Local checks.**
 
-- Run every bun command through /home/user/.tools/vector-serial.
+- Run every bun command through ~/.tools/vector-serial.
 - Run one test file at a time from its package directory: `bun test --timeout 30000 <file>`.
 - Run eval-script tests from packages/script against ../../script/vectorscope-eval/<file> as test.yml does. That CI glob covers only top-level _.test.ts, and the eval tsconfig includes only top-level _.ts. A research/ script must therefore be tested from a top-level eval test or a core test, as VS-48a does with packages/core/test/review/instruction-count-script.test.ts.
 - Typecheck each touched package plus the eval tsconfig (`bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from packages/engine).
-- Before each push, run the full TURBO typecheck with TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache.
-- Scratch goes under /tmp/vector-v2/scope-finish/, with fresh XDG roots for anything that boots the engine.
+- Before each push, run the full TURBO typecheck with TURBO_CACHE_DIR=<worktree>/.turbo/cache.
+- Scratch goes under <scratch>/scope-finish/, with fresh XDG roots for anything that boots the engine.
 - CLI tests go in NEW files (packages/engine/test/cli/review-strict.test.ts, review-fix.test.ts, review-pr-verdict.test.ts), never review.test.ts.
 
 **CI-only tests (never run locally):** Playwright/Chromium app e2e (scope-app-validation.yml), the strace/systemd directory-identity and private-mount cases (scope-directory-identity.yml), the engine HTTP shard (review-http-regression.yml scope=shard), and the Windows/macOS legs of test.yml.
@@ -1466,21 +1466,21 @@ const FIX_RESUME = A.fixResumeNotes || {}
 const RESOLVED = A.resolved || {}
 const TRIAGE = `${L.scratch}ci-triage.md`
 const TC = `TURBO_CACHE_DIR=${L.worktree}/.turbo/cache`
-const TYPECHECK = `cd ${L.worktree} && ${TC} /home/user/.tools/vector-serial bun turbo typecheck --concurrency=2`
-const PUSH = `cd ${L.worktree} && git fetch origin ${L.remoteBranch} 2>/dev/null; if origin/${L.remoteBranch} exists and has commits HEAD lacks, merge it in with a merge commit (never rebase, never overwrite) and re-run the affected checks; then ${TC} /home/user/.tools/vector-serial git push -u origin HEAD:${L.remoteBranch} (fast-forward only; never force, never --no-verify). If a pre-push hook runs, fix whatever it reports.`
+const TYPECHECK = `cd ${L.worktree} && ${TC} ~/.tools/vector-serial bun turbo typecheck --concurrency=2`
+const PUSH = `cd ${L.worktree} && git fetch origin ${L.remoteBranch} 2>/dev/null; if origin/${L.remoteBranch} exists and has commits HEAD lacks, merge it in with a merge commit (never rebase, never overwrite) and re-run the affected checks; then ${TC} ~/.tools/vector-serial git push -u origin HEAD:${L.remoteBranch} (fast-forward only; never force, never --no-verify). If a pre-push hook runs, fix whatever it reports.`
 const DISPATCH = L.dispatchWorkflows || []
 const CI_AFTER_PUSH = DISPATCH.length
   ? `dispatch the lane's CI on ref ${L.remoteBranch} with mcp__github__actions_run_trigger (method run_workflow, owner scr1pter, repo vectordev.ai, ref ${L.remoteBranch}, inputs {}), one call per workflow file: ${DISPATCH.join(", ")}. The push itself starts ${L.ciWorkflows.filter((w) => !DISPATCH.includes(w)).join(", ") || "nothing else"}. Then list the newest runs to record their ids. Never dispatch any other workflow.`
   : `do NOT dispatch any workflow: the push starts the lane's CI (${L.ciWorkflows.join(", ")}) by itself. List the newest runs for the new head to record their ids.`
 
 const CONTEXT = `You are an agent in the Vector "${L.name}" lane.
-Worktree: ${L.worktree} (local branch ${L.localBranch}, pushes to origin/${L.remoteBranch}). Work ONLY in that worktree. Never touch /home/user/Vectordev.ai or any other lane's worktree.
-Binding rules: read ${L.rules} FIRST and follow every rule in it exactly (one Bun workload at a time through /home/user/.tools/vector-serial, tests one file at a time from the package dir with --timeout 30000, git rules, commit identity and trailers). Put scratch files under ${L.scratch} only.
+Worktree: ${L.worktree} (local branch ${L.localBranch}, pushes to origin/${L.remoteBranch}). Work ONLY in that worktree. Never touch the owner's Vectordev.ai checkout or any other lane's worktree.
+Binding rules: read ${L.rules} FIRST and follow every rule in it exactly (one Bun workload at a time through ~/.tools/vector-serial, tests one file at a time from the package dir with --timeout 30000, git rules, commit identity and trailers). Put scratch files under ${L.scratch} only.
 Lane documents (read the parts your task needs; they are the lane's own spec, progress record and deviation log, and you must keep them accurate):
 ${L.docs}
 Lane notes:
 ${L.extra}
-Dependencies: if bun install is needed, the git dependency on scr1pter/vector-ghostty-web is served locally: check \`curl -s -o /dev/null -w '%{http_code}' --noproxy 127.0.0.1 http://127.0.0.1:47311/\` returns 200 (if not, start it with \`cd <lead scratch>/ghserve && nohup python3 -m http.server 47311 --bind 127.0.0.1 >/dev/null 2>&1 &\`), then run \`GITHUB_API_URL=http://127.0.0.1:47311 NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost /home/user/.tools/vector-serial bun install --ignore-scripts --frozen-lockfile\` (drop --frozen-lockfile only when the package adds a dependency, and pin it exactly).
+Dependencies: if bun install is needed, run `~/.tools/vector-serial bun install --ignore-scripts --frozen-lockfile` (drop --frozen-lockfile only when the package adds a dependency, and pin it exactly).
 GitHub: load the GitHub MCP tools with ToolSearch (query "+github") and use owner scr1pter, repo vectordev.ai. Read job logs with mcp__github__get_job_logs (job_id, return_content true, tail_lines 400, more if needed); full-log zip downloads are blocked.`
 
 const PLAN = {

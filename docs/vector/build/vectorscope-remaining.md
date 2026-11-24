@@ -4,9 +4,9 @@ The table records source on `scope-finish` through commit `858ddcb33`. “Engine
 
 Package evidence is recorded in [the deviation log](vectorscope-deviations.md). The [continuation ledger](vectorscope-continuation.md) identifies integration runs by commit. A package receipt applies to its tested revision. Final native and browser acceptance requires the corresponding jobs on the final PR head.
 
-The V1 desktop/server privacy checks cover attributed review traffic. The separate V2 session prompt path can still admit a review session under ZDR before the engine route guards observe it. Its HTTP fixture records admission and the missing route registration. The lead owns this open path. [HTTP privacy fixture](../../../packages/engine/test/server/httpapi-review-privacy.test.ts) · [SF-15 decision 12](vectorscope-deviations.md#2026-11-20--vs-23d-hidden-global-review-privacy-and-holdback-with-server-and-desktop-enforcement-sf-15)
+The V1 desktop/server privacy checks cover attributed review traffic. Since 2026-11-23 the V2 session routes refuse a review session under ZDR (prompt, free-model resume and compaction), before anything is stored or sent; its HTTP fixture asserts the refusal (`v2-p0/scope-finish-takeover.md`). [HTTP privacy fixture](../../../packages/engine/test/server/httpapi-review-privacy.test.ts) · [SF-15 decision 12](vectorscope-deviations.md#2026-11-20--vs-23d-hidden-global-review-privacy-and-holdback-with-server-and-desktop-enforcement-sf-15)
 
-The committed evidence pin at `858ddcb33` covers 107 source files. Its digest is `31a9837d871ec207` at pipeline revision 5. Everywhere introduced revision 5 for outward-read policy in `12b3ad09d`. Its shell route later changed the digest in `09a0db662`. The sole registered-but-unapplied review key is `runtime`. The aggregate still needs its final hosted checks.
+The committed evidence pin at `858ddcb33` covered 107 source files, with digest `31a9837d871ec207` at pipeline revision 5; the current pin is in [the continuation ledger](vectorscope-continuation.md). Everywhere introduced revision 5 for outward-read policy in `12b3ad09d`. Its shell route later changed the digest in `09a0db662`. The sole registered-but-unapplied review key is `runtime`. The aggregate still needs its final hosted checks.
 
 ## Approved plan VS-01 through VS-20
 

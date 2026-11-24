@@ -39,12 +39,12 @@ These come from the owner and override defaults. Breaking one is never acceptabl
 
 **Local work**
 
-- One Bun workload at a time across all agents in a container: run every `bun` command through a flock wrapper. The lead used `/home/user/.tools/vector-serial`, which is two lines: `#!/bin/sh` and `exec flock --close /home/user/.cache/vector-bun-workload.lock "$@"`. Create the same in your container.
+- One Bun workload at a time across all agents in a container: run every `bun` command through a flock wrapper. The lead used `~/.tools/vector-serial`, which is two lines: `#!/bin/sh` and `exec flock --close ~/.cache/vector-bun-workload.lock "$@"`. Create the same in your container.
 - Tests: one file at a time from its package directory: `vector-serial bun test --timeout 30000 <file>`. Never whole suites.
 - Typecheck per package (`bun typecheck` in `packages/<p>`) and, before every push, the whole tree: `TURBO_CACHE_DIR=<worktree>/.turbo/cache vector-serial bun turbo typecheck --concurrency=2` (use `--concurrency=2`; higher concurrency can fail for memory).
-- Install: `vector-serial bun install --ignore-scripts --frozen-lockfile`. It fetches the dependency `scr1pter/vector-ghostty-web` at commit `513463a6f1190253057e8a3f0dac8f6ee8393553` as a GitHub tarball. If your network blocks that download, put the tarball at `<dir>/repos/scr1pter/vector-ghostty-web/tarball/513463a6f1190253057e8a3f0dac8f6ee8393553`, serve `<dir>` with `python3 -m http.server 47311 --bind 127.0.0.1`, and prefix the install with `GITHUB_API_URL=http://127.0.0.1:47311 NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost`.
+- Install: `vector-serial bun install --ignore-scripts --frozen-lockfile`. It fetches the dependency `scr1pter/vector-ghostty-web` at commit `513463a6f1190253057e8a3f0dac8f6ee8393553` as a GitHub tarball.
 - Generated files (SDK, openapi.json, config.json, workflow.json, the help snapshot) are regenerated with the repo's generators (`bun run generate` in `packages/client`, `./packages/sdk/js/script/build.ts`, the engine schema script, the snapshot test's update mode), never hand-edited.
-- Scratch under `/tmp/vector-v2/<task>/`, with fresh XDG roots for anything that boots the engine. Keep disk above 3 GB free.
+- Scratch under `<scratch>/<task>/`, with fresh XDG roots for anything that boots the engine. Keep disk above 3 GB free.
 
 **Git and CI**
 

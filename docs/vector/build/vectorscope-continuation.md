@@ -2,7 +2,7 @@
 
 ## Draft integration checkpoint, 2026-11-21
 
-The local review build and its inventory are on scope-finish. The two hosted failures led to a ledger import-boundary repair and restored Connect preflight order. Updated Linux writers now hold the same checkpoint lock during batched coverage and ordinary publication. Earlier status and run references below apply to their named commits. The current candidate uses pipeline revision 5 with source digest `102ac0ede06d9bac`. The pull request tracks the remaining GitHub integration and hosted checks. [Integration PR](https://github.com/scr1pter/claudeondfsfdaf/pull/73)
+The local review build and its inventory are on scope-finish. The two hosted failures led to a ledger import-boundary repair and restored Connect preflight order. Updated Linux writers now hold the same checkpoint lock during batched coverage and ordinary publication. Earlier status and run references below apply to their named commits. The current candidate uses pipeline revision 5 with source digest `ebb0553631c36d34` (2026-11-23, after the takeover review fixes in `v2-p0/scope-finish-takeover.md`; recompute it after the final main merge). The pull request tracks the remaining GitHub integration and hosted checks. [Integration PR](https://github.com/scr1pter/claudeondfsfdaf/pull/73)
 
 ## VectorScope finish checkpoint, 21 November 2026
 

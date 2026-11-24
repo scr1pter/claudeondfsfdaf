@@ -94,3 +94,11 @@ Left as a follow-up: recalled owner memory that a review session's later request
 **Mutation check.** Without the check, the case fails (4 pass, 1 fail); restored, 5 pass.
 
 Left as a follow-up: the desktop's per-finding Apply and posted GitHub suggestions do not go through `planEdits`, so under holdback they can still offer a suggestion that echoes the placeholder (each shows the text before it is applied).
+
+## 2026-11-23, review pipeline pin and lane documents
+
+**Pin.** `local-result.ts`, `holdback.ts`, `run.ts`, `session/prompt.ts` and `cli/cmd/review.ts` are pinned review pipeline sources, so core `test/review/model-evidence.test.ts` failed (36 pass, 1 fail) and printed the new digest. `REVIEW_PIPELINE_SOURCES` moved from `9f5a18170b7da7c8` to `ebb0553631c36d34`; the case then passed (37 pass). **Lead ruling:** `REVIEW_PIPELINE_REVISION` stays 5. What a default review finds or posts is unchanged: the prompt changes apply only under the hidden, off-by-default holdback "secrets", the `--apply` refusal only under the hidden offline diagnostics, and the rest is decoding and admission. The existing case "D3: unset and off send what they did" still holds byte-identical requests for unset and off. The pin is recomputed after the final main merge.
+
+**Stale pins in the docs.** `vectorscope-continuation.md` named `102ac0ede06d9bac` and `vectorscope-remaining.md` named `31a9837d871ec207` as current; both now point at the current pin. The remaining-work note also said the V2 session path was open; it now names the refusal above.
+
+**Absolute local paths.** The lane plan, the lane handoff, the deviations log and addendum B named the earlier container's paths (`/home/user/wt/sf/...`, `/home/user/.tools/vector-serial`, `/tmp/vector-v2/...`). They passed `test/no-personal-paths.test.ts`, since `user` is a generic name, but broke the lane rule against absolute local paths in docs. They are now repo-relative paths, `~/.tools/vector-serial`, `<worktree>` and `<scratch>`. The lane plan's and handoff's recipe for serving a dependency tarball through a local `python3 -m http.server` with `GITHUB_API_URL` pointed at it is removed; the plain `bun install` line stays.
