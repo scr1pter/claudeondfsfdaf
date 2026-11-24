@@ -122,6 +122,38 @@ describe("Windows background command preparation", () => {
     expect(() => reader.finish()).not.toThrow()
   })
 
+  test("startup diagnostics accept only the ordered holder phases before readiness", () => {
+    const phase = (step: unknown) => message({ type: "startup", step })
+    const reader = new WindowsProcess.StatusReader()
+    expect(reader.startupPhase).toBe("spawn")
+    for (const invalid of [0, 2, 8, 1.5, "1", null]) {
+      expect(() => new WindowsProcess.StatusReader().push(phase(invalid))).toThrow("startup phase")
+    }
+    expect(reader.push(phase(1).subarray(0, 13))).toEqual([])
+    expect(reader.startupPhase).toBe("spawn")
+    expect(reader.push(phase(1).subarray(13))).toEqual([])
+    expect(reader.startupPhase).toBe("host-entered")
+    expect(() => reader.push(phase(1))).toThrow("startup phase")
+    expect(() => reader.push(message({ type: "startup", step: 2, payload: "unexpected" }))).toThrow("startup phase")
+    const phases = [
+      "utility-loaded",
+      "compiler-returned",
+      "reading-config",
+      "config-decoded",
+      "creating-payload",
+      "payload-created",
+    ] as const
+    for (const [index, expected] of phases.entries()) {
+      expect(reader.push(phase(index + 2))).toEqual([])
+      expect(reader.startupPhase).toBe(expected)
+    }
+    expect(() => reader.push(phase(8))).toThrow("startup phase")
+    expect(reader.push(message({ type: "ready", pid: 17 }))).toEqual([{ type: "ready", pid: 17 }])
+    const ready = new WindowsProcess.StatusReader()
+    ready.push(message({ type: "ready", pid: 17 }))
+    expect(() => ready.push(phase(1))).toThrow("startup phase")
+  })
+
   test("status rejects forged shapes, missing proof, truncation and unbounded diagnostics", () => {
     for (const value of [
       { type: "ready", pid: 0 },

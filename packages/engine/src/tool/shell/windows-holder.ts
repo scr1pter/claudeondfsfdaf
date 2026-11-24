@@ -53,6 +53,7 @@ public static class VectorShellHolder {
   static volatile bool badControl;
   static void Check(bool ok,string operation) { if(!ok) throw new Exception(operation+" failed ("+Marshal.GetLastWin32Error()+")"); }
   static void Emit(object value) { Console.Error.WriteLine("VECTOR_SHELL/1 "+new JavaScriptSerializer().Serialize(value)); Console.Error.Flush(); }
+  static void Startup(int step) { Console.Error.WriteLine("VECTOR_SHELL/1 {\"type\":\"startup\",\"step\":"+step+"}"); }
   static string Line(Stream stream,int max) {
     using(var bytes=new MemoryStream()) {
       for(int n=0;n<=max;n++) {
@@ -78,12 +79,14 @@ public static class VectorShellHolder {
     IntPtr job=IntPtr.Zero, attrs=IntPtr.Zero, handles=IntPtr.Zero, jobs=IntPtr.Zero, env=IntPtr.Zero, output=IntPtr.Zero, input=IntPtr.Zero;
     PI child=new PI(); bool assigned=false, attrsReady=false, cleaned=false, attempted=false;
     try {
+      Startup(4);
       var stream=Console.OpenStandardInput();
       var read=Task.Run(()=>Line(stream,262144));
       if(!read.Wait(15000) || read.Result==null) throw new Exception("Configuration timeout or EOF");
       var json=new JavaScriptSerializer(); json.MaxJsonLength=262144;
       var cfg=json.Deserialize<Launch>(read.Result);
       if(cfg==null || String.IsNullOrEmpty(cfg.file) || String.IsNullOrEmpty(cfg.commandLine) || cfg.commandLine.Length>32766 || cfg.env==null) throw new Exception("Invalid configuration");
+      Startup(5);
       Check(SetHandleInformation(GetStdHandle(-10),1,0),"Control inheritance");
       Check(SetHandleInformation(GetStdHandle(-12),1,0),"Status inheritance");
       job=CreateJobObjectW(IntPtr.Zero,null); Check(job!=IntPtr.Zero,"Create job");
@@ -107,7 +110,9 @@ public static class VectorShellHolder {
       env=Marshal.StringToHGlobalUni(block.ToString());
       var start=new SX(); start.si.cb=Marshal.SizeOf(typeof(SX)); start.si.flags=0x100;
       start.si.input=input; start.si.output=output; start.si.error=output; start.attrs=attrs;
+      Startup(6);
       Check(CreateProcessW(cfg.file,new StringBuilder(cfg.commandLine),IntPtr.Zero,IntPtr.Zero,true,0x08080404,env,cfg.cwd,ref start,out child),"Create suspended job process"); assigned=true;
+      Startup(7);
       var control=new Thread(()=> {
         try {
           bool acknowledged=false;
@@ -154,12 +159,27 @@ public static class VectorShellHolder {
 }
 `
 
+export const startupPhases = [
+  "spawn",
+  "host-entered",
+  "utility-loaded",
+  "compiler-returned",
+  "reading-config",
+  "config-decoded",
+  "creating-payload",
+  "payload-created",
+] as const
+
+const startup = (step: number) => `[Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"startup","step":${step}}'); `
+
 // Resolve the Windows PowerShell built-in by its Microsoft strong name. The helper intentionally has no inherited
 // PSModulePath: command discovery can otherwise wait indefinitely before Add-Type starts, even with -NoProfile.
 export const preparation =
-  "Import-Module -Assembly ([Reflection.Assembly]::Load('Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')); "
+  "Import-Module -Assembly ([Reflection.Assembly]::Load('Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')); " +
+  startup(2)
 
-export const script = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';try { ${preparation}Add-Type -TypeDefinition @'\n${source}\n'@ -ReferencedAssemblies System.Web.Extensions } catch { [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"error","terminationProven":true,"message":"Windows containment helper unavailable"}'); exit 1 }; exit [VectorShellHolder]::Run()`
+// Remove C# indentation only in the transported script to leave room for the phase receipts in Windows' argv limit.
+export const script = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';${startup(1)}try { ${preparation}Add-Type -TypeDefinition @'\n${source.replace(/^ +/gm, "")}\n'@ -ReferencedAssemblies System.Web.Extensions } catch { [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"error","terminationProven":true,"message":"Windows containment helper unavailable"}'); exit 1 }; ${startup(3)}exit [VectorShellHolder]::Run()`
 
 export function argumentsForHolder() {
   const encoded = Buffer.from(script, "utf16le").toString("base64")

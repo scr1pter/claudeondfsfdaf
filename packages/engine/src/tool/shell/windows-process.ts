@@ -103,6 +103,13 @@ type Status =
 export class StatusReader {
   private pending = Buffer.alloc(0)
   private total = 0
+  private startupStep = 0
+  private startupComplete = false
+
+  get startupPhase() {
+    return WindowsHolder.startupPhases[this.startupStep]!
+  }
+
   push(chunk: Uint8Array): Status[] {
     this.total += chunk.byteLength
     if (this.total > 16_384) throw new Error("Windows holder status exceeded its bound")
@@ -116,6 +123,21 @@ export class StatusReader {
       if (!line.startsWith("VECTOR_SHELL/1 ")) throw new Error("Invalid Windows holder status")
       const value: unknown = JSON.parse(line.slice(15))
       if (!value || typeof value !== "object" || !("type" in value)) throw new Error("Invalid Windows holder status")
+      // The fixed startup phases add context to timeouts. Readiness and termination still use their own status frames.
+      if (value.type === "startup") {
+        const next = this.startupStep + 1
+        if (
+          this.startupComplete ||
+          !("step" in value) ||
+          Object.keys(value).length !== 2 ||
+          value.step !== next ||
+          next >= WindowsHolder.startupPhases.length
+        )
+          throw new Error("Invalid Windows holder startup phase")
+        this.startupStep = next
+        continue
+      }
+      this.startupComplete = true
       if ((value.type === "ready" || value.type === "running") && "pid" in value && whole(value.pid) && value.pid > 0) {
         result.push({ type: value.type, pid: value.pid })
         continue
@@ -355,7 +377,11 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
   })()
   child.stdin.write(config)
   try {
-    const pid = await bounded(ready.promise, STARTUP_MS, "Windows containment helper startup timed out")
+    const pid = await bounded(
+      ready.promise,
+      STARTUP_MS,
+      () => `Windows containment helper startup timed out (last phase: ${reader.startupPhase})`,
+    )
     await bounded(callbacks.onReady(pid), PERSIST_MS, "Saving the background shell PID timed out")
     if (state.stopping || state.failure || state.closed || callbacks.signal?.aborted)
       throw state.failure ?? new Error("Background shell stopped during startup")
@@ -397,13 +423,13 @@ function deferred<T>() {
   })
   return { promise, resolve, reject }
 }
-async function bounded<T>(promise: Promise<T>, ms: number, message: string) {
+async function bounded<T>(promise: Promise<T>, ms: number, message: string | (() => string)) {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), ms)
+        timer = setTimeout(() => reject(new Error(typeof message === "function" ? message() : message)), ms)
       }),
     ])
   } finally {
