@@ -98,11 +98,13 @@ test("the existing Bun cell executes its installed Bun artifact while host asser
     fileURLToPath(new URL("../../../../.github/workflows/vector-at-mention.yml", import.meta.url)),
   ).text()
   expect(workflow).toContain(
-    'install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe-bun.mjs" /opt/vector-sandbox-probe-bun.mjs',
+    'install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe-bun.mjs" /opt/vector-sandbox-runtime/probe-bun.mjs',
   )
   expect(workflow).toContain(
-    "vector github sandbox run -- /opt/vector-probe-bun --no-install /opt/vector-sandbox-probe-bun.mjs",
+    "vector github sandbox run -- /opt/vector-probe-bun --no-install /opt/vector-sandbox-runtime/probe-bun.mjs",
   )
-  expect(workflow).toContain("node /opt/vector-sandbox-probe.mjs --assert")
+  expect(workflow).toContain("node /opt/vector-sandbox-runtime/probe.mjs --assert")
+  expect(workflow).toContain("for directory in assets node_modules rust-pty; do")
+  expect(workflow).toContain('chmod -R a+rX,go-w -- "/opt/vector-sandbox-runtime/$directory"')
   expect(workflow).toContain("runtime: bun")
 })

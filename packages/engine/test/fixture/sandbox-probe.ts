@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import { probePtyDescriptors } from "./sandbox-pty-probe"
 import { probeToolProcesses } from "./sandbox-tool-probe"
 
 const execute = promisify(execFile)
@@ -24,6 +25,13 @@ const markers = [
 ]
 const trigger = "/tmp/vector-sandbox-probe-next-step"
 const escaped = "/tmp/vector-sandbox-probe-detached-escaped"
+
+function syntheticProofIdentity() {
+  const proof = fstatSync(3, { bigint: true })
+  if (!proof.isFile() || proof.size !== 0n)
+    throw new Error("The disposable Codium fixture was missing its empty dummy proof descriptor")
+  return `${proof.dev}:${proof.ino}`
+}
 
 async function identity(pid: number) {
   const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8")
@@ -153,6 +161,11 @@ async function scan(parent: number) {
 if (process.argv[2] === "--module-load-check") {
   // Packaging smoke only: imports initialize, but no filesystem/process probe or credential channel is entered.
   console.log("Sandbox probe modules loaded")
+} else if (process.argv[2] === "--pty-fixture-check") {
+  // An isolated build check can supply an empty temporary descriptor without entering the private channel.
+  ProcessIsolation.requireIsolation()
+  await probePtyDescriptors(syntheticProofIdentity())
+  console.log("Staged PTY descriptor check passed")
 } else if (process.argv[2] === "--crash-controls") {
   const limits = await fs.readFile("/proc/self/limits", "utf8")
   const status = await fs.readFile("/proc/self/status", "utf8")
@@ -200,6 +213,7 @@ if (process.argv[2] === "--module-load-check") {
   if (
     !report.toolProcess?.actualShellTool ||
     report.toolProcess?.shellProofExcluded !== (process.env.VECTOR_MODE === "codium") ||
+    report.ptyProofExcluded !== (process.env.VECTOR_MODE === "codium") ||
     !report.toolProcess?.sameUid ||
     !report.toolProcess?.inspectorStayedClosed ||
     !report.toolProcess?.controlInspectorOpened ||
@@ -324,11 +338,10 @@ if (process.argv[2] === "--module-load-check") {
   let syntheticProof: string | undefined
   if (process.env.VECTOR_MODE === "codium") {
     if (!holder.sessionProof()) throw new Error("The disposable Codium fixture has no evidence of its proof descriptor")
-    const proof = fstatSync(3, { bigint: true })
-    if (!proof.isFile()) throw new Error("The disposable Codium fixture was missing its dummy proof descriptor")
-    syntheticProof = `${proof.dev}:${proof.ino}`
+    syntheticProof = syntheticProofIdentity()
   }
   const toolProcess = await probeToolProcesses(syntheticProof)
+  if (syntheticProof) await probePtyDescriptors(syntheticProof)
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
   const scanner = ProcessIsolation.launch("/bin/bash", [
     "--noprofile",
@@ -363,7 +376,14 @@ if (process.argv[2] === "--module-load-check") {
   await fs.writeFile("vector-out/patch.diff", "", { mode: 0o600 })
   await fs.writeFile(
     "vector-out/summary.json",
-    JSON.stringify({ channel, scan: report, crash, toolProcess, detached: detachedIdentity }),
+    JSON.stringify({
+      channel,
+      scan: report,
+      crash,
+      toolProcess,
+      ptyProofExcluded: syntheticProof !== undefined,
+      detached: detachedIdentity,
+    }),
     { mode: 0o600 },
   )
   if (process.env.VECTOR_MODE === "codium") {
