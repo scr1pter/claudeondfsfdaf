@@ -53,9 +53,19 @@ export function initializeSupportReport(form: HTMLFormElement, request: typeof f
       submit.disabled = false
       return
     }
+    const reference =
+      "report" in result &&
+      result.report &&
+      typeof result.report === "object" &&
+      "id" in result.report &&
+      typeof result.report.id === "string" &&
+      result.report.id.length === 28 &&
+      /^r_[a-z2-7]{26}$/.test(result.report.id)
+        ? result.report.id
+        : undefined
     message.value = ""
     email.value = ""
-    status.textContent = "Report sent. If you left an email, the Vector team can reply there."
+    status.textContent = `Report sent.${reference ? ` Reference: ${reference}. Keep it for follow-up.` : ""} If you left an email, the Vector team can reply there.`
     submit.textContent = "Report sent"
   })
   return () => window.removeEventListener("message", draft)
