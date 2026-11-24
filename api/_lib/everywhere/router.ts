@@ -34,7 +34,7 @@ export async function routeFacts<Repo extends Pick<Repository, "id" | "fullName"
   ])
   const [gates, presence, computer] = await Promise.all([
     readGates(),
-    input.ports.presence(input.sponsor).catch(() => ({ online: false, computers: 0, reason: "unreachable" as const })),
+    input.ports.presence(input.sponsor).catch(() => ({ online: false, computers: 0, reason: "not-configured" as const })),
     readComputer(input.ctx.store, input.sponsor),
   ])
   const [everywhere, remote, inPlan, remotePerk] = gates
@@ -48,7 +48,8 @@ export async function routeFacts<Repo extends Pick<Repository, "id" | "fullName"
     repository: input.repository,
     github: input.github,
     laptop: {
-      configured: presence.reason !== "not-configured" && presence.reason !== "unreachable",
+      // The production adapter reports an unreachable relay only after checking Remote setup and entitlement.
+      configured: presence.reason !== "not-configured",
       perk: remotePerk,
       online: presence.online && Number.isSafeInteger(presence.computers) && presence.computers > 0,
       lastSeen: computer.lastSeen,
