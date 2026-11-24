@@ -15,6 +15,7 @@ export const PHONE_BASE = "/phone/"
  */
 export const PHONE_SW_URL = "/phone/sw.js"
 export const PHONE_SW_SCOPE = "/"
+export const PHONE_PUSH_CHANGED = "vector-phone:push-subscription-changed"
 
 /** The deployed build's version file, read with no cache for the version handshake (version.ts). */
 export const PHONE_VERSION_URL = "/phone/version.json"

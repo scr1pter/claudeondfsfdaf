@@ -244,6 +244,25 @@ export async function removePushSubscription(account: string, endpoint: string, 
   )
 }
 
+/** Checks whether this account has the browser's current endpoint and encryption keys registered. */
+export async function hasPushSubscription(
+  account: string,
+  subscription: PushSubscriptionInput,
+  fetcher: typeof fetch = fetch,
+  now = Date.now(),
+) {
+  const id = pushSubscriptionId(subscription.endpoint)
+  const raw = await persistentStore(["HGET", pushSubscriptionsKey(account), id], fetcher)
+  const stored = typeof raw === "string" ? decodeStored(raw) : undefined
+  return (
+    stored?.id === id &&
+    stored.endpoint === subscription.endpoint &&
+    stored.p256dh === subscription.p256dh &&
+    stored.auth === subscription.auth &&
+    (stored.expiresAt === undefined || stored.expiresAt > now)
+  )
+}
+
 /** The account's subscriptions, newest first, at most ten. Malformed entries are left out. */
 export async function listPushSubscriptions(account: string, fetcher: typeof fetch = fetch) {
   return (await readSubscriptions(pushSubscriptionsKey(account), fetcher))

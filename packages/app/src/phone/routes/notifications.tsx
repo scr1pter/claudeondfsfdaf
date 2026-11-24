@@ -1,43 +1,31 @@
-import { createResource, createSignal, Match, Switch } from "solid-js"
-import { PHONE_SW_SCOPE } from "../config"
+import { createSignal, Match, Show, Switch } from "solid-js"
 import { alertsSupport } from "../environment"
-import { alertsErrorText, alertsState, turnOffAlerts, turnOnAlerts, type PushDeps, type PushManagerLike } from "../push"
+import { alertsErrorText, turnOffAlerts, turnOnAlerts, useAlertsState } from "../push"
 import { planNotice } from "../status"
 import { InstallCard, Notice, Panel, type RouteProps } from "./parts"
-
-/** The browser's push manager and notification permission (the Production page asks too, WP A50). */
-export function browserPush(): PushDeps {
-  return {
-    fetcher: (input, init) => fetch(input, init),
-    pushManager: async () => {
-      const registration = await navigator.serviceWorker?.getRegistration(PHONE_SW_SCOPE).catch(() => undefined)
-      return registration?.pushManager as unknown as PushManagerLike | undefined
-    },
-    permission: () => Notification.permission,
-    requestPermission: () => Notification.requestPermission(),
-  }
-}
 
 // Phone alerts on this phone (WP A38). Which events a computer sends is chosen on that computer, in Settings →
 // Notifications; the server's own alerts are titles only (P7).
 export function NotificationsRoute(props: RouteProps) {
   const support = alertsSupport(props.environment)
-  const deps = support === "ready" ? browserPush() : undefined
-  const [state, { mutate }] = createResource(() => deps && alertsState(deps))
+  const { deps, state, refetch } = useAlertsState(
+    () => props.session,
+    () => support === "ready",
+  )
   const [busy, setBusy] = createSignal(false)
   const [problem, setProblem] = createSignal<string>()
 
   const change = async (on: boolean) => {
-    if (!deps || busy()) return
+    if (busy()) return
     setBusy(true)
     setProblem(undefined)
     try {
       if (on) await turnOnAlerts(props.session, deps)
       else await turnOffAlerts(props.session, deps)
-      mutate(await alertsState(deps))
     } catch (cause) {
       setProblem(alertsErrorText(cause))
     } finally {
+      await refetch()
       setBusy(false)
     }
   }
@@ -55,22 +43,23 @@ export function NotificationsRoute(props: RouteProps) {
         <Match when={support === "unsupported"}>
           <p>This browser cannot receive alerts. On iPhone and iPad they need iOS 16.4 or later.</p>
         </Match>
+        <Match when={state.loading}>
+          <p role="status">Checking alerts on this phone…</p>
+        </Match>
+        <Match when={state() === "unknown"}>
+          <p>Vector could not check alerts on this phone.</p>
+          <button type="button" class="phone-button phone-button--quiet" onClick={() => void refetch()}>
+            Try again
+          </button>
+        </Match>
         <Match when={state() === "denied"}>
           <p>Notifications for Vector are off in this phone's settings. Turn them on there, then come back.</p>
         </Match>
         <Match when={state() === "on"}>
           <p>
-            This phone gets Vector alerts: a short title, such as the session's name, when an agent finishes or needs
-            you.
+            Alerts are set up for this account on this phone. An alert can show a short title, such as the session's
+            name, when an agent finishes or needs you.
           </p>
-          <button
-            type="button"
-            class="phone-button phone-button--quiet"
-            disabled={busy()}
-            onClick={() => change(false)}
-          >
-            Turn off alerts on this phone
-          </button>
         </Match>
         <Match when={state() === "off"}>
           <p>
@@ -81,6 +70,11 @@ export function NotificationsRoute(props: RouteProps) {
           </button>
         </Match>
       </Switch>
+      <Show when={!state.loading && (state() === "on" || state() === "unknown")}>
+        <button type="button" class="phone-button phone-button--quiet" disabled={busy()} onClick={() => change(false)}>
+          Turn off alerts on this phone
+        </button>
+      </Show>
       <Notice text={problem()} />
       <p class="phone-meta">
         Choose which events reach this phone in Vector on your computer: Settings → Notifications.

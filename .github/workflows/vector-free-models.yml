@@ -65,3 +65,6 @@ jobs:
           test/model-plan-models-api.test.ts test/model-plan-status-api.test.ts test/model-plan-context.test.ts
           test/model-plan-catalog.test.ts src/lib/model-plans.test.ts src/components/marketing/codium
           src/components/marketing/account
+      - name: Check phone alert registration status
+        working-directory: packages/web
+        run: bun test --timeout 30000 test/phone-notify-status.test.ts

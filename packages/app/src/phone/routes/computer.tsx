@@ -39,9 +39,8 @@ import { hostedRoute, type HostedRequest } from "@/features/cloud/hosted/hosted-
 import { phoneApi, PhoneApiError } from "../api"
 import { phonePath } from "../config"
 import { alertsSupport } from "../environment"
-import { alertsState } from "../push"
+import { useAlertsState } from "../push"
 import { planNotice } from "../status"
-import { browserPush } from "./notifications"
 import { Empty, Notice, Panel, type RouteProps } from "./parts"
 
 // The cloud computer on the phone (WP A56; the A38 shell's route): what runs on the computer Vector runs for you, with
@@ -176,10 +175,10 @@ export function ComputerRoute(props: RouteProps) {
 
   // Alerts: the computer tells the phone when it needs you, so a phone without alerts is offered them here.
   const support = alertsSupport(props.environment)
-  const push = support === "ready" ? browserPush() : undefined
-  const [alerts] = createResource(
-    () => (push && included() && props.status.listed.has("alerts") ? push : undefined),
-    alertsState,
+  const canOfferAlerts = () => included() && props.status.listed.has("alerts")
+  const { state: alerts } = useAlertsState(
+    () => props.session,
+    () => support === "ready" && canOfferAlerts(),
   )
 
   const LinkFor = (linkProps: { id: string }) => (
@@ -207,7 +206,7 @@ export function ComputerRoute(props: RouteProps) {
       >
         {(line) => <p class="phone-meta">{line}</p>}
       </For>
-      <Show when={alerts() === "off"}>
+      <Show when={canOfferAlerts() && !alerts.loading && alerts() === "off"}>
         <div class="phone-row" role="note">
           <p>Get a short alert on this phone when Vector needs you on its cloud computer.</p>
           <button
