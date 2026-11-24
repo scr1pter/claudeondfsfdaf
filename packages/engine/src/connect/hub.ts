@@ -157,6 +157,8 @@ export interface Interface {
    * once, as a note to the requester's session, when it ends.
    */
   readonly run: (input: StartInput) => Effect.Effect<Connect.Run>
+  /** Whether the registered adapter has no hand-off handler. This does not probe the member. */
+  readonly isListOnly: (to: string) => boolean
   /** Cancels a run that is going. With `sessionID`, only that session's own runs. False when there was none. */
   readonly cancel: (runID: string, scope?: { readonly sessionID?: SessionID }) => Effect.Effect<boolean>
   /** Owner service only: save dismissal context, then change the original trusted durable review row. */
@@ -324,6 +326,12 @@ interface Admission {
 const refusal = (code: Connect.RefusalCode, message: string) =>
   new Connect.Refusal({ code, message: clip(message, 2_000) })
 
+const listOnlyRefusal = (to: string) =>
+  refusal("unknown", `${clip(to, 200)} is only listed; connect cannot hand work to it.`)
+
+const taskReviewRefusal = () =>
+  refusal("input", "An isolated task review needs its launching conversation and VectorScope.")
+
 const OFF = "Connected tools are off in this build (VECTOR_EXPERIMENTAL_CONNECT)."
 
 /** The hub's layer over the given adapters. Tests pass fakes; the engine passes `ADAPTERS`. */
@@ -352,6 +360,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const scope = yield* Scope.Scope
       const adapters = yield* Effect.all(factories)
       const byID = new Map(adapters.map((adapter) => [adapter.id, adapter]))
+      const isListOnly = (to: string) => {
+        const adapter = byID.get(to)
+        return adapter !== undefined && !adapter.handle
+      }
       // Each adapter's cloud actions, read once here: nothing it describes or changes later widens them.
       const clouds = new Map(
         adapters.map((adapter) => [
@@ -930,6 +942,24 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         } satisfies ConnectPolicy.RunSpend
       })
 
+      const checkRequester = Effect.fnUntraced(function* (requester: Connect.Requester, hasDirectory: boolean) {
+        const session = requester.sessionID
+          ? yield* sessions.get(requester.sessionID).pipe(Effect.orElseSucceed(() => undefined))
+          : undefined
+        if (requester.sessionID && !session)
+          return yield* refusal("not-allowed", "The session that asked no longer exists, so connect did not start.")
+        if (!requester.sessionID && !hasDirectory)
+          return yield* refusal("not-allowed", "A directory review needs the current owner's execution authority.")
+        // A member's own helper session never starts a hand-off (no chains).
+        if (session?.internal)
+          return yield* refusal("not-allowed", "A helper session cannot hand work to another member.")
+        // Nor does a subagent (a child session the task tool made): only the conversation's own agent, a person or a
+        // workflow stage hands work off.
+        if (requester.kind === "agent" && session?.parentID)
+          return yield* refusal("not-allowed", "A subagent cannot hand work to another member.")
+        return session
+      })
+
       const admit = Effect.fnUntraced(function* (
         entry: Entry,
         saved: readonly Connect.Run[],
@@ -939,24 +969,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const requester = request.requester
         if (!flags.experimentalConnect) return yield* refusal("not-allowed", OFF)
         yield* directoryCurrent(entry)
-        const session = requester.sessionID
-          ? yield* sessions.get(requester.sessionID).pipe(Effect.orElseSucceed(() => undefined))
-          : undefined
-        if (requester.sessionID && !session)
-          return yield* refusal("not-allowed", "The session that asked no longer exists, so connect did not start.")
-        if (!requester.sessionID && !entry.directory)
-          return yield* refusal("not-allowed", "A directory review needs the current owner's execution authority.")
-        // A member's own helper session never starts a hand-off (no chains).
-        if (session?.internal)
-          return yield* refusal("not-allowed", "A helper session cannot hand work to another member.")
-        // Nor does a subagent (a child session the task tool made): only the conversation's own agent, a person or a
-        // workflow stage hands work off.
-        if (requester.kind === "agent" && session?.parentID)
-          return yield* refusal("not-allowed", "A subagent cannot hand work to another member.")
+        const session = yield* checkRequester(requester, entry.directory !== undefined)
         const adapter = entry.adapter
         if (!adapter) return yield* refusal("unknown", `Connect has no member named ${clip(request.to, 200)}.`)
-        if (!adapter.handle)
-          return yield* refusal("unknown", `${clip(request.to, 200)} is only listed; connect cannot hand work to it.`)
+        if (!adapter.handle) return yield* listOnlyRefusal(request.to)
         const described = yield* adapter.describe().pipe(Effect.exit)
         if (Exit.isFailure(described))
           return yield* refusal("unavailable", `Connect could not check whether ${request.to} is ready.`)
@@ -1372,9 +1388,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               "The directory review's private execution authority is no longer valid.",
             )
         }
-        const state = yield* InstanceState.get(ledger)
         const requester = decoded.value.requester
-        const saved = requester.sessionID ? yield* recorded(requester.sessionID) : undefined
+        // Directory requests keep their existing private binding and replay protocol.
+        const listOnly = !directory && isListOnly(decoded.value.to)
+        const saved =
+          requester.sessionID && (!listOnly || input.call?.expectedRequestID !== undefined)
+            ? yield* recorded(requester.sessionID)
+            : undefined
         if (input.call?.expectedRequestID !== undefined && saved?.requestID !== input.call.expectedRequestID)
           return unrecorded(
             id,
@@ -1391,6 +1411,18 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             "not-allowed",
             "The automatic review is no longer authorized for this request.",
           )
+        if (listOnly) {
+          const target = decoded.value.action === "review" ? decoded.value.target : undefined
+          if (target?.kind === "task" && (decoded.value.to !== "vectorscope" || !requester.sessionID)) {
+            const denied = taskReviewRefusal()
+            return unrecorded(id, decoded.value, created, denied.code, denied.message, target)
+          }
+          const denied = yield* checkRequester(requester, false).pipe(
+            Effect.match({ onFailure: (error) => error, onSuccess: () => listOnlyRefusal(decoded.value.to) }),
+          )
+          return unrecorded(id, decoded.value, created, denied.code, denied.message, target)
+        }
+        const state = yield* InstanceState.get(ledger)
         const configured = ConfigConnectV1.review((yield* config.get()).connect).max_cost_usd
         const request: Connect.Request = {
           ...decoded.value,
@@ -1469,8 +1501,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           })
         const work = Effect.gen(function* () {
           if (request.action !== "review" || request.target.kind !== "task") return yield* execute()
-          if (request.to !== "vectorscope" || !request.requester.sessionID)
-            return yield* refusal("input", "An isolated task review needs its launching conversation and VectorScope.")
+          if (request.to !== "vectorscope" || !request.requester.sessionID) return yield* taskReviewRefusal()
           return yield* isolation
             .review({ taskID: request.target.task, parentSessionID: request.requester.sessionID }, (record) =>
               ConnectGit.withTask(record, (reviewGit) => execute(record, reviewGit)),
@@ -1770,7 +1801,18 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return list.map((member) => withActivity(member, state))
       })
 
-      return Service.of({ run, cancel, get, replayDirectory, settleDirectory, runs, request, members, dismiss })
+      return Service.of({
+        run,
+        isListOnly,
+        cancel,
+        get,
+        replayDirectory,
+        settleDirectory,
+        runs,
+        request,
+        members,
+        dismiss,
+      })
     }),
   )
 
@@ -1991,9 +2033,8 @@ function sealed(job: BackgroundJobStore.Row, digest: string) {
 }
 
 /**
- * A run refused before it was recorded: connected tools are off, or the request is not valid. It carries the caller's
- * request as given (it was never decoded, so `metadata` may save nothing for it) and is neither kept in the ledger nor
- * published.
+ * A refusal before a run was recorded. It is returned only to the caller, with no ledger entry or event. When the
+ * request did not decode it carries the caller's request as given, so `metadata` may save nothing for it.
  */
 function unrecorded(
   id: Connect.RunID,
@@ -2001,6 +2042,7 @@ function unrecorded(
   created: number,
   code: Connect.RefusalCode,
   message: string,
+  target?: Connect.Target,
 ): Connect.Run {
   const given = (typeof request === "object" && request !== null ? request : {}) as Partial<Connect.Request>
   return {
@@ -2011,6 +2053,7 @@ function unrecorded(
       state: "refused",
       refusal: code,
       ...(given.action === "review" ? { verdict: "not-reviewed" as const } : {}),
+      ...(target ? { target } : {}),
       summary: clip(message, Connect.MAX_SUMMARY),
       findings: [],
       sessions: [],

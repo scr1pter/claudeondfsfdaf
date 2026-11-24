@@ -78,6 +78,9 @@ const requestError = (error: ConnectDirectoryRequest.Error) =>
     message: error.message,
   })
 
+const busyReview = () =>
+  new Error({ code: "invalid", message: "This conversation is busy. Start the review after its turn finishes." })
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -156,15 +159,8 @@ const layer = Layer.effect(
             const failed = Cause.squash(cause)
             const error = failed instanceof WorkflowOwnerHandoffFailure ? failed.original : failed
             if (error instanceof Error) return Effect.fail(error)
-            return Effect.fail(
-              new Error({
-                code: "invalid",
-                message:
-                  error instanceof Session.BusyError
-                    ? "This conversation is busy. Start the review after its turn finishes."
-                    : "The connected owner action did not complete.",
-              }),
-            )
+            if (error instanceof Session.BusyError) return Effect.fail(busyReview())
+            return Effect.fail(new Error({ code: "invalid", message: "The connected owner action did not complete." }))
           }),
         )
         if (Option.isNone(result.value))
@@ -345,40 +341,53 @@ const layer = Layer.effect(
         return yield* hub.cancel(runID, sessionID ? { sessionID } : undefined)
       })
     const review: Interface["review"] = (sessionID, input, options) =>
-      own(
-        sessionID,
-        Effect.gen(function* () {
+      Effect.gen(function* () {
+        const to = input.to ?? "vectorscope"
+        const request = (directory: string, agent: string): ConnectHub.StartRequest => ({
+          to,
+          action: "review",
+          requester: { kind: "user", sessionID, agent },
+          directory,
+          target: input.target ?? { kind: "uncommitted" },
+          background: input.background ?? true,
+          ...(input.budget ? { budget: input.budget } : {}),
+          ...(input.security !== undefined ? { security: input.security } : {}),
+          ...(input.since ? { since: input.since } : {}),
+        })
+        if (hub.isListOnly(to)) {
+          const session = yield* requireSession(sessionID)
+          yield* state.assertNotBusy(sessionID).pipe(Effect.mapError(busyReview))
           if (options?.abort?.aborted) return yield* Effect.interrupt
-          const saved = yield* recorder(sessionID, "Review my changes with VectorScope.", {
-            action: "review",
-            ...input,
-          })
-          return yield* Effect.gen(function* () {
-            const run = yield* hub.run({
-              request: {
-                to: input.to ?? "vectorscope",
-                action: "review",
-                requester: { kind: "user", sessionID, agent: saved.agent.name },
-                directory: saved.context.directory,
-                target: input.target ?? { kind: "uncommitted" },
-                background: input.background ?? true,
-                ...(input.budget ? { budget: input.budget } : {}),
-                ...(input.security !== undefined ? { security: input.security } : {}),
-                ...(input.since ? { since: input.since } : {}),
-              },
-              call: {
-                promptOps,
-                ...(options?.abort ? { abort: options.abort } : {}),
-                part: { messageID: saved.part.messageID, callID: saved.part.callID },
-                update: saved.update,
-              },
+          const context = yield* InstanceState.context
+          return yield* hub.run({ request: request(context.directory, session.agent ?? "build") })
+        }
+        return yield* own(
+          sessionID,
+          Effect.gen(function* () {
+            if (options?.abort?.aborted) return yield* Effect.interrupt
+            const saved = yield* recorder(sessionID, "Review my changes with VectorScope.", {
+              action: "review",
+              ...input,
             })
-            return { value: run, message: yield* saved.complete(run) }
-          }).pipe(
-            Effect.onExit((exit) => (Exit.isFailure(exit) ? saved.fail(Cause.hasInterrupts(exit.cause)) : Effect.void)),
-          )
-        }),
-      )
+            return yield* Effect.gen(function* () {
+              const run = yield* hub.run({
+                request: request(saved.context.directory, saved.agent.name),
+                call: {
+                  promptOps,
+                  ...(options?.abort ? { abort: options.abort } : {}),
+                  part: { messageID: saved.part.messageID, callID: saved.part.callID },
+                  update: saved.update,
+                },
+              })
+              return { value: run, message: yield* saved.complete(run) }
+            }).pipe(
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit) ? saved.fail(Cause.hasInterrupts(exit.cause)) : Effect.void,
+              ),
+            )
+          }),
+        )
+      })
     const directoryReview: Interface["directoryReview"] = (input, options) =>
       Effect.gen(function* () {
         yield* enabled
