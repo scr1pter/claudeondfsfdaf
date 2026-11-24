@@ -7,6 +7,7 @@ on:
       - .github/actions/install-ripgrep-windows/**
       - packages/engine/src/tool/shell/windows-*.ts
       - packages/engine/test/tool/shell-windows-process.test.ts
+      - packages/engine/test/tool/windows-holder-diagnostic.test.ts
       - packages/engine/script/diagnose-windows-holder.ts
   workflow_dispatch:
 
@@ -21,6 +22,23 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  cold-start:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # The diagnostic uses only Bun, Node built-ins and the checked-out holder source.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: package.json
+      - name: Measure the first holder startup, then run discovery controls
+        timeout-minutes: 6
+        working-directory: packages/engine
+        shell: bash
+        run: bun script/diagnose-windows-holder.ts
+
   native:
     runs-on: windows-latest
     timeout-minutes: 20
@@ -42,10 +60,6 @@ jobs:
       - name: Install native ripgrep
         timeout-minutes: 10
         uses: ./.github/actions/install-ripgrep-windows
-      - name: Locate PowerShell startup failure without printing environment values
-        timeout-minutes: 6
-        working-directory: packages/engine
-        run: bun script/diagnose-windows-holder.ts
       - name: Run real Windows process ownership and termination cases
         timeout-minutes: 10
         working-directory: packages/engine
