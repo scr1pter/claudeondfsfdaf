@@ -130,6 +130,8 @@ const engine = {
       }
     if (connections && request.method === "GET" && request.path === "/experimental/connect/runs")
       return { status: 200, body: review ? [review] : [] }
+    if (connections && request.method === "GET" && request.path === `/experimental/connect/runs/${REVIEW_ID}`)
+      return { status: 200, body: review }
     if (connections && request.method === "POST" && request.path === `/experimental/session/${ROOT.id}/connect`) {
       review = {
         id: REVIEW_ID,
@@ -237,7 +239,7 @@ const platformRemote = {
   cancelPairing: async () => link.cancelPairing(),
   unpair: (device) => link.unpair(device),
   disconnectAll: () => link.disconnectAll(),
-  isPhoneTurn: async (ids) => link.isPhoneTurn(ids),
+  isPhoneTurn: async (ids, ask) => link.isPhoneTurn(ids, ask),
   onChange: (callback) => {
     listeners.add(callback)
     return () => listeners.delete(callback)
@@ -349,6 +351,7 @@ window.remoteFixture = {
   phones: () => identity?.phones?.map((phone) => phone.name) ?? [],
   engine: () => requests.slice(),
   phoneTurn: () => link.isPhoneTurn([ROOT.id]),
+  reviewHeld: () => link.isPhoneTurn([ROOT.id], { runID: REVIEW_ID, sessionID: ROOT.id, directory: ROOT.directory }),
   phone: (request) => remote.request(remote.view().computers[0].device, request),
   // Stands in for notification.tsx reading the engine's own `session.updated` for the helper session.
   helper: (state) => void helperAlerts("/repo", { ...HELPER, metadata: { subagent: helperRecord(state) } }),
