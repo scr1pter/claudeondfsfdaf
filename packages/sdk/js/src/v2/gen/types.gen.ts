@@ -19864,6 +19864,10 @@ export type PermissionReplyData = {
   body?: {
     reply: "once" | "always" | "reject"
     message?: string
+    /**
+     * Required with Allow once after the user explicitly approves a Connect write or cloud handoff.
+     */
+    confirm?: true
   }
   path: {
     requestID: string
@@ -19888,6 +19892,10 @@ export type PermissionReplyErrors = {
    * PermissionNotFoundError
    */
   404: PermissionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type PermissionReplyError = PermissionReplyErrors[keyof PermissionReplyErrors]
@@ -21341,6 +21349,10 @@ export type PermissionRespondErrors = {
    * NotFoundError | PermissionNotFoundError
    */
   404: NotFoundError | PermissionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type PermissionRespondError = PermissionRespondErrors[keyof PermissionRespondErrors]
@@ -24249,6 +24261,10 @@ export type V2SessionPermissionReplyData = {
   body: {
     reply: PermissionV2Reply
     message?: string
+    /**
+     * Required with Allow once after the user explicitly approves a Connect write or cloud handoff.
+     */
+    confirm?: true
   }
   path: {
     sessionID: string
@@ -24275,6 +24291,10 @@ export type V2SessionPermissionReplyErrors = {
    * SessionNotFoundError | PermissionNotFoundError
    */
   404: PermissionNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type V2SessionPermissionReplyError = V2SessionPermissionReplyErrors[keyof V2SessionPermissionReplyErrors]

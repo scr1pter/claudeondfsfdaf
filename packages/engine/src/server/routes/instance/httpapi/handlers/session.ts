@@ -56,7 +56,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { InvalidRequestError, PermissionNotFoundError, notFound } from "../errors"
+import { ConflictError, InvalidRequestError, PermissionNotFoundError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 import { ForbiddenError } from "@vectordevai/protocol/errors"
@@ -629,6 +629,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response }).pipe(
+        Effect.catchTag(
+          "Permission.ConfirmationRequiredError",
+          (error) => new ConflictError({ resource: error.requestID, message: error.message }),
+        ),
         Effect.catchTag("Permission.NotFoundError", (error) =>
           Effect.fail(
             new PermissionNotFoundError({

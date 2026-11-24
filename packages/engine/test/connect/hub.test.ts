@@ -1457,17 +1457,19 @@ describe("consent", () => {
           expect(viaCall.result?.state).toBe("completed")
           expect(writes.length).toBe(2)
           expect(writes.every((item) => item.always.length === 0)).toBe(true)
-          // Through Permission the requester's allow-everything rule does not answer it, and an "always" reply is
-          // kept for that one question only: the second is asked again.
+          // The requester's allow-everything rule leaves each write pending for an explicit Allow once.
           const permissions = yield* Permission.Service
           const running = yield* hub.run({ request: review(requester.id, directory) }).pipe(Effect.forkChild)
-          for (const reply of ["always", "once"] as const) {
+          for (const _ of [0, 1]) {
             const pending = yield* pollWithTimeout(
               permissions.list().pipe(Effect.map((list) => list.find((item) => item.permission === "connect_write"))),
               "connect_write was not asked through Permission",
             )
             expect(pending.always).toEqual([])
-            yield* permissions.reply({ requestID: pending.id, reply })
+            expect(
+              yield* permissions.reply({ requestID: pending.id, reply: "always" }).pipe(Effect.flip),
+            ).toMatchObject({ _tag: "Permission.ConfirmationRequiredError" })
+            yield* permissions.reply({ requestID: pending.id, reply: "once", confirm: true })
           }
           const viaPermission = yield* Fiber.join(running)
           expect(viaPermission.result?.state).toBe("completed")
@@ -1605,11 +1607,14 @@ describe("the cloud effect (CW-23)", () => {
       const asked = yield* pending()
       expect(asked.always).toEqual([])
       expect(asked.patterns).toEqual(["hosted.review"])
-      yield* permissions.reply({ requestID: asked.id, reply: "always" })
+      expect(yield* permissions.reply({ requestID: asked.id, reply: "always" }).pipe(Effect.flip)).toMatchObject({
+        _tag: "Permission.ConfirmationRequiredError",
+      })
+      yield* permissions.reply({ requestID: asked.id, reply: "once", confirm: true })
       expect((yield* Fiber.join(first)).result?.state).toBe("completed")
       expect((yield* permissions.approved()).some((rule) => rule.permission === "connect_cloud")).toBe(false)
 
-      // The "always" reply kept nothing: the next hand-off asks again.
+      // The explicit answer kept nothing: the next hand-off asks again.
       const second = yield* hub.run({ request: toHosted(requester.id, directory) }).pipe(Effect.forkChild)
       const again = yield* pending()
       yield* permissions.reply({ requestID: again.id, reply: "reject" })

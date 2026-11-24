@@ -1098,9 +1098,9 @@ export function make(options: ClientOptions) {
                 throw new Error(`Refusing cross-origin endpoint path: ${path}`)
               return path
             })(),
-            body: { reply: input["reply"], message: input["message"] },
+            body: { reply: input["reply"], message: input["message"], confirm: input["confirm"] },
             successStatus: 204,
-            declaredStatuses: [400, 401, 403, 404],
+            declaredStatuses: [400, 401, 403, 404, 409],
             empty: true,
           },
           requestOptions,
