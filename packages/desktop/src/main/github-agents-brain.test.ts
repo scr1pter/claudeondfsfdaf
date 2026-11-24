@@ -68,7 +68,7 @@ function fixture() {
       state.localRequests++
       await hooks.preview?.()
       expect(url.origin).toBe("http://127.0.0.1:4096")
-      expect(url.pathname).toBe("/experimental/brain/preview")
+      expect(url.pathname).toBe("/experimental/brain/run-bundle/preview")
       expect(new Headers(init?.headers).get("authorization")).toBe(
         "Basic " + Buffer.from("vector:local-owner-only").toString("base64"),
       )

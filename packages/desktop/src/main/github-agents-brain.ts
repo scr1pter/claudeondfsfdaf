@@ -122,7 +122,7 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
     const fence = () => check(cwd, owner, ctx.authority, expectedEpoch)
     const value = await local(
       cwd,
-      "/experimental/brain/preview",
+      "/experimental/brain/run-bundle/preview",
       {
         includeBrain: true,
         publicRepository: !ctx.info.private,
