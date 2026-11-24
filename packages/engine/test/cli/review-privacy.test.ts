@@ -12,7 +12,12 @@ import { notePrivacyRefused } from "@vectordevai/core/review/format"
 import { selectFindings } from "@vectordevai/core/review/select"
 import type { ModelFinding, ReviewOutcome } from "@vectordevai/core/review/types"
 import { reviewVerdict } from "@vectordevai/core/review/verdict"
-import { executeLocalReview, type LocalReviewDeps, type LocalReviewOptions } from "../../src/cli/cmd/review"
+import {
+  APPLY_DIAGNOSTICS_REFUSAL,
+  executeLocalReview,
+  type LocalReviewDeps,
+  type LocalReviewOptions,
+} from "../../src/cli/cmd/review"
 import type { FixStep } from "../../src/cli/cmd/review.fix"
 import { Git } from "../../src/git"
 import { ReviewModel, type ResolvedModel } from "../../src/review/model"
@@ -336,6 +341,34 @@ describe("vector review: a review the route rules stop (VS-23b)", () => {
 describe("vector review: the user config's review block (VS-23d)", () => {
   const withGlobal = (global: ConfigV1.Info) =>
     Effect.provideService(Config.Service, TestConfig.make({ getGlobal: () => Effect.succeed(global) }))
+
+  // scope-finish takeover (2026-11-23): the outcome --apply reads is redacted under offline diagnostics, so a fix could
+  // write "[redacted]" into the source. --apply is refused first, before any model is resolved or anything is reviewed.
+  it.live("--apply is refused before any review while the user config's review diagnostics are offline", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      let applied = 0
+      const fix: FixStep = {
+        refusal: () => undefined,
+        branchRefusal: () => undefined,
+        run: () => Effect.sync(() => void applied++),
+      }
+      const run = fake()
+      const result = yield* review({ directory: repo.dir, env: {}, apply: true }, { ...run.deps, fix }).pipe(
+        withGlobal({ review: { diagnostics: "offline" } }),
+      )
+      expect(result).toMatchObject({ exitCode: 2, error: APPLY_DIAGNOSTICS_REFUSAL })
+      expect(run.calls).toEqual([])
+      expect(run.resolved).toEqual([])
+      expect(applied).toBe(0)
+      // Without --apply the same review runs.
+      const plain = fake()
+      expect((yield* review({ directory: repo.dir, env: {} }, plain.deps).pipe(
+        withGlobal({ review: { diagnostics: "offline" } }),
+      )).error).toBeUndefined()
+      expect(plain.calls).toHaveLength(1)
+    }),
+  )
 
   it.live("no config service, an empty user config and an empty block give the settings and warnings of before", () =>
     Effect.gen(function* () {

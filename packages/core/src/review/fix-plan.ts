@@ -7,6 +7,7 @@ import { structuredPatch } from "diff"
 import { applyFixPatch } from "./diff"
 import { FIX_LIMITS } from "./fix-proposal"
 import { MAX_FIX_HUNKS } from "./guardrail"
+import { REDACTED } from "./redact"
 import type { FailureClass, ReviewOutcome, Severity } from "./types"
 
 // `start`..`end` are the head lines a "lines" fix replaces; a patch fix names its own hunks and is placed at `start`.
@@ -168,6 +169,10 @@ export function planEdits(fixes: readonly FixCandidate[], heads: ReadonlyMap<str
     if (after === undefined) return drop(chosen, "its fix does not apply to the reviewed commit")
     if (unshown(after)) return drop(chosen, "its fix adds control or invisible characters")
     if (after === before) return drop(chosen, "its fix changes nothing")
+    // Under holdback "secrets" or offline diagnostics the model saw values as the placeholder; a suggestion that echoes
+    // it would write the placeholder over the real value. A placeholder the file already holds may stay.
+    if (after.split(REDACTED).length > before.split(REDACTED).length)
+      return drop(chosen, `its fix writes the ${REDACTED} placeholder into the file`)
     return [
       {
         file: { path: file, before: bytes, after: encoder.encode(after), ...gitPatch(file, before, after) },

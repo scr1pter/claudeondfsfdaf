@@ -70,3 +70,27 @@ So a token in AGENTS.md or `.vector/review.md` went to the provider in plain tex
 **Mutation checks.** Each part was reverted alone and the engine case failed every time: the `session/prompt.ts` mapping (the AGENTS.md token reached a body), the `run.ts` override (the instructions token reached a body) and the `safeRulePrompt` change (both tokens reached a body). With the `safeRulePrompt` change reverted, the desktop case also failed (0 pass, 1 fail).
 
 Left as a follow-up: recalled owner memory that a review session's later requests fill in (`withheldRecall` in `session/prompt.ts`) is not passed through `holdbackText`.
+
+## 2026-11-23, --apply built fixes from the redacted outcome under offline diagnostics
+
+**Bug.** Under `review.diagnostics: "offline"`, engine `cli/cmd/review.ts` passes `redactDiagnosticData(completed)` to the `--apply` step. That function runs `holdbackText` on every string, suggestions and patches included, so a verified suggestion holding a token-shaped literal became a patch that writes `[redacted]` into the source, which the commit step then offered to commit.
+
+**Lead ruling.** The safest option the review offered: refuse `--apply` before anything is reviewed while diagnostics are offline (the alternative was dropping such candidates afterwards).
+
+**Fix.** Right after the settings are merged, and before any model is resolved, `--apply` with offline diagnostics stops with `APPLY_DIAGNOSTICS_REFUSAL`: "--apply is not available while review diagnostics are offline. Nothing was reviewed."
+
+**Test.** engine `test/cli/review-privacy.test.ts`, "--apply is refused before any review while the user config's review diagnostics are offline": exit 2 with that error, no model resolved, no review run, no fix step. The same review without `--apply` runs.
+
+**Mutation check.** With the refusal disabled, the case fails (10 pass, 1 fail); restored, 11 pass.
+
+## 2026-11-23, a fix could write the [redacted] placeholder over the real value
+
+**Bug.** Under holdback "secrets" the model sees a secret-shaped value as `[redacted]`. A verified suggestion on that line that keeps the placeholder stayed a fix candidate, and nothing checked for it. Core `planEdits` (`review/fix-plan.ts`), which the CLI's `--apply` and the desktop's local fix share, would then build a patch replacing the real value with the literal placeholder (shown in the preview before consent, but a broken offered fix).
+
+**Fix.** `planEdits` leaves out a file's fixes when the postimage holds more `[redacted]` placeholders than the head does. The reason given is "its fix writes the [redacted] placeholder into the file". A placeholder the file already holds may stay.
+
+**Test.** core `test/review/fix-plan.test.ts`, "a fix that writes the [redacted] placeholder into a file is left out; one the file already holds may stay".
+
+**Mutation check.** Without the check, the case fails (4 pass, 1 fail); restored, 5 pass.
+
+Left as a follow-up: the desktop's per-finding Apply and posted GitHub suggestions do not go through `planEdits`, so under holdback they can still offer a suggestion that echoes the placeholder (each shows the text before it is applied).

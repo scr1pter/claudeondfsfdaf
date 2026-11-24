@@ -159,6 +159,29 @@ describe("the shared fix planner (core review/fix-plan.ts)", () => {
     expect(stale.none).toBe("the strict result is for another commit than the one reviewed.")
   })
 
+  // scope-finish takeover (2026-11-23): under holdback "secrets" the model sees a value as "[redacted]". A verified,
+  // committable suggestion that echoes the placeholder must not become a fix that writes it over the real value.
+  test("a fix that writes the [redacted] placeholder into a file is left out; one the file already holds may stay", () => {
+    const token = "ghp_" + "k4E5".repeat(9)
+    const heads = new Map([
+      ["src/a.ts", bytes(`const key = "${token}"\nreturn items[items.length]\n`)],
+      ["src/b.ts", bytes(`log("[redacted]")\nreturn items[items.length]\n`)],
+    ])
+    const plan = planEdits(
+      [
+        fix("echo", "src/a.ts", 1, `const key = "[redacted]"\nreturn items[items.length - 1]`, { end: 2 }),
+        fix("kept", "src/b.ts", 2, "return items[items.length - 1]"),
+      ],
+      heads,
+    )
+    expect(plan.used.map((item) => item.id)).toEqual(["kept"])
+    expect(plan.skipped).toEqual([
+      { id: "echo", path: "src/a.ts", reason: "its fix writes the [redacted] placeholder into the file" },
+    ])
+    expect(plan.files.map((file) => file.path)).toEqual(["src/b.ts"])
+    expect(new TextDecoder().decode(plan.files[0]!.after)).toBe(`log("[redacted]")\nreturn items[items.length - 1]\n`)
+  })
+
   test("plainBranch and fixPath accept only what the proposal contract does, counted in bytes", () => {
     expect(["main", "feature/x-1", "release_2.0", "a/b/c", "abc123"].map(plainBranch), "plain names").toEqual([
       true,

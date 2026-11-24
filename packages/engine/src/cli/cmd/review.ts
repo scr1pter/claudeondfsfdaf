@@ -280,6 +280,9 @@ export function executeLocalReview<RunR, ModelR>(
   })
 }
 
+export const APPLY_DIAGNOSTICS_REFUSAL =
+  "--apply is not available while review diagnostics are offline. Nothing was reviewed."
+
 function localReview<RunR, ModelR>(
   options: LocalReviewOptions,
   deps: LocalReviewDeps<RunR, ModelR>,
@@ -386,6 +389,10 @@ function localReview<RunR, ModelR>(
     })
     output.failClosedPR = options.pr !== undefined && settingsAt === "base" && parsed.config.failOn === "blocking-or-incomplete"
     output.diagnostics = parsed.config.diagnostics === "offline"
+    // An offline-diagnostics outcome is redacted before --apply would read it (redactDiagnosticData), suggestions and
+    // patches included, so a fix could write "[redacted]" over the source. Refused before any model or review.
+    if (options.apply && output.diagnostics)
+      return yield* new LocalReviewError({ message: APPLY_DIAGNOSTICS_REFUSAL })
     for (const warning of parsed.warnings) say(`Warning: ${warning}`)
     let config = withFlags(
       parsed.config,
