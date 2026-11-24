@@ -59,6 +59,8 @@ export type RemoteStatus = {
     | { state: "failed"; message: string }
 }
 
+export type RemoteReviewAsk = { runID: string; sessionID: string; directory: string }
+
 export type RemotePlatform = {
   status(): Promise<RemoteStatus>
   setEnabled(enabled: boolean): Promise<RemoteStatus>
@@ -70,8 +72,8 @@ export type RemotePlatform = {
   unpair(device: string): Promise<RemoteStatus>
   /** "Disconnect all phones": a new identity on this computer, and every relay connection closed. */
   disconnectAll(): Promise<RemoteStatus & { killed: boolean }>
-  /** Whether a phone started the turn any of these sessions runs (auto-accept leaves those to a person, S6). */
-  isPhoneTurn(sessionIDs: string[]): Promise<boolean>
+  /** Whether a phone started a session's turn or the review that raised this ask. */
+  isPhoneTurn(sessionIDs: string[], review?: RemoteReviewAsk): Promise<boolean>
   onChange(callback: (status: RemoteStatus) => void): () => void
 }
 
