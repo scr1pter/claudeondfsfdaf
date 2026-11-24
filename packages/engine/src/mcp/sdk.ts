@@ -19,6 +19,8 @@ export { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
 export {
   CallToolResultSchema,
   LoggingMessageNotificationSchema,
+  PromptListChangedNotificationSchema,
+  ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 

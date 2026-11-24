@@ -8,6 +8,7 @@ import {
   CERTIFICATE_VERDICTS,
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
+  FINDING_SCOPES,
   SEVERITIES,
   STRICT_DROPS,
   STRICT_FIX_KINDS,
@@ -137,74 +138,107 @@ export const VERIFY_JSON_SCHEMA = {
   required: ["results"],
 }
 
-// The keys the strict schemas depend on. Each later key widens this and adds its field or enum value only when set, so
-// the `guardrail: "strict"` schemas, and the digest they enter, stay as they are while it is off: VS-42 with scopeGate
-// (the result schema's `pre-existing` drop now; the report schema's `scope` field with VS-42 wiring), VS-43 with
-// ruleCheck (the structured rule) and VS-44 with verifyEvidence (its certificate schema, verifyCertJsonSchema, now; its
-// drops and the result's certificate field with VS-44 wiring). Without `guardrail: "strict"` every later key is
-// ignored, as the guardrail ignores it.
-export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail" | "scopeGate" | "verifyEvidence">>
+// ruleCheck controls structured citations independently of the blocking-finding guardrail.
+export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail" | "scopeGate" | "verifyEvidence" | "ruleCheck">>
 
-// The report schema under `guardrail: "strict"` (VS-27a), or undefined when it is off: the legacy report schema with a
-// finding's `failure`, `quotes` and `patch` added. A finding's `required` list is the legacy one, because conservative
-// JSON Schema cannot say "required when blocking": S2 and S5 drop a blocking finding without them. Built from a deep copy,
-// so nothing it returns shares an object with REVIEW_REPORT_JSON_SCHEMA. The quote cap is in the description, not in
-// maxItems, so a provider sees only the keywords the legacy schema already sends; the decoder enforces it. VS-42's
-// `scope` field joins it only with VS-42 wiring (with VS-27c), under `scopeGate: "introduced"`; until then this schema,
-// and decodeReport, are the same whatever scopeGate says.
-export function strictReportJsonSchema(keys: StrictSchemaKeys) {
-  if (keys.guardrail !== "strict") return undefined
-  const legacy = structuredClone(REVIEW_REPORT_JSON_SCHEMA)
-  const finding = legacy.properties.findings.items
+// The model supplies a source name and text. Provenance comes from the trusted block, never from the model.
+function structuredRuleSchema() {
   return {
-    ...legacy,
+    type: "object",
     properties: {
-      ...legacy.properties,
-      findings: {
-        ...legacy.properties.findings,
-        items: {
-          ...finding,
-          properties: {
-            ...finding.properties,
-            failure: {
-              type: "object",
-              description:
-                "Required on every blocking finding: the production failure it causes, in one of the five classes.",
-              properties: {
-                class: { type: "string", enum: [...FAILURE_CLASSES] },
-                mechanism: { type: "string", enum: [...FAILURE_MECHANISMS] },
-                trigger: {
-                  type: "string",
-                  maxLength: MAX_FAILURE_TEXT_CHARS,
-                  description: "The input or state that makes it fail.",
-                },
-                impact: { type: "string", maxLength: MAX_FAILURE_TEXT_CHARS, description: "What breaks when it does." },
-              },
-              required: ["class", "mechanism", "trigger", "impact"],
-            },
-            quotes: {
-              type: "array",
-              description: `Required on every blocking finding: up to ${MAX_FINDING_QUOTES} quotes of the code it rests on, each copied exactly.`,
-              items: quoteSchema(),
-            },
-            patch: {
-              type: "string",
-              maxLength: MAX_SUGGESTION_CHARS,
-              description: "A unified diff against head that fixes it, with at most 3 hunks.",
-            },
-          },
-        },
+      source: {
+        type: "string",
+        description: "repository_instructions, review_rules, or a paths[i] index shown in the trusted block.",
+      },
+      quote: {
+        type: "string",
+        maxLength: MAX_RULE_QUOTE_CHARS,
+        description: "Smallest complete supporting rule, copied from the named block.",
+      },
+      lines: {
+        type: "object",
+        properties: { start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 } },
+        required: ["start", "end"],
       },
     },
+    required: ["source", "quote"],
   }
+}
+
+function reportSchemaWith<T extends object>(extra: T) {
+  const base = structuredClone(REVIEW_REPORT_JSON_SCHEMA)
+  const findings = base.properties.findings
+  return {
+    ...base,
+    properties: {
+      ...base.properties,
+      findings: { ...findings, items: { ...findings.items, properties: { ...findings.items.properties, ...extra } } },
+    },
+  }
+}
+
+function guardrailReportSchema(keys: StrictSchemaKeys) {
+  return reportSchemaWith({
+    ...(keys.ruleCheck === "strict" ? { rule: structuredRuleSchema() } : {}),
+    failure: {
+      type: "object",
+      description: "Required on every blocking finding: the production failure it causes, in one of the five classes.",
+      properties: {
+        class: { type: "string", enum: [...FAILURE_CLASSES] },
+        mechanism: { type: "string", enum: [...FAILURE_MECHANISMS] },
+        trigger: {
+          type: "string",
+          maxLength: MAX_FAILURE_TEXT_CHARS,
+          description: "The input or state that makes it fail.",
+        },
+        impact: { type: "string", maxLength: MAX_FAILURE_TEXT_CHARS, description: "What breaks when it does." },
+      },
+      required: ["class", "mechanism", "trigger", "impact"],
+    },
+    quotes: {
+      type: "array",
+      description: `Required on every blocking finding: up to ${MAX_FINDING_QUOTES} quotes of the code it rests on, each copied exactly.`,
+      items: quoteSchema(),
+    },
+    ...(keys.scopeGate === "introduced"
+      ? {
+          scope: {
+            type: "string",
+            enum: [...FINDING_SCOPES],
+            description:
+              "Required on blocking findings. Does this change introduce or exacerbate the defect, or did it already exist at the merge-base?",
+          },
+        }
+      : {}),
+    patch: {
+      type: "string",
+      maxLength: MAX_SUGGESTION_CHARS,
+      description: "A unified diff against head that fixes it, with at most 3 hunks.",
+    },
+  })
+}
+
+export function strictReportJsonSchema(
+  keys: StrictSchemaKeys & { guardrail: "strict" },
+): ReturnType<typeof guardrailReportSchema>
+export function strictReportJsonSchema(
+  keys: StrictSchemaKeys,
+): ReturnType<typeof guardrailReportSchema> | ReturnType<typeof rulesReportSchema> | undefined
+export function strictReportJsonSchema(keys: StrictSchemaKeys) {
+  if (keys.guardrail === "strict") return guardrailReportSchema(keys)
+  if (keys.ruleCheck === "strict") return rulesReportSchema()
+  return undefined
+}
+
+function rulesReportSchema() {
+  return reportSchemaWith({ rule: structuredRuleSchema() })
 }
 
 // The schema of the StrictResult a strict review reports (VS-27a), or undefined when `guardrail` is off. It is never sent
 // to a model; VS-27c checks the JSON outcome against it. A lane deviation from the contract's STRICT_RESULT_JSON_SCHEMA
 // constant (the round-two amendment names only the report schema): later keys add StrictDrop values (VS-42's
 // `pre-existing`, VS-44's `certificate-mismatch` and `verdict-unsure`) and fields, each only under its key, so a strict
-// review validates against the schema built for its own keys. VS-44's drops and its finding's certificate field join
-// with VS-44 wiring, so until then this schema is the same whatever verifyEvidence says.
+// review validates against the schema built for its own keys and its accepted certificate evidence.
 export function strictResultJsonSchema(keys: StrictSchemaKeys) {
   if (keys.guardrail !== "strict") return undefined
   return {
@@ -241,8 +275,34 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
               },
               required: ["kind", "text"],
             },
+            ...(keys.ruleCheck === "strict"
+              ? {
+                  linkedRule: {
+                    type: "object",
+                    properties: {
+                      source: { type: "string" },
+                      quote: { type: "string", maxLength: MAX_RULE_QUOTE_CHARS },
+                      rulesSource: { type: "string", enum: ["base branch", "working tree"] },
+                    },
+                    required: ["source", "quote", "rulesSource"],
+                  },
+                }
+              : {}),
             verifiedBy: { type: "string", enum: [...VERIFIED_BY] },
             verifier: { type: "string" },
+            ...(keys.verifyEvidence === "certificate"
+              ? {
+                  certificate: {
+                    type: "object",
+                    properties: {
+                      trace: { type: "array", minItems: 1, maxItems: MAX_TRACE_QUOTES, items: quoteSchema() },
+                      guards: { type: "array", maxItems: MAX_FINDING_QUOTES, items: quoteSchema() },
+                      reach: { type: "string", enum: ["caller-shown", "entry-point"] },
+                    },
+                    required: ["trace", "guards", "reach"],
+                  },
+                }
+              : {}),
           },
           required: [
             "id",
@@ -258,6 +318,7 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
             "fix",
             "verifiedBy",
             "verifier",
+            ...(keys.verifyEvidence === "certificate" ? ["certificate"] : []),
           ],
         },
       },
@@ -269,7 +330,12 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
             // VS-42's `pre-existing` only under `scopeGate: "introduced"`, the one key that produces it.
             reason: {
               type: "string",
-              enum: STRICT_DROPS.filter((reason) => reason !== "pre-existing" || keys.scopeGate === "introduced"),
+              enum: STRICT_DROPS.filter((reason) => {
+                if (reason === "pre-existing") return keys.scopeGate === "introduced"
+                if (reason === "certificate-mismatch" || reason === "verdict-unsure")
+                  return keys.verifyEvidence === "certificate"
+                return true
+              }),
             },
             count: { type: "integer", minimum: 1 },
           },
@@ -289,7 +355,7 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
 // results and a rejected verdict needs no trace, so certified() enforces the rest. The caps are in the descriptions,
 // not in minItems or maxItems, so a provider sees only the keywords the legacy schemas already send; the decoder and
 // certified() enforce them. The text is untuned (tuning waits for the held-out freeze, I-13). It enters promptsDigest
-// only under both keys, and no runner sends it before VS-44 wiring (with VS-27c's blind candidate).
+// only under both keys, beside the blind verifier prompt.
 export function verifyCertJsonSchema(keys: StrictSchemaKeys) {
   if (keys.guardrail !== "strict" || keys.verifyEvidence !== "certificate") return undefined
   const legacy = structuredClone(VERIFY_JSON_SCHEMA)
@@ -429,7 +495,10 @@ export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): Model
       : input
   if (!isRecord(value)) return undefined
   const summary = text(value.summary).slice(0, MAX_SUMMARY_CHARS)
-  if (!Array.isArray(value.findings) && !summary) return undefined
+  const strict = keys.guardrail === "strict"
+  if (!Array.isArray(value.findings) && (strict || !summary)) return undefined
+  const candidates = list(value.findings)
+  if (strict && candidates.length > MAX_REPORT_FINDINGS) return undefined
   const report: ModelReport = {
     summary,
     risk: RISKS.find((risk) => risk === lower(value.risk)) ?? "low",
@@ -438,13 +507,15 @@ export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): Model
       const path = cleanPath(text(entry.path))
       return path ? [{ path, note: oneLine(text(entry.note)) }] : []
     }),
-    findings: list(value.findings)
+    findings: candidates
       .flatMap((entry) => {
-        const finding = decodeFinding(entry, keys.guardrail === "strict")
+        const finding = decodeFinding(entry, keys)
         return finding ? [finding] : []
       })
       .slice(0, MAX_REPORT_FINDINGS),
   }
+  // Silently dropping an unreadable candidate could turn a malformed strict response into a clean review.
+  if (strict && report.findings.length !== candidates.length) return undefined
   const priorStatus = list(value.priorStatus).flatMap((entry) => {
     if (!isRecord(entry)) return []
     const id = text(entry.id)
@@ -563,8 +634,8 @@ function decodeTrace(input: unknown): Pick<VerifyCertificate, "trace" | "traceUn
 export type RuleCitationProblem = "not-structured" | "source" | "quote"
 
 // One structured rule citation (VS-43), as `{ citation } | { problem }`, the shape of privacy.ts's readZdrAttestation.
-// VS-43 wiring calls it under `ruleCheck: "strict"`; decodeReport and decodeFinding do not, so `rule` stays the quoted
-// text. The source is read leniently: `paths[i]` (0-based into the parsed ReviewConfig.paths) and `scoped:<path>` in
+// Under `ruleCheck: "strict"`, decodeFinding records a structured value or a bounded problem code.
+// The source is read leniently: `paths[i]` (0-based into the parsed ReviewConfig.paths) and `scoped:<path>` in
 // any case and spacing, and the two block names in any case, with their tag's angle brackets and slash, and with spaces
 // or hyphens for underscores. A file name ("AGENTS.md", ".vector/review.md") names no block, so it is a "source"
 // problem. A scoped path keeps its case, is trimmed and loses a leading "./" or "/", and is refused when it is empty,
@@ -617,7 +688,7 @@ function ruleLines(input: unknown): RuleCitation["lines"] {
   return { start, end }
 }
 
-function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefined {
+function decodeFinding(input: unknown, keys: StrictSchemaKeys): ModelFinding | undefined {
   if (!isRecord(input)) return undefined
   const path = cleanPath(text(input.path))
   const title = oneLine(text(input.title)).slice(0, MAX_TITLE_CHARS)
@@ -643,11 +714,23 @@ function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefine
     .flatMap((entry) => (typeof entry === "string" && entry.trim() ? [entry.trim()] : []))
     .slice(0, 20)
   if (evidence.length) finding.evidence = evidence
-  const rule = oneLine(text(input.rule)).slice(0, 300)
-  if (rule) finding.rule = rule
+  if (keys.ruleCheck === "strict") {
+    if (Object.hasOwn(input, "rule")) {
+      const checked = decodeRuleCitation(input.rule)
+      if ("citation" in checked) finding.citation = checked.citation
+      else finding.ruleProblem = checked.problem
+    }
+  } else {
+    const rule = oneLine(text(input.rule)).slice(0, 300)
+    if (rule) finding.rule = rule
+  }
   const duplicateOf = text(input.duplicateOf)
   if (duplicateOf) finding.duplicateOf = duplicateOf
-  if (!strict) return finding
+  if (keys.guardrail !== "strict") return finding
+  if (keys.scopeGate === "introduced") {
+    const scope = FINDING_SCOPES.find((value) => value === input.scope)
+    if (scope) finding.scope = scope
+  }
   // An unreadable severity stays "concern" as above, so strict mode never reads it as blocking, and is marked, so S2
   // drops it as `severity-unreadable` rather than as a concern the model chose (VS-27b, [GP3]).
   if (!severity) finding.severityUnreadable = true

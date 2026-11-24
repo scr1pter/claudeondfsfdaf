@@ -175,7 +175,9 @@ export const refusedRequest = Effect.fnUntraced(function* (guest: boolean, forwa
 /** Whether a guest is refused `route`, the matched route's declared path pattern (e.g. `/session/:sessionID/shell`). */
 export function isOwnerOnlyRoute(method: string, route: string) {
   if (route === "/experimental/review-memory" || route.startsWith("/experimental/review-memory/")) return true
-  if (/^\/experimental\/session\/[^/]+\/review(?:\/[^/]+(?:\/stop)?)?$/.test(route)) return true
+  // Every local review route, its fix routes among them, as workspace-routing.ts treats them: a route added under
+  // /review is owner-only from the day it lands.
+  if (/^\/experimental\/session\/[^/]+\/review(?:\/|$)/.test(route)) return true
   if (route === "/experimental/workflow/saved" || route === "/experimental/workflow/validate") return true
   if (method === "POST" && /^\/experimental\/session\/[^/]+\/workflow(?:\/[^/]+\/resume)?$/.test(route)) return true
   if (route === "/api/session/import" || /\/session\/[^/]+\/share(?:\/|$)/.test(route)) return true
