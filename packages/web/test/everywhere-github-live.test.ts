@@ -246,7 +246,10 @@ test("a signed handoff authorizes thread reads only for the live lease and origi
     expect((await request()).body).toEqual({ expiresAt: job.offeredAt! + TIMING.offerWindowMs })
     expect(await readJob(w.f.store, jid)).toEqual(job)
     expect(metadataReads).toBe(1)
-    for (const rejected of [{ generation: "2" }, { installationId: "601" }, { binderGithubId: "790" }, { suspended: "binder-left" }]) {
+    const rejectedBindings: Record<string, string>[] = [
+      { generation: "2" }, { installationId: "601" }, { binderGithubId: "790" }, { suspended: "binder-left" },
+    ]
+    for (const rejected of rejectedBindings) {
       binding = rejected
       expect((await request()).status).toBe(404)
     }
