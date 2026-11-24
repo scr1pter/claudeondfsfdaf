@@ -18,6 +18,7 @@ import { AppProcess } from "@vectordevai/core/process"
 import { createJobId } from "@vectordevai/schema/everywhere"
 import { GlobalBus } from "../../src/bus/global"
 import { Config } from "../../src/config/config"
+import { EverywherePreferences } from "../../src/config/everywhere-preferences"
 import { AppLayer } from "../../src/effect/app-runtime"
 import { InstanceState } from "../../src/effect/instance-state"
 import { Git } from "../../src/git"
@@ -911,12 +912,40 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
       Config.confirmLocal()
       expect(Config.lockedKeys()).toContain("everywhere")
       refusedWith(await post(f.input), 403, OFF)
+      const access = EverywherePreferences.access(preferencesPath)
+      expect(await run(access({ version: 1, kind: "update", revision: 2, settings: { enabled: false } }))).toEqual({
+        version: 1,
+        kind: "locked",
+      })
     } finally {
       ConfigManaged.useTestPolicies(undefined)
       Config.refreshLocal()
       Config.confirmLocal()
       if (agent !== undefined) process.env.VECTOR_AGENT_SESSION = agent
     }
+    await untouched(f)
+  }, 30_000)
+
+  test("durable preference writes compare revisions and immediately stop legacy-enabled admission", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const file = path.join(Global.Path.config, "vector.json")
+    const original = await readFile(file, "utf8")
+    const access = EverywherePreferences.access(preferencesPath)
+    const read = { version: 1, kind: "read" }
+    const update = { version: 1, kind: "update", revision: 0, settings: { enabled: false } }
+    expect(await run(access(read))).toMatchObject({ kind: "ready", snapshot: { revision: 0, everywhere: { enabled: true } } })
+    expect(await run(access({ ...update, version: 2 }))).toEqual({ version: 1, kind: "invalid" })
+    expect(await run(access({ ...update, consent: true }))).toEqual({ version: 1, kind: "invalid" })
+    const writes = await Promise.all([run(access(update)), run(access(update))])
+    expect(writes.map((result) => result.kind).sort()).toEqual(["ready", "stale"])
+    expect(await run(access(read))).toMatchObject({ kind: "ready", snapshot: { revision: 1, everywhere: { enabled: false } } })
+    expect(JSON.parse(await readFile(preferencesPath, "utf8"))).toEqual({ version: 1, revision: 1, settings: { enabled: false } })
+    const name = path.basename(preferencesPath)
+    expect(readdirSync(path.dirname(preferencesPath)).filter((item) => item.startsWith(name))).toEqual([name])
+    expect(await readFile(file, "utf8")).toBe(original)
+    refusedWith(await post(f.input), 403, OFF)
     await untouched(f)
   }, 30_000)
 

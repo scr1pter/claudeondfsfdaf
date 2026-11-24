@@ -2,23 +2,19 @@ import { Option, Schema } from "effect"
 import type { GlobalSession, ProjectTrustStatus } from "@vectordevai/sdk/v2/client"
 import type { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
+import { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
 import { ConfigEverywhereV1 } from "@vectordevai/core/v1/config/everywhere"
 import { isJobId, isPlatform, type PlatformId } from "@vectordevai/schema/everywhere"
 import { EVERYWHERE_PAGE, PLATFORM_NAMES } from "@vectordevai/schema/everywhere-policy"
 import type { RemoteStatus } from "@/context/platform"
 import { pathKey } from "@/utils/path-key"
-import { JOBS_ONLY_LINE, remoteOffered, stateLine } from "./remote-model"
+import { JOBS_ONLY_LINE, stateLine } from "./remote-model"
 import { projectTrustSummary } from "./project-trust-model"
 
 /*
- * Settings → Vector everywhere (VE-41), as the app reads it. The page reads only the `everywhere` block of the built-in
- * engine's GET /global/config (EV-10), and lists this computer's jobs from the engine's sessions marked
- * `vector.unattended`. The desktop's runner reads the same block again on every check
- * (packages/desktop/src/main/everywhere-settings.ts), so nothing here talks to the runner directly.
- *
- * The page writes nothing: an engine before this release refuses a settings file with this key, and user/global config
- * is shared with such a Vector on the same computer, so the write waits for storage outside it (EV-21, "Ruling on
- * (a)"). That write path is rebuilt against its new storage; nothing here writes or prepares a write.
+ * Settings → Vector everywhere (VE-41). The built-in sidecar supplies the same settings to this panel and the runner.
+ * Older Desktop versions supply their global config for viewing. This computer's jobs still come from its engine's
+ * sessions marked `vector.unattended`.
  */
 
 export type EverywhereView = {
@@ -131,7 +127,7 @@ export const HOW_JOBS_RUN =
  * plan still sees it listed, so Remote's entitlement is the plan check.
  */
 export function everywhereOffered(status: ModelPlanStatus.Status | undefined) {
-  return Boolean(status?.listed?.includes("everywhere")) && remoteOffered(status)
+  return EverywherePreferenceWire.offered(status)
 }
 
 /**
