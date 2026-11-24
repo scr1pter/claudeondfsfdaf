@@ -16,7 +16,6 @@ import path from "node:path"
 import { APICallError } from "ai"
 import { Clock, Context, Duration, Effect, Exit, Fiber, Layer, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js"
 import { Brain } from "@vectordevai/core/brain/brain"
 import type { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainRunBundle } from "@vectordevai/core/brain/run-bundle"
@@ -113,6 +112,7 @@ import {
   type FakeArtifact,
   type GatewayAction,
 } from "./github.agent-fixture"
+import { artifactZip } from "./github.session-fixture"
 
 const guard = NetworkGuard.use()
 const web = FakeWeb.start({ sites: {} })
@@ -192,17 +192,6 @@ const noBundle = (dir: string) =>
   )
 const taskRequests = () => codium.state.requests.filter((request) => !request.title)
 const writeNotes = (dir: string) => ({ filePath: path.join(dir, "NOTES.md"), content: "notes\n" })
-
-/** The artifact's download as the runner uploads it: a zip that holds session.vsa. */
-const artifactZip = async (bytes: Uint8Array) => {
-  const writer = new ZipWriter(new Uint8ArrayWriter())
-  await writer.add(GithubAgents.SESSION_FILE, new Uint8ArrayReader(Uint8Array.from(bytes)), {
-    level: 0,
-    useWebWorkers: false,
-    useCompressionStream: false,
-  })
-  return writer.close()
-}
 
 /**
  * The real SessionArchive over this runtime's database behind a share service whose other methods die: the save and

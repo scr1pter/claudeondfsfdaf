@@ -11,7 +11,7 @@ import { afterAll, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Context, Effect, Layer } from "effect"
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } from "@zip.js/zip.js"
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from "@zip.js/zip.js"
 import type { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainRunBundle } from "@vectordevai/core/brain/run-bundle"
 import { Database } from "@vectordevai/core/database/database"
@@ -86,6 +86,7 @@ import {
   type FakeArtifact,
   type Recorded,
 } from "./github.agent-fixture"
+import { artifactZip } from "./github.session-fixture"
 
 type RouteScript = (github: unknown, context: unknown, core: unknown) => Promise<void>
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...args: string[]) => RouteScript
@@ -1350,17 +1351,6 @@ function share(used: string[], archive?: SessionArchive.Interface) {
     auto: unused("auto"),
     read: unused("read"),
   })
-}
-
-/** The artifact's download as the runner uploads it: a zip that holds session.vsa (github.agent-codium.test.ts `:197`). */
-async function artifactZip(bytes: Uint8Array) {
-  const writer = new ZipWriter(new Uint8ArrayWriter())
-  await writer.add(GithubAgents.SESSION_FILE, new Uint8ArrayReader(Uint8Array.from(bytes)), {
-    level: 0,
-    useWebWorkers: false,
-    useCompressionStream: false,
-  })
-  return writer.close()
 }
 
 /** Back to the checked-out tree: the agent's edits and the bundle directory go, ignored state stays. */
