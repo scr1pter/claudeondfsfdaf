@@ -2,11 +2,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import { drainAfter } from "../../../api/_lib/everywhere/after"
 import { eraseEverywhereAccount, eraseInstallation } from "../../../api/_lib/everywhere/erase"
+import { createJobEvents, jobView } from "../../../api/_lib/everywhere/events"
 import { findLink, installationAuthority, issueLinkCode, readInstallSnapshot, readLinkSnapshot, recordInstall, redeemConnectCode, setMapping } from "../../../api/_lib/everywhere/identity"
-import { claimJob, createJob, queueJob, readJob, readJobBody, recordSeen } from "../../../api/_lib/everywhere/jobs"
+import { claimJob, createJob, queueJob, readJob, readJobBody, recordSeen, reportJob, settleJob } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { readCounts } from "../../../api/_lib/everywhere/limits"
 import { createJiraRoutes } from "../../../api/_lib/everywhere/jira/a2a"
+import { createJiraAdapter } from "../../../api/_lib/everywhere/jira/adapter"
 import { JIRA_SCOPES } from "../../../api/_lib/everywhere/jira/client"
 import { ERASE_JIRA_TASK_SCRIPT, eraseJiraTaskInstallation, readJiraDraft, readJiraTask, WRITE_JIRA_TASK_SCRIPT, writeJiraTask } from "../../../api/_lib/everywhere/jira/task-store"
 import { type Store } from "../../../api/_lib/everywhere/store"
@@ -66,6 +68,71 @@ test("SendMessage durably answers before slow native reads and current native te
   expect(JSON.stringify(f.fake.commands)).not.toContain(native.token)
   expect(native.calls.filter((call) => call.operation !== "jwks").every((call) => call.authorization === `Bearer ${native.token}`)).toBe(true)
   expect((await f.poll(answer.body.result.task.id)).body.result.status.state).toBe("TASK_STATE_SUBMITTED")
+})
+
+test("a stale Jira routing write cannot fail a task whose own computer already started", async () => {
+  const f = await ready()
+  const privateDeliveries: string[] = []
+  const nativeAdapter = createJiraAdapter({
+    ...f.deps,
+    privateResult: async (delivery) => {
+      expect(delivery.account).toBe(f.account)
+      privateDeliveries.push(delivery.jid)
+    },
+  })
+  const events = createJobEvents(f.context, { jira: nativeAdapter.adapter })
+  const race: { claimed?: string; verdict?: unknown } = {}
+  const store: Store = async (command) => {
+    if (command[0] !== "EVAL" || typeof command[1] !== "string" || !command[1].endsWith(WRITE_JIRA_TASK_SCRIPT))
+      return f.store(command)
+    const jid = f.fake.sorted(everywhereKeys.jobs(f.account))[0]
+    const job = jid && await readJob(f.store, jid)
+    if (!job || job.state !== "claimed" || !job.lease) return f.store(command)
+    const claimed = await f.store(["GET", everywhereKeys.job(job.jid)])
+    if (typeof claimed !== "string") throw new Error("The claimed job was not stored")
+    race.claimed = claimed
+    const started = await reportJob(f.context(), {
+      account: f.account,
+      device: f.computer,
+      report: { jid: job.jid, lease: job.lease.id, seq: 0, milestone: "started" },
+    })
+    if (!started.ok || !started.job) throw new Error("The fixture's computer could not start")
+    await events.reported?.(started.job)
+    const result = await f.store(command)
+    race.verdict = result
+    return result
+  }
+  harness.mount({ "/a2a": createJiraRoutes({ ...f.deps, context: () => ({ ...f.context(), store }) }).a2a })
+
+  const answer = await f.send(native.message())
+  const id = answer.body.result.task.id
+  await drainAfter()
+  expect(race.verdict).toBe(-2)
+  const [jid] = f.fake.sorted(everywhereKeys.jobs(f.account))
+  const job = (await readJob(f.store, jid!))!
+  expect(job.state).toBe("running")
+  expect((await readJiraTask(f.store, id))?.record).toMatchObject({ jid, state: "WORKING" })
+  expect((await f.poll(id)).body.result.status.state).toBe("TASK_STATE_WORKING")
+
+  // A routing callback that read the job before the report also cannot overwrite a fresh native task snapshot.
+  const olderJobRead: Store = async (command) => command[0] === "GET" && command[1] === everywhereKeys.job(job.jid)
+    ? race.claimed
+    : f.store(command)
+  const stale = createJiraAdapter({ ...f.deps, context: () => ({ ...f.context(), store: olderJobRead }) })
+  await stale.adapter.progress(jobView(f.context(), job), "laptop")
+  expect((await readJiraTask(f.store, id))?.record).toMatchObject({ jid, state: "WORKING" })
+
+  const settled = await settleJob(f.context(), {
+    account: f.account,
+    device: f.computer,
+    settle: { jid: job.jid, lease: job.lease!.id, outcome: "no-changes" },
+  })
+  if (!settled.ok) throw new Error("The fixture's computer could not settle")
+  await events.settled?.(settled.job)
+  const completed = (await f.poll(id)).body.result
+  expect(completed.status.state).toBe("TASK_STATE_COMPLETED")
+  expect(completed.artifacts).toHaveLength(1)
+  expect(privateDeliveries).toEqual([jid!])
 })
 
 test("bad signature, absent signed principal and mismatched body identity cannot admit work; a FIT jti cannot be replayed", async () => {
