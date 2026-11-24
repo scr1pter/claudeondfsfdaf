@@ -26546,3 +26546,9 @@ Main was already merged, so nothing conflicted. Regenerated the SDK for main's `
 ## 2026-11-23 · Review fixes after the takeover
 
 The v2 run took #73 over and fixes the round-1 review findings on this branch. Each fix, its failing test and its mutation check: `v2-p0/scope-finish-takeover.md`.
+
+## 2026-11-24 · Review availability after the main integration
+
+The continuation and remaining-work inventory now distinguish the main source checkpoint from publisher and native release gates. The guide explains the working-checkout CLI's model connection, the desktop snapshot adapter's immutable evidence limit, and the existing GitHub coding follow-up command. The experimental API still relies on the authenticated owner, checkout placement and explicit approval for each fix operation. [Continuation checkpoint](vectorscope-continuation.md#main-integration-checkpoint-2026-11-24) · [Guide](../../../packages/web/src/pages/docs/vectorscope.astro)
+
+Review-source digest `ec98770af384bbb8` and revision 5 carry over. Three offline guide regressions cover the entry-point descriptions. The recorded release gates still govern activation.

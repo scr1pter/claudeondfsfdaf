@@ -1,8 +1,28 @@
 # VectorScope continuation
 
-## Draft integration checkpoint, 2026-11-21
+## Main integration checkpoint, 2026-11-24
 
-The local review build and its inventory are on scope-finish. The two hosted failures led to a ledger import-boundary repair and restored Connect preflight order. Updated Linux writers now hold the same checkpoint lock during batched coverage and ordinary publication. Earlier status and run references below apply to their named commits. The current candidate uses pipeline revision 5 with source digest `ec98770af384bbb8` (2026-11-24, after the takeover review fixes in `v2-p0/scope-finish-takeover.md`, with a fresh digest due after the final main merge). The pull request tracks the remaining GitHub integration and hosted checks. [Integration PR](https://github.com/scr1pter/claudeondfsfdaf/pull/73)
+PR #73 merged as `f8451dc0b817` and is part of the source checkpoint `0a81d682e26d`. Its exact PR head `95b06fc43324` passed the full test workflow with 37 successful jobs and 12 skipped. The 108-file review source pin at this main checkpoint is `ec98770af384bbb8` at pipeline revision 5. Later changes need their own checks. [Integration PR](https://github.com/scr1pter/claudeondfsfdaf/pull/73) · [Exact PR test](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/45332392769) · [Source checkpoint](https://github.com/scr1pter/claudeondfsfdaf/commit/0a81d682e26d8b78f168cc3d174d2ed38421ba06)
+
+### Review entry points
+
+| Entry point                  | Source contract                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Terminal                     | `vector vectorscope` or `vector review` runs in the checkout with the configured model and prints the result. Reviewing your own branch, working tree, or staged changes can run without a GitHub connection. `--pr` reads the pull request from GitHub.                                                                                                                                                                                                        |
+| Desktop pull requests        | The separate adapter reviews a snapshot and lets the user choose whether to post. Strict selection that needs immutable base and head evidence is unavailable in this adapter.                                                                                                                                                                                                                                                                                  |
+| Experimental owner local API | The authenticated owner uses an existing main conversation in its exact repository and checkout. The global `experimental.vectorscope` setting enables new runs. A request binds its ID and staged or working-tree target to the observed Git head. Listing returns status summaries. Fetching an exact owned run can return the retained result. Owners can read and stop existing runs with new starts disabled. No GitHub sign-in or connection is required. |
+| Experimental owner fix API   | On a supported Linux engine outside CI and GitHub runs, the owner can preview a detached checkout at the exact reviewed head. Apply, checks, commit and push each use a separate offer bound to the operation and patch. Discovering the routes in capabilities gives a client the protocol and the engine checks authority again when it receives a request.                                                                                                   |
+| GitHub workflow              | The review job uses its own trust and posting policy. The existing `/vectorscope fix` reply requests a coding follow-up using the finding as context. SF-40 and SF-41 cover a separately authorized apply and publish operation.                                                                                                                                                                                                                                |
+
+The owner review APIs are experimental and the release gates below still apply. The combined alias, approval, recall and socket follow-up in #128 requires its own hosted qualification and integration receipt. [Owner review API](../../../packages/engine/src/server/routes/instance/httpapi/groups/review.ts) · [Adapter differences](vectorscope-remaining.md) · [Follow-up PR](https://github.com/scr1pter/claudeondfsfdaf/pull/128)
+
+### Release gates
+
+- SF-36 requires a compatible published CLI and hosted workflow proof. This source reserves `1.99.121` as the workflow floor, while the desktop source version is `1.99.120`. The registry evidence for the reservation in the inventory is dated 2026-11-21.
+- SF-37 through SF-41 require the trusted @Vector workflow and publisher. SF-40 must bind the current writer and exact thread, repository, finding and head. SF-41 requires that binding plus its recorded co-sign and approval.
+- Native behavior needs evidence on a qualified host. Model quality and default changes need owner-authorized evaluation with a protected, spend-limited provider and held-out data.
+
+The earlier branch and per-package receipts below apply to their named commits.
 
 ## VectorScope finish checkpoint, 21 November 2026
 
@@ -12,7 +32,7 @@ The original SF-20 run failed two Connect cache assertions. The repaired source 
 
 The remote checkpoint on 21 November was `20d47c22ba95`. The table below links successful workflows at the individual commit shown. Native Linux review, Windows and desktop cases must qualify through their actual hosted runs. The local Cloud host's private Git refusal prevented several positive native fixtures from reaching the provider.
 
-The GitHub work in SF-36 through SF-41 is listed in the remaining inventory. The local `--pr` verdict path and the protected GitHub job are separately implemented surfaces. SF-36 requires a compatible published CLI. The November 21 checkpoint identified a lease recovery race in the batch lock and a privacy limitation in the V2 session API. The current candidate and its verification status are described above and in the takeover notes.
+The GitHub work in SF-36 through SF-41 is listed in the remaining inventory. The local `--pr` verdict path and the protected GitHub job are separately implemented surfaces. SF-36 requires a compatible published CLI. The November 21 checkpoint identified a lease recovery race in the batch lock and a privacy limitation in the V2 session API. The main integration above includes the later takeover repairs. [Takeover notes](v2-p0/scope-finish-takeover.md)
 
 | Package | Commit | Successful workflows at this commit |
 | --- | --- | --- |

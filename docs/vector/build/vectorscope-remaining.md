@@ -1,12 +1,12 @@
 # VectorScope remaining software and acceptance
 
-The table records source on `scope-finish` through commit `858ddcb33`. “Engine” includes the local CLI's review runner. Desktop PR review has its own adapter. GitHub review also has a job and a publisher with separate authority. Local review requires a local server owner and project access. A GitHub connection, a GitHub login and a Vector account are optional for that local path.
+The tables record the package inventory from `scope-finish` through commit `858ddcb33` and later repairs where noted. PR #73 merged the reviewed source into `main` as `f8451dc0b817`. “Engine” includes the local CLI's review runner. Desktop PR review has its own adapter. GitHub review also has a job and a publisher with separate authority. The experimental local review API requires the authenticated local server owner and access to the conversation's checkout. A GitHub connection, a GitHub login and a Vector account are optional for that local path. [Main integration checkpoint](vectorscope-continuation.md#main-integration-checkpoint-2026-11-24)
 
 Package evidence is recorded in [the deviation log](vectorscope-deviations.md). The [continuation ledger](vectorscope-continuation.md) identifies integration runs by commit. A package receipt applies to its tested revision. Final native and browser acceptance requires the corresponding jobs on the final PR head.
 
 The V1 desktop/server privacy checks cover attributed review traffic. Since 2026-11-23 the V2 session routes refuse a review session under ZDR (prompt, free-model resume and compaction), before anything is stored or sent; its HTTP fixture asserts the refusal (`v2-p0/scope-finish-takeover.md`). [HTTP privacy fixture](../../../packages/engine/test/server/httpapi-review-privacy.test.ts) · [SF-15 decision 12](vectorscope-deviations.md#2026-11-20--vs-23d-hidden-global-review-privacy-and-holdback-with-server-and-desktop-enforcement-sf-15)
 
-The committed evidence pin at `858ddcb33` covered 107 source files, with digest `31a9837d871ec207` at pipeline revision 5; the current pin is in [the continuation ledger](vectorscope-continuation.md). Everywhere introduced revision 5 for outward-read policy in `12b3ad09d`. Its shell route later changed the digest in `09a0db662`. The sole registered-but-unapplied review key is `runtime`. The aggregate still needs its final hosted checks.
+The committed evidence pin at `858ddcb33` covered 107 source files, with digest `31a9837d871ec207` at pipeline revision 5. Everywhere introduced revision 5 for outward-read policy in `12b3ad09d`. Its shell route later changed the digest in `09a0db662`. The sole registered but unapplied review key is `runtime`. The continuation ledger records the main checkpoint pin, hosted receipt and independent release gates. [Continuation ledger](vectorscope-continuation.md)
 
 ## Approved plan VS-01 through VS-20
 

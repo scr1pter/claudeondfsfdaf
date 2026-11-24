@@ -35,6 +35,38 @@ const sources = await Promise.all(
   ].map(async (file) => ({ file: file.replaceAll("\\", "/"), text: await Bun.file(`${web}${file}`).text() })),
 )
 
+function reviewGuideSection(id: string) {
+  const guide = sources.find(({ file }) => file === "src/pages/docs/vectorscope.astro")!.text
+  const start = guide.indexOf(`<h2 id="${id}">`)
+  expect(start).toBeGreaterThanOrEqual(0)
+  const end = guide.indexOf("<h2", start + 1)
+  return guide
+    .slice(start, end === -1 ? undefined : end)
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+}
+
+test("working-tree review needs a model connection but can run without a GitHub or Vector account", () => {
+  const text = reviewGuideSection("before-you-push")
+  expect(text).toContain("A review of your working checkout needs neither a GitHub connection nor a Vector account")
+  expect(text).toContain("uses your configured model provider")
+  expect(text).toContain("posts no review to GitHub")
+  expect(text).toContain("--pr fetches pull request data from GitHub")
+})
+
+test("desktop pull request snapshots describe their evidence limit", () => {
+  const text = reviewGuideSection("review-pipeline")
+  expect(text).toContain("desktop Pull Requests panel reviews a snapshot")
+  expect(text).toContain("strict selection is unavailable when it needs evidence from both committed revisions")
+  expect(text).not.toContain("They share the same prompts, the same output schema")
+})
+
+test("replying to a GitHub finding requests a coding task", () => {
+  const text = reviewGuideSection("pull-requests")
+  expect(text).toContain("/vectorscope fix on a review comment to ask the coding agent to address that finding")
+  expect(text).not.toContain("Vectorscope applies that fix")
+})
+
 test("the site marks the latest shipped desktop release as published", () => {
   expect(Bun.semver.order(publishedDesktopVersion, shipped)).toBeGreaterThanOrEqual(0)
   expect(

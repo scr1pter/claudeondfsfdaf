@@ -14,9 +14,9 @@ export const prerender = true
 
           <h2 id="where-it-runs">Where Vectorscope runs</h2>
           <dl class="doc-rows">
-            <div><dt>On every pull request</dt><dd>Say yes to automatic review during <code>vector github install</code>. Vectorscope reviews each pull request when it opens and again on every push, and answers <code>/vectorscope</code> in a comment.</dd></div>
-            <div><dt>Before you push</dt><dd><code>vector vectorscope</code> in your terminal runs the same review on your branch against its merge base, or on your uncommitted work with <code>--uncommitted</code>. Nothing is posted anywhere.</dd></div>
-            <div><dt>In the workspace</dt><dd>The desktop app's Pull Requests panel reviews a pull request in place and lets you post the result, or keep it to yourself.</dd></div>
+            <div><dt>On GitHub</dt><dd>The repository workflow can review eligible pull requests when they open and on later pushes. Enable automatic review during <code>vector github install</code>, or request a review with <code>/vectorscope review</code>.</dd></div>
+            <div><dt>Before you push</dt><dd><code>vector vectorscope</code> reviews your branch against its merge base, or reviews uncommitted work with <code>--uncommitted</code>. It prints the result in your terminal.</dd></div>
+            <div><dt>In the workspace</dt><dd>The desktop app's Pull Requests panel reviews a snapshot and lets you choose whether to post the result to GitHub.</dd></div>
           </dl>
 
           <h2 id="pull-requests">On a pull request</h2>
@@ -28,7 +28,18 @@ export const prerender = true
           </p>
           <dl class="doc-rows">
             <div><dt>What you get</dt><dd>A summary that is edited in place, and one review per push that contains only new comments. Severities are Blocking, Concern and Nit. Nits and style points are left out unless you set <code>nits</code> to true; anything outside the changed lines stays in the summary. Vectorscope only ever comments. It never approves or blocks a pull request, unless you set <code>failOn</code> to make its check fail on blocking issues.</dd></div>
-            <div><dt>Commands</dt><dd><code>/vectorscope review</code> reviews again, <code>/vectorscope review full</code> starts over, and <code>/vectorscope pause</code> or <code>/vectorscope resume</code> turns automatic reviews off or on for one pull request (or add the <code>vector:paused</code> label). Reply <code>/vectorscope fix</code> on a comment and Vectorscope applies that fix. <code>/vs</code> is the short form; <code>/vector</code> and <code>/vx</code> still work, so workflows installed before the name existed keep running. General coding tasks on issues continue to use <code>/vector</code> or <code>/vx</code>. A person with write access, or the pull request's author, can resolve a comment or react to it with a thumbs-down, and Vectorscope won't raise it again. Commands need write access.</dd></div>
+            <div>
+              <dt>Commands</dt>
+              <dd>
+                <code>/vectorscope review</code> reviews again and <code>/vectorscope review full</code> starts over.
+                Use <code>/vectorscope pause</code>, <code>/vectorscope resume</code> or the <code>vector:paused</code>
+                label to control automatic reviews on one pull request. Reply <code>/vectorscope fix</code> on a
+                review comment to ask the coding agent to address that finding. Commands need write access.
+                <code>/vs</code> is the short form, and <code>/vector</code> and <code>/vx</code> still work with older
+                workflows and for general coding tasks on issues. A writer or the pull request's author can resolve
+                a comment or react with a thumbs-down to dismiss the finding.
+              </dd>
+            </div>
             <div><dt>Your rules</dt><dd>Write plain-English rules in <code>.vector/review.md</code>. A <code>## path: src/billing/**</code> heading scopes the rules under it. Tune limits in <code>.vector/review.json</code>: <code>maxComments</code> (10), <code>minSeverity</code> (concern), <code>minConfidence</code> (0.7), <code>nits</code> (false), <code>ignore</code>, <code>security</code>, <code>maxCostUsd</code>, <code>triageModel</code>. Both are read from the base branch, so a pull request can't change the rules it is reviewed under, except by editing the workflow file, which needs write access.</dd></div>
             <div><dt>Low noise</dt><dd>Lockfiles, build output, generated and vendored files, snapshots and binaries are skipped and listed. Drafts, dependency bots and pull requests labelled <code>vector:skip</code> are skipped. To review drafts too, delete the <code>draft == false</code> line from <code>.github/workflows/vector.yml</code>. Very large pull requests get a note with a cost estimate instead of a review.</dd></div>
             <div><dt>Cost</dt><dd>Your model provider bills usage under your own credentials. Every review ends with the model, the tokens, what it cost and the total for that pull request. Each review stops at <code>maxCostUsd</code> ($2.00), automatic reviews of one pull request stop at <code>maxCostUsdPerPr</code> ($10.00), and <code>REVIEW_MAX_COST_USD_PER_MONTH</code> in the workflow caps a month. Set <code>REVIEW_AUTO_MODEL</code> to use a cheaper model for automatic reviews, or <code>triageModel</code> in <code>.vector/review.json</code> to run the first pass on a cheaper model and double-check its findings on your review model.</dd></div>
@@ -82,9 +93,14 @@ export const prerender = true
 
           <h2 id="before-you-push">Before you push</h2>
           <p>
-            <code>vector vectorscope</code> (or <code>vector review</code>) runs the same review on your branch against
-            its merge-base with the default branch. Use <code>--uncommitted</code> for work in progress,
+            <code>vector vectorscope</code> (or <code>vector review</code>) reviews your branch against its merge base
+            with the default branch. Use <code>--uncommitted</code> for work in progress,
             <code>--json</code> for scripts, and <code>--fail-on blocking</code> in a pre-push hook.
+          </p>
+          <p>
+            A review of your working checkout needs neither a GitHub connection nor a Vector account when it uses
+            your configured model provider. <code>--pr</code> fetches pull request data from GitHub. The terminal
+            review prints its result and posts no review to GitHub.
           </p>
           <p class="doc-cmd"><code>vector vectorscope
 vector vectorscope --uncommitted
@@ -108,9 +124,10 @@ vector github review --pr 482 --dry-run</code><button class="doc-cmd-copy" type=
 
           <h2 id="review-pipeline">How a review runs</h2>
           <p>
-            Vectorscope is one engine behind three doors: the GitHub Action, <code>vector vectorscope</code> in your
-            terminal, and the Pull Requests panel in the desktop app. They share the same prompts, the same output
-            schema, the same filters and the same summary. This is what happens between a trigger and a comment.
+            Vectorscope shares review logic across the terminal, desktop app and GitHub workflow. In the terminal
+            it reads your checkout. The desktop Pull Requests panel reviews a snapshot, so strict selection is
+            unavailable when it needs evidence from both committed revisions. The GitHub workflow has its own rules
+            for which events can start a review and what it can post. Here is how a review runs in that workflow.
           </p>
           <ol class="steps">
             <li>
