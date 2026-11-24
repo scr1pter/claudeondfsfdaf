@@ -21,6 +21,7 @@ const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const ID = /^[1-9]\d{0,19}$/
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/
 const WRITERS = new Set(["admin", "maintain", "write"])
+const AGENT_JOB_RESULTS = ["success", "failure", "cancelled", "skipped"] as const
 
 type PatchResult =
   | { ok: true; patch: string; paths: string[]; heldBack: string[] }
@@ -398,7 +399,11 @@ async function bundleFile(directory: string, name: string, limit: number) {
 }
 
 async function readBundle(directory: string) {
-  const info = await fs.lstat(directory)
+  const info = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined
+    throw error
+  })
+  if (!info) return undefined
   if (!info.isDirectory() || info.isSymbolicLink() || (await fs.realpath(directory)) !== path.resolve(directory))
     throw new Error("The run bundle is unavailable.")
   const entries = await fs.readdir(directory)
@@ -523,7 +528,11 @@ export async function publishBundle(input: {
     await comment("Vector cannot publish this task from a fork's pull request.")
     return { outcome: "refused" as const }
   }
-  const bundle = await readBundle(input.bundleDirectory).catch(() => undefined)
+  // A failed read of existing evidence must still report a failure when GitHub says the agent job succeeded.
+  const bundle = await readBundle(input.bundleDirectory).catch(() => null)
+  const jobResult = AGENT_JOB_RESULTS.find((value) => value === env.VECTOR_AGENT_RESULT)
+  if (bundle === undefined && env.VECTOR_MODE === "own-key" && jobResult === "success")
+    return { outcome: "refused" as const }
   if (!bundle || !routingAgrees(bundle.summary, route)) {
     await comment("Vector could not safely read this run's result; retry the repository task.")
     return { outcome: "failed" as const }

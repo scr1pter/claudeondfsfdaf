@@ -260,6 +260,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
           "env": {
             "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
             "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "VECTOR_AGENT_RESULT": "\${{ needs.agent.result }}",
             "VECTOR_AGENT_STATUS": "\${{ needs.agent.outputs.status }}",
             "VECTOR_BUNDLE_DIR": "\${{ runner.temp }}/vector-bundle",
             "VECTOR_DISABLE_PROJECT_CONFIG": "1",
@@ -632,6 +633,7 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
           "env": {
             "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
             "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "VECTOR_AGENT_RESULT": "\${{ needs.agent.result }}",
             "VECTOR_AGENT_STATUS": "ok",
             "VECTOR_BUNDLE_DIR": "\${{ runner.temp }}/vector-bundle",
             "VECTOR_DISABLE_PROJECT_CONFIG": "1",
@@ -1010,6 +1012,7 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
           "env": {
             "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
             "MENTIONS": "@vector-dev,/vector,/vs,/vectorscope,/vx",
+            "VECTOR_AGENT_RESULT": "\${{ needs.agent.result }}",
             "VECTOR_AGENT_STATUS": "ok",
             "VECTOR_BUNDLE_DIR": "\${{ runner.temp }}/vector-bundle",
             "VECTOR_DISABLE_PROJECT_CONFIG": "1",

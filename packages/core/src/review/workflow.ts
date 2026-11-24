@@ -886,6 +886,7 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
                   VECTOR_ROUTE_PR: "${{ needs.route.outputs.pr }}",
                   VECTOR_ROUTE_REF: "${{ needs.route.outputs.ref }}",
                   VECTOR_AGENT_STATUS: codium ? "${{ needs.agent.outputs.status }}" : "ok",
+                  VECTOR_AGENT_RESULT: "${{ needs.agent.result }}",
                   VECTOR_RUN_ID: codium ? "${{ needs.agent.outputs.rid }}" : "",
                   VECTOR_GITHUB_AUTH: opts.publishAuth ?? "github",
                   // The publisher re-derives the route (agentRoute), which refuses a dispatch without its prompt and

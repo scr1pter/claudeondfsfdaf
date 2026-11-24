@@ -19,6 +19,7 @@ import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 
 const REPOSITORY = "fixture-owner/project"
 const BOT = "github-actions[bot]"
+const RESULT_UNAVAILABLE = "Vector could not safely read this run's result; retry the repository task."
 const patchFor = (name: string) =>
   `diff --git a/${name} b/${name}\nindex 3367afd..3e75765 100644\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-before\n+after\n`
 
@@ -348,16 +349,61 @@ test("at-once deduplication counts only a recent Vector bot marker, never a stra
   expect(f.state.auth).toEqual([])
 })
 
-test("a missing bundle leaves one generic failure comment and does not acquire publishing credentials", async () => {
+test("a successful own-key job with no downloaded bundle has nothing to publish", async () => {
   await using f = await fixture()
   await fs.rm(f.bundleDirectory, { recursive: true })
-  expect((await f.run()).outcome).toBe("failed")
-  expect(f.state.posts).toHaveLength(1)
+  f.env.VECTOR_AGENT_RESULT = "success"
+  expect(await f.run()).toEqual({ outcome: "refused" })
+  expect(f.state.posts).toEqual([])
+  expect(f.state.auth).toEqual([])
+  expect(f.state.pulls).toEqual([])
+})
+
+test.each([
+  ["no result", undefined],
+  ["failure", "failure"],
+  ["cancellation", "cancelled"],
+  ["skipped", "skipped"],
+  ["an unknown result", "success\nfixture detail"],
+] as const)("a missing bundle with %s leaves one fixed failure comment", async (_label, result) => {
+  await using f = await fixture()
+  await fs.rm(f.bundleDirectory, { recursive: true })
+  f.env.VECTOR_AGENT_RESULT = result
+  expect(await f.run()).toEqual({ outcome: "failed" })
+  expect(f.state.posts).toEqual([RESULT_UNAVAILABLE])
   expect(f.state.auth).toEqual([])
 })
 
+test("a minted run still reports missing evidence after its agent job succeeds", async () => {
+  await using f = await fixture()
+  await fs.rm(f.bundleDirectory, { recursive: true })
+  f.env.VECTOR_MODE = "codium"
+  f.env.VECTOR_AGENT_RESULT = "success"
+  expect((await f.run()).outcome).toBe("failed")
+  expect(f.state.posts).toEqual([RESULT_UNAVAILABLE])
+  expect(f.state.auth).toEqual([])
+})
+
+test.each(["empty", "partial", "malformed"] as const)(
+  "a successful job with %s downloaded evidence leaves one fixed failure comment",
+  async (evidence) => {
+    await using f = await fixture()
+    f.env.VECTOR_AGENT_RESULT = "success"
+    if (evidence === "malformed") {
+      await fs.writeFile(path.join(f.bundleDirectory, "summary.json"), "fixture unreadable result detail")
+    } else {
+      await fs.unlink(path.join(f.bundleDirectory, "summary.json"))
+      if (evidence === "empty") await fs.unlink(path.join(f.bundleDirectory, "patch.diff"))
+    }
+    expect(await f.run()).toEqual({ outcome: "failed" })
+    expect(f.state.posts).toEqual([RESULT_UNAVAILABLE])
+    expect(f.state.auth).toEqual([])
+  },
+)
+
 test("a summary that claims ready changes after a stop can only open a draft", async () => {
   await using f = await fixture()
+  f.env.VECTOR_AGENT_RESULT = "failure"
   f.summary.stop = "deadline"
   await f.save()
   expect((await f.run()).outcome).toBe("draft")

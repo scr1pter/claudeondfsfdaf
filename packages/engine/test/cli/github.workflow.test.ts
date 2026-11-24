@@ -831,6 +831,7 @@ describe("workflow v3", () => {
       expect(publish.env!.VECTOR_AGENT_STATUS).toBe(
         options.mode === "codium" ? "${{ needs.agent.outputs.status }}" : "ok",
       )
+      expect(publish.env!.VECTOR_AGENT_RESULT).toBe("${{ needs.agent.result }}")
       expect(publish.env!.VECTOR_CLI_TOKEN).toBeUndefined()
       expect(publish.env!.OPENAI_API_KEY).toBeUndefined()
     }
@@ -1021,6 +1022,7 @@ describe("workflow v3", () => {
       "steps.mint.outputs.rid",
       "needs.agent.outputs.status",
       "needs.agent.outputs.rid",
+      "needs.agent.result",
       // Ship Desk (V31): the ticket step's output and the pull request publish names.
       "steps.capture.outputs.capture",
       "needs.agent.outputs.capture",

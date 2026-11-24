@@ -284,6 +284,27 @@ for (const scenario of ["codium", "stopped", "at-once", "stranger", "own-key"] a
   )
 }
 
+it.instance(
+  "GitHub workflow journey leaves an own-key refusal unposted after the writer loses access",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const repo = yield* repository(test)
+      const run = yield* pass({ test, ...repo, scenario: "own-key", agentPermission: "read", turns: Effect.void })
+      expect(run.result).toEqual({ exitCode: 0, outcome: "refused" })
+      expect(run.published).toEqual({ outcome: "refused" })
+      expect(run.out).toEqual([])
+      expect(run.posts).toEqual([])
+      expect(run.pulls).toEqual([])
+      expect(run.authority).toEqual({ acquired: 0, disposed: 0 })
+      expect(run.cloud.requests).toEqual([])
+      expect(yield* test.llm.inputs).toEqual([])
+      expect(guard.outside()).toEqual([])
+    }),
+  { git: true },
+  30_000,
+)
+
 const followUp = process.platform === "linux" ? it.instance : it.instance.skip
 followUp(
   "GitHub workflow journey follow-up continues its issue thread's saved conversation and posts nothing restored",
@@ -727,6 +748,7 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
   base: string
   remote: string
   scenario: Exclude<Scenario, "stranger">
+  agentPermission?: "read"
   run?: string
   comment?: { id: number; body: string }
   comments?: unknown[]
@@ -764,7 +786,7 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
     expect(routed.outputs).toEqual({ kind: "task", pr: "", ref: input.base, thread: `dispatch-${run}`, app: "false" })
   if (!dispatch) expect(routed.outputs).toMatchObject({ kind: "task", pr: "17", thread: "17", ref: input.base })
   const github = fakeGithub({
-    roles: { alice: "write" },
+    roles: { alice: input.agentPermission ?? "write" },
     threads: [
       {
         number: 17,
@@ -905,10 +927,7 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
       },
       { home: scratch, temporary: scratch, event: runner.GITHUB_EVENT_PATH, node: process.execPath },
     )
-    const publishStep = resolve(workflow.steps.publish, values(agentOutputs))
     const bundleDirectory = path.join(scratch, "vector-bundle")
-    expect(publishStep.VECTOR_BUNDLE_DIR).toBe(bundleDirectory)
-    yield* Effect.promise(() => fs.mkdir(bundleDirectory))
     const ran =
       status !== "ok"
         ? undefined
@@ -969,7 +988,10 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
               ? phase.pipe(Effect.provideService(PublicSessionShare.Service, input.share))
               : phase
             expect(result?.exitCode).toBe(0)
-            // Every run here records a bundle; a refusal (BOT_REFUSED, for one) exits 0 without one.
+            if (input.agentPermission === "read") {
+              expect(result?.outcome).toBe("refused")
+              return { result, verified, listing: [], saved: undefined, bundle: undefined }
+            }
             expect(result?.outcome).not.toBe("refused")
             const out = path.join(dir, GithubAgents.BUNDLE_DIR)
             const listing = yield* Effect.promise(async () => (await fs.readdir(out)).sort())
@@ -978,6 +1000,7 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
               : undefined
             // The runner hands publish the bundle only; the checkout publish starts from is clean.
             const bundle = yield* Effect.promise(async () => {
+              await fs.mkdir(bundleDirectory)
               await Promise.all(
                 GithubAgents.BUNDLE_FILES.map((name) =>
                   fs.copyFile(path.join(out, name), path.join(bundleDirectory, name)),
@@ -991,6 +1014,11 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
             })
             return { result, verified, listing, saved, bundle }
           })
+    const publishStep = resolve(workflow.steps.publish, {
+      ...values(agentOutputs),
+      "needs.agent.result": ran?.result?.exitCode === 1 ? "failure" : "success",
+    })
+    expect(publishStep.VECTOR_BUNDLE_DIR).toBe(bundleDirectory)
     const posts: { id: number; body: string; login: string }[] = []
     const pulls: { head: string; base: string; body: string; draft: boolean }[] = []
     const authority = { disposed: 0, acquired: 0 }
