@@ -31,7 +31,9 @@ function fixture() {
   const desktopToken = randomBytes(32).toString("hex")
   const device = randomBytes(16).toString("base64url")
   const profile = { ...user }
-  const repository = { id: 101, full_name: "acme/app", visibility: "private", private: true }
+  const repository = { id: 101, node_id: "R_fixture101", full_name: "acme/app", visibility: "private", private: true }
+  const graph = { data: { node: { __typename: "Repository", id: repository.node_id, nameWithOwner: repository.full_name,
+    issue: { number: 7 } as { number: number } | null } } }
   const authority = { status: 200, expiresAt: now + 10_000 }
   const paths: string[] = []
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -43,8 +45,16 @@ function fixture() {
       expect(await request.json()).toEqual({ jid: job.jid, lease: job.lease.id })
       return Response.json({ expiresAt: authority.expiresAt }, { status: authority.status })
     }
-    expect(request.method).toBe("GET")
     expect(request.headers.get("authorization")).toBe(`Bearer ${token}`)
+    if (path === "/graphql") {
+      expect(request.method).toBe("POST")
+      const body = await request.json() as { query: string; variables: Record<string, unknown> }
+      expect(body.query).toContain("issue(number: $number)")
+      expect(body.query).not.toContain("body")
+      expect(body.variables).toEqual({ repository: repository.node_id, number: 7 })
+      return Response.json(graph)
+    }
+    expect(request.method).toBe("GET")
     if (path === "/user") return Response.json(profile)
     if (path === "/repositories/101") return Response.json(repository)
     if (path === "/repos/acme/app/issues/7") return Response.json(issue)
@@ -53,7 +63,7 @@ function fixture() {
     if (path === "/repos/acme/app/collaborators/writer/permission") return Response.json({ permission: "write", user: { id: 43 } })
     return Response.json({ permission: "read", user: { id: 44 } })
   } })
-  return { job, trigger, issue, comments, paths, profile, repository, authority, now,
+  return { job, trigger, issue, comments, paths, profile, repository, graph, authority, now,
     access: { token, source: "vector" as const, apiUrl: server.url.origin },
     jobs: createEverywhereJobsClient({ token: async () => desktopToken, device, url: server.url.origin }),
     async [Symbol.asyncDispose]() { await server.stop(true) } }
@@ -67,11 +77,24 @@ test("the qualified reader proves the OAuth actor, repository and lease before t
     signal: new AbortController().signal,
     now: () => f.now,
   })
-  expect(f.paths.slice(0, 5)).toEqual([
-    "/user", "/repositories/101", "/api/everywhere/jobs/github-thread", "/repos/acme/app/issues/7",
+  expect(f.paths.slice(0, 6)).toEqual([
+    "/user", "/repositories/101", "/graphql", "/api/everywhere/jobs/github-thread", "/repos/acme/app/issues/7",
     "/repos/acme/app/issues/comments/99",
   ])
   expect(frame.thread?.task).toBe(f.trigger.body)
+})
+
+test("a claimed issue number that GitHub resolves to a PR reaches neither the lease check nor the REST body", async () => {
+  await using f = fixture()
+  f.graph.data.node.issue = null
+  f.issue.pull_request = { url: "https://api.github.com/repos/acme/app/pulls/7" }
+  await expect(readAuthorizedGithubThread(f.job, {
+    access: async () => f.access,
+    authorize: f.jobs.authorizeGithubThread,
+    signal: new AbortController().signal,
+    now: () => f.now,
+  })).rejects.toThrow()
+  expect(f.paths).toEqual(["/user", "/repositories/101", "/graphql"])
 })
 
 test.each([
@@ -80,15 +103,19 @@ test.each([
   { mode: "CLI login", reads: 0 },
   { mode: "different OAuth user", reads: 1 },
   { mode: "shared repository change", reads: 2 },
-  { mode: "lease or App proof refused", reads: 3 },
-  { mode: "OAuth switched during proof", reads: 3 },
-  { mode: "proof expired", reads: 3 },
+  { mode: "wrong GraphQL repository", reads: 3 },
+  { mode: "wrong GraphQL issue number", reads: 3 },
+  { mode: "lease or App proof refused", reads: 4 },
+  { mode: "OAuth switched during proof", reads: 4 },
+  { mode: "proof expired", reads: 4 },
 ])("the qualified reader reaches no thread body for $mode", async ({ mode, reads }) => {
   await using f = fixture()
   const job = mode === "non-owner claim" ? { ...f.job, requester: { ...f.job.requester, self: false } } :
     mode === "PR claim" ? { ...f.job, github: { ...f.job.github!, kind: "pr" as const } } : f.job
   if (mode === "different OAuth user") f.profile.id++
   if (mode === "shared repository change") { f.repository.visibility = "internal"; f.repository.private = true }
+  if (mode === "wrong GraphQL repository") f.graph.data.node.id = "R_other"
+  if (mode === "wrong GraphQL issue number") f.graph.data.node.issue = { number: 8 }
   if (mode === "lease or App proof refused") f.authority.status = 404
   if (mode === "proof expired") f.authority.expiresAt = f.now
   let readsOfAccess = 0
@@ -102,7 +129,7 @@ test.each([
     signal: new AbortController().signal,
     now: () => f.now,
   })).rejects.toThrow()
-  expect(f.paths).toEqual(["/user", "/repositories/101", "/api/everywhere/jobs/github-thread"].slice(0, reads))
+  expect(f.paths).toEqual(["/user", "/repositories/101", "/graphql", "/api/everywhere/jobs/github-thread"].slice(0, reads))
 })
 
 test("the desktop reads the binder's own task and labels bounded thread context by real collaborator grants", async () => {

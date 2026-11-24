@@ -20,6 +20,36 @@ type ThreadReadAuthority = {
   readonly now?: () => number
 }
 
+const ISSUE_KIND_QUERY = `query VectorEverywhereIssueKind($repository: ID!, $number: Int!) {
+  node(id: $repository) {
+    __typename
+    ... on Repository {
+      id
+      nameWithOwner
+      issue(number: $number) { number }
+    }
+  }
+}`
+
+async function verifyIssueKind(access: GithubAccess, job: EverywhereJob, nodeId: unknown, signal: AbortSignal) {
+  const unavailable = () => new Error("The Github thread is not an issue in this repository")
+  if (typeof nodeId !== "string" || nodeId.length > 200 || !/^\S+$/.test(nodeId)) throw unavailable()
+  const number = job.github!.number
+  signal.throwIfAborted()
+  const result = await githubJson<unknown>(access, "/graphql", {
+    method: "POST",
+    body: { query: ISSUE_KIND_QUERY, variables: { repository: nodeId, number } },
+    signal,
+    redirect: "error",
+  })
+  if (!record(result) || (result.errors !== undefined && (!Array.isArray(result.errors) || result.errors.length > 0)) ||
+    !record(result.data) || !record(result.data.node)) throw unavailable()
+  const node = result.data.node
+  if (node.__typename !== "Repository" || node.id !== nodeId || typeof node.nameWithOwner !== "string" ||
+    node.nameWithOwner.toLowerCase() !== job.repository.fullName.toLowerCase() ||
+    !record(node.issue) || node.issue.number !== number) throw unavailable()
+}
+
 /** Desktop reads only the binder's authorized issue, using the same Vector GitHub credential throughout. */
 export async function readAuthorizedGithubThread(input: EverywhereJob, authority: ThreadReadAuthority): Promise<FrameOptions> {
   const job = verifiedJob(input)
@@ -56,13 +86,15 @@ async function readThread(access: GithubAccess, job: EverywhereJob, authority?: 
     signal?.throwIfAborted()
     return githubJson<T>(access, path, { timeoutMs, ...(signal ? { signal, redirect: "error" } : {}) })
   }
-  const repository = await read<{ id: number; full_name: string; visibility?: unknown; private?: unknown }>(`/repositories/${job.repository.id}`)
+  const repository = await read<{ id: number; full_name: string; node_id?: unknown; visibility?: unknown; private?: unknown }>(`/repositories/${job.repository.id}`)
   if (repository.id !== job.repository.id || repository.full_name.toLowerCase() !== job.repository.fullName.toLowerCase()) throw new Error("The Github repository changed")
   if (authority) {
     const visibility = repository.visibility
     if ((visibility !== "private" && visibility !== "internal" && visibility !== "public") ||
       repository.private !== (visibility !== "public") || job.repository.shared !== (visibility !== "private"))
       throw new Error("The Github repository visibility changed")
+    // REST's issues endpoint also returns pull requests. Prove the native kind before reading either body.
+    await verifyIssueKind(access, job, repository.node_id, authority.signal)
     const expiresAt = await authority.authorize(job, authority.signal)
     const current = await authority.access()
     if (current?.source !== "vector" || current.token !== access.token) throw new Error("The bound Github account changed")
