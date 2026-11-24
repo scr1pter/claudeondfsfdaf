@@ -581,6 +581,16 @@ const layer: Layer.Layer<
         return yield* new CreateFailedError({
           message: `The unattended worktree could not be created.${common.error ? ` git: ${common.error}` : ""}`,
         })
+      const commonKey = FileLock.key(pathSvc.resolve(ctx.worktree, common.text.trim()))
+      const checkCheckout = Effect.fnUntraced(function* () {
+        if (!(yield* unattendedConfig(ctx.worktree)))
+          return yield* new CreateFailedError({
+            message: "The repository's git configuration can run programs. No unattended worktree was created.",
+          })
+        // core.worktree, which the allowlist keeps, could point git at another folder.
+        const toplevel = yield* unattendedGit(["rev-parse", "--show-toplevel"], ctx.worktree)
+        if (toplevel.code !== 0 || (yield* canonical(toplevel.text.trim())) !== checkout) return yield* own
+      })
       const root = pathSvc.join(unattendedRoot, ctx.project.id)
       const directory = pathSvc.join(root, input.jid)
       const reserved = new CreateFailedError({ message: "This job's branch or folder is already reserved." })
@@ -589,16 +599,10 @@ const layer: Layer.Layer<
       })
       // The lock orders this with every other worktree change in this process. Across processes the exclusive
       // receipt and mkdir reserve the job and folder, and git's ref lock reserves the branch.
-      return yield* FileLock.forTree(pathSvc.resolve(ctx.worktree, common.text.trim()))(
+      return yield* FileLock.forTree(commonKey)(
         Effect.gen(function* () {
-          // The authoritative check: git's own worktree add and reset follow with nothing else awaited in between.
-          if (!(yield* unattendedConfig(ctx.worktree)))
-            return yield* new CreateFailedError({
-              message: "The repository's git configuration can run programs. No unattended worktree was created.",
-            })
-          // core.worktree, which the allowlist keeps, could point git at another folder.
-          const toplevel = yield* unattendedGit(["rev-parse", "--show-toplevel"], ctx.worktree)
-          if (toplevel.code !== 0 || (yield* canonical(toplevel.text.trim())) !== checkout) return yield* own
+          // Refuse an unsafe or redirected checkout before consuming the job id.
+          yield* checkCheckout()
           // The ref the runner fetched this job's base into must name the base, and the base must be a commit here.
           const fetched = yield* unattendedPrints(
             ["rev-parse", "--verify", "--quiet", "--end-of-options", fetchRef(input.jid)],
@@ -628,7 +632,12 @@ const layer: Layer.Layer<
             Effect.orElseSucceed(() => false),
           )
           if (!made) return yield* reserved
-          // Neither the receipt nor the directory reservation is given back, even if git fails.
+          // Reservation can wait on disk. Recheck the locked repository and its effective config before Git mutates
+          // it. Both reservations survive a refusal here. The subprocesses cannot pin external config writers.
+          const current = yield* unattendedGit(["rev-parse", "--git-common-dir"], ctx.worktree)
+          if (current.code !== 0 || FileLock.key(pathSvc.resolve(ctx.worktree, current.text.trim())) !== commonKey)
+            return yield* own
+          yield* checkCheckout()
           // --no-track keeps .git/config, which the runner hashes, unwritten.
           const created = yield* unattendedGit(
             ["worktree", "add", "--no-checkout", "--no-track", "-b", input.branch, "--", directory, input.base],
