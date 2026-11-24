@@ -311,6 +311,17 @@ export function everywhereJobs(sessions: readonly GlobalSession[]): EverywhereJo
     .slice(0, 20)
 }
 
+/** The status response lists active sessions. An absent job in a successful snapshot is idle. */
+export function continuationState(statuses: unknown, jobID: string, working: boolean) {
+  if (working) return "running"
+  if (!statuses || typeof statuses !== "object" || Array.isArray(statuses)) return "unavailable"
+  if (!Object.hasOwn(statuses, jobID)) return "ready"
+  const status = (statuses as Record<string, { type?: unknown } | undefined | null>)[jobID]
+  if (status?.type === "idle") return "ready"
+  if (status?.type === "busy" || status?.type === "retry") return "running"
+  return "unavailable"
+}
+
 /** The jobs page on vectordev.ai, linked only while the plan offers the perk (website rule). */
 export function jobsPage(offered: boolean) {
   return offered ? `https://${EVERYWHERE_PAGE}` : undefined

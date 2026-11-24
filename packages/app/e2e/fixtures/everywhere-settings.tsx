@@ -35,9 +35,10 @@ function Fixture() {
   const statuses = () => sync().session.data.session_status
   const ready = () =>
     statuses().ses_everywhere_active?.type === "busy" && statuses().ses_everywhere_idle?.type === "idle"
+  const coldStart = new URLSearchParams(location.search).has("cold")
   return (
     <main>
-      <button type="button" disabled={!ready()} onClick={() => setOpen(true)}>
+      <button type="button" disabled={!coldStart && !ready()} onClick={() => setOpen(true)}>
         Show Everywhere settings
       </button>
       <output aria-label="Fixture route">{route.pathname}</output>

@@ -16,6 +16,7 @@ import {
   RULE_KEYS,
   VERSION_NOTE,
   checksLine,
+  continuationState,
   everywhereJobs,
   everywhereOffered,
   everywhereTab,
@@ -27,6 +28,18 @@ import {
   openWorktree,
 } from "./everywhere-model"
 import { filterSettingsGroups, isSettingsTab, settingsGroups } from "./settings-registry"
+
+test("Continue requires a successful scoped status snapshot even before the first live event", () => {
+  const job = "ses_everywhere"
+  expect(continuationState(undefined, job, false)).toBe("unavailable")
+  expect(continuationState([], job, false)).toBe("unavailable")
+  expect(continuationState({ [job]: null }, job, false)).toBe("unavailable")
+  expect(continuationState({ [job]: { type: "busy" } }, job, false)).toBe("running")
+  expect(continuationState({ [job]: { type: "retry" } }, job, false)).toBe("running")
+  expect(continuationState({ [job]: { type: "idle" } }, job, true)).toBe("running")
+  expect(continuationState({ [job]: { type: "idle" } }, job, false)).toBe("ready")
+  expect(continuationState({ ses_other: { type: "busy" } }, job, false)).toBe("ready")
+})
 
 // VE-41 (EV-21): Settings → Vector everywhere, read-only (EV-21, "Ruling on (a)"). Jobs are off by default, a folder
 // is listed only when the person's own settings file lists it, a limit outside the runner's caps makes the block off,
