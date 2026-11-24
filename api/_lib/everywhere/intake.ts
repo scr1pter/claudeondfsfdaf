@@ -38,16 +38,17 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
   const context = (): JobsContext => ({ store, now: now(), keys: config().dataKeys, offer: config().offer, accountAuthority: ports.accountAuthority })
   const events = createJobEvents(context, platforms)
 
-  async function repository(parsed: ParsedTrigger, mapping: Awaited<ReturnType<typeof readMappingSnapshot>>): Promise<Repository | undefined> {
+  async function repository(parsed: ParsedTrigger, mapping: Awaited<ReturnType<typeof readMappingSnapshot>>, account: string): Promise<Repository | undefined> {
     const repositories = mapping?.record.repositories
     const named = parsed.trigger.repository?.fullName
     const selected = named
       ? repositories?.find((item) => item.fullName.toLowerCase() === named.toLowerCase())
       : repositories?.length === 1 ? repositories[0] : undefined
     if (!selected || !Number.isSafeInteger(selected.id) || selected.id! <= 0 || !isRepositoryName(selected.fullName)) return undefined
-    const resolved = await ports.repository?.(selected.fullName)
+    const resolved = await ports.repository?.({ fullName: selected.fullName, account, id: selected.id })
     // An id or visibility copied from a webhook cannot widen the mapped repository's authority.
-    if (!resolved || resolved.fullName.toLowerCase() !== selected.fullName.toLowerCase()) return undefined
+    if (!resolved || !isRepositoryName(resolved.fullName) || resolved.fullName.toLowerCase() !== selected.fullName.toLowerCase())
+      return undefined
     if (selected.id !== undefined && resolved.id !== selected.id) return undefined
     return resolved
   }
@@ -127,8 +128,11 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
     const counts = await readCounts(store, subject, now())
     const mappingKey = everywhereKeys.repo(trigger.installation, parsed.place)
     const mapping = await readMappingSnapshot(store, trigger.installation, parsed.place)
-    const resolved = await repository(parsed, mapping)
-    const facts = await routeFacts({ ctx: context(), ports, trigger, sponsor, repository: resolved, counts, receivedAt: now() })
+    const facts = await routeFacts({
+      ctx: context(), ports, trigger, sponsor, counts, receivedAt: now(),
+      resolveRepository: () => repository(parsed, mapping, sponsor),
+    })
+    const resolved = facts.repository
     const decision = decideRoute(facts)
     if (decision.action === "refuse" || decision.action === "hand-back") {
       await adapter.refuse(trigger, decision.code)
