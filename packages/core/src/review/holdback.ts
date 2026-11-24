@@ -210,13 +210,21 @@ export function holdbackContext(
   }
 }
 
-// A credential in trusted instructions is still a credential. Omit the affected block as a
-// whole so clipping and source offsets on the remaining block agree with the transmitted text.
+// A credential in trusted instructions is still a credential. Under ruleCheck "strict", omit the affected block as a
+// whole so clipping and source offsets on the remaining block agree with the transmitted text. Otherwise no citation
+// refers to these blocks, so their values are redacted in place, as the read tool redacts loaded instructions.
 export function safeRulePrompt(
   input: { instructions?: string; rules?: string; ruleParts?: readonly RulePart[] },
   config: Pick<ReviewConfig, "ruleCheck" | "holdback">,
 ) {
-  if (config.ruleCheck !== "strict" || config.holdback !== "secrets") return input
+  if (config.holdback !== "secrets") return input
+  if (config.ruleCheck !== "strict")
+    return {
+      ...input,
+      ...(input.instructions ? { instructions: holdbackText(input.instructions) } : {}),
+      ...(input.rules ? { rules: holdbackText(input.rules) } : {}),
+      ...(input.ruleParts ? { ruleParts: input.ruleParts.map((part) => ({ ...part, text: holdbackText(part.text) })) } : {}),
+    }
   return {
     ...input,
     ...(input.instructions && holdbackText(input.instructions) !== input.instructions ? { instructions: "" } : {}),

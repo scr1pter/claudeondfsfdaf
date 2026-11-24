@@ -3705,6 +3705,27 @@ describe("desktop rule citations (VS-43)", () => {
     expect(outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
   })
 
+  // scope-finish takeover (2026-11-23): with ruleCheck off (the default) no citation refers to these blocks, so under
+  // holdback they are sent with their values redacted in place. They used to be sent raw beside the redacted diff.
+  test("with ruleCheck off, holdback redacts the instruction and rule blocks in place", async () => {
+    const secret = "ghp_" + "y".repeat(36)
+    const fake = fakeClient({
+      global: { review: { holdback: "secrets" } },
+      files: {
+        "src/list.ts": HEAD,
+        "AGENTS.md": `Deploy with ${secret} only.`,
+        ".vector/review.md": `Never log ${secret} anywhere.`,
+        ...NO_VERIFY,
+      },
+      reply: () => answer(report([])),
+    })
+    await run(fake.client)
+    const sent = JSON.stringify(fake.calls.prompt)
+    expect(sent).not.toContain(secret)
+    expect(sent).toContain("Deploy with [redacted] only.")
+    expect(sent).toContain("Never log [redacted] anywhere.")
+  })
+
   test("revalidates cached authority and applies strict on the restricted finalize turn", async () => {
     const files = { "src/list.ts": HEAD, "AGENTS.md": quote, ...NO_VERIFY }
     const reply = () => answer(report([{ ...offByOne, rule: { source: "repository_instructions", quote } }]))

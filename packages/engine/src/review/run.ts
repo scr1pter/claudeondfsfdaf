@@ -1727,7 +1727,11 @@ const execute = Effect.fn("Review.run")(function* (input: RunInput) {
             instructions: ruleInput.instructions,
             instructionsSource: source,
           }
-        : {}),
+        : // Under holdback "secrets" the context's raw instructions spread above never reach the prompt: these are
+          // redacted (safeRulePrompt).
+          config.holdback === "secrets" && input.context.instructions !== undefined
+          ? { instructions: ruleInput.instructions }
+          : {}),
       prior,
       maxComments: config.maxComments,
       nits: wantsNits(config),

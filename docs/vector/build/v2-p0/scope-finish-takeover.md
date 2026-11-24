@@ -47,3 +47,26 @@ Left as a follow-up: `LocalReviewPanel` (`local-review-panel.tsx`, also on main)
 **Test.** engine `test/server/httpapi-review-privacy.test.ts`. The old pin is replaced by "under zdr the V2 session API refuses a review session's prompt and compaction before anything is sent": both answer 403, the session is idle, nothing is registered, the fake model server got 0 calls, and an ordinary session is still admitted. The new case "under standard the V2 session API admits a review session's prompt as before" keeps the standard path open (and fails if the port is missing).
 
 **Mutation check.** With the prompt route's refusal removed, the zdr case fails (expected 403, received 200; 6 pass, 1 fail); restored, 7 pass.
+
+## 2026-11-23, holdback "secrets" sent instruction files and review rules unredacted
+
+**Bug.** Under the hidden `review.holdback: "secrets"`, the diff and every untrusted block were redacted, but the trusted blocks were not:
+
+- core `safeRulePrompt` (`review/holdback.ts`) returned its input untouched unless `ruleCheck` was "strict", so `<review_rules>` (from `.vector/review.md` and review.json `paths`) and `<repository_instructions>` reached the prompt raw.
+- engine `Review.run` (`review/run.ts`) spreads `input.context` into the prompt input, which carries the raw `instructions`, and replaced them only under strict.
+- engine `session/prompt.ts` adds AGENTS.md and the rest (`instruction.system()`) and the Brain digest to every non-pinned `vectorscope.*` session's system prompt, with no holdback check. The read tool already redacts loaded instructions under holdback (`tool/read.ts`).
+- The desktop (`ai-review.ts`) calls `safeRulePrompt` too, so it had the same gap.
+
+So a token in AGENTS.md or `.vector/review.md` went to the provider in plain text, while the outcome said values were redacted. That breaks VS-34's "Done when": no secret-shaped string in any recorded wire body. The setting is hidden and off by default, so main's default behaviour was not affected.
+
+**Fix.** With `ruleCheck` not strict, `safeRulePrompt` redacts the instructions, the rules and each rule part in place with `holdbackText`. No citation offsets refer to them then. Under strict, the whole-block omission stays. `Review.run` sets `instructions` from that result after the context spread whenever holdback is "secrets". In `session/prompt.ts`, a review session whose stored rules are holdback's (`holdsBack`, read as `session/tools.ts` reads them) gets its snapshot instructions mapped through `holdbackText`. The first-request estimate (`reviewFirstRequest`) does the same to its instructions, digest and recall, so the estimate matches what is sent. The desktop gets the fix through `safeRulePrompt`.
+
+**Tests.**
+
+- engine `test/review/run.test.ts`, "secrets redacts the instruction files, repository instructions and review rules in every request". It puts a token in AGENTS.md, one in the context's instructions and one in the rules. Unset, each token reaches a request body; under "secrets", none does and "[redacted]" stands in their place.
+- core `test/review/rule-check.test.ts`, the holdback case. It used to assert that the rules pass through raw with ruleCheck off; it now asserts in-place redaction, and no change when holdback is off.
+- app `src/features/pull-requests/ai-review.test.ts`, "with ruleCheck off, holdback redacts the instruction and rule blocks in place".
+
+**Mutation checks.** Each part was reverted alone and the engine case failed every time: the `session/prompt.ts` mapping (the AGENTS.md token reached a body), the `run.ts` override (the instructions token reached a body) and the `safeRulePrompt` change (both tokens reached a body). With the `safeRulePrompt` change reverted, the desktop case also failed (0 pass, 1 fail).
+
+Left as a follow-up: recalled owner memory that a review session's later requests fill in (`withheldRecall` in `session/prompt.ts`) is not passed through `holdbackText`.

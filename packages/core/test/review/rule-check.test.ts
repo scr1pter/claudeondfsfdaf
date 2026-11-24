@@ -161,6 +161,15 @@ test("ruleCheck holdback omits a sensitive trusted block before clipping or chec
   const unsafe = { ...blocks, rules: blocks.rules + "\n" + marker, instructions: "Independent owner rule." }
   const safe = safeRulePrompt(unsafe, { ...config, holdback: "secrets" })
   expect(safe).toEqual({ instructions: "Independent owner rule.", rules: "", ruleParts: [] })
-  const disabled = safeRulePrompt(unsafe, { ruleCheck: "off", holdback: "secrets" })
-  expect(disabled).toBe(unsafe)
+  // scope-finish takeover (2026-11-23): without rule citations nothing refers to these blocks' offsets, so they keep
+  // their text with the values redacted in place. They used to pass through raw, credential and all.
+  const unchecked = safeRulePrompt(
+    { ...unsafe, instructions: `Deploy with ${marker} only.` },
+    { ruleCheck: "off", holdback: "secrets" },
+  )
+  expect(unchecked.rules).toBe(blocks.rules + "\n[redacted]")
+  expect(unchecked.instructions).toBe("Deploy with [redacted] only.")
+  expect(JSON.stringify(unchecked)).not.toContain(marker)
+  expect(safeRulePrompt(unsafe, { ruleCheck: "off", holdback: "off" })).toBe(unsafe)
+  expect(safeRulePrompt(unsafe, { ruleCheck: "strict", holdback: "off" })).toBe(unsafe)
 })

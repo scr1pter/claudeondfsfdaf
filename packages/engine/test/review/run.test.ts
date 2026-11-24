@@ -5127,6 +5127,53 @@ describe("VS-34 holdback payload (SF-13b)", () => {
     120_000,
   )
 
+  // scope-finish takeover (2026-11-23): the trusted blocks too, with ruleCheck off (the default). A token in AGENTS.md
+  // (the review sessions' system prompt), in the context's repository instructions and in the review rules reaches no
+  // request body under "secrets", where "[redacted]" stands in; unset, each of them is sent as before. They used to
+  // reach the provider in plain text while the diff beside them was redacted.
+  it.instance(
+    "secrets redacts the instruction files, repository instructions and review rules in every request",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const files = yield* FSUtil.Service
+        const tokens = {
+          agents: "ghp_" + "a5G6".repeat(9),
+          instructions: "glpat-" + "i1N2s3T4r5U6c7T8i9O0",
+          rules: "sk-" + "r3U4".repeat(8),
+        }
+        yield* files.writeWithDirs(path.join(directory, "AGENTS.md"), `Deploy with ${tokens.agents} only.\n`)
+        const runs = yield* Effect.forEach([undefined, "secrets"] as const, (holdback) =>
+          Effect.gen(function* () {
+            yield* llm.reset
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+            const outcome = yield* Review.run(
+              input(directory, {
+                model: priced,
+                context: { instructions: `Sign releases with ${tokens.instructions} only.` },
+                rules: `Never log ${tokens.rules} anywhere.`,
+                config: config(holdback ? { holdback } : {}),
+              }),
+            )
+            return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), outcome }
+          }),
+        )
+        const [unset, secrets] = runs
+        for (const run of runs) expect(run.outcome.specialists.map((entry) => entry.name)).toEqual(["review"])
+        for (const [name, value] of Object.entries(tokens)) {
+          expect({ name, unset: unset.bodies.some((body) => body.includes(value)) }).toEqual({ name, unset: true })
+          expect({ name, secrets: secrets.bodies.filter((body) => body.includes(value)).length }).toEqual({
+            name,
+            secrets: 0,
+          })
+        }
+        expect(secrets.bodies.length).toBe(unset.bodies.length)
+        for (const kept of ["Deploy with [redacted] only.", "Sign releases with [redacted] only.", "Never log [redacted] anywhere."])
+          expect({ kept, sent: secrets.bodies.some((body) => body.includes(kept)) }).toEqual({ kept, sent: true })
+      }),
+    120_000,
+  )
+
   // Design item 5: a held file is skipped, never unreviewed, however the run ends, so a re-trigger on the same head
   // still takes the already-reviewed skip.
   it.instance(

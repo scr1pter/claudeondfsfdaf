@@ -98,6 +98,8 @@ import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
 import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { REVIEW_LENSES } from "@vectordevai/core/review/types"
+import { holdbackText } from "@vectordevai/core/review/holdback"
+import { holdsBack } from "@vectordevai/core/review/permission"
 import { ReviewRoutes } from "@/review/route"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
@@ -147,6 +149,9 @@ const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
 const MAX_INSTRUCTION_SNAPSHOTS = 256
 // Vectorscope's reviewers and its judge run as hidden sessions named `vectorscope.<pass>`.
 const VECTORSCOPE = "vectorscope."
+// VS-34 (holdback "secrets"): a review session whose stored rules are holdback's, read as session/tools.ts reads them.
+const holdsReviewBack = (session: { readonly internal?: string; readonly permission?: readonly PermissionV1.Rule[] }) =>
+  session.internal?.startsWith(VECTORSCOPE) === true && holdsBack(session.permission)
 // Agents whose output leaves the machine or reaches the web: research workers and the research judge.
 const OUTWARD_AGENTS = new Set(["researcher", "research-judge"])
 
@@ -3281,7 +3286,12 @@ const layer = Layer.effect(
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
             MessageV2.toModelMessagesEffect(history, model, { dropMedia }),
           ])
-          const instructions = snapshot.instructions
+          // Under holdback "secrets" (the session's stored rules, as the tools read them) a review session's instruction
+          // files and Brain digest are redacted as the read tool redacts loaded instructions: a credential in AGENTS.md
+          // is still a credential.
+          const instructions = holdsReviewBack(session)
+            ? snapshot.instructions.map(holdbackText)
+            : snapshot.instructions
           if (tools.memory && snapshot.documents)
             tools.memory = { ...tools.memory, description: `${tools.memory.description}\n${MEMORY_DOCUMENTS.trim()}` }
           const system = [
@@ -4822,8 +4832,10 @@ const layer = Layer.effect(
             wrap: ownerBlock,
           })
           if (!memory) return
-          instructions.push(...(yield* instruction.system()))
-          if (memory.digest) instructions.push(memory.digest)
+          // Redacted under holdback as the session's own request redacts them, so this estimate matches what is sent.
+          const held = holdsReviewBack(session) ? holdbackText : (text: string) => text
+          instructions.push(...(yield* instruction.system()).map(held))
+          if (memory.digest) instructions.push(held(memory.digest))
           if (memory.recall)
             parts.push({
               type: "text",
@@ -4831,7 +4843,7 @@ const layer = Layer.effect(
               id: PartID.ascending(),
               messageID: user.id,
               sessionID,
-              text: memory.recall,
+              text: held(memory.recall),
             })
           skills = yield* sys.skills(agent, { learned: [] })
         }
