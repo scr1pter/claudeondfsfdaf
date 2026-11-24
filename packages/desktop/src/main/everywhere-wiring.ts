@@ -151,7 +151,13 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
   const log = (message: string) => deps.log?.(message)
   const authorization = `Basic ${Buffer.from(`vector:${deps.engine.password}`).toString("base64")}`
   const keys = deps.keys ?? OFFER_KEYS
-  const ledger = deps.ledger ?? createLedger({ ...ledgerFile(deps.ledgerPath), now })
+  const ledger = deps.ledger ?? createLedger({
+    ...ledgerFile(deps.ledgerPath),
+    now,
+    onPublicationExpired: deps.log
+      ? () => log("Vector everywhere could not report a publication before its receipt expired.")
+      : undefined,
+  })
   const token = () => deps.token().catch(() => undefined)
   const git: RunnerDeps["git"] =
     deps.git ??
@@ -333,7 +339,7 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     openPr: async () => undefined,
     now,
     localPolicy: deps.localPolicy,
-    log,
+    log: deps.log ? log : undefined,
   })
 
   const current = (): EverywhereJobsState => {
