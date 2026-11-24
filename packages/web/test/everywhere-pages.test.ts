@@ -9,8 +9,9 @@ import {
   createAccountApi,
   type AccountApiDeps,
 } from "../../../api/_lib/everywhere/account-api"
+import { createRepositoryPort } from "../../../api/_lib/everywhere/adapters/cloud-agents"
 import { AUDIT_CODES, AUDIT_EVENTS, appendAudit } from "../../../api/_lib/everywhere/audit"
-import { readConfig, type OfferKey } from "../../../api/_lib/everywhere/config"
+import { ENV_NAMES, readConfig, type OfferKey } from "../../../api/_lib/everywhere/config"
 import type { InstallRevoker, JobEraser } from "../../../api/_lib/everywhere/erase"
 import {
   CODE_ALPHABET,
@@ -23,6 +24,7 @@ import {
   listMappings,
   recordInstall,
   redeemLinkCode,
+  setMapping,
   unlink,
   type IdentityContext,
   type LinkActor,
@@ -54,6 +56,8 @@ import {
   type Settle,
 } from "../../../packages/schema/src/everywhere"
 import { ENDINGS, WITHHELD } from "../../../packages/schema/src/everywhere-policy"
+import { githubAppFixture } from "./github-app-fixture"
+import { bindingFields, bindingStore } from "./lib/everywhere-cloud-agents"
 import {
   AUDIT_LIMIT,
   EVERYWHERE_AUDIT_CODES,
@@ -1126,6 +1130,102 @@ describe("repository mappings", () => {
     html = render(b.model)
     expect(html).not.toContain("Key ENG")
     expect(html).toContain("Channel C0123")
+  })
+
+  test("a connector can add a repository from the tracker controls using the installed Vector session", async () => {
+    await using fixture = await githubAppFixture()
+    const { repositoryId, app, state } = fixture
+    const verified = { fullName: "fixture-owner/project", id: Number(repositoryId) }
+    state.repository.private = true
+    state.repository.visibility = "private"
+    await install(LINEAR, alice)
+    await install(JIRA, alice)
+    const prior = { fullName: "acme/other", id: 21 }
+    await map(LINEAR, TEAM, [prior], true)
+    const bindings = bindingStore(() => bindingFields({ repositoryId, account: alice.id }))
+    const lookup = createRepositoryPort({
+      app,
+      store: async (command) =>
+        command[3] === `vector:cloud-agents:bindings:${alice.id}` ? [repositoryId] : bindings.store(command),
+    })
+    const proofs: unknown[] = []
+    const mappingDeps: Partial<AccountApiDeps> = {
+      repository: async (input) => {
+        proofs.push(input)
+        return lookup(input)
+      },
+    }
+    mountAccount(createAccountApi(deps(mappingDeps)))
+    const body: { installation: string; place: string; addRepository: string } = {
+      installation: LINEAR,
+      place: TEAM,
+      addRepository: verified.fullName.toUpperCase(),
+    }
+    const put = (fields: typeof body, token: string = alice.token) =>
+      harness.call("PUT", EVERYWHERE_ROUTES.repos, { token, body: fields })
+    expect((await harness.call("PUT", EVERYWHERE_ROUTES.repos)).status).toBe(401)
+    expect((await harness.call("PUT", EVERYWHERE_ROUTES.repos, {
+      token: alice.token, headers: { origin: "https://example.invalid" },
+    })).status).toBe(403)
+    expect((await put(body, bob.token)).status).toBe(404)
+    expect((await put({ ...body, place: "ENG" }, alice.token)).status).toBe(400)
+    expect((await harness.call("PUT", EVERYWHERE_ROUTES.repos, {
+      token: alice.token, body: { ...body, repositories: [verified] },
+    })).status).toBe(400)
+    mountAccount(createAccountApi(deps({ ...mappingDeps, env: { ...env, [ENV_NAMES.platforms]: "slack,jira" } })))
+    expect((await put(body, alice.token)).status).toBe(404)
+    expect(proofs).toEqual([])
+    expect(state.requests).toEqual([])
+    mountAccount(createAccountApi(deps(mappingDeps)))
+
+    const b = browser()
+    await b.model.setSession(as(alice))
+    const html = render(b.model)
+    expect(html).toContain(EVERYWHERE_COPY.linearTeamId)
+    expect(html).toContain(EVERYWHERE_COPY.jiraProjectKey)
+    expect(count(html, EVERYWHERE_COPY.addRepository)).toBe(2)
+    expect(html).not.toContain("<form")
+
+    await b.model.addTrackerRepository(LINEAR, TEAM, ` ${body.addRepository} `)
+    expect(ready(b.model).notice).toBe("saved")
+    expect(ready(b.model).mappings[LINEAR]).toEqual([
+      expect.objectContaining({ place: TEAM, repositories: [prior, verified], private: true }),
+    ])
+    const request = b.calls.find((call) => call.path === EVERYWHERE_ROUTES.repos && call.init.method === "PUT")
+    expect(JSON.parse(String(request?.init.body))).toEqual(body)
+    expect(headers(request!).authorization).toBe(`Bearer ${alice.token}`)
+    expect(proofs).toEqual([{ account: alice.id, fullName: body.addRepository, id: undefined }])
+    expect(b.navigations).toEqual([])
+    expect((await put(body, alice.token)).body.mapping.repositories).toEqual([prior, verified])
+
+    await b.model.addTrackerRepository(JIRA, "Eng", "acme/unbound")
+    expect(ready(b.model).problem).toBe("repository-unverified")
+    expect(ready(b.model).mappings[JIRA]).toEqual([])
+    const jira = { installation: JIRA, place: "Eng_1", addRepository: verified.fullName }
+    expect((await put({ ...jira, place: "../ENG" }, alice.token)).status).toBe(400)
+    await b.model.addTrackerRepository(JIRA, jira.place, jira.addRepository)
+    expect(ready(b.model).mappings[JIRA]).toEqual([
+      expect.objectContaining({ place: jira.place, repositories: [verified], private: false }),
+    ])
+    expect(state.minted).toHaveLength(3)
+
+    const newer = { id: 22, fullName: "fixture-owner/newer" }
+    mountAccount(createAccountApi(deps({
+      repository: async (input) => {
+        const proof = await lookup(input)
+        expect((await setMapping(ctx(), {
+          account: alice.id, installation: JIRA, place: jira.place, repositories: [newer],
+        })).ok).toBe(true)
+        return proof
+      },
+    })))
+    const stale = await put(jira, alice.token)
+    expect([stale.status, stale.body.error.code]).toEqual([409, "EVERYWHERE_AUTHORITY_CHANGED"])
+    const [saved] = await listMappings(ctx().store, JIRA)
+    expect(saved?.repositories).toEqual([newer])
+    expect(fixture.tokens.size).toBe(0)
+    await b.model.setSession(as(bob))
+    expect(render(b.model)).not.toContain(EVERYWHERE_COPY.addRepository)
   })
 
   test("a repository whose id is not known yet is listed and its mapping can be removed, but it is never sent back", async () => {

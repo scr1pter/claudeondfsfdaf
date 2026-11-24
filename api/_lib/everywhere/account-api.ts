@@ -1,5 +1,6 @@
 import {
   LIMITS,
+  installationPlatform,
   isPlatform,
   type DeclineCode,
   type JobState,
@@ -12,12 +13,14 @@ import { requireTrustedJsonRequest } from "../abuse.js"
 import { requireAccountUser } from "../account.js"
 import { ApiError, handleApiError, json, queryValue, readJson, type ApiRequest, type ApiResponse } from "../http.js"
 import { codiumAccountAuthority } from "./adapters/account.js"
+import { createRepositoryPort } from "./adapters/cloud-agents.js"
 import { readAudit, type AuditEntry } from "./audit.js"
 import { checkAccount } from "./authority.js"
 import { platformOn, readConfig, type Env, type EverywhereConfig } from "./config.js"
 import { eraseInstallation, type InstallRevoker, type JobEraser } from "./erase.js"
 import {
   CODE_LINK_PLATFORMS,
+  addTrackerRepository,
   checkRepositories,
   createState,
   emailNotifier,
@@ -37,6 +40,7 @@ import {
   type Notifier,
   type OAuthExchanges,
 } from "./identity.js"
+import type { Ports } from "./ports.js"
 import { jobEraser, openSummary, readJobHistory, type JobRecord, type JobRoute } from "./jobs.js"
 import { KEEP_MS } from "./keys.js"
 import { platformExchanges } from "./oauth-exchanges.js"
@@ -65,6 +69,7 @@ export type AccountApiDeps = {
   /** For `requireAccountUser`'s call to the account service and, with no `store`, the default store's calls. */
   readonly fetcher?: typeof fetch
   readonly now?: () => number
+  readonly repository?: NonNullable<Ports["repository"]>
   /**
    * Replaces the default exchanges, oauth-exchanges.ts `platformExchanges`: Slack's install (VE-11) and Linear's
    * install and sign-in link (VE-12), built per request for each platform in `config.platforms` (listed in
@@ -192,6 +197,8 @@ const LINK_NOTE: Readonly<Record<string, string>> = {
 }
 
 export function createAccountApi(deps: AccountApiDeps = {}) {
+  const verifyRepository = deps.repository ?? createRepositoryPort()
+
   /**
    * POST {platform, installation?}: a link code for Slack or Jira (sent to the bot in a private place), or for Linear
    * the start of the sign-in that links (3.8). GitHub needs no link (4.1).
@@ -320,7 +327,8 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
 
   /**
    * GET ?installation=: the mappings of an installation the account connected. PUT {installation, place,
-   * repositories, private?}: sets a place's repositories. DELETE {installation, place}: removes one. Connector only.
+   * repositories, private?}: sets a place's repositories. PUT {installation, place, addRepository}: verifies and
+   * adds a Linear or Jira mapping entry. DELETE {installation, place}: removes a mapping. Connector only.
    */
   const repos = route(deps, (request, response) =>
     methods(request, response, {
@@ -337,6 +345,28 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
       PUT: async () => {
         const session = await begin(request, deps)
         const input = await body(request)
+        if (Object.hasOwn(input, "addRepository")) {
+          if (Object.keys(input).some((key) => key !== "addRepository" && key !== "installation" && key !== "place"))
+            throw new ApiError(400, "EVERYWHERE_INVALID", "Send the installation, place and one repository to add.")
+          const installation = text(input.installation, "installation")
+          const platform = installationPlatform(installation)
+          if (platform !== "linear" && platform !== "jira") throw notFound()
+          requirePlatform(session.config, platform)
+          const verdict = await addTrackerRepository(session.ctx, {
+            account: session.account,
+            installation,
+            place: text(input.place, "place"),
+            fullName: text(input.addRepository, "repository"),
+            verifyRepository,
+          })
+          if (!verdict.ok) {
+            if (verdict.code === "repository-unverified")
+              throw new ApiError(400, "EVERYWHERE_REPOSITORY_UNVERIFIED", "Choose a repository connected to your Vector account.")
+            throw notFound()
+          }
+          json(response, 200, { mapping: verdict.mapping })
+          return
+        }
         const repositories = checkRepositories(input.repositories)
         if (!repositories)
           throw new ApiError(400, "EVERYWHERE_INVALID", "Name at most 20 repositories as owner/name, each once.")

@@ -180,7 +180,11 @@ export const EVERYWHERE_COPY = {
   mappingsUnread: "The repositories set for this connection could not be read.",
   noRepositories: "No repository is set for this place.",
   slackMappingHint: "In a Slack channel, send @Vector repo owner/name to set its repository.",
-  trackerMappingHint: "Linear teams and Jira keys cannot be given repositories from this page yet.",
+  trackerMappingHint: "Choose a GitHub repository connected to this Vector account.",
+  linearTeamId: "Linear team ID",
+  jiraProjectKey: "Jira key",
+  githubRepository: "GitHub repository",
+  addRepository: "Add repository",
   unknownId: "(not verified yet)",
   removeRepository: "Remove",
   removeMapping: "Remove mapping",
@@ -309,6 +313,7 @@ export const EVERYWHERE_COPY = {
     "installed-elsewhere": "Another Vector account connected this site.",
     changed: "That changed while this page was open. The page has been reloaded.",
     "not-allowed": "This account cannot do that.",
+    "repository-unverified": "Choose a repository connected to this Vector account.",
     "too-many": "Too many requests. Wait a moment and try again.",
     invalid: "Vector could not accept that. Check it and try again.",
     unavailable: "Vector everywhere could not be reached. Try again.",
@@ -899,6 +904,26 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
         () => ({ notice: "connected" }),
       )
     },
+    addTrackerRepository(installation: string, placeInput: string, repositoryInput: string): Promise<void> {
+      if (current.kind !== "ready" || current.busy) return Promise.resolve()
+      const install = current.installs.find((entry) => entry.installation === installation)
+      const place = placeInput.trim()
+      const addRepository = repositoryInput.trim()
+      if (
+        !install ||
+        install.status !== undefined ||
+        current.unread.includes(installation) ||
+        !Everywhere.isTrackerPlace(install.platform, place) ||
+        !Everywhere.isRepositoryName(addRepository)
+      ) {
+        patch({ problem: "invalid" })
+        return Promise.resolve()
+      }
+      return act(
+        () => send("PUT", EVERYWHERE_ROUTES.repos, { installation, place, addRepository }),
+        () => ({ notice: "saved" }),
+      )
+    },
     unlink(installation: string, userId: string) {
       return act(
         () => send("DELETE", EVERYWHERE_ROUTES.links, { installation, userId }),
@@ -1073,6 +1098,7 @@ export function readAuthorize(value: unknown, platform: "slack" | "linear"): str
 export function problemOf(status: number, code?: string): EverywhereProblem {
   if (code === "EVERYWHERE_CODE_INVALID") return "code-invalid"
   if (code === "EVERYWHERE_INSTALLED_ELSEWHERE") return "installed-elsewhere"
+  if (code === "EVERYWHERE_REPOSITORY_UNVERIFIED") return "repository-unverified"
   if (status === 404) return "not-found"
   if (status === 409) return "changed"
   if (status === 403) return "not-allowed"

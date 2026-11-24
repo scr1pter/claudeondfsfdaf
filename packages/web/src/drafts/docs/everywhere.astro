@@ -6,10 +6,6 @@
 // entry, so a forgotten entry fails loudly.
 // The set-up steps do not say how to turn jobs on or allow a folder: the desktop page cannot write those settings yet
 // (vector-everywhere-deviations.md, EV-21, "Ruling on (a)" and (aj)). Rewrite "Set it up" when the write path lands.
-// Step 3 of "Set it up" describes repository mapping that production cannot do yet: there is no production repository
-// port (EV-19) and no Linear or Jira mapping route (EV-22). The Slack, Linear and Jira guides' Before you start name
-// those gates.
-// Rewrite step 3 of "Set it up" when the production repository port and the Linear and Jira mapping route land.
 // With Vector Local on, every job is declined until EV-21 labels the desktop's GitHub calls (the `github` guard in
 // desktop everywhere-runner.ts `localAllows`; spec §3.5, EV-15 note). When the guard goes, say what Vector Local must
 // allow.
@@ -98,8 +94,9 @@ export const prerender = true
       everywhere page instead. A code works once, for 10 minutes. Send it only to Vector, never to a person.
     </li>
     <li>
-      Choose the repository. In a Slack channel, <code>repo &lt;owner/name&gt;</code> sets the channel's repository.
-      Linear teams and Jira keys get their repositories on the Vector everywhere page.
+      Choose a repository connected to your Vector account. In Slack, use <code>repo &lt;owner/name&gt;</code> to set
+      the channel's repository. On the Vector everywhere page, the connector can enter a Linear team ID or a Jira
+      key and choose <strong>Add repository</strong>.
     </li>
     <li>
       On your computer, turn on Vector Remote, open the repository in Vector and trust it. Jobs reach a computer only

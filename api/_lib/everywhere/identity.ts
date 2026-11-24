@@ -5,6 +5,7 @@ import {
   installationPlatform,
   isPlatform,
   isRepositoryName,
+  isTrackerPlace,
   type PlatformId,
 } from "../../../packages/schema/src/everywhere.js"
 import { EVERYWHERE_PAGE, PLATFORM_NAMES } from "../../../packages/schema/src/everywhere-policy.js"
@@ -14,6 +15,7 @@ import { accountGuards, authorizedCommands, authorizedScript, authorityChanged, 
 import type { EverywhereConfig } from "./config.js"
 import { open, openJson, seal, sealJson, type DataKey } from "./crypto.js"
 import { platformFetch, readPlatformJson } from "./fetch.js"
+import type { Ports } from "./ports.js"
 import { KEEP_MS, USER_ID_PATTERNS, everywhereKeys, userIdValid } from "./keys.js"
 import { hmacSha256Hex, sha256Hex } from "./signature.js"
 import {
@@ -1314,6 +1316,62 @@ export async function setMapping(
     setAt: ctx.now,
   }
   await writeMapping(ctx, input.installation, mapping, install.raw, previous)
+  return { ok: true, mapping }
+}
+
+/** Add one verified repository to a tracker place using the connector's own binding. */
+export async function addTrackerRepository(
+  ctx: IdentityContext,
+  input: {
+    readonly account: string
+    readonly installation: string
+    readonly place: string
+    readonly fullName: string
+    readonly verifyRepository: NonNullable<Ports["repository"]>
+  },
+): Promise<MappingVerdict> {
+  const account = accountId(input.account)
+  const platform = platformOf(input.installation)
+  const { installation, place, fullName } = input
+  if (!isTrackerPlace(platform, place)) invalid("Enter the Linear team ID or Jira key.")
+  if (!isRepositoryName(fullName)) invalid("Name the repository as owner/name.")
+  const install = await readInstallSnapshot(ctx.store, installation)
+  if (!install) return { ok: false, code: "not-connected" }
+  if (install.record.connector !== account) return { ok: false, code: "not-connector" }
+  const previous = await readMappingSnapshot(ctx.store, installation, place)
+  const repositories = [...(previous?.record.repositories ?? [])]
+  const name = fullName.toLowerCase()
+  const namedIndex = repositories.findIndex((repo) => repo.fullName.toLowerCase() === name)
+  const id = repositories[namedIndex]?.id
+  await checkInstallAuthority(ctx, installation, install)
+
+  const verified = await input.verifyRepository({ account, fullName, id })
+  if (
+    !verified ||
+    !isRepositoryName(verified.fullName) ||
+    verified.fullName.toLowerCase() !== name ||
+    !Number.isSafeInteger(verified.id) ||
+    verified.id <= 0 ||
+    (id !== undefined && id !== verified.id)
+  )
+    return { ok: false, code: "repository-unverified" }
+  const index = namedIndex >= 0 ? namedIndex : repositories.findIndex((repo) => repo.id === verified.id)
+  const entry = { id: verified.id, fullName: verified.fullName }
+  if (index < 0) {
+    if (repositories.length >= MAX_MAPPED_REPOSITORIES) invalid("Choose at most 20 repositories for this place.")
+    repositories.push(entry)
+  } else {
+    repositories[index] = entry
+  }
+  const mapping: RepoMapping = {
+    revision: randomBytes(16).toString("base64url"),
+    place,
+    repositories,
+    setBy: account,
+    private: previous?.record.private ?? false,
+    setAt: ctx.now,
+  }
+  await writeMapping(ctx, installation, mapping, install.raw, previous?.raw)
   return { ok: true, mapping }
 }
 
