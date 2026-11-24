@@ -339,17 +339,25 @@ describe("jobs (R-C2)", () => {
   }
 
   /** A computer on the memory relay that only jobs want. Its fake API mints `vt1.computer.<device>`. */
-  function jobsComputer(relay: MemoryRelay, timing?: LinkDependencies["timing"]) {
+  function jobsComputer(
+    relay: MemoryRelay,
+    timing?: LinkDependencies["timing"],
+    reply?: (attempt: number) => Response | undefined,
+  ) {
     const stored: { value?: RemoteIdentity } = {}
     const enabled = { value: false }
     const jobs = { want: true, offers: [] as string[] }
     const minted: number[] = []
+    const attempts: number[] = []
     const opened = { count: 0 }
     const link = createRemoteLink({
       store: { read: async () => stored.value, write: async (identity) => void (stored.value = identity) },
       enabled: { get: () => enabled.value, set: (value) => void (enabled.value = value) },
       token: async () => "vct_desktop",
       api: async () => {
+        attempts.push(Date.now())
+        const refusal = reply?.(attempts.length)
+        if (refusal) return refusal
         const identity = stored.value!
         relay.key(identity.device, identity.publicKey)
         minted.push(Date.now())
@@ -366,7 +374,7 @@ describe("jobs (R-C2)", () => {
       jobs: { want: () => jobs.want, offer: (text) => void jobs.offers.push(text) },
       timing: timing ?? { heartbeatMs: 30, refreshMs: 60_000, batchMs: 20, retryMs: 10 },
     })
-    return { link, stored, enabled, jobs, minted, sockets: () => opened.count }
+    return { link, stored, enabled, jobs, minted, attempts, sockets: () => opened.count }
   }
 
   test("an offer frame reaches the subscriber unchanged on a computer connected only for jobs", async () => {
@@ -476,6 +484,86 @@ describe("jobs (R-C2)", () => {
       expect(env.sockets()).toBe(1)
     } finally {
       // Stopped here so that a failed assertion leaves no ping or refresh timer running for the tests after it.
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  const renewing = () =>
+    Response.json({ error: { code: "MODEL_PLAN_RENEWING" } }, { status: 503, headers: { "retry-after": "30" } })
+
+  test.each([
+    { name: "a renewed plan", reply: (attempt: number) => (attempt === 2 ? renewing() : undefined), mint: true },
+    { name: "a plan still renewing", reply: (attempt: number) => (attempt > 1 ? renewing() : undefined), mint: false },
+  ])("retries a pre-mint renewal only once on the same socket for $name", async ({ reply, mint }) => {
+    const relay = createMemoryRelay()
+    const env = jobsComputer(relay, {}, reply)
+    env.jobs.want = false
+    await env.link.setEnabled(true)
+    env.jobs.want = true
+    jest.useFakeTimers()
+    try {
+      await env.link.jobsChanged()
+      await turns(() => env.link.status().state === "online")
+      jest.advanceTimersByTime(RELAY_LIMITS.computerTicketMaxAgeMs / 2)
+      await flush()
+      expect(env.attempts).toHaveLength(2)
+      expect(env.minted).toHaveLength(1)
+
+      jest.advanceTimersByTime(29_999)
+      await flush()
+      expect(env.attempts).toHaveLength(2)
+      jest.advanceTimersByTime(1)
+      await flush()
+      expect(env.attempts).toHaveLength(3)
+      expect(env.attempts[2]! - env.attempts[1]!).toBe(30_000)
+      expect(env.minted).toHaveLength(mint ? 2 : 1)
+      expect(relay.texts.filter((text) => text.includes('"refresh"'))).toHaveLength(mint ? 1 : 0)
+      jest.advanceTimersByTime(2 * 60_000)
+      await flush()
+      expect(env.attempts).toHaveLength(3)
+      expect(env.sockets()).toBe(1)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test.each([
+    {
+      name: "a lost response",
+      reply: () => {
+        throw new Error("response lost")
+      },
+      disable: false,
+    },
+    { name: "an unreadable success", reply: () => new Response("{"), disable: false },
+    {
+      name: "an unrelated refusal",
+      reply: () =>
+        Response.json({ error: { code: "REMOTE_UNAVAILABLE" } }, { status: 503, headers: { "retry-after": "30" } }),
+      disable: false,
+    },
+    { name: "an owner disabling the link during the wait", reply: renewing, disable: true },
+  ])("does not make an early ticket request after $name", async ({ reply, disable }) => {
+    const relay = createMemoryRelay()
+    const env = jobsComputer(relay, {}, (attempt) => (attempt === 2 ? reply() : undefined))
+    env.jobs.want = false
+    await env.link.setEnabled(true)
+    env.jobs.want = true
+    jest.useFakeTimers()
+    try {
+      await env.link.jobsChanged()
+      await turns(() => env.link.status().state === "online")
+      jest.advanceTimersByTime(RELAY_LIMITS.computerTicketMaxAgeMs / 2)
+      await flush()
+      expect(env.attempts).toHaveLength(2)
+      if (disable) await env.link.setEnabled(false)
+      jest.advanceTimersByTime(2 * 60_000)
+      await flush()
+      expect(env.attempts).toHaveLength(2)
+      expect(relay.texts.some((text) => text.includes('"refresh"'))).toBe(false)
+    } finally {
       env.link.stop()
       jest.useRealTimers()
     }

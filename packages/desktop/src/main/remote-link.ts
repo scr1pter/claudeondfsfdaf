@@ -56,6 +56,7 @@ const HEARTBEAT_MS = 25_000
 const REFRESH_MS = 4 * 60_000
 /** R-C2: a computer kept only for jobs refreshes twice inside the relay's computerTicketMaxAgeMs (24 h). */
 const JOBS_REFRESH_MS = 12 * 60 * 60_000
+const JOBS_REFRESH_MAX_RETRY_SECONDS = 60
 /** The relay's internalBodyBytes: it refuses a longer job offer, so a longer 0x02 frame is not one. */
 const OFFER_BYTES = 16 * 1024
 const OFFER_PREFIX = new TextEncoder().encode("vef1.")
@@ -190,6 +191,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     heartbeat?: ReturnType<typeof setInterval>
     refresher?: ReturnType<typeof setInterval>
     jobsRefresher?: ReturnType<typeof setInterval>
+    jobsRefreshRetry?: ReturnType<typeof setTimeout>
     flusher?: ReturnType<typeof setTimeout>
     retry?: ReturnType<typeof setTimeout>
     failures: number
@@ -557,6 +559,11 @@ export function createRemoteLink(deps: LinkDependencies) {
   // inside the relay's computerTicketMaxAgeMs, because each refresh wakes the account's Durable Object and books up to
   // idleTailMs of awake time. Its ticket lapses in between, and the relay asks again only when its peers change, so a
   // phone's cadence that takes over from the jobs cadence refreshes at once unless control() just did.
+  const clearJobsRefreshRetry = () => {
+    if (state.jobsRefreshRetry !== undefined) clearTimeout(state.jobsRefreshRetry)
+    state.jobsRefreshRetry = undefined
+  }
+
   const syncRefresher = (refreshed = false) => {
     const phones = state.viewers > 0 && !jobsOnly()
     const jobs = state.online && !phones && jobsWanted()
@@ -566,24 +573,51 @@ export function createRemoteLink(deps: LinkDependencies) {
       clearInterval(state.refresher)
       state.refresher = undefined
     }
-    if (jobs && !state.jobsRefresher) state.jobsRefresher = setInterval(() => void refresh(), timing.jobsRefreshMs)
+    if (jobs && !state.jobsRefresher) state.jobsRefresher = setInterval(() => void refresh(true), timing.jobsRefreshMs)
     if (!jobs && state.jobsRefresher) {
       clearInterval(state.jobsRefresher)
       state.jobsRefresher = undefined
+      clearJobsRefreshRetry()
     }
     if (lapsed) void refresh()
   }
 
-  const refresh = async () => {
+  const refresh = async (retryJobs = false, eligible?: () => boolean) => {
     const socket = state.socket
     const identity = state.identity
-    if (!socket || !identity) return
+    const jobsRefresher = state.jobsRefresher
+    if (!socket || !identity || eligible?.() === false) return
     const ticket = await mint(identity).catch(() => undefined)
-    if (ticket && "ticket" in ticket && state.socket === socket && socket.readyState === 1)
+    if (eligible?.() === false) return
+    if (ticket && "ticket" in ticket && state.socket === socket && socket.readyState === 1) {
       socket.send(JSON.stringify({ t: "refresh", ticket: ticket.ticket }))
+      return
+    }
+    if (
+      !retryJobs ||
+      jobsRefresher === undefined ||
+      !ticket ||
+      "ticket" in ticket ||
+      ticket.refreshRetryMs === undefined
+    )
+      return
+    const sameJobsLink = () =>
+      state.socket === socket &&
+      state.identity === identity &&
+      socket.readyState === 1 &&
+      state.jobsRefresher === jobsRefresher &&
+      wanted() &&
+      jobsWanted()
+    if (!sameJobsLink() || state.jobsRefreshRetry !== undefined) return
+    state.jobsRefreshRetry = setTimeout(() => {
+      state.jobsRefreshRetry = undefined
+      void refresh(false, sameJobsLink)
+    }, ticket.refreshRetryMs)
   }
 
-  type Minted = { ticket: string; url: string } | { refused: RemoteState; message?: string; retryMs: number }
+  type Minted =
+    | { ticket: string; url: string }
+    | { refused: RemoteState; message?: string; retryMs: number; refreshRetryMs?: number }
 
   const mint = async (identity: RemoteIdentity): Promise<Minted> => {
     const token = await deps.token().catch(() => undefined)
@@ -614,6 +648,18 @@ export function createRemoteLink(deps: LinkDependencies) {
       if (response.status === 401) return { refused: "signed-out", ...(message ? { message } : {}), retryMs: 0 }
       if (response.status === 402 || response.status === 403)
         return { refused: "not-in-plan", ...(message ? { message } : {}), retryMs: 30 * 60_000 }
+      // This reply comes from the entitlement check before the API signs a ticket.
+      if (response.status === 503 && error?.code === "MODEL_PLAN_RENEWING") {
+        const retryAfter = response.headers.get("retry-after")
+        const seconds = retryAfter && /^[1-9][0-9]?$/.test(retryAfter) ? Number(retryAfter) : 0
+        if (seconds && seconds <= JOBS_REFRESH_MAX_RETRY_SECONDS)
+          return {
+            refused: "unavailable",
+            ...(message ? { message } : {}),
+            retryMs: 10 * 60_000,
+            refreshRetryMs: seconds * 1_000,
+          }
+      }
       return { refused: "unavailable", ...(message ? { message } : {}), retryMs: 10 * 60_000 }
     }
     if (typeof body?.ticket !== "string" || typeof body.url !== "string" || body.protocol !== RELAY_SUBPROTOCOL)
@@ -769,6 +815,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     if (state.heartbeat) clearInterval(state.heartbeat)
     if (state.refresher) clearInterval(state.refresher)
     if (state.jobsRefresher) clearInterval(state.jobsRefresher)
+    clearJobsRefreshRetry()
     if (state.flusher) clearTimeout(state.flusher)
     state.heartbeat = undefined
     state.refresher = undefined
