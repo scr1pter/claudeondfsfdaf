@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import {
   createDockerRuntime,
   parseWorkspaceSnapshot,
@@ -450,6 +454,187 @@ test.skipIf(process.platform !== "linux")(
         error: undefined,
         stderr: "",
       })
+    }
+  },
+)
+
+// INITIALIZE runs git from its own fixed PATH, so the clone cases need git there and python3 here.
+const initializeGit = ["/usr/local/bin/git", "/usr/bin/git", "/bin/git"].find((file) => existsSync(file))
+const canInitialize =
+  process.platform !== "win32" &&
+  initializeGit !== undefined &&
+  spawnSync(initializeGit, ["--version"], { timeout: 5000 }).status === 0 &&
+  spawnSync("python3", ["--version"], { timeout: 5000 }).status === 0
+
+function git(home: string, args: string[], stdin?: string) {
+  return spawnSync(initializeGit!, args, {
+    input: stdin,
+    encoding: "utf8",
+    timeout: 20_000,
+    maxBuffer: 16 * 1024 * 1024,
+    env: {
+      PATH: "/usr/local/bin:/usr/bin:/bin",
+      HOME: home,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+    },
+  })
+}
+
+/** main has `main` commits; feature forks at main~`forkBack` and adds `feature` commits. */
+function history(input: { main: number; forkBack: number; feature: number }) {
+  let stream = ""
+  let time = 1_700_000_000
+  const commit = (ref: string, mark: number, file: string, from?: number) => {
+    const message = `${file} ${mark}\n`
+    stream +=
+      `commit ${ref}\nmark :${mark}\ncommitter Fixture <fixture@example.invalid> ${time++} +0000\n` +
+      `data ${Buffer.byteLength(message)}\n${message}${from ? `from :${from}\n` : ""}` +
+      `M 644 inline ${file}\ndata ${Buffer.byteLength(message)}\n${message}\n`
+  }
+  for (let index = 1; index <= input.main; index++) commit("refs/heads/main", index, "main.txt")
+  for (let index = 1; index <= input.feature; index++) {
+    const fork = index === 1 ? input.main - input.forkBack : undefined
+    commit("refs/heads/feature", input.main + index, "feature.txt", fork)
+  }
+  return stream
+}
+
+/** A local bare `vector/example.git` built with fast-import, whose HEAD names `head`. */
+function remote(root: string, stream: string, head: string) {
+  const bare = join(root, "remote", "vector", "example.git")
+  for (const [args, stdin] of [
+    [["init", "--bare", "--quiet", bare]],
+    [["-C", bare, "symbolic-ref", "HEAD", head]],
+    [["-C", bare, "fast-import", "--quiet"], stream],
+  ] as [string[], string?][]) {
+    const result = git(root, args, stdin)
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" })
+  }
+  return {
+    bare,
+    rev: (spec: string) => git(root, ["-C", bare, "rev-parse", "--verify", spec]).stdout.trim(),
+  }
+}
+
+/** Runs the captured INITIALIZE program against the local remote, with each substitution matching exactly once. */
+async function initializeClone(root: string, ref: string) {
+  const value = fixture()
+  await runtime(value).create(input)
+  const init = value.commands.find((item) => item.args[0] === "container" && item.args[1] === "run")!
+  let source = init.args[init.args.indexOf("-c") + 1]!
+  const substitute = (from: string, to: string) => {
+    expect(source.split(from)).toHaveLength(2)
+    source = source.replace(from, () => to)
+  }
+  substitute("pathlib.Path('/data')", `pathlib.Path(${JSON.stringify(join(root, "data"))})`)
+  substitute("'HOME': '/data/home'", `'HOME': ${JSON.stringify(join(root, "data", "home"))}`)
+  substitute("pathlib.Path('/run/git-credential')", `pathlib.Path(${JSON.stringify(join(root, "git-credential"))})`)
+  substitute("'https://github.com/'", JSON.stringify(pathToFileURL(join(root, "remote")).href + "/"))
+  substitute("'-c', 'protocol.file.allow=never', ", "")
+  // Every git process the program starts, children included, appends its trace2 events here.
+  const trace = join(root, "trace2.json")
+  substitute("'GIT_LFS_SKIP_SMUDGE': '1'", `'GIT_LFS_SKIP_SMUDGE': '1', 'GIT_TRACE2_EVENT': ${JSON.stringify(trace)}`)
+  const result = spawnSync("python3", ["-c", source], {
+    input: JSON.stringify({ repository: { owner: "vector", repository: "example", ref }, model: input.model }),
+    encoding: "utf8",
+    timeout: 25_000,
+    maxBuffer: 65536,
+  })
+  expect({ status: result.status, error: result.error?.message, stderr: result.stderr }).toEqual({
+    status: 0,
+    error: undefined,
+    stderr: "",
+  })
+  const repository = join(root, "data", "repository")
+  return {
+    repository,
+    baseCommit: (JSON.parse(result.stdout) as { baseCommit: string }).baseCommit,
+    git: (...args: string[]) => git(root, ["-C", repository, ...args]),
+    originHead: () => {
+      const file = join(repository, ".git", "refs", "remotes", "origin", "HEAD")
+      return existsSync(file) ? readFileSync(file, "utf8") : undefined
+    },
+    /** The git command name of every traced process, in order. */
+    commands: () =>
+      (existsSync(trace) ? readFileSync(trace, "utf8") : "")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { event: string; name?: string })
+        .filter((event) => event.event === "cmd_name")
+        .map((event) => event.name),
+  }
+}
+
+test.skipIf(!canInitialize)(
+  "the workspace clone records the default branch with enough history for a branch review",
+  async () => {
+    const root = mkdtempSync(join(tmpdir(), "vector-ws-clone-"))
+    try {
+      const origin = remote(root, history({ main: 80, forkBack: 40, feature: 100 }), "refs/heads/main")
+      const clone = await initializeClone(root, "refs/heads/feature")
+      expect(clone.baseCommit).toBe(origin.rev("refs/heads/feature"))
+      // A loose symbolic ref, as ReadOnlyGit's default-branch read requires.
+      expect(clone.originHead()).toBe("ref: refs/remotes/origin/main\n")
+      const base = clone.git("merge-base", "HEAD", "origin/main")
+      expect({ status: base.status, base: base.stdout.trim() }).toEqual({ status: 0, base: origin.rev("main~40") })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+)
+
+test.skipIf(!canInitialize)(
+  "a branch forked beyond the deepening cap still initializes, bounded-shallow, with the default branch recorded",
+  async () => {
+    const root = mkdtempSync(join(tmpdir(), "vector-ws-clone-"))
+    try {
+      const origin = remote(root, history({ main: 80, forkBack: 40, feature: 1200 }), "refs/heads/main")
+      const clone = await initializeClone(root, "refs/heads/feature")
+      expect(clone.baseCommit).toBe(origin.rev("refs/heads/feature"))
+      expect(clone.originHead()).toBe("ref: refs/remotes/origin/main\n")
+      const base = clone.git("merge-base", "HEAD", "origin/main")
+      expect({ status: base.status, base: base.stdout.trim() }).toEqual({ status: 1, base: "" })
+      // depth 64, then four rounds of 256 and no more
+      expect(clone.git("rev-list", "--count", "HEAD").stdout.trim()).toBe(String(64 + 4 * 256))
+      expect(clone.git("rev-parse", "--is-shallow-repository").stdout.trim()).toBe("true")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+)
+
+test.skipIf(!canInitialize)(
+  "the clone's fetches start no automatic git maintenance, which would race the next fetch and die with the container",
+  async () => {
+    const root = mkdtempSync(join(tmpdir(), "vector-ws-clone-"))
+    try {
+      remote(root, history({ main: 80, forkBack: 40, feature: 1200 }), "refs/heads/main")
+      const commands = (await initializeClone(root, "refs/heads/feature")).commands()
+      expect(commands).toContain("fetch")
+      expect(commands.filter((name) => name === "maintenance" || name === "gc" || name === "repack")).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+)
+
+test.skipIf(!canInitialize)(
+  "a default branch name outside the supervisor's branch rule leaves today's depth-1 clone",
+  async () => {
+    const root = mkdtempSync(join(tmpdir(), "vector-ws-clone-"))
+    try {
+      // Git accepts "odd+name"; the supervisor's validBranch rule does not.
+      const stream = history({ main: 80, forkBack: 40, feature: 10 }) + "reset refs/heads/odd+name\nfrom :80\n\n"
+      const origin = remote(root, stream, "refs/heads/odd+name")
+      const clone = await initializeClone(root, "refs/heads/feature")
+      expect(clone.baseCommit).toBe(origin.rev("refs/heads/feature"))
+      expect(clone.originHead()).toBeUndefined()
+      expect(clone.git("rev-parse", "--verify", "--quiet", "refs/remotes/origin/odd+name").status).toBe(1)
+      expect(clone.git("rev-list", "--count", "HEAD").stdout.trim()).toBe("1")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   },
 )
