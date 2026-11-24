@@ -109,6 +109,7 @@ import {
   type TestAccount,
 } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
+import { BINDING_KEY, bindingFields } from "./lib/everywhere-cloud-agents"
 import { seedJobAuthority } from "./lib/everywhere-job-authority"
 import { FakeLinear } from "./lib/everywhere-linear"
 import { FakeSlack } from "./lib/everywhere-slack"
@@ -2514,6 +2515,135 @@ describe("the jobs", () => {
     const html = render(b.model)
     expect(html).not.toContain(CHANNEL_SUMMARY)
     expect(html).toContain(EVERYWHERE_COPY.sharedSummary)
+  })
+
+  test("GitHub history links require the requester's current repository binding", async () => {
+    const input: NewJob = {
+      platform: "github",
+      installation: "github:600",
+      kind: "mention",
+      requester: { userId: "790", account: alice.id },
+      sponsor: alice.id,
+      repository: { id: 4242, fullName: "acme/app", shared: false },
+      shared: false,
+      task: "",
+      context: [],
+      reply: { ref: "sealed-reference-only", statusCommentId: 623_452 },
+    }
+    const addJob = async (extra: Partial<NewJob>) => {
+      const created = await createJob(jobsCtx(), { ...input, ...extra })
+      if (!created.ok) throw new Error(`createJob refused: ${created.code}`)
+      return created.job
+    }
+    const issue = await addJob({
+      github: { kind: "issue", number: 72, actorId: 790, event: "issue_comment", commentId: 414 },
+    })
+    const pull = await addJob({
+      github: { kind: "pr", number: 73, actorId: 790, event: "issue_comment", commentId: 415 },
+    })
+    const legacy = await addJob({ github: { kind: "issue", number: 74 } })
+    expect((await refuseJob(jobsCtx(), legacy.jid, "not-mapped")).ok).toBe(true)
+    const sponsored = await addJob({
+      requester: { userId: "790", account: bob.id },
+      github: { kind: "issue", number: 76, actorId: 790, event: "issue_comment", commentId: 417 },
+    })
+    const other = await addJob({
+      requester: { userId: "791", account: bob.id },
+      sponsor: bob.id,
+      github: { kind: "pr", number: 75, actorId: 791, event: "issue_comment", commentId: 416 },
+    })
+    fake.send(["ZADD", everywhereKeys.jobHistory(alice.id), fake.clock.now + 1, other.jid])
+
+    const original = bindingFields({
+      account: alice.id,
+      repositoryId: "4242",
+      with: { repository: "acme/app", boundAt: String(fake.clock.now - 1) },
+    })
+    let binding: Record<string, string> | "down" | undefined = original
+    const reads: string[][] = []
+    const fetchBinding = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      if (String(url) !== FAKE_KV_URL) return fetch(url, init)
+      const command: string[] = JSON.parse(String(init?.body))
+      reads.push(command)
+      expect(command[0]).toBe("EVAL")
+      expect(command[2]).toBe("1")
+      if (command[3] === `vector:cloud-agents:bindings:${alice.id}`) return Response.json({ result: ["4242"] })
+      expect(command[3]).toBe(`${BINDING_KEY}4242`)
+      if (binding === "down") return new Response(null, { status: 503 })
+      return Response.json({ result: [binding ? Object.entries(binding).flat() : []] })
+    }
+    const fetcher: typeof fetch = Object.assign(fetchBinding, { preconnect: () => {} })
+    mountAccount(createAccountApi(deps({ fetcher })))
+    const history = () => harness.call("GET", EVERYWHERE_ROUTES.history, { token: alice.token })
+    const answer = await history()
+    expect(answer.status).toBe(200)
+    expect(reads).toHaveLength(2)
+    const rows = new Map(answer.body.jobs.map((row: { jid: string; threadUrl?: string }) => [row.jid, row]))
+    expect([...rows.keys()].sort()).toEqual([issue.jid, pull.jid, legacy.jid, sponsored.jid].sort())
+    expect(rows.get(issue.jid)).toMatchObject({ threadUrl: "https://github.com/acme/app/issues/72" })
+    expect(rows.get(pull.jid)).toMatchObject({ threadUrl: "https://github.com/acme/app/pull/73" })
+    expect(rows.get(legacy.jid)).not.toHaveProperty("threadUrl")
+    expect(rows.get(sponsored.jid)).not.toHaveProperty("threadUrl")
+    expect(answer.text).not.toMatch(/replyEnc|statusCommentId|commentId|requester|actorId|sealed-reference-only/)
+
+    const b = browser(loopback, { activity: true })
+    await b.model.setSession(as(alice))
+    const html = render(b.model)
+    expect(html).toContain(
+      '<a href="https://github.com/acme/app/issues/72" rel="noopener noreferrer">GitHub thread</a>',
+    )
+    expect(html).toContain('<a href="https://github.com/acme/app/pull/73" rel="noopener noreferrer">GitHub thread</a>')
+
+    for (const unavailable of [
+      undefined,
+      "down" as const,
+      { ...original, account: bob.id },
+      { ...original, suspended: "binder-left" },
+      { ...original, repository: "acme/renamed" },
+      { ...original, installationId: "601" },
+      { ...original, binderGithubId: "791" },
+      { ...original, boundAt: String(fake.clock.now + 1) },
+    ]) {
+      binding = unavailable
+      const withoutLink = await history()
+      expect(withoutLink.status).toBe(200)
+      expect(withoutLink.body.jobs).toHaveLength(4)
+      expect(withoutLink.text).not.toContain("threadUrl")
+    }
+
+    const readCount = reads.length
+    binding = original
+    env = everywhereEnv("slack")
+    mountAccount(createAccountApi(deps({ fetcher })))
+    const disabled = await history()
+    expect(disabled.status).toBe(200)
+    expect(disabled.body.jobs).toHaveLength(4)
+    expect(disabled.text).not.toContain("threadUrl")
+    expect(reads).toHaveLength(readCount)
+  })
+
+  test("the history keeps jobs while discarding noncanonical or differently scoped thread links", async () => {
+    const github = { platform: "github", installation: "github:600" }
+    const url = "https://github.com/acme/app/issues/72"
+    const rows = [
+      forgedJob({ ...github, threadUrl: "https://github.com/ACME/App/issues/72" }),
+      forgedJob({ threadUrl: url }),
+      ...[
+        "javascript:alert(1)",
+        "https://github.com.evil.example/acme/app/issues/72",
+        "https://github.com/elsewhere/app/issues/72",
+        "https://user@github.com/acme/app/issues/72",
+        "https://github.com/acme/app/issues/72?extra=yes",
+        "https://github.com/acme/app/pull/73#reply",
+        "https://github.com/acme/app/issues/9007199254740992",
+        "https://github.com/acme/app/issues/072",
+        url + "\n",
+      ].map((threadUrl) => forgedJob({ ...github, threadUrl })),
+    ]
+    const read = readJobs({ jobs: rows, capped: false, skipped: 0 })
+    expect(read?.items).toHaveLength(rows.length)
+    expect(read?.items.map((job) => job.threadUrl).filter(Boolean)).toEqual(["https://github.com/ACME/App/issues/72"])
+    expect(read?.skipped).toBe(0)
   })
 
   test("each job's platform, route, state, outcome, reason, ending and pull request link", async () => {

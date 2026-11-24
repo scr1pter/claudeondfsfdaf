@@ -274,6 +274,13 @@ function JobRow(props: { readonly job: EverywhereJob }) {
           {copy.ending} <code>{job.ending}</code>
         </p>
       )}
+      {job.threadUrl && job.threadUrl !== job.prUrl && (
+        <p className="acct-fine">
+          <a href={job.threadUrl} rel="noopener noreferrer">
+            {copy.githubThread}
+          </a>
+        </p>
+      )}
       {job.prUrl && (
         <p className="acct-fine">
           <a href={job.prUrl} rel="noopener noreferrer">
