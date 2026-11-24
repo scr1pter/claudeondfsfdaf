@@ -874,6 +874,39 @@ test("a lost acknowledgement of a held result replays that exact result with its
   expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
 })
 
+for (const outcome of ["held", "needs-approval"] as const) {
+  test(`a lost early ${outcome} acknowledgement replays the original result`, async () => {
+    const f = fixture()
+    if (outcome === "needs-approval") f.ask()
+    const attempts: Settle[] = []
+    const runner = createEverywhereRunner({
+      ...f.deps,
+      safeWorktree: outcome === "held" ? undefined : f.deps.safeWorktree,
+      jobs: {
+        ...f.deps.jobs,
+        settle: async (result) => {
+          attempts.push(structuredClone(result))
+          if (attempts.length === 1) throw new Error("Fixture acknowledgement lost")
+        },
+      },
+    })
+    expect(await runner.offer("fixture-offer")).toBe(true)
+    const expected: Settle = {
+      jid: f.job.jid,
+      lease: f.job.lease.id,
+      ...(outcome === "held"
+        ? {
+            outcome,
+            summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed.",
+          }
+        : { outcome, summary: "Fixed retry handling.", needs: ["external_directory"] }),
+    }
+    expect(attempts).toEqual([expected, expected])
+    expect(f.calls.some((call) => ["commit", "push", "open-pr"].includes(call.kind))).toBe(false)
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
+
 for (const action of ["stop", "lost"] as const) {
   test(`a server ${action} answered to pushing keeps the committed branch on the computer and settles held`, async () => {
     const f = fixture()
@@ -999,12 +1032,15 @@ test("a stop heard on a heartbeat after pushing was accepted, before the push is
 })
 
 for (const push of ["confirmed", "ambiguous"] as const) {
-  test(`a switch stop heard on a heartbeat during an admitted ${push} push delivers only the publication result, once`, async () => {
+  test(`a switch stop during an admitted ${push} push keeps the publication receipt until it is acknowledged`, async () => {
     const f = fixture()
     let stopped = false
     let abortedDuringPush = false
     // Under the stop switch, jobs-api answers every report, heartbeat and settle 200 {action: "stop"}.
-    const server = jobsServer(() => ({ status: 200, body: { action: stopped ? "stop" : "continue" } }))
+    const server = jobsServer((route) => ({
+      status: 200,
+      body: route === "settle" && !stopped ? { settled: true } : { action: stopped ? "stop" : "continue" },
+    }))
     f.git.push = async (_, __, branch) => {
       f.calls.push({ kind: "push", value: branch })
       stopped = true
@@ -1022,6 +1058,8 @@ for (const push of ["confirmed", "ambiguous"] as const) {
       ["report", "pushing"],
       ["report", "heartbeat"],
       ["settle", push === "confirmed" ? "changes" : "failed"],
+      ["settle", push === "confirmed" ? "changes" : "failed"],
+      ["settle", push === "confirmed" ? "changes" : "failed"],
     ])
     const published = {
       jid: f.job.jid,
@@ -1031,7 +1069,7 @@ for (const push of ["confirmed", "ambiguous"] as const) {
       files: 1,
       checks: "skipped",
     }
-    expect(server.requests.at(-1)?.body).toEqual(
+    const receipt =
       push === "confirmed"
         ? {
             ...published,
@@ -1042,17 +1080,57 @@ for (const push of ["confirmed", "ambiguous"] as const) {
             ...published,
             outcome: "failed",
             summary: "Publication was not confirmed. Check the remote branch before retrying this task.",
-          },
-    )
+          }
+    expect(server.requests.slice(3).map((request) => request.body)).toEqual([receipt, receipt, receipt])
     // EV-03 (lead ruling): the admitted push finishes, but no draft PR opens after the stop, so the result names the
     // branch and carries no PR link.
     expect(f.calls.filter((call) => call.kind === "open-pr")).toHaveLength(0)
-    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [receipt] })
+    stopped = false
     await createEverywhereRunner(deps).recover()
-    expect(server.requests).toHaveLength(4)
+    expect(server.requests.slice(6)).toEqual([{ route: "settle", status: 200, body: receipt }])
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
     expect(f.calls.filter((call) => call.kind === "push")).toHaveLength(1)
   })
 }
+
+test.each(["visible", "missing", "failed"])("an authenticated JOB_ENDED retires a publication only when it can be reported (%s)", async (warning) => {
+  const f = fixture()
+  const logged: string[] = []
+  const visible = warning === "visible"
+  const server = jobsServer((route) =>
+    route === "settle"
+      ? { status: 409, body: { error: { code: "JOB_ENDED", message: "untrusted message" } } }
+      : { status: 200, body: { action: "continue" } },
+  )
+  const deps = {
+    ...f.deps,
+    jobs: { ...f.deps.jobs, report: server.client.report, settle: server.client.settle },
+    log: warning === "missing" ? undefined : (message: string) => {
+      if (warning === "failed") throw new Error("warning unavailable")
+      logged.push(message)
+    },
+  }
+  await createEverywhereRunner(deps).offer("fixture-offer")
+  const settles = () => server.requests.filter((request) => request.route === "settle")
+  expect(settles()).toHaveLength(1)
+  expect((await f.ledger.inspect()).pending).toEqual(visible ? [] : [settles()[0]!.body])
+  await createEverywhereRunner(deps).recover()
+  expect(settles()).toHaveLength(visible ? 1 : 2)
+  expect(logged).toEqual(visible ? ["Vector everywhere could not report a publication because the job had ended."] : [])
+  expect(f.calls.filter((call) => call.kind === "push")).toHaveLength(1)
+})
+
+test.each([
+  { status: 202, body: { settled: true } },
+  { status: 200, body: { settled: true, action: "stop" } },
+  { status: 200, body: { settled: "true" } },
+])("the jobs client refuses an unconfirmed success response (%j)", async (answer) => {
+  const f = fixture()
+  const server = jobsServer(() => answer)
+  await expect(server.client.settle({ jid: f.job.jid, lease: f.job.lease.id, outcome: "changes" }))
+    .rejects.toThrow("Everywhere result was not acknowledged")
+})
 
 for (const answer of ["stop", "lost", 404, 409] as const) {
   for (const push of ["confirmed", "ambiguous"] as const) {
@@ -1061,10 +1139,11 @@ for (const answer of ["stop", "lost", 404, 409] as const) {
       const logged: string[] = []
       let pushed = false
       let abortedDuringPush = false
-      // A cancelled or lost job answers its settle 409 JOB_ENDED; a job the account no longer sponsors answers 404.
+      // A lease conflict or missing job does not prove what happened to this receipt.
       const refused = answer === 404 ? 404 : 409
       const server = jobsServer((route, milestone) => {
-        if (route === "settle") return { status: refused, body: { error: "The fixture job has ended" } }
+        if (route === "settle")
+          return { status: refused, body: { error: { code: refused === 404 ? "NOT_FOUND" : "LEASE_MISMATCH" } } }
         if (!pushed || milestone !== "heartbeat") return { status: 200, body: { action: "continue" } }
         return typeof answer === "number"
           ? { status: answer, body: { error: "The fixture lease is no longer current" } }

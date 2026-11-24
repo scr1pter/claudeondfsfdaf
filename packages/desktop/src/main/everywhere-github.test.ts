@@ -97,6 +97,21 @@ test("a claimed issue number that GitHub resolves to a PR reaches neither the le
   expect(f.paths).toEqual(["/user", "/repositories/101", "/graphql"])
 })
 
+test("cancellation at the lease boundary aborts the authorization POST and reads no thread body", async () => {
+  await using f = fixture()
+  const controller = new AbortController()
+  await expect(readAuthorizedGithubThread(f.job, {
+    access: async () => f.access,
+    authorize: (job, signal) => {
+      controller.abort()
+      return f.jobs.authorizeGithubThread(job, signal)
+    },
+    signal: controller.signal,
+    now: () => f.now,
+  })).rejects.toThrow()
+  expect(f.paths).toEqual(["/user", "/repositories/101", "/graphql"])
+})
+
 test.each([
   { mode: "non-owner claim", reads: 0 },
   { mode: "PR claim", reads: 0 },
