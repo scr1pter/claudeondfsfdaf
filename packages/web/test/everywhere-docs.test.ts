@@ -550,23 +550,21 @@ describe("the owner's go-live guides", () => {
       expect(before).toContain("Add repository")
       expect(before).toContain("`privateResult`")
     }
-    // Wording that promises routes not built is a gate exactly while it is there.
-    for (const platform of ["slack", "linear"] as const)
-      expect({
-        platform,
-        gate: section(guide(platform), "Before you start").includes("(or in GitHub Actions)"),
-      }).toEqual({
-        platform,
-        gate: renderHelp(platform).includes("GitHub Actions"),
-      })
+  })
+
+  test("keep dormant execution routes out of platform help and listing copy", async () => {
+    for (const platform of TRACKERS) {
+      expect(renderHelp(platform)).not.toMatch(/GitHub Actions|opens a draft pull request/i)
+      expect(renderHelp(platform)).toContain("mapped repository")
+    }
+    expect(renderHelp("github")).toContain("configured Vector workflow")
+    expect(renderHelp("github")).not.toContain("run on their computer")
     const manifest = (await Bun.file(path.join(root, "integrations/slack/manifest.json")).json()) as {
       display_information: { description: string }
       features: { agent_view: { agent_description: string } }
     }
-    const promises = /runner/i.test(
-      manifest.display_information.description + manifest.features.agent_view.agent_description,
-    )
-    expect(section(guide("slack"), "Before you start").includes("GitHub runner")).toBe(promises)
+    expect(manifest.display_information.description).not.toMatch(/GitHub|runner|draft pull request/i)
+    expect(manifest.features.agent_view.agent_description).not.toMatch(/GitHub|runner|draft pull request/i)
   })
 
   test("list the legal and privacy texts the owner provides, and draft none", () => {

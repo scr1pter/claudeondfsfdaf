@@ -1107,7 +1107,7 @@ export function renderRefusal(code: RefusalCode | DeclineCode, options: RefusalO
 
 const HELP: Readonly<Record<PlatformId, readonly string[]>> = {
   slack: [
-    "Mention Vector with what to change. It runs on your computer (or in GitHub Actions) and opens a draft pull request.",
+    "Mention Vector with the change you want in the mapped repository.",
     "Words after the mention:",
     "- `help`: this text",
     "- `link <code>`: link your Vector account (only in a direct message to Vector)",
@@ -1117,7 +1117,7 @@ const HELP: Readonly<Record<PlatformId, readonly string[]>> = {
     "- `repo <owner/name>`: set the repository for this channel",
   ],
   linear: [
-    "Delegate an issue to Vector, or mention it, to have it work on the issue. It runs on your computer (or in GitHub Actions) and opens a draft pull request.",
+    "Delegate an issue to Vector, or mention Vector to request a change in the mapped repository.",
     "Words after the mention:",
     "- `help`: this text",
     "- `unlink`: remove the link",
@@ -1126,7 +1126,7 @@ const HELP: Readonly<Record<PlatformId, readonly string[]>> = {
     "Repositories for each team are set on vectordev.ai/everywhere.",
   ],
   jira: [
-    "Assign a work item to Vector, or mention it in a comment, to have it work on the item. It runs on your computer and opens a draft pull request.",
+    "Assign a work item to Vector, or mention Vector in a comment to request a change in the mapped repository.",
     "Words after the mention:",
     "- `help`: this text",
     "- `link <code>`: link your Vector account (only in Rovo chat with Vector)",
@@ -1136,7 +1136,7 @@ const HELP: Readonly<Record<PlatformId, readonly string[]>> = {
     "Repositories for each project are set on vectordev.ai/everywhere.",
   ],
   github: [
-    "Mention Vector in an issue or pull request comment. Mentions from the person who bound this repository can run on their computer; everyone else's run in this repository's GitHub Actions.",
+    "Mention Vector in an issue or pull request comment. The repository needs a configured Vector workflow in GitHub Actions.",
   ],
 }
 

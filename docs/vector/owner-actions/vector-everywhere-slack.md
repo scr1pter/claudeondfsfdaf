@@ -20,8 +20,6 @@ These gates are in the code or with the lead, not yours. Check that each one is 
 - Repository lookup requires the requester's verified GitHub binding. In a Slack channel, the connector or an eligible requester can map it with `@Vector repo owner/name`.
 - /everywhere is still a draft (PUB-8): installs, links, connect codes and mapping all happen on that page, so go-live waits for the 2.0.0 move (At 2.0.0).
 - Listing Codium's `everywhere` perk needs EV-21's four preconditions first (spec §10, "Codium listing", note of 2026-11-20).
-- The `help` text promises a route that is not built: `renderHelp` in `packages/schema/src/everywhere-policy.ts` says "(or in GitHub Actions)" for Slack and Linear. That wording changes before go-live (R-A4, R-C8).
-- The app's own text names a route that is not built: `display_information.description` and `features.agent_view.agent_description` in `integrations/slack/manifest.json` name a "GitHub runner". Both change before go-live (Texts you provide).
 
 ## Keys (once, for every platform)
 

@@ -20,7 +20,6 @@ These gates are in the code or with the lead, not yours. Check that each one is 
 - Repository lookup requires the requester's verified GitHub binding.
 - /everywhere is still a draft (PUB-8): installs, links, connect codes and mapping all happen on that page, so go-live waits for the 2.0.0 move (At 2.0.0).
 - Listing Codium's `everywhere` perk needs EV-21's four preconditions first (spec §10, "Codium listing", note of 2026-11-20).
-- The `help` text promises a route that is not built: `renderHelp` in `packages/schema/src/everywhere-policy.ts` says "(or in GitHub Actions)" for Slack and Linear. That wording changes before go-live (R-A4, R-C8).
 - Once /everywhere is published, the connector can enter a Linear team ID and the GitHub repository's `owner/name`, then choose **Add repository**. Adding a repository requires the connector's verified GitHub binding.
 - Summaries are held: Linear and Jira post only the outcome and the pull request link, and the private result surface (`privateResult`) is not built, so a summary reaches no one. The lead rules on EV-23 (c) before Linear or Jira goes live.
 

@@ -314,7 +314,7 @@ Each item below is also in the deviations log.
 
   Deviations log, "2026-11-20, EV-23", Left open.
 - **The docs and guides' loose ends (EV-24, open).**
-  - **Wording that promises routes not built:** `renderHelp`'s Slack and Linear lines say "(or in GitHub Actions)" and GitHub's promises the binder's mentions on their computer (packages/schema/src/everywhere-policy.ts, the HELP table), and the Slack manifest's `description` and `agent_description` name a "GitHub runner". Go-live gates in the guides, tripwired by the copy test; the change is for the lead.
+  - **Help and listing copy (EV-24).** Slack, Linear and Jira explain how to request a change in a mapped repository. GitHub help names the configured Vector workflow. The Slack manifest describes requesting work and following its progress. The guides keep the execution-route prerequisites.
   - **No per-platform stop switch:** removing a platform from VECTOR_EVERYWHERE_PLATFORMS leaves its live replies unable to post (runtime.ts `configuredPlatforms`), so the guides give only the full order.
   - **The docs' set-up steps wait for the desktop write path** (EV-21 (aj)); the copy test fails when the page starts writing.
   - **The lane's path filter** (FIT-4, review-fixes) does not cover packages/web/src/drafts/**. **For review-fixes:** when it repairs the vector-everywhere.yml path filter, include packages/web/src/drafts/**. Until then, dispatch vector-everywhere.yml for any draft-only change.
