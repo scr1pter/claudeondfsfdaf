@@ -35,6 +35,10 @@ on:
         type: boolean
         required: false
         default: false
+      stop_repeat:
+        type: number
+        required: false
+        default: 1
     outputs:
       darwin-digest:
         description: Source digest of the verified macOS helper
@@ -85,6 +89,11 @@ on:
         type: boolean
         required: false
         default: false
+      stop_repeat:
+        description: Isolated Windows Stop diagnostic samples (requires the full desktop lane, 1 disables)
+        type: number
+        required: false
+        default: 1
   push:
     branches: ["ci/computer-**"]
 
@@ -92,7 +101,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-computer-helper-${{ inputs['linux-only'] && (inputs['windows-only'] && 'invalid-linux-windows' || 'linux-only') || inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['helper-channel'] || 'prod' }}-${{ inputs['artifact-suffix'] || github.sha }}
+  group: ${{ github.workflow }}-computer-helper-${{ inputs['linux-only'] && (inputs['windows-only'] && 'invalid-linux-windows' || 'linux-only') || inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['helper-channel'] || 'prod' }}-${{ inputs['artifact-suffix'] || github.sha }}${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.stop_repeat) != '1' && format('-stop-{0}', inputs.stop_repeat) || '' }}
   cancel-in-progress: true
 
 env:
@@ -126,6 +135,7 @@ jobs:
           FULL_DESKTOP_E2E: ${{ toJSON(inputs['full-desktop-e2e']) }}
           LINUX_ONLY: ${{ inputs['linux-only'] || false }}
           WINDOWS_ONLY: ${{ inputs['windows-only'] || false }}
+          STOP_REPEAT: ${{ format('{0}', inputs.stop_repeat) }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |
@@ -136,6 +146,15 @@ jobs:
             exit 1
           fi
           # HELPER_PLATFORM_GUARD_END
+          if [[ "$EVENT_NAME" != workflow_dispatch && -z "$STOP_REPEAT" ]]; then STOP_REPEAT=1; fi
+          if [[ ! "$STOP_REPEAT" =~ ^([1-9]|[1-4][0-9]|50)$ ]]; then
+            echo "::error::stop_repeat must be an integer from 1 to 50."
+            exit 1
+          fi
+          if (( STOP_REPEAT > 1 )) && [[ "$EVENT_NAME" != workflow_dispatch || "$ISOLATED_DESKTOP" != true || "$LINUX_ONLY" == true || "$FULL_DESKTOP_E2E" != true ]]; then
+            echo "::error::stop_repeat requires a manual run with the full isolated Windows desktop lane."
+            exit 1
+          fi
           # HELPER_CHANNEL_GUARD_BEGIN
           case "$VECTOR_CHANNEL" in prod|beta|dev) ;; *) echo "::error::Choose helper-channel prod, beta or dev."; exit 1 ;; esac
           if [[ "$VECTOR_CHANNEL" != prod ]]; then ARTIFACT_SUFFIX="$ARTIFACT_SUFFIX-$VECTOR_CHANNEL"; fi
@@ -878,6 +897,17 @@ jobs:
           } elseif ($status -ne 0) {
             throw "Actual isolated overlay Stop failed or required native evidence is unavailable."
           }
+      - name: Measure repeated isolated Windows overlay Stop
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.stop_repeat > 1 && inputs['isolated-desktop'] && needs.plan.outputs.desktop == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 35
+        env:
+          STOP_REPEAT: ${{ inputs.stop_repeat }}
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "0"
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke-repeat.ts $env:STOP_REPEAT
+          if ($LASTEXITCODE -ne 0) { throw "The Stop measurement did not gather the requested usable samples." }
       - name: Archive the verified never-shipped overlay stage separately
         if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 5
