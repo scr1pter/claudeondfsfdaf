@@ -22,6 +22,7 @@ export function jiraTask(ctx: JiraTaskContext, record: JiraTaskRecord, job?: Job
     record.code === "origin" ? "Send your own coding task in this conversation before Vector starts." :
     record.code === "repository" ? "Choose an exact mapped repository option." : record.code === "unsupported" ? "This invocation is not supported. Assign Vector a work item or mention it in your own comment." :
     job && state === "WORKING" ? renderMilestone(job.milestone === "heartbeat" ? "reading" : job.milestone ?? "reading", { platform: "jira" }) :
+    state === "SUBMITTED" && job?.state === "claimed" ? "Your computer picked up the request and is preparing to start." :
     state === "SUBMITTED" ? "Received your request. Waiting for your computer." : state === "CANCELED" ? "Cancelled at your request." :
     state === "REJECTED" ? "This task could not be accepted." : "The result is being prepared.")
   const message = { role: "ROLE_AGENT", parts: [{ text }], messageId: randomUUID(), taskId: record.id, contextId: record.contextId }
