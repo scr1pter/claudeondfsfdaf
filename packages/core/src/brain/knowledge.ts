@@ -520,6 +520,7 @@ export interface Interface {
       /** Run Guard has warned for this run, so document context is halved. */
       readonly tight: boolean
       readonly personal: boolean
+      readonly audience?: Brain.Audience
       readonly exclude: ReadonlySet<string>
       /** What the request is touching: records linked to it come in with no word in common with the request. */
       readonly seeds?: readonly BrainFuse.Seed[]
@@ -2364,6 +2365,7 @@ function make(input: {
       tier: Tier
       tight: boolean
       personal: boolean
+      audience?: Brain.Audience
       exclude: ReadonlySet<string>
       seeds?: readonly BrainFuse.Seed[]
       sessionID?: string
@@ -2376,7 +2378,8 @@ function make(input: {
   ) {
     const use = request.use ?? "recall"
     state.active = Date.now()
-    const has = (yield* count(place, { personal: request.personal })) > 0
+    // Document visibility gives local read access. It does not qualify a card or its full passage for outward recall.
+    const has = request.audience !== "outward" && (yield* count(place, { personal: request.personal })) > 0
     // Without documents memory recalls exactly as it always has.
     if (!has) {
       const recalled = yield* brain.recall(place, {
@@ -2384,6 +2387,7 @@ function make(input: {
         files: request.files,
         budget: request.budget ?? Brain.recallBudget(request.tier),
         personal: request.personal,
+        audience: request.audience,
         exclude: request.exclude,
         ...(request.sessionID ? { sessionID: request.sessionID } : {}),
         ...(request.requestID ? { requestID: request.requestID } : {}),

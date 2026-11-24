@@ -1,6 +1,6 @@
 import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
-import { Effect, Option } from "effect"
+import { Context, Effect, Option } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 
 export function forwarded(request: HttpServerRequest.HttpServerRequest) {
@@ -48,6 +48,15 @@ export const owner = Effect.gen(function* () {
   const request = yield* Effect.serviceOption(HttpServerRequest.HttpServerRequest)
   return principal.kind === "owner" && (!Option.isSome(request) || !forwarded(request.value))
 })
+
+/** Supplied only after the authorization middleware verifies the server credential. */
+export class VerifiedCredentials extends Context.Service<VerifiedCredentials, "owner" | "guest">()(
+  "@vector/VerifiedServerCredentials",
+) {}
+
+export const authenticated = Effect.serviceOption(VerifiedCredentials).pipe(
+  Effect.map((identity) => Option.isSome(identity) && identity.value === "owner"),
+)
 
 /** Path selectors are checked before resolving an instance, even when an endpoint would ignore a supplied selector. */
 export function paths(request: HttpServerRequest.HttpServerRequest) {

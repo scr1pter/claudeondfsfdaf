@@ -67,6 +67,7 @@ function validateCredential<A, E, R>(
     const owner = identity === "owner" && !RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest)
     return yield* SessionAudienceHttp.protectResponse(effect, owner, audience).pipe(
       Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)),
+      Effect.provideService(RequestOwner.VerifiedCredentials, identity),
       Effect.flatMap((response) => (owner ? Effect.succeed(response) : ComputerPrivacy.response(response))),
     )
   })

@@ -246,6 +246,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ),
         )
       yield* SessionAudienceHttp.admit(created.id, owner)
+      if (owner && promptSvc.recordScreenedRecallJob && (yield* RequestOwner.authenticated))
+        yield* promptSvc.recordScreenedRecallJob(created)
       return created
     })
 
@@ -447,9 +449,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     // guest never accepted the free-model training notice, so the owner's acceptance does not carry a guest's prompt to
     // a model that may train. Where research searches is the owner's choice too.
     const promptOptions = Effect.gen(function* () {
+      const screenedRecallOwner = yield* RequestOwner.authenticated
       return (yield* RequestOwner.owner)
-        ? { userFile: () => true }
-        : { tightenBudget: true, refuseTrainingFreeModels: true, dropResearchOptions: true }
+        ? { userFile: () => true, screenedRecallOwner }
+        : { tightenBudget: true, refuseTrainingFreeModels: true, dropResearchOptions: true, screenedRecallOwner }
     })
 
     // An isolated task, or a descendant of a retired one, is refused here with a client error before anything is
