@@ -66,7 +66,7 @@ import {
   sanitizeModelMarkdown,
   type RepoRef,
 } from "@vectordevai/core/review/format"
-import { holdbackContext, holdbackFiles, safeRulePrompt } from "@vectordevai/core/review/holdback"
+import { holdbackContext, holdbackFiles, holdbackText, safeRulePrompt } from "@vectordevai/core/review/holdback"
 import { classifyFiles, classifyPath, isSensitivePath, parseGitAttributes } from "@vectordevai/core/review/ignore"
 import {
   assessReview,
@@ -78,7 +78,7 @@ import {
 import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { decideRoute, type RouteRefusal } from "@vectordevai/core/review/privacy"
-import { redactSecrets } from "@vectordevai/core/review/redact"
+import { REDACTED, redactSecrets } from "@vectordevai/core/review/redact"
 import {
   combineCostKinds,
   contextRefusal,
@@ -829,6 +829,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         trigger: "desktop",
       })
   const config = merged.config
+  const holdSecrets = config.holdback === "secrets"
   const ruleCheck = config.ruleCheck === "strict" ? ("strict" as const) : undefined
   input.onSettings?.({ config: structuredClone(config), warnings: [...merged.warnings] })
   // The settings' warnings about privacy, holdback and attestations (a value read as the stricter setting, an
@@ -876,7 +877,9 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     input.previous.specialists.length > 0 &&
     input.previous.specialists.every((specialist) => specialist.status === "ok") &&
     (input.previous.verification?.status ?? "ok") === "ok"
-      ? input.previous
+      ? holdSecrets
+        ? withoutRedactedEdits(input.previous)
+        : input.previous
       : undefined
   const unchanged = new Set(
     review.filter((file) => previous?.fileKeys?.[file.path] === fileKeys[file.path]).map((file) => file.path),
@@ -925,8 +928,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   // untrusted block the prompts quote are redacted, and the sessions' rules deny the read tool the credential files
   // and every held path, so the engine's read, grep and glob tools redact what they return. The desktop cannot ask git
   // which changed files are ignored, so its note says so. Unset, nothing here runs and the prompts are as before.
-  const hold =
-    config.holdback === "secrets" ? holdbackFiles(review, { headFiles: checkout.headFiles, ignored: [] }) : undefined
+  const hold = holdSecrets ? holdbackFiles(review, { headFiles: checkout.headFiles, ignored: [] }) : undefined
   const heldPaths = new Set(hold?.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
   const sent = hold?.files ?? review
   const reviewed = hold?.held.length
@@ -1393,7 +1395,9 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     throw cause
   })
 
-  const reports = runs.flatMap((run) => (run.report ? [{ source: run.name, report: run.report }] : []))
+  const reports = runs.flatMap((run) =>
+    run.report ? [{ source: run.name, report: holdSecrets ? withoutRedactedReportEdits(run.report) : run.report }] : [],
+  )
   if (!reports.length) {
     stop.dispose()
     const spend = reviewProgressSpend(runs, first)
@@ -1927,6 +1931,46 @@ function routeRefusalOf(model: ReviewModel): RouteRefusal | undefined {
 // A file's diff as one key: its rename, status and hunks.
 function fileKey(file: DiffFile) {
   return fnv1a64([file.oldPath ?? "", file.status, file.patch].join("\n"))
+}
+
+function containsRedactedValue(text: string | undefined) {
+  return text !== undefined && holdbackText(text).includes(REDACTED)
+}
+
+// The model can only see the placeholder where a value was held back. Preserve its finding and omit edits that could
+// write the placeholder into the file. This also covers a value that would be redacted when posted.
+function withoutRedactedEdit<T extends ModelFinding>(finding: T): T {
+  const suggestion = containsRedactedValue(finding.suggestion)
+  const patch = containsRedactedValue(finding.patch)
+  if (!suggestion && !patch) return finding
+  const clean = { ...finding }
+  if (suggestion) delete clean.suggestion
+  if (patch) delete clean.patch
+  return clean
+}
+
+function withoutRedactedReportEdits(report: ModelReport): ModelReport {
+  return { ...report, findings: report.findings.map(withoutRedactedEdit) }
+}
+
+function withoutRedactedEdits(outcome: ReviewOutcomeLite): ReviewOutcomeLite {
+  const { selection } = outcome
+  const fixes =
+    outcome.fixes &&
+    Object.fromEntries(Object.entries(outcome.fixes).filter(([, fix]) => !containsRedactedValue(fix.after.join("\n"))))
+  return {
+    ...outcome,
+    report: withoutRedactedReportEdits(outcome.report),
+    selection: {
+      ...selection,
+      inline: selection.inline.map(withoutRedactedEdit),
+      overflow: selection.overflow.map(withoutRedactedEdit),
+      outsideDiff: selection.outsideDiff.map(withoutRedactedEdit),
+      elsewhere: selection.elsewhere.map(withoutRedactedEdit),
+      nits: selection.nits.map(withoutRedactedEdit),
+    },
+    ...(fixes ? { fixes } : {}),
+  }
 }
 
 // Every finding a review listed, as findings again, for carrying them into the next review.

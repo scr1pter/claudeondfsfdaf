@@ -1712,6 +1712,63 @@ describe("review privacy and holdback on the desktop (VS-23d)", () => {
     expect(outcome.files).toEqual([])
     expect(outcome.notes).toEqual([noteHeldBack(["deploy/.netrc"])!, noteIgnoreUnchecked()])
   })
+
+  test("holdback keeps the finding but withholds placeholder edits from desktop Apply and GitHub", async () => {
+    const suggestion = '  return items[items.length - 1] ?? "[redacted]"'
+    const options = {
+      files: { "src/list.ts": HEAD },
+      reply: (call: PromptCall) =>
+        isVerify(call) ? answer(verdicts(call)) : answer(report([{ ...offByOne, suggestion }])),
+    }
+    const ordinary = (await run(fakeClient(options).client))!
+    expect(findingGroups(ordinary)[0]?.findings[0]?.apply?.after).toEqual([suggestion])
+    expect(buildDesktopReview(ordinary, pr.url).comments[0]?.body).toContain("```suggestion")
+
+    const global = { review: { holdback: "secrets" } }
+    const held = (await run(fakeClient({ ...options, global }).client))!
+    const cached = fakeClient({ ...options, global })
+    const previous = { ...ordinary, settingsKey: held.settingsKey }
+    const reused = (await run(cached.client, { previous }))!
+    expect(reused.unchanged).toBe(true)
+    expect(cached.calls.prompt).toEqual([])
+    const changed = fakeClient({
+      files: { ...options.files, "src/auth/login.ts": "export const retries = 3\n" },
+      global,
+      reply: () => answer(report([])),
+    })
+    const carried = (await run(changed.client, { diff: join(listDiff, authDiff), previous }))!
+    expect(carried.carried).toBe(1)
+
+    for (const outcome of [held, reused, carried]) {
+      const finding = outcome.selection.inline[0]!
+      expect(finding.title).toBe(offByOne.title)
+      expect(finding.verified).toBe(true)
+      expect(finding.suggestion).toBeUndefined()
+      expect(outcome.report.findings[0]?.suggestion).toBeUndefined()
+      expect(findingGroups(outcome)[0]?.findings[0]?.apply).toBeUndefined()
+      const comment = buildDesktopReview(outcome, pr.url).comments[0]!.body
+      expect(comment).toContain(offByOne.title)
+      expect(comment).not.toContain("```suggestion")
+    }
+
+    const safe = (await run(fakeClient({ files: options.files, global }).client))!
+    expect(findingGroups(safe)[0]?.findings[0]?.apply?.after).toEqual([offByOne.suggestion])
+    expect(buildDesktopReview(safe, pr.url).comments[0]?.body).toContain("```suggestion")
+  })
+
+  test("holdback withholds a suggestion GitHub would turn into a placeholder", async () => {
+    const token = "ghp_" + "a1B2".repeat(9)
+    const suggestion = `  return items[items.length - 1] ?? "${token}"`
+    const { client } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      global: { review: { holdback: "secrets" } },
+      reply: (call) => isVerify(call) ? answer(verdicts(call)) : answer(report([{ ...offByOne, suggestion }])),
+    })
+    const outcome = (await run(client))!
+    expect(outcome.selection.inline[0]?.suggestion).toBeUndefined()
+    expect(findingGroups(outcome)[0]?.findings[0]?.apply).toBeUndefined()
+    expect(buildDesktopReview(outcome, pr.url).comments[0]?.body).not.toContain("```suggestion")
+  })
 })
 
 describe("uncommitted changes", () => {
