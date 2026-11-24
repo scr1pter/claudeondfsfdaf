@@ -53,7 +53,8 @@ import { completeStrictReview } from "@vectordevai/core/review/local-result"
 import { policyDigest, REVIEW_PIPELINE_SOURCES } from "@vectordevai/core/review/model-evidence"
 import { diffBudgetChars, estimateCostUsd } from "@vectordevai/core/review/plan"
 import type { PromptInput } from "@vectordevai/core/review/prompt"
-import { collectSecretValues, redactSecrets } from "@vectordevai/core/review/redact"
+import { holdbackText } from "@vectordevai/core/review/holdback"
+import { collectSecretValues, REDACTED, redactSecrets } from "@vectordevai/core/review/redact"
 import {
   classifyPrior,
   decodeState,
@@ -1399,7 +1400,15 @@ const postToPull = Effect.fnUntraced(function* (input: {
   }
   const repo = { owner: where.owner, repo: where.repo }
   const head = input.target.head
-  const inline = input.outcome.selection.inline
+  // Remove unsafe edits before building suggestion fences. Redacting a fence's contents would leave it committable.
+  const inline =
+    input.config.holdback === "secrets" || input.config.diagnostics === "offline"
+      ? input.outcome.selection.inline.map((finding) =>
+          finding.suggestion !== undefined && holdbackText(clean(finding.suggestion)).includes(REDACTED)
+            ? { ...finding, suggestion: undefined, suggestionAllowed: false }
+            : finding,
+        )
+      : input.outcome.selection.inline
   const verdict = reviewVerdict({ kind: "outcome", outcome: input.outcome }).verdict
   const plan = postingPlan(verdict, inline.length, { failOn: input.config.failOn })
   const draft = buildCreateReviewPayload({
