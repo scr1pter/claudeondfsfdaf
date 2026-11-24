@@ -6,6 +6,7 @@ import { ChildProcess } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { UNATTENDED_KEY, UNATTENDED_SHELL_KEY, UNATTENDED_SHELL_OFFLINE } from "@vectordevai/core/everywhere/frame"
 import { Sandbox } from "@/tool/shell/sandbox"
+import * as UnattendedSeccomp from "@/tool/shell/unattended-seccomp"
 import type { Session } from "./session"
 import { SessionID } from "./schema"
 
@@ -43,10 +44,7 @@ export class LineageError extends Schema.TaggedErrorClass<LineageError>()("Unatt
 }) {}
 
 /**
- * Only bubblewrap's own start is tried: a fixed argument list with no user input, the namespaces and mounts the offline
- * profile needs, and a program that does nothing, named by a path every system bubblewrap runs on has (NixOS has no
- * `true` in /usr/bin or /bin, only /bin/sh). A bubblewrap that is installed but cannot start (Ubuntu 24.04 refuses an
- * unprivileged user namespace to an unconfined program) is then not advertised.
+ * A fixed harmless program tests bubblewrap startup with the actual socket policy and descriptor check.
  */
 export const SELF_TEST = [
   "--die-with-parent",
@@ -65,10 +63,11 @@ export const SELF_TEST = [
   "/proc",
   "--tmpfs",
   "/tmp",
-  "/bin/sh",
-  "-c",
-  ":",
+  ...UnattendedSeccomp.args,
 ] as const
+export function selfTestArgs(shell: string) {
+  return [...SELF_TEST, ...UnattendedSeccomp.command(shell, [shell, "-c", ":"])]
+}
 // Each bubblewrap's answer, once per process, by the binary it would run.
 const started = new Map<string, boolean>()
 
@@ -176,8 +175,9 @@ export const policy = Effect.fn("UnattendedShell.policy")(function* (
   platform: NodeJS.Platform = process.platform,
 ) {
   const binary = Sandbox.unattendedBinary(platform)
-  if (binary === undefined) return "none" as const
-  const works = started.get(binary) ?? (yield* selfTest(spawner, binary))
+  const shell = Sandbox.unattendedBootstrap()
+  if (binary === undefined || shell === undefined) return "none" as const
+  const works = started.get(binary) ?? (yield* selfTest(spawner, binary, shell))
   started.set(binary, works)
   return works ? ("offline-v1" as const) : ("none" as const)
 })
@@ -186,14 +186,18 @@ export const policy = Effect.fn("UnattendedShell.policy")(function* (
 export const selfTest = Effect.fn("UnattendedShell.selfTest")(function* (
   spawner: ChildProcessSpawner["Service"],
   binary: string,
+  shell: string,
 ) {
+  const filter = UnattendedSeccomp.filter()
+  if (filter === undefined) return false
   const exit = yield* spawner
     .exitCode(
-      ChildProcess.make(binary, SELF_TEST, {
+      ChildProcess.make(binary, selfTestArgs(shell), {
         env: { PATH: "/usr/bin:/bin" },
         stdin: "ignore",
         stdout: "ignore",
         stderr: "ignore",
+        ...UnattendedSeccomp.options(filter),
       }),
     )
     .pipe(Effect.timeout("10 seconds"), Effect.exit)
