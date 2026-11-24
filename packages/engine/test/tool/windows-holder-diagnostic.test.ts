@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
+import { EventEmitter } from "node:events"
 import { readFileSync } from "node:fs"
-import { coldHolderScript, startupTimeline } from "../../script/diagnose-windows-holder"
+import { PassThrough, Writable } from "node:stream"
+import { coldHolderScript, observeHolder, startupTimeline } from "../../script/diagnose-windows-holder"
 import { WindowsHolder } from "../../src/tool/shell/windows-holder"
 
 const workflow = Bun.YAML.parse(
@@ -43,4 +45,108 @@ test("the cold probe adds only fixed phase writes to the production holder and f
   for (let i = 0; i < stages.length; i++) expect(timeline.add(stages[i], 2.1 * i)).toBe(true)
   expect(timeline.phases).toEqual(stages.map((phase, i) => ({ phase, elapsedMs: Math.round(2.1 * i) })))
   expect(timeline.add("ready", 120)).toBe(false)
+})
+
+function fakeLaunch() {
+  let now = 0
+  let killed = 0
+  let written: (() => void) | undefined
+  const writes: string[] = []
+  const timers = new Map<number, () => void>()
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new Writable({
+      write(chunk, _encoding, callback) {
+        writes.push(chunk.toString())
+        written = callback
+      },
+    }),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill() {
+      killed++
+    },
+  })
+  const config = '{"file":"fixture-private-command"}\n'
+  const timeline = startupTimeline()
+  const result = observeHolder(
+    () => {
+      now = 43
+      return child
+    },
+    () => config,
+    timeline,
+    {
+      now: () => now,
+      schedule(run, delay) {
+        const at = now + delay
+        timers.set(at, run)
+        return () => {
+          timers.delete(at)
+        }
+      },
+    },
+  )
+  return {
+    child,
+    config,
+    result,
+    timeline,
+    timers,
+    writes,
+    completedWrite: () => written?.(),
+    killed: () => killed,
+    at: (time: number, run: () => void) => {
+      now = time
+      run()
+    },
+  }
+}
+
+test("a cold timeout with no pipe bytes preserves launch and cleanup timings", async () => {
+  const probe = fakeLaunch()
+  probe.at(57, () => probe.child.emit("spawn"))
+  probe.at(76, probe.completedWrite)
+  expect([...probe.timers.keys()]).toEqual([15_000, 20_043])
+  probe.at(15_000, probe.timers.get(15_000)!)
+  probe.at(15_081, () => probe.child.emit("exit"))
+  probe.at(15_104, () => probe.child.emit("close"))
+  const result = await probe.result
+  expect(result).toEqual({
+    phase: "spawn",
+    ready: false,
+    closed: true,
+    proven: false,
+    timedOut: true,
+    timedOutAtMs: 15_000,
+    delivery: {
+      launchReturnedMs: 40,
+      spawnEventMs: 60,
+      configWrittenMs: 80,
+      watchdogMs: 15_000,
+      exitMs: 15_080,
+      closeMs: 15_100,
+    },
+  })
+  expect(probe.writes).toEqual([probe.config])
+  expect(probe.killed()).toBe(1)
+  expect(probe.timers.size).toBe(0)
+})
+
+test("stderr bytes and the first complete startup marker have separate timings", async () => {
+  const probe = fakeLaunch()
+  probe.at(60, probe.completedWrite)
+  probe.at(217, () => probe.child.stderr.write('VECTOR_SHELL/1 {"type":"startup",'))
+  probe.at(353, () => probe.child.stderr.write('"step":1}\nVECTOR_HOLDER_PHASE host-entered\n'))
+  probe.at(15_000, probe.timers.get(15_000)!)
+  probe.at(15_063, () => probe.child.emit("close"))
+  const result = await probe.result
+  expect(result).toMatchObject({
+    phase: "host-entered",
+    timedOut: true,
+    ready: false,
+    delivery: { firstStderrMs: 220, firstMarkerMs: 350, watchdogMs: 15_000, closeMs: 15_060 },
+  })
+  expect(probe.timeline.phases).toEqual([{ phase: "host-entered", elapsedMs: 353 }])
+  expect(JSON.stringify(result)).not.toContain("fixture-private-command")
+  expect(probe.writes).toEqual([probe.config])
 })

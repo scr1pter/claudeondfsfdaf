@@ -2,7 +2,12 @@ import { spawn } from "node:child_process"
 import { access, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import type { Readable, Writable } from "node:stream"
 import { WindowsHolder } from "../src/tool/shell/windows-holder"
+
+const STARTUP_MS = 15_000
+const CLOSE_MS = 20_000
+const MAX_REPORTED_MS = 60_000
 
 const coldPhases = [
   "host-entered",
@@ -18,6 +23,17 @@ const coldPhases = [
 
 type ColdPhase = (typeof coldPhases)[number]
 type Milestone = { phase: ColdPhase; elapsedMs: number }
+type DeliveryEvent =
+  | "launchReturnedMs"
+  | "spawnEventMs"
+  | "configWrittenMs"
+  | "configWriteFailedMs"
+  | "firstStderrMs"
+  | "firstMarkerMs"
+  | "watchdogMs"
+  | "exitMs"
+  | "closeMs"
+  | "closeDeadlineMs"
 type Observation = {
   phase: string
   ready: boolean
@@ -25,6 +41,23 @@ type Observation = {
   proven: boolean
   timedOut: boolean
   timedOutAtMs?: number
+  delivery?: Partial<Record<DeliveryEvent, number>>
+}
+
+interface DiagnosticChild {
+  stdin: Pick<Writable, "on" | "write" | "end" | "destroy">
+  stdout: Pick<Readable, "resume" | "destroy">
+  stderr: Pick<Readable, "on" | "destroy">
+  once(event: "spawn" | "error" | "exit" | "close", run: () => void): void
+  kill(): void
+}
+
+const realClock = {
+  now: () => performance.now(),
+  schedule(run: () => void, delay: number) {
+    const timer = setTimeout(run, delay)
+    return () => clearTimeout(timer)
+  },
 }
 
 // Instrument only this disposable copy. Removing the writes must restore the production script byte for byte.
@@ -141,110 +174,143 @@ async function diagnose() {
   }
 
   function observe(env: NodeJS.ProcessEnv, argv: string[], timeline?: ReturnType<typeof startupTimeline>) {
-    return new Promise<Observation>((resolve) => {
-      const state: Observation = { phase: "spawn", ready: false, closed: false, proven: false, timedOut: false }
-      const started = performance.now()
-      const child = spawn(powershell, argv, {
-        cwd: path.win32.join(root!, "System32"),
-        env,
-        windowsHide: true,
-        stdio: ["pipe", "pipe", "pipe"],
-      })
-      const timeout = () => {
-        if (state.timedOut) return
-        state.timedOut = true
-        if (timeline) state.timedOutAtMs = Math.round(performance.now() - started)
-        child.kill()
-      }
-      const timer = setTimeout(timeout, timeline ? Math.max(0, 15_000 - (performance.now() - started)) : 15_000)
-      const closeTimer = setTimeout(() => {
-        child.stdin.destroy()
-        child.stdout.destroy()
-        child.stderr.destroy()
-        resolve(state)
-      }, 20_000)
-      child.stdin.on("error", () => {})
-      child.stdout.resume()
-      let pending = ""
-      let bytes = 0
-      child.stderr.on("data", (chunk: Buffer) => {
-        bytes += chunk.length
-        if (bytes > 16_384) {
-          state.phase = "status-bound"
-          child.kill()
-          return
-        }
-        pending += chunk.toString("utf8")
-        for (;;) {
-          const end = pending.indexOf("\n")
-          if (end < 0) return
-          const line = pending.slice(0, end).replace(/\r$/, "")
-          pending = pending.slice(end + 1)
-          if (timeline && line.startsWith("VECTOR_HOLDER_PHASE ")) {
-            const phase = line.slice("VECTOR_HOLDER_PHASE ".length)
-            if (!timeline.add(phase, performance.now() - started)) {
-              state.phase = "invalid-status"
-              child.kill()
-              return
-            }
-            state.phase = phase
-            continue
-          }
-          if (!timeline && /^VECTOR_HOLDER_PHASE (host|compiler|configuration|decoded|job|payload)$/.test(line)) {
-            state.phase = line.slice(20)
-            continue
-          }
-          if (!line.startsWith("VECTOR_SHELL/1 ")) {
-            state.phase = "invalid-status"
-            child.kill()
-            return
-          }
-          try {
-            const value: unknown = JSON.parse(line.slice(15))
-            if (!value || typeof value !== "object" || !("type" in value)) throw new Error("Invalid status")
-            if (value.type === "ready") {
-              if (timeline) {
-                const elapsed = performance.now() - started
-                if (state.timedOut || elapsed >= 15_000) {
-                  timeout()
-                  return
-                }
-                if (!timeline.add("ready", elapsed)) {
-                  state.phase = "invalid-status"
-                  child.kill()
-                  return
-                }
-                clearTimeout(timer)
-              }
-              state.ready = true
-              state.phase = "ready"
-              // Never acknowledge/resume the payload: EOF must clean up the suspended process instead.
-              child.stdin.end()
-            }
-            if (value.type === "error" && "terminationProven" in value) state.proven = value.terminationProven === true
-          } catch {
-            state.phase = "invalid-status"
-            child.kill()
-          }
-        }
-      })
-      child.once("error", () => {
-        state.phase = "spawn-error"
-      })
-      child.once("close", () => {
-        state.closed = true
-        clearTimeout(timer)
-        clearTimeout(closeTimer)
-        resolve(state)
-      })
-      child.stdin.write(
+    return observeHolder(
+      () =>
+        spawn(powershell, argv, {
+          cwd: path.win32.join(root!, "System32"),
+          env,
+          windowsHide: true,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+      () =>
         JSON.stringify({
           file: path.win32.join(root!, "System32", "cmd.exe"),
           commandLine: "cmd.exe /d /s /c exit 19",
           cwd: directory,
           env: minimal,
         }) + "\n",
-      )
-    })
+      timeline,
+    )
   }
+}
+
+/** Closed delivery milestones for the first disposable holder. The program never emits config or stream contents. */
+export function observeHolder(
+  launch: () => DiagnosticChild,
+  config: () => string,
+  timeline?: ReturnType<typeof startupTimeline>,
+  clock = realClock,
+) {
+  return new Promise<Observation>((resolve) => {
+    const state: Observation = { phase: "spawn", ready: false, closed: false, proven: false, timedOut: false }
+    const started = clock.now()
+    const elapsed = () => clock.now() - started
+    const delivery: Observation["delivery"] = timeline ? {} : undefined
+    function mark(event: DeliveryEvent) {
+      if (!delivery || delivery[event] !== undefined) return
+      delivery[event] = Math.min(MAX_REPORTED_MS, Math.max(0, Math.round(elapsed() / 10) * 10))
+    }
+    const child = launch()
+    mark("launchReturnedMs")
+    const timeout = () => {
+      if (state.timedOut) return
+      mark("watchdogMs")
+      state.timedOut = true
+      if (timeline) state.timedOutAtMs = Math.round(elapsed())
+      child.kill()
+    }
+    const cancelWatchdog = clock.schedule(timeout, timeline ? Math.max(0, STARTUP_MS - elapsed()) : STARTUP_MS)
+    const cancelClose = clock.schedule(() => {
+      mark("closeDeadlineMs")
+      child.stdin.destroy()
+      child.stdout.destroy()
+      child.stderr.destroy()
+      finish()
+    }, CLOSE_MS)
+    function finish() {
+      cancelWatchdog()
+      cancelClose()
+      resolve({ ...state, ...(delivery ? { delivery: { ...delivery } } : {}) })
+    }
+    child.once("spawn", () => mark("spawnEventMs"))
+    child.once("exit", () => mark("exitMs"))
+    child.stdin.on("error", () => {})
+    child.stdout.resume()
+    let pending = ""
+    let bytes = 0
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (chunk.length) mark("firstStderrMs")
+      bytes += chunk.length
+      if (bytes > 16_384) {
+        state.phase = "status-bound"
+        child.kill()
+        return
+      }
+      pending += chunk.toString("utf8")
+      for (;;) {
+        const end = pending.indexOf("\n")
+        if (end < 0) return
+        const line = pending.slice(0, end).replace(/\r$/, "")
+        pending = pending.slice(end + 1)
+        if (timeline && line.startsWith("VECTOR_HOLDER_PHASE ")) {
+          const phase = line.slice("VECTOR_HOLDER_PHASE ".length)
+          if (!timeline.add(phase, elapsed())) {
+            state.phase = "invalid-status"
+            child.kill()
+            return
+          }
+          if (phase === "host-entered") mark("firstMarkerMs")
+          state.phase = phase
+          continue
+        }
+        if (!timeline && /^VECTOR_HOLDER_PHASE (host|compiler|configuration|decoded|job|payload)$/.test(line)) {
+          state.phase = line.slice(20)
+          continue
+        }
+        if (!line.startsWith("VECTOR_SHELL/1 ")) {
+          state.phase = "invalid-status"
+          child.kill()
+          return
+        }
+        try {
+          const value: unknown = JSON.parse(line.slice(15))
+          if (!value || typeof value !== "object" || !("type" in value)) throw new Error("Invalid status")
+          if (value.type === "startup" && "step" in value && value.step === 1 && Object.keys(value).length === 2)
+            mark("firstMarkerMs")
+          if (value.type === "ready") {
+            if (timeline) {
+              const time = elapsed()
+              if (state.timedOut || time >= STARTUP_MS) {
+                timeout()
+                return
+              }
+              if (!timeline.add("ready", time)) {
+                state.phase = "invalid-status"
+                child.kill()
+                return
+              }
+              cancelWatchdog()
+            }
+            state.ready = true
+            state.phase = "ready"
+            // EOF cleans up the suspended payload. The diagnostic never acknowledges it.
+            child.stdin.end()
+          }
+          if (value.type === "error" && "terminationProven" in value) state.proven = value.terminationProven === true
+        } catch {
+          state.phase = "invalid-status"
+          child.kill()
+        }
+      }
+    })
+    child.once("error", () => {
+      state.phase = "spawn-error"
+    })
+    child.once("close", () => {
+      mark("closeMs")
+      state.closed = true
+      finish()
+    })
+    child.stdin.write(config(), (error) => mark(error ? "configWriteFailedMs" : "configWrittenMs"))
+  })
 }
