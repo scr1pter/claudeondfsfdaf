@@ -504,12 +504,11 @@ type CommandInput = {
   home?: string
   data?: string
   /**
-   * "workspace" (review checks and unattended commands): only the workspace is
-   * writable, with no temporary folder, package cache or Git metadata grant, and the working folder must be inside it.
-   * Under bubblewrap, /tmp and /run are also private and empty (so no host socket under them is reachable), Vector's
-   * data folder is an empty read-only folder with the workspace bound back into it, and the command runs with no
-   * capabilities. Under seatbelt only the writes are narrowed: /tmp is the host's, just not writable. Without it, the
-   * policy is the shell tool's, unchanged.
+   * Review checks and unattended commands use "workspace". The working folder must be inside the checkout. Host write
+   * access is limited to the checkout, without grants to host temporary folders, package caches or Git metadata.
+   * Bubblewrap supplies private /tmp and runtime directories, masks Vector's data with a read-only mount and drops
+   * capabilities. Unattended commands also get a fresh HOME under private /tmp. Seatbelt uses the host's /tmp without
+   * granting writes there. When writes is omitted, the normal shell sandbox policy applies.
    */
   writes?: "workspace"
 }
@@ -635,9 +634,8 @@ function wrap(input: CommandInput, hostHome?: string): Wrapped {
       args: [
         "--die-with-parent",
         // Run as root (a container), bwrap would keep its capabilities, and a command could remount the root writable.
-        // No --new-session: bwrap's namespace init must stay in the caller's process group, whose one SIGKILL then
-        // reaches it before it has tied its life to the outer bwrap's (fix.ts `execute`). The caller starts bwrap
-        // detached, in a session of its own with no controlling terminal, so the command shares no terminal anyway.
+        // Keep bwrap's namespace init in the caller's process group so group termination reaches it during startup.
+        // Review checks and unattended shell commands already start detached from the caller's terminal.
         ...(workspace ? ["--cap-drop", "ALL"] : []),
         "--unshare-ipc",
         "--unshare-uts",
