@@ -27,6 +27,7 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { Event } from "../../src/server/event"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+import type { EverywhereSession } from "../../src/server/everywhere-session"
 import { FileLock } from "../../src/tool/file-lock"
 import { Worktree } from "../../src/worktree"
 import { resetDatabase } from "../fixture/db"
@@ -758,8 +759,9 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     ["config.json", "vector.json", "vector.jsonc"].map((name) => path.join(Global.Path.config, name))
 
   const memo = Layer.makeMemoMapUnsafe()
+  let privateSession: EverywhereSession.Handler | undefined
   const web = HttpRouter.toWebHandler(
-    HttpApiApp.createRoutes(undefined, preferencesPath).pipe(
+    HttpApiApp.createRoutes(undefined, preferencesPath, (handler) => { privateSession = handler }).pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromUnknown({
@@ -1104,6 +1106,79 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     expect(await readFile(file, "utf8")).toBe(original)
     refusedWith(await post(f.input), 403, OFF)
     await untouched(f)
+  }, 30_000)
+
+  test("only the listener's private creator can bind its actual unattended session to a placement", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const result = await post(f.input)
+    expect(result.status).toBe(200)
+    const directory = result.body.directory as string
+    const placedHeaders = { ...owner, "x-vector-directory": directory }
+    const trust = await call("/config/trust", { headers: placedHeaders })
+    expect(trust.body.trusted).toBe(false)
+    const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
+    const placedPath = path.join(folder, `${f.input.jid}.placed.json`)
+    const receipt = path.join(folder, `${f.input.jid}.session.json`)
+    const command = {
+      ...f.input, directory, version: 1, platform: "slack", title: "Slack: Fixture setting", permission: [], claim: "a".repeat(64),
+    }
+    const inline = await call("/session", {
+      method: "POST", headers: placedHeaders,
+      body: { title: command.title, metadata: { "vector.unattended": { by: "everywhere", jid: f.input.jid, platform: "slack" } } },
+    })
+    expect(inline.status).toBe(200)
+    expect(await present(receipt)).toBe(false)
+    const bind = (payload: unknown) => Effect.runPromise(privateSession!(payload))
+    expect(await bind({ ...command, sessionID: inline.body.id })).toEqual({ version: 1, kind: "refused" })
+    expect(await bind({ ...command, directory: f.repo })).toEqual({ version: 1, kind: "refused" })
+    // Older reservations lack a positive Engine placement, even when the directory and ordinary session exist.
+    const placedBody = await readFile(placedPath)
+    await rm(placedPath)
+    expect(await bind(command)).toEqual({ version: 1, kind: "refused" })
+    expect(await present(receipt)).toBe(false)
+    await writeFile(placedPath, placedBody, { mode: 0o600 })
+    const created = await bind(command)
+    expect(created.kind).toBe("created")
+    if (created.kind !== "created") throw new Error("Missing binding from the real session service")
+    expect(created.sessionID).not.toBe(inline.body.id)
+    expect(await bind(command)).toEqual(created)
+    expect(await bind({ ...command, claim: "b".repeat(64) })).toEqual({ version: 1, kind: "refused" })
+    expect(await bind({ ...command, terminal: true })).toEqual({ version: 1, kind: "refused" })
+    const details = await call(`/session/${created.sessionID}`, { headers: placedHeaders })
+    expect(details.status).toBe(200)
+    expect(details.body.metadata["vector.unattended"]).toEqual({ by: "everywhere", jid: f.input.jid, platform: "slack" })
+    const saved = JSON.parse(await readFile(receipt, "utf8"))
+    expect(saved).toMatchObject({ version: 1, sessionID: created.sessionID, directory, jid: f.input.jid, claim: command.claim })
+    expect(saved).not.toHaveProperty("terminal")
+  }, 30_000)
+
+  test("a checkout that changes while the Engine creates the session gets no binding", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const created = await post(f.input)
+    expect(created.status).toBe(200)
+    const directory = created.body.directory as string
+    await call("/config/trust", { headers: { ...owner, "x-vector-directory": directory } })
+    const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
+    const placement = JSON.parse(await readFile(path.join(folder, `${f.input.jid}.placed.json`), "utf8"))
+    const receipt = path.join(folder, `${f.input.jid}.session.json`)
+    let switched = false
+    const on = (event: { directory?: string; payload: { type: string } }) => {
+      if (event.directory !== directory || event.payload.type !== "session.created") return
+      // Simulate an outside Git writer after the session's durable creation. The proof rechecks the branch before publication.
+      writeFileSync(path.join(placement.gitDirectory, "HEAD"), `${f.base}\n`)
+      switched = true
+    }
+    GlobalBus.on("event", on)
+    const reply = await Effect.runPromise(privateSession!({
+      ...f.input, directory, version: 1, platform: "slack", title: "Slack: Fixture", permission: [], claim: "a".repeat(64),
+    })).finally(() => GlobalBus.off("event", on))
+    expect(switched).toBe(true)
+    expect(reply).toEqual({ version: 1, kind: "refused" })
+    expect(await present(receipt)).toBe(false)
   }, 30_000)
 
   test("a company lock on everywhere is off, with the project open and trusted", async () => {

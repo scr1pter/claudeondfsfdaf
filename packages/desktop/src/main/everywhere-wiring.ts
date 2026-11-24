@@ -70,6 +70,7 @@ export type EverywhereJobsDeps = {
   readonly engine: { readonly url: string; readonly password: string }
   /** Owner's versioned settings from the built-in engine's private sidecar channel. */
   readonly preferences?: () => Promise<EverywherePreferenceWire.Result>
+  readonly createEverywhereSession?: Parameters<typeof createEverywhereEngine>[0]["createSession"]
   /** The desktop sign-in (vectorAccount.token). One that cannot be read counts as none. */
   readonly token: () => Promise<string | undefined>
   /** The engine's GET /global/event stream; subscribed only while Remote is on. */
@@ -331,7 +332,15 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     },
     git,
     engine:
-      deps.runnerEngine ?? ((directory) => createEverywhereEngine({ url: deps.engine.url, directory, authorization })),
+      deps.runnerEngine ??
+      ((directory) =>
+        createEverywhereEngine({
+          url: deps.engine.url,
+          directory,
+          authorization,
+          fetcher: deps.fetcher,
+          createSession: deps.createEverywhereSession,
+        })),
     // The probe-gated adapter, offered only while the engine's last definite answer is `unattended-v1`; the runner reads
     // it once per job.
     get safeWorktree() {

@@ -1,4 +1,6 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import type { EverywhereSessionWire } from "@vectordevai/core/everywhere/session-binding"
+import { UnattendedRecords } from "./unattended-records"
 import { path } from "@vectordevai/core/effect/app-node-platform"
 import { Global } from "@vectordevai/core/global"
 import { InstanceStore } from "@/project/instance-store"
@@ -180,6 +182,10 @@ export interface Interface {
    * caller's (EV-13), which must not load an instance for a folder outside the allowlist.
    */
   readonly createUnattended: (input: UnattendedInput) => Effect.Effect<Unattended, NotGitError | CreateFailedError>
+  readonly withUnattendedPlacement: <A, E, R>(
+    input: EverywhereSessionWire.Placement,
+    use: (placed: typeof UnattendedRecords.Placed.Type) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A | undefined, E, R>
   readonly list: () => Effect.Effect<(Omit<Info, "branch"> & { branch?: string })[], Error>
   readonly remove: (input: RemoveInput) => Effect.Effect<boolean, Error>
   /** Isolation removal may delete only the reserved branch its registry validated. */
@@ -427,7 +433,7 @@ const layer: Layer.Layer<
     })
 
     const unattendedRoot = pathSvc.join(Global.Path.data, "everywhere-worktree")
-    const reservationDirectory = "everywhere-worktree-reservations"
+    const reservationDirectory = UnattendedRecords.folder
     const reservationRoot = pathSvc.join(Global.Path.state, reservationDirectory)
     const overlapsUnattended = Effect.fnUntraced(function* (requested: string, directory: string) {
       // The ordinary remove path can also erase an unregistered parent. Check both the requested spelling and
@@ -655,10 +661,91 @@ const layer: Layer.Layer<
           // comparison would not match.
           const placed = yield* Effect.try({ try: () => FSUtil.realpath(directory), catch: () => failed })
           yield* project.addSandbox(ctx.project.id, placed).pipe(Effect.catchDefect(() => Effect.fail(failed)))
+          // A standalone caller can still use the established worktree route. The private Desktop creator insists
+          // on this positive placement record before it can start a model session.
+          yield* Effect.gen(function* () {
+            const gitDirectory = yield* unattendedGit(["rev-parse", "--absolute-git-dir"], placed)
+            if (gitDirectory.code !== 0 || !pathSvc.isAbsolute(gitDirectory.text.trim())) return yield* failed
+            const gitPath = yield* Effect.try({
+              try: () => FSUtil.realpath(gitDirectory.text.trim()),
+              catch: () => failed,
+            })
+            if (pathSvc.dirname(FileLock.key(gitPath)) !== pathSvc.join(commonKey, "worktrees")) return yield* failed
+            const directoryIdentity = yield* UnattendedRecords.identity(placed)
+            const gitIdentity = yield* UnattendedRecords.identity(gitPath)
+            yield* UnattendedRecords.write(input.jid, "placed", {
+              version: 1,
+              project: ctx.project.id,
+              jid: input.jid,
+              directory: placed,
+              branch: input.branch,
+              base: input.base,
+              common: commonKey,
+              gitDirectory: gitPath,
+              directoryIdentity,
+              gitIdentity,
+            })
+          }).pipe(Effect.catch(() => Effect.logWarning("Could not record the unattended worktree placement.")))
           return { directory: placed, branch: input.branch, base: input.base }
         }),
       )
     })
+
+    const withUnattendedPlacement: Interface["withUnattendedPlacement"] = (input, use) =>
+      Effect.gen(function* () {
+        const placed = yield* UnattendedRecords.read(input.jid, "placed", UnattendedRecords.Placed).pipe(
+          Effect.orElseSucceed(() => undefined),
+        )
+        const reserved = yield* UnattendedRecords.read(input.jid, "reservation", UnattendedRecords.Reservation).pipe(
+          Effect.orElseSucceed(() => undefined),
+        )
+        if (
+          !placed ||
+          !reserved ||
+          placed.jid !== input.jid ||
+          reserved.jid !== input.jid ||
+          placed.branch !== input.branch ||
+          reserved.branch !== input.branch ||
+          placed.base !== input.base ||
+          reserved.base !== input.base ||
+          placed.project !== reserved.project ||
+          placed.directory !== input.directory ||
+          !pathSvc.isAbsolute(input.directory)
+        )
+          return undefined
+        const absolute = yield* canonicalPath(input.directory)
+        const root = yield* canonicalPath(unattendedRoot)
+        if (
+          !absolute ||
+          !root ||
+          absolute !== folded(placed.directory) ||
+          absolute !== pathSvc.join(root, placed.project, input.jid)
+        )
+          return undefined
+        return yield* FileLock.forTree(placed.common)(
+          Effect.gen(function* () {
+            if (!(yield* UnattendedRecords.intact(placed))) return undefined
+            const common = yield* unattendedGit(["rev-parse", "--git-common-dir"], input.directory)
+            const gitDirectory = yield* unattendedGit(["rev-parse", "--absolute-git-dir"], input.directory)
+            if (
+              common.code !== 0 ||
+              gitDirectory.code !== 0 ||
+              FileLock.key(pathSvc.resolve(input.directory, common.text.trim())) !== placed.common ||
+              FileLock.key(gitDirectory.text.trim()) !== FileLock.key(placed.gitDirectory)
+            )
+              return undefined
+            const top = yield* unattendedGit(["rev-parse", "--show-toplevel"], input.directory)
+            if (
+              top.code !== 0 ||
+              (yield* canonicalPath(top.text.trim())) !== absolute ||
+              !(yield* unattendedPrints(["symbolic-ref", "HEAD"], input.directory, `refs/heads/${input.branch}`)) ||
+              !(yield* unattendedPrints(["rev-parse", "--verify", "HEAD"], input.directory, input.base))
+            )
+              return undefined
+            return yield* use(placed)
+          }),
+        )
+      }).pipe(Effect.withSpan("Worktree.withUnattendedPlacement"))
 
     function parseWorktreeList(text: string) {
       return text
@@ -956,7 +1043,9 @@ const layer: Layer.Layer<
         return yield* new ResetFailedError({ message: "Cannot reset the primary workspace" })
       }
       if (yield* overlapsUnattended(input.directory, directory)) {
-        return yield* new ResetFailedError({ message: "Cannot reset a Vector Everywhere worktree through this command." })
+        return yield* new ResetFailedError({
+          message: "Cannot reset a Vector Everywhere worktree through this command.",
+        })
       }
 
       const list = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
@@ -1041,6 +1130,7 @@ const layer: Layer.Layer<
       create,
       createForTask,
       createUnattended,
+      withUnattendedPlacement,
       list,
       remove,
       removeForTask,

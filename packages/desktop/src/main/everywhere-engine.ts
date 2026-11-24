@@ -1,4 +1,6 @@
 import { Option, Schema } from "effect"
+import { createHash } from "node:crypto"
+import type { EverywhereSessionWire } from "@vectordevai/core/everywhere/session-binding"
 import { everywhereSystemInstructions, frameTask, outsideMetadata, sessionTitle, unattendedMetadata, UNATTENDED_SHELL_KEY, UNATTENDED_SHELL_OFFLINE, type FrameOptions } from "@vectordevai/core/everywhere/frame"
 import { RUN_STEPS, type EverywhereJob } from "@vectordevai/schema/everywhere"
 import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
@@ -93,7 +95,7 @@ export function localEngineOrigin(url: string) {
 
 export type EngineEvent = { readonly type: string; readonly properties: Record<string, unknown> }
 export type RunnerEngine = {
-  readonly create: (job: EverywhereJob, rules: readonly PermissionV1.Rule[]) => Promise<string>
+  readonly create: (job: EverywhereJob, rules: readonly PermissionV1.Rule[], placement?: EverywhereSessionWire.Placement) => Promise<string>
   readonly prompt: (session: string, job: EverywhereJob, maxUsd: number, model?: { providerID: string; modelID: string }, options?: FrameOptions) => Promise<void>
   readonly events: (signal: AbortSignal, ready: () => void) => AsyncIterable<EngineEvent>
   readonly abort: (session: string) => Promise<void>
@@ -135,6 +137,7 @@ export function createEverywhereEngine(input: {
   readonly directory: string
   readonly authorization: string
   readonly fetcher?: typeof fetch
+  readonly createSession?: (request: EverywhereSessionWire.Request) => Promise<EverywhereSessionWire.Result>
 }): RunnerEngine {
   const origin = localEngineOrigin(input.url)
   const fetcher = input.fetcher ?? fetch
@@ -157,11 +160,32 @@ export function createEverywhereEngine(input: {
     return encodeURIComponent(value)
   }
   return {
-    async create(job, rules) {
+    async create(job, rules, placement) {
       // Every unattended session carries the shell mark, whatever the probe said: its commands then run only in the
       // engine's offline sandbox and are refused where that is missing, and its terminals and session shell are refused.
+      const title = sessionTitle(job)
+      if (input.createSession) {
+        if (!placement || placement.directory !== input.directory || placement.jid !== job.jid)
+          throw new Error("The unattended session has no verified worktree")
+        const request = {
+          ...placement,
+          version: 1 as const,
+          claim: createHash("sha256").update(job.lease.id).digest("hex"),
+          platform: job.platform,
+          title,
+          permission: rules,
+        }
+        const response = await input.createSession(request)
+        if (response.kind === "created") return response.sessionID
+        // The first reply can be lost after the receipt is durable. No failure on this path may fall back to HTTP.
+        if (response.kind === "unavailable") {
+          const retry = await input.createSession(request)
+          if (retry.kind === "created") return retry.sessionID
+        }
+        if (response.kind !== "unsupported") throw new Error("The unattended session could not be bound")
+      }
       const metadata = { ...unattendedMetadata(job), [UNATTENDED_SHELL_KEY]: UNATTENDED_SHELL_OFFLINE }
-      const result = await call("POST", "/session", { title: sessionTitle(job), metadata, permission: rules })
+      const result = await call("POST", "/session", { title, metadata, permission: rules })
       if (!record(result) || typeof result.id !== "string" || !/^ses[A-Za-z0-9_]+$/.test(result.id)) throw new Error("Invalid unattended session")
       return result.id
     },

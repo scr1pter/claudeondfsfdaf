@@ -33,6 +33,7 @@ function broadcast(status: RemoteStatus) {
 export function startRemote(input: {
   engine: { url: string; password: string }
   preferences?: EverywhereJobsDeps["preferences"]
+  createEverywhereSession?: EverywhereJobsDeps["createEverywhereSession"]
   packaged: boolean
   watchingChanged: () => void
   log: (message: string, meta?: Record<string, unknown>) => void
@@ -45,6 +46,7 @@ export function startRemote(input: {
   const jobs = createEverywhereJobs({
     engine: input.engine,
     preferences: input.preferences,
+    createEverywhereSession: input.createEverywhereSession,
     token: () => vectorAccount.token(),
     events: (signal) => events.events(signal),
     ledgerPath: path.join(app.getPath("userData"), "everywhere", "runner.json"),

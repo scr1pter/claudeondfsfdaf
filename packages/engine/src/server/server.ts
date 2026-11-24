@@ -20,6 +20,8 @@ import { assertListenSecurity, guardedHostname, isLoopback } from "./listen-poli
 import { EverywherePreferences } from "@/config/everywhere-preferences"
 import type { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
 import { AppRuntime } from "@/effect/app-runtime"
+import type { EverywhereSession } from "./everywhere-session"
+import type { EverywhereSessionWire } from "@vectordevai/core/everywhere/session-binding"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -30,6 +32,7 @@ export type Listener = {
   url: URL
   stop: (close?: boolean) => Promise<void>
   everywherePreferences?: (request: unknown) => Promise<EverywherePreferenceWire.Result>
+  everywhereSession?: (request: unknown) => Promise<EverywhereSessionWire.Result>
 }
 
 type ServerApp = {
@@ -49,6 +52,7 @@ type ListenOptions = CorsOptions & {
   guardedHostname?: string
   /** Only the built-in, authenticated Desktop sidecar supplies its per-user state file. */
   everywherePreferencesPath?: string
+  attachEverywhereSession?: EverywhereSession.Attach
 }
 type ListenerState = {
   scope: Scope.Scope
@@ -56,7 +60,7 @@ type ListenerState = {
   http: ListenerServer
   websockets: WebSocketTracker.Interface
 }
-type EffectListener = Omit<Listener, "stop" | "everywherePreferences"> & {
+type EffectListener = Omit<Listener, "stop" | "everywherePreferences" | "everywhereSession"> & {
   stop: (close?: boolean) => Effect.Effect<void>
 }
 
@@ -95,12 +99,20 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
   )
   assertListenSecurity(opts, auth)
   const preferencesPath =
-    isLoopback(opts.hostname) && Option.getOrElse(auth.password, () => "") !== "" ? opts.everywherePreferencesPath : undefined
+    isLoopback(opts.hostname) && Option.getOrElse(auth.password, () => "") !== ""
+      ? opts.everywherePreferencesPath
+      : undefined
+  let createEverywhereSession: EverywhereSession.Handler | undefined
   const listener = await Effect.runPromise(
     listenEffect({
       ...opts,
       guardedHostname: guardedHostname(opts, auth),
       everywherePreferencesPath: preferencesPath,
+      attachEverywhereSession: preferencesPath
+        ? (handler) => {
+            createEverywhereSession = handler
+          }
+        : undefined,
       // A passwordless listener trusts only its own origin among local pages. Running from source keeps every local
       // page trusted, so the app's dev server on another port can still reach a `bun dev serve` backend.
       loopbackOrigins: opts.loopbackOrigins ?? InstallationLocal,
@@ -111,9 +123,18 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
     hostname: listener.hostname,
     port: listener.port,
     url: listener.url,
-    stop: (close?: boolean) => Effect.runPromiseExit(listener.stop(close)).then(() => undefined),
+    stop: (close?: boolean) => {
+      createEverywhereSession = undefined
+      return Effect.runPromiseExit(listener.stop(close)).then(() => undefined)
+    },
     everywherePreferences: preferences
       ? (request) => AppRuntime.runPromise(preferences(request)).catch(() => ({ version: 1, kind: "unavailable" }))
+      : undefined,
+    everywhereSession: preferencesPath
+      ? async (request) =>
+          createEverywhereSession
+            ? Effect.runPromise(createEverywhereSession(request))
+            : { version: 1, kind: "unavailable" }
       : undefined,
   }
 }
@@ -136,7 +157,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 )
 
 function listenerLayer(opts: ListenOptions, port: number) {
-  return HttpRouter.serve(HttpApiApp.createRoutes(opts, opts.everywherePreferencesPath), {
+  return HttpRouter.serve(HttpApiApp.createRoutes(opts, opts.everywherePreferencesPath, opts.attachEverywhereSession), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,

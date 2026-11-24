@@ -33,6 +33,7 @@ import { ComputerPrune } from "@/computer/prune"
 import { ComputerProtection } from "@/computer/protection"
 import { Config } from "@/config/config"
 import { EverywherePreferences } from "@/config/everywhere-preferences"
+import { EverywhereSession } from "@/server/everywhere-session"
 import { Workspace } from "@/control-plane/workspace"
 import { Env } from "@/env"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -367,6 +368,7 @@ const app = LayerNode.group([
 export function createRoutes(
   corsOptions?: CorsOptions & { readonly guardedHostname?: string },
   everywherePreferencesPath?: string,
+  attachEverywhereSession?: EverywhereSession.Attach,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   const locationServiceMapV2 = buildLocationServiceMap([[Teams.node, VectorTeams.node]])
 
@@ -376,6 +378,9 @@ export function createRoutes(
     ptyConnectApiRoutes,
     instanceRoutes,
     serverRoutes,
+    attachEverywhereSession
+      ? Layer.effectDiscard(Effect.map(EverywhereSession.make, attachEverywhereSession))
+      : Layer.empty,
     docRoute,
     uiRoute,
   ).pipe(

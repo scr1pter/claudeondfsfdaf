@@ -660,6 +660,7 @@ const main = Effect.gen(function* () {
     startRemote({
       engine: { url, password },
       preferences: () => listener.everywherePreferences({ version: 1, kind: "read" }),
+      createEverywhereSession: listener.everywhereSession,
       packaged: app.isPackaged,
       watchingChanged: () => {
         keepAwake?.refresh()
