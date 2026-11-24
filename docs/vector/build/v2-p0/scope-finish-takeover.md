@@ -69,7 +69,7 @@ So a token in AGENTS.md or `.vector/review.md` went to the provider in plain tex
 
 **Mutation checks.** Each part was reverted alone and the engine case failed every time: the `session/prompt.ts` mapping (the AGENTS.md token reached a body), the `run.ts` override (the instructions token reached a body) and the `safeRulePrompt` change (both tokens reached a body). With the `safeRulePrompt` change reverted, the desktop case also failed (0 pass, 1 fail).
 
-Left as a follow-up: recalled owner memory that a review session's later requests fill in (`withheldRecall` in `session/prompt.ts`) is not passed through `holdbackText`.
+**Owner recall follow-up.** The outward screen checks note text. The rendered recall also includes scope paths, which can contain a credential-shaped value. Under `holdback: "secrets"`, `withheldRecall` now applies `holdbackText` to the complete rendered block on each provider request, matching the first-request estimate. The transcript continues to store recall IDs. The fake-provider regression in `test/session/memory-every-agent.test.ts` failed on an unredacted scope path and passes with the fix. It checks the first request and a tool continuation under unset, explicit off, and secrets. The source digest advances to `79973b2a9a131847` at revision 5 under the same opt-in holdback rule below.
 
 ## 2026-11-23, --apply built fixes from the redacted outcome under offline diagnostics
 

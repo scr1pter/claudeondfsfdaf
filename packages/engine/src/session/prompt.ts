@@ -2929,6 +2929,7 @@ const layer = Layer.effect(
         // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
         // found for it is not filled in from the owner's personal memory or private documents.
         const audience = audienceOf(session, agent.name)
+        const holdback = holdsReviewBack(session)
         // Attachments the user marked to remember become documents while this request runs, never at admission. A
         // session a guest is in keeps none.
         if (!guest && !session.parentID && !session.internal)
@@ -2966,7 +2967,7 @@ const layer = Layer.effect(
               query: (sized?.users ?? SessionMemory.request(msgs)).map(SessionMemory.typed).join("\n"),
               first: !msgs.some((message) => message.info.role === "assistant" && message.info.agent !== "quick"),
             })
-        msgs = yield* withheldRecall(sessionID, msgs, personal, audience)
+        msgs = yield* withheldRecall(sessionID, msgs, { personal, audience, holdback })
         // What the request carries out of the brain, for Vector Local's network log; counted only while it is on.
         const carried = Egress.policy().enabled
           ? carriedOf(msgs, personal, personal && audience === "owner", learned.length)
@@ -3289,9 +3290,7 @@ const layer = Layer.effect(
           // Under holdback "secrets" (the session's stored rules, as the tools read them) a review session's instruction
           // files and Brain digest are redacted as the read tool redacts loaded instructions: a credential in AGENTS.md
           // is still a credential.
-          const instructions = holdsReviewBack(session)
-            ? snapshot.instructions.map(holdbackText)
-            : snapshot.instructions
+          const instructions = holdback ? snapshot.instructions.map(holdbackText) : snapshot.instructions
           if (tools.memory && snapshot.documents)
             tools.memory = { ...tools.memory, description: `${tools.memory.description}\n${MEMORY_DOCUMENTS.trim()}` }
           const system = [
@@ -4174,8 +4173,7 @@ const layer = Layer.effect(
     const withheldRecall = Effect.fn("SessionPrompt.withheldRecall")(function* (
       sessionID: SessionID,
       msgs: SessionV1.WithParts[],
-      personal: boolean,
-      audience: Brain.Audience = "owner",
+      { personal, audience, holdback }: { personal: boolean; audience: Brain.Audience; holdback: boolean },
     ) {
       // What a tool found (memory search and reads, linked files' pointers) is filled in from personal memory and
       // private documents only for a role whose output stays in the session.
@@ -4289,15 +4287,18 @@ const layer = Layer.effect(
           const recall = SessionMemory.recall(part)
           if (part.type === "text" && recall && (recall.cards.length > 0 || (personal && recall.personal.length > 0))) {
             const lines = recall.ids.flatMap((id) => cards.get(id) ?? memory.get(id) ?? [])
+            if (recall.review) {
+              // Recall renders scope paths as well as screened note text. Use the estimator's redaction on the block.
+              const text = ownerBlock(lines)
+              return [{ ...part, text: holdback ? holdbackText(text) : text }]
+            }
             return [
               {
                 ...part,
-                text: recall.review
-                  ? ownerBlock(lines)
-                  : Brain.recallText(lines, {
-                      newest: recall.newest,
-                      documents: recall.ids.some((id) => cards.has(id)),
-                    }),
+                text: Brain.recallText(lines, {
+                  newest: recall.newest,
+                  documents: recall.ids.some((id) => cards.has(id)),
+                }),
               },
             ]
           }
