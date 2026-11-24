@@ -576,6 +576,160 @@ describe("lifecycle", () => {
 })
 
 describe("checks before anything is asked", () => {
+  it.instance("a rule-only subtree alias blocks its matching files before consent", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-rule-origin-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const alias = path.join(outside, "alternate")
+      const ancestor = path.join(outside, "parent-spelling")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "pkg/deep/private.txt", "fixture")
+      yield* Effect.promise(async () => {
+        const type = process.platform === "win32" ? "junction" : "dir"
+        await fs.symlink(path.join(repository, "pkg/deep"), alias, type)
+        await fs.symlink(outside, ancestor, type)
+      })
+      const canonical = yield* Effect.promise(() => fs.realpath(repository))
+      const rules = [
+        { pattern: path.join(alias, "private.*"), action: "ask" },
+        { pattern: path.join(ancestor, "*", "pkg", "deep", "private.txt"), action: "deny" },
+      ] as const
+      for (const rule of rules) {
+        const { hub, requester } = yield* setup([
+          { permission: "read", pattern: "*", action: "allow" },
+          { permission: "read", ...rule },
+        ])
+        const { ops } = recorder()
+        const { asks, ask } = asker()
+        const run = yield* hub.run({ request: review(requester.id, canonical), call: { ask, promptOps: ops } })
+        expect(run.result?.refusal).toBe("read-rule")
+        expect(asks).toEqual([])
+        expect(seen).toEqual([])
+      }
+    }),
+  )
+
+  it.instance("rule-only diff aliases keep ordered permits and each source namespace", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-rule-diff-origin-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const other = path.join(outside, "other")
+      const alias = path.join(outside, "alternate")
+      const unrelated = path.join(outside, "unrelated")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "pkg/public.txt", "fixture")
+      yield* write(other, "public.txt", "different fixture")
+      yield* Effect.promise(async () => {
+        const type = process.platform === "win32" ? "junction" : "dir"
+        await fs.symlink(path.join(repository, "pkg"), alias, type)
+        await fs.symlink(other, unrelated, type)
+      })
+      const canonical = yield* Effect.promise(() => fs.realpath(repository))
+      for (const allow of [false, true]) {
+        const { hub, requester } = yield* setup([
+          { permission: "read", pattern: "*", action: "allow" },
+          { permission: "read", pattern: path.join(alias, "nested", ".env"), action: "deny" },
+          ...(allow
+            ? [{ permission: "read", pattern: path.join(alias, "nested", ".env"), action: "allow" as const }]
+            : []),
+          { permission: "read", pattern: path.join(canonical, "pkg", "other", ".env"), action: "ask" },
+          { permission: "read", pattern: path.join(unrelated, "public.txt"), action: "deny" },
+        ])
+        let checks: boolean[] = []
+        script.handle = (_request, context) =>
+          Effect.gen(function* () {
+            checks = yield* Effect.forEach(
+              ["pkg/nested/.env", "pkg/other/.env", "pkg/public.txt", "sibling/nested/.env"],
+              (file) =>
+                ConnectReviewService.checkReads(context.reviewService!, [file]).pipe(
+                  Effect.exit,
+                  Effect.map(Exit.isSuccess),
+                ),
+            )
+            return clean()
+          })
+        const { ops } = recorder()
+        const run = yield* hub.run({
+          request: review(requester.id, canonical),
+          call: { ask: () => write(repository, "pkg/nested/.env", "fixture"), promptOps: ops },
+        })
+        expect(run.result?.state).toBe("completed")
+        expect(checks).toEqual([allow, false, true, true])
+      }
+    }),
+  )
+
+  it.instance("a rule-only alias keeps its preflight authority across consent", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-rule-retarget-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const alias = path.join(outside, "alternate")
+      const other = path.join(outside, "other")
+      const type = process.platform === "win32" ? "junction" : "dir"
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "pkg/public.txt", "fixture")
+      yield* write(other, "public.txt", "different fixture")
+      yield* Effect.promise(() => fs.symlink(path.join(repository, "pkg"), alias, type))
+      const canonical = yield* Effect.promise(() => fs.realpath(repository))
+      const { hub, requester } = yield* setup([
+        { permission: "read", pattern: "*", action: "allow" },
+        { permission: "read", pattern: path.join(alias, "future", "private.txt"), action: "deny" },
+      ])
+      const { ops } = recorder()
+      const run = yield* hub.run({
+        request: review(requester.id, canonical),
+        call: {
+          ask: () =>
+            Effect.promise(async () => {
+              await fs.unlink(alias)
+              await fs.symlink(other, alias, type)
+            }),
+          promptOps: ops,
+        },
+      })
+      expect(run.result?.refusal).toBe("read-rule")
+      expect(seen).toEqual([])
+    }),
+  )
+
+  it.instance("an unresolved rule-only alias refuses the review before consent", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-rule-dangling-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const alias = path.join(outside, "alternate")
+      const target = path.join(repository, "nested")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(target)
+        await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir")
+        await fs.rmdir(target)
+      })
+      const canonical = yield* Effect.promise(() => fs.realpath(repository))
+      const { hub, requester } = yield* setup([
+        { permission: "read", pattern: "*", action: "allow" },
+        { permission: "read", pattern: path.join(alias, "private.txt"), action: "deny" },
+      ])
+      const { ops } = recorder()
+      const { ask, asks } = asker()
+      const run = yield* hub.run({ request: review(requester.id, canonical), call: { ask, promptOps: ops } })
+      expect(run.result?.refusal).toBe("read-rule")
+      expect(asks).toEqual([])
+      expect(seen).toEqual([])
+    }),
+  )
+
   it.instance(
     "verified subdirectory aliases retain secret diff asks and denies without inheriting sibling authority",
     () =>
