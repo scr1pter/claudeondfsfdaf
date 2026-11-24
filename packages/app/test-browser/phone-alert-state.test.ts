@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { createRoot, createSignal } from "solid-js"
 import { PHONE_PUSH_CHANGED } from "../src/phone/config"
 import { useAlertsState } from "../src/phone/push"
@@ -6,6 +7,13 @@ import { useAlertsState } from "../src/phone/push"
 test("the foreground checks the current account on worker invalidation and on return", async () => {
   const session = { accessToken: "fixture-a", refreshToken: "refresh", expiresAt: 1_800_000_000_000 }
   const endpoint = "https://web.push.apple.com/test"
+  const keys = { p256dh: "fixture-public-key", auth: "fixture-auth" }
+  const lookup = (endpoint: string) => ({
+    id: createHash("sha256").update(endpoint).digest("base64url").slice(0, 22),
+    fingerprint: createHash("sha256")
+      .update(JSON.stringify(["vector-phone-push-v1", endpoint, keys.p256dh, keys.auth]))
+      .digest("hex"),
+  })
   let current = endpoint
   let permission = "granted"
   const calls: { token: string | null; body: unknown }[] = []
@@ -14,7 +22,7 @@ test("the foreground checks the current account on worker invalidation and on re
     controller,
     getRegistration: async () => ({
       pushManager: {
-        getSubscription: async () => ({ toJSON: () => ({ endpoint: current }) }),
+        getSubscription: async () => ({ endpoint: current, toJSON: () => ({ endpoint: current, keys }) }),
       },
     }),
   })
@@ -43,8 +51,8 @@ test("the foreground checks the current account on worker invalidation and on re
       calls.push({ token, body })
       expect(url).toBe("/api/notify/subscribe")
       expect(init.method).toBe("POST")
-      expect(Object.keys(body)).toEqual(["check"])
-      return Response.json({ subscribed: token === "Bearer fixture-a" && body.check.endpoint === endpoint })
+      expect(body).toEqual({ check: lookup(current) })
+      return Response.json({ subscribed: token === "Bearer fixture-a" && body.check.id === lookup(endpoint).id })
     },
   })
   const message = (source: object) => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { createECDH } from "node:crypto"
+import { createECDH, createHash } from "node:crypto"
 import type { ApiRequest, ApiResponse } from "../../../api/_lib/http"
 import { pushSubscriptionId, pushSubscriptionsKey } from "../../../api/_lib/web-push"
 import { handleNotifySubscribe } from "../../../api/notify/subscribe"
@@ -18,6 +18,16 @@ const subscription = {
   keys: { p256dh: key.getPublicKey().toString("base64url"), auth: Buffer.alloc(16, 1).toString("base64url") },
 }
 const subscriptionId = pushSubscriptionId(endpoint)
+function lookup(subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) {
+  const { endpoint, keys } = subscription
+  return {
+    id: pushSubscriptionId(endpoint),
+    fingerprint: createHash("sha256")
+      .update(JSON.stringify(["vector-phone-push-v1", endpoint, keys.p256dh, keys.auth]))
+      .digest("hex"),
+  }
+}
+const check = lookup(subscription)
 let restore: () => void
 
 beforeEach(() => {
@@ -29,8 +39,9 @@ beforeEach(() => {
 })
 afterEach(() => restore())
 
-function fixture(expiresAt?: number) {
+function fixture(expiresAt?: number, afterRead = now) {
   const fake = codiumFakes({ now })
+  let currentTime = now
   fake.store.command([
     "HSET",
     pushSubscriptionsKey(alice),
@@ -48,7 +59,9 @@ function fixture(expiresAt?: number) {
         : Response.json({}, { status: 401 })
     }
     expect(url).toBe(process.env.KV_REST_API_URL!)
-    commands.push(JSON.parse(String(options?.body)))
+    const command = JSON.parse(String(options?.body)) as string[]
+    commands.push(command)
+    if (command[0] === "HGET") currentTime = afterRead
     return fake.fetcher(input, options)
   }) as typeof fetch
   const call = async (body: unknown, token?: string, origin = phone) => {
@@ -68,7 +81,7 @@ function fixture(expiresAt?: number) {
       setHeader: (name: string, value: string) => headers.set(name, value),
       end: (body: string) => (payload = JSON.parse(body)),
     }
-    await handleNotifySubscribe(request, response as unknown as ApiResponse, fetcher, () => now)
+    await handleNotifySubscribe(request, response as unknown as ApiResponse, fetcher, () => currentTime)
     return { status: response.statusCode, headers, payload }
   }
   return { commands, call }
@@ -76,35 +89,53 @@ function fixture(expiresAt?: number) {
 
 test("only the same account and exact current endpoint and keys count as registered", async () => {
   const { commands, call } = fixture()
-  const owner = await call({ check: subscription }, "fixture-alice")
+  const owner = await call({ check }, "fixture-alice")
   expect(owner.status).toBe(200)
   expect(owner.payload).toEqual({ subscribed: true })
   expect(owner.headers.get("cache-control")).toBe("no-store")
-  expect((await call({ check: subscription }, "fixture-bob")).payload).toEqual({ subscribed: false })
+  expect((await call({ check }, "fixture-bob")).payload).toEqual({ subscribed: false })
   expect(
-    (await call({ check: { ...subscription, endpoint: `${endpoint}-rotated` } }, "fixture-alice")).payload,
+    (await call({ check: lookup({ ...subscription, endpoint: `${endpoint}-rotated` }) }, "fixture-alice")).payload,
   ).toEqual({ subscribed: false })
   expect(
     (
       await call(
-        { check: { ...subscription, keys: { ...subscription.keys, auth: Buffer.alloc(16, 2).toString("base64url") } } },
+        {
+          check: lookup({
+            ...subscription,
+            keys: { ...subscription.keys, auth: Buffer.alloc(16, 2).toString("base64url") },
+          }),
+        },
         "fixture-alice",
       )
     ).payload,
   ).toEqual({ subscribed: false })
-  expect(commands.filter(([verb]) => verb !== "EVAL").map(([verb, key]) => [verb, key])).toEqual([
-    ["HGET", pushSubscriptionsKey(alice)],
-    ["HGET", pushSubscriptionsKey(bob)],
-    ["HGET", pushSubscriptionsKey(alice)],
-    ["HGET", pushSubscriptionsKey(alice)],
+  expect(commands.filter(([verb]) => verb !== "EVAL")).toEqual([
+    ["HGET", pushSubscriptionsKey(alice), subscriptionId],
+    ["HGET", pushSubscriptionsKey(bob), subscriptionId],
+    ["HGET", pushSubscriptionsKey(alice), pushSubscriptionId(`${endpoint}-rotated`)],
+    ["HGET", pushSubscriptionsKey(alice), subscriptionId],
   ])
 })
 
-test("expired records, ambiguous requests and unauthenticated reads never enable alerts", async () => {
+test("expired records, raw passive data and unauthorized or malformed requests never enable alerts", async () => {
   const { commands, call } = fixture(now)
-  expect((await call({ check: subscription }, "fixture-alice")).payload).toEqual({ subscribed: false })
-  expect((await call({ check: subscription })).status).toBe(401)
-  expect((await call({ check: subscription }, "fixture-alice", "https://other.fixture.invalid")).status).toBe(403)
-  expect((await call({ check: subscription, subscription }, "fixture-alice")).status).toBe(400)
+  expect((await call({ check }, "fixture-alice")).payload).toEqual({ subscribed: false })
+  expect((await call({ check })).status).toBe(401)
+  expect((await call({ check }, "fixture-alice", "https://other.fixture.invalid")).status).toBe(403)
+  for (const body of [
+    { check, subscription },
+    { check: subscription },
+    { check: { ...check, ...subscription } },
+    { check: { ...check, id: `${check.id}\n` } },
+    { check: { ...check, fingerprint: check.fingerprint.toUpperCase() } },
+    { check: { ...check, fingerprint: `${check.fingerprint}\n` } },
+  ])
+    expect((await call(body, "fixture-alice")).status).toBe(400)
   expect(commands.filter(([verb]) => verb !== "EVAL")).toEqual([["HGET", pushSubscriptionsKey(alice), subscriptionId]])
+})
+
+test("a record that expires during the account lookup reads as unregistered", async () => {
+  const { call } = fixture(now + 100, now + 100)
+  expect((await call({ check }, "fixture-alice")).payload).toEqual({ subscribed: false })
 })

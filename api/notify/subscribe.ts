@@ -12,6 +12,7 @@ import {
 import {
   hasPushSubscription,
   parsePushSubscription,
+  parsePushSubscriptionCheck,
   phoneAppOrigin,
   PUSH_LIMITS,
   removePushSubscription,
@@ -35,7 +36,7 @@ export default function handler(request: ApiRequest, response: ApiResponse) {
  *   session (the phone app signs in on its own origin). It needs push configured and switched on, and a plan that
  *   allows phone alerts (§4.4: active or renewing), decided here from the entitlement snapshot (S1). Only endpoints
  *   of the browsers' own push services are taken. An account keeps at most ten; an eleventh replaces the oldest.
- * - `POST {check}` reads whether this signed-in account has the exact subscription in `check`.
+ * - `POST {check: {id, fingerprint}}` reads whether this signed-in account has the matching subscription.
  * - `DELETE {endpoint}` removes one, whatever the plan, so alerts can always be turned off.
  */
 export async function handleNotifySubscribe(
@@ -76,14 +77,14 @@ export async function handleNotifySubscribe(
       json(response, 200, { removed: await removePushSubscription(user.id, input.endpoint, fetcher) })
       return
     }
-    const now = clock()
     if (checking) {
       if (Object.keys(input).length !== 1)
         throw new ApiError(400, "PUSH_SUBSCRIPTION_INVALID", "Send just the subscription to check.")
-      const subscription = parsePushSubscription(input.check, now)
-      json(response, 200, { subscribed: await hasPushSubscription(user.id, subscription, fetcher, now) })
+      const check = parsePushSubscriptionCheck(input.check)
+      json(response, 200, { subscribed: await hasPushSubscription(user.id, check, fetcher, clock) })
       return
     }
+    const now = clock()
     const subscription = parsePushSubscription(input.subscription, now)
     await requirePushService(fetcher, now)
     await requirePushPlan(user.id, fetcher, now)

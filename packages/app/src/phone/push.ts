@@ -1,6 +1,12 @@
+import {
+  PUSH_SUBSCRIPTION_ID_LENGTH,
+  pushSubscriptionFingerprintInput,
+  type PushSubscriptionCheck,
+  type PushSubscriptionIdentity,
+} from "@vectordevai/schema/push-subscription"
 import { createResource, onCleanup, onMount } from "solid-js"
 import { phoneApi, PhoneApiError } from "./api"
-import { fromBase64url, type PhoneSession } from "./auth"
+import { base64url, fromBase64url, type PhoneSession } from "./auth"
 import { PHONE_PUSH_CHANGED, PHONE_SW_SCOPE } from "./config"
 
 // Turning phone alerts on and off (WP A38), against A37's `/api/notify/subscribe`. The browser makes a push
@@ -14,7 +20,7 @@ export type SubscriptionLike = {
   endpoint: string
   expirationTime?: number | null
   options?: { applicationServerKey?: ArrayBuffer | null }
-  toJSON(): unknown
+  toJSON(): PushSubscriptionJSON
   unsubscribe(): Promise<boolean>
 }
 export type PushManagerLike = {
@@ -77,21 +83,39 @@ export async function alertsState(deps: PushDeps, session: PhoneSession): Promis
     const manager = await deps.pushManager()
     const subscription = await manager?.getSubscription()
     if (!manager || !subscription || expired(subscription)) return "off"
-    const snapshot = subscription.toJSON()
-    const answer = await phoneApi(
-      "/api/notify/subscribe",
-      session,
-      { method: "POST", body: { check: snapshot } },
-      deps.fetcher,
-    )
+    const identity = subscriptionIdentity(subscription)
+    if (!identity) return "unknown"
+    const snapshot = pushSubscriptionFingerprintInput(identity)
+    const check = await subscriptionCheck(identity.endpoint, snapshot)
+    const answer = await phoneApi("/api/notify/subscribe", session, { method: "POST", body: { check } }, deps.fetcher)
     const current = await manager.getSubscription()
     const permission = deps.permission()
     if (permission === "denied") return "denied"
     if (permission !== "granted" || !current || expired(current)) return "off"
-    if (JSON.stringify(current.toJSON()) !== JSON.stringify(snapshot)) return "off"
+    const latest = subscriptionIdentity(current)
+    if (!latest || pushSubscriptionFingerprintInput(latest) !== snapshot) return "off"
     return answer.subscribed === true ? "on" : answer.subscribed === false ? "off" : "unknown"
   } catch {
     return deps.permission() === "denied" ? "denied" : "unknown"
+  }
+}
+
+function subscriptionIdentity(subscription: SubscriptionLike): PushSubscriptionIdentity | undefined {
+  const { endpoint } = subscription
+  const { keys } = subscription.toJSON()
+  if (!endpoint || !keys?.p256dh || !keys.auth) return undefined
+  return { endpoint, p256dh: keys.p256dh, auth: keys.auth }
+}
+
+async function subscriptionCheck(endpoint: string, snapshot: string): Promise<PushSubscriptionCheck> {
+  const encoder = new TextEncoder()
+  const [endpointHash, fingerprint] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(endpoint)),
+    crypto.subtle.digest("SHA-256", encoder.encode(snapshot)),
+  ])
+  return {
+    id: base64url(new Uint8Array(endpointHash)).slice(0, PUSH_SUBSCRIPTION_ID_LENGTH),
+    fingerprint: Array.from(new Uint8Array(fingerprint), (byte) => byte.toString(16).padStart(2, "0")).join(""),
   }
 }
 

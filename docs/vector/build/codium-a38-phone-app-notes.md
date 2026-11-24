@@ -73,7 +73,7 @@ on `remote.vectordev.ai`, an iPhone Home Screen install, and Vercel applying the
 
 ## Subscription changes
 
-The service worker tells an open phone page when the browser's push subscription changes. The page checks the signed-in account's exact registration on that signal and when it comes back into view. Turning alerts on or restoring them for a changed subscription requires a tap in Alerts.
+The service worker tells an open phone page when the browser's push subscription changes. The page checks the signed-in account's registration with a lookup ID and fingerprint on that signal and when it comes back into view. Turning alerts on or restoring them for a changed subscription requires a tap in Alerts to send the browser's registration details.
 
 ## Not done
 

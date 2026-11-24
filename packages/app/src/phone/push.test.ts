@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { PhoneApiError } from "./api"
 import { base64url } from "./auth"
 import {
@@ -16,6 +17,16 @@ import {
 
 const session = { accessToken: "session-token", refreshToken: "r", expiresAt: Date.now() + 3_600_000 }
 const serverKey = new Uint8Array(65).fill(4)
+
+function lookup(subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) {
+  const { endpoint, keys } = subscription
+  return {
+    id: createHash("sha256").update(endpoint).digest("base64url").slice(0, 22),
+    fingerprint: createHash("sha256")
+      .update(JSON.stringify(["vector-phone-push-v1", endpoint, keys.p256dh, keys.auth]))
+      .digest("hex"),
+  }
+}
 
 function subscription(endpoint: string, key: Uint8Array = serverKey, auth = "a") {
   const value: SubscriptionLike & { unsubscribed: boolean } = {
@@ -45,7 +56,7 @@ function fakes(
   let current: SubscriptionLike | null = options.existing ?? null
   const created: ReturnType<typeof subscription>[] = []
   const calls: { url: string; method: string; body?: unknown; authorization?: string }[] = []
-  const registered = new Map<string, unknown>()
+  const registered = new Map<string, ReturnType<typeof lookup>>()
   const manager: PushManagerLike = {
     getSubscription: async () => current,
     subscribe: async (input) => {
@@ -79,7 +90,7 @@ function fakes(
         })
       }
       const status = init?.method === "POST" ? (options.post ?? 200) : 200
-      if (init?.method === "POST" && status === 200) registered.set(headers.authorization, body?.subscription)
+      if (init?.method === "POST" && status === 200) registered.set(headers.authorization, lookup(body.subscription))
       return new Response(
         JSON.stringify(
           status === 200 ? { subscribed: true } : { error: { code: "MODEL_PLAN_REQUIRED", message: "x" } },
@@ -107,7 +118,7 @@ describe("checking alert status", () => {
       {
         url: "/api/notify/subscribe",
         method: "POST",
-        body: { check: { endpoint, keys: { p256dh: "p", auth: "a" } } },
+        body: { check: lookup({ endpoint, keys: { p256dh: "p", auth: "a" } }) },
         authorization: "Bearer session-token",
       },
     ])
@@ -168,6 +179,14 @@ describe("checking alert status", () => {
     expect(calls).toHaveLength(1)
     expect(created).toEqual([])
     expect(existing.unsubscribed).toBe(false)
+  })
+
+  test("unavailable subscription keys never produce a passive request", async () => {
+    const existing = subscription(endpoint)
+    existing.toJSON = () => ({ endpoint })
+    const { deps, calls } = fakes({ permission: "granted", existing })
+    expect(await alertsState(deps, session)).toBe("unknown")
+    expect(calls).toEqual([])
   })
 })
 
