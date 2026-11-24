@@ -3456,6 +3456,42 @@ describe("the Brain context (B08, BT07a)", () => {
     { git: true },
   )
 
+  const entryPath = "src/EchoBundleMetadata.ts"
+  for (const { name, copied, entries } of [
+    { name: "an entry path", copied: entryPath, entries: [{ ...lesson, paths: [entryPath] }] },
+    { name: "an insight-only attachment", copied: INSIGHT, entries: [] },
+  ]) {
+    it.instance(
+      `public Brain output screening covers ${name}`,
+      () =>
+        Effect.gen(function* () {
+          const test = yield* start()
+          const bundle = yield* Effect.promise(() => pack({ publicRepository: true, entries }))
+          const download = yield* Effect.promise(() => brainUploaded(bundle.bytes, { publicRepository: true }))
+          const row = yield* brainRun(test, {
+            answer: () => Response.json(download),
+            ticket: { repository: { private: false } },
+            text: `The approved detail is ${copied}.`,
+            resultTitle: copied,
+          })
+          const input = textIn(row.first, false)
+          expect(input).toContain(OPEN_TAG)
+          const literal = input.slice(input.indexOf(OPEN_TAG) + OPEN_TAG.length, input.indexOf("\n</brain_context>"))
+          const received = JSON.parse(JSON.parse(literal) as string) as { memory: unknown[] }
+          expect(received.memory).toHaveLength(entries.length)
+          expect(input).toContain(copied)
+          expect(row.run.result).toMatchObject({ outcome: "changes" })
+          const { summary } = yield* Effect.promise(() => bundleOf(test.dir))
+          if (!summary) throw new Error("The run did not write a valid summary.")
+          for (const output of [row.run.lines.join("\n"), summary.title, summary.body, summary.comment])
+            expect(output).not.toContain(copied)
+          expect(summary.comment).toBe("Vector left out output that repeats the approved Brain context.")
+          expect(guard.outside()).toEqual([])
+        }),
+      { git: true },
+    )
+  }
+
   it.instance(
     "no other event, mode or upload id makes a Brain read, nor a stop before it, and a ticket dispatch without a repository id asks nothing",
     () =>

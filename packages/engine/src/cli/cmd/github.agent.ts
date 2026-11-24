@@ -1035,8 +1035,16 @@ async function readBrain(
   const opened = await deps.brain.open(answer.download, expected)
   if (!opened) return undefined
   if (opened.brainKey) deps.kept.brain = { bytes: opened.bytes, approval: opened.approval, brainKey: opened.brainKey }
-  if ((expected.publicRepository || opened.approval.publicRepository) && opened.bundle.memory.entries.length)
-    deps.kept.publicBrain = opened.bundle.memory.entries.map((entry) => entry.text)
+  if (expected.publicRepository || opened.approval.publicRepository) {
+    const { BrainRunBundle } = await import("@vectordevai/core/brain/run-bundle")
+    const { parts } = BrainRunBundle.select({
+      publicRepository: true,
+      memory: opened.bundle.memory,
+      shareableSkills: [],
+      insights: opened.bundle.insights,
+    })
+    if (parts.length) deps.kept.publicBrain = parts
+  }
   const block = `${BRAIN_CONTEXT_OPEN}${untrustedJson(
     JSON.stringify({
       memory: opened.bundle.memory.entries,
