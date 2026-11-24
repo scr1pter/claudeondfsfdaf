@@ -1108,50 +1108,79 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     await untouched(f)
   }, 30_000)
 
-  test("only the listener's private creator can bind its actual unattended session to a placement", async () => {
+  test("only the listener's private creator can bind an unattended session after the scoped checkout trust probe", async () => {
     const f = await repository(true)
     await allow([f.repo])
     await open(f.repo)
     const result = await post(f.input)
     expect(result.status).toBe(200)
     const directory = result.body.directory as string
-    const placedHeaders = { ...owner, "x-vector-directory": directory }
-    const trust = await call("/config/trust", { headers: placedHeaders })
-    expect(trust.body.trusted).toBe(false)
     const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
+    const intent = path.join(folder, `${f.input.jid}.session-intent.json`)
     const placedPath = path.join(folder, `${f.input.jid}.placed.json`)
     const receipt = path.join(folder, `${f.input.jid}.session.json`)
     const command = {
       ...f.input, directory, version: 1, platform: "slack", title: "Slack: Fixture setting", permission: [], claim: "a".repeat(64),
     }
-    const inline = await call("/session", {
-      method: "POST", headers: placedHeaders,
-      body: { title: command.title, metadata: { "vector.unattended": { by: "everywhere", jid: f.input.jid, platform: "slack" } } },
-    })
-    expect(inline.status).toBe(200)
-    expect(await present(receipt)).toBe(false)
     const bind = (payload: unknown) => Effect.runPromise(privateSession!(payload))
-    expect(await bind({ ...command, sessionID: inline.body.id })).toEqual({ version: 1, kind: "refused" })
+    // Placement never loads a checkout. A direct broker request cannot use the session creator to bootstrap it.
+    expect(await loaded()).not.toContain(FileLock.key(directory))
+    expect(await bind(command)).toEqual({ version: 1, kind: "refused" })
     expect(await bind({ ...command, directory: f.repo })).toEqual({ version: 1, kind: "refused" })
-    // Older reservations lack a positive Engine placement, even when the directory and ordinary session exist.
+    expect(await loaded()).not.toContain(FileLock.key(directory))
+    expect(await present(intent)).toBe(false)
+    expect(await present(receipt)).toBe(false)
+
+    // Use the same scoped HTTP request the Desktop worktree adapter makes before sending a broker command.
+    const scoped = (route: string) => `${route}?${new URLSearchParams({ directory })}`
+    const trust = await call(scoped("/config/trust"), { headers: owner })
+    expect(trust.status).toBe(200)
+    expect(trust.body).toMatchObject({ trusted: false, ignored: true })
+    expect(await loaded()).toContain(FileLock.key(directory))
+    // Older reservations lack a positive Engine placement, even when the checkout has been opened.
     const placedBody = await readFile(placedPath)
     await rm(placedPath)
     expect(await bind(command)).toEqual({ version: 1, kind: "refused" })
     expect(await present(receipt)).toBe(false)
     await writeFile(placedPath, placedBody, { mode: 0o600 })
+    await allow([f.repo], false)
+    expect(await bind(command)).toEqual({ version: 1, kind: "refused" })
+    expect(await present(intent)).toBe(false)
+    await allow([f.repo])
     const created = await bind(command)
     expect(created.kind).toBe("created")
     if (created.kind !== "created") throw new Error("Missing binding from the real session service")
-    expect(created.sessionID).not.toBe(inline.body.id)
     expect(await bind(command)).toEqual(created)
     expect(await bind({ ...command, claim: "b".repeat(64) })).toEqual({ version: 1, kind: "refused" })
     expect(await bind({ ...command, terminal: true })).toEqual({ version: 1, kind: "refused" })
-    const details = await call(`/session/${created.sessionID}`, { headers: placedHeaders })
+    const details = await call(scoped(`/session/${created.sessionID}`), { headers: owner })
     expect(details.status).toBe(200)
     expect(details.body.metadata["vector.unattended"]).toEqual({ by: "everywhere", jid: f.input.jid, platform: "slack" })
     const saved = JSON.parse(await readFile(receipt, "utf8"))
     expect(saved).toMatchObject({ version: 1, sessionID: created.sessionID, directory, jid: f.input.jid, claim: command.claim })
     expect(saved).not.toHaveProperty("terminal")
+  }, 30_000)
+
+  test("an ordinary session cannot bind itself using unattended metadata", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const placed = await post(f.input)
+    expect(placed.status).toBe(200)
+    const directory = placed.body.directory as string
+    const request = {
+      ...f.input, directory, version: 1, platform: "slack", title: "Slack: Fixture", permission: [], claim: "a".repeat(64),
+    }
+    const inline = await call(`/session?${new URLSearchParams({ directory })}`, {
+      method: "POST", headers: owner,
+      body: { title: request.title, metadata: { "vector.unattended": { by: "everywhere", jid: f.input.jid, platform: "slack" } } },
+    })
+    expect(inline.status).toBe(200)
+    expect(await Effect.runPromise(privateSession!({ ...request, sessionID: inline.body.id })))
+      .toEqual({ version: 1, kind: "refused" })
+    const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
+    expect(await present(path.join(folder, `${f.input.jid}.session-intent.json`))).toBe(false)
+    expect(await present(path.join(folder, `${f.input.jid}.session.json`))).toBe(false)
   }, 30_000)
 
   test("a checkout that changes while the Engine creates the session gets no binding", async () => {
@@ -1161,7 +1190,9 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     const created = await post(f.input)
     expect(created.status).toBe(200)
     const directory = created.body.directory as string
-    await call("/config/trust", { headers: { ...owner, "x-vector-directory": directory } })
+    expect(await loaded()).not.toContain(FileLock.key(directory))
+    const trust = await call(`/config/trust?${new URLSearchParams({ directory })}`, { headers: owner })
+    expect(trust.body.trusted).toBe(false)
     const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
     const placement = JSON.parse(await readFile(path.join(folder, `${f.input.jid}.placed.json`), "utf8"))
     const receipt = path.join(folder, `${f.input.jid}.session.json`)

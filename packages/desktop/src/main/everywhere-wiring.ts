@@ -583,6 +583,7 @@ export function unattendedWorktree(input: {
         log("Vector everywhere could not create a job's worktree.")
         throw new Error("The unattended worktree was not created")
       }
+      // The scoped trust route loads the checkout into this listener. Private session creation only uses that context.
       const url = new URL("/config/trust", origin)
       url.searchParams.set("directory", created.directory)
       const answer = await fetcher(url, {

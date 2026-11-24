@@ -47,6 +47,8 @@ export const make = Effect.gen(function* () {
     const placed = yield* worktree.withUnattendedPlacement(request, Effect.succeed)
     if (!placed || Config.lockedKeys().includes("everywhere")) return refused
     const loaded = (yield* store.loaded()).filter((item) => item.project.id === placed.project)
+    // Desktop's scoped GET /config/trust opens the placed checkout before calling the private creator.
+    // The creator must never bootstrap a checkout or use a context from another listener.
     const instance = loaded.find((item) => item.directory === placed.directory)
     if (!instance) return refused
     const parent = yield* Worktree.canonicalPath(instance.project.worktree)

@@ -523,24 +523,28 @@ test("an offer frame reaches the runner, and without the safe worktree its claim
   }
 })
 
-test("the runner creates its session through the private reply broker and only explicit legacy can fall back", async () => {
+test("the runner checks the new checkout before using the private session broker or explicit legacy fallback", async () => {
   const folders = await folderFixture()
-  const created = { version: 1, kind: "created", sessionID: "ses_bound" } as const
+  const bound = { version: 1, kind: "created", sessionID: "ses_bound" } as const
   const unavailable = { version: 1, kind: "unavailable" } as const
   const unsupported = { version: 1, kind: "unsupported" } as const
   const refused = { version: 1, kind: "refused" } as const
   const scenarios = [
-    { replies: [unavailable, created], path: "/session/ses_bound/prompt_async", legacy: false },
-    { replies: [refused], path: undefined, legacy: false },
-    { replies: [unavailable, unsupported], path: undefined, legacy: false },
-    { replies: [unsupported], path: "/session/ses_legacy/prompt_async", legacy: true },
+    { trust: untrusted, replies: [unavailable, bound], path: "/session/ses_bound/prompt_async", legacy: false },
+    { trust: untrusted, replies: [refused], path: undefined, legacy: false },
+    { trust: untrusted, replies: [unavailable, unsupported], path: undefined, legacy: false },
+    { trust: untrusted, replies: [unsupported], path: "/session/ses_legacy/prompt_async", legacy: true },
+    { trust: answer({ trusted: true }), replies: [], path: undefined, legacy: false },
+    { trust: answer({}, 503), replies: [], path: undefined, legacy: false },
   ] as const
   try {
     for (const scenario of scenarios) {
       const sent: EverywhereSessionWire.Request[] = []
       const listeners = new Set<(message: unknown) => void>()
+      const sequence: string[] = []
       const broker = sessionRequester({
         send(message) {
+          sequence.push("bind")
           const incoming = requestMessage(message, SESSION_MESSAGE)!
           const result = scenario.replies[sent.length]
           sent.push(incoming.request as EverywhereSessionWire.Request)
@@ -554,18 +558,32 @@ test("the runner creates its session through the private reply broker and only e
         },
       })
       const env = computer(on(folders.project), {
-        safeWorktree: WORKTREE,
         createEverywhereSession: broker,
         engine: {
-          "POST /session": () => Response.json({ id: "ses_legacy" }),
-          "GET /event": (_url, init) =>
-            new Response(
+          ...CAPABLE,
+          "POST /experimental/worktree/unattended": (url, init) => {
+            sequence.push("place")
+            return created(url, init)
+          },
+          "GET /config/trust": (url, init) => {
+            sequence.push("trust")
+            expect(url.searchParams.get("directory")).toBe(SANDBOX)
+            return scenario.trust(url, init)
+          },
+          "POST /session": () => {
+            sequence.push("legacy create")
+            return Response.json({ id: "ses_legacy" })
+          },
+          "GET /event": (_url, init) => {
+            sequence.push("events")
+            return new Response(
               new ReadableStream({
                 start(controller) {
                   init?.signal?.addEventListener("abort", () => controller.close(), { once: true })
                 },
               }),
-            ),
+            )
+          },
           "POST /session/ses_bound/prompt_async": () => new Response(null, { status: 503 }),
           "POST /session/ses_legacy/prompt_async": () => new Response(null, { status: 503 }),
           "POST /session/ses_bound/abort": () => Response.json(true),
@@ -580,16 +598,23 @@ test("the runner creates its session through the private reply broker and only e
         expect(env.relay.offer(signed(jid))).toBe(1)
         await until(() => env.service.of("settle").length === 1)
         expect(sent).toHaveLength(scenario.replies.length)
+        expect(sequence).toEqual([
+          "place",
+          "trust",
+          ...scenario.replies.map(() => "bind"),
+          ...(scenario.legacy ? ["legacy create"] : []),
+          ...(scenario.path ? ["events"] : []),
+        ])
         for (const message of sent) {
           expect([message.version, message.jid, message.directory, message.branch]).toEqual([
             1,
             jid,
-            "/fixture/sandbox",
+            SANDBOX,
             branchFor(jid),
           ])
           expect(message.claim).toMatch(/^[a-f0-9]{64}$/)
         }
-        expect(new Set(sent.map((message) => message.claim)).size).toBe(1)
+        expect(new Set(sent.map((message) => message.claim)).size).toBe(sent.length ? 1 : 0)
         expect(env.config.calls.some((call) => call.path === "/session")).toBe(scenario.legacy)
         expect(env.config.calls.find((call) => call.path.endsWith("/prompt_async"))?.path).toBe(scenario.path)
         expect(listeners.size).toBe(0)
