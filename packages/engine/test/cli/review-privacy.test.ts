@@ -18,7 +18,7 @@ import {
   type LocalReviewDeps,
   type LocalReviewOptions,
 } from "../../src/cli/cmd/review"
-import type { FixStep } from "../../src/cli/cmd/review.fix"
+import type { FixStep, FixStepInput } from "../../src/cli/cmd/review.fix"
 import { Git } from "../../src/git"
 import { ReviewModel, type ResolvedModel } from "../../src/review/model"
 import { Review } from "../../src/review/run"
@@ -341,6 +341,25 @@ describe("vector review: a review the route rules stop (VS-23b)", () => {
 describe("vector review: the user config's review block (VS-23d)", () => {
   const withGlobal = (global: ConfigV1.Info) =>
     Effect.provideService(Config.Service, TestConfig.make({ getGlobal: () => Effect.succeed(global) }))
+
+  it.live("--apply receives the effective secret holdback policy", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      yield* write(repo.dir, { [REVIEW_CONFIG_PATH]: '{"holdback":"off"}' })
+      const applied: FixStepInput["holdback"][] = []
+      const fix: FixStep = {
+        refusal: () => undefined,
+        branchRefusal: () => undefined,
+        run: (input) => Effect.sync(() => void applied.push(input.holdback)),
+      }
+      const run = fake()
+      const result = yield* review({ directory: repo.dir, env: {}, apply: true }, { ...run.deps, fix }).pipe(
+        withGlobal({ review: { holdback: "secrets" } }),
+      )
+      expect(result.error).toBeUndefined()
+      expect(applied).toEqual(["secrets"])
+    }),
+  )
 
   // scope-finish takeover (2026-11-23): the outcome --apply reads is redacted under offline diagnostics, so a fix could
   // write "[redacted]" into the source. --apply is refused first, before any model is resolved or anything is reviewed.

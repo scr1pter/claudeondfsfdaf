@@ -8,7 +8,7 @@ import { applyFixPatch } from "./diff"
 import { FIX_LIMITS } from "./fix-proposal"
 import { MAX_FIX_HUNKS } from "./guardrail"
 import { REDACTED } from "./redact"
-import type { FailureClass, ReviewOutcome, Severity } from "./types"
+import type { FailureClass, ReviewConfig, ReviewOutcome, Severity } from "./types"
 
 // `start`..`end` are the head lines a "lines" fix replaces; a patch fix names its own hunks and is placed at `start`.
 // `label` is what the review said of the finding: a legacy finding's severity, or a strict one's failure class (a strict
@@ -134,7 +134,11 @@ const unshown = (text: string) => UNSHOWN.test(text.replace(/^\uFEFF/, ""))
  * limits: files are taken in path order, and one whose patch would take the total over the line or byte limit is left
  * out while the files after it can still fit, so a long review never makes the whole proposal unacceptable.
  */
-export function planEdits(fixes: readonly FixCandidate[], heads: ReadonlyMap<string, Uint8Array | undefined>): FixPlan {
+export function planEdits(
+  fixes: readonly FixCandidate[],
+  heads: ReadonlyMap<string, Uint8Array | undefined>,
+  config: Pick<ReviewConfig, "holdback"> = {},
+): FixPlan {
   const skipped: FixSkipped[] = []
   const skip = (group: readonly FixCandidate[], reason: string) =>
     skipped.push(...group.map((fix) => ({ id: fix.id, path: fix.path, reason })))
@@ -169,9 +173,7 @@ export function planEdits(fixes: readonly FixCandidate[], heads: ReadonlyMap<str
     if (after === undefined) return drop(chosen, "its fix does not apply to the reviewed commit")
     if (unshown(after)) return drop(chosen, "its fix adds control or invisible characters")
     if (after === before) return drop(chosen, "its fix changes nothing")
-    // Under holdback "secrets" or offline diagnostics the model saw values as the placeholder; a suggestion that echoes
-    // it would write the placeholder over the real value. A placeholder the file already holds may stay.
-    if (after.split(REDACTED).length > before.split(REDACTED).length)
+    if (config.holdback === "secrets" && writesPlaceholder(before, chosen))
       return drop(chosen, `its fix writes the ${REDACTED} placeholder into the file`)
     return [
       {
@@ -267,6 +269,21 @@ function linesText(before: string, fixes: readonly FixCandidate[]) {
 function patchText(before: string, file: string, patch: string) {
   const applied = applyFixPatch(before, patch, { path: file, maxHunks: MAX_FIX_HUNKS })
   return applied.ok ? applied.text : undefined
+}
+
+// Read the proposed edits at their original locations. A generated diff could align a new placeholder with the
+// same text elsewhere, making a replacement look like a deletion. An unchanged line can keep its literal marker.
+function writesPlaceholder(before: string, fixes: readonly FixCandidate[]) {
+  const original = before.split("\n")
+  return fixes.some((fix) => {
+    if (!fix.text.includes(REDACTED)) return false
+    const lines = fix.text.replace(/\r\n/g, "\n").split("\n")
+    if (fix.kind === "patch") return lines.some((line) => line.startsWith("+") && line.includes(REDACTED))
+    return lines.some(
+      (line, offset) =>
+        line.includes(REDACTED) && (fix.start + offset > fix.end || line !== original[fix.start + offset - 1]),
+    )
+  })
 }
 
 /**

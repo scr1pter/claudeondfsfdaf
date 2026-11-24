@@ -1298,7 +1298,7 @@ function localReview<RunR, ModelR>(
           color: deps.color,
         }),
       )
-    if (options.apply && deps.fix) yield* deps.fix.run({ git, root, target, outcome, say, now })
+    if (options.apply && deps.fix) yield* deps.fix.run({ git, root, target, outcome, holdback: config.holdback, say, now })
     if (options.post && options.pr !== undefined && range.remote)
       yield* postToPull({
         git,

@@ -21,7 +21,7 @@ import {
   type FixSkipped,
 } from "@vectordevai/core/review/fix-plan"
 import { createFixConsentPolicy, FIX_LIMITS, type FixProposal } from "@vectordevai/core/review/fix-proposal"
-import type { ReviewOutcome } from "@vectordevai/core/review/types"
+import type { ReviewConfig, ReviewOutcome } from "@vectordevai/core/review/types"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { ReviewFix } from "@/review/fix"
 import type { ReviewGit } from "@/review/git"
@@ -34,6 +34,7 @@ export interface FixStepInput {
   root: string
   target: LocalTarget
   outcome: ReviewOutcome
+  holdback?: ReviewConfig["holdback"]
   say: (text: string) => void
   now: () => number
 }
@@ -181,7 +182,9 @@ const runFixStep = Effect.fn("Cli.review.fix")(function* (input: FixStepInput & 
   const found = fixCandidates(input.outcome, target.head)
   input.say(found.source)
   if (!found.fixes.length) return input.say(`Nothing to apply: ${found.none}${leftOut(found.left, [])}`)
-  const planned = planEdits(found.fixes, yield* readHeads(input.git, input.root, target.head, found.fixes))
+  const planned = planEdits(found.fixes, yield* readHeads(input.git, input.root, target.head, found.fixes), {
+    holdback: input.holdback,
+  })
   if (!planned.files.length)
     return input.say(`Nothing to apply: no fix could be made into a patch.${leftOut(found.left, planned.skipped)}`)
   const identity = yield* commitIdentity(input.git, input.root)
