@@ -874,6 +874,39 @@ test("a lost acknowledgement of a held result replays that exact result with its
   expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
 })
 
+for (const outcome of ["held", "needs-approval"] as const) {
+  test(`a lost early ${outcome} acknowledgement replays the original result`, async () => {
+    const f = fixture()
+    if (outcome === "needs-approval") f.ask()
+    const attempts: Settle[] = []
+    const runner = createEverywhereRunner({
+      ...f.deps,
+      safeWorktree: outcome === "held" ? undefined : f.deps.safeWorktree,
+      jobs: {
+        ...f.deps.jobs,
+        settle: async (result) => {
+          attempts.push(structuredClone(result))
+          if (attempts.length === 1) throw new Error("Fixture acknowledgement lost")
+        },
+      },
+    })
+    expect(await runner.offer("fixture-offer")).toBe(true)
+    const expected: Settle = {
+      jid: f.job.jid,
+      lease: f.job.lease.id,
+      ...(outcome === "held"
+        ? {
+            outcome,
+            summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed.",
+          }
+        : { outcome, summary: "Fixed retry handling.", needs: ["external_directory"] }),
+    }
+    expect(attempts).toEqual([expected, expected])
+    expect(f.calls.some((call) => ["commit", "push", "open-pr"].includes(call.kind))).toBe(false)
+    expect(await f.ledger.inspect()).toMatchObject({ jobs: [], pending: [] })
+  })
+}
+
 for (const action of ["stop", "lost"] as const) {
   test(`a server ${action} answered to pushing keeps the committed branch on the computer and settles held`, async () => {
     const f = fixture()
