@@ -75,6 +75,23 @@ export type RouteAnswer = {
 export class RouteHarness {
   private handlers: Record<string, Handler> = {}
   private server = createServer((request, response) => {
+    const length = request.headers["content-length"]
+    if (request.headers["transfer-encoding"] || (length !== undefined && length !== "0")) {
+      // Bun keeps the connection open if a handler ends its response before it drains the request body.
+      // Let the handler read normally. Drain only when it ends the response with unread bytes.
+      const end = response.end
+      response.end = ((...args: unknown[]) => {
+        const finish = () => Reflect.apply(end, response, args) as typeof response
+        if (request.readableEnded || request.destroyed) return finish()
+        void (async () => {
+          for await (const _ of request) {
+            // Discard bytes the handler did not need.
+          }
+          finish()
+        })().catch(() => response.destroy())
+        return response
+      }) as typeof response.end
+    }
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname
     const handler = this.handlers[path]
     if (!handler) {
