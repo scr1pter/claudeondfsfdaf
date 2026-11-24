@@ -794,6 +794,16 @@ it.effect("an open binding is inspected only after the existing age floor and ne
     yield* TestClock.adjust(ConnectDirectoryRequest.RETENTION_MS - 1)
     yield* admit()
     const young = yield* boundWith(f.service, f.scope, "running")
+    // Legacy index entries omit the age hint, so only the reservation can rule out an early lookup.
+    for (const file of [path.join(ledgerRoot, "index.json"), path.join(f.folder, "index.json")]) {
+      const index = yield* stored(file)
+      yield* store(file, {
+        ...index,
+        entries: index.entries.map((entry) =>
+          entry.key === young.request.requestKey ? { key: entry.key, digest: entry.digest } : entry,
+        ),
+      })
+    }
     expect(inspected).toEqual([])
     yield* TestClock.adjust(1)
     expect((yield* f.service.reserve(f.scope, old.request, undefined, inspect)).kind).toBe("bound")

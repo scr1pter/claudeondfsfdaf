@@ -180,7 +180,8 @@ export function deadModernLease(owner: Owner): boolean {
       self.machine === owner.machine &&
       !leases.has(owner.runtime)
     )
-  return readMachineProof() === owner.machine && (self?.boot ?? boot()) === owner.boot && exited(owner.pid)
+  // A pid may have been reused since the general liveness cache last recorded it as dead.
+  return readMachineProof() === owner.machine && (self?.boot ?? boot()) === owner.boot && signal(owner.pid) === "dead"
 }
 
 // Whether the owner's process is alive, whatever became of its instance.

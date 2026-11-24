@@ -1,4 +1,4 @@
-import { afterAll, describe, expect } from "bun:test"
+import { afterAll, describe, expect, spyOn } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
@@ -83,6 +83,33 @@ describe("BackgroundJobStore", () => {
         expect(readFileSync(machineFile, "utf8")).toBe(existing)
       } finally {
         BackgroundJobStore.useMachineFile(machineFile)
+      }
+    }),
+  )
+
+  it.live("a fresh modern lease never inherits a cached death from a recycled pid", () =>
+    Effect.sync(() => {
+      const pid = 2_147_483_600
+      let running = false
+      const kill = spyOn(process, "kill").mockImplementation((observed, signal) => {
+        expect([observed, signal]).toEqual([pid, 0])
+        if (!running) throw Object.assign(new Error("The previous process exited"), { code: "ESRCH" })
+        return true
+      })
+      try {
+        expect(BackgroundJobStore.exited(pid)).toBe(true)
+        const owner = foreign(pid)
+        running = true
+        // The old cache still reports the previous exit when retention checks the new lease.
+        expect(BackgroundJobStore.exited(pid)).toBe(true)
+        expect(kill).toHaveBeenCalledTimes(1)
+        expect(BackgroundJobStore.deadModernLease(owner)).toBe(false)
+        expect(kill).toHaveBeenCalledTimes(2)
+        running = false
+        expect(BackgroundJobStore.deadModernLease(owner)).toBe(true)
+        expect(kill).toHaveBeenCalledTimes(3)
+      } finally {
+        kill.mockRestore()
       }
     }),
   )

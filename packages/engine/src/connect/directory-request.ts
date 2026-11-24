@@ -626,7 +626,6 @@ const make = (input: Partial<Limits>) =>
           const pointer = yield* read(pointerFile(entry.key), Reservation, MAX_RECORD_BYTES)
           if (!pointer || pointer.digest !== entry.digest) return undefined
           const createdAt = pointer.value.createdAt
-          if (createdAt > now - floor) return undefined
           const local = current.entries.some((item) => item.key === entry.key && item.digest === pointer.digest)
           const folder = pointer.value.folder ?? (local ? home.folder : undefined)
           if (!folder) return undefined
@@ -653,7 +652,13 @@ const make = (input: Partial<Limits>) =>
           spent.bytes += run.bytes
           if (run.kind === "done") return { folder, at: Math.max(createdAt, run.ended ?? createdAt) }
           if (run.kind === "gone") return { folder, at: createdAt }
-          if (run.kind === "open" && inspectOpen && scopeDigestOf(run.receipt) === binding.scopeDigest) {
+          // A legacy index may omit its age hint. The pointer still gates the open binding's job lookup.
+          if (
+            run.kind === "open" &&
+            inspectOpen &&
+            createdAt <= now - floor &&
+            scopeDigestOf(run.receipt) === binding.scopeDigest
+          ) {
             const remaining = Math.floor(inspectUntil - performance.now())
             if (remaining <= 0) return undefined
             const dead = yield* Effect.interruptible(Effect.suspend(() => inspectOpen(binding, run.receipt))).pipe(
