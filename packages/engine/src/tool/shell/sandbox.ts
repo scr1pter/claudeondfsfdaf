@@ -261,7 +261,11 @@ export type Offline =
  * missing, the profile could not be built) is refused rather than run unwrapped. Windows has no sandbox, so there a
  * command runs as it is, and the notice says it is not network-filtered.
  */
-export function offline(input: Omit<Parameters<typeof wrapCommand>[0], "allowNetwork">): Offline {
+export function offline(input: Omit<CommandInput, "allowNetwork">): Offline {
+  return offlineCommand(input)
+}
+
+function offlineCommand(input: Omit<CommandInput, "allowNetwork">, hostHome?: string): Offline {
   const platform = input.platform ?? process.platform
   if (platform === "win32") return { type: "unfiltered", notice: WINDOWS_UNFILTERED }
   const missing = offlineRefusal(platform)
@@ -269,7 +273,7 @@ export function offline(input: Omit<Parameters<typeof wrapCommand>[0], "allowNet
   const env = Object.fromEntries(
     Object.entries(input.env).filter(([key]) => !PROXY_VARIABLES.includes(key.toUpperCase())),
   )
-  const wrapped = wrapCommand({ ...input, env, allowNetwork: false })
+  const wrapped = wrap({ ...input, env, allowNetwork: false }, hostHome)
   if (!wrapped.sandboxed || wrapped.mechanism === "none")
     return { type: "refused", message: refusal(platform, wrapped.reason), reason: wrapped.reason }
   return { type: "sandboxed", wrapped, notice: OFFLINE_NOTICE[wrapped.mechanism] }
@@ -304,11 +308,8 @@ export const UNATTENDED_REFUSAL =
 // What an unattended run's commands keep of the engine's environment: what a build needs to find its tools and speak
 // the user's language, the folders a toolchain is configured with (JAVA_HOME, GOROOT) and Vector's own markers for its
 // children, never a name that reads as a secret, in any case. Everything else stays out: credentials, agent and bus
-// sockets, proxies and loader variables among them. The home folder is read-only in the sandbox, so the caches a check
-// writes go to the sandbox's own empty /tmp.
+// sockets, proxies and loader variables among them. The sandbox's private /tmp holds the empty HOME and check caches.
 const UNATTENDED_KEPT = new Set([
-  "PATH",
-  "HOME",
   "USER",
   "LOGNAME",
   "SHELL",
@@ -322,6 +323,7 @@ const UNATTENDED_KEPT = new Set([
   "VECTOR_LOCAL",
   "VECTOR_LOCAL_WEB",
 ])
+const UNATTENDED_HOME = "/tmp/vector-unattended-home"
 const UNATTENDED_CACHES = {
   TMPDIR: "/tmp",
   XDG_CACHE_HOME: "/tmp/.cache",
@@ -329,9 +331,7 @@ const UNATTENDED_CACHES = {
   npm_config_cache: "/tmp/.npm",
   BUN_INSTALL_CACHE_DIR: "/tmp/.bun-cache",
 }
-// Plaintext credential stores in the home folder that SECRETS leaves readable to the shell tool, hidden from an
-// unattended run's commands as well: what such a command reads could leave in the pull request its run opens (Q8).
-// Docker's folder also holds Docker Desktop's socket.
+// Known stores may be symlinks to paths the sandbox still exposes, so it masks those targets too.
 const UNATTENDED_SECRETS = [
   ".git-credentials",
   ".config/git/credentials",
@@ -371,10 +371,22 @@ export function unattended(
   const seccomp = UnattendedSeccomp.filter()
   if (binary === undefined || bootstrap === undefined || seccomp === undefined)
     return { type: "refused", message: UNATTENDED_REFUSAL }
-  // The command's HOME is the home folder whose secrets the profile hides, whatever the engine's environment says now.
-  const home = input.home ?? os.homedir()
-  const metadata = gitMetadata(input.workspaceRoot)
-  const decided = offline({ ...input, home, env: unattendedEnvironment(input.env, home), writes: "workspace" })
+  const home = unattendedHome(input.home ?? os.homedir(), input.workspaceRoot, input.env.PATH)
+  const cwd = absoluteDirectory(input.cwd)
+  if (!home || !cwd || !containsOrSame(cwd, home.workspace) || containsOrSame(bootstrap, home.host))
+    return { type: "refused", message: UNATTENDED_REFUSAL }
+  const metadata = gitMetadata(home.workspace)
+  const decided = offlineCommand(
+    {
+      ...input,
+      cwd,
+      workspaceRoot: home.workspace,
+      home: home.host,
+      env: unattendedEnvironment(input.env, home.path),
+      writes: "workspace",
+    },
+    home.host,
+  )
   if (
     metadata === undefined ||
     decided.type !== "sandboxed" ||
@@ -385,8 +397,8 @@ export function unattended(
   // These mounts go after every mount wrapCommand makes, before the data folder turns read-only and the command starts.
   const args = decided.wrapped.args
   const at = args.findIndex((arg) => arg === "--remount-ro" || arg === "--chdir")
-  const cwd = args.indexOf("--chdir", at)
-  if (at < 0 || cwd < at || cwd + 2 >= args.length) return { type: "refused", message: UNATTENDED_REFUSAL }
+  const chdir = args.indexOf("--chdir", at)
+  if (at < 0 || chdir < at || chdir + 2 >= args.length) return { type: "refused", message: UNATTENDED_REFUSAL }
   return {
     ...decided,
     wrapped: {
@@ -396,10 +408,10 @@ export function unattended(
       args: [
         ...args.slice(0, at),
         ...metadata,
-        ...hiddenStores(home),
+        ...hiddenStores(home.host, home.workspace),
         ...UnattendedSeccomp.args,
-        ...args.slice(at, cwd + 2),
-        ...UnattendedSeccomp.command(bootstrap, args.slice(cwd + 2)),
+        ...args.slice(at, chdir + 2),
+        ...UnattendedSeccomp.command(bootstrap, args.slice(chdir + 2)),
       ],
     },
     notice: UNATTENDED_NOTICE,
@@ -417,19 +429,50 @@ function gitMetadata(workspaceRoot: string) {
   return info.isSymbolicLink() ? undefined : ["--ro-bind", marker, marker]
 }
 
-function hiddenStores(home: string) {
-  return UNATTENDED_SECRETS.map((entry) => canonical(path.join(canonical(home), entry)))
-    .filter(fs.existsSync)
+function hiddenStores(home: string, workspace: string) {
+  return UNATTENDED_SECRETS.map((entry) => canonical(path.join(home, entry)))
+    .filter((file) => visibleWithPrivateHome(file, home, workspace) && fs.existsSync(file))
     .flatMap((file) => (fs.statSync(file).isDirectory() ? ["--tmpfs", file] : ["--ro-bind", "/dev/null", file]))
 }
 
-function unattendedEnvironment(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+function visibleWithPrivateHome(file: string, home: string, workspace: string) {
+  return !containsOrSame(file, home) || containsOrSame(file, workspace)
+}
+
+/** Resolve the mask and keep canonical tool paths outside it or inside the authorized checkout. */
+export function unattendedHome(homePath: string, workspacePath: string, searchPath?: string) {
+  const host = absoluteDirectory(homePath)
+  const workspace = absoluteDirectory(workspacePath)
+  const overlaps = (first: string, second: string) => containsOrSame(first, second) || containsOrSame(second, first)
+  if (!host || !workspace || overlaps(host, UNATTENDED_HOME) || containsOrSame(host, workspace)) return undefined
+  const tools = (directories: readonly string[]) =>
+    directories.flatMap((directory) => {
+      const real = absoluteDirectory(directory)
+      return real && (!overlaps(real, host) || containsOrSame(real, workspace)) ? [real] : []
+    })
+  const selected = tools(searchPath?.split(path.delimiter) ?? [])
+  const pathEntries = selected.length ? selected : tools(["/usr/bin", "/bin"])
+  return { host, workspace, path: [...new Set(pathEntries)].join(path.delimiter) }
+}
+
+function absoluteDirectory(directory: string) {
+  if (!path.isAbsolute(directory)) return undefined
+  try {
+    const real = fs.realpathSync(directory)
+    return fs.statSync(real).isDirectory() ? real : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function unattendedEnvironment(env: NodeJS.ProcessEnv, searchPath: string): NodeJS.ProcessEnv {
   const kept = (name: string) =>
     !GithubAgents.SECRET_NAME_PATTERN.test(name) &&
     (UNATTENDED_KEPT.has(name) || name.startsWith("LC_") || /_(?:HOME|ROOT)$/.test(name))
   return {
     ...Object.fromEntries(Object.entries(env).filter(([key, value]) => value !== undefined && kept(key.toUpperCase()))),
-    HOME: home,
+    HOME: UNATTENDED_HOME,
+    PATH: searchPath,
     ...UNATTENDED_CACHES,
   }
 }
@@ -450,8 +493,7 @@ function rootOnly(file: string) {
   }
 }
 
-// NOTE: `writes`'s docblock below predates `unattended` above, which passes "workspace" for an unattended session.
-export function wrapCommand(input: {
+type CommandInput = {
   shell: string
   command: string
   cwd: string
@@ -462,7 +504,7 @@ export function wrapCommand(input: {
   home?: string
   data?: string
   /**
-   * "workspace" (the review fix executor's checks, SF-08; the shell tool never passes it): only the workspace is
+   * "workspace" (review checks and unattended commands): only the workspace is
    * writable, with no temporary folder, package cache or Git metadata grant, and the working folder must be inside it.
    * Under bubblewrap, /tmp and /run are also private and empty (so no host socket under them is reachable), Vector's
    * data folder is an empty read-only folder with the workspace bound back into it, and the command runs with no
@@ -470,7 +512,13 @@ export function wrapCommand(input: {
    * policy is the shell tool's, unchanged.
    */
   writes?: "workspace"
-}): Wrapped {
+}
+
+export function wrapCommand(input: CommandInput): Wrapped {
+  return wrap(input)
+}
+
+function wrap(input: CommandInput, hostHome?: string): Wrapped {
   const platform = input.platform ?? process.platform
 
   // Preserved verbatim from the pre-sandbox shell tool: PowerShell needs an
@@ -574,9 +622,13 @@ export function wrapCommand(input: {
 
     const bwrap = which("bwrap")
     if (!bwrap) return unwrapped("bubblewrap (bwrap) disappeared from PATH before the command could be wrapped")
-    const hidden = workspace
+    const visible = (file: string) =>
+      hostHome === undefined || visibleWithPrivateHome(file, hostHome, input.workspaceRoot)
+    const mayBind = (file: string) => visible(file) && (hostHome === undefined || !containsOrSame(hostHome, file))
+    const data = workspace
       ? privateData(canonical(input.data ?? Global.Path.data), canonical(input.workspaceRoot), home)
       : undefined
+    const hidden = data && visible(data) ? data : undefined
 
     return {
       command: bwrap,
@@ -602,20 +654,25 @@ export function wrapCommand(input: {
         "--tmpfs",
         "/tmp",
         ...(workspace ? runtimeMounts(input.env.PATH) : []),
+        // Mask HOME first, then add the approved workspace, even when it lives inside HOME.
+        ...(hostHome ? ["--tmpfs", hostHome, "--dir", UNATTENDED_HOME] : []),
         ...(hidden ? ["--tmpfs", hidden, ...readOnly(searchFolders(input.env.PATH, [hidden]))] : []),
         ...(allowNetwork || workspace || !fs.existsSync(RESOLVER) ? [] : ["--tmpfs", RESOLVER]),
         ...writable.filter(fs.existsSync).flatMap((file) => ["--bind", file, file]),
-        ...git.readonly.filter(fs.existsSync).flatMap((file) => ["--ro-bind", file, file]),
+        ...git.readonly
+          .filter((file) => mayBind(file) && fs.existsSync(file))
+          .flatMap((file) => ["--ro-bind", file, file]),
         // bwrap has no read filter, so covering the path is how a secret gets
         // hidden. A tmpfs only mounts over a directory, so a secret that is a
         // plain file (.netrc, .docker/config.json) gets /dev/null bound over it
         // instead: mounting a tmpfs there fails and takes the whole run with it.
         ...denyRead
-          .filter(fs.existsSync)
+          .filter((file) => visible(file) && fs.existsSync(file))
           .flatMap((file) => (fs.statSync(file).isDirectory() ? ["--tmpfs", file] : ["--ro-bind", "/dev/null", file])),
         // Last, once every mount point inside it exists: the data folder's own tmpfs becomes read-only (not the
         // workspace or the PATH folders bound into it).
         ...(hidden ? ["--remount-ro", hidden] : []),
+        ...(hostHome ? ["--remount-ro", hostHome] : []),
         "--chdir",
         input.cwd,
         input.shell,

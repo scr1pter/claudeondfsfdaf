@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -832,6 +833,36 @@ describe("Sandbox.unattended", () => {
     workspaceRoot: os.tmpdir(),
   })
 
+  test.skipIf(!linux)("the home plan rejects broader checkout grants and excludes inherited aliases into the host home", () => {
+    const fixture = scratch()
+    const host = path.join(fixture, "home")
+    const workspace = path.join(host, "job")
+    const userTools = path.join(host, "other", "bin")
+    const jobTools = path.join(workspace, "bin")
+    const systemTools = path.join(fixture, "system-bin")
+    const homeAlias = path.join(fixture, "home-alias")
+    const toolAlias = path.join(fixture, "tool-alias")
+    try {
+      mkdirSync(jobTools, { recursive: true })
+      mkdirSync(userTools, { recursive: true })
+      mkdirSync(systemTools, { recursive: true })
+      symlinkSync(host, homeAlias)
+      symlinkSync(userTools, toolAlias)
+      const searchPath = [host, fixture, userTools, toolAlias, "relative", systemTools, jobTools].join(path.delimiter)
+      expect(Sandbox.unattendedHome(homeAlias, workspace, searchPath)).toEqual({
+        host: realpathSync(host),
+        workspace: realpathSync(workspace),
+        path: [realpathSync(systemTools), realpathSync(jobTools)].join(path.delimiter),
+      })
+      expect(Sandbox.unattendedHome(homeAlias, fixture, searchPath)).toBeUndefined()
+      expect(Sandbox.unattendedHome(homeAlias, homeAlias, searchPath)).toBeUndefined()
+      expect(Sandbox.unattendedHome("/", workspace, searchPath)).toBeUndefined()
+      expect(Sandbox.unattendedHome(path.join(fixture, "missing"), workspace, searchPath)).toBeUndefined()
+    } finally {
+      rmSync(fixture, { recursive: true, force: true })
+    }
+  })
+
   test("is refused on Windows, macOS, other systems and Linux without bubblewrap, with no command to run", () => {
     for (const platform of ["win32", "darwin", "freebsd"] as const) {
       expect(Sandbox.unattendedBinary(platform)).toBeUndefined()
@@ -869,28 +900,35 @@ describe("Sandbox.unattended", () => {
   })
 
   test.skipIf(Sandbox.unattendedBinary() === undefined)(
-    "wraps a command with no network, private /tmp and /run, the secrets hidden and a scrubbed environment",
+    "masks the canonical host home before restoring only the job checkout and keeps selected system tools",
     () => {
-      const workspace = scratch()
-      const home = path.join(workspace, "home")
-      mkdirSync(path.join(home, ".ssh"), { recursive: true })
-      writeFileSync(path.join(home, ".netrc"), "machine example.com password fixture\n")
-      mkdirSync(path.join(home, ".cache"), { recursive: true })
-      mkdirSync(path.join(home, ".docker"), { recursive: true })
-      writeFileSync(path.join(home, ".git-credentials"), "https://fixture@example.com\n")
-      mkdirSync(path.join(workspace, ".git", "hooks"), { recursive: true })
+      const fixture = scratch()
+      const home = path.join(fixture, "home")
+      const homeAlias = path.join(fixture, "home-alias")
+      const data = path.join(home, "data")
+      const workspace = path.join(data, "job")
+      const existingMask = path.join(workspace, "named-store.txt")
+      const userTools = path.join(data, "tools")
+      const toolAlias = path.join(fixture, "tool-alias")
       try {
+        mkdirSync(path.join(workspace, ".git", "hooks"), { recursive: true })
+        mkdirSync(userTools, { recursive: true })
+        symlinkSync(home, homeAlias)
+        symlinkSync(userTools, toolAlias)
+        writeFileSync(existingMask, "synthetic credential target")
+        symlinkSync(existingMask, path.join(home, ".git-credentials"))
         const decided = Sandbox.unattended({
           shell: "/bin/sh",
           command: "true",
           cwd: workspace,
           workspaceRoot: workspace,
-          home,
+          home: homeAlias,
+          data,
           env: {
-            PATH: process.env.PATH,
+            PATH: [userTools, toolAlias, "/usr/bin"].join(path.delimiter),
             LANG: "C.UTF-8",
             LC_ALL: "C",
-            HOME: home,
+            HOME: path.join(fixture, "env-home"),
             JAVA_HOME: "/opt/java",
             HTTP_PROXY: "http://127.0.0.1:3128",
             https_proxy: "http://127.0.0.1:3128",
@@ -918,26 +956,26 @@ describe("Sandbox.unattended", () => {
           "--seccomp\n3",
           "--cap-drop\nALL",
           "--tmpfs\n/tmp",
-          `--tmpfs\n${home}/.ssh`,
-          `--ro-bind\n/dev/null\n${home}/.netrc`,
-          // The unattended run's own stores, beside the shell sandbox's list.
-          `--tmpfs\n${home}/.docker`,
-          `--ro-bind\n/dev/null\n${home}/.git-credentials`,
+          `--tmpfs\n${home}\n`,
+          "--dir\n/tmp/vector-unattended-home",
         ])
           expect(args).toContain(expected)
         // The checkout's .git is bound read-only after the checkout itself is bound writable.
         const writable = args.indexOf(`--bind\n${workspace}\n${workspace}\n`)
-        expect(writable).toBeGreaterThan(-1)
+        expect(writable).toBeGreaterThan(args.indexOf(`--tmpfs\n${home}\n`))
         expect(args.indexOf(`--ro-bind\n${workspace}/.git\n${workspace}/.git\n`)).toBeGreaterThan(writable)
+        expect(args.indexOf(`--ro-bind\n/dev/null\n${existingMask}\n`)).toBeGreaterThan(writable)
+        expect(args.indexOf(`--remount-ro\n${home}\n`)).toBeGreaterThan(writable)
         if (existsSync("/run")) expect(args).toContain("--tmpfs\n/run")
-        // Nothing outside the checkout is writable: not the host's /tmp, nor a cache in the home folder.
+        expect(args).not.toContain(`--tmpfs\n${homeAlias}\n`)
         expect(args).not.toContain(`--bind\n${os.tmpdir()}\n`)
-        expect(args).not.toContain(`--bind\n${home}/.cache\n`)
+        expect(args).not.toContain(`--ro-bind\n${userTools}\n`)
+        expect(args).not.toContain(`--ro-bind\n${toolAlias}\n`)
         expect(decided.wrapped.env).toEqual({
-          PATH: process.env.PATH,
+          PATH: "/usr/bin",
           LANG: "C.UTF-8",
           LC_ALL: "C",
-          HOME: home,
+          HOME: "/tmp/vector-unattended-home",
           JAVA_HOME: "/opt/java",
           TMPDIR: "/tmp",
           XDG_CACHE_HOME: "/tmp/.cache",
@@ -945,50 +983,69 @@ describe("Sandbox.unattended", () => {
           npm_config_cache: "/tmp/.npm",
           BUN_INSTALL_CACHE_DIR: "/tmp/.bun-cache",
         })
-        // A working folder outside the checkout is refused, never run with a wider grant.
-        expect(Sandbox.unattended({ ...input(process.env, os.homedir()), workspaceRoot: workspace })).toEqual({
+        // A working folder outside the checkout, or a checkout that covers the host home, is refused.
+        expect(Sandbox.unattended({ ...input({}, fixture), home, workspaceRoot: workspace })).toEqual({
+          type: "refused",
+          message: Sandbox.UNATTENDED_REFUSAL,
+        })
+        expect(Sandbox.unattended({ ...input({}, workspace), home, workspaceRoot: fixture })).toEqual({
           type: "refused",
           message: Sandbox.UNATTENDED_REFUSAL,
         })
         // A .git that is a link cannot be pinned read-only, so the command is refused.
         const linked = scratch()
         symlinkSync(path.join(workspace, ".git"), path.join(linked, ".git"))
-        expect(Sandbox.unattended({ ...input(process.env, linked), workspaceRoot: linked })).toEqual({
+        expect(Sandbox.unattended({ ...input({}, linked), home, workspaceRoot: linked })).toEqual({
           type: "refused",
           message: Sandbox.UNATTENDED_REFUSAL,
         })
         rmSync(linked, { recursive: true, force: true })
         // Web access None's own sandbox is unchanged: it still binds the host's temporary folder back in.
-        const web = Sandbox.offline({ ...input({ PATH: process.env.PATH }), cwd: workspace, workspaceRoot: workspace })
+        const web = Sandbox.offline({ ...input({ PATH: "/usr/bin", HOME: home }, workspace), home, workspaceRoot: workspace })
         expect(web.type === "sandboxed" ? web.wrapped.args.join("\n") : "").toContain(`--bind\n${os.tmpdir()}\n`)
+        expect(web.type === "sandboxed" ? web.wrapped.args.join("\n") : "").not.toContain(`--tmpfs\n${home}\n`)
       } finally {
-        rmSync(workspace, { recursive: true, force: true })
+        rmSync(fixture, { recursive: true, force: true })
       }
     },
   )
 
   test.skipIf(!offline)(
-    "a command it wraps cannot read the home folder's secrets, which a command outside it can",
+    "the private home hides sibling project files while the nested job checkout and system tools still work",
     () => {
-      // The home folder sits inside the checkout, since the sandbox replaces /tmp: what hides these is the secret list.
-      const workspace = scratch()
-      const home = path.join(workspace, "home")
-      const secret = randomBytes(12).toString("hex")
-      mkdirSync(path.join(home, ".ssh"), { recursive: true })
-      writeFileSync(path.join(home, ".ssh", "id_fixture"), `ssh-${secret}`)
-      writeFileSync(path.join(home, ".netrc"), `netrc-${secret}`)
-      writeFileSync(path.join(home, ".git-credentials"), `credentials-${secret}`)
-      writeFileSync(path.join(home, "notes.txt"), "readable")
-      const command =
-        'cat "$HOME/.ssh/id_fixture" "$HOME/.netrc" "$HOME/.git-credentials" "$HOME/notes.txt" 2>/dev/null; echo " home=$HOME"'
+      // /var/tmp is outside the private /tmp mount, so that mount alone cannot hide this fixture.
+      const fixture = mkdtempSync("/var/tmp/vector-unattended-home-")
+      const home = path.join(fixture, "home")
+      const alias = path.join(fixture, "alias")
+      const workspace = path.join(home, "job")
+      const sibling = path.join(home, "another-project")
+      const otherFile = path.join(sibling, "notes.txt")
+      const existingMask = path.join(workspace, "named-store.txt")
       try {
+        mkdirSync(workspace, { recursive: true })
+        mkdirSync(sibling, { recursive: true })
+        symlinkSync(home, alias)
+        writeFileSync(otherFile, "host fixture")
+        writeFileSync(path.join(workspace, "input.txt"), "checkout fixture")
+        writeFileSync(existingMask, "synthetic credential target")
+        symlinkSync(existingMask, path.join(home, ".git-credentials"))
+        const command = [
+          'test "$HOME" = /tmp/vector-unattended-home',
+          `test ! -e "${otherFile}"`,
+          `test ! -e "${alias}/another-project/notes.txt"`,
+          'test "$(cat input.txt)" = "checkout fixture"',
+          "test ! -s named-store.txt",
+          'printf "checked" > output.txt',
+          'mkdir "$HOME/scratch"',
+        ].join(" && ")
         const decided = Sandbox.unattended({
           shell: "/bin/sh",
           command,
           cwd: workspace,
           workspaceRoot: workspace,
-          home,
-          env: { PATH: process.env.PATH, HOME: "/elsewhere" },
+          home: alias,
+          data: path.join(fixture, "data"),
+          env: { PATH: "/usr/bin", HOME: "/elsewhere" },
         })
         expect(decided.type).toBe("sandboxed")
         if (decided.type !== "sandboxed") return
@@ -1005,13 +1062,12 @@ describe("Sandbox.unattended", () => {
             closeSync(fd)
           }
         })()
-        const outside = Bun.spawnSync(["/bin/sh", "-c", command], { env: { PATH: process.env.PATH, HOME: home } })
-        expect(inside.stdout.toString()).toBe(`readable home=${home}\n`)
-        expect(outside.stdout.toString()).toBe(
-          `ssh-${secret}netrc-${secret}credentials-${secret}readable home=${home}\n`,
-        )
+        expect({ exitCode: inside.exitCode, stderr: inside.stderr.toString() }).toEqual({ exitCode: 0, stderr: "" })
+        expect(readFileSync(path.join(workspace, "output.txt"), "utf8")).toBe("checked")
+        expect(readFileSync(otherFile, "utf8")).toBe("host fixture")
+        expect(readFileSync(existingMask, "utf8")).toBe("synthetic credential target")
       } finally {
-        rmSync(workspace, { recursive: true, force: true })
+        rmSync(fixture, { recursive: true, force: true })
       }
     },
   )
