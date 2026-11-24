@@ -3729,6 +3729,7 @@ describe("VS-23b route admission", () => {
     () =>
       Effect.gen(function* () {
         const { llm, directory } = yield* useServer(PRICE)
+        const sessions = yield* Session.Service
         // Each scenario's replies, made fresh for every run.
         const scenarios: { name: string; config: Partial<ReviewConfig>; push: () => Effect.Effect<void> }[] = [
           { name: "ok", config: {}, push: () => llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report())) },
@@ -3768,6 +3769,11 @@ describe("VS-23b route admission", () => {
                   config: config({ ...scenario.config, ...(privacy ? { privacy } : {}) }),
                 }),
               )
+              expect(outcome.sessions.length).toBeGreaterThan(0)
+              for (const id of outcome.sessions) {
+                const session = yield* sessions.get(SessionID.make(id))
+                expect(session.metadata?.["vector.review.zdr"]).toBe(privacy === "zdr" ? true : undefined)
+              }
               const { durationMs: _duration, sessions: _sessions, ...rest } = outcome
               return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), outcome: rest }
             }),

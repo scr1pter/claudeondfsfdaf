@@ -12,6 +12,9 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@vector/ReviewSessionAdmission") {}
 
+export const ZDR_METADATA = "vector.review.zdr"
+export const ZDR_METADATA_PATH = `$."${ZDR_METADATA}"`
+
 export const REFUSAL =
   "This review session runs under zero data retention, which this session API cannot hold to. Nothing was sent."
 

@@ -169,6 +169,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { readAuthority, type ReadAuthority } from "./read-authority"
 import type { ResolvedModel } from "./model"
 import { ReviewRoutes } from "./route"
+import { ReviewSessionAdmission } from "@vectordevai/core/review/session-admission"
 import { ReviewTrivial } from "./trivial"
 import { ReviewImpact } from "./impact"
 import { ReviewDepth } from "./depth"
@@ -1058,7 +1059,10 @@ const execute = Effect.fn("Review.run")(function* (input: RunInput) {
         } satisfies Asked<T>
       }
       // A helper session: it stays out of session lists, and the review reports what it spent.
-      const session = yield* sessions.create(passSession(spec))
+      const session = yield* sessions.create({
+        ...passSession(spec),
+        ...(passRoute.privacy === "zdr" ? { metadata: { [ReviewSessionAdmission.ZDR_METADATA]: true } } : {}),
+      })
       if (privateCardIds.length) {
         const isolated = yield* Effect.gen(function* () {
           if (

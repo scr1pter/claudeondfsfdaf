@@ -3,14 +3,18 @@ import { rm } from "node:fs/promises"
 import path from "node:path"
 import { Effect, Layer } from "effect"
 import { HttpClientResponse } from "effect/unstable/http"
+import { eq } from "drizzle-orm"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Database } from "@vectordevai/core/database/database"
 import { Global } from "@vectordevai/core/global"
+import { ModelV2 } from "@vectordevai/core/model"
+import { ProviderV2 } from "@vectordevai/core/provider"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { SCOPE } from "@vectordevai/core/review/prompt"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
+import { SessionInputTable } from "@vectordevai/core/session/sql"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
@@ -20,9 +24,9 @@ import { AppRuntime } from "../../src/effect/app-runtime"
 import { Config } from "../../src/config/config"
 import { Workspace } from "../../src/control-plane/workspace"
 import { Session } from "@/session/session"
-import { SessionID } from "../../src/session/schema"
+import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
+import { disposeAllInstances, provideInstanceEffect, tmpdirScoped } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
@@ -239,6 +243,10 @@ describe("the engine server's hold on the desktop's review sessions (VS-23d)", (
 
       yield* llm.text("ok", { usage: { input: 1, output: 1 } })
       const allowed = yield* desktop.create()
+      const allowedID = SessionID.make(allowed.id)
+      yield* Session.use.setMetadata({ sessionID: allowedID, metadata: { fixture: "keep" } }).pipe(
+        provideInstanceEffect(desktop.directory),
+      )
       expect(error(yield* desktop.prompt(allowed.id, "lmstudio/test-model", { privacy: "zdr" }))).toBe("")
       expect(ReviewRoutes.registered(allowed.id)).toMatchObject({
         policy: { privacy: "zdr", attested: [] },
@@ -247,6 +255,13 @@ describe("the engine server's hold on the desktop's review sessions (VS-23d)", (
       })
       // The pass's own turn alone: no title or other helper request.
       expect(yield* llm.calls).toBe(1)
+      const persisted = yield* Session.use.get(allowedID).pipe(provideInstanceEffect(desktop.directory))
+      expect(persisted.metadata).toMatchObject({ fixture: "keep", "vector.review.zdr": true })
+      yield* Session.use.setMetadata({ sessionID: allowedID, metadata: { fixture: "updated" } }).pipe(
+        provideInstanceEffect(desktop.directory),
+      )
+      const updated = yield* Session.use.get(allowedID).pipe(provideInstanceEffect(desktop.directory))
+      expect(updated.metadata).toMatchObject({ fixture: "updated", "vector.review.zdr": true })
       // A scope that says nothing lowers nothing either: the next session under standard is not held.
       yield* llm.text("ok", { usage: { input: 1, output: 1 } })
       const plain = yield* desktop.create()
@@ -336,6 +351,8 @@ describe("the engine server's hold on the desktop's review sessions (VS-23d)", (
       const message = yield* desktop.prompt(session.id, "lmstudio/test-model")
       expect(error(message)).toContain("unknown-destination")
       expect(ReviewRoutes.registered(id)).toBeUndefined()
+      const persisted = yield* Session.use.get(id).pipe(provideInstanceEffect(desktop.directory))
+      expect(persisted.metadata).toMatchObject({ "vector.review.zdr": true })
       expect(yield* llm.calls).toBe(0)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
@@ -387,6 +404,65 @@ describe("the engine server's hold on the desktop's review sessions (VS-23d)", (
       })
       expect(admitted.status).toBe(200)
       expect(ReviewRoutes.known(session.id)).toBe(false)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  it.live("V2 refuses recorded zdr review histories without a live policy", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const desktop = yield* project(llm)
+      const database = yield* Database.Service
+      yield* setReview({ privacy: "standard" })
+      yield* llm.reset
+
+      const legacy = SessionID.make((yield* desktop.create()).id)
+      const marked = SessionID.make((yield* desktop.create()).id)
+      const historical = yield* Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const info = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: legacy,
+          agent: "review",
+          model: { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("test-model") },
+          time: { created: Date.now() },
+        })
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          type: "text",
+          sessionID: legacy,
+          messageID: info.id,
+          text: "Review this change.",
+          metadata: { [SCOPE]: { paths: ["src/a.ts"], trust: "untrusted", privacy: "zdr" } },
+        })
+        yield* sessions.setMetadata({ sessionID: marked, metadata: { "vector.review.zdr": true } })
+        return info.id
+      }).pipe(provideInstanceEffect(desktop.directory))
+
+      // These are existing database rows without any live registration, as when reopening prior review sessions.
+      for (const sessionID of [legacy, marked]) {
+        expect(ReviewRoutes.known(sessionID)).toBe(false)
+        for (const [route, body] of [
+          ["prompt", { prompt: { text: "Continue reviewing." }, resume: false }],
+          ["free-models/resume", { messageID: historical, modelID: "test-model" }],
+          ["compact", {}],
+        ] as const) {
+          const refused = yield* send(desktop.at(`/api/session/${sessionID}/${route}`), body)
+          expect(refused.status).toBe(403)
+          expect(yield* refused.text).toContain("zero data retention")
+        }
+        const inputs = yield* database.db
+          .select({ id: SessionInputTable.id })
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.session_id, sessionID))
+          .all()
+        expect(inputs).toHaveLength(0)
+      }
+      expect(yield* llm.calls).toBe(0)
+      // A resumed V1 prompt also keeps the policy if its new text brings no privacy setting.
+      const resumed = yield* desktop.prompt(legacy, "acme/coder")
+      expect(error(resumed)).toContain("unattested-provider")
+      expect(yield* llm.calls).toBe(0)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 })
