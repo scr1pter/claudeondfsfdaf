@@ -6373,11 +6373,27 @@ describe("task isolation saves", () => {
         const home = yield* InstanceState.context
         yield* Effect.promise(() => fs.writeFile(path.join(home.directory, "notes.txt"), "base\n"))
         const gate = yield* Deferred.make<void>()
+        const mirroring = yield* Deferred.make<void>()
+        const releaseMirror = yield* Deferred.make<void>()
         commitGate.current = gate
         yield* Effect.addFinalizer(() => Effect.sync(() => (commitGate.current = undefined)))
         const seeded = yield* seed("Held save")
         const sessions = yield* Session.Service
-        const definition = yield* (yield* TaskTool).init()
+        const isolation = yield* TaskIsolation.Service
+        const jobs = yield* BackgroundJob.Service
+        const tool = yield* TaskTool.pipe(
+          Effect.provideService(Session.Service, {
+            ...sessions,
+            setMetadata: (input) =>
+              SubagentLifecycle.read(input)?.isolation?.state === "changed"
+                ? Deferred.succeed(mirroring, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseMirror)),
+                    Effect.andThen(sessions.setMetadata(input)),
+                  )
+                : sessions.setMetadata(input),
+          }),
+        )
+        const definition = yield* tool.init()
         yield* definition.execute(
           brief,
           taskContext({
@@ -6387,14 +6403,34 @@ describe("task isolation saves", () => {
           }),
         )
         const child = (yield* sessions.children(seeded.chat.id))[0]
-        yield* Effect.addFinalizer(() => cleanup(child.id))
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(gate, undefined).pipe(
+            Effect.andThen(Deferred.succeed(releaseMirror, undefined)),
+            Effect.andThen(cleanup(child.id)),
+          ),
+        )
         // The run finished and its save is waiting on the commit.
         yield* saveStarted(child.id)
         // Other task controls are not held behind Git.
         yield* SubagentLifecycle.locked(SubagentLifecycle.controlLock)(Effect.void).pipe(Effect.timeout("2 seconds"))
         yield* Deferred.succeed(gate, undefined)
-        yield* reached(child.id, "changed", "the isolated save never finished")
-        expect(SubagentLifecycle.read(yield* sessions.get(child.id))?.isolation).toMatchObject({ state: "changed" })
+        yield* awaitWithTimeout(
+          Effect.gen(function* () {
+            yield* Deferred.await(mirroring)
+            // The private record commits before the session projection. Normal completion waits for both.
+            expect(yield* isolation.get(child.id)).toMatchObject({ state: "changed", files: [{ path: "notes.txt" }] })
+            expect(SubagentLifecycle.read(yield* sessions.get(child.id))?.isolation).toMatchObject({ state: "settling" })
+            expect((yield* jobs.wait({ id: child.id, timeout: 0 })).timedOut).toBe(true)
+            yield* Deferred.succeed(releaseMirror, undefined)
+            expect((yield* jobs.wait({ id: child.id })).info?.status).toBe("completed")
+            expect(SubagentLifecycle.read(yield* sessions.get(child.id))?.isolation).toMatchObject({
+              state: "changed",
+              files: 1,
+            })
+          }),
+          "the isolated save never finished",
+          ISOLATED,
+        )
       }),
     { git: true },
   )
