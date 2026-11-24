@@ -104,3 +104,30 @@ Recorded in `codium-deviations.md` under "A33 report tracker (2 Nov 2026)".
 - For A60's legal read: the A30 privacy draft describes bug-report counters keyed by network address and email. A
   signed-in report adds a one-hour counter keyed by a keyed hash of the account id (`bug-report-account`), and one
   keyed by address (`bug-report-ip-signed`). The draft's record description matches what is stored.
+
+## Website receipt correction (22 Nov 2026)
+
+The website ID gap in “Not done” above is closed by the local `support-report-id` candidate, based on main
+`c515de62465db817ff309f4237023f9704fe7983`. Anonymous submissions already receive the tracker's random `report.id`
+when its metadata record is written. The form now shows that existing reference in its confirmed-delivery receipt
+and asks the sender to keep it for follow-up. It accepts only the nested `r_` reference with exactly 26 lower-case
+base32 characters. The email provider's top-level `id` is never used. Missing or malformed tracker metadata keeps
+the ordinary sent receipt; failed or unconfirmed delivery keeps the draft.
+
+There is no new identity, sign-in, API privilege, storage, polling, URL parameter or consent flow. The reference is
+rendered through `textContent`. Existing report retention, metadata-only status reads, email routing and limits are
+unchanged. No support message or provider request was sent during this work.
+
+The DOM test lives in `packages/web/test/support-report.test.ts`. A small app test utility exposes the already
+installed DOM registrar, which the test registers and unregisters for each case; no dependency or lockfile changes
+are needed. Every form request is an injected fake. With the original form helper, the valid-reference case was red
+(2 pass, 1 fail); with the change, all 3 cases pass, 44 assertions. Cases include provider IDs, missing metadata,
+malformed and newline-suffixed references, and failed/unconfirmed delivery.
+
+Existing fake API suites also pass individually: `test/bug-report-api.test.ts`, 18 tests/99 assertions, and
+`test/support-reports-api.test.ts`, 18 tests/101 assertions with its existing Valkey-only skip. All Bun workloads use
+the canonical serial wrapper. Tests run one file at a time from package directories with `--no-env-file --timeout 30000`.
+Web `astro check` passed with 0 errors and 0 warnings (455 hints); the app typecheck also passed. The website
+has no automatic test script, so the existing Linux website CI step explicitly runs the new form test as its own Bun
+process. The workflow YAML parsed successfully, and `packages/cloud/src/workflow-compliance.test.ts` passed with
+61 tests/1,137 assertions.
