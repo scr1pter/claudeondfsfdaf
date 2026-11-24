@@ -46,6 +46,7 @@ yieldLaunchScreen("app")
 const ORIGIN = location.origin
 const RELAY = `ws://${location.hostname}:8787/v1/connect`
 const relay = createMemoryRelay()
+const connections = new URLSearchParams(location.search).get("connect") === "1"
 
 const NOW = Date.now()
 const ROOT = {
@@ -55,6 +56,8 @@ const ROOT = {
   title: "Fix the login",
   time: { created: NOW - 60_000, updated: NOW },
 }
+const REVIEW_ID = "cr_phone_review"
+let review
 let stopped = false
 // A Task.Info as the engine sends it (packages/schema/src/task.ts), with private text in every field the phone drops.
 const helperTask = (id, title, status, extra) => ({
@@ -121,7 +124,45 @@ const engine = {
     if (request.method === "GET" && request.path === "/session") return { status: 200, body: [ROOT] }
     if (request.path === "/session/status") return { status: 200, body: { [ROOT.id]: { type: "busy" } } }
     if (request.path === "/experimental/capabilities")
-      return { status: 200, body: { backgroundSubagents: true, sessionStop: true } }
+      return {
+        status: 200,
+        body: { backgroundSubagents: true, sessionStop: true, ...(connections ? { connections } : {}) },
+      }
+    if (connections && request.method === "GET" && request.path === "/experimental/connect/runs")
+      return { status: 200, body: review ? [review] : [] }
+    if (connections && request.method === "POST" && request.path === `/experimental/session/${ROOT.id}/connect`) {
+      review = {
+        id: REVIEW_ID,
+        request: {
+          ...request.body,
+          id: REVIEW_ID,
+          action: "review",
+          requester: { kind: "user", sessionID: ROOT.id },
+          requestID: "phone-review",
+          directory: ROOT.directory,
+        },
+        status: "running",
+        time: { created: NOW, started: NOW },
+      }
+      return { status: 200, body: review }
+    }
+    if (connections && request.method === "POST" && request.path === `/experimental/connect/runs/${REVIEW_ID}/cancel`) {
+      if (review?.status !== "running") return { status: 200, body: false }
+      review = {
+        ...review,
+        status: "done",
+        time: { ...review.time, ended: Date.now() },
+        result: {
+          state: "cancelled",
+          verdict: "not-reviewed",
+          summary: "Review cancelled.",
+          findings: [],
+          sessions: [],
+          notes: [],
+        },
+      }
+      return { status: 200, body: true }
+    }
     if (request.path === `/experimental/session/${ROOT.id}/tasks`) return { status: 200, body: board() }
     if (request.method === "POST" && request.path === `/experimental/session/${ROOT.id}/stop`) {
       stopped = true
@@ -307,6 +348,7 @@ window.remoteFixture = {
   replies: () => requests.filter((request) => /^\/permission\/[^/]+\/reply$/.test(request.path)).map((request) => ({ path: request.path, body: request.body })),
   phones: () => identity?.phones?.map((phone) => phone.name) ?? [],
   engine: () => requests.slice(),
+  phoneTurn: () => link.isPhoneTurn([ROOT.id]),
   phone: (request) => remote.request(remote.view().computers[0].device, request),
   // Stands in for notification.tsx reading the engine's own `session.updated` for the helper session.
   helper: (state) => void helperAlerts("/repo", { ...HELPER, metadata: { subagent: helperRecord(state) } }),
