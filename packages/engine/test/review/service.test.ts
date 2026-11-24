@@ -214,6 +214,55 @@ describe("shared review service", () => {
       expect(result._tag).toBe("Failure")
     }),
   )
+  // VS-34 item 4 (SF-13b): the bound view answers ReviewGit.ignoredPaths' one check-ignore form over named paths, with
+  // the port's own config (global excludes /dev/null, quoted non-ASCII names) and the work tree's ignore rules, and the
+  // read leaves the next preflight passing; every other check-ignore form is refused and poisons the view.
+  linux("the bound view answers check-ignore --no-index over named paths and refuses other forms", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      yield* Effect.promise(() => fs.writeFile(path.join(repo.directory, ".gitignore"), "*.local.json\n"))
+      const bound = yield* ReviewGit.metadata(repo.directory)
+      const answered = yield* ReviewGit.within(
+        bound,
+        repo.head,
+        Effect.gen(function* () {
+          const ignored = yield* ReviewGit.ignoredPaths(repo.directory, [
+            "visible.ts",
+            "config.local.json",
+            "é.local.json",
+            ":x.local.json",
+          ])
+          const git = yield* ReviewGit.client
+          const none = yield* git.run(["check-ignore", "--no-index", "--", "./visible.ts"], { cwd: repo.directory })
+          return { ignored, none: none.exitCode, preflight: (yield* ReviewGit.preflight.pipe(Effect.result))._tag }
+        }),
+      )
+      expect(answered).toEqual({
+        ignored: ["config.local.json", "é.local.json", ":x.local.json"],
+        none: 1,
+        preflight: "Success",
+      })
+      for (const args of [
+        ["check-ignore", "--no-index", "-z", "--stdin"],
+        ["check-ignore", "-v", "--no-index", "--", "./a"],
+        ["check-ignore", "--", "./a"],
+        ["check-ignore", "--no-index", "--", "a"],
+        ["check-ignore", "--no-index", "--"],
+      ]) {
+        const refused = yield* ReviewGit.within(
+          bound,
+          repo.head,
+          Effect.gen(function* () {
+            const git = yield* ReviewGit.client
+            const result = yield* git.run(args, { cwd: repo.directory })
+            return { code: result.exitCode, preflight: (yield* ReviewGit.preflight.pipe(Effect.result))._tag }
+          }),
+        )
+        expect({ args, ...refused }).toEqual({ args, code: 128, preflight: "Failure" })
+      }
+    }),
+  )
+
   linux("retains requester read authority when the review runs in a real Git worktree", () =>
     Effect.gen(function* () {
       const repo = yield* fixture

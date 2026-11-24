@@ -1,11 +1,21 @@
-// What a review runs and what it may cost: which specialists, which findings the verify pass re-checks, how much diff
-// fits a model's context, and the cost estimates behind the budget checks (sections 5.2 and 5.3). Pure and
-// browser-safe.
+// What a review runs and what it may cost: which specialists, which findings the verify pass re-checks (and, for
+// VS-44c's ablation, which of them it re-checks one call each), how much diff fits a model's context, and the cost
+// estimates behind the budget checks (sections 5.2 and 5.3). Pure and browser-safe.
 
-import type { DiffFile } from "./diff"
+import { renderPatch, type DiffFile } from "./diff"
+import { sha256 } from "../util/sha256"
 import { isSensitivePath } from "./ignore"
-import type { RiskAssessment, RiskBand } from "./risk"
-import { REVIEW_LENSES, type CostKind, type Finding, type ReviewConfig, type ReviewLens, type Trust } from "./types"
+import { orderByRiskDensity, type RiskAssessment, type RiskBand } from "./risk"
+import {
+  FAILURE_CLASSES,
+  FAILURE_MECHANISMS,
+  REVIEW_LENSES,
+  type CostKind,
+  type Finding,
+  type ReviewConfig,
+  type ReviewLens,
+  type Trust,
+} from "./types"
 
 export type Specialist = "review" | "security"
 
@@ -257,6 +267,150 @@ function onePerId<F extends Candidate>(findings: readonly F[]): F[] {
   return [...new Map(findings.map((finding) => [finding.id, finding])).values()]
 }
 
+// VS-44c (addendum B §1.10): what a blind verifier sees of a candidate, VS-44 item 1's list and nothing more. No title,
+// body, suggestion, rule, quotes, patch or category. `failure.trigger` and `failure.impact` are the reviewer's words,
+// and VS-44 lets them through on purpose. Only decodeReport under `guardrail: "strict"` fills `failure`, so until a
+// runner asks for strict (VS-27c) a candidate has no class and no failure fields.
+export type BlindCandidate = Pick<Finding, "id" | "path" | "line" | "side" | "severity" | "failure" | "evidence">
+
+// One verify candidate, with what estimateCostUsd needs to price its own call: `promptTokens` counts that candidate's
+// isolated (blind) verify prompt.
+export interface IsolatedVerifyInput<C extends BlindCandidate = BlindCandidate> {
+  candidate: C
+  promptTokens: number
+  maxSteps: number
+  price: ReviewPrice
+}
+
+// One planned verify call. An isolated call holds one candidate, and the batched call the rest in the order given.
+// `positions` are the candidates' places in planIsolatedVerify's `calls`, so a caller finds its own findings again
+// without matching ids, which the desktop's legacy rule does not merge.
+export interface PlannedVerifyCall {
+  kind: "isolated" | "batched"
+  candidates: BlindCandidate[]
+  positions: number[]
+  estimate: { low: number; high: number }
+}
+
+// VS-44c's planner, an ablation candidate (Q9) and never a default: the top k blocking candidates (3 unless set) get
+// one verify call each, and the rest go to one batched call. Each call's estimate is estimateCostUsd's legacy range,
+// with no VS-40 inputs and no tiers. No runner calls it before runner-wiring R3, which admits each call (I-5) on the
+// review model's route (I-3).
+//
+// The batched call's tokens come from `batched.promptTokens`, because that prompt depends on which candidates were
+// isolated, and estimateCostUsd is not additive: each call pays its own S·600 output and R·S(S−1)/2 growth. It is
+// called once, only when the rest is not empty, with the caller's own candidates in the order given, so it can count
+// the prompt it would send. Every planned call holds blind copies only (blindCandidate). A count of k that is not a
+// number isolates none, a negative one none, and a fraction rounds down.
+//
+// Only the isolated calls go blind: R3 renders each one from its `candidates`. The batched call stays today's verify
+// pass for the rest (the spec sends the rest "through today's batched pass", and at k = 0 its estimate is today's), so
+// R3 renders it from its own findings through `positions`, title, body and suggestion included, as run.ts does now,
+// and its `candidates` are only a blind record of what it holds. A batched pass that went blind too would render from
+// `candidates` and pass a counter of that blind prompt as `batched.promptTokens`.
+//
+// A token count that is not a number gives a NaN estimate, as estimateCostUsd does, and a check written as
+// `estimate.high > budget` is false for NaN, so it would admit the call: R3 must treat a non-finite estimate as
+// unaffordable.
+export function planIsolatedVerify<C extends BlindCandidate>(
+  calls: readonly IsolatedVerifyInput<C>[],
+  options: {
+    k?: number
+    batched: { promptTokens: (rest: readonly C[]) => number; maxSteps: number; price: ReviewPrice }
+  },
+): PlannedVerifyCall[] {
+  // slice reads a NaN end as 0 and drops a fraction; Math.max keeps a negative count from counting from the end.
+  const picked = calls
+    .map((call, position) => ({ call, position }))
+    .filter((entry) => entry.call.candidate.severity === "blocking")
+    .toSorted((a, b) => isolatedOrder(a.call.candidate, b.call.candidate))
+    .slice(0, Math.max(0, options.k ?? 3))
+  const isolated = new Set(picked.map((entry) => entry.position))
+  const rest = calls.flatMap((call, position) => (isolated.has(position) ? [] : [{ call, position }]))
+  return [
+    ...picked.map((entry) => ({
+      kind: "isolated" as const,
+      candidates: [blindCandidate(entry.call.candidate)],
+      positions: [entry.position],
+      estimate: estimateCostUsd({
+        promptTokens: entry.call.promptTokens,
+        maxSteps: entry.call.maxSteps,
+        price: entry.call.price,
+      }),
+    })),
+    ...(rest.length
+      ? [
+          {
+            kind: "batched" as const,
+            candidates: rest.map((entry) => blindCandidate(entry.call.candidate)),
+            positions: rest.map((entry) => entry.position),
+            estimate: estimateCostUsd({
+              promptTokens: options.batched.promptTokens(rest.map((entry) => entry.call.candidate)),
+              maxSteps: options.batched.maxSteps,
+              price: options.batched.price,
+            }),
+          },
+        ]
+      : []),
+  ]
+}
+
+// The isolation order, a named concept of its own: severity first, which only blocking candidates reach. Then the
+// failure class in FAILURE_CLASSES order, with no known failure last; then path by code unit, as select.ts's posting
+// order compares it (never localeCompare, which diff.ts's mergeFocus uses); then line, then id. Candidates that share
+// all of these keep the order given.
+function isolatedOrder(a: BlindCandidate, b: BlindCandidate) {
+  const rank = (candidate: BlindCandidate) => {
+    const failure = knownFailure(candidate)
+    return failure ? FAILURE_CLASSES.indexOf(failure.class) : FAILURE_CLASSES.length
+  }
+  return (
+    rank(a) - rank(b) ||
+    (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ||
+    a.line - b.line ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  )
+}
+
+// A path:line or path:start-end reference with no whitespace. Any other evidence entry is left out: a narrowing only,
+// not what keeps reviewer text out (a token such as "trust-me:1" still matches, and a path with a space never does).
+const EVIDENCE_REFERENCE = /^\S+:\d+(?:-\d+)?$/
+
+// A fresh copy of the blind fields alone. A whole Finding is structurally a BlindCandidate, so this projection, not
+// the type, is what keeps the reviewer's title, body and suggestion out of every planned call. `side` is copied as is:
+// Finding requires one, and the desktop sets `side ?? "RIGHT"` before it builds a Finding.
+function blindCandidate(candidate: BlindCandidate): BlindCandidate {
+  const failure = knownFailure(candidate)
+  const evidence = (candidate.evidence ?? []).filter((entry) => EVIDENCE_REFERENCE.test(entry))
+  return {
+    id: candidate.id,
+    path: candidate.path,
+    line: candidate.line,
+    side: candidate.side,
+    severity: candidate.severity,
+    ...(failure
+      ? {
+          failure: {
+            class: failure.class,
+            mechanism: failure.mechanism,
+            trigger: failure.trigger,
+            impact: failure.impact,
+          },
+        }
+      : {}),
+    ...(evidence.length ? { evidence } : {}),
+  }
+}
+
+// A failure as schema.ts's decodeFailure keeps one: a class and a mechanism the enums name. Anything else is no
+// failure, for the order and the blind copy alike, so a caller that skips the strict decoder passes no arbitrary class.
+function knownFailure(candidate: BlindCandidate) {
+  const failure = candidate.failure
+  return failure && FAILURE_CLASSES.includes(failure.class) && FAILURE_MECHANISMS.includes(failure.mechanism)
+    ? failure
+    : undefined
+}
+
 // Characters of diff to inline for a model: 30% of the context left after a reserve, at 3.5 characters a token,
 // clamped to 8,000..maxDiffChars. That is 16.8k at 32k of context, 79.8k at 128k, and the cap at 1M.
 export function diffBudgetChars(context: number, maxDiffChars: number): number {
@@ -460,4 +614,132 @@ export function bandCostUsd(input: {
       usd(count * input.outputPerStep, rates.output)
     )
   }, 0)
+}
+
+// VS-19 operates on whole admitted changes. The planner never reads project files or lets
+// PR text describe tasks. Only file identities, sizes and dependency group memberships survive.
+export interface ReviewBatch {
+  readonly id: string
+  readonly paths: readonly string[]
+  readonly changedLines: number
+  readonly diffChars: number
+}
+export interface ReviewBatchPlan {
+  readonly id: string
+  readonly base: string
+  readonly head: string
+  readonly batches: readonly ReviewBatch[]
+  readonly omitted: readonly string[]
+  readonly clusters: readonly (readonly string[])[]
+}
+
+type BatchLimits = Pick<ReviewConfig, "maxFiles" | "maxChangedLines" | "maxDiffChars">
+
+export function planReviewBatches(input: {
+  base: string
+  head: string
+  files: readonly DiffFile[]
+  limits: BatchLimits
+  policy?: string
+  clusters?: ReadonlyMap<string, string>
+  dependents?: ReadonlyMap<string, number>
+}): ReviewBatchPlan {
+  const { base, head, limits } = input
+  const commit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+  if (!commit.test(base) || !commit.test(head)) throw new Error("Batch coverage requires full commit IDs.")
+  const caps = [limits.maxFiles, limits.maxChangedLines, limits.maxDiffChars]
+  if (!caps.every((value) => Number.isSafeInteger(value) && value >= 0)) throw new Error("Invalid batch limit.")
+  if (new Set(input.files.map((file) => file.path)).size !== input.files.length)
+    throw new Error("Duplicate changed path in a review batch plan.")
+  const ordered = orderByRiskDensity(input.files, input.dependents)
+  const groups = new Map<string | DiffFile, DiffFile[]>()
+  for (const file of ordered) {
+    const key = input.clusters?.get(file.path) ?? file
+    const group = groups.get(key)
+    if (group) group.push(file)
+    else groups.set(key, [file])
+  }
+  // Review files in density order, keeping the members of each impact cluster together as far as the caps allow.
+  const omitted: string[] = []
+  const batches: ReviewBatch[] = []
+  const identity: string[] = []
+  let current = { paths: [] as string[], changedLines: 0, diffChars: 0 }
+  const flush = () => {
+    if (!current.paths.length) return
+    batches.push(
+      Object.freeze({
+        ...current,
+        paths: Object.freeze(current.paths),
+        id: sha256(JSON.stringify([base, head, batches.length, current.paths])),
+      }),
+    )
+    current = { paths: [], changedLines: 0, diffChars: 0 }
+  }
+  for (const group of groups.values()) {
+    const members = []
+    for (const file of group) {
+      const patch = renderPatch([file])
+      const lines = file.additions + file.deletions
+      const complete =
+        !file.binary &&
+        [file.additions, file.deletions].every((n) => Number.isSafeInteger(n) && n >= 0) &&
+        file.hunks.reduce((n, h) => n + h.lines.filter((line) => line.kind === "add").length, 0) === file.additions &&
+        file.hunks.reduce((n, h) => n + h.lines.filter((line) => line.kind === "del").length, 0) === file.deletions
+      identity.push(
+        sha256(JSON.stringify([file.path, file.oldPath, file.status, file.additions, file.deletions, sha256(patch)])),
+      )
+      if (!complete || limits.maxFiles === 0 || lines > limits.maxChangedLines || patch.length > limits.maxDiffChars) {
+        omitted.push(file.path)
+        continue
+      }
+      members.push({ path: file.path, lines, chars: patch.length })
+    }
+    const groupLines = members.reduce((sum, member) => sum + member.lines, 0)
+    const groupChars = members.reduce((sum, member) => sum + member.chars, Math.max(0, members.length - 1))
+    if (
+      members.length <= limits.maxFiles &&
+      groupLines <= limits.maxChangedLines &&
+      groupChars <= limits.maxDiffChars &&
+      (current.paths.length + members.length > limits.maxFiles ||
+        current.changedLines + groupLines > limits.maxChangedLines ||
+        current.diffChars + 1 + groupChars > limits.maxDiffChars)
+    )
+      flush()
+    for (const member of members) {
+      if (
+        current.paths.length >= limits.maxFiles ||
+        current.changedLines + member.lines > limits.maxChangedLines ||
+        current.diffChars + Number(current.paths.length > 0) + member.chars > limits.maxDiffChars
+      )
+        flush()
+      current.diffChars += Number(current.paths.length > 0) + member.chars
+      current.changedLines += member.lines
+      current.paths.push(member.path)
+    }
+  }
+  flush()
+  const clusters = [...groups.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => Object.freeze(group.map((file) => file.path)))
+  const id = sha256(
+    JSON.stringify([
+      1,
+      base,
+      head,
+      caps,
+      input.policy ?? "",
+      identity,
+      batches.map((batch) => batch.id),
+      omitted,
+      clusters,
+    ]),
+  )
+  return Object.freeze({
+    id,
+    base,
+    head,
+    batches: Object.freeze(batches),
+    omitted: Object.freeze(omitted),
+    clusters: Object.freeze(clusters),
+  })
 }

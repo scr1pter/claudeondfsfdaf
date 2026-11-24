@@ -19,7 +19,8 @@
 // A pipeline variant (VS-21a) arrives only as `variant`: a registry name and the keys it sets over the base's settings,
 // which the artifact records with the run. The registry (script/vectorscope-eval/replay.ts) refuses a variant whose
 // package has not landed; this replay cannot see the registry, so it refuses any variant that would run the frozen
-// pipeline under its name: one with no key and no model requirement, or a key outside VARIANT_KEYS.engine.
+// pipeline under its name: one with no key and no model requirement, or a key outside VARIANT_KEYS.engine. A variant
+// may raise privacy to "zdr" (engine:privacy-zdr, VS-23c), never lower it.
 //
 // ReviewEval.project (VS-21b) runs the same replay against a fake model server on this computer, so every pass runs,
 // verify, the finalizer and retries included, and records each pass's real wire body with its estimated tokens and
@@ -35,25 +36,31 @@ import { createHash } from "node:crypto"
 import path from "path"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
 import {
-  parseReviewConfig,
+  mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
-  rulesForPaths,
+  rulePromptInput,
   SOURCED_REVIEW_KEYS,
+  strictReviewConfig,
   type SourcedReviewKey,
 } from "@vectordevai/core/review/config"
 import {
   buildNoteBody,
   buildReviewBody,
   buildSummaryBody,
+  findingItem,
+  firstRequestStopDetail,
   inlineLeads,
   noteFailed,
   noteGeneratedHeaders,
   noteInlineCap,
   noteNothingToReview,
+  noteBudgetEstimate,
   notePartial,
+  noteTrivialSkip,
 } from "@vectordevai/core/review/format"
+import { buildAnchorIndex, resolveAnchor, suggestionAllowed } from "@vectordevai/core/review/diff"
 import { buildCreateReviewPayload, type CreateReviewPayload } from "@vectordevai/core/review/github-payload"
 import {
   classifyFiles,
@@ -73,6 +80,7 @@ import { VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "@vectordevai/
 import type { ImpactRecord } from "@vectordevai/core/review/impact"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import { estimateCostUsd, nextStepCostUsd, type ReviewPrice } from "@vectordevai/core/review/plan"
+import { holdbackContext } from "@vectordevai/core/review/holdback"
 import { MAX_HITS, MAX_SYMBOLS, type RelatedCode } from "@vectordevai/core/review/prompt"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { sendsToOpenRouter } from "@vectordevai/core/free-model-catalog"
@@ -87,8 +95,10 @@ import {
   DEFAULT_REVIEW_CONFIG,
   UNAPPLIED_REVIEW_KEYS,
   type CostKind,
+  type Finding,
   type ReviewConfig,
   type ReviewOutcome,
+  type ReviewLens,
   type SkippedFile,
   type Trigger,
   type Trust,
@@ -101,10 +111,13 @@ import { Git } from "@/git"
 import { Provider } from "@/provider/provider"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
+import { publicCardGrant } from "./card-access"
 import { ReviewContext } from "./context"
+import { ReviewGit } from "./git"
 import type { ResolvedModel } from "./model"
 import { Review, type Observation } from "./run"
 import { ReviewSource } from "./source"
+import { ReviewTrivial } from "./trivial"
 
 export interface ReplayCase {
   label: string // names the case in the artifact; never sent to a model
@@ -134,17 +147,25 @@ export type PostingCheck = (input: {
 }) => Effect.Effect<readonly string[], unknown>
 
 export interface ReplayInput {
+  // A local synthetic evaluation supplies a single-use grant from its own seeded store. JSON
+  // artifacts, CI datasets and the operator's personal Brain cannot supply these contents.
+  localCards?: ReviewContext.CardGrant
   case: ReplayCase
   model: ResolvedModel
   triage?: ResolvedModel
   // The eval's own settings, applied over the base's review.json: its limits, and settings a test fixes. Its
   // maxCostUsd must be a positive cap, and it alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
-  // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from a trusted source through
-  // mergeReviewConfig once a runner enforces it (VS-23b). Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
-  // VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence,
-  // VS-28's depth and lenses, and VS-30's runtime, which is also trusted-only). The type says so, and step 0b refuses
-  // any of them from an untyped caller.
+  // it set a route setting (privacy, zdrAttested; SOURCED_REVIEW_KEYS also holds VS-30's runtime, refused below as
+  // unapplied, and VS-34's holdback, refused with its own message), which comes only from the sources
+  // mergeReviewConfig tags: the base's review.json may raise privacy (VS-23b, whose admission enforces it in
+  // Review.run), and so may the engine:privacy-zdr variant (VS-23c); the eval attests no route (owner Q7), so under
+  // "zdr" only a server on this computer is admitted. The base's review.json may raise holdback too, which Review.run
+  // applies to the prompt since SF-13b and to the reviewer's read and grep tools since SF-14, and so may the
+  // engine:holdback-secrets variant (VARIANT_KEYS.engine), which may only raise it to "secrets". Nor a key
+  // no runner applies yet (core UNAPPLIED_REVIEW_KEYS: VS-44's verifyEvidence,
+  // VS-28's depth and lenses, VS-30's runtime, which is also
+  // trusted-only). The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
   >
@@ -201,7 +222,7 @@ export type ReplayVariant = VariantRecord | { verifyPolicy?: ReviewConfig["verif
 
 // One step of VS-24's pre-dispatch shrink, in the order it ran: the lever core dispatch.ts's decideDispatch named, and
 // the estimate after it, which holds both the legacy range the gate decides on and VS-40's v2 beside it, per pass.
-// Nothing writes it before VS-24 wiring.
+// An ineffective or unavailable lever has no step.
 export interface ShrinkStep {
   step: Shrink
   estimate: DispatchEstimate
@@ -221,6 +242,14 @@ export interface PlacedRecord {
 }
 
 export interface ReplayArtifact {
+  // Actual S9 drops with a verified base location, for local latent-forecast scoring only.
+  drops?: {
+    path: string
+    base: { sha: string; start: number; end: number }
+    class: Finding["category"]
+    fingerprint: string
+    at: string
+  }[]
   version: 1
   label: string
   adapter: "engine"
@@ -251,7 +280,7 @@ export interface ReplayArtifact {
   }
   // VS-25b's Tier 1 impact slice as core impact.ts's ImpactRecord: its stage counts and drops, the scan plan, git's
   // version, the clone mode, grep, parse and total time, tokens, tests, unsupported files and why it is incomplete.
-  // Absent until VS-25b wiring builds the slice inside Review.run; context.locations then gains the slice's locations.
+  // Present only when the runner built the slice. Its quoted locations appear in context.locations after admission.
   tier1?: ImpactRecord
   files: { reviewed: string[]; skipped: SkippedFile[] }
   // Each pass's prompt, and, for a pass that had a session, its wall time and cache use from the messages of every
@@ -260,6 +289,7 @@ export interface ReplayArtifact {
   // of the same name's. A pass planned and skipped, or refused before its session, has none of the four.
   passes: {
     pass: Pass
+    lens?: ReviewLens
     model: string
     digest: string
     chars: number
@@ -269,8 +299,7 @@ export interface ReplayArtifact {
     cacheWrite?: number
     reasoning?: number // VS-21e: the reasoning tokens measureCost counts; absent when the provider reported none
   }[]
-  // VS-24's first pre-dispatch estimate, before any shrink, then its shrink steps, in order. Both absent until VS-24
-  // wiring.
+  // Present only when the runner estimated this dispatch. Each step records its new estimate in application order.
   dispatch?: DispatchEstimate
   shrink?: ShrinkStep[]
   // VS-49's slice utilisation (core eval.ts SliceUtilisation), from the passes' session events at zero tokens: each
@@ -280,8 +309,22 @@ export interface ReplayArtifact {
   // replay.ts utilisationProblems checks it against the rest of the artifact.
   utilisation?: SliceUtilisation
   attempts: AttemptRecord[]
-  tools: { pass?: Pass; tool: string; status: string; input: Record<string, string | number | boolean> }[]
+  tools: {
+    pass?: Pass
+    lens?: ReviewLens
+    tool: string
+    status: string
+    input: Record<string, string | number | boolean>
+  }[]
   outcome?: ReviewOutcome // absent when nothing was left to review and no model was asked
+  // The actual inputs to strict selection after verification, before its drops. The replay redacts model text.
+  // Older artifacts and reviews that did not reach strict selection omit this record.
+  strictCandidates?: {
+    findings: (Finding & { anchored: boolean; suggestionAllowed: boolean })[]
+    unanswered: string[]
+    // Expected redacted summary rows, so an offline report can match the visible text that survived posting.
+    summaryRows?: { id: string; digest: string }[]
+  }
   placed: PlacedRecord[] // the findings that would go on lines, where they would go
   posted: PostedRecord[] // what the posting adapter was handed, after redaction and the posting check
   refused?: string // the posting check failed, so nothing after it was posted
@@ -345,6 +388,7 @@ export interface ProjectedRequest {
 // One planned pass: its prompt, every request its sessions sent, and what estimateCostUsd makes of its first one.
 export interface ProjectedPass {
   pass: Pass
+  lens?: ReviewLens
   model: string
   maxSteps: number
   status?: ReviewOutcome["specialists"][number]["status"]
@@ -380,9 +424,12 @@ export interface ProjectionRecord {
   variant?: ReplayVariant
   scope: EvidenceScope
   rules: { digest: string }
-  context: { digest: string }
+  context: { digest: string; locations?: string[] }
+  tier1?: ImpactRecord
   models: ReplayArtifact["models"]
   files: ReplayArtifact["files"]
+  dispatch?: DispatchEstimate
+  shrink?: ShrinkStep[]
   // Every decision the dollar cap refused, which the projection ran. From the first on, the record describes an
   // uncapped run: a capped paid run would have stopped that pass there, and every lifted reservation and settlement
   // counts against the other passes too.
@@ -615,19 +662,26 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // base's own "verify" still wins, and without one the policy's default applies.
   const variant = input.variant
   const policy = variant?.keys.verifyPolicy
-  const parsed = parseReviewConfig({ json, env: policy ? { REVIEW_VERIFY_POLICY: policy } : {}, trigger })
+  // On the "local" surface, as the CLI reads it (VS-23b): a sourced key is read only from its sources, so the base's
+  // review.json may raise privacy and nothing here attests a route. With none named it is what parseReviewConfig read.
+  const parsed = mergeReviewConfig({
+    surface: "local",
+    json: { at: "base", text: json },
+    env: policy ? { REVIEW_VERIFY_POLICY: policy } : {},
+    trigger,
+  })
   // Keys config.ts parses and no runner applies yet (UNAPPLIED_REVIEW_KEYS) are dropped, so a base review.json that sets
   // one is replayed, and recorded, without it. Its "not applied" warning stays in the artifact's warnings.
   const applied: ReviewConfig = { ...parsed.config }
   UNAPPLIED_REVIEW_KEYS.forEach((key) => delete applied[key])
-  const config: ReviewConfig = {
+  const config: ReviewConfig = strictReviewConfig({
     ...applied,
     ...input.config,
     ...variant?.keys,
     maxCostUsd: cap,
     maxSteps: input.config?.maxSteps ?? DEFAULT_REVIEW_CONFIG.maxSteps,
     timeoutMinutes: input.config?.timeoutMinutes ?? DEFAULT_REVIEW_CONFIG.timeoutMinutes,
-  }
+  })
   const rules = parseReviewRules(rulesTexts.find((text) => text !== undefined) ?? "")
   const attributes = attributesText === undefined ? undefined : parseGitAttributes(attributesText)
   const ignored = (file: string) => classifyPath(file, { config, attributes }) !== undefined
@@ -709,7 +763,15 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
           } satisfies VariantRecord,
         }
       : {}),
-    scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: triaged } : {}) }),
+    // Under privacy "zdr", from the base's review.json or the engine:privacy-zdr variant, Review.run enforces the route
+    // rules at admission, at the transport and in the session runtime (VS-23c), so the scope claims the zdr route.
+    scope: evidenceScope({
+      adapter: "engine",
+      offlineDiagnostics: process.platform === "linux",
+      config,
+      ...(triaged ? { triage: triaged } : {}),
+      ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
+    }),
     rules: { digest: digest(rules) },
     models: { review: modelRecord(input.model), ...(input.triage ? { triage: modelRecord(input.triage) } : {}) },
     files: { reviewed: files.map((file) => file.path), skipped },
@@ -790,12 +852,48 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     instructions: (file) => show(item.base, file).pipe(Effect.provideService(Git.Service, git)),
   })
   const known = yield* ReviewSource.knownPath({ directory, rev: item.head })
+  // VS-34 item 4: under holdback "secrets", the changed files this checkout's ignore rules exclude although committed.
+  const ignoredPaths =
+    config.holdback === "secrets" || config.diagnostics === "offline"
+      ? yield* ReviewGit.ignoredPaths(
+          directory,
+          files.filter((file) => file.status !== "deleted").map((file) => file.path),
+        )
+      : undefined
 
   // 6. The review. A projection runs every decision the dollar cap refuses and keeps it; one made at admission is
   // followed at once by the attempt it admitted, so that attempt's seq is the next one.
   const observed: Observation[] = []
+  const drops: NonNullable<ReplayArtifact["drops"]> = []
   const over: ProjectedOverCap[] = []
+  // Only a trusted committed checkout can supply SF-16 evidence. The helper derives it from the private Git view.
+  const trivialProof =
+    config.trivial === "skip" && item.trust === "trusted" && trusted && !skipped.length
+      ? yield* ReviewTrivial.prove({
+          directory,
+          base: plan.mergeBase,
+          head: item.head,
+          files: plan.files,
+          config,
+          instructions: effective.instructions ?? [],
+          denied: ignored,
+        })
+      : undefined
+  if (
+    config.cards === "brain" &&
+    (projecting ||
+      Flag.VECTOR_PURE ||
+      item.trust !== "trusted" ||
+      !publicCardGrant(input.localCards, { directory, base: plan.mergeBase, head: item.head, files }))
+  ) {
+    return yield* new ReviewEvalError({
+      message:
+        "A Brain cards evaluation requires a local repository-only card grant for the exact synthetic base and head.",
+    })
+  }
   const outcome = yield* Review.run({
+    ...(config.cards === "brain" ? { selectedCards: input.localCards, localCardEvaluation: true as const } : {}),
+    ...(trivialProof ? { trivialProof } : {}),
     directory,
     trigger,
     trust: item.trust,
@@ -809,10 +907,10 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     context: gathered,
     ...(item.pr ? { pr: item.pr } : {}),
     prior: [],
-    rules: rulesForPaths(
+    ...rulePromptInput(
       rules,
       files.map((file) => file.path),
-      config.paths,
+      config,
     ),
     config,
     model: input.model,
@@ -821,7 +919,23 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     baseRef: item.baseRef ?? "base",
     rulesSource: "base branch",
     inlinePosted: 0,
-    observe: (event) => observed.push(event),
+    ...(ignoredPaths ? { ignored: ignoredPaths } : {}),
+    observe: (event) => {
+      observed.push(event)
+      if (event.type !== "scope-drops" || event.base !== plan.mergeBase) return
+      const at = new Date(now()).toISOString()
+      for (const drop of event.drops) {
+        // Redacting a path would give the downstream history join a different file. Omit that location.
+        if (clean(drop.path) !== drop.path || drop.path.length > 4096) continue
+        drops.push({
+          path: drop.path,
+          base: { sha: event.base, start: drop.start, end: drop.end },
+          class: drop.class,
+          fingerprint: drop.fingerprint,
+          at,
+        })
+      }
+    },
     ...(projecting
       ? {
           projection: {
@@ -841,7 +955,15 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify")
   const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
   const run = digest([item.label, repetition]).slice(0, 8)
-  if (failed) {
+  const notReviewed = outcome.trivial
+    ? noteTrivialSkip()
+    : outcome.partial === "budget-estimate"
+      ? noteBudgetEstimate(outcome.notes)
+      : undefined
+  if (notReviewed) {
+    const body = buildNoteBody({ note: [...new Set([notReviewed, ...outcome.notes])].join("\n\n") })
+    yield* post({ write: "createIssueComment", pr: prNumber, body }, outcome.sessions)
+  } else if (failed) {
     const detail = reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no review"
     const state = nextState(undefined, {
       head: item.head,
@@ -860,7 +982,7 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       outcome.sessions,
     )
   }
-  if (!failed && selection.inline.length) {
+  if (!notReviewed && !failed && selection.inline.length) {
     const payload = buildCreateReviewPayload({
       head: item.head,
       inline: selection.inline,
@@ -872,14 +994,16 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     })
     yield* post({ write: "createReview", pr: prNumber, payload }, outcome.sessions)
   }
-  if (!failed) {
+  if (!notReviewed && !failed) {
     const count = posted.flatMap((write) => (write.write === "createReview" ? write.payload.comments : [])).length
-    const detail = outcome.specialists.find((entry) => entry.status === "failed")?.detail
+    const requestStop = firstRequestStopDetail(outcome)
+    const detail = requestStop ?? outcome.specialists.find((entry) => entry.status === "failed")?.detail
     const banners = outcome.partial
       ? [
           notePartial({
             reason: outcome.partial,
-            reviewed: files.length - outcome.unreviewed.length,
+            // A held-back file (VS-34) is neither reviewed nor unreviewed.
+            reviewed: files.length - outcome.unreviewed.length - (outcome.held?.length ?? 0),
             total: files.length,
             unreviewed: outcome.unreviewed,
             maxCostUsd: config.maxCostUsd,
@@ -918,10 +1042,13 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       head: item.head,
       baseRef: item.baseRef ?? "base",
       mode: "full",
+      ...(requestStop ? { incomplete: true } : {}),
       report: outcome.report,
+      ...(outcome.strict ? { strict: outcome.strict } : {}),
       selection,
       files: files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
-      skipped,
+      // Review.run's, which add its held-back files (VS-34) to the eval's own.
+      skipped: outcome.skipped,
       banners,
       notes,
       ...(outcome.cost ? { cost: outcome.cost } : {}),
@@ -937,11 +1064,13 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // settlement, and the tool calls each session made, with this checkout's paths made relative. Each session's
   // messages are read once.
   const attempts = foldAttempts(observed)
-  const passOf = new Map(attempts.flatMap((attempt) => (attempt.sessionID ? [[attempt.sessionID, attempt.pass]] : [])))
+  const passOf = new Map(
+    attempts.flatMap((attempt) => (attempt.sessionID ? [[attempt.sessionID, attempt] as const] : [])),
+  )
   const recorded = yield* Effect.forEach(outcome.sessions, (id) =>
     sessions.messages({ sessionID: SessionID.make(id) }).pipe(
-      Effect.map((messages) => ({ pass: passOf.get(SessionID.make(id)), messages })),
-      Effect.catch(() => Effect.succeed({ pass: passOf.get(SessionID.make(id)), messages: [] })),
+      Effect.map((messages) => ({ owner: passOf.get(SessionID.make(id)), messages })),
+      Effect.catch(() => Effect.succeed({ owner: passOf.get(SessionID.make(id)), messages: [] })),
     ),
   )
   const tools = recorded.flatMap((session) =>
@@ -951,7 +1080,8 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
         part.type === "tool"
           ? [
               {
-                ...(session.pass ? { pass: session.pass } : {}),
+                ...(session.owner ? { pass: session.owner.pass } : {}),
+                ...(session.owner?.lens ? { lens: session.owner.lens } : {}),
                 tool: part.tool,
                 status: part.state.status,
                 input: relativeInput(part.state.input, directory),
@@ -995,28 +1125,104 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     }),
   )
 
+  // VS-34: under holdback "secrets" a held file was not reviewed, and the prompt quoted related code without the hits
+  // holdback drops (holdbackContext), so a location is listed only when the model saw it.
+  const excluded = new Set(outcome.held?.map((file) => file.path))
+  const graph = config.impact === "graph"
+  const estimates = observed.filter((event) => event.type === "dispatch")
+  const initial = estimates.find((event) => event.step === undefined)
+  if (graph || (initial && outcome.partial === "budget")) {
+    for (const file of outcome.unreviewed) excluded.add(file)
+  }
+  const impact = observed.find((event) => event.type === "impact")
+  const quoted =
+    !notReviewed &&
+    ((!graph && !initial) ||
+      attempts.some(
+        (attempt) =>
+          attempt.admitted && (attempt.pass === "review" || attempt.pass === "security" || attempt.pass === "lens"),
+      ))
+  const relatedLocations = quoted
+    ? quotedLocations(
+        config.holdback === "secrets" || config.diagnostics === "offline"
+          ? (holdbackContext({ related: gathered.related }, { held: outcome.held ?? [] }).related ?? [])
+          : gathered.related,
+      )
+    : []
+  // Model answers can contain tokens in any string, including nested quotes or a proposed fix. Redact the
+  // complete serialized strict record, including the same findings repeated in the outcome and placements.
+  const observedStrict = observed.find((event) => event.type === "strict-candidates")
+  let strictCandidates: ReplayArtifact["strictCandidates"]
+  if (!notReviewed && config.guardrail === "strict" && outcome.strict && observedStrict) {
+    const index = buildAnchorIndex(plan.files)
+    strictCandidates = {
+      findings: observedStrict.findings.map((finding) => {
+        const anchor = resolveAnchor(index, finding)
+        return {
+          ...finding,
+          // The offline rules admit a recorded diff anchor. The online S3 also requires a changed line.
+          anchored: anchor.ok,
+          suggestionAllowed:
+            anchor.ok &&
+            !!finding.suggestion &&
+            config.suggestions &&
+            suggestionAllowed(index, anchor.anchor, finding.suggestion, {
+              trust: item.trust,
+              verified: finding.verified,
+              range: { line: finding.line, endLine: finding.endLine },
+            }),
+        }
+      }),
+      unanswered: observedStrict.unanswered,
+      // Strict findings anchor to changed lines. Only the remaining PR comment cap sends them to the summary
+      // in a first, full replay. Its invisible state marker can also retain rows the formatter trimmed.
+      ...(selection.overflow.length
+        ? {
+            summaryRows: selection.overflow.map((finding) => ({
+              id: finding.id,
+              digest: digest(clean(findingItem(finding, repo))),
+            })),
+          }
+        : {}),
+    }
+  }
   const artifact: ReplayArtifact = {
     ...common,
+    ...(initial
+      ? {
+          dispatch: initial.estimate,
+          shrink: estimates.flatMap((event) => (event.step ? [{ step: event.step, estimate: event.estimate }] : [])),
+        }
+      : {}),
+    ...(strictCandidates ? { strictCandidates } : {}),
+    ...(drops.length ? { drops } : {}),
+    ...(impact ? { tier1: impact.record } : {}),
+    files: {
+      reviewed: quoted ? files.flatMap((file) => (excluded.has(file.path) ? [] : [file.path])) : [],
+      skipped: outcome.skipped,
+    },
     context: {
       digest: digest({ gathered, headFiles: headFiles ?? [] }),
       related: gathered.related.length,
       history: gathered.history.length,
       instructions: gathered.instructions !== undefined,
       headFiles: headFiles?.length ?? 0,
-      locations: quotedLocations(gathered.related),
+      locations: impact && quoted ? [...new Set([...relatedLocations, ...impact.locations])] : relatedLocations,
     },
-    // Every session of a pass counts toward it. One pass event per pass name today; VS-28's lenses add several "lens"
-    // passes and must match them by lens too.
+    // Match every contributing session to its own pass and lens.
     passes: observed.flatMap((event) =>
       event.type === "pass"
         ? [
             {
               pass: event.pass,
+              ...(event.lens ? { lens: event.lens } : {}),
               model: event.model,
               digest: digest(event.text),
               chars: event.text.length,
               ...passUsage(
-                recorded.flatMap((session) => (session.pass === event.pass ? session.messages : [])),
+                recorded.flatMap((session) =>
+                  session.owner?.pass === event.pass && session.owner.lens === event.lens ? session.messages : [],
+                ),
                 start,
               ),
             },
@@ -1044,6 +1250,13 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
     posted,
     ...(refusal.message !== undefined ? { refused: refusal.message } : {}),
   }
+  if (outcome.strict) {
+    const evidence = { outcome, placed: artifact.placed, ...(strictCandidates ? { strictCandidates } : {}) }
+    const redacted = JSON.parse(
+      JSON.stringify(evidence, (_key, value) => (typeof value === "string" ? clean(value) : value)),
+    ) as typeof evidence
+    return { artifact: { ...artifact, ...redacted }, observed, over }
+  }
   return { artifact, observed, over }
 })
 
@@ -1061,11 +1274,13 @@ function projectionOf(input: {
   const lifted = new Set(input.over.flatMap((decision) => (decision.attempt === undefined ? [] : [decision.attempt])))
   const named = new Set<string>(artifact.attempts.flatMap((attempt) => (attempt.sessionID ? [attempt.sessionID] : [])))
   const events = input.observed.flatMap((event) => (event.type === "pass" ? [event] : []))
-  // One pass event per pass name today; VS-28's lenses add several "lens" passes and must match them by lens too.
-  const planned = events.filter((event, index) => events.findIndex((other) => other.pass === event.pass) === index)
+  // Each single-class lens owns its sessions and its measured usage.
+  const planned = events.filter(
+    (event, index) => events.findIndex((other) => other.pass === event.pass && other.lens === event.lens) === index,
+  )
   const passes = planned.map((event): ProjectedPass => {
     const price = [artifact.models.review, artifact.models.triage].find((model) => model?.id === event.model)?.price
-    const tried = artifact.attempts.filter((attempt) => attempt.pass === event.pass)
+    const tried = artifact.attempts.filter((attempt) => attempt.pass === event.pass && attempt.lens === event.lens)
     const sessions = [...new Set(tried.flatMap((attempt) => (attempt.sessionID ? [attempt.sessionID] : [])))]
     const paired = sessions.map((sessionID) => {
       const admitted = tried.filter((attempt) => attempt.admitted && attempt.sessionID === sessionID)
@@ -1092,10 +1307,13 @@ function projectionOf(input: {
     })
     const requests = paired.flatMap((entry) => entry.requests).toSorted((a, b) => a.seq - b.seq)
     const first = requests[0]
-    const status = artifact.outcome?.specialists.find((entry) => entry.name === event.pass)?.status
-    const decision = input.over.find((entry) => entry.pass === event.pass)
+    const status = artifact.outcome?.specialists.find(
+      (entry) => entry.name === event.pass && entry.lens === event.lens,
+    )?.status
+    const decision = input.over.find((entry) => entry.pass === event.pass && entry.lens === event.lens)
     return {
       pass: event.pass,
+      ...(event.lens ? { lens: event.lens } : {}),
       model: event.model,
       maxSteps: event.maxSteps,
       ...(status ? { status } : {}),
@@ -1136,9 +1354,14 @@ function projectionOf(input: {
     ...(artifact.variant ? { variant: artifact.variant } : {}),
     scope: artifact.scope,
     rules: artifact.rules,
-    context: { digest: artifact.context.digest },
+    context: {
+      digest: artifact.context.digest,
+      ...(artifact.tier1 ? { locations: artifact.context.locations } : {}),
+    },
+    ...(artifact.tier1 ? { tier1: artifact.tier1 } : {}),
     models: artifact.models,
     files: artifact.files,
+    ...(artifact.dispatch ? { dispatch: artifact.dispatch, shrink: artifact.shrink } : {}),
     cap: { maxCostUsd: artifact.config.value.maxCostUsd, over: [...input.over] },
     passes,
     unattributed: input.wire.filter((request) => !request.sessionID || !named.has(request.sessionID)).length,
@@ -1196,14 +1419,6 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 
 // The package whose wiring applies each key no runner applies yet.
 const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
-  trivial: "VS-24 wiring",
-  maxInputTokens: "VS-24 wiring",
-  impact: "VS-25b wiring",
-  guardrail: "VS-27c",
-  scopeGate: "VS-42 wiring",
-  verifyEvidence: "VS-44 wiring",
-  depth: "VS-28 wiring",
-  lenses: "VS-28 wiring",
   runtime: "the VS-30 executor",
 }
 
@@ -1211,16 +1426,41 @@ const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
 // the run unnamed, a route setting there, which nothing would enforce, or a variant that would run the frozen pipeline,
 // or anything but itself, under its name.
 function variantProblem(input: ReplayInput) {
-  const misplaced = VARIANT_KEYS.engine.filter((key) => input.config && Object.hasOwn(input.config, key))
+  if (
+    input.model.inversion ||
+    input.triage?.inversion ||
+    (input.config && (Object.hasOwn(input.config, "inversion") || Object.hasOwn(input.config, "alternateModel")))
+  )
+    return "A replay cannot establish local assistant authorship or select the owner's equal-tier alternate."
+  // A route setting a variant may raise (privacy) is still a route setting in `config`, which gets its own message.
+  const misplaced = VARIANT_KEYS.engine.filter(
+    (key) =>
+      !SOURCED_REVIEW_KEYS.some((item) => item === key) &&
+      input.config !== undefined &&
+      Object.hasOwn(input.config, key),
+  )
   if (misplaced.length)
     return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
-  // Nothing enforces the route rules in a replay yet, so its artifact may not record a route setting. A sourced key that
-  // no runner applies yet (VS-30's runtime) gets the unwired message below, which names what applies it.
+  // A replay's route settings come from the case's own review.json alone (VS-23b), so its artifact never records one the
+  // eval set. A sourced key that no runner applies yet (VS-30's runtime) gets the unwired message below, which names
+  // what applies it, and VS-34's holdback, which is no route setting, its own.
   const sourced = SOURCED_REVIEW_KEYS.filter(
-    (key) => input.config && Object.hasOwn(input.config, key) && !UNAPPLIED_REVIEW_KEYS.some((item) => item === key),
+    (key) =>
+      key !== "ruleCheck" &&
+      key !== "diagnostics" &&
+      key !== "holdback" &&
+      input.config &&
+      Object.hasOwn(input.config, key) &&
+      !UNAPPLIED_REVIEW_KEYS.some((item) => item === key),
   )
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
+  if (input.config && Object.hasOwn(input.config, "diagnostics"))
+    return "config sets diagnostics, which a replay takes only from the committed base."
+  if (input.config && Object.hasOwn(input.config, "ruleCheck"))
+    return "config sets ruleCheck, which a replay takes from the committed base or the engine:rule-strict variant."
+  if (input.config && Object.hasOwn(input.config, "holdback"))
+    return "config sets holdback, which a replay takes only from the case's own review.json or the engine:holdback-secrets variant."
   const unwired = UNAPPLIED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
   if (unwired.length) {
     const packages = [...new Set(unwired.map((key) => WIRING[key]))]
@@ -1239,9 +1479,92 @@ function variantProblem(input: ReplayInput) {
   const unapplied = keys.filter(([key, value]) => value === undefined || !allowed.includes(key)).map(([key]) => key)
   if (unapplied.length)
     return `${variant.name} sets ${unapplied.join(", ")}, which this replay does not apply (it applies ${allowed.join(", ")}, each with a value), so the run would not be ${variant.name}.`
+  // A variant's keys go over the base's review.json, whose privacy is raise-only (config.ts), so one may raise it to
+  // "zdr" (engine:privacy-zdr) and never lower it.
+  if (variant.keys.privacy !== undefined && variant.keys.privacy !== "zdr")
+    return `${variant.name} sets privacy "${variant.keys.privacy}": a variant may raise privacy to "zdr", never lower it.`
+  // So is holdback (VS-34): a variant may raise it to "secrets" (engine:holdback-secrets) and never lower it.
+  if (variant.keys.holdback !== undefined && variant.keys.holdback !== "secrets")
+    return `${variant.name} sets holdback "${variant.keys.holdback}": a variant may raise holdback to "secrets", never lower it.`
   if (!keys.length && !variant.models)
     return `${variant.name} sets no key and no model requirement, so it would run the frozen pipeline under its name.`
   const triaged = input.triage && modelRecord(input.triage).id !== modelRecord(input.model).id
+  if (
+    (variant.name === "engine:trivial-skip" || variant.keys.trivial !== undefined) &&
+    (variant.name !== "engine:trivial-skip" || variant.keys.trivial !== "skip" || keys.length !== 1 || variant.models)
+  )
+    return 'The engine:trivial-skip variant sets only trivial: "skip".'
+  if (
+    (variant.name === "engine:impact-graph" || variant.keys.impact !== undefined) &&
+    (variant.name !== "engine:impact-graph" || variant.keys.impact !== "graph" || keys.length !== 1 || variant.models)
+  )
+    return 'The engine:impact-graph variant sets only impact: "graph".'
+  if (variant.name === "engine:lenses-high" || Object.hasOwn(variant.keys, "lenses")) {
+    if (
+      variant.name !== "engine:lenses-high" ||
+      variant.keys.depth !== "auto" ||
+      variant.keys.lenses !== "high" ||
+      keys.length !== 2 ||
+      keys.some(([key]) => key !== "depth" && key !== "lenses") ||
+      variant.models !== undefined
+    )
+      return 'The engine:lenses-high variant sets only depth: "auto" and lenses: "high".'
+    return undefined
+  }
+  if (variant.name === "engine:depth-auto" || Object.hasOwn(variant.keys, "depth")) {
+    if (variant.name !== "engine:depth-auto" || variant.keys.depth !== "auto" || keys.length !== 1 || variant.models)
+      return 'The engine:depth-auto variant sets only depth: "auto".'
+  }
+  if (variant.name === "engine:rule-strict" || Object.hasOwn(variant.keys, "ruleCheck")) {
+    if (
+      variant.name !== "engine:rule-strict" ||
+      Reflect.get(variant.keys, "ruleCheck") !== "strict" ||
+      keys.length !== 1 ||
+      variant.models
+    )
+      return 'The engine:rule-strict variant sets only ruleCheck: "strict".'
+    return undefined
+  }
+  if (variant.name === "engine:verify-cert" || variant.keys.verifyEvidence !== undefined) {
+    if (
+      variant.name !== "engine:verify-cert" ||
+      variant.keys.guardrail !== "strict" ||
+      variant.keys.verifyEvidence !== "certificate" ||
+      keys.length !== 2 ||
+      variant.models
+    )
+      return 'The engine:verify-cert variant sets only guardrail: "strict" and verifyEvidence: "certificate".'
+    return undefined
+  }
+  if (variant.name === "engine:scope-introduced" || variant.keys.scopeGate !== undefined) {
+    if (
+      variant.name !== "engine:scope-introduced" ||
+      variant.keys.guardrail !== "strict" ||
+      variant.keys.scopeGate !== "introduced" ||
+      keys.length !== 2 ||
+      variant.models
+    )
+      return 'The engine:scope-introduced variant sets only guardrail: "strict" and scopeGate: "introduced".'
+    return undefined
+  }
+  if (variant.name === "engine:cards-brain" || Object.hasOwn(variant.keys, "cards")) {
+    if (
+      variant.name !== "engine:cards-brain" ||
+      Reflect.get(variant.keys, "cards") !== "brain" ||
+      keys.length !== 1 ||
+      variant.models
+    )
+      return 'The engine:cards-brain variant sets only cards: "brain".'
+    return undefined
+  }
+  if (
+    (variant.name === "engine:guardrail-strict" || variant.keys.guardrail !== undefined) &&
+    (variant.name !== "engine:guardrail-strict" ||
+      variant.keys.guardrail !== "strict" ||
+      keys.length !== 1 ||
+      variant.models)
+  )
+    return 'The engine:guardrail-strict variant sets only guardrail: "strict".'
   if (variant.models === "triage-pair" && !triaged)
     return `${variant.name} is made by its models: it needs a triage model other than the review model.`
   return undefined
@@ -1285,7 +1608,12 @@ function foldAttempts(observed: Observation[]): AttemptRecord[] {
     }
     if (event.type !== "settle") continue
     const open = attempts.findLast(
-      (attempt) => attempt.pass === event.pass && attempt.phase === event.phase && attempt.admitted && !attempt.settled,
+      (attempt) =>
+        attempt.pass === event.pass &&
+        attempt.lens === event.lens &&
+        attempt.phase === event.phase &&
+        attempt.admitted &&
+        !attempt.settled,
     )
     if (open)
       open.settled = {

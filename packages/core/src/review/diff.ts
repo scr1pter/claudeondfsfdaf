@@ -272,6 +272,64 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
   return files
 }
 
+/** Every explicit target in a model's proposed patch, including superseded headers and both sides of a copy.
+ * An ambiguous header cannot authorize forwarding its contents. Bare hunk text inherits its finding's path. */
+export function explicitPatchPaths(patch: string): string[] | undefined {
+  const lines = splitLines(patch)
+  const paths = new Set<string>()
+  let prefixes: [string, string] = ["", ""]
+  const pathOf = (raw: string) => {
+    if (raw.startsWith('"')) {
+      const end = readQuoted(raw, 0).end
+      if (end > raw.length || (end < raw.length && raw[end] !== "\t")) return undefined
+    }
+    return headerPath(raw)
+  }
+  const add = (value: string | null | undefined, prefix = "") => {
+    if (value === null) return true // /dev/null is a side of an add or delete.
+    if (!value) return false
+    const file = prefix && value.startsWith(prefix) ? value.slice(prefix.length) : value
+    if (!file) return false
+    paths.add(file)
+    return true
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (HUNK_HEADER.test(line)) {
+      i = readHunk(lines, i).next - 1
+      continue
+    }
+    if (/^diff --(?:git|vector) /.test(line)) {
+      const raw = line.replace(/^diff --(?:git|vector) /, "")
+      const file = startGitFile(line)
+      if (!file.git || !file.git.every(Boolean)) return undefined
+      // The general diff reader tolerates a missing quote or trailing prose. Each quoted token here must end.
+      if (raw.includes('"') && !/^(?:"(?:\\.|[^"\\])*"|[^"]+) (?:"(?:\\.|[^"\\])*"|[^"]+)$/.test(raw)) return undefined
+      prefixes = file.prefixes
+      file.git.forEach((name) => paths.add(name))
+      continue
+    }
+    if (line.startsWith("--- ")) {
+      const next = lines[++i]
+      if (!next?.startsWith("+++ ")) return undefined
+      const old = pathOf(line.slice(4)),
+        current = pathOf(next.slice(4))
+      const paired = (old === null || old?.startsWith("a/")) && (current === null || current?.startsWith("b/"))
+      if (!add(old, prefixes[0] || (paired ? "a/" : "")) || !add(current, prefixes[1] || (paired ? "b/" : "")))
+        return undefined
+      continue
+    }
+    const move = /^(?:rename (?:from|to|old|new)|copy (?:from|to)) (.+)$/.exec(line)
+    if (move) {
+      if (!add(pathOf(move[1]!))) return undefined
+      continue
+    }
+    if (/^(?:diff |---(?: |$)|\+\+\+(?: |$)|\*\*\* |rename |copy |Binary files |GIT binary patch|Index: )/.test(line))
+      return undefined
+  }
+  return [...paths]
+}
+
 export function fromGitHubFiles(files: GitHubPrFile[]): DiffFile[] {
   return files.map((file) => {
     const patch = file.patch ?? ""
@@ -566,6 +624,31 @@ export function applyPatch(baseText: string, file: DiffFile): string | undefined
   if (!out.length) return ""
   const endsWithNewline = tail ? base.endsWithNewline : !last?.noNewline
   return out.join(eol) + (endsWithNewline ? eol : "")
+}
+
+// Rebuilds the old version of a file from its new text: applyPatch over the inverted diff, so undefined when any
+// context or added line differs (the text is not the diff's head) or the file is binary. A deleted file's old text
+// comes from its removed lines alone (pass ""), and an added file's is "". The desktop rebuilds the base's
+// review.json with it when a pull request changes that file and the checkout holds the head (VS-23d, SF-15).
+export function revertPatch(headText: string, file: DiffFile): string | undefined {
+  const status = file.status === "added" ? "deleted" : file.status === "deleted" ? "added" : file.status
+  return applyPatch(headText, {
+    ...file,
+    status,
+    hunks: file.hunks.map((hunk) => ({
+      ...hunk,
+      oldStart: hunk.newStart,
+      oldLines: hunk.newLines,
+      newStart: hunk.oldStart,
+      newLines: hunk.oldLines,
+      lines: hunk.lines.map((line) => ({
+        ...line,
+        kind: line.kind === "add" ? "del" : line.kind === "del" ? "add" : line.kind,
+        oldLine: line.newLine,
+        newLine: line.oldLine,
+      })),
+    })),
+  })
 }
 
 // Why a model's fix patch is not posted as a patch (S6). "malformed": not one well-formed unified diff, a line outside

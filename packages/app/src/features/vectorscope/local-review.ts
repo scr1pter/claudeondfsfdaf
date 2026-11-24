@@ -56,16 +56,12 @@ export function localReviewTransport(
     return result.data
   }
   const placement = async (signal: AbortSignal) => {
-    if (!source.parentID || !source.directory || !source.projectID)
+    const problem = await conversationProblem(client, source, signal)
+    if (problem === "missing")
       throw new LocalReviewRefusal("Open an existing main conversation in this checkout before reviewing.")
-    const session = answer(await client.session.get(params, { signal, throwOnError: false }))
-    if (
-      session.id !== source.parentID ||
-      session.parentID ||
-      session.internal ||
-      session.projectID !== source.projectID ||
-      pathKey(session.directory) !== pathKey(source.directory)
-    )
+    if (problem === "unverified")
+      throw new LocalReviewRefusal("Owner access or this conversation's local review placement could not be verified.")
+    if (problem === "mismatch")
       throw new LocalReviewRefusal("Open this main conversation in its own checkout before reviewing.")
   }
   return {
@@ -98,6 +94,34 @@ export function localReviewTransport(
       return answer(await client.review.stop({ ...params, runID }, { signal, throwOnError: false }))
     },
   }
+}
+
+/**
+ * Why this conversation cannot place owner-only work in its checkout, from a fresh read of the session: no main
+ * conversation, a read the owner's access could not verify, or a session that is a child, internal, or in another
+ * project or folder. Undefined when it can. Shared by the local review and local fix transports (SF-10b).
+ */
+export async function conversationProblem(
+  client: Pick<VectorClient, "session">,
+  source: Pick<LocalReviewScope, "parentID" | "directory" | "projectID">,
+  signal: AbortSignal,
+) {
+  if (!source.parentID || !source.directory || !source.projectID) return "missing" as const
+  const result = await client.session.get(
+    { sessionID: source.parentID, directory: source.directory },
+    { signal, throwOnError: false },
+  )
+  if (result.response.status !== 200 || result.data === undefined) return "unverified" as const
+  const session = result.data
+  if (
+    session.id !== source.parentID ||
+    session.parentID ||
+    session.internal ||
+    session.projectID !== source.projectID ||
+    pathKey(session.directory) !== pathKey(source.directory)
+  )
+    return "mismatch" as const
+  return undefined
 }
 
 export function localReviewCanStart(state: LocalReviewState, enabled: boolean) {

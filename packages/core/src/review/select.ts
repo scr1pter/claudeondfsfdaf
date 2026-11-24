@@ -1,6 +1,8 @@
 // Noise control: which findings go on lines, which are listed in the summary, and which are dropped. Matching to
 // earlier findings is by location first; titles only break ties (section 3.9).
 
+import { ruleCited, type TrustedRules, type RuleMismatch } from "./citation"
+import type { RuleCitationProblem } from "./schema"
 import { anchorText, buildAnchorIndex, lookupFile, resolveAnchor, suggestionAllowed, type DiffFile } from "./diff"
 import { normalizeCode, normalizeTitle, titleSimilarity } from "./fingerprint"
 import { INJECTION_TITLE, type TeamPattern } from "./prompt"
@@ -10,6 +12,7 @@ import {
   type Category,
   type DropReason,
   type Finding,
+  type ModelFinding,
   type FocusHunk,
   type PlacedFinding,
   type PriorFinding,
@@ -47,6 +50,7 @@ const DROP_ORDER: DropReason[] = [
   "dismissed",
   "rejected-by-verify",
   "unconfirmed",
+  "rule-unverified",
 ]
 
 export interface SelectInput {
@@ -56,7 +60,9 @@ export interface SelectInput {
   trust: Trust
   mode: "full" | "incremental"
   config: Pick<ReviewConfig, "minConfidence" | "minSeverity" | "maxComments" | "maxCommentsPerPr" | "suggestions"> &
-    Partial<Pick<ReviewConfig, "nits">>
+    Partial<Pick<ReviewConfig, "nits" | "ruleCheck">>
+  trustedRules?: TrustedRules
+  ruleCounts?: readonly RuleCounts[]
   prior?: PriorFinding[] // classified by classifyPrior, with current head lines
   focus?: FocusHunk[]
   inlinePosted?: number // state.inlinePosted
@@ -152,6 +158,72 @@ export function isNit(finding: Pick<Finding, "severity" | "category">): boolean 
   return finding.severity === "nit" || (finding.category === "style" && finding.severity !== "blocking")
 }
 
+export interface RuleCounts {
+  dropped: number
+  stripped: number
+  problems: Partial<Record<RuleMismatch | RuleCitationProblem, number>>
+}
+
+// Validate every model claim before verification, deduplication, posting or persistence.
+// A second check is safe for a previously admitted finding, and never restores a stripped claim.
+export function checkedRuleFindings<T extends ModelFinding>(findings: readonly T[], trusted?: TrustedRules) {
+  const counts: RuleCounts = { dropped: 0, stripped: 0, problems: {} }
+  const kept: T[] = []
+  for (const finding of findings) {
+    if (!finding.citation && !finding.ruleProblem && !finding.rule && !finding.rulesSource) {
+      kept.push(finding)
+      continue
+    }
+    const onlyBasis = ["style", "maintainability", "docs"].includes(finding.category)
+    const checked =
+      finding.citation && trusted ? ruleCited({ ...finding, citation: finding.citation }, trusted) : undefined
+    if (checked?.cited && finding.citation) {
+      kept.push({
+        ...finding,
+        rule: finding.citation.quote,
+        rulesSource: checked.rulesSource,
+        severity: onlyBasis && finding.severity === "blocking" ? "concern" : finding.severity,
+      })
+      continue
+    }
+    const problem =
+      finding.ruleProblem ??
+      (checked && !checked.cited ? checked.reason : finding.citation ? "source" : "not-structured")
+    counts.problems[problem] = (counts.problems[problem] ?? 0) + 1
+    if (onlyBasis) counts.dropped++
+    else {
+      counts.stripped++
+      const copy = { ...finding }
+      delete copy.rule
+      delete copy.citation
+      delete copy.ruleProblem
+      delete copy.rulesSource
+      kept.push(copy)
+    }
+  }
+  return { findings: kept, ...counts }
+}
+
+export function ruleCheckNotes(counts: readonly RuleCounts[]): string[] {
+  const problems = new Map<string, number>()
+  let dropped = 0
+  let stripped = 0
+  for (const count of counts) {
+    dropped += count.dropped
+    stripped += count.stripped
+    for (const [reason, total] of Object.entries(count.problems))
+      problems.set(reason, (problems.get(reason) ?? 0) + total)
+  }
+  if (!dropped && !stripped) return []
+  const reasons = [...problems]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([reason, total]) => `${reason} ${total}`)
+    .join(", ")
+  return [
+    `Rule citation checks dropped ${dropped} finding(s) and stripped ${stripped} unsupported claim(s) (${reasons}).`,
+  ]
+}
+
 export function selectFindings(input: SelectInput): Selection {
   const { config } = input
   const asked = wantsNits(config)
@@ -164,7 +236,12 @@ export function selectFindings(input: SelectInput): Selection {
   // agree.
   const index = buildAnchorIndex(input.anchors)
   const kept: Finding[] = []
-  for (const finding of input.findings) {
+  const checked = config.ruleCheck === "strict" ? checkedRuleFindings(input.findings, input.trustedRules) : undefined
+  if (checked) {
+    const invalid = checked.dropped + (input.ruleCounts ?? []).reduce((total, entry) => total + entry.dropped, 0)
+    if (invalid) drop("rule-unverified", invalid)
+  }
+  for (const finding of checked?.findings ?? input.findings) {
     const entry = finding.path.trim() ? lookupFile(index, finding.path) : undefined
     const path = entry?.file.path ?? finding.path
     if (!finding.title.trim() || !finding.path.trim()) drop("empty")
@@ -445,7 +522,7 @@ const ALSO_LINES = /The same problem is also at lines? ((?:\d+, )*\d+(?: and \d+
 
 // "path:line" entries of one file, as the sentence a reader sees under the finding. A sentence written by an earlier
 // fold is replaced, so a carried finding never lists a place twice.
-function withAlso(body: string, also: readonly string[]): string {
+export function withAlso(body: string, also: readonly string[]): string {
   const lines = [...new Set(also.map(lineOf))].toSorted((a, b) => a - b)
   const list = lines.length === 1 ? lines[0] : `${lines.slice(0, -1).join(", ")} and ${lines.at(-1)}`
   const sentence = `The same problem is also at ${lines.length === 1 ? "line" : "lines"} ${list}.`

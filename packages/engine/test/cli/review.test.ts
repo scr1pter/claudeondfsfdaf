@@ -17,10 +17,12 @@ import {
   type LocalReviewOptions,
 } from "../../src/cli/cmd/review"
 import { Git } from "../../src/git"
+import { Config } from "../../src/config/config"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { ReviewModel, type ResolvedModel } from "../../src/review/model"
 import { Review } from "../../src/review/run"
+import { TestConfig } from "../fixture/config"
 import { tmpdir } from "../fixture/fixture"
 import { cliIt } from "../lib/cli-process"
 import { testEffect } from "../lib/effect"
@@ -758,6 +760,58 @@ describe("vector review: --post", () => {
       expect(github.comments[0]).not.toContain("<!-- vector-review:summary -->")
       expect(github.comments[0]).not.toContain("vector-review:state")
       expect(run.err()).toContain("Posted to acme/widgets#7: https://github.com/acme/widgets/pull/7#issuecomment-1")
+    }),
+  )
+
+  it.live("explicit posting keeps safe suggestions and drops replacements that would post redacted values", () =>
+    Effect.gen(function* () {
+      const repo = yield* pullRequest
+      const raw = "ghp_" + "p7Q2".repeat(9)
+      const safe = "  const index = items.length - 1"
+      for (const mode of ["default", "held", "offline"] as const) {
+        for (const replacement of ["[redacted]", raw]) {
+          const github = fakeGitHub({ token: TOKEN })
+          const run = fake({
+            github: github.access,
+            findings: () => [
+              { ...finding({ line: 2, title: "Adjust the index", suggestion: safe }), verified: true },
+              {
+                ...finding({ line: 3, title: "Fix the return value", suggestion: `  return "${replacement}"` }),
+                verified: true,
+              },
+            ],
+          })
+          const result = yield* review(
+            {
+              directory: repo.dir,
+              pr: 7,
+              post: true,
+              yes: true,
+              full: true,
+              env: mode === "held" ? { REVIEW_HOLDBACK: "secrets" } : {},
+            },
+            run.deps,
+          ).pipe(
+            Effect.provideService(
+              Config.Service,
+              TestConfig.make({
+                getGlobal: () => Effect.succeed(mode === "offline" ? { review: { diagnostics: "offline" } } : {}),
+              }),
+            ),
+          )
+          expect(result.exitCode).toBe(0)
+          const comments = github.reviews[0]?.comments ?? []
+          const safeBody = comments.find((comment) => comment.line === 2)?.body
+          const unsafeBody = comments.find((comment) => comment.line === 3)?.body
+          expect(safeBody).toContain(`\`\`\`suggestion\n${safe}\n\`\`\``)
+          expect(unsafeBody).toContain("Fix the return value")
+          if (mode === "default") expect(unsafeBody).toContain("```suggestion")
+          else {
+            expect(unsafeBody).not.toContain("```suggestion")
+            expect(unsafeBody).not.toContain(replacement)
+          }
+        }
+      }
     }),
   )
 
