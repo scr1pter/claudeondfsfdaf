@@ -1,5 +1,5 @@
 import fs from "node:fs/promises"
-import { constants } from "node:fs"
+import { constants, fstatSync } from "node:fs"
 import path from "node:path"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -199,6 +199,7 @@ if (process.argv[2] === "--module-load-check") {
     throw new Error("Missing actual ShellTool process-namespace acceptance")
   if (
     !report.toolProcess?.actualShellTool ||
+    report.toolProcess?.shellProofExcluded !== (process.env.VECTOR_MODE === "codium") ||
     !report.toolProcess?.sameUid ||
     !report.toolProcess?.inspectorStayedClosed ||
     !report.toolProcess?.controlInspectorOpened ||
@@ -320,7 +321,14 @@ if (process.argv[2] === "--module-load-check") {
     config.uid !== process.getuid?.()
   )
     throw new Error("The agent home was not created empty with its own .config")
-  const toolProcess = await probeToolProcesses()
+  let syntheticProof: string | undefined
+  if (process.env.VECTOR_MODE === "codium") {
+    if (!holder.sessionProof()) throw new Error("The disposable Codium fixture has no evidence of its proof descriptor")
+    const proof = fstatSync(3, { bigint: true })
+    if (!proof.isFile()) throw new Error("The disposable Codium fixture was missing its dummy proof descriptor")
+    syntheticProof = `${proof.dev}:${proof.ino}`
+  }
+  const toolProcess = await probeToolProcesses(syntheticProof)
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
   const scanner = ProcessIsolation.launch("/bin/bash", [
     "--noprofile",
