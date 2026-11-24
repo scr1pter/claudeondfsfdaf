@@ -1,8 +1,10 @@
 import {
   DEVICE_ID_PATTERN,
   READINESS_QUERY,
+  TIMING,
   decodeClaim,
   decodeDecline,
+  decodeGithubThreadCheck,
   decodeReport,
   decodeSettle,
   type DeclineCode,
@@ -21,14 +23,17 @@ import {
 } from "../http.js"
 import { requireUnrevokedCliToken } from "../revocation.js"
 import { codiumAccountAuthority } from "./adapters/account.js"
+import { createGithubThreadAuthority } from "./adapters/cloud-agents.js"
 import { after } from "./after.js"
 import { checkAccount, type AccountAuthorityPort } from "./authority.js"
-import { readConfig, type Env, type EverywhereConfig } from "./config.js"
+import { platformOn, readConfig, type Env, type EverywhereConfig } from "./config.js"
 import {
   claimJob,
   declineJob,
   isBusy,
   offerWaiting,
+  openReply,
+  readJob,
   recordSeen,
   reportJob,
   settleJob,
@@ -50,6 +55,7 @@ import { productionJobEvents } from "./runtime.js"
  *   POST /api/everywhere/jobs/decline  {jid, device, reason, lease?}  → {recorded}
  *   POST /api/everywhere/jobs/report   Report (milestones and the heartbeat), header x-vector-device → {action}
  *   POST /api/everywhere/jobs/settle   Settle, header x-vector-device → {settled}
+ *   POST /api/everywhere/jobs/github-thread {jid, lease}, header x-vector-device → {expiresAt}
  *   GET  /api/everywhere/jobs/pending  readiness booleans, header x-vector-device → {offers, waiting}
  *
  * Every route takes only the desktop app's own sign-in token (`verifyDesktopToken`), checked against revocation
@@ -61,7 +67,7 @@ import { productionJobEvents } from "./runtime.js"
  * read. Under the `stop` switch claims are refused, every report, heartbeat, settle and decline answers `stop`, and
  * the account's live jobs end. `no-new` lets all of this through: it is work on jobs already taken.
  *
- * Each call first sweeps the account's due jobs (3.4's safety net beside the sweep cron).
+ * The GitHub thread proof only reads authority. The other calls sweep the account's due jobs first.
  */
 
 /** The header that names the computer on report, settle and pending (Report and Settle have no device field). */
@@ -89,6 +95,7 @@ export type JobsApiDeps = {
   /** Codium's switches (R-C6); the default reads them once Codium has an `everywhere` switch. */
   readonly switches?: CodiumSwitches
   readonly events?: JobEvents
+  readonly githubThreadAuthority?: ReturnType<typeof createGithubThreadAuthority>
 }
 
 /** Settle is the largest body: a 1,500-character summary, ids and links. */
@@ -136,7 +143,7 @@ type Session = {
 }
 
 /** Revocation, then the `everywhere` switch. Under `stop` the account's live jobs end here. */
-async function session(started: Started & { readonly off: false }, deps: JobsApiDeps): Promise<Session> {
+async function session(started: Started & { readonly off: false }, deps: JobsApiDeps, sweep = true): Promise<Session> {
   const claims = await requireUnrevokedCliToken(started.token, deps.fetcher ?? fetch, started.now)
   const account = claims.id.toLowerCase()
   const ctx: JobsContext = {
@@ -149,8 +156,7 @@ async function session(started: Started & { readonly off: false }, deps: JobsApi
   await checkAccount(ctx, account)
   const state = await readEverywhereSwitch(started.config, deps.switches ?? codiumSwitches(deps.fetcher ?? fetch))
   const stopped = !admits(state, "running")
-  const ended = await sweepAccount(ctx, account, { stop: stopped })
-  announce(deps, ended)
+  if (sweep) announce(deps, await sweepAccount(ctx, account, { stop: stopped }))
   return { account, ctx, stopped }
 }
 
@@ -236,6 +242,51 @@ function route(work: (request: ApiRequest, response: ApiResponse) => Promise<voi
 }
 
 export function createJobsApi(deps: JobsApiDeps = {}) {
+  const githubThread = route(async (request, response) => {
+    const clock = deps.now ?? Date.now
+    const started = start(request, deps, "POST")
+    const denied = () => refused({ ok: false, status: 404, code: "NOT_FOUND" })
+    const authority = deps.githubThreadAuthority
+    if (started.off || !platformOn(started.config, "github") || !authority) throw denied()
+    const decoded = decodeGithubThreadCheck(await body(request))
+    if (!decoded.ok) throw invalid(decoded.error)
+    const from = device(request)
+    const { jid, lease } = decoded.value
+    const eligible = async () => {
+      const { account, ctx, stopped } = await session({ ...started, now: clock() }, deps, false)
+      if (stopped) return undefined
+      const job = await readJob(ctx.store, jid)
+      if (!job || job.platform !== "github" || job.state !== "claimed" || job.route !== "laptop" ||
+        job.sponsor !== account || job.requester.account !== account || job.device !== from || job.lease?.id !== lease ||
+        job.github?.kind !== "issue" || !job.github.actorId || String(job.github.actorId) !== job.requester.userId ||
+        (job.github.event !== "issues" && job.github.event !== "issue_comment") || job.offeredAt === undefined || !job.limits)
+        return undefined
+      const expiresAt = Math.min(job.offeredAt + TIMING.offerWindowMs, job.lease.expiresAt, job.limits.deadline)
+      const generation = openReply(ctx, job)?.githubBindingGeneration
+      if (clock() >= expiresAt || typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1)
+        return undefined
+      return { version: job.version, expiresAt, proof: { account, actorId: job.github.actorId, installation: job.installation, generation, repository: job.repository } }
+    }
+    const claimed = await eligible()
+    if (!claimed) throw denied()
+    const remaining = claimed.expiresAt - clock()
+    if (remaining <= 0) throw denied()
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      const authorized = await Promise.race([
+        authority(claimed.proof, async () => {
+          const current = await eligible()
+          return current?.version === claimed.version && current.expiresAt === claimed.expiresAt
+        }),
+        new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), remaining) }),
+      ])
+      if (!authorized || clock() >= claimed.expiresAt) throw denied()
+      json(response, 200, { expiresAt: claimed.expiresAt })
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout)
+    }
+  })
+
   const claim = route(async (request, response) => {
     const started = start(request, deps, "POST")
     if (started.off) throw stopped()
@@ -320,8 +371,8 @@ export function createJobsApi(deps: JobsApiDeps = {}) {
     json(response, 200, result)
   })
 
-  return { claim, decline, report, settle, pending }
+  return { claim, decline, report, settle, pending, githubThread }
 }
 
 /** The production routes: environment, store and switches as deployed. */
-export const everywhereJobsApi = createJobsApi({ events: productionJobEvents })
+export const everywhereJobsApi = createJobsApi({ events: productionJobEvents, githubThreadAuthority: createGithubThreadAuthority() })

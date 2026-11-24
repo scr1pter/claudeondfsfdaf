@@ -1075,6 +1075,17 @@ export function decodeClaim(input: unknown): Decoded<Claim> {
   })
 }
 
+/** The GitHub thread proof uses the current device header, job id, and exact lease. */
+export function decodeGithubThreadCheck(input: unknown) {
+  return run(() => {
+    const fields = object(input, "github-thread", ["jid", "lease"])
+    return {
+      jid: matching(field(fields, "jid"), "jid", JOB_ID_PATTERN),
+      lease: matching(field(fields, "lease"), "lease", RANDOM_ID_PATTERN),
+    }
+  })
+}
+
 export function decodeDecline(input: unknown): Decoded<Decline> {
   return run(() => {
     const fields = object(input, "decline", ["jid", "device", "reason", "lease"])

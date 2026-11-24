@@ -218,12 +218,50 @@ export function createHandoffBinding(deps: Pick<CloudPortsDeps, "store"> = {}) {
       githubId: Number(binding.binder.githubId),
       ownerId: Number(binding.ownerId),
       installationId: Number(binding.installationId),
+      generation: binding.generation,
       laptopFirst: false,
       codiumMode: binding.workflowMode === "codium",
       workflowVersion: binding.workflowVersion,
       defaultRef: binding.defaultRef,
       repository: { id: Number(binding.repositoryId), fullName: binding.repository, shared: true },
     } satisfies GithubHandoffBinding
+  }
+}
+
+export type GithubThreadProof = {
+  readonly account: string
+  readonly actorId: number
+  readonly installation: string
+  readonly generation: number
+  readonly repository: JobRecord["repository"]
+}
+
+/** Authorize a local thread read against the same active App binding as the handoff. */
+export function createGithubThreadAuthority(deps: Pick<CloudPortsDeps, "store" | "app"> = {}) {
+  return async (proof: GithubThreadProof, stillClaimed: () => Promise<boolean>) => {
+    const name = proof.repository.fullName.toLowerCase()
+    const matches = (binding: RepoBinding | undefined): binding is RepoBinding =>
+      !!binding?.installationId &&
+      binding.repositoryId === String(proof.repository.id) &&
+      binding.account === proof.account &&
+      `github:${binding.installationId}` === proof.installation &&
+      binding.binder.githubId === String(proof.actorId) &&
+      binding.generation === proof.generation &&
+      binding.repository.toLowerCase() === name &&
+      binding.workflowMode === "codium"
+    try {
+      const binding = await currentBinding(proof.repository.id, deps.store)
+      if (!matches(binding)) return false
+      const live = await (deps.app ?? defaultApp).attachmentRepository(binding, { includeFullName: true })
+      if (live.fullName?.toLowerCase() !== name ||
+        (live.visibility !== "private" && live.visibility !== "internal" && live.visibility !== "public") ||
+        live.publicRepository !== (live.visibility === "public") ||
+        proof.repository.shared !== (live.visibility !== "private") ||
+        !await stillClaimed()) return false
+      return matches(await currentBinding(proof.repository.id, deps.store))
+    } catch {
+      return false
+    }
   }
 }
 
