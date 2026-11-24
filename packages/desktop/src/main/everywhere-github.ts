@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { LIMITS, decodeJob, type EverywhereJob } from "@vectordevai/schema/everywhere"
+import { LIMITS, TIMING, decodeJob, type EverywhereJob } from "@vectordevai/schema/everywhere"
 import type { FrameItem, FrameOptions } from "@vectordevai/core/everywhere/frame"
 import { githubJson, type GithubAccess } from "./github-api"
 
@@ -13,18 +13,67 @@ function post(value: unknown): Post | undefined {
   return value as Post
 }
 
-/** VE-21 supplies the owner's getGithubToken result. No token or fetched thread text goes to Vector's servers. */
-export async function readEverywhereGithubThread(access: GithubAccess, input: EverywhereJob): Promise<FrameOptions> {
+type ThreadReadAuthority = {
+  readonly access: () => Promise<GithubAccess | undefined>
+  readonly authorize: (job: EverywhereJob, signal: AbortSignal) => Promise<number>
+  readonly signal: AbortSignal
+  readonly now?: () => number
+}
+
+/** Desktop reads only the binder's authorized issue, using the same Vector GitHub credential throughout. */
+export async function readAuthorizedGithubThread(input: EverywhereJob, authority: ThreadReadAuthority): Promise<FrameOptions> {
+  const job = verifiedJob(input)
+  const reference = job.github!
+  if (!job.requester.self || reference.kind !== "issue" || reference.event === "pull_request_review_comment")
+    throw new Error("The Github trigger cannot be verified")
+  const now = authority.now ?? Date.now
+  const remaining = Math.min(TIMING.offerWindowMs, job.lease.expiresAt - now(), job.limits.deadline - now())
+  if (remaining <= 0) throw new Error("The Github lease expired")
+  const signal = AbortSignal.any([authority.signal, AbortSignal.timeout(remaining)])
+  const account = await authority.access()
+  if (!account || account.source !== "vector" || !account.token) throw new Error("The bound Github account is unavailable")
+  const access = { ...account }
+  const user = await githubJson<unknown>(access, "/user", { signal, redirect: "error" })
+  if (!record(user) || user.type !== "User" || user.id !== reference.actorId) throw new Error("The bound Github account changed")
+  return readThread(access, job, { ...authority, signal, now })
+}
+
+function verifiedJob(input: EverywhereJob) {
   const decoded = decodeJob(input)
   if (!decoded.ok || decoded.value.platform !== "github" || !decoded.value.github?.actorId || !decoded.value.github.event) throw new Error("The Github trigger cannot be verified")
-  const job = decoded.value
+  return decoded.value
+}
+
+/** Thread validation over an already selected credential. No fetched text goes to Vector's servers. */
+export async function readEverywhereGithubThread(access: GithubAccess, input: EverywhereJob): Promise<FrameOptions> {
+  return readThread(access, verifiedJob(input))
+}
+
+async function readThread(access: GithubAccess, job: EverywhereJob, authority?: ThreadReadAuthority): Promise<FrameOptions> {
   const reference = job.github!
-  const repository = await githubJson<{ id: number; full_name: string }>(access, `/repositories/${job.repository.id}`)
+  let signal = authority?.signal
+  const read = <T>(path: string, timeoutMs?: number) => {
+    signal?.throwIfAborted()
+    return githubJson<T>(access, path, { timeoutMs, ...(signal ? { signal, redirect: "error" } : {}) })
+  }
+  const repository = await read<{ id: number; full_name: string; visibility?: unknown; private?: unknown }>(`/repositories/${job.repository.id}`)
   if (repository.id !== job.repository.id || repository.full_name.toLowerCase() !== job.repository.fullName.toLowerCase()) throw new Error("The Github repository changed")
+  if (authority) {
+    const visibility = repository.visibility
+    if ((visibility !== "private" && visibility !== "internal" && visibility !== "public") ||
+      repository.private !== (visibility !== "public") || job.repository.shared !== (visibility !== "private"))
+      throw new Error("The Github repository visibility changed")
+    const expiresAt = await authority.authorize(job, authority.signal)
+    const current = await authority.access()
+    if (current?.source !== "vector" || current.token !== access.token) throw new Error("The bound Github account changed")
+    const remaining = expiresAt - (authority.now ?? Date.now)()
+    if (!Number.isSafeInteger(remaining) || remaining <= 0 || remaining > TIMING.offerWindowMs) throw new Error("The Github lease expired")
+    signal = AbortSignal.any([authority.signal, AbortSignal.timeout(remaining)])
+  }
   const base = `/repos/${job.repository.fullName}`
-  const issue = await githubJson<unknown>(access, `${base}/issues/${reference.number}`)
+  const issue = await read<unknown>(`${base}/issues/${reference.number}`)
   if (!record(issue) || issue.number !== reference.number || (reference.kind === "pr") !== record(issue.pull_request)) throw new Error("The Github thread changed")
-  const trigger = reference.event === "issues" ? post(issue) : post(await githubJson<unknown>(access,
+  const trigger = reference.event === "issues" ? post(issue) : post(await read<unknown>(
     `${base}/${reference.event === "pull_request_review_comment" ? "pulls" : "issues"}/comments/${reference.commentId}`))
   if (!trigger || trigger.user.id !== reference.actorId || trigger.user.type === "Bot" ||
     (reference.commentId !== undefined && trigger.id !== reference.commentId) || !trigger.body.trim() || trigger.body.length > LIMITS.taskChars)
@@ -41,7 +90,7 @@ export async function readEverywhereGithubThread(access: GithubAccess, input: Ev
   const sameBody = reference.bodySha256 !== undefined && createHash("sha256").update(trigger.body).digest("hex") === reference.bodySha256
   if (!sameBody && (reference.event === "issues" || trigger.updated_at !== trigger.created_at))
     throw new Error("The Github trigger changed")
-  const rows = await githubJson<unknown>(access, `${base}/${reference.event === "pull_request_review_comment" ? "pulls" : "issues"}/${reference.number}/comments?per_page=30`)
+  const rows = await read<unknown>(`${base}/${reference.event === "pull_request_review_comment" ? "pulls" : "issues"}/${reference.number}/comments?per_page=30`)
   if (!Array.isArray(rows)) throw new Error("The Github thread is unavailable")
   const cache = new Map<string, Promise<"writer" | "untrusted">>()
   const label = (author: Author) => {
@@ -49,8 +98,8 @@ export async function readEverywhereGithubThread(access: GithubAccess, input: Ev
     const key = `${author.id}:${author.login.toLowerCase()}`
     const found = cache.get(key)
     if (found) return found
-    const permission = githubJson<{ permission?: string; user?: { id?: number; permissions?: { push?: boolean } } }>(access,
-      `${base}/collaborators/${encodeURIComponent(author.login)}/permission`, { timeoutMs: 5_000 }).then((value): "writer" | "untrusted" =>
+    const permission = read<{ permission?: string; user?: { id?: number; permissions?: { push?: boolean } } }>(
+      `${base}/collaborators/${encodeURIComponent(author.login)}/permission`, 5_000).then((value): "writer" | "untrusted" =>
         value.user?.id === author.id && (["admin", "write", "maintain"].includes(value.permission ?? "") || value.user.permissions?.push === true) ? "writer" : "untrusted",
       () => "untrusted" as const)
     cache.set(key, permission)

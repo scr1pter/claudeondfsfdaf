@@ -14,6 +14,7 @@ import { Option, Schema } from "effect"
 
 export type JobsClient = {
   readonly claim: (jid: string) => Promise<EverywhereJob>
+  readonly authorizeGithubThread: (job: EverywhereJob, signal: AbortSignal) => Promise<number>
   readonly decline: (jid: string, reason: DeclineCode, lease?: string) => Promise<void>
   readonly report: (job: EverywhereJob, seq: number, milestone: Milestone, files?: number) => Promise<"continue" | "stop" | "lost">
   readonly settle: (result: Settle) => Promise<void>
@@ -39,12 +40,12 @@ const PendingAnswer = Schema.fromJsonString(Schema.Struct({
 export function createEverywhereJobsClient(input: { readonly token: () => Promise<string>; readonly device: string; readonly fetcher?: typeof fetch; readonly url?: string }): JobsClient {
   const origin = new URL(input.url ?? "https://vectordev.ai")
   if (!(origin.origin === "https://vectordev.ai" || (origin.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname))) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Invalid Everywhere service")
-  const call = async (route: string, body: unknown) => {
+  const call = async (route: string, body: unknown, signal?: AbortSignal) => {
     // Each request is the `everywhere` source: Vector Local decides and logs it first, and one it blocks rejects with
     // EgressGuard.EgressBlocked before anything is sent. With Vector Local off it goes to the fetcher unchanged (under
     // Bun, with a company's certificate authorities added: LocalCA).
     const response = await Egress.fetch("everywhere", new URL(`/api/everywhere/jobs/${route}`, origin), {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+      method: "POST", redirect: "error", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${await input.token()}`, "x-vector-device": input.device, "content-type": "application/json" },
       body: JSON.stringify(body),
     }, input.fetcher)
@@ -56,6 +57,11 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
       const result = decodeJob((await call("claim", { jid, device: input.device })).job)
       if (!result.ok) throw new Error("Invalid Everywhere claim")
       return result.value
+    },
+    async authorizeGithubThread(job, signal) {
+      const result = await call("github-thread", { jid: job.jid, lease: job.lease.id }, signal)
+      if (typeof result.expiresAt !== "number" || !Number.isSafeInteger(result.expiresAt)) throw new Error("Invalid Github thread authorization")
+      return result.expiresAt
     },
     decline: async (jid, reason, lease) => { await call("decline", { jid, device: input.device, reason, ...(lease ? { lease } : {}) }) },
     async report(job, seq, milestone, files) {
@@ -126,11 +132,11 @@ export type RunnerDeps = {
   readonly verify: (offer: unknown) => Promise<{ jid: string } | undefined>
   readonly ledger: JobLedger
   /** The runner never asks for waiting jobs; everywhere-wiring.ts does. */
-  readonly jobs: Omit<JobsClient, "pending">
+  readonly jobs: Omit<JobsClient, "pending" | "authorizeGithubThread">
   readonly safeWorktree?: SafeWorktree
   readonly git: (directory: string, repository: string, signal: AbortSignal) => RunnerGit
   readonly engine: (directory: string) => RunnerEngine
-  readonly githubThread?: (job: EverywhereJob) => Promise<FrameOptions>
+  readonly githubThread?: (job: EverywhereJob, signal: AbortSignal) => Promise<FrameOptions>
   readonly privateRepository: (job: EverywhereJob) => Promise<boolean>
   readonly openPr: (input: { job: EverywhereJob; branch: string; base: string; summary: string; held: number }) => Promise<string | undefined>
   readonly now?: () => number
@@ -259,7 +265,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       let frame: FrameOptions | undefined
       if (job.platform === "github") {
         try {
-          frame = await deps.githubThread?.(job)
+          frame = await deps.githubThread?.(job, controller.signal)
           if (!frame?.thread) throw new Error("The Github trigger is unavailable")
           frameTask(job, frame)
         } catch {

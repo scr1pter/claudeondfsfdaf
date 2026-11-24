@@ -33,8 +33,9 @@ const NETWORK_ERROR = "Couldn't reach GitHub. Check your internet connection and
 export async function githubFetch(
   access: GithubAccess,
   path: string,
-  init: { method?: string; body?: unknown; accept?: string; timeoutMs?: number } = {},
+  init: { method?: string; body?: unknown; accept?: string; timeoutMs?: number; signal?: AbortSignal; redirect?: RequestRedirect } = {},
 ) {
+  const timeout = AbortSignal.timeout(init.timeoutMs ?? 30_000)
   const response = await Egress.fetch("github", `${access.apiUrl ?? API_URL}${path}`, {
     method: init.method ?? "GET",
     headers: {
@@ -45,7 +46,8 @@ export async function githubFetch(
       ...(init.body === undefined ? {} : { "content-type": "application/json" }),
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    signal: AbortSignal.timeout(init.timeoutMs ?? 30_000),
+    signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
+    redirect: init.redirect,
   }).catch((error: unknown) => {
     if (error instanceof EgressGuard.EgressBlocked) throw new GithubRequestError(error.message, 0)
     if (error instanceof Error && error.name === "TimeoutError")
