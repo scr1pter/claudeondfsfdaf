@@ -59,6 +59,12 @@ export const useEffect = <A, E, R, B, E2, R2>(
   select: (value: A) => Effect.Effect<B, E2, R2>,
 ) => Effect.flatMap(get(self), select)
 
+/** Read a finished value without initializing, refreshing, or waiting for the producer. */
+export const getSuccess = <A, E, R>(self: InstanceState<A, E, R>) =>
+  Effect.gen(function* () {
+    return yield* ScopedCache.getSuccess(self.cache, yield* directory)
+  })
+
 export const has = <A, E, R>(self: InstanceState<A, E, R>) =>
   Effect.gen(function* () {
     return yield* ScopedCache.has(self.cache, yield* directory)

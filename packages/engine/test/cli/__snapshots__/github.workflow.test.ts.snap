@@ -15,6 +15,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
       "name": "Vector agent",
       "needs": "route",
       "outputs": {
+        "bundle": "\${{ steps.bundle.outputs.artifact-id }}",
         "capture": "\${{ steps.capture.outputs.capture }}",
         "rid": "\${{ steps.mint.outputs.rid }}",
         "status": "\${{ steps.mint.outputs.status }}",
@@ -112,6 +113,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
           "run": "vector github sandbox finish",
         },
         {
+          "id": "bundle",
           "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
           "uses": "actions/upload-artifact@v4",
           "with": {
@@ -250,9 +252,11 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
         },
         {
           "continue-on-error": true,
+          "if": "needs.agent.outputs.bundle != ''",
           "uses": "actions/download-artifact@v4",
           "with": {
-            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "artifact-ids": "\${{ needs.agent.outputs.bundle }}",
+            "merge-multiple": true,
             "path": "\${{ runner.temp }}/vector-bundle",
           },
         },
@@ -461,6 +465,7 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
       "name": "Vector agent",
       "needs": "route",
       "outputs": {
+        "bundle": "\${{ steps.bundle.outputs.artifact-id }}",
         "status": "ok",
       },
       "permissions": {
@@ -542,6 +547,7 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
           "run": "vector github sandbox finish",
         },
         {
+          "id": "bundle",
           "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
           "uses": "actions/upload-artifact@v4",
           "with": {
@@ -623,9 +629,11 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
         },
         {
           "continue-on-error": true,
+          "if": "needs.agent.outputs.bundle != ''",
           "uses": "actions/download-artifact@v4",
           "with": {
-            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "artifact-ids": "\${{ needs.agent.outputs.bundle }}",
+            "merge-multiple": true,
             "path": "\${{ runner.temp }}/vector-bundle",
           },
         },
@@ -840,6 +848,7 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
       "name": "Vector agent",
       "needs": "route",
       "outputs": {
+        "bundle": "\${{ steps.bundle.outputs.artifact-id }}",
         "status": "ok",
       },
       "permissions": {
@@ -921,6 +930,7 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
           "run": "vector github sandbox finish",
         },
         {
+          "id": "bundle",
           "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
           "uses": "actions/upload-artifact@v4",
           "with": {
@@ -1002,9 +1012,11 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
         },
         {
           "continue-on-error": true,
+          "if": "needs.agent.outputs.bundle != ''",
           "uses": "actions/download-artifact@v4",
           "with": {
-            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "artifact-ids": "\${{ needs.agent.outputs.bundle }}",
+            "merge-multiple": true,
             "path": "\${{ runner.temp }}/vector-bundle",
           },
         },

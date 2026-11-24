@@ -69,6 +69,7 @@
     "./regression/vectorscope-memory.spec.ts",
     "./regression/vectorscope-memory-connected.spec.ts",
     "./regression/vectorscope-local-app.spec.ts",
+    "./regression/vectorscope-fix.spec.ts",
     "./regression/workflow-permission.spec.ts",
     "./regression/workflow-progress.spec.ts",
     "./utils/**/*.ts"

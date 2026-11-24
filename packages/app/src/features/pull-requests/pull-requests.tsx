@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show
 import { createStore } from "solid-js/store"
 import { githubApi, GithubDeviceSignIn } from "@/components/github-connect"
 import { OffInLocal } from "@/features/local/off-in-local"
+import { LocalFixSlot, type LocalFixRender } from "@/features/vectorscope/local-fix-slot"
 import { agentsApi } from "@/features/github-agents/agents-model"
 import { GithubAgentsSetup } from "@/features/github-agents/setup-card"
 import {
@@ -24,6 +25,7 @@ import {
   repoOf,
   reviewEvents,
   reviewFooter,
+  reviewPanelResult,
   reviewSpendText,
   type ReviewSpend,
   skippedText,
@@ -667,6 +669,9 @@ export function PullRequests(props: {
   onChanges?: () => Promise<WorkingTreeChanges | undefined>
   // The engine-owned local runner is separate from the PR review adapter.
   localReview?: () => JSX.Element
+  // VS-12d (SF-10b): local fixes under a pull request's review result, passed only when the engine has the owner fix
+  // API and the global VectorScope setting is on (localFixesMounted); without it this panel renders as before.
+  localFix?: LocalFixRender
   factoryLocal?: boolean
   // The model automatic reviews would run on, with its provider's key variables (see workflowModel), and the model
   // evidence warnings when the open project opted into them ("modelEvidence": "warn", VS-07).
@@ -736,14 +741,25 @@ export function PullRequests(props: {
     return outcome ? findingGroups(outcome) : []
   }
   const dismissedIds = () => new Set(Object.keys(dismissed()))
+  // Findings whose fix "Apply" wrote (or may have written) into the user's checkout; a local fix refuses while any is.
+  const appliedIds = () =>
+    new Set(
+      Object.entries(applied())
+        .filter((entry) => entry[1] !== "changed")
+        .map((entry) => entry[0]),
+    )
   const counts = () =>
     countBySeverity(
       groups().map((group) => ({ ...group, findings: group.findings.filter((finding) => !dismissed()[finding.id]) })),
     )
   const events = () => {
     const outcome = review()
-    return outcome ? reviewEvents(withoutDismissed(outcome.selection, dismissedIds())) : undefined
+    return outcome ? reviewEvents(withoutDismissed(outcome.selection, dismissedIds()), outcome.partial) : undefined
   }
+  const approvalNote = () =>
+    review()?.partial
+      ? "Approve is off while the review is incomplete."
+      : "Approve is off while a blocking finding stands."
   // One section per severity; dismissed findings sink to the bottom of theirs.
   const sections = () => findingSections(groups(), { filter: severityFilter(), dismissed: dismissed() })
   const canFix = () =>
@@ -1135,6 +1151,7 @@ export function PullRequests(props: {
           if (progress.type === "checkout") setCheckout({ mode: progress.checkout.mode, label: progress.label })
         },
       })
+      .then(reviewPanelResult)
       .catch((cause: unknown) => {
         if (!current()) return undefined
         setError(pullRequestErrorMessage(cause))
@@ -1164,7 +1181,7 @@ export function PullRequests(props: {
     const request = { path: projectPath, revision: projectRevision }
     const ignored = dismissedIds()
     if (!bridge || !pr || !outcome || !projectPath || busy()) return
-    if (!reviewEvents(withoutDismissed(outcome.selection, ignored))[event]) return
+    if (!events()?.[event]) return
     const draft = buildDesktopReview(outcome, pr.url, ignored)
     const current = () =>
       props.open &&
@@ -1381,7 +1398,7 @@ export function PullRequests(props: {
               : review()?.unchanged
                 ? `No changes since the last review of ${subject.pr ? review()!.head.slice(0, 7) : "your uncommitted changes"} · nothing was sent`
                 : review()
-                  ? `Reviewed ${subject.pr ? review()!.head.slice(0, 7) : "your uncommitted changes"} · ${reviewFooter(review()!)}`
+                  ? `${review()!.partial ? "Review incomplete for" : "Reviewed"} ${subject.pr ? review()!.head.slice(0, 7) : "your uncommitted changes"} · ${reviewFooter(review()!)}`
                   : liveSpend()
                     ? `${reviewFailed() ? "Review failed" : "Review stopped"} · ${reviewSpendText(liveSpend()!)}`
                     : "Not reviewed yet"}
@@ -1512,7 +1529,9 @@ export function PullRequests(props: {
                   )}
                 </For>
               </div>
-              <RiskMeter risk={outcome().selection.risk} counts={counts()} />
+              <Show when={!outcome().partial}>
+                <RiskMeter risk={outcome().selection.risk} counts={counts()} />
+              </Show>
             </div>
 
             <Show
@@ -1602,6 +1621,14 @@ export function PullRequests(props: {
               </p>
             </Show>
 
+            <LocalFixSlot
+              pr={subject.pr}
+              render={props.localFix}
+              outcome={outcome}
+              dismissed={dismissedIds}
+              applied={appliedIds}
+            />
+
             <Show when={subject.pr}>
               {(pr) => (
                 <footer class="flex flex-wrap items-center gap-2 border-t border-[color:var(--vx-line)] bg-[color:var(--vx-stage)] px-4 py-3">
@@ -1647,7 +1674,7 @@ export function PullRequests(props: {
                     <button
                       type="button"
                       disabled={Boolean(busy()) || !events()?.approve}
-                      title={events()?.approve ? undefined : "Approve is off while a blocking finding stands."}
+                      title={events()?.approve ? undefined : approvalNote()}
                       class={SECONDARY}
                       onClick={() => void postReview("approve")}
                     >
@@ -1659,7 +1686,7 @@ export function PullRequests(props: {
                         ? status()?.login
                           ? `Posting as @${status()!.login}`
                           : "Posting with your GitHub sign-in"
-                        : "Approve is off while a blocking finding stands."}
+                        : approvalNote()}
                     </span>
                   </Show>
                 </footer>

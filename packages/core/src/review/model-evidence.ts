@@ -17,9 +17,12 @@ import { sameModel } from "./eval"
 import type { Report } from "./eval-report"
 import { fnv1a64 } from "./fingerprint"
 import { codeSpan } from "./format"
+import { strictReviewConfig } from "./config"
 import type { ImpactPrompt } from "./impact"
+import { CREDENTIAL_FILES } from "./permission"
 import {
   buildFinalizePrompt,
+  buildJudgePrompt,
   buildLensPrompt,
   buildReviewPrompt,
   buildSecurityPrompt,
@@ -59,7 +62,7 @@ export const REVIEW_PIPELINE_REVISION = 5
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "29ddfb47cf8ec7ed"
+export const REVIEW_PIPELINE_SOURCES = "ec98770af384bbb8"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -76,8 +79,13 @@ export const MAX_CERTIFICATE_DAYS = 90
 // VS-28's `depth` and `lenses` are two (they choose which passes look for defects), counted from VS-28 wiring on, and
 // then only as non-default values, `lenses` only under `depth: "auto"`. POLICY_ONLY_WITH holds the strict and the
 // `depth: "auto"` conditions. VS-30's `runtime` is one (a runtime confirmation changes what is verified, and so what is
-// posted), counted from the VS-30 executor on, and then only as "ask".
+// posted), counted from the VS-30 executor on, and then only as "ask". VS-34's `holdback` is one (a held-back file is
+// not reviewed, and redacted values change what the model reads), counted since SF-13b applied its payload half, and
+// then only as "secrets". What its tool half (SF-14) changes, the files the reviewer may read and what the read,
+// grep and glob tools show, is counted in promptsDigest under "secrets", not here: this digest stays a digest of the
+// settings.
 export const EVIDENCE_POLICY_KEYS = [
+  "largeChanges",
   "security",
   "verify",
   "verifyPolicy",
@@ -90,12 +98,16 @@ export const EVIDENCE_POLICY_KEYS = [
   "maxDiffChars",
   "trivial",
   "impact",
+  "cards",
   "guardrail",
+  "ruleCheck",
   "scopeGate",
   "verifyEvidence",
   "depth",
   "lenses",
   "runtime",
+  "holdback",
+  "diagnostics",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -109,8 +121,10 @@ export interface EvidenceScope {
   prompts: string // promptsDigest()
   policy: string // policyDigest(config)
   triage?: string // the cheaper first pass's "provider/model", when the review had one
-  // "zdr" only when a runner enforced the route rules (privacy.ts) for the whole review: VS-23b and VS-23c set it.
-  // Absent otherwise, so every scope and certificate made before VS-23 still matches.
+  // "zdr" only when a runner enforced the route rules (privacy.ts) for the whole review: the engine runner (Review.run
+  // and the eval's replay) under privacy "zdr", whose admission, transport (provider.ts) and session runtime (llm.ts)
+  // enforce them (VS-23c). The desktop's scope does not set it until VS-23d. Absent otherwise, so every scope and
+  // certificate made before VS-23 still matches.
   route?: "zdr"
 }
 
@@ -193,6 +207,13 @@ const CANONICAL_FINDING: Finding = {
   body: "Example.",
   suggestion: "example",
   confidence: 1,
+}
+
+const STRICT_FINDING: Finding = {
+  ...CANONICAL_FINDING,
+  failure: { class: "crash", mechanism: "logic", trigger: "A lookup returns null.", impact: "The request aborts." },
+  quotes: [{ path: "src/example.ts", line: 1, side: "RIGHT", code: "return value.id" }],
+  patch: "@@ -1 +1 @@\n-return value.id\n+return value?.id",
 }
 
 const CANONICAL_INPUT: PromptInput = {
@@ -431,42 +452,141 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // (prompt.ts), so a lens-only branch added to build() must add the inputs that reach it here. Under `runtime: "ask"`,
 // VS-30's trusted instruction and its <untrusted_runtime_evidence> block come last, standalone like the owner's block:
 // no prompt builder renders them before the VS-30 executor, whose repro or verify prompt joins here under the key.
+// Under `holdback: "secrets"`, VS-34's input-redaction sentence comes after them: the review and security prompts with
+// every input set and their inputs marked redacted, for both trusts. The verify and judge prompts carry no sentence.
 export function canonicalPrompts(
-  keys: Partial<Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime">> = {},
+  keys: Partial<
+    Pick<
+      ReviewConfig,
+      | "impact"
+      | "depth"
+      | "cards"
+      | "lenses"
+      | "runtime"
+      | "holdback"
+      | "guardrail"
+      | "scopeGate"
+      | "ruleCheck"
+      | "verifyEvidence"
+      | "diagnostics"
+    >
+  > = {},
 ): string[] {
+  const gate =
+    keys.guardrail === "strict" && keys.scopeGate === "introduced" ? { scopeGate: "introduced" as const } : {}
+  const finding = gate.scopeGate ? { ...STRICT_FINDING, scope: "introduced" as const } : STRICT_FINDING
+  const certificate =
+    keys.guardrail === "strict" && keys.verifyEvidence === "certificate"
+      ? { verifyEvidence: "certificate" as const }
+      : {}
+  const effective = (input: PromptInput): PromptInput => ({
+    ...input,
+    ...(keys.diagnostics === "offline"
+        ? {
+            diagnostics: [
+              {
+                source: "offline-v1" as const,
+                rule: "secret-added" as const,
+                path: "sample.ts",
+                side: "RIGHT" as const,
+                line: 1,
+              },
+            ],
+          }
+        : {}),
+    ...(keys.guardrail === "strict" ? { guardrail: "strict", ...gate } : {}),
+    ...(keys.ruleCheck === "strict" ? { ruleCheck: "strict" } : {}),
+  })
+  const reviewers = (input: PromptInput) => [buildReviewPrompt(effective(input)), buildSecurityPrompt(effective(input))]
   const impact =
     keys.impact === "graph"
       ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS].flatMap((slice) =>
           (["trusted", "untrusted"] as const).flatMap((trust) => {
             const input: PromptInput = { ...POPULATED_INPUT, trust, impact: slice }
-            return [buildReviewPrompt(input), buildSecurityPrompt(input)]
+            return reviewers(input)
           }),
         )
       : []
+  const useLenses = keys.depth === "auto" && keys.lenses === "high"
   const lenses =
-    keys.depth === "auto" && keys.lenses === "high"
+    useLenses
       ? REVIEW_LENSES.flatMap((lens) => [
           ...(["trusted", "untrusted"] as const).flatMap((trust) =>
-            canonicalInputs(trust).map((input) => buildLensPrompt(input, lens)),
+            canonicalInputs(trust).map((input) => buildLensPrompt(effective(input), lens)),
           ),
           ...(keys.impact === "graph" ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS] : []).flatMap((slice) =>
             (["trusted", "untrusted"] as const).map((trust) =>
-              buildLensPrompt({ ...POPULATED_INPUT, trust, impact: slice }, lens),
+              buildLensPrompt(effective({ ...POPULATED_INPUT, trust, impact: slice }), lens),
             ),
           ),
         ])
       : []
   return [
     ...(["trusted", "untrusted"] as const).flatMap((trust) => [
-      ...canonicalInputs(trust).flatMap((input) => [buildReviewPrompt(input), buildSecurityPrompt(input)]),
-      buildVerifyPrompt({ trust, head: CANONICAL_INPUT.head, candidates: [CANONICAL_FINDING] }),
-      buildVerifyPrompt({ ...POPULATED_VERIFY, trust }),
+      ...canonicalInputs(trust).flatMap(reviewers),
+      ...(keys.guardrail === "strict"
+        ? [
+            buildVerifyPrompt({
+              ...certificate,
+              ...gate,
+              trust,
+              guardrail: "strict",
+              head: CANONICAL_INPUT.head,
+              candidates: [finding],
+            }),
+            buildVerifyPrompt({
+              ...POPULATED_VERIFY,
+              ...certificate,
+              ...gate,
+              trust,
+              guardrail: "strict",
+              candidates: [finding],
+            }),
+            buildJudgePrompt({
+              ...POPULATED_VERIFY,
+              ...certificate,
+              trust,
+              guardrail: "strict",
+              ...gate,
+              candidates: [finding],
+              checks: [{ id: STRICT_FINDING.id, verdict: "confirmed", reason: "Re-read the cited line." }],
+            }),
+          ]
+        : [
+            buildVerifyPrompt({ trust, head: CANONICAL_INPUT.head, candidates: [CANONICAL_FINDING] }),
+            buildVerifyPrompt({ ...POPULATED_VERIFY, trust }),
+          ]),
     ]),
     buildFinalizePrompt(),
     ownerBlock(["Example."]),
     ...impact,
+    ...(keys.cards === "brain"
+      ? (["trusted", "untrusted"] as const).flatMap((trust) =>
+          [undefined, ...(keys.impact === "graph" ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS] : [])].flatMap(
+            (slice) => {
+              const input: PromptInput = {
+                ...POPULATED_INPUT,
+                trust,
+                contextCards: ["[drifted] An indexed requirement.", "A scoped context document."],
+                ...(slice ? { impact: slice } : {}),
+                ...(keys.holdback === "secrets" ? { inputsRedacted: true } : {}),
+              }
+              return [
+                ...reviewers(input),
+                ...(useLenses ? REVIEW_LENSES.map((lens) => buildLensPrompt(effective(input), lens)) : []),
+              ]
+            },
+          ),
+        )
+      : []),
     ...lenses,
     ...(keys.runtime === "ask" ? [RUNTIME_EVIDENCE_INSTRUCTION, runtimeEvidenceBlock(CANONICAL_RUNTIME, [])] : []),
+    ...(keys.holdback === "secrets"
+      ? (["trusted", "untrusted"] as const).flatMap((trust) => {
+          const input: PromptInput = { ...POPULATED_INPUT, trust, inputsRedacted: true }
+          return reviewers(input)
+        })
+      : []),
   ]
 }
 
@@ -494,20 +614,41 @@ const prompts = new Map<string, string>()
 // strict, so it joins the memo key only there. VS-44's `verifyEvidence: "certificate"` adds the certificate verify schema
 // (verifyCertJsonSchema) after them, also only under strict. VS-28's lens prompts join canonicalPrompts only under
 // `depth: "auto"` with `lenses: "high"`, so only that pair joins the memo key. VS-30's runtime block joins only under
-// `runtime: "ask"`.
+// `runtime: "ask"`, and VS-34's input-redaction sentence only under `holdback: "secrets"`. Under "secrets" it also
+// digests what the reviewer's tools may read and show (SF-14): the read tool's added denies (CREDENTIAL_FILES, and the
+// held paths, which vary by change and so enter as a word) and the tools that redact. That is no prompt text, but it is
+// what the model reads through a tool call, and the held paths are denied by the same key: evidence scoped while only
+// the payload half applied (SF-13b) therefore no longer matches, and a change to the list moves the digest again.
 export function promptsDigest(
   keys: Partial<
-    Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate" | "verifyEvidence" | "depth" | "lenses" | "runtime">
+    Pick<
+      ReviewConfig,
+      | "impact"
+      | "guardrail"
+      | "ruleCheck"
+      | "scopeGate"
+      | "verifyEvidence"
+      | "depth"
+      | "cards"
+      | "lenses"
+      | "runtime"
+      | "holdback"
+      | "diagnostics"
+    >
   > = {},
 ): string {
   const strict = keys.guardrail === "strict"
   const key = [
     keys.impact === "graph" ? "impact:graph" : "",
+    keys.cards === "brain" ? "cards:brain" : "",
     strict ? "guardrail:strict" : "",
+    keys.ruleCheck === "strict" ? "ruleCheck:strict" : "",
     strict && keys.scopeGate === "introduced" ? "scopeGate:introduced" : "",
     strict && keys.verifyEvidence === "certificate" ? "verifyEvidence:certificate" : "",
     keys.depth === "auto" && keys.lenses === "high" ? "lenses:high" : "",
     keys.runtime === "ask" ? "runtime:ask" : "",
+    keys.holdback === "secrets" ? "holdback:secrets" : "",
+    keys.diagnostics === "offline" ? "diagnostics:offline" : "",
   ]
     .filter(Boolean)
     .join(",")
@@ -517,7 +658,15 @@ export function promptsDigest(
     (schema) => schema !== undefined,
   )
   const digest = fnv1a64(
-    JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA, ...schemas]),
+    JSON.stringify([
+      ...canonicalPrompts(keys),
+      REVIEW_REPORT_JSON_SCHEMA,
+      VERIFY_JSON_SCHEMA,
+      ...schemas,
+      ...(keys.holdback === "secrets"
+        ? [{ holdbackTools: { readDenies: CREDENTIAL_FILES, held: "denied", redacts: ["read", "grep", "glob"] } }]
+        : []),
+    ]),
   )
   prompts.set(key, digest)
   return digest
@@ -538,10 +687,10 @@ const POLICY_ONLY_WITH: Partial<
 
 // Default-stable (contract §0.3): a key with an entry in OPTIONAL_REVIEW_DEFAULTS counts only when set to another value,
 // so every digest made before it stays as it was; every other key counts as it always has. A key no runner applies yet
-// (UNAPPLIED_REVIEW_KEYS, all optional) reads as absent, so it never counts: a review under `trivial: "skip"` before
-// VS-24 wiring runs the full review, and its scope says so. A key in POLICY_ONLY_WITH reads as absent without the
+// (UNAPPLIED_REVIEW_KEYS, all optional) reads as absent. A key conditional on another counts only with the
 // setting it depends on.
-export function policyDigest(config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>): string {
+export function policyDigest(settings: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>): string {
+  const config = strictReviewConfig(settings)
   return fnv1a64(
     JSON.stringify(
       EVIDENCE_POLICY_KEYS.flatMap((key) => {
@@ -563,33 +712,31 @@ export function evidenceScope(input: {
   config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>
   triage?: string
   route?: "zdr"
+  // Set by an engine that can run the pinned offline scanner on this host.
+  offlineDiagnostics?: boolean
 }): EvidenceScope {
+  const requested = input.adapter === "engine" && input.config.diagnostics === "offline"
+  const scanning = requested && input.offlineDiagnostics === true
   return {
     adapter: input.adapter,
     pipeline: REVIEW_PIPELINE_REVISION,
     // The impact block and the strict schemas enter the prompts only once a runner applies their key (it leaves
     // UNAPPLIED_REVIEW_KEYS), and VS-42's and VS-44's schema changes only once both their key and strict are applied.
     prompts: promptsDigest({
-      ...(input.config.impact === "graph" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "impact")
-        ? { impact: "graph" as const }
-        : {}),
-      ...(input.config.guardrail === "strict" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail")
-        ? { guardrail: "strict" as const }
-        : {}),
-      ...(input.config.guardrail === "strict" &&
-      input.config.scopeGate === "introduced" &&
-      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail" || key === "scopeGate")
+      ...(input.adapter === "engine" && input.config.cards === "brain" ? { cards: "brain" as const } : {}),
+      ...(input.config.ruleCheck === "strict" ? { ruleCheck: "strict" as const } : {}),
+      ...(input.adapter === "engine" && input.config.impact === "graph" ? { impact: "graph" as const } : {}),
+      ...(input.adapter === "engine" && input.config.guardrail === "strict" ? { guardrail: "strict" as const } : {}),
+      ...(input.adapter === "engine" && input.config.guardrail === "strict" && input.config.scopeGate === "introduced"
         ? { scopeGate: "introduced" as const }
         : {}),
-      ...(input.config.guardrail === "strict" &&
-      input.config.verifyEvidence === "certificate" &&
-      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail" || key === "verifyEvidence")
+      ...(input.adapter === "engine" &&
+      input.config.guardrail === "strict" &&
+      input.config.verifyEvidence === "certificate"
         ? { verifyEvidence: "certificate" as const }
         : {}),
       // VS-28's lens prompts, only once a runner applies both keys.
-      ...(input.config.depth === "auto" &&
-      input.config.lenses === "high" &&
-      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "depth" || key === "lenses")
+      ...(input.adapter === "engine" && input.config.depth === "auto" && input.config.lenses === "high"
         ? { depth: "auto" as const, lenses: "high" as const }
         : {}),
       // VS-30's runtime block, only once the executor applies the key. Whether the scope then counts "ask" or the
@@ -597,8 +744,18 @@ export function evidenceScope(input: {
       ...(input.config.runtime === "ask" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "runtime")
         ? { runtime: "ask" as const }
         : {}),
+      // VS-34's input-redaction sentence (Review.run under "secrets" since SF-13b) and its tool half (SF-14).
+      ...(input.config.holdback === "secrets" || requested ? { holdback: "secrets" as const } : {}),
+      ...(scanning ? { diagnostics: "offline" as const } : {}),
     }),
-    policy: policyDigest(input.config),
+    // Graph context, the trivial proof and the strict guardrail are applied only by the engine.
+    policy: policyDigest(
+      input.adapter === "desktop"
+        ? { ...input.config, largeChanges: "skip", depth: "fixed", lenses: "off", cards: "off", trivial: "review", impact: "grep", guardrail: "off", diagnostics: "off" }
+        : requested
+          ? { ...input.config, holdback: "secrets", diagnostics: scanning ? "offline" : "off" }
+          : input.config,
+    ),
     ...(input.triage ? { triage: input.triage } : {}),
     ...(input.route ? { route: input.route } : {}),
   }

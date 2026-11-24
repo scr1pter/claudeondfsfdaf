@@ -22,6 +22,7 @@ import { AbsolutePath } from "@vectordevai/core/schema"
 import { Location } from "@vectordevai/core/location"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { Reference } from "@vectordevai/core/reference"
+import { ReviewMcp } from "@/review/mcp"
 import { MCP } from "@/mcp"
 import { ToolRegistry } from "@/tool/registry"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -290,7 +291,11 @@ export interface Interface {
     agent: Agent.Info,
     options?: { readonly learned?: readonly Skill.Info[] },
   ) => Effect.Effect<string | undefined>
-  readonly mcp: (agent: Agent.Info, permission?: PermissionV1.Ruleset) => Effect.Effect<string | undefined>
+  readonly mcp: (
+    agent: Agent.Info,
+    permission?: PermissionV1.Ruleset,
+    internal?: string,
+  ) => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/SystemPrompt") {}
@@ -430,9 +435,16 @@ const layer = Layer.effect(
         ].join("\n")
       }),
 
-      mcp: Effect.fn("SystemPrompt.mcp")(function* (agent: Agent.Info, permission?: PermissionV1.Ruleset) {
+      mcp: Effect.fn("SystemPrompt.mcp")(function* (
+        agent: Agent.Info,
+        permission?: PermissionV1.Ruleset,
+        internal?: string,
+      ) {
         const ruleset = Permission.merge(agent.permission, permission ?? [])
-        const listed = yield* mcp.instructions()
+        const listed = yield* MCP.modelCatalog(
+          mcp,
+          ReviewMcp.restrictsModel(internal) || (yield* ReviewMcp.blocked),
+        ).instructions()
         // A server a run on GitHub Actions withholds whole (INV-S13) has no tool the model may call, so its instructions
         // go too.
         const withheld = ToolRegistry.actionsWithheldServers(

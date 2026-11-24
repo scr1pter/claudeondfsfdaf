@@ -399,7 +399,14 @@ describe("the replay pipeline", () => {
   test("takes the default variants, or registry names built for the engine, and refuses everything else", () => {
     expect(inputs(REPLAY)).toMatchObject({ pipeline: "replay", variants: DEFAULT_VARIANTS })
     expect(inputs({ ...REPLAY, EVAL_VARIANTS: " engine:shared-verify " }).variants).toEqual(["engine:shared-verify"])
-    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" }).join("\n")).toContain("VS-23c")
+    expect(inputs({ ...REPLAY, EVAL_VARIANTS: "engine:impact-graph" }).variants).toEqual(["engine:impact-graph"])
+    expect(inputs({ ...REPLAY, EVAL_VARIANTS: "engine:guardrail-strict" }).variants).toEqual([
+      "engine:guardrail-strict",
+    ])
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:cards-brain" }).join("\n")).toContain("locally seeded Brain")
+    // VS-23c (SF-12b): the engine half of privacy-zdr is built.
+    expect(inputs({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" }).variants).toEqual(["engine:privacy-zdr"])
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" })).toEqual([])
     expect(problems({ ...REPLAY, EVAL_VARIANTS: "desktop" }).join("\n")).toContain("runs on the desktop runner")
     expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:nothing" }).join("\n")).toContain("not a registered variant")
     expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine,engine" }).join("\n")).toContain("more than once")

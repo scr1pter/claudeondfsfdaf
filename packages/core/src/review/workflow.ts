@@ -708,6 +708,7 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
       env: { ...base, VECTOR_MODE: opts.mode },
     },
     {
+      id: "bundle",
       uses: "actions/upload-artifact@v4",
       if: "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
       with: {
@@ -837,13 +838,16 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
                 "${{ github.event_name == 'schedule' && format('vector-schedule-{0}', needs.route.outputs.thread) || format('vector-{0}-{1}', needs.route.outputs.thread, github.event.comment.id || github.run_id) }}",
               "cancel-in-progress": false,
             },
-            outputs: codium
-              ? {
-                  status: "${{ steps.mint.outputs.status }}",
-                  rid: "${{ steps.mint.outputs.rid }}",
-                  capture: "${{ steps.capture.outputs.capture }}",
-                }
-              : { status: "ok" },
+            outputs: {
+              ...(codium
+                ? {
+                    status: "${{ steps.mint.outputs.status }}",
+                    rid: "${{ steps.mint.outputs.rid }}",
+                    capture: "${{ steps.capture.outputs.capture }}",
+                  }
+                : { status: "ok" }),
+              bundle: "${{ steps.bundle.outputs.artifact-id }}",
+            },
             steps: agentSteps,
           },
           publish: {
@@ -868,9 +872,11 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
               checkout(0, false),
               {
                 uses: "actions/download-artifact@v4",
+                if: "needs.agent.outputs.bundle != ''",
                 "continue-on-error": true,
                 with: {
-                  name: "vector-run-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "artifact-ids": "${{ needs.agent.outputs.bundle }}",
+                  "merge-multiple": true,
                   path: "${{ runner.temp }}/vector-bundle",
                 },
               },

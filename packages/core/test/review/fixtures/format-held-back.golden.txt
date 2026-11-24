@@ -1,0 +1,36 @@
+## Vectorscope review · Risk: High
+
+This change adds refresh-token rotation to the auth client and moves session storage from localStorage to IndexedDB. Rotation can race with logout, and sessions saved by older builds are not migrated.
+
+**1 blocking · 1 concern** on the changed lines · 3 nits below
+
+| File | + | − | Why it matters |
+| --- | ---: | ---: | --- |
+| `src/auth/refresh.ts` | 84 | 12 | Rotation loop; races logout |
+| `src/auth/storage.ts` | 40 | 31 | IndexedDB adapter replaces localStorage |
+| `src/auth/client.ts` | 9 | 3 | Wires the adapter in |
+
+_4 more files changed (tests and docs)._
+
+<details><summary>Outside the changed lines (1)</summary>
+
+- **Concern** · `src/api/session.ts:88` · `readSession()` still expects the old stored shape. This PR changes what `storage.ts` writes, and this reader was not updated.
+</details>
+
+<details><summary>Nits (3)</summary>
+
+- `src/auth/storage.ts:18` · `openDB` is imported but never used
+- `src/auth/storage.ts:30` · Comment still says localStorage
+- `src/auth/client.ts:5` · Imports are out of order
+</details>
+
+<details><summary>Not reviewed (2 files)</summary>
+
+`config/prod/.envrc` held back · `package-lock.json` lockfile
+</details>
+
+---
+<sub>Reviewed `d4e5f6a` against `main` · full review · anthropic/claude-sonnet-4-5 · $0.21 (48.2k in, 31.0k of it cached / 3.1k out) · 1m 52s · this pull request: $0.21 over 1 review · [workflow run](https://github.com/o/r/actions/runs/42)</sub>
+<sub>Comment `/vector review` to review again, `/vector review full` to start over, or `/vector pause` to stop automatic reviews. Resolve a comment or react to it with a thumbs-down to dismiss it.</sub>
+<!-- vector-review:summary -->
+<!-- vector-review:state v1 eyJ2IjoxLCJyIjoyLCJjIjowLjM3LCJ0IjpbNjAwMDAsNTAwMF0sInUiOltdLCJpIjozLCJzIjpbXSwicCI6W10sImgiOiJkNGU1ZjZhN2I4YzlkMGUxZjJhM2I0YzVkNmU3ZjhhOWIwYzFkMmUzIiwiYiI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1NjcifQ -->
