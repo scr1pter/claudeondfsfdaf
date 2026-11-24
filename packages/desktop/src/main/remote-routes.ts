@@ -1,4 +1,5 @@
 import type { WebAuthn } from "@vectordevai/core/webauthn/verify"
+import { Connect } from "@vectordevai/schema/connect"
 import { ApprovalError, type PasskeyApprovals } from "./remote-passkey"
 
 // What a paired phone may ask of this computer's engine (WP A41, S6): an allowlist of the engine's HTTP routes, each
@@ -264,11 +265,19 @@ export function createRemoteRoutes(deps: RouteDependencies) {
       .engine({ method: "GET", path: "/permission", query: { directory } })
       .catch(() => undefined)
     if (!answer || answer.status !== 200 || !Array.isArray(answer.body)) return undefined
-    const found = answer.body.find(
-      (item): item is { id: string; sessionID: string } =>
-        Boolean(item) && typeof item === "object" && (item as { id?: unknown }).id === requestID,
+    const found = answer.body.find((item): item is Record<string, unknown> => isRecord(item) && item.id === requestID)
+    return found && typeof found.sessionID === "string"
+      ? { sessionID: found.sessionID, permission: found.permission, metadata: found.metadata }
+      : undefined
+  }
+
+  function approvalUnavailable(request: { permission: unknown; metadata: unknown }) {
+    if (
+      request.permission === "connect_cloud" ||
+      (request.permission === "connect_write" &&
+        !Connect.writeApprovalDetails(request.metadata, Connect.MAX_PHONE_APPROVAL_DIFF))
     )
-    return found && typeof found.sessionID === "string" ? found : undefined
+      return refuse(403, "REMOTE_APPROVAL_DETAILS", "Open Vector on your computer to review this request.")
   }
 
   const approval = async (phone: string, directory: string, body: unknown): Promise<RouteAnswer> => {
@@ -279,6 +288,8 @@ export function createRemoteRoutes(deps: RouteDependencies) {
     if (!credential) return refuse(403, "REMOTE_NOT_PAIRED", "This phone is not paired with this computer.")
     const request = await pendingPermission(directory, requestID)
     if (!request) return refuse(404, "REMOTE_PERMISSION_GONE", "That request was already answered.")
+    const unavailable = approvalUnavailable(request)
+    if (unavailable) return unavailable
     return {
       status: 200,
       body: deps.approvals.challenge(phone, { requestID, sessionID: request.sessionID, directory }, credential.id),
@@ -303,6 +314,8 @@ export function createRemoteRoutes(deps: RouteDependencies) {
     if (!credential) return refuse(403, "REMOTE_NOT_PAIRED", "This phone is not paired with this computer.")
     const request = await pendingPermission(directory, requestID)
     if (!request) return refuse(404, "REMOTE_PERMISSION_GONE", "That request was already answered.")
+    const unavailable = approvalUnavailable(request)
+    if (unavailable) return unavailable
     const target = { requestID, sessionID: request.sessionID, directory }
     const verified = await deps.approvals.verify(phone, target, input.passkey, credential).catch((error: unknown) => {
       if (error instanceof ApprovalError) return error
@@ -314,7 +327,8 @@ export function createRemoteRoutes(deps: RouteDependencies) {
       method: "POST",
       path: `/permission/${requestID}/reply`,
       query: { directory },
-      body: { reply: "once" },
+      // The phone's existing prompt displays write details. Cloud actions require a destination prompt first.
+      body: { reply: "once", ...(request.permission === "connect_write" ? { confirm: true } : {}) },
     })
   }
 

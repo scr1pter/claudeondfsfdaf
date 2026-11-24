@@ -319,8 +319,10 @@ export function validateEngineCommand(command: EngineCommand) {
   }
   if (new RegExp(`^/permission/${request}/reply$`).test(path)) {
     if (!record(command.body)) return invalid()
-    fields(command.body, ["reply"])
+    fields(command.body, ["reply", "confirm"])
     if (command.body.reply !== "once" && command.body.reply !== "reject") return invalid()
+    if (Object.hasOwn(command.body, "confirm") && (command.body.reply !== "once" || command.body.confirm !== true))
+      return invalid()
     return
   }
   if (new RegExp(`^/question/${request}/reject$`).test(path)) {

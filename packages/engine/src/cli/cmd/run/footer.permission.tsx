@@ -186,7 +186,7 @@ export function RunPermissionBody(props: {
 
   const run = (option: PermissionOption) => {
     const cur = state()
-    const next = permissionRun(cur, props.request.id, option)
+    const next = permissionRun(cur, props.request, option)
     if (next.state !== cur) {
       setState(next.state)
     }
@@ -356,20 +356,18 @@ export function RunPermissionBody(props: {
                 }}
               >
                 <box width="100%" flexDirection="column" gap={1}>
-                  <Show
-                    when={info().diff}
-                    fallback={
-                      <box width="100%" flexDirection="column" gap={1} paddingLeft={1}>
-                        <For each={info().lines}>
-                          {(line) => (
-                            <text fg={props.theme.text} wrapMode="word">
-                              {line}
-                            </text>
-                          )}
-                        </For>
-                      </box>
-                    }
-                  >
+                  <Show when={!info().diff || props.request.permission === "connect_write"}>
+                    <box width="100%" flexDirection="column" gap={1} paddingLeft={1}>
+                      <For each={info().lines}>
+                        {(line) => (
+                          <text fg={props.theme.text} wrapMode="word">
+                            {line}
+                          </text>
+                        )}
+                      </For>
+                    </box>
+                  </Show>
+                  <Show when={info().diff}>
                     <diff
                       diff={info().diff!}
                       view="unified"

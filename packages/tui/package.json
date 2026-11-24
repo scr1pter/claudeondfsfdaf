@@ -32,6 +32,7 @@
     "./config/keybind": "./src/config/keybind.ts",
     "./keymap": "./src/keymap.tsx",
     "./prompt/display": "./src/prompt/display.ts",
+    "./connect-presentation": "./src/routes/session/connect-presentation.ts",
     "./plugin/runtime": "./src/plugin/runtime.tsx",
     "./plugin/slots": "./src/plugin/slots.tsx",
     "./plugin/command-shim": "./src/plugin/command-shim.ts",

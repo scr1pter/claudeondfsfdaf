@@ -85,6 +85,27 @@ test("closed commands reject URL, ref and engine routing/permission substitution
     expect(parseCommand(command)).toEqual(command)
 })
 
+test("forwards explicit once confirmation without widening the permission reply body", () => {
+  const command = {
+    action: "engine",
+    workspaceId: id,
+    path: "/permission/per_example/reply",
+    method: "POST",
+  } as const
+  for (const body of [{ reply: "once" }, { reply: "once", confirm: true }, { reply: "reject" }])
+    expect(parseCommand({ ...command, body })).toEqual({ ...command, body })
+  for (const body of [
+    { confirm: true },
+    { reply: "once", confirm: false },
+    { reply: "once", confirm: "true" },
+    { reply: "once", confirm: undefined },
+    { reply: "reject", confirm: true },
+    { reply: "always", confirm: true },
+    { reply: "once", confirm: true, sessionID: "ses_other" },
+  ])
+    expect(() => parseCommand({ ...command, body })).toThrow()
+})
+
 test("a forwarded turn requires a stable message identity, bounded text and the hosted provider", () => {
   const command = {
     action: "engine",
