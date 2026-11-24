@@ -32,10 +32,49 @@ import "../../../api/_lib/ops-registration"
 import { createOpsRunStarter } from "../../../api/_lib/ops-run-starter"
 import { repoBindingsAvailable, repositoryBinding } from "../../../api/_lib/ops-settings"
 import { persistentStore } from "../../../api/_lib/persistent-store"
-import { createJobId } from "../../../packages/schema/src/everywhere"
+import { ACTIONS_JOB_PROMPT, createJobId } from "../../../packages/schema/src/everywhere"
 import { githubAppFixture } from "./github-app-fixture"
 
 integrationTests()
+
+test("EV-28: only a linked ticket can carry its exact Actions job marker", async () => {
+  const trigger: CloudRunTrigger = {
+    source: "desktop",
+    account: crypto.randomUUID(),
+    target: { kind: "github-run", repositoryId: 301 },
+    purpose: "task",
+    prompt: "Review the release notes",
+  }
+  const jobId = createJobId()
+  const marker = `${ACTIONS_JOB_PROMPT}${jobId}`
+  let bindingReads = 0
+  const store = async () => {
+    bindingReads++
+    return [[]]
+  }
+
+  for (const invalid of [
+    { prompt: marker },
+    { prompt: ` ${marker}\n` },
+    { jobId, prompt: trigger.prompt },
+    { jobId, prompt: `${ACTIONS_JOB_PROMPT}${createJobId()}` },
+    { jobId, prompt: ` ${marker}` },
+    { jobId, prompt: `${marker}\n` },
+  ]) {
+    await expect(prepareCloudRun({ ...trigger, ...invalid }, { store })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "INVALID_REQUEST",
+    })
+  }
+  expect(bindingReads).toBe(0)
+
+  await expect(prepareCloudRun(trigger, { store })).resolves.toEqual({ ok: false, reason: "not-bound" })
+  await expect(prepareCloudRun({ ...trigger, jobId, prompt: marker }, { store })).resolves.toEqual({
+    ok: false,
+    reason: "not-bound",
+  })
+  expect(bindingReads).toBe(2)
+})
 
 function integrationTests() {
   const configured = process.env.VECTOR_TEST_REDIS_URL
@@ -1237,18 +1276,22 @@ function integrationTests() {
   }
 
   async function jobTicket(f: Awaited<ReturnType<typeof fixture>>, jobId?: string) {
-    const prepared = await prepareCloudRun(jobId === undefined ? f.trigger : { ...f.trigger, jobId }, f.deps)
+    const prepared = await prepareCloudRun(
+      jobId === undefined ? f.trigger : { ...f.trigger, jobId, prompt: `${ACTIONS_JOB_PROMPT}${jobId}` },
+      f.deps,
+    )
     if (!prepared.ok) throw new Error("Fixture could not prepare")
     expect(await prepared.dispatch()).toEqual({ ok: true, dispatchedAt: f.policy.now })
     return prepared.ticketHash
   }
 
-  test("R-A1: a ticket keeps a job id that only its pattern admits; it never reaches GitHub, and RESERVE admits it", async () => {
+  test("R-A1: a ticket stores a valid job id that RESERVE admits and only the prompt carries it to GitHub", async () => {
     const f = await fixture()
     const heard = hear()
     try {
       const jobId = createJobId(f.policy.now)
-      const prepared = await prepareCloudRun({ ...f.trigger, jobId }, f.deps)
+      const prompt = `${ACTIONS_JOB_PROMPT}${jobId}`
+      const prepared = await prepareCloudRun({ ...f.trigger, jobId, prompt }, f.deps)
       if (!prepared.ok) throw new Error("Fixture could not prepare")
       const key = `vector:cloud-agents:ticket:${prepared.ticketHash}`
       const six = {
@@ -1262,9 +1305,8 @@ function integrationTests() {
       expect(JSON.parse(String(await persistentStore(["GET", key])))).toEqual({ ...six, jobId })
       expect(await prepared.dispatch()).toEqual({ ok: true, dispatchedAt: f.policy.now })
       expect(f.github.state.dispatches).toEqual([
-        { ref: "refs/heads/main", inputs: { mode: "task", prompt: f.trigger.prompt, ticket: f.ticket() } },
+        { ref: "refs/heads/main", inputs: { mode: "task", prompt, ticket: f.ticket() } },
       ])
-      expect(JSON.stringify([f.github.state.dispatches, f.github.state.requests])).not.toContain(jobId)
       expect(prepared.ticketHash).toBe(createHash("sha256").update(f.ticket()).digest("hex"))
       expect(await peekRunTicket(f.ticket(), await f.botIdentity(), f.binding, f.deps)).toEqual({
         ...six,

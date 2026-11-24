@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
-import { JOB_ID_PATTERN } from "../../packages/schema/src/everywhere.js"
+import { JOB_ID_PATTERN, jobOfActionsPrompt } from "../../packages/schema/src/everywhere.js"
 import { bindingFor, bindingKey, generationKey, type RepoBinding } from "./cloud-agents-binding.js"
 import {
   cloudAgentEntitlement,
@@ -89,7 +89,12 @@ export async function prepareCloudRun(
     (trigger.source !== "desktop" || !/^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/.test(deps.brainUpload))
   )
     throw invalidRequest()
-  if (trigger.jobId !== undefined && (typeof trigger.jobId !== "string" || !JOB_ID_PATTERN.test(trigger.jobId)))
+  // The runner treats even a trimmed marker as reserved, but can read a body only for an exact marker.
+  if (
+    trigger.jobId === undefined
+      ? typeof trigger.prompt === "string" && jobOfActionsPrompt(trigger.prompt.trim()) !== undefined
+      : jobOfActionsPrompt(trigger.prompt) !== trigger.jobId
+  )
     throw invalidRequest()
   if (trigger.purpose === "scheduled") return { ok: false, reason: "purpose-unavailable" }
   if (
