@@ -75,6 +75,15 @@ export function captureEnvironmentProblem(
   return undefined
 }
 
+/**
+ * What a refusal prints (INV-P1). A GitHub Actions log can be public, so in Actions (`GITHUB_ACTIONS=true`) only the
+ * fixed line: vectordev.ai's own text can name the account's plan or payment state ("Your Vector Codium plan does not
+ * include Ship Desk.", "... on hold ... while its payment is reviewed."). Elsewhere the detail follows the fixed line.
+ */
+export function refusalLine(fixed: string, detail: string | undefined, env: Record<string, string | undefined>) {
+  return env.GITHUB_ACTIONS === "true" || !detail?.trim() ? fixed : `${fixed} ${detail}`
+}
+
 /** The environment the repository's commands run with: Vector's tickets, tokens and secrets taken out. */
 export function childEnvironment(env: Record<string, string | undefined>) {
   const out: Record<string, string> = {}
@@ -517,7 +526,7 @@ const ShipTicketCommand = cmd({
     }
     const result = await requestTicket({ site, token })
     if (result.kind === "none") {
-      UI.println(`Ship Desk: no capture ticket. ${result.reason}`)
+      UI.println(refusalLine("Ship Desk: no capture ticket.", result.reason, process.env))
       return
     }
     // The ticket goes to the capture job as this job's output. It is not masked (GitHub drops a masked output), so the
@@ -587,7 +596,15 @@ const ShipCaptureCommand = cmd({
         await fs.rm(work, { recursive: true, force: true }).catch(() => undefined)
       }
     } catch (error) {
-      UI.error(error instanceof Error ? error.message : String(error))
+      // A ShipError with a status is vectordev.ai's refusal, whose text stays out of an Actions log (INV-P1); this
+      // computer's own refusals keep their text.
+      UI.error(
+        error instanceof ShipError && error.status !== undefined
+          ? refusalLine("Ship Desk: vectordev.ai refused this capture.", error.message, process.env)
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      )
       process.exitCode = 1
     }
   },

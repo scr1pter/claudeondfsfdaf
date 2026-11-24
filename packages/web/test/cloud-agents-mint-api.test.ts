@@ -669,6 +669,59 @@ function integrationTests() {
     }
   })
 
+  test("B08: a run names only its own event's thread, refused before the App and OIDC; a review token gets no conversation key", async () => {
+    const f = await fixture()
+    try {
+      f.github.state.run.event = "workflow_dispatch"
+      const appRequests = () => f.github.state.requests.filter((route) => route !== "/jwks").length
+      const before = appRequests()
+      const dispatch = { event_name: "workflow_dispatch" }
+      const oidc = await f.github.makeToken("mint", dispatch)
+      const mintWith = (token: string, body: Record<string, unknown>) =>
+        f.send("mint", token, { purpose: "task", workflowVersion: "3", ...body })
+      // A writer's dispatch asking for issue thread 5, another run's dispatch thread or a schedule's thread, and a
+      // dispatched review naming another pull request than its thread.
+      for (const body of [
+        { thread: "5" },
+        { thread: "dispatch-999" },
+        { thread: "schedule-0a1b2c3d" },
+        { purpose: "review", thread: "5", pullRequest: 6 },
+      ])
+        expect((await mintWith(oidc, body)).body.error.code).toBe("EVENT_NOT_ALLOWED")
+      // A schedule asking for an issue thread, and a comment asking for a schedule's thread.
+      expect((await f.mint({ thread: "17" }, { event_name: "schedule" })).body.error.code).toBe("EVENT_NOT_ALLOWED")
+      expect((await f.mint({ thread: "schedule-0a1b2c3d" })).body.error.code).toBe("EVENT_NOT_ALLOWED")
+      // None of them reached the App, and nothing was reserved.
+      expect(appRequests()).toBe(before)
+      expect(await persistentStore(["EXISTS", liveKey(f.account)])).toBe(0)
+      // The same identity token then mints for its own dispatch thread, so no refusal consumed its OIDC proof.
+      f.github.state.enabled = false
+      const own = await mintWith(oidc, { thread: "dispatch-1000" })
+      expect(own.status).toBe(200)
+      expect(readRunToken(own.body.token, f.policy.now)).toMatchObject({
+        thr: "dispatch-1000",
+        src: "github-dispatch",
+        pur: "task",
+      })
+      expect((await f.send("artifactKey", own.body.token, { thread: "dispatch-1000" })).status).toBe(200)
+      // A person's dispatched review names its pull request; its review token gets no conversation key.
+      const review = await f.mint(
+        { purpose: "review", thread: "17", pullRequest: 17 },
+        { ...dispatch, check_run_id: "1002" },
+      )
+      expect(review.status).toBe(200)
+      expect(readRunToken(review.body.token, f.policy.now)).toMatchObject({ thr: "17", pur: "review" })
+      const refused = await f.send("artifactKey", review.body.token, { thread: "17" })
+      expect({ status: refused.status, code: refused.body.error?.code, key: refused.body.key }).toEqual({
+        status: 403,
+        code: "ARTIFACT_KEY_NOT_ALLOWED",
+        key: undefined,
+      })
+    } finally {
+      await f.close()
+    }
+  })
+
   test("store outage fails closed and returns no token", async () => {
     const f = await fixture()
     try {
