@@ -10,6 +10,7 @@ import type { SwitchState } from "../../../../packages/schema/src/everywhere-pol
 import type { RepoBinding, WorkflowMode } from "../../cloud-agents-binding.js"
 import type { listCloudRuns, RunEnd, RunSettleListener, RunStartListener } from "../../cloud-agents-runs.js"
 import type { prepareCloudRun } from "../../cloud-agents-start.js"
+import type { RunTokenClaims } from "../../cloud-agents-run-token.js"
 import type { GithubIdentity, GithubOidcPurpose } from "../../github-oidc.js"
 import { ApiError } from "../../http.js"
 import { persistentStore } from "../../persistent-store.js"
@@ -130,6 +131,55 @@ export function createCloudPorts(
         },
       } satisfies PreparedDispatch
     },
+  }
+}
+
+/** Read the ticket identity only when both records match this verified, currently started run. */
+export async function runBodyStartProof(claims: RunTokenClaims, store = persistentStore) {
+  if (claims.src !== "github-dispatch" || claims.pur !== "task") return undefined
+  try {
+    const { liveRun, runRecordKey } = await import("../../cloud-agents-ledger.js")
+    const live = await liveRun(claims.sub, claims.rid, store)
+    const platform = live?.triggerSource
+    if (
+      !live?.ticketHash ||
+      (platform !== "slack" && platform !== "linear") ||
+      live.triggerPurpose !== "task" ||
+      live.repo !== claims.repo ||
+      live.gen !== claims.gen ||
+      live.jti !== claims.jti ||
+      live.src !== claims.src ||
+      live.pur !== claims.pur ||
+      live.epoch !== claims.epoch ||
+      live.thr !== claims.thr ||
+      live.deadline !== claims.dl
+    )
+      return undefined
+    const fields = [
+      ["rid", claims.rid],
+      ["account", claims.sub],
+      ["repositoryId", claims.repo],
+      ["generation", String(claims.gen)],
+      ["thread", claims.thr],
+      ["jti", claims.jti],
+      ["source", claims.src],
+      ["purpose", claims.pur],
+      ["event", "workflow_dispatch"],
+      ["triggerSource", platform],
+      ["triggerPurpose", "task"],
+      ["startedAt", String(live.startedAt)],
+      ["endedAt", null],
+    ] as const
+    const started = await store(["HMGET", runRecordKey(claims.rid), ...fields.map(([field]) => field)])
+    if (
+      !Array.isArray(started) ||
+      started.length !== fields.length ||
+      !fields.every(([, value], index) => started[index] === value)
+    )
+      return undefined
+    return { ticketHash: live.ticketHash, platform, startedAt: live.startedAt }
+  } catch {
+    return undefined
   }
 }
 

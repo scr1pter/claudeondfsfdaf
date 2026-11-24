@@ -671,6 +671,7 @@ type Decision<T> =
       readonly body?: BodyMode
       /** Writes made under the guards `change()` has just read, before the transition (EV-27: the start's run link). */
       readonly before?: readonly (readonly (string | number)[])[]
+      readonly beforeGuards?: readonly AuthorityGuard[]
       readonly done: (written: JobRecord) => T
     }
 
@@ -695,7 +696,7 @@ async function change<T>(
     if ("answer" in decision) return decision.answer
     // No second record read or authority lookup for a step's own writes. No erase step has any: an erase reads no
     // guards, and authorizedCommands refuses an empty proof.
-    if (decision.before) await authorizedCommands(ctx.store, guards, decision.before)
+    if (decision.before) await authorizedCommands(ctx.store, [...guards, ...(decision.beforeGuards ?? [])], decision.before)
     const terminal = TERMINAL_STATES.has(decision.next.state)
     const due = terminal ? undefined : dueOf(decision.next)
     const written = { ...decision.next, version: job.version + 1, ...(due === undefined ? {} : { due }) } as JobRecord
@@ -1107,25 +1108,53 @@ export async function startDispatched(
   ticketHash: string,
   rid: string,
   jobId?: string,
+  recovery?: {
+    readonly account: string
+    readonly repository: string
+    readonly platform: "slack" | "linear"
+    readonly startedAt: number
+  },
 ): Promise<Moved> {
   if (!TICKET_HASH_PATTERN.test(ticketHash) || !RID_PATTERN.test(rid)) return notFound()
-  const jid = await getValue(ctx.store, everywhereKeys.ticket(ticketHash))
+  const ticket = everywhereKeys.ticket(ticketHash)
+  const jid = await getValue(ctx.store, ticket)
   if (jid === undefined || !JOB_ID_PATTERN.test(jid) || (jobId !== undefined && jobId !== jid)) return notFound()
+  const keys = [everywhereKeys.run(rid), everywhereKeys.runSettle(rid)] as const
   return change<Moved>(
     ctx,
     jid,
-    (job) => {
+    async (job) => {
       if (job.state !== "dispatched" || job.ticketHash !== ticketHash) return { answer: wrongState(job) }
+      let beforeGuards: AuthorityGuard[] | undefined
+      if (recovery) {
+        if (
+          job.route !== "actions" ||
+          job.platform !== recovery.platform ||
+          String(job.repository.id) !== recovery.repository ||
+          job.repository.shared ||
+          job.dispatchedAt === undefined ||
+          recovery.startedAt < job.dispatchedAt ||
+          recovery.startedAt > ctx.now ||
+          ctx.now >= job.dispatchedAt + TIMING.dispatchStartMs ||
+          ctx.now >= job.bodyExpiresAt
+        )
+          return { answer: notFound() }
+        const links = await Promise.all(keys.map((key) => getValue(ctx.store, key)))
+        if (links.some((link) => link !== undefined && link !== jid)) return { answer: notFound() }
+        beforeGuards = [{ key: ticket, value: jid }, ...keys.map((key, index) => ({ key, value: links[index] }))]
+      }
       return {
-        next: next(job, { state: "running", startedAt: ctx.now, rid }),
+        next: next(job, { state: "running", startedAt: recovery?.startedAt ?? ctx.now, rid }),
         before: [
-          ["SET", everywhereKeys.run(rid), jid, "PX", untilBodyEnds(job, ctx.now, KEEP_MS.run)],
-          ["SET", everywhereKeys.runSettle(rid), jid, "PX", KEEP_MS.runSettle],
+          ["SET", keys[0], jid, "PX", untilBodyEnds(job, ctx.now, KEEP_MS.run)],
+          ["SET", keys[1], jid, "PX", KEEP_MS.runSettle],
         ],
+        beforeGuards,
         done: (written) => ({ ok: true, job: written }),
       }
     },
     notFound,
+    recovery?.account,
   )
 }
 
@@ -1278,6 +1307,7 @@ export type RunBodyRequest = {
   readonly repository: string
   readonly platformOn: (platform: PlatformId) => boolean
   readonly isPrivate: (repository: JobRecord["repository"]) => Promise<boolean>
+  readonly recoverStart?: () => Promise<void>
 }
 
 const RUN_NOT_FOUND = { ok: false, status: 404, code: "NOT_FOUND" } as const
@@ -1294,10 +1324,25 @@ const BODY_GONE = { ok: false, status: 410, code: "EVERYWHERE_BODY_GONE" } as co
  */
 export async function readRunBody(ctx: JobsContext, input: RunBodyRequest): Promise<RunBodyVerdict> {
   if (!JOB_ID_PATTERN.test(input.jid) || !RID_PATTERN.test(input.rid)) return RUN_NOT_FOUND
-  if ((await getValue(ctx.store, everywhereKeys.run(input.rid))) !== input.jid) return RUN_NOT_FOUND
+  const run = everywhereKeys.run(input.rid)
+  let linked = await getValue(ctx.store, run)
+  if (linked !== undefined && linked !== input.jid) return RUN_NOT_FOUND
+  let recover = input.recoverStart
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    const job = await readJob(ctx.store, input.jid)
-    if (!job || !linkedRun(job, input)) return RUN_NOT_FOUND
+    const job = linked === input.jid ? await readJob(ctx.store, input.jid) : undefined
+    if (!job || !linkedRun(job, input)) {
+      if (!recover || (linked !== undefined && job?.state !== "dispatched")) return RUN_NOT_FOUND
+      try {
+        await recover()
+      } catch (error) {
+        // A start hook can win the same link fence. Re-read and apply the ordinary job guards before using it.
+        if (!(error instanceof ApiError) || error.code !== "EVERYWHERE_AUTHORITY_CHANGED") throw error
+      }
+      recover = undefined
+      linked = await getValue(ctx.store, run)
+      if (linked !== input.jid) return RUN_NOT_FOUND
+      continue
+    }
     if (!(ctx.now < job.bodyExpiresAt)) return BODY_GONE
     const guards = await jobGuards(ctx, job)
     const privateNow = await Promise.resolve(job.repository).then(input.isPrivate).catch(() => false)

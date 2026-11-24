@@ -1,9 +1,9 @@
 import { requireRunToken, type RunTokenDeps } from "../../../_lib/cloud-agents-run-token.js"
 import { codiumAccountAuthority } from "../../../_lib/everywhere/adapters/account.js"
-import { createRunBodyVisibility } from "../../../_lib/everywhere/adapters/cloud-agents.js"
+import { createRunBodyVisibility, runBodyStartProof } from "../../../_lib/everywhere/adapters/cloud-agents.js"
 import type { AccountAuthorityPort } from "../../../_lib/everywhere/authority.js"
 import { platformOn, readConfig, type Env } from "../../../_lib/everywhere/config.js"
-import { isBusy, readRunBody } from "../../../_lib/everywhere/jobs.js"
+import { isBusy, readRunBody, startDispatched } from "../../../_lib/everywhere/jobs.js"
 import { everywhereStore, type Store } from "../../../_lib/everywhere/store.js"
 import { admits, codiumSwitches, readEverywhereSwitch, type CodiumSwitches } from "../../../_lib/everywhere/switch.js"
 import {
@@ -24,7 +24,8 @@ import { persistentStore } from "../../../_lib/persistent-store.js"
  *
  * Only @vector's run token works, checked by its own verifier until the run's deadline (signature, claims, the live
  * run, the binding and revocation; 401 otherwise). The body goes only to the run that `run:<rid>` links to this job,
- * which the start hook writes, and only once (410 after). Another account's job, another run's token, an unlinked
+ * which the start hook writes, and only once (410 after). The exact live and started-run records can recover the
+ * link through the consumed ticket if the hook did not finish. Another account's job, another run's token, an unlinked
  * run, a GitHub job, a job whose repository is no longer confirmed private and a job whose platform is no longer
  * listed all get the same 404, which leaves the read unspent. While the feature is off (the flag or the data
  * key) the route answers 404 `EVERYWHERE_OFF` before the token or the store is read, and under the `stop` switch after
@@ -59,27 +60,44 @@ export function createJobBodyRoute(deps: BodyRouteDeps = {}) {
       const now = clock()
       const claims = await requireRunToken(request, { allowAfterDeadline: false }, { now, ...deps.runTokens })
       const fetcher = deps.fetcher ?? fetch
-      if (!admits(await readEverywhereSwitch(everywhere, deps.switches ?? codiumSwitches(fetcher)), "running"))
+      const switches = deps.switches ?? codiumSwitches(fetcher)
+      if (!admits(await readEverywhereSwitch(everywhere, switches), "running"))
         return json(response, 404, { error: { code: "EVERYWHERE_OFF" } })
+      const stillAdmitted = async () => {
+        if (!admits(await readEverywhereSwitch(everywhere, switches), "running")) return false
+        await requireRunToken(request, { allowAfterDeadline: false }, { now: clock(), ...deps.runTokens })
+        return true
+      }
       const accountAuthority = deps.accountAuthority ?? codiumAccountAuthority
-      const visibility =
-        deps.visibility ??
-        createRunBodyVisibility({
-          store: deps.runTokens?.store ?? ((command) => persistentStore(command, fetcher)),
-        })
+      const vectorStore: typeof persistentStore = deps.runTokens?.store ?? ((command) => persistentStore(command, fetcher))
+      const visibility = deps.visibility ?? createRunBodyVisibility({ store: vectorStore })
+      const jid = queryValue(request, "jid") ?? ""
+      const context = {
+        store: deps.store ?? everywhereStore(fetcher, accountAuthority),
+        keys: everywhere.dataKeys,
+        now,
+        accountAuthority,
+      }
+      let recheckAfterVisibility = false
       const verdict = await readRunBody(
+        context,
         {
-          store: deps.store ?? everywhereStore(fetcher, accountAuthority),
-          keys: everywhere.dataKeys,
-          now,
-          accountAuthority,
-        },
-        {
-          jid: queryValue(request, "jid") ?? "",
+          jid,
           account: claims.sub,
           rid: claims.rid,
           repository: claims.repo,
           platformOn: (platform) => platformOn(everywhere, platform),
+          recoverStart: async () => {
+            recheckAfterVisibility = true
+            const proof = await runBodyStartProof(claims, vectorStore)
+            if (!proof || !platformOn(everywhere, proof.platform) || !(await stillAdmitted())) return
+            await startDispatched({ ...context, now: clock() }, proof.ticketHash, claims.rid, jid, {
+              account: claims.sub,
+              repository: claims.repo,
+              platform: proof.platform,
+              startedAt: proof.startedAt,
+            })
+          },
           isPrivate: async (repository) => {
             const observed = await visibility({
               account: claims.sub,
@@ -87,7 +105,7 @@ export function createJobBodyRoute(deps: BodyRouteDeps = {}) {
               generation: claims.gen,
               fullName: repository.fullName,
             })
-            return observed === "private" && clock() < claims.dl
+            return observed === "private" && (!recheckAfterVisibility || await stillAdmitted()) && clock() < claims.dl
           },
         },
       )

@@ -2,8 +2,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "
 import { randomBytes, randomInt, randomUUID } from "node:crypto"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { mintCliToken } from "../../../api/_lib/cli-token"
-import { mintRunToken } from "../../../api/_lib/cloud-agents-run-token"
+import { liveKey, runRecordKey } from "../../../api/_lib/cloud-agents-ledger"
+import { mintRunToken, readRunToken } from "../../../api/_lib/cloud-agents-run-token"
 import { createRunBodyVisibility } from "../../../api/_lib/everywhere/adapters/cloud-agents"
+import { ATOMIC_COMMANDS_SCRIPT } from "../../../api/_lib/everywhere/authority"
 import { ENV_NAMES, platformOn, readConfig } from "../../../api/_lib/everywhere/config"
 import {
   READ_BODY_ONCE_SCRIPT,
@@ -210,13 +212,62 @@ function runToken(sub: string, rid: string, options: { readonly dl?: number } = 
 type Running = { readonly jid: string; readonly hash: string; readonly rid: string; readonly job: JobRecord }
 
 /** A job created, then dispatched to Actions with a fresh ticket hash, through the jobs module. */
-async function dispatched(input: NewJob = slackJob()) {
+async function dispatched(input: NewJob = slackJob(), hash = randomBytes(32).toString("base64url")) {
   await seedJobAuthority(ctx(), input)
   const created = await createJob(ctx(), input)
   if (!created.ok) throw new Error(`createJob refused: ${created.code}`)
-  const hash = randomBytes(32).toString("base64url")
   expect(await dispatchJob(ctx(), created.job.jid, { ticketHash: hash })).toMatchObject({ ok: true })
   return { jid: created.job.jid, hash, job: created.job }
+}
+
+/** The exact live ledger row and started record written by a mint, behind its read-only store seam. */
+function recordedRun(token: string, ticketHash: string, triggerSource = "slack") {
+  const claims = readRunToken(token, fake.clock.now)
+  const startedAt = fake.clock.now
+  const ledger: Record<string, unknown> = {
+    startedAt,
+    deadline: claims.dl,
+    lastReport: startedAt,
+    epoch: claims.epoch,
+    repo: claims.repo,
+    thr: claims.thr,
+    src: claims.src,
+    pur: claims.pur,
+    gen: claims.gen,
+    jti: claims.jti,
+    triggerSource,
+    triggerPurpose: "task",
+    ticketHash,
+  }
+  const started: Record<string, string> = {
+    account: claims.sub,
+    rid: claims.rid,
+    repositoryId: claims.repo,
+    generation: String(claims.gen),
+    thread: claims.thr,
+    jti: claims.jti,
+    event: "workflow_dispatch",
+    source: claims.src,
+    purpose: claims.pur,
+    triggerSource,
+    triggerPurpose: "task",
+    startedAt: String(startedAt),
+  }
+  const commands: StoreCommand[] = []
+  const runTokens = {
+    store: async (command: StoreCommand) => {
+      commands.push(command)
+      if (command[0] === "EVAL" && command[2] === "4") return "ok"
+      if (command[0] === "EVAL") {
+        expect(command.slice(2)).toEqual(["1", liveKey(claims.sub), claims.rid])
+        return JSON.stringify(ledger)
+      }
+      expect(command.slice(0, 2)).toEqual(["HMGET", runRecordKey(claims.rid)])
+      return command.slice(2).map((field) => started[String(field)] ?? null)
+    },
+    revokedBefore: async () => undefined,
+  }
+  return { ledger, started, runTokens, commands }
 }
 
 /** A dispatched job whose run started as `rid`: the start hook links the run to the job. */
@@ -583,6 +634,161 @@ describe("the body route", () => {
     expect(scripted(since(mark))).toEqual([])
     for (const rid of [stranger, other, job.rid]) expect(fake.read(marker({ rid }))).toBeUndefined()
     expect((await read(job.jid, runToken(ALICE, job.rid))).status).toBe(200)
+  })
+
+  test.each([false, true])("an authenticated start recovers the exact ticket and reads once (partial: %s)", async (partial) => {
+    const job = await dispatched(slackJob(), randomBytes(32).toString("hex"))
+    const rid = runId()
+    const token = runToken(ALICE, rid)
+    const proof = recordedRun(token, job.hash)
+    const options = { deps: { runTokens: proof.runTokens } }
+    if (partial) fake.send(["SET", everywhereKeys.run(rid), job.jid])
+    const response = await read(job.jid, token, options)
+    expect([response.status, response.body]).toEqual([
+      200, { task: TASK, context: [{ from: "teammate", text: CONTEXT_TEXT }], outside: "slack" },
+    ])
+    expect(await readJob(store, job.jid)).toMatchObject({ state: "running", rid })
+    expect(fake.read(everywhereKeys.run(rid))?.value).toBe(job.jid)
+    expect(fake.read(everywhereKeys.runSettle(rid))?.value).toBe(job.jid)
+    expect((await startDispatched(ctx(), job.hash, rid, job.jid)).ok).toBe(false)
+    expect((await read(job.jid, token, options)).status).toBe(410)
+  })
+
+  test("a delayed start hook can win while the body route reads proof", async () => {
+    const job = await dispatched(slackJob(), randomBytes(32).toString("hex"))
+    const rid = runId()
+    const token = runToken(ALICE, rid)
+    const proof = recordedRun(token, job.hash)
+    const runTokens = {
+      ...proof.runTokens,
+      store: async (command: StoreCommand) => {
+        if (command[0] === "HMGET") expect((await startDispatched(ctx(), job.hash, rid, job.jid)).ok).toBe(true)
+        return proof.runTokens.store(command)
+      },
+    }
+    expect((await read(job.jid, token, { deps: { runTokens } })).status).toBe(200)
+    expect((await read(job.jid, token, { deps: { runTokens } })).status).toBe(410)
+  })
+
+  test("a delayed hook that wins the recovery link fence still allows one body read", async () => {
+    const job = await dispatched(slackJob(), randomBytes(32).toString("hex"))
+    const rid = runId()
+    const token = runToken(ALICE, rid)
+    const proof = recordedRun(token, job.hash)
+    let notified = false
+    const racingStore: Store = async (command) => {
+      if (
+        !notified && command[0] === "EVAL" && command.includes(everywhereKeys.run(rid)) &&
+        String(command[1]).endsWith(ATOMIC_COMMANDS_SCRIPT)
+      ) {
+        notified = true
+        expect((await startDispatched(ctx(), job.hash, rid, job.jid)).ok).toBe(true)
+      }
+      return store(command)
+    }
+    const options = { deps: { store: racingStore, runTokens: proof.runTokens } }
+    expect((await read(job.jid, token, options)).status).toBe(200)
+    expect(notified).toBe(true)
+    expect((await read(job.jid, token, options)).status).toBe(410)
+  })
+
+  test.each(["stop", "settled"] as const)("visibility reading cannot spend a recovered body after %s", async (change) => {
+    const job = await dispatched(slackJob(), randomBytes(32).toString("hex"))
+    const rid = runId()
+    const token = runToken(ALICE, rid)
+    const proof = recordedRun(token, job.hash)
+    let visibilityRead = false
+    const answer = await read(job.jid, token, {
+      deps: {
+        runTokens: {
+          ...proof.runTokens,
+          store: async (command) => {
+            if (visibilityRead && change === "settled" && command[0] === "EVAL" && command[2] === "4")
+              return "settled"
+            return proof.runTokens.store(command)
+          },
+        },
+        visibility: async () => {
+          visibilityRead = true
+          if (change === "stop") everywhere = "stop"
+          return "private"
+        },
+      },
+    })
+    expect([answer.status, answer.body]).toEqual([404, NOT_FOUND])
+    expect(visibilityRead).toBe(true)
+    expect(fake.read(marker({ rid }))).toBeUndefined()
+  })
+
+  test.each(["stop", "settled"] as const)("recovery rechecks a %s that arrives during proof", async (change) => {
+    const job = await dispatched(slackJob(), randomBytes(32).toString("hex"))
+    const rid = runId()
+    const token = runToken(ALICE, rid)
+    const proof = recordedRun(token, job.hash)
+    let readProof = false
+    const runTokens = {
+      ...proof.runTokens,
+      store: async (command: StoreCommand) => {
+        if (command[0] === "HMGET") {
+          readProof = true
+          if (change === "stop") everywhere = "stop"
+        }
+        if (readProof && command[0] === "EVAL" && command[2] === "4" && change === "settled") return "settled"
+        return proof.runTokens.store(command)
+      },
+    }
+    const mark = fake.commands.length
+    const answer = await read(job.jid, token, { deps: { runTokens } })
+    expect([answer.status, answer.body?.error?.code]).toEqual(
+      change === "stop" ? [404, "NOT_FOUND"] : [401, "MODEL_PLAN_RUN_EXPIRED"],
+    )
+    expect(readProof).toBe(true)
+    expect(since(mark).filter((command) => MUTATING.has(command[0]!))).toEqual([])
+    expect(fake.read(everywhereKeys.run(rid))).toBeUndefined()
+    expect(fake.read(marker({ rid }))).toBeUndefined()
+  })
+
+  test("missing or stale start proof and foreign job or run links leave the job and body unspent", async () => {
+    const job = await dispatched(slackJob(), randomBytes(32).toString("hex"))
+    const foreign = await dispatched(bobJob(), randomBytes(32).toString("hex"))
+    const rid = runId()
+    const token = runToken(ALICE, rid)
+    const proof = recordedRun(token, job.hash)
+    const options = { deps: { runTokens: proof.runTokens } }
+    const refused = async (jid = job.jid) => {
+      const mark = fake.commands.length
+      const answer = await read(jid, token, options)
+      expect([answer.status, answer.body]).toEqual([404, NOT_FOUND])
+      expect(since(mark).filter((command) => MUTATING.has(command[0]!))).toEqual([])
+      expect(touching(since(mark), everywhereKeys.jobBody(jid))).toEqual([])
+    }
+
+    await refused(foreign.jid)
+    fake.send(["SET", everywhereKeys.run(rid), foreign.jid])
+    const calls = proof.commands.length
+    await refused()
+    expect(proof.commands).toHaveLength(calls + 1)
+    fake.send(["DEL", everywhereKeys.run(rid)])
+    fake.send(["SET", everywhereKeys.runSettle(rid), foreign.jid])
+    await refused()
+    expect(fake.read(everywhereKeys.runSettle(rid))?.value).toBe(foreign.jid)
+    fake.send(["DEL", everywhereKeys.runSettle(rid)])
+
+    const filedStart = { ...proof.started }
+    delete proof.started.jti
+    await refused()
+    Object.assign(proof.started, filedStart, { generation: "2" })
+    await refused()
+    Object.assign(proof.started, filedStart)
+    proof.ledger.ticketHash = randomBytes(32).toString("hex")
+    await refused()
+    proof.ledger.ticketHash = job.hash
+    proof.ledger.triggerSource = proof.started.triggerSource = "linear"
+    await refused()
+    expect(await readJob(store, job.jid)).toMatchObject({ state: "dispatched" })
+    expect(fake.read(marker({ rid }))).toBeUndefined()
+    expect(fake.read(everywhereKeys.run(rid))).toBeUndefined()
+    expect(fake.read(everywhereKeys.runSettle(rid))).toBeUndefined()
   })
 
   test("B5: off answers 404 EVERYWHERE_OFF before the token or the store; `stop` after the token; `no-new` reads", async () => {
