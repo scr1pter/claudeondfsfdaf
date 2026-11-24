@@ -213,24 +213,22 @@ it.live("a guest stops or backgrounds only a session it controls", () =>
 
 // Track B B09: the phone's Stop reaches this route (packages/desktop/src/main/remote-routes.ts). Whatever else a body
 // names, only the session in the path, and with `helpers` its own helper tree, is stopped. The published body takes no
-// other field (additionalProperties false); the runtime may strip the extras or refuse the request, never act on them.
-it.live("a body naming another session, tasks or every helper still stops only the session in the path", () =>
+// other field (additionalProperties false). Older clients may still send extras, which are ignored.
+it.live("a legacy body with extra fields still stops only the session in the path", () =>
   Effect.gen(function* () {
     for (const helpers of [true, false]) {
       calls.length = 0
+      const reason = "Pause this conversation"
       const response = yield* stop({
         helpers,
+        reason,
         sessionID: "ses_session_stop_other",
         taskIDs: [stopped.id],
         all: true,
         descendants: true,
       })
-      expect([200, 400]).toContain(response.status)
-      if (response.status === 400) {
-        expect(calls).toEqual([])
-        continue
-      }
-      expect(calls).toEqual([{ sessionID, helpers }])
+      expect(response.status).toBe(200)
+      expect(calls).toEqual([{ sessionID, helpers, reason }])
       expect(((yield* response.json) as { tasks: Task.Info[] }).tasks).toEqual(helpers ? [stopped] : [])
     }
   }),
