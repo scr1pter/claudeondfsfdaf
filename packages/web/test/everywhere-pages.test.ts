@@ -1132,6 +1132,33 @@ describe("repository mappings", () => {
     expect(html).toContain("Channel C0123")
   })
 
+  test("only the server dates a tracker mark and account responses keep their existing shape", async () => {
+    await install(JIRA, alice)
+    const input = {
+      installation: JIRA,
+      place: "ENG",
+      repositories: [{ fullName: "acme/api", id: 7 }],
+      privateSetAt: fake.clock.now + 100_000,
+    }
+    const edited = await harness.call("PUT", EVERYWHERE_ROUTES.repos, { token: alice.token, body: input })
+    expect(edited.status).toBe(200)
+    expect((await listMappings(ctx().store, JIRA))[0]).not.toHaveProperty("privateSetAt")
+
+    fake.clock.advance(5_000)
+    const marked = await harness.call("PUT", EVERYWHERE_ROUTES.repos, {
+      token: alice.token,
+      body: { ...input, private: true },
+    })
+    expect(marked.status).toBe(200)
+    expect(marked.body.mapping).not.toHaveProperty("privateSetAt")
+    expect((await listMappings(ctx().store, JIRA))[0]).toMatchObject({ privateSetAt: fake.clock.now })
+    const listed = await harness.call("GET", EVERYWHERE_ROUTES.repos, {
+      token: alice.token,
+      query: { installation: JIRA },
+    })
+    expect(listed.body.mappings).toEqual([marked.body.mapping])
+  })
+
   test("a connector can add a repository from the tracker controls using the installed Vector session", async () => {
     await using fixture = await githubAppFixture()
     const { repositoryId, app, state } = fixture
@@ -1196,7 +1223,9 @@ describe("repository mappings", () => {
     expect(headers(request!).authorization).toBe(`Bearer ${alice.token}`)
     expect(proofs).toEqual([{ account: alice.id, fullName: body.addRepository, id: undefined }])
     expect(b.navigations).toEqual([])
-    expect((await put(body, alice.token)).body.mapping.repositories).toEqual([prior, verified])
+    const savedTeam = await put(body, alice.token)
+    expect(savedTeam.body.mapping.repositories).toEqual([prior, verified])
+    expect(savedTeam.body.mapping).not.toHaveProperty("privateSetAt")
 
     await b.model.addTrackerRepository(JIRA, "Eng", "acme/unbound")
     expect(ready(b.model).problem).toBe("repository-unverified")

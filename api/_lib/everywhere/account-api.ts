@@ -42,6 +42,7 @@ import {
   type InstallRecord,
   type Notifier,
   type OAuthExchanges,
+  type RepoMapping,
 } from "./identity.js"
 import type { Ports } from "./ports.js"
 import { jobEraser, openSummary, readJobHistory, type JobRecord, type JobRoute } from "./jobs.js"
@@ -166,6 +167,10 @@ function text(value: unknown, field: string): string {
 
 function optionalText(value: unknown, field: string): string | undefined {
   return value === undefined ? undefined : text(value, field)
+}
+
+function mappingForAccount({ privateSetAt: _privateSetAt, ...mapping }: RepoMapping) {
+  return mapping
 }
 
 function requirePlatform(config: EverywhereConfig, platform: PlatformId) {
@@ -344,7 +349,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
         const mappings = await listMappings(session.ctx.store, installation)
         await checkAccount(session.ctx, session.account)
         if ((await readInstallState(session.ctx.store, installation))?.raw !== snapshot.raw) throw notFound()
-        json(response, 200, { installation, mappings })
+        json(response, 200, { installation, mappings: mappings.map(mappingForAccount) })
       },
       PUT: async () => {
         const session = await begin(request, deps)
@@ -368,7 +373,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
               throw new ApiError(400, "EVERYWHERE_REPOSITORY_UNVERIFIED", "Choose a repository connected to your Vector account.")
             throw notFound()
           }
-          json(response, 200, { mapping: verdict.mapping })
+          json(response, 200, { mapping: mappingForAccount(verdict.mapping) })
           return
         }
         const repositories = checkRepositories(input.repositories)
@@ -384,7 +389,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
           ...(input.private !== undefined ? { private: input.private as boolean } : {}),
         })
         if (!verdict.ok) throw notFound()
-        json(response, 200, { mapping: verdict.mapping })
+        json(response, 200, { mapping: mappingForAccount(verdict.mapping) })
       },
       DELETE: async () => {
         const session = await begin(request, deps)
