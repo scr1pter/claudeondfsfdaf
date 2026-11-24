@@ -41,6 +41,44 @@ const PublicBranch = Schema.Struct({
 })
 const decodeBranch = Schema.decodeUnknownOption(Schema.fromJsonString(PublicBranch), { onExcessProperty: "error" })
 
+/**
+ * Whether a run of this event may name this conversation (thread) at mint: B08's thread binding, by the owner's ruling
+ * R1, option A. The run token's `thr` decides which conversation's ordinary key artifact-key gives, so each event may
+ * name only the thread the route script (`buildAgentsRouteScript`) gives it:
+ * - a schedule, a well-formed `schedule-<8 hex>`. It is the start of its cron line's SHA-256, which the identity token
+ *   does not carry, so a schedule's conversation is shared by whoever controls that cron line; a writer can already
+ *   add the same line;
+ * - a dispatch, its own run's `dispatch-<run id>`. Only a person's dispatched review names its pull request's number
+ *   instead, which the App's check confirms is this repository's own pull request, and its token is a review token,
+ *   which artifact-key refuses;
+ * - an issue or a conversation comment, a number (with the App, `verifyThread` checks which one); a review comment, the
+ *   pull request its signed merge ref names.
+ */
+export function runThreadAllowed(
+  identity: Pick<GithubIdentity, "event" | "runId" | "actorIsBot" | "pullRequest">,
+  body: { thread: string; purpose: "task" | "review"; pullRequest?: number },
+) {
+  switch (identity.event) {
+    case "schedule":
+      return /^schedule-[0-9a-f]{8}$/.test(body.thread)
+    case "workflow_dispatch":
+      return (
+        body.thread === `dispatch-${identity.runId}` ||
+        (!identity.actorIsBot &&
+          body.purpose === "review" &&
+          body.pullRequest !== undefined &&
+          body.thread === String(body.pullRequest))
+      )
+    case "pull_request_review_comment":
+      return identity.pullRequest !== undefined && body.thread === String(identity.pullRequest)
+    case "issue_comment":
+    case "issues":
+      return /^[1-9]\d{0,9}$/.test(body.thread)
+    default:
+      return false
+  }
+}
+
 export async function requireCloudAgentsUser(
   request: ApiRequest,
   fetcher: typeof fetch = fetch,
@@ -291,6 +329,16 @@ export function createCloudAgentsApi(
         : undefined
     if (bot && !ticket && !renewal) throw new ApiError(403, "ACTOR_NOT_ALLOWED", "This actor cannot start a run.")
     const trigger = ticket ? { source: ticket.source, purpose: ticket.purpose } : renewal?.trigger
+    // B08 (owner ruling R1, option A): the token's thread is the conversation whose ordinary key artifact-key gives, so
+    // a run names only the thread its own event gives it, before the App, entitlement, OIDC and reservation steps.
+    if (
+      !runThreadAllowed(identity, {
+        thread: body.thread,
+        purpose: body.purpose,
+        ...(typeof body.pullRequest === "number" ? { pullRequest: body.pullRequest } : {}),
+      })
+    )
+      throw new ApiError(403, "EVENT_NOT_ALLOWED", "The conversation does not match this run.")
     const checked = app.configuration().available
       ? await app.verifyRun(identity, {
           job: body.purpose === "review" ? "review" : "agent",
@@ -505,6 +553,10 @@ export function createCloudAgentsApi(
     if (Object.keys(body).some((key) => key !== "thread") || typeof body.thread !== "string") throw invalidRequest()
     const claims = await requireRunToken(request, { allowAfterDeadline: false }, { now: now(), store, revokedBefore })
     if (body.thread !== claims.thr) throw invalidRequest()
+    // B08: a review run never saves or restores a conversation, and a person's dispatched review names its pull
+    // request's thread (runThreadAllowed), so a review token never holds that conversation's key.
+    if (claims.pur === "review")
+      throw new ApiError(403, "ARTIFACT_KEY_NOT_ALLOWED", "This conversation key is not available to this run.")
     await enforceRateLimit(request, response, {
       scope: "cloud-agents-artifact-key-run",
       identifier: claims.rid,

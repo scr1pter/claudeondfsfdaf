@@ -46,6 +46,7 @@ import { formatValidationForRepair, validateWorkspace, type WorkspaceValidationR
 import { whileDesktopWorks } from "./keep-awake"
 import { parseUnifiedDiff, selectUnifiedDiff, type UnifiedDiffSelection } from "./unified-diff"
 import { scanChangedSecrets } from "./secret-scanner"
+import { codiumRunHeadroom } from "./codium-run-headroom"
 import { spendLedger } from "./spend-limits"
 import {
   combineSpend,
@@ -236,7 +237,8 @@ type ActiveParallelRun = {
 }
 
 // What a Vector-runtime run holds and has spent. `budgetUsd` is the ledger
-// headroom it reserved, sent as the engine budget with every prompt it admits.
+// headroom allocated to it, sent with every prompt it admits. A Codium
+// fence only tightens the engine's existing caps.
 // Each drain of the session is its own guard run, so `measured` sums the
 // drains read so far, `counted` is the last reading added to it, a later
 // prompt only gets what is left, and `draining` says a drain has started that
@@ -244,6 +246,7 @@ type ActiveParallelRun = {
 type ParallelRunSpend = {
   projectPath: string
   budgetUsd?: number
+  fence?: boolean
   measured?: RunBudget.Snapshot
   counted?: RunBudget.Snapshot
   draining: boolean
@@ -1211,6 +1214,8 @@ async function admitVectorPrompt(
       prompt: { text },
       resume: true,
       budget: budgetUsd === undefined ? undefined : { usd: budgetUsd },
+      // As with scheduled Codium runs, this fence must preserve stricter engine and research caps.
+      tightenBudget: active.spend?.fence && budgetUsd !== undefined ? true : undefined,
     },
     signal: active.controller.signal,
   })
@@ -2154,13 +2159,14 @@ async function executeParallelWorkspace(id: string, engine: ParallelWorkspaceEng
     const persisted = readRecords().find((record) => record.id === id)
     if (!persisted) throw new Error("Parallel workspace was not found.")
     const ledger = await spendLedger()
+    const codium = persisted.runtime === "vector" && Billing.isCodium(persisted.provider)
     // The headroom is held inside the check, so agents launched beside this
     // one cannot be handed the same dollars.
     const allowance = await ledger.checkAllowance({
       runId,
       source: "parallel",
       reserve: true,
-      billing: persisted.runtime === "vector" && Billing.isCodium(persisted.provider) ? "codium" : undefined,
+      billing: codium ? "codium" : undefined,
     })
     // Blocked means the money is already spent, so the agent must never start.
     // Throwing lands in the catch below, which is the same failed-record shape
@@ -2168,9 +2174,11 @@ async function executeParallelWorkspace(id: string, engine: ParallelWorkspaceEng
     if (!allowance.allowed) {
       throw new Error(allowance.reason || "A spend limit blocked this parallel agent run.")
     }
+    // The session's model can change while the run goes, and a subagent can run on its own model, so a run admitted as
+    // Codium carries the own-key headroom as its budget, which only its own-key steps spend (codium-run-headroom.ts).
+    const budgetUsd = codium ? await codiumRunHeadroom(ledger, { runId, source: "parallel" }) : allowance.budgetUsd
     const launched = activeRuns.get(id)
-    if (launched)
-      launched.spend = { projectPath: persisted.sourcePath, budgetUsd: allowance.budgetUsd, draining: false }
+    if (launched) launched.spend = { projectPath: persisted.sourcePath, budgetUsd, fence: codium, draining: false }
     // A warning is information, not a gate: the run proceeds and the user gets
     // told how close the cap is.
     const warning = allowance.state === "warn" ? allowance.reason : undefined
@@ -2573,9 +2581,9 @@ async function recordVectorRunSpend(
 }
 
 // The cap a prompt is admitted with, none when the run has no headroom limit.
-// A teammate note that joins a drain still running keeps that drain's cap,
-// which the engine replaces with the one sent: the drain's guard run already
-// counts what it has spent, so taking that spend off the headroom as well
+// A teammate note that joins a drain still running keeps that drain's cap:
+// its guard run already counts what it has spent, so taking that spend off
+// the headroom as well
 // would count it twice and stop the agent early. Any other prompt starts a
 // drain, and a guard run, of its own with the headroom left, and so does a
 // note sent while a stopped drain winds down, since the run after it starts
@@ -2860,6 +2868,8 @@ export async function messageParallelWorkspace(
       delivery: coordination?.delivery ?? "steer",
       resume: true,
       budget: budgetUsd === undefined ? undefined : { usd: budgetUsd },
+      // As with scheduled Codium runs, this fence must preserve stricter engine and research caps.
+      tightenBudget: active.spend?.fence && budgetUsd !== undefined ? true : undefined,
     },
     signal: active.controller.signal,
   })
