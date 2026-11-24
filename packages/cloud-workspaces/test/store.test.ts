@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { setImmediate } from "node:timers/promises"
 import { publicWorkspace, StoreError, WorkspaceStore } from "../src/store"
 
 const owner = "d285fc6c-4be3-4adf-89c4-c06db4967db4"
@@ -420,16 +421,19 @@ test("rejects repository paths, invalid refs, malformed actors and unsupported s
 
 type Contender = { created?: boolean; id?: string; code?: string }
 
-async function contenders(path: string, requests: ReturnType<typeof input>[], maxActivePerAccount: number) {
-  // Separate workers use independent SQLite connections and start only after every connection is ready.
-  const url = URL.createObjectURL(
-    new Blob(
-      [
-        `
+async function contenders(
+  path: string,
+  requests: ReturnType<typeof input>[],
+  maxActivePerAccount: number,
+  onResults?: (lifecycle: { release: () => void; exited: readonly Promise<number>[] }) => void,
+) {
+  // Workers' terminate() returns void. Independent connections must actually exit before database cleanup.
+  const program = `
     import { WorkspaceStore, StoreError } from ${JSON.stringify(new URL("../src/store.ts", import.meta.url).href)};
-    self.onmessage = ({ data }) => {
+    process.once("message", (data) => {
       const store = new WorkspaceStore(data.options);
-      self.onmessage = () => {
+      process.once("message", (command) => {
+        if (command.run !== true) throw new Error("Invalid workspace contender command.");
         let result;
         try {
           const value = store.create(data.owner, data.request);
@@ -438,54 +442,105 @@ async function contenders(path: string, requests: ReturnType<typeof input>[], ma
           if (!(error instanceof StoreError)) throw error;
           result = { code: error.code };
         } finally { store.close(); }
-        self.postMessage(result);
-      };
-      self.postMessage({ ready: true });
-    };
-  `,
-      ],
-      { type: "text/javascript" },
-    ),
-  )
-  const workers: Worker[] = []
+        process.once("message", (command) => {
+          if (command.exit !== true) throw new Error("Invalid workspace contender exit command.");
+          process.disconnect();
+        });
+        process.send(result);
+      });
+      process.send({ ready: true });
+    });
+  `
+  const children: Bun.Subprocess<"ignore", "ignore", "pipe">[] = []
   const ready: Promise<void>[] = []
+  const diagnostics: Promise<string>[] = []
   let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error("Workspace store contenders did not settle.")), 10_000)
   })
   try {
     const results = requests.map((request) => {
-      const worker = new Worker(url, { type: "module" })
-      workers.push(worker)
       let admitted!: () => void
       let failed!: (error: unknown) => void
-      ready.push(
-        new Promise<void>((resolve, reject) => {
-          admitted = resolve
-          failed = reject
-        }),
-      )
-      const result = new Promise<Contender>((resolve, reject) => {
-        worker.onmessage = (event: MessageEvent<{ ready?: boolean } & Contender>) => {
-          if (event.data.ready) return admitted()
-          resolve(event.data)
-        }
-        worker.onerror = (error) => {
-          failed(error)
-          reject(error)
-        }
+      const available = new Promise<void>((resolve, reject) => {
+        admitted = resolve
+        failed = reject
       })
-      worker.postMessage({ options: { path, maxActivePerAccount }, owner, request })
+      // A later launch can throw before the aggregates attach. Observe originals without changing their rejection.
+      available.catch(() => undefined)
+      ready.push(available)
+      let completed!: (result: Contender) => void
+      let rejected!: (error: unknown) => void
+      const result = new Promise<Contender>((resolve, reject) => {
+        completed = resolve
+        rejected = reject
+      })
+      result.catch(() => undefined)
+      const child = Bun.spawn([process.execPath, "--no-env-file", "--eval", program], {
+        cwd: import.meta.dir,
+        env: {},
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "pipe",
+        serialization: "json",
+        ipc(message: unknown) {
+          if (message && typeof message === "object") {
+            if ("ready" in message && message.ready === true) return admitted()
+            if (
+              "created" in message &&
+              typeof message.created === "boolean" &&
+              "id" in message &&
+              typeof message.id === "string"
+            )
+              return completed({ created: message.created, id: message.id })
+            if ("code" in message && typeof message.code === "string") return completed({ code: message.code })
+          }
+          const error = new Error("Invalid workspace contender response.")
+          failed(error)
+          rejected(error)
+        },
+      })
+      children.push(child)
+      const stderr = new Response(child.stderr).text()
+      diagnostics.push(stderr)
+      child.exited
+        .then(async (code) => {
+          if (code === 0) return
+          const error = new Error(`Workspace contender exited ${code}: ${(await stderr).slice(0, 4096)}`)
+          failed(error)
+          rejected(error)
+        })
+        .catch((error) => {
+          failed(error)
+          rejected(error)
+        })
+      child.send({ options: { path, maxActivePerAccount }, owner, request })
       return result
     })
-    const completed = Promise.all(results)
+    const completed = Promise.all(results).then(async (results) => {
+      const exited = children.map((child) => child.exited)
+      let released = false
+      const release = () => {
+        if (released) return
+        released = true
+        for (const child of children) if (child.exitCode === null) child.send({ exit: true })
+      }
+      if (onResults) onResults({ release, exited })
+      else release()
+      if ((await Promise.all(exited)).some((code) => code !== 0))
+        throw new Error(
+          `Workspace contender did not exit successfully: ${(await Promise.all(diagnostics)).join("\n").slice(0, 4096)}`,
+        )
+      return results
+    })
     await Promise.race([Promise.all(ready), completed.then(() => undefined), deadline])
-    for (const worker of workers) worker.postMessage({ run: true })
+    for (const child of children) child.send({ run: true })
     return await Promise.race([completed, deadline])
   } finally {
     clearTimeout(timer)
-    await Promise.all(workers.map((worker) => worker.terminate()))
-    URL.revokeObjectURL(url)
+    for (const child of children) if (child.exitCode === null) child.kill("SIGKILL")
+    await Promise.all(children.map((child) => child.exited))
+    await Promise.allSettled(diagnostics)
   }
 }
 
@@ -506,4 +561,34 @@ test("simultaneous distinct creates cannot oversubscribe an account's active quo
   expect(results.filter((result) => result.created)).toHaveLength(2)
   expect(results.filter((result) => result.code === "quota_exceeded")).toHaveLength(2)
   expect(value.list(owner)).toHaveLength(2)
+}, 15_000)
+
+test("contender results do not release database ownership before the actual children exit", async () => {
+  const path = filename()
+  store({ path, maxActivePerAccount: 1 })
+  const request = input()
+  let atResults!: () => void
+  const results = new Promise<void>((resolve) => {
+    atResults = resolve
+  })
+  let lifecycle: { release: () => void; exited: readonly Promise<number>[] } | undefined
+  const work = contenders(path, [request, request, request, request], 1, (owned) => {
+    lifecycle = owned
+    atResults()
+  })
+  try {
+    await Promise.race([
+      results,
+      work.then(() => {
+        throw new Error("Contenders returned before the exit barrier.")
+      }),
+    ])
+    // The real children have returned SQL results but are independently held on their exit command. Yield one
+    // event-loop turn after this published barrier, without a delay, to detect a result-only or void-terminate join.
+    expect(await Promise.race([work.then(() => true), setImmediate(false)])).toBe(false)
+  } finally {
+    lifecycle?.release()
+    await Promise.all(lifecycle?.exited ?? [])
+    await work
+  }
 }, 15_000)
