@@ -765,6 +765,23 @@ export const make = Effect.gen(function* () {
   })
   const text = (cwd: string, args: string[], options: Omit<Git.Options, "cwd"> = {}) =>
     command(cwd, args, options).pipe(Effect.map((out) => out.toString("utf8").trim()))
+  const worktreePaths = Effect.fn("TaskIsolation.worktreePaths")(function* (cwd: string) {
+    const queries = [["--git-dir"], ["--git-common-dir"], ["--show-toplevel"], ["--git-path", "index"]]
+    const result = yield* run(cwd, ["rev-parse", ...queries.flat()])
+    const lines = result.text().trim().split("\n").map((line) => line.trim())
+    // Git prints these paths verbatim. A path can contain a newline, so use individual reads when field boundaries
+    // cannot be determined.
+    const values =
+      result.exitCode === 0 && !result.truncated && lines.length === queries.length && lines.every(Boolean)
+        ? lines
+        : yield* Effect.forEach(queries, (args) => text(cwd, ["rev-parse", ...args]))
+    return {
+      gitDirectory: path.resolve(cwd, values[0]!),
+      common: path.resolve(cwd, values[1]!),
+      top: path.resolve(cwd, values[2]!),
+      index: path.resolve(cwd, values[3]!),
+    }
+  })
   // A partial merge's logical base is a commit no branch reaches, so Git's gc would prune it while the task is kept.
   // Each one gets its own private ref under its task before a record names it. A ref is never moved, so a merge that
   // fails after pinning leaves the record's current base pinned as well; `remove` drops the task's refs.
@@ -831,15 +848,12 @@ export const make = Effect.gen(function* () {
     if (!entry || entry.branch !== `refs/heads/${current.branch}`)
       return yield* err("registry", "Registered task worktree or reserved branch no longer matches Git.")
     yield* io(() => guarded(current.directory))
-    const gitDirectory = path.resolve(current.directory, yield* text(current.directory, ["rev-parse", "--git-dir"]))
-    const common = path.resolve(current.directory, yield* text(current.directory, ["rev-parse", "--git-common-dir"]))
     const branch = yield* text(current.directory, ["symbolic-ref", "--short", "HEAD"])
     const parentCommon = path.resolve(
       current.parentDirectory,
       yield* text(current.parentDirectory, ["rev-parse", "--git-common-dir"]),
     )
-    const top = path.resolve(current.directory, yield* text(current.directory, ["rev-parse", "--show-toplevel"]))
-    const index = path.resolve(current.directory, yield* text(current.directory, ["rev-parse", "--git-path", "index"]))
+    const { gitDirectory, common, top, index } = yield* worktreePaths(current.directory)
     yield* io(() => guarded(path.join(current.directory, ".git")))
     yield* io(() => guarded(gitDirectory, parentCommon))
     yield* io(() => guarded(index, gitDirectory))
