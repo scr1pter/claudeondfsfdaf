@@ -887,13 +887,16 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
     // The agent job's outputs map from the mint's file commands, as the publish job reads it through `needs`. A step
     // output the mint never wrote reads empty, as on GitHub (an at-once mint writes no rid); the mint writes only
     // `status` and `rid` (github.cloud.ts). Ship Desk's ticket step is skipped while vars.VECTOR_SHIP_DESK is unset, so
-    // its `capture` reads empty too (V31). On own key the map is the literal `ok`.
+    // its `capture` reads empty too (V31). This fixture copies a completed agent's bundle directly below instead of
+    // running the Actions artifact service; its stand-in upload returns ID 123, or no output when mint skips the agent.
     const agentOutputs = resolve(workflow.outputs, {
       ...Object.fromEntries(["status", "rid"].map((name) => [`steps.mint.outputs.${name}`, outputs[name] ?? ""])),
       "steps.capture.outputs.capture": "",
+      "steps.bundle.outputs.artifact-id": status === "ok" ? "123" : "",
     })
     expect(agentOutputs.status).toBe(status)
-    expect(Object.keys(agentOutputs)).toEqual(ownKey ? ["status"] : ["status", "rid", "capture"])
+    expect(Object.keys(agentOutputs)).toEqual(ownKey ? ["status", "bundle"] : ["status", "rid", "capture", "bundle"])
+    expect(agentOutputs.bundle).toBe(status === "ok" ? "123" : "")
     if (!ownKey) expect(agentOutputs.capture).toBe("")
     // The agent step after the mint's file commands, as the sandbox launcher starts the engine with it.
     const agentEnv = sandboxEnvironment(

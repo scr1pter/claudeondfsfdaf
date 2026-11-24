@@ -190,6 +190,8 @@ export function parseInputs(env: Env): { inputs: Inputs } | { problems: string[]
           return [
             `variants entry ${JSON.stringify(entry)} is not a variant name: a runner, then optionally ":" and a registered suffix, such as engine:shared-verify`,
           ]
+        if (entry === "engine:cards-brain")
+          return ["VS-26 uses a locally seeded Brain; the CI replay cannot run engine:cards-brain."]
         const resolved = variantRecord(entry)
         return resolved.ok ? [] : [`variants entry ${JSON.stringify(entry)}: ${resolved.detail}`]
       }),

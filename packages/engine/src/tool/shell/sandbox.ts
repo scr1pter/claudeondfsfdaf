@@ -249,7 +249,8 @@ export const OFFLINE_NOTICE: Record<"seatbelt" | "bubblewrap", string> = {
 export type Offline =
   | { readonly type: "sandboxed"; readonly wrapped: Wrapped; readonly notice: string }
   | { readonly type: "unfiltered"; readonly notice: string }
-  | { readonly type: "refused"; readonly message: string }
+  // `reason` is the sandbox's own why, without the shell tool's wording around it.
+  | { readonly type: "refused"; readonly message: string; readonly reason?: string }
 
 /**
  * A command under Vector Local's Web access None (section 4.3.5): on macOS and Linux it runs in the sandbox with no
@@ -261,13 +262,13 @@ export function offline(input: Omit<Parameters<typeof wrapCommand>[0], "allowNet
   const platform = input.platform ?? process.platform
   if (platform === "win32") return { type: "unfiltered", notice: WINDOWS_UNFILTERED }
   const missing = offlineRefusal(platform)
-  if (missing) return { type: "refused", message: missing }
+  if (missing) return { type: "refused", message: missing, reason: sandboxAvailability(platform).reason }
   const env = Object.fromEntries(
     Object.entries(input.env).filter(([key]) => !PROXY_VARIABLES.includes(key.toUpperCase())),
   )
   const wrapped = wrapCommand({ ...input, env, allowNetwork: false })
   if (!wrapped.sandboxed || wrapped.mechanism === "none")
-    return { type: "refused", message: refusal(platform, wrapped.reason) }
+    return { type: "refused", message: refusal(platform, wrapped.reason), reason: wrapped.reason }
   return { type: "sandboxed", wrapped, notice: OFFLINE_NOTICE[wrapped.mechanism] }
 }
 

@@ -21,6 +21,7 @@ import {
   strictCandidates,
   strictRules,
   strictSelect,
+  strictSelection,
   type StrictBlob,
   type StrictInput,
 } from "@vectordevai/core/review/guardrail"
@@ -701,6 +702,21 @@ describe("strictSelect: completeness", () => {
     expect(coverage({ skipped: [{ reason: "size-limit" }] }).incomplete).toEqual(["size-limit"])
     expect(coverage({ skipped: [{ reason: "lockfile" }] }).complete).toBe(true)
     expect(coverage({ held: [{ status: "modified" }] }).incomplete).toEqual(["held-back"])
+    // VS-34's held-back skip: once alone, once beside its held change, and not for a held deletion only (VS-32).
+    expect(coverage({ skipped: [{ reason: "held-back" }] }).incomplete).toEqual(["held-back"])
+    expect(coverage({ skipped: [{ reason: "held-back" }], held: [{ status: "modified" }] }).incomplete).toEqual([
+      "held-back",
+    ])
+    expect(coverage({ skipped: [{ reason: "held-back" }], held: [{ status: "deleted" }] }).complete).toBe(true)
+    // With paths, as Review.run records them (SF-13b), a held deletion accounts only for its own skip.
+    expect(
+      coverage({ skipped: [{ path: ".env", reason: "held-back" }], held: [{ path: ".env", status: "deleted" }] })
+        .complete,
+    ).toBe(true)
+    expect(
+      coverage({ skipped: [{ path: "id_rsa", reason: "held-back" }], held: [{ path: ".env", status: "deleted" }] })
+        .incomplete,
+    ).toEqual(["held-back"])
     expect(
       coverage({
         specialists: [
@@ -823,6 +839,88 @@ function uncheckedOf(findings: Finding[], overrides: Partial<StrictInput> = {}) 
 }
 
 describe("S9: the introduced-by-change check (VS-42a)", () => {
+  test("observes base spans only for actual S9 drops with matched immutable evidence", () => {
+    const entry = onFlush({ quotes: [NAME_QUOTE] })
+    const review = strictSelection([entry], input(gated()), true)
+    expect(review.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(review.scopeDrops).toEqual([
+      {
+        path: "src/auth/old-token.ts",
+        start: 2,
+        end: 2,
+        class: entry.category,
+        fingerprint: entry.id,
+      },
+    ])
+    expect(review.result).not.toHaveProperty("scopeDrops")
+    const sameFile = onFlush({ quotes: [RESET_QUOTE] })
+    expect(strictSelection([sameFile], input(gated()), true).scopeDrops[0]).toMatchObject({
+      path: SESSION,
+      start: 8,
+      end: 8,
+    })
+    const changed = onFlush({ scope: "pre-existing", quotes: [FLUSH_QUOTE] })
+    const labelled = strictSelection([changed], input(gated()), true)
+    expect(labelled.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(labelled.scopeDrops).toEqual([])
+    const supported = onFlush({ scope: "pre-existing", quotes: [FLUSH_QUOTE, NAME_QUOTE] })
+    expect(suspectOf(supported)).toBe(false)
+    const labelOnly = strictSelection([supported], input(gated()), true)
+    expect(labelOnly.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(labelOnly.scopeDrops).toEqual([])
+    expect(strictSelection([{ ...entry, verified: false }], input(gated()), true).scopeDrops).toEqual([])
+    expect(strictSelection([entry], input(gated())).scopeDrops).toEqual([])
+    const unavailable = strictSelection(
+      [sameFile],
+      input(gated({ blobs: { head: GATED_BLOBS.head, base: new Map() } })),
+      true,
+    )
+    expect(unavailable.result.findings.map((item) => item.id)).toEqual([sameFile.id])
+    expect(unavailable.preExistingUnchecked).toBe(1)
+    expect(unavailable.scopeDrops).toEqual([])
+  })
+
+  test("overlapping renames retain the matched quote's own side and base path for local scoring", () => {
+    const head = "src/auth/token.ts"
+    const base = "src/auth/old-token.ts"
+    const older = "src/auth/other-token.ts"
+    const renamed = anchors.find((file) => file.path === head)!
+    const files = [...anchors, { ...renamed, path: base, oldPath: older }]
+    const source = blobs({ [base]: TOKEN_HEAD }, { [older]: TOKEN_BASE })
+    const options = input(gated({ anchors: files, blobs: source }))
+    const left: Quote = { path: head, side: "LEFT", line: 1, code: "export const ttl = 60" }
+    const entry = finding({ path: head, line: 1, side: "LEFT", scope: "pre-existing", quotes: [left] })
+    expect(strictBlobRequests([entry], files, GATE).base).toEqual([base])
+    expect(suspectOf(entry, source, files)).toBe(false)
+    // Both base blobs contain these bytes. Only b supplied S4 for this LEFT quote of c.
+    const labelled = strictSelection([entry], options, true)
+    expect(labelled.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(labelled.scopeDrops).toEqual([
+      { path: base, start: 1, end: 1, class: entry.category, fingerprint: entry.id },
+    ])
+    // Each RIGHT quote maps once from its own head path. The independent suspect agrees for both renames.
+    for (const [path, expected] of [
+      [head, base],
+      [base, older],
+    ]) {
+      const right = finding({ path, line: 1, scope: "introduced", quotes: [{ ...NAME_QUOTE, path }] })
+      expect(suspectOf(right, source, files)).toBe(true)
+      expect(strictSelection([right], options, true).scopeDrops[0]).toMatchObject({ path: expected, start: 2, end: 2 })
+    }
+    // A RIGHT quote at b is not the finding's own file just because c was called b at base.
+    const differentFile = finding({
+      path: head,
+      line: 1,
+      scope: "pre-existing",
+      quotes: [
+        { ...NAME_QUOTE, path: base },
+        { path: head, line: 1, side: "RIGHT", code: "export const ttl = 0" },
+      ],
+    })
+    expect(suspectOf(differentFile, source, files)).toBe(false)
+    expect(strictSelection([differentFile], options, true).scopeDrops).toEqual([])
+  })
+
   test("introduced: a finding that quotes the line the change added is kept", () => {
     for (const scope of [undefined, "introduced", "exacerbated"] as const) {
       const entry = onFlush(scope ? { scope } : {})
@@ -1430,6 +1528,35 @@ describe("strictSelect: properties", () => {
           : 0,
       )
       if (pass.preExistingUnchecked) seen.add("pre-existing-unchecked")
+
+      const certConfig = { ...options.config, guardrail: "strict", verifyEvidence: "certificate" } as const
+      const certs = new Map(
+        findings.map((entry, position) => [
+          entry.id,
+          certificate({
+            id: entry.id,
+            verdict: (seed + position) % 5 === 0 ? "unsure" : "confirmed",
+            reach: (seed + position) % 7 === 0 ? "assumed" : "caller-shown",
+          }),
+        ]),
+      )
+      const evidenceHead = new Recording(source.head)
+      const evidenceBase = new Recording(source.base)
+      const withCertificates = strictSelect(findings, {
+        ...options,
+        config: certConfig,
+        certificates: certs,
+        blobs: { head: evidenceHead, base: evidenceBase },
+      })
+      for (const drop of withCertificates.dropped) seen.add(drop.reason)
+      expect(violations(strictResultJsonSchema(certConfig)!, withCertificates)).toEqual([])
+      for (const kept of withCertificates.findings) {
+        expect(kept.certificate?.trace).toEqual([RETURN_QUOTE])
+        expect(certs.get(kept.id)?.verdict).toBe("confirmed")
+      }
+      const needed = strictBlobRequests(findings, anchors, certConfig, certs)
+      expect([...evidenceHead.asked].filter((key) => !needed.head.includes(key))).toEqual([])
+      expect([...evidenceBase.asked].filter((key) => !needed.base.includes(key))).toEqual([])
 
       function satisfies(origin: Finding, kept: StrictFinding) {
         const resolved = resolveAnchor(index, origin)
@@ -2104,4 +2231,57 @@ describe("certified: properties (VS-44a)", () => {
       ].toSorted(),
     )
   })
+})
+
+test("certificate mode admits only matched traces, requests both immutable sides, and preserves unreadable evidence", () => {
+  const row = finding({ id: "c1" })
+  const config = { ...input().config, guardrail: "strict", verifyEvidence: "certificate" } as const
+  const cert = certificate({ trace: [RETURN_QUOTE, GUARD_QUOTE, STORE_QUOTE] })
+  const certificates = new Map([[row.id, cert]])
+  const source = input({ config, certificates })
+  expect(strictBlobRequests([row], anchors, config, certificates)).toEqual({
+    head: [SESSION, "src/auth/store.ts"],
+    base: [SESSION],
+  })
+  expect(strictSelect([row], source).findings[0]?.certificate).toEqual({
+    trace: cert.trace!,
+    guards: [],
+    reach: "caller-shown",
+  })
+  const unread = strictSelect([row], { ...source, blobs: blobs({ "src/auth/store.ts": null }) })
+  expect(unread).toMatchObject({
+    complete: false,
+    findings: [],
+    dropped: [{ reason: "certificate-mismatch", count: 1 }],
+  })
+  expect(unread.incomplete).toContain("blob-unreadable")
+  expect(strictSelect([row], { ...source, certificates: undefined })).toMatchObject({
+    complete: false,
+    findings: [],
+    dropped: [{ reason: "verdict-unreadable", count: 1 }],
+  })
+  const mistaken = certificate({ trace: [{ ...RETURN_QUOTE, code: "fabricated" }] })
+  expect(strictSelect([row], { ...source, certificates: new Map([[row.id, mistaken]]) })).toMatchObject({
+    complete: true,
+    findings: [],
+    dropped: [{ reason: "certificate-mismatch", count: 1 }],
+  })
+  expect(strictBlobRequests([row], anchors, { ...config, verifyEvidence: "off" }, certificates)).toEqual({
+    head: [SESSION],
+    base: [],
+  })
+})
+
+test("a matched certificate trace supplies the base location of an introduced-scope omission", () => {
+  const row = onFlush({ id: "c1", scope: "pre-existing", quotes: [FLUSH_QUOTE] })
+  const cert = certificate({ id: row.id, trace: [FLUSH_QUOTE, GUARD_QUOTE] })
+  const config = { ...GATE, verifyEvidence: "certificate" as const }
+  const certificates = new Map([[row.id, cert]])
+  const source = input(gated({ config, certificates }))
+  const result = strictSelection([row], source, true)
+  expect(result.result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+  expect(result.scopeDrops).toEqual([
+    { path: SESSION, start: 3, end: 3, class: row.category, fingerprint: row.id },
+  ])
+  expect(strictBlobRequests([row], anchors, config, certificates).base).toContain(SESSION)
 })

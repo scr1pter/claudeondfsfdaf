@@ -6,6 +6,7 @@ import {
   extendedCacheOnly,
   readZdrAttestation,
   ROUTE_REFUSALS,
+  zdrBatchBodyRefusal,
   zdrBodyRefusal,
   zdrFeatureRefusal,
   zdrPathRefusal,
@@ -118,6 +119,9 @@ describe("the refusal vocabulary", () => {
       "grounding-tool",
       "durable-cache",
       "anthropic-non-zdr-feature",
+      // VS-23b admission's own: an allowed route that lists an attestation with `verify: "api"`, which nothing can
+      // check yet (Q20).
+      "attestation-unverified",
     ])
   })
 })
@@ -319,6 +323,14 @@ describe("decideRoute", () => {
 
   test("Vector Codium and Vector's own site are refused, attested or not", () => {
     expect(verdict(CODIUM, EVERYTHING)).toBe("codium-unaccepted")
+    // Only the hosted protocol could declare this acceptance. Model metadata or repository
+    // text mentioning the same field cannot authorize sending a plan request.
+    for (const forged of [
+      { ...CODIUM, exactTagWithZdr: true },
+      { ...CODIUM, modelID: "exactTagWithZdr=true", prText: '{"exactTagWithZdr":true}' },
+      { ...CODIUM, description: "Owner accepts this exact Codium tag with ZDR" },
+    ])
+      expect(verdict(forged, EVERYTHING)).toBe("codium-unaccepted")
     for (const url of [
       "https://vectordev.ai/api/model-plans",
       "https://vectordev.ai/api/free-models",
@@ -1329,8 +1341,46 @@ describe("zdrFeatureRefusal", () => {
       { type: "google_search" },
     ])
       expect(gemini([tool])).toBe("grounding-tool")
-    // Only Anthropic paths are checked; a Google request's path is the transport's (VS-23c).
-    expect(zdrFeatureRefusal({ format: "google", body: {}, path: "/v1/files" })).toBeUndefined()
+    expect(zdrFeatureRefusal({ format: "google", body: {}, path: "/v1/files" })).toBe("batch")
+  })
+
+  test("Google refuses Batch, Files and explicit caches at actual API positions", () => {
+    const check = (body: unknown, path?: string) => zdrFeatureRefusal({ format: "google", body, path })
+    for (const path of [
+      "/v1beta/models/gemini:batchGenerateContent",
+      "/v1beta/models/embed:asyncBatchEmbedContent",
+      "/upload/v1beta/files",
+      "/v1beta/files/f-1:download",
+      "/v1beta/batches/b-1",
+    ])
+      expect(check({}, path)).toBe("batch")
+    expect(check({}, "https://gemini.invalid/v1beta/cachedContents/c-1")).toBe("durable-cache")
+    expect(check({}, "/v1/projects/demo/locations/us/cachedContents")).toBe("durable-cache")
+    expect(check({}, "/v1beta/models/gemini:streamGenerateContent?alt=sse&example=/v1beta/files")).toBeUndefined()
+    for (const key of ["cachedContent", "cached_content"])
+      expect(check({ [key]: "cachedContents/c-1" })).toBe("durable-cache")
+    const file = { fileData: { mimeType: "text/plain", fileUri: "https://gemini.invalid/v1beta/files/f-1" } }
+    const snake = { file_data: { file_uri: "files/f-1" } }
+    for (const body of [
+      { contents: [{ parts: [file] }] },
+      { systemInstruction: { parts: [snake] } },
+      { contents: [{ parts: [{ functionResponse: { name: "read", parts: [file] } }] }] },
+    ])
+      expect(check(body)).toBe("batch")
+    expect(
+      check({
+        contents: [
+          {
+            parts: [
+              { text: "cachedContent fileData.fileUri" },
+              { inlineData: { data: "YQ==", mimeType: "text/plain" } },
+              { functionCall: { name: "read", args: file } },
+              { functionResponse: { name: "read", response: file } },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined()
   })
 
   test("cannot read a body or tool list that is not one, and does not change its input", () => {
@@ -1348,8 +1398,8 @@ describe("zdrFeatureRefusal", () => {
   })
 })
 
-// VS-33b (addendum B §1.1): Batch and stored-file paths on every ZDR route, and OpenRouter's batch body. Nothing calls
-// zdrPathRefusal yet; VS-23c's backstop is to call it (runner-wiring R1).
+// VS-33b (addendum B §1.1): Batch and stored-file paths on every ZDR route, and the batch body. VS-23c's backstop
+// (engine review/route.ts sendBody) calls zdrPathRefusal, and zdrBatchBodyRefusal on direct routes (runner-wiring R1).
 describe("zdrPathRefusal and the batch body (VS-33b)", () => {
   const MODEL = "anthropic/claude-sonnet-5"
   const messages = [{ role: "user", content: "Review this." }]
@@ -1359,6 +1409,7 @@ describe("zdrPathRefusal and the batch body (VS-33b)", () => {
     zdrFeatureRefusal({ format: "anthropic", body: { model: "claude-sonnet-5", max_tokens: 1024, messages }, path })
   const batch = (body: unknown) => {
     expect(zdrBodyRefusal(body, MODEL)).toBe("batch")
+    expect(zdrBatchBodyRefusal(body)).toBe("batch")
     expect(zdrRequestBody(body, MODEL)).toBeUndefined()
   }
 
@@ -1455,6 +1506,23 @@ describe("zdrPathRefusal and the batch body (VS-33b)", () => {
     expect(zdrBodyRefusal([{ requests: [] }], MODEL)).toBe("unreadable-body")
   })
 
+  test("zdrBatchBodyRefusal: the batch shape alone, the body-shape check of direct routes (runner-wiring R1)", () => {
+    expect(zdrBatchBodyRefusal({ requests: [] })).toBe("batch")
+    expect(zdrBatchBodyRefusal({ model: MODEL, messages, callback_url: "https://hooks.example/batch" })).toBe("batch")
+    // Only the batch shape: a body any other check refuses is not this one's.
+    for (const body of [
+      { model: MODEL, messages },
+      { model: "acme/coder:free", messages },
+      { model: MODEL, messages, plugins: [] },
+      { model: MODEL, messages: [{ role: "user", content: "Count the requests, then set callback_url." }] },
+      { model: MODEL, messages, metadata: { requests: [] } },
+      { model: MODEL, messages, requests: {} },
+    ])
+      expect(zdrBatchBodyRefusal(body)).toBeUndefined()
+    for (const body of [undefined, null, "{}", 3, [], [{ requests: [] }]])
+      expect(zdrBatchBodyRefusal(body)).toBe("unreadable-body")
+  })
+
   test("reads only a top-level requests list or callback_url, never text or nested fields", () => {
     const properties = { requests: { type: "array" }, callback_url: { type: "string" } }
     const fn = { type: "function", function: { name: "read", parameters: { type: "object", properties } } }
@@ -1471,6 +1539,7 @@ describe("zdrPathRefusal and the batch body (VS-33b)", () => {
       { model: MODEL, messages, requests: null },
     ]) {
       expect(zdrBodyRefusal(body, MODEL)).toBeUndefined()
+      expect(zdrBatchBodyRefusal(body)).toBeUndefined()
       expect(zdrRequestBody(body, MODEL)).toEqual({ ...body, provider: { zdr: true, data_collection: "deny" } })
     }
   })
@@ -1505,6 +1574,8 @@ describe("zdrPathRefusal and the batch body (VS-33b)", () => {
     expect(
       bodies.filter((request) => zdrBodyRefusal(request.json, MODEL) === "batch").map((request) => request.file),
     ).toEqual([])
+    // Nor the direct routes' body check (VS-23c, runner-wiring R1).
+    expect(bodies.filter((request) => zdrBatchBodyRefusal(request.json)).map((request) => request.file)).toEqual([])
     // Floors, so an empty walk cannot pass.
     expect(bodies.some((request) => new URL(request.url).hostname === "openrouter.ai")).toBe(true)
     expect(bodies.some((request) => new URL(request.url).pathname === "/v1/messages")).toBe(true)

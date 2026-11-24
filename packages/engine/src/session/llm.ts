@@ -32,6 +32,8 @@ import * as Option from "effect/Option"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { reviewRequestProjection } from "./review-request-size"
+import { SessionAdmission } from "./admission"
 import { LLMTiming } from "./llm/timing"
 import { NativePatch } from "./llm/native-patch"
 import { Session } from "./session"
@@ -45,12 +47,14 @@ import { ReviewMemoryFence } from "@vectordevai/core/review/memory-fence"
 import { ComputerNative } from "@/computer/native"
 import { ComputerModels } from "@/computer/models"
 import { ComputerGeneric } from "@/computer/generic"
+import { ReviewRoutes } from "@/review/route"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
 const INHERITED = Symbol("vector.computer-inherited-message")
 
 export type StreamInput = {
+  reviewFirstRequest?: SessionAdmission.ReviewFirstRequest
   user: SessionV1.User
   sessionID: string
   parentSessionID?: string
@@ -203,6 +207,18 @@ const live: Layer.Layer<
         mode: input.agent.mode,
       })
 
+      // VS-23c (SF-12b): a "zdr" review session's call is decided before anything is read or a runtime chosen
+      // (ReviewRoutes.turn): only its pass's own turns go on, and only on the AI SDK runtime below, whose fetch is
+      // provider.ts's and holds the call; every other call of it or of its child is refused here. Every other session's
+      // call gets undefined and takes the path it took before.
+      const zdr = ReviewRoutes.turn({
+        sessionID: input.sessionID,
+        parentSessionID: input.parentSessionID,
+        agent: input.agent.name,
+        small: input.small,
+      })
+      if (zdr && "refusal" in zdr) return yield* Effect.fail(new ReviewRoutes.Refused(zdr.refusal, "session"))
+
       // A small request is a title or a name: on a model server someone hosts, its reply stays short.
       const laned = input.small ? Provider.brief(input.model) : input.model
       const [language, cfg, item, info] = yield* Effect.all(
@@ -235,6 +251,9 @@ const live: Layer.Layer<
           ? yield* Effect.promise(() => import("gitlab-ai-provider"))
           : undefined
       const isWorkflow = gitlab !== undefined && language instanceof gitlab.GitLabWorkflowLanguageModel
+      // A workflow model sends over a connection of its own (the GitLab Duo workflow service's), which provider.ts's
+      // fetch never sees, so a "zdr" review session never sends on one.
+      if (zdr && isWorkflow) return yield* Effect.fail(new ReviewRoutes.Refused("unknown-destination", "session"))
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
         provider: item,
@@ -243,6 +262,24 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      // The repository instructions, definitions or model revision may have changed after dispatch planning.
+      // Check this exact, prepared invocation before constructing its provider stream or executing any of its tools.
+      if (input.reviewFirstRequest) {
+        const { maxTokens, checked } = input.reviewFirstRequest
+        const stockHooks = plugin.reviewRequestHooks && (yield* plugin.reviewRequestHooks())
+        const measured =
+          !stockHooks ||
+          (!flags.pure && cfg.plugin_origins?.length) ||
+          isWorkflow ||
+          (!zdr && flags.experimentalNativeLlm) ||
+          input.computerRequested
+            ? undefined
+            : yield* reviewRequestProjection({ prepared, model: input.model })
+        const tokens = measured?.promptTokens
+        checked(tokens)
+        if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0 || tokens === undefined || tokens > maxTokens)
+          return yield* Effect.fail(new SessionAdmission.ReviewFirstRequestBudget())
+      }
       if (
         input.model.providerID === "openai" &&
         info &&
@@ -375,16 +412,21 @@ const live: Layer.Layer<
 
       // Runtime seam: native is an opt-in adapter over @vectordevai/llm. It
       // either returns a ready LLMEvent stream or a concrete fallback reason.
-      const nativeComputer = computerNative.wants({
-        sessionID: input.sessionID,
-        model: input.model,
-        provider: item,
-        auth: info,
-        tools: prepared.tools,
-        messages: prepared.messages,
-        config: cfg,
-        requested: input.computerRequested,
-      })
+      // VS-23c: it sends through @vectordevai/llm, not provider.ts's fetch, so the route rules could not hold its
+      // requests: a "zdr" review session's turn never takes it, and never asks the computer adapter, whose choice
+      // would select it.
+      const nativeComputer =
+        !zdr &&
+        computerNative.wants({
+          sessionID: input.sessionID,
+          model: input.model,
+          provider: item,
+          auth: info,
+          tools: prepared.tools,
+          messages: prepared.messages,
+          config: cfg,
+          requested: input.computerRequested,
+        })
       // Generic Anthropic replay can remove a whole old signed-reasoning message. Mark the inherited prefix before
       // that normalization so a fork's cache boundary still ends at its last surviving inherited message.
       const inheritedEnd =
@@ -407,7 +449,7 @@ const live: Layer.Layer<
       // Generic computer tools need the same stable definition and context clearing on either LLM runtime.
       // A native computer turn must not create a generic snapshot that was never sent to the provider.
       const genericComputer = nativeComputer ? undefined : prepareGeneric()
-      if (flags.experimentalNativeLlm || nativeComputer) {
+      if (!zdr && (flags.experimentalNativeLlm || nativeComputer)) {
         const nativeMessages = genericComputer?.messages ?? tagged
         const boundary = inheritedEnd === undefined ? undefined : inheritedBoundary(nativeMessages)
         yield* ordinary(input.sessionID)
