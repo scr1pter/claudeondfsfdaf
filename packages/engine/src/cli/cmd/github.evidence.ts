@@ -64,6 +64,8 @@ export type EvidenceInput = {
   closes?: number
   /** Extra line under the response, e.g. "Triggered by workflow_dispatch". */
   trigger?: string
+  /** The separate publisher treats the bundle as untrusted text and escapes HTML and fences. */
+  checkFormat?: "indented"
 }
 
 export const CHECK_TAIL_LINES = 40
@@ -216,19 +218,20 @@ export function judgeTextFromMessages(messages: readonly SessionV1.WithParts[]):
 
 export function buildEvidenceBody(input: EvidenceInput): string {
   const checks = collectChecks(input.messages)
-  const full = assemble(input, input.response.trim(), formatChecks(checks))
+  const full = assemble(input, input.response.trim(), formatChecks(checks, false, input.checkFormat))
   if (full.length <= BODY_MAX_CHARS) return full
   // Too long: first shrink the check output (the usual culprit), then trim the
   // agent's response. The evidence sections and "Closes #N" always survive.
-  const compact = assemble(input, input.response.trim(), formatChecks(checks, true))
+  const compactChecks = formatChecks(checks, true, input.checkFormat)
+  const compact = assemble(input, input.response.trim(), compactChecks)
   if (compact.length <= BODY_MAX_CHARS) return compact
   const marker = "\n\n_… response truncated; the full transcript is in the run log._"
-  const without = assemble(input, "", formatChecks(checks, true))
+  const without = assemble(input, "", compactChecks)
   // A present response also costs its separator lines; measure that exactly.
-  const overhead = assemble(input, "x", formatChecks(checks, true)).length - without.length - 1
+  const overhead = assemble(input, "x", compactChecks).length - without.length - 1
   const room = BODY_MAX_CHARS - without.length - overhead - marker.length
   const response = room > 0 ? input.response.trim().slice(0, room) + marker : marker.trim()
-  return assemble(input, response, formatChecks(checks, true))
+  return assemble(input, response, compactChecks)
 }
 
 function assemble(input: EvidenceInput, response: string, checks: string[]): string {
@@ -263,7 +266,7 @@ function formatChanges(changes: EvidenceChange[]): string[] {
   return out
 }
 
-function formatChecks(checks: EvidenceCheck[], compact = false): string[] {
+function formatChecks(checks: EvidenceCheck[], compact: boolean, format: EvidenceInput["checkFormat"]): string[] {
   if (!checks.length) return ["_No test, typecheck, lint or build commands were run._"]
   const shown = checks.slice(-(compact ? CHECK_COMPACT_COUNT : CHECK_MAX_COUNT))
   const out: string[] = []
@@ -275,6 +278,12 @@ function formatChecks(checks: EvidenceCheck[], compact = false): string[] {
       compact && check.output.length > CHECK_COMPACT_CHARS
         ? "…" + check.output.slice(-CHECK_COMPACT_CHARS)
         : check.output
+    if (format === "indented") {
+      const command = check.command.replace(/\s+/g, " ")
+      const lines = (output || "(no output)").split(/\r\n?|\n/).map((line) => `    ${line}`)
+      out.push(`    ${icon} ${command} (${status})`, ...lines, "")
+      continue
+    }
     const fence = fenceFor(output)
     out.push(
       "<details>",

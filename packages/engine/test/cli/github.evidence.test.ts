@@ -288,6 +288,20 @@ describe("buildEvidenceBody", () => {
     expect(body).toContain(`[Public session](${shareUrl})`)
   })
 
+  test("indented checks keep command and multiline output as code without HTML or fences", () => {
+    const body = buildEvidenceBody({
+      response: "",
+      changes: [],
+      messages: [withParts(assistant(), [bash("bun test\n# command", "# output\r\n```\r> text", 1)])],
+      runUrl,
+      checkFormat: "indented",
+    })
+
+    expect(body).toContain("\n    ❌ bun test # command (exit 1)\n    # output\n    ```\n    > text\n")
+    expect(body).not.toContain("<details>")
+    expect(body).not.toContain("\n```\n")
+  })
+
   test("stays under GitHub's body limit, keeping the evidence and Closes line", () => {
     const body = buildEvidenceBody({
       response: "word ".repeat(20_000),
