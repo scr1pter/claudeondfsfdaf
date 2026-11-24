@@ -25,3 +25,15 @@ Branch `scope-finish` (PR #73). By the owner's decision this v2 run took #73 ove
 ## The known exit-2 bug (engine saves error with outcome, core refused it)
 
 On main, engine `cli/cmd/review.ts` returns `{ exitCode: 2, error, target, outcome }` when every reviewer fails, and core `local-result.ts` refused any result that carries an error together with an outcome, so a retained "could not finish" local run could never be read back. On this branch, commits `fe969458` and `d70cb4b0` (2026-11-22) already accept the retained privacy, held-back, batch, failed-reviewer and empty-reviewer stops, with their tests in core `test/review/local-result.test.ts` ("retained local review result decoding"). This run keeps them intact and adds the verdict fix above. Ruling: the fix lands with #73; nothing on main is changed separately.
+
+## 2026-11-23, the fix panel retired itself when any folder's instance was disposed
+
+**Bug.** `LocalFixPanel` (app `features/vectorscope/local-fix-panel.tsx`) retired its controller on every `server.instance.disposed` event without looking at the event's folder. The engine sends that event for every instance it disposes: an isolated task's worktree retiring (`task/isolation.ts`), a worktree removed or reset, another project's reload. Retiring calls the controller's `dispose`, which aborts a running approved step (apply, checks, commit or push, with an unknown result) and cancels the prepared fix checkout. The panel's own copy promises this only for a reconnect or a settings change.
+
+**Fix.** `localFixRetires` keeps `server.connected` and `global.disposed` unconditional and takes `server.instance.disposed` only when the event names the conversation's own folder (compared with `pathKey`), as the connect panels already do.
+
+**Test.** app `src/features/vectorscope/local-fix-panel.test.tsx`, "another folder's instance disposal keeps the prepared fix; this folder's retires it and cancels the fix". It renders the real `LocalFixPanel` against a fake server SDK: its event emitter is driven by the test and its generated client answers from the recording fake engine the view tests use. A disposal named `/other` or `/repo/worktrees/task` sends nothing and keeps the preview. A disposal named `/repo` cancels `fix_0123abcd`, clears the preview and lists again. A reconnect named `global` retires it too.
+
+**Mutation check.** With the folder comparison dropped (any `server.instance.disposed` retires), the case fails (8 pass, 1 fail); restored, 9 pass.
+
+Left as a follow-up: `LocalReviewPanel` (`local-review-panel.tsx`, also on main) has the same unscoped listener. There it only clears and lists the review results again, with nothing to abort or cancel.

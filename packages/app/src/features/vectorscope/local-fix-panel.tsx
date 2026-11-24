@@ -26,6 +26,16 @@ import {
 import { localFixesEnabled } from "./local-fix-slot"
 
 const empty = (): LocalFixState => ({ fixes: [], results: [], uncertain: false, error: "" })
+
+/** Whether a server event retires the fix panel of the conversation in `directory`. */
+export function localFixRetires(event: { name: string; details: { type: string } }, directory: string) {
+  const type = event.details.type
+  return (
+    type === "server.connected" ||
+    type === "global.disposed" ||
+    (type === "server.instance.disposed" && pathKey(event.name) === pathKey(directory))
+  )
+}
 const VERB = { apply: "apply", checks: "run checks", commit: "commit", push: "push" } as const
 
 /**
@@ -86,7 +96,9 @@ export function LocalFixPanel(props: {
     controller = active
     void active.check()
     const unsubscribe = captured.current.event.listen((event) => {
-      if (!["server.connected", "global.disposed", "server.instance.disposed"].includes(event.details.type)) return
+      // A reconnect or the server's own disposal, or this checkout's instance disposed (a settings reload). Another
+      // folder's instance going (a retired isolated task's worktree, another project's reload) leaves the fix alone.
+      if (!localFixRetires(event, scope.directory)) return
       // Owner authority may have changed: retire the fix and its offer at once, before another request settles.
       active.dispose()
       setState("value", reconcile(empty()))

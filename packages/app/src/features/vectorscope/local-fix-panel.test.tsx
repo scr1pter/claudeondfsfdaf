@@ -5,7 +5,7 @@ import { ReviewFixControl } from "@vectordevai/schema/review-fix"
 import type { PlacedFinding } from "@vectordevai/core/review/types"
 import type { ReviewOutcomeLite } from "../pull-requests/ai-review"
 import type { LocalFixAPI, LocalFixSource, LocalFixState } from "./local-fix"
-import type { LocalFixView } from "./local-fix-panel"
+import type { LocalFixPanel, LocalFixView } from "./local-fix-panel"
 import type { LocalFixSlot, localFixesMounted } from "./local-fix-slot"
 
 // VS-12d (SF-10b): the fix panel's presentation and its mount boundary, rendered in happy-dom. Bun does not run Vite's
@@ -27,6 +27,10 @@ const store: typeof import("solid-js/store") = await import(browserStore)
 mock.module("solid-js/store", () => store)
 
 let View: typeof LocalFixView
+let Panel: typeof LocalFixPanel
+// What the two server contexts give LocalFixPanel; the view tests never read them.
+let panelSDK: unknown
+let panelSync: unknown
 let Slot: typeof LocalFixSlot
 let mounted: typeof localFixesMounted
 let fix: typeof import("./local-fix")
@@ -49,10 +53,12 @@ beforeAll(async () => {
       }))
     },
   })
-  // LocalFixPanel reads these; the view under test does not.
-  mock.module("@/context/server-sdk", () => ({ useServerSDK: () => () => undefined }))
-  mock.module("@/context/server-sync", () => ({ useServerSync: () => () => undefined }))
-  View = (await import("./local-fix-panel")).LocalFixView
+  // LocalFixPanel reads these; the view tests do not.
+  mock.module("@/context/server-sdk", () => ({ useServerSDK: () => () => panelSDK }))
+  mock.module("@/context/server-sync", () => ({ useServerSync: () => () => panelSync }))
+  const panel = await import("./local-fix-panel")
+  View = panel.LocalFixView
+  Panel = panel.LocalFixPanel
   const slot = await import("./local-fix-slot")
   Slot = slot.LocalFixSlot
   mounted = slot.localFixesMounted
@@ -367,6 +373,96 @@ describe("the fix panel's mount boundary", () => {
     expect(before).toBe("<p>Not reviewed</p><footer>Post review</footer>")
     expect(parent(true, { number: 7, baseRefName: "main" })).toBe(before)
     expect(parent(true)).toBe(before)
+  })
+})
+
+// scope-finish takeover (2026-11-23): the panel itself, against a fake server SDK whose event emitter the test drives
+// and whose generated client answers from the same recording fake engine the view tests use.
+function mountPanel() {
+  const fake = engine()
+  const listeners = new Set<(event: { name: string; details: { type: string } }) => void>()
+  const ok = (data: unknown) => ({ data, error: undefined, response: { status: 200 } as Response })
+  const signal = new AbortController().signal
+  const client = {
+    session: { get: async () => ok({ id: "ses_parent", projectID: "project", directory: "/repo" }) },
+    file: { read: async (input: { path: string }) => ok({ type: "text", content: await fake.api.read(input.path, signal) }) },
+    review: {
+      fix: {
+        list: async () => ok(await fake.api.list(signal)),
+        prepare: async (input: { reviewFixControlPrepare: never }) =>
+          ok(await fake.api.prepare(input.reviewFixControlPrepare, signal)),
+        preview: async (input: { fixID: string; reviewFixControlRequest: never }) =>
+          ok(await fake.api.preview(input.fixID, input.reviewFixControlRequest, signal)),
+        execute: async (input: { fixID: string; reviewFixControlExecute: never }) =>
+          ok(await fake.api.execute(input.fixID, input.reviewFixControlExecute, signal)),
+        cancel: async (input: { fixID: string }) => ok(await fake.api.cancel(input.fixID, signal)),
+      },
+    },
+  }
+  panelSDK = {
+    scope: "test",
+    client,
+    event: {
+      listen: (listener: (event: { name: string; details: { type: string } }) => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    },
+  }
+  panelSync = {
+    session: {
+      get: (id: string) =>
+        id === "ses_parent" ? { id: "ses_parent", projectID: "project", directory: "/repo" } : undefined,
+    },
+    globalConfig: () => ({ experimental: { vectorscope: true } }),
+  }
+  const host = document.createElement("div")
+  document.body.append(host)
+  const view = source()
+  cleanups.push(
+    web.render(
+      () =>
+        solid.createComponent(Panel, {
+          outcome: view.outcome,
+          pr: view.pr,
+          dismissed: new Set(),
+          applied: new Set(),
+          parentID: "ses_parent",
+          directory: "/repo",
+        }),
+      host,
+    ),
+  )
+  const emit = (name: string, type: string) => {
+    for (const listener of [...listeners]) listener({ name, details: { type } })
+  }
+  const button = (label: string) =>
+    [...host.querySelectorAll("button")].find((item) => item.textContent?.trim() === label)
+  return { host, calls: fake.calls, button, emit }
+}
+
+describe("the fix panel under a review result", () => {
+  test("another folder's instance disposal keeps the prepared fix; this folder's retires it and cancels the fix", async () => {
+    const panel = mountPanel()
+    await until(() => panel.calls.includes("list"))
+    panel.button("Prepare a fix checkout")!.click()
+    await until(() => !!panel.button("Preview apply"))
+    const prepared = panel.calls.length
+    // An isolated task's worktree, or another project, retiring its instance.
+    panel.emit("/other", "server.instance.disposed")
+    panel.emit("/repo/worktrees/task", "server.instance.disposed")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(panel.calls.slice(prepared)).toEqual([])
+    expect(panel.button("Preview apply")).toBeDefined()
+    // This checkout's own instance (a settings reload): the fix goes, and a new controller lists again.
+    panel.emit("/repo", "server.instance.disposed")
+    await until(() => panel.calls.includes("cancel fix_0123abcd"))
+    await until(() => !panel.button("Preview apply"))
+    await until(() => panel.calls.slice(prepared).includes("list"))
+    // A reconnect retires the panel whatever folder it names.
+    const listed = panel.calls.filter((call) => call === "list").length
+    panel.emit("global", "server.connected")
+    await until(() => panel.calls.filter((call) => call === "list").length > listed)
   })
 })
 
