@@ -453,7 +453,13 @@ describe("code review after each task", () => {
         expect(notes(yield* f.sessions.messages({ sessionID: off.id }))).toEqual([])
         const on = yield* f.sessions.create({ title: "On" })
         yield* task(f, on.id, { file: "on.ts" })
-        yield* settled(f, on.id)
+        // Idle schedules admission. Wait for the review owner to record the start before inspecting it.
+        yield* pollWithTimeout(
+          f.status
+            .get(on.id)
+            .pipe(Effect.map((current) => (current.type === "idle" && recorded.starts.length > 0 ? true : undefined))),
+          "The conversation did not go idle and start its review.",
+        )
         const messages = yield* f.sessions.messages({ sessionID: on.id })
         expect(SessionTaskSize.judgeRuns({ messages })).toEqual([])
         expect(recorded.starts.map((start) => start.requestID)).toEqual([`after_${lastAssistant(messages)}`])
