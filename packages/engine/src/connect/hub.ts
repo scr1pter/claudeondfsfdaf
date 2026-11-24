@@ -27,6 +27,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { MCP } from "@/mcp"
 import { WorkflowLibrary } from "@/orchestration/library"
 import { Permission } from "@/permission"
+import type { InstanceContext } from "@/project/instance-context"
 import type { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionAdmission } from "@/session/admission"
@@ -1017,10 +1018,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         // Vector Local governs every member here as in the registry: one that runs in a cloud, or sends code past this
         // computer and the listed model servers, is off whatever it says of itself. It applies at this engine's place,
         // so in a Vector cloud workspace a member in this engine runs on Vector's servers.
-        const ready = ConnectMembers.gate(
+        const available = ConnectMembers.gate(
           ConnectMembers.located(member, flags.cloudWorkspace),
           (yield* config.localPolicy()).enabled,
         )
+        const ready = placed
+          ? available
+          : withRepositoryReadiness(available, yield* InstanceState.context, request.directory)
         if (ready.state !== "ready")
           return yield* refusal(
             "unavailable",
@@ -1798,7 +1802,8 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           local,
           cloudWorkspace: flags.cloudWorkspace,
         })
-        return list.map((member) => withActivity(member, state))
+        const current = yield* InstanceState.context
+        return list.map((member) => withActivity(withRepositoryReadiness(member, current, current.directory), state))
       })
 
       return Service.of({
@@ -1930,6 +1935,12 @@ function withActivity(member: Connect.Member, state: State): Connect.Member {
   const running = runs.filter((entry) => entry.run.status !== "done").length
   const last = Math.max(...runs.map((entry) => entry.run.time.created))
   return { ...member, activity: { running, lastRunAt: last } }
+}
+
+function withRepositoryReadiness(member: Connect.Member, instance: InstanceContext, directory: string): Connect.Member {
+  if (member.id !== "vectorscope" || member.owner !== "vectorscope" || member.state !== "ready") return member
+  if (!ConnectGit.nonRepository(instance, directory)) return member
+  return { ...member, state: "unavailable", reason: ConnectGit.NON_REPOSITORY, sendsTo: undefined }
 }
 
 const describeSafely = (adapter: ConnectAdapter.Adapter) =>
