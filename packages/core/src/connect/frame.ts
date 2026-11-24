@@ -74,6 +74,26 @@ export function shownVerdict(
   return "clean"
 }
 
+/** The title of a run's tool call. */
+export function titleOf(run: Connect.Run): string {
+  if (run.request.action === "fix") {
+    if (run.status !== "done" || !run.result)
+      return run.progress?.message ? `VectorScope fix: ${run.progress.message}` : "VectorScope fix"
+    const state = run.result.state
+    if (state === "refused") return "VectorScope fix not started"
+    if (state === "failed") return "VectorScope fix failed"
+    if (state === "cancelled") return "VectorScope fix cancelled"
+    return `VectorScope fix: ${run.request.mode === "worktree" ? "in a worktree" : "approved"}`
+  }
+  if (run.status !== "done" || !run.result)
+    return run.progress?.message ? `VectorScope: ${run.progress.message}` : "VectorScope review"
+  const state = run.result.state
+  if (state === "refused") return "VectorScope did not review"
+  if (state === "failed") return "VectorScope review failed"
+  if (state === "cancelled") return "VectorScope review cancelled"
+  return `VectorScope review: ${shownVerdict(run.result)}`
+}
+
 const VERDICT_WORDS: Record<Connect.Verdict, string> = {
   clean: "clean (no blocking finding or concern)",
   findings: "findings (concerns to check)",

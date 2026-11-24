@@ -1727,6 +1727,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             messageID: part.messageID,
             callID: part.callID,
             patch: metadata(run),
+            ...(run.status === "done" && run.result ? { title: ConnectFrame.titleOf(run) } : {}),
           }).pipe(Effect.provideService(Database.Service, database), Effect.forkIn(scope, { startImmediately: true }))
         const ops = entry.call.promptOps
         if (!sessionID || !ops) return
