@@ -56,6 +56,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 concurrency:
   # Every run on main keeps its own group, so a cancelled check never marks main's history; branches and pull
   # requests cancel their stale runs. Both format() results are non-empty, so the && / || idiom is safe here.
