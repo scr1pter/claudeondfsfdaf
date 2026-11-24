@@ -340,13 +340,46 @@ describe("the engine server's hold on the desktop's review sessions (VS-23d)", (
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
-  // A known limit, pinned so it stays visible: the V2 session API admits a prompt of a `vectorscope.*` session, and its
-  // runner sends through @vectordevai/llm, which the route rules do not see. Nothing in SF-15 holds that path (the lead's).
-  it.live("known limit: the V2 session API still admits a prompt of a review session under zdr", () =>
+  // scope-finish takeover (2026-11-23): the V2 session API runs a session through @vectordevai/llm, which the route rules
+  // do not see, so under zdr it refuses a `vectorscope.*` session before anything is stored or sent (core's
+  // ReviewSessionAdmission port, read by the server package). It replaces the earlier pin of that hole as a known limit.
+  it.live("under zdr the V2 session API refuses a review session's prompt and compaction before anything is sent", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
       const desktop = yield* project(llm)
       yield* setReview({ privacy: "zdr" })
+      yield* llm.reset
+      yield* llm.text("ok", { usage: { input: 1, output: 1 } })
+      const session = yield* desktop.create()
+      const refused = yield* send(desktop.at(`/api/session/${session.id}/prompt`), {
+        prompt: { text: "Review this change." },
+      })
+      expect(refused.status).toBe(403)
+      expect(yield* refused.text).toContain("zero data retention")
+      const compacted = yield* send(desktop.at(`/api/session/${session.id}/compact`), {})
+      expect(compacted.status).toBe(403)
+      yield* desktop.idle(session.id)
+      expect(ReviewRoutes.known(session.id)).toBe(false)
+      expect(yield* llm.calls).toBe(0)
+      // A session no review asked for is the V2 API's as before, whatever the review privacy says.
+      const own = yield* send(desktop.at("/session"), { title: "Mine" }).pipe(
+        Effect.flatMap(json<Info>),
+        Effect.tap((mine) => Effect.sync(() => created.push(mine.id))),
+      )
+      const admitted = yield* send(desktop.at(`/api/session/${own.id}/prompt`), {
+        prompt: { text: "hello" },
+        resume: false,
+      })
+      expect(admitted.status).toBe(200)
+      expect(yield* llm.calls).toBe(0)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  it.live("under standard the V2 session API admits a review session's prompt as before", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const desktop = yield* project(llm)
+      yield* setReview({ privacy: "standard" })
       const session = yield* desktop.create()
       const admitted = yield* send(desktop.at(`/api/session/${session.id}/prompt`), {
         prompt: { text: "hello" },

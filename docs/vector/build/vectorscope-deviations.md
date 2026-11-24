@@ -25968,6 +25968,8 @@ the user config's privacy.
       table, so a `vectorscope.*` session can be driven there unheld. Closing it needs a check the engine supplies to the
       server package through core, which touches the V2 session core; it is left to the lead, and the HTTP test "known
       limit: the V2 session API still admits a prompt of a review session under zdr" pins today's behaviour.
+      (Closed 2026-11-23 by lead ruling: the V2 prompt, resume and compaction routes refuse such a session under zdr;
+      see `v2-p0/scope-finish-takeover.md`.)
 
 - **Critique points.** 1 taken as (b) (Decision 12, a pinning test). 2 taken (Decision 7). 3 taken in another form
   (Decision 6). 4 taken in full (Decision 4). 5 taken (Decision 5, with the caller-visible assertions). 6 taken

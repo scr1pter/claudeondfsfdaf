@@ -37,3 +37,13 @@ On main, engine `cli/cmd/review.ts` returns `{ exitCode: 2, error, target, outco
 **Mutation check.** With the folder comparison dropped (any `server.instance.disposed` retires), the case fails (8 pass, 1 fail); restored, 9 pass.
 
 Left as a follow-up: `LocalReviewPanel` (`local-review-panel.tsx`, also on main) has the same unscoped listener. There it only clears and lists the review results again, with nothing to abort or cancel.
+
+## 2026-11-23, the V2 session API sent a review session's prompt unheld under zdr
+
+**Bug.** Only the engine's V1 routes hold a `vectorscope.*` session to its review's privacy (`holdReview`, then `ReviewRoutes.hold` and `turn`). The V2 routes in the server package (`packages/server/src/handlers/session.ts`) admitted a prompt of such a session and ran it through `@vectordevai/llm`, which nothing holds. With the user config's `review.privacy: "zdr"`, a client driving a review session over `POST /api/session/:id/prompt` could send the reviewed code to a route that keeps data. The lane had pinned this as a known limit (`vectorscope-deviations.md`, Decision 12) and left it to the lead.
+
+**Lead ruling.** The deviations log's own plan, which is the safest option that closes it: refuse V2 admission of a `vectorscope.*` session while its review policy is "zdr". The policy is `ReviewRoutes.zdr(sessionID)` or the server policy from the user config (`ReviewRoutes.serverPolicy`), as V1's `holdReview` reads it. The engine gives it to the server package through a new core port, `ReviewSessionAdmission` (core `review/session-admission.ts`; engine `review/session-admission.ts`, registered in the engine's server layer). A host without the port treats the session as "zdr" (fail closed). The refusal covers the three V2 routes that make model calls for a session: prompt, free-model resume and compaction. It is a 403 sent before anything is stored or sent. Sessions that are not review sessions, and review sessions under "standard", are admitted as before.
+
+**Test.** engine `test/server/httpapi-review-privacy.test.ts`. The old pin is replaced by "under zdr the V2 session API refuses a review session's prompt and compaction before anything is sent": both answer 403, the session is idle, nothing is registered, the fake model server got 0 calls, and an ordinary session is still admitted. The new case "under standard the V2 session API admits a review session's prompt as before" keeps the standard path open (and fails if the port is missing).
+
+**Mutation check.** With the prompt route's refusal removed, the zdr case fails (expected 403, received 200; 6 pass, 1 fail); restored, 7 pass.
