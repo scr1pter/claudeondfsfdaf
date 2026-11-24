@@ -82,6 +82,97 @@ Teammate note: run migrations before seeding.
 `
 
 describe("owner review dismissals", () => {
+  test("review-only SQL reads retain only current screened owner notes from the exact repository", async () => {
+    await run({}, ({ brain, db, place }) =>
+      Effect.gen(function* () {
+        const saved = yield* brain.dismissReview(place, {
+          text: "This optional parser response is intentionally empty.",
+          paths: ["parser.ts"],
+          sessionID: "ses_owner",
+        })
+        if (saved.type === "refused") throw new Error(saved.message)
+        const original = yield* db
+          .select()
+          .from(BrainEntryTable)
+          .where(eq(BrainEntryTable.id, saved.entry.id))
+          .get()
+          .pipe(Effect.orDie)
+        if (!original) throw new Error("The owner dismissal was not persisted")
+        const variants: [string, Partial<typeof BrainEntryTable.$inferInsert>][] = [
+          ["other-repository", { repository_id: "another-repository" }],
+          ["personal-repository", { repository_id: "" }],
+          ["personal-scope", { scope: "personal" }],
+          ["agent", { origin: "agent" }],
+          ["import", { origin: "import" }],
+          ["file", { origin: "file" }],
+          ["fact", { kind: "fact" }],
+          ["proposed", { status: "proposed" }],
+          ["archived", { status: "archived" }],
+          ["quarantined", { status: "quarantined" }],
+          ["superseded-status", { status: "superseded" }],
+          ["private", { private: true }],
+          ["held", { hold_reason: "guest" }],
+          ["stale", { stale: true }],
+          ["superseded-link", { superseded_by: saved.entry.id }],
+          ["credential-after-truncation", { body: `${"A harmless legacy note. ".repeat(60)}ghp_${"a".repeat(40)}` }],
+        ]
+        yield* db
+          .insert(BrainEntryTable)
+          .values(variants.map(([id, change]) => ({ ...original, ...change, id })))
+          .run()
+          .pipe(Effect.orDie)
+        expect(yield* brain.reviewDismissals(place)).toEqual([saved.entry])
+      }),
+    )
+  })
+
+  test("review-only SQL reads are bounded and ordered by newest note then id", async () => {
+    await run({}, ({ brain, db, place }) =>
+      Effect.gen(function* () {
+        const saved = yield* brain.dismissReview(place, {
+          text: "A safe review note.",
+          paths: ["parser.ts"],
+          sessionID: "ses_owner",
+        })
+        if (saved.type === "refused") throw new Error(saved.message)
+        const original = yield* db
+          .select()
+          .from(BrainEntryTable)
+          .where(eq(BrainEntryTable.id, saved.entry.id))
+          .get()
+          .pipe(Effect.orDie)
+        if (!original) throw new Error("The owner dismissal was not persisted")
+        yield* db.delete(BrainEntryTable).where(eq(BrainEntryTable.id, original.id)).run().pipe(Effect.orDie)
+        yield* db
+          .insert(BrainEntryTable)
+          .values(
+            Array.from({ length: Brain.LIMIT.repository + 2 }, (_, index) => ({
+              ...original,
+              id: `bounded-${String(index).padStart(4, "0")}`,
+              updated_at: Math.floor(index / 2),
+            })),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        const notes = yield* brain.reviewDismissals(place)
+        expect(notes).toHaveLength(Brain.LIMIT.repository)
+        expect(notes.slice(0, 2).map((note) => note.id)).toEqual(["bounded-0300", "bounded-0301"])
+        expect(notes.at(-1)?.id).toBe("bounded-0003")
+      }),
+    )
+  })
+
+  test("held and personal places do not even query review dismissal SQL", async () => {
+    await run({}, ({ brain, db, place }) =>
+      Effect.gen(function* () {
+        yield* db.run("DROP TABLE brain_entry").pipe(Effect.orDie)
+        expect(yield* brain.reviewDismissals({ ...place, held: true })).toEqual([])
+        expect(yield* brain.reviewDismissals({ ...place, repository: "" })).toEqual([])
+        expect(yield* brain.reviewDismissals({ ...place, repository: "  " })).toEqual([])
+      }),
+    )
+  })
+
   test("an owner dismissal writes only active repository review context and stays out of coding digests", async () => {
     await run({}, ({ brain, place }) =>
       Effect.gen(function* () {

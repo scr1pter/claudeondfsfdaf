@@ -456,6 +456,8 @@ export interface Interface {
     place: Place,
     input: { readonly filter?: Filter; readonly query?: string; readonly scope?: BrainSchema.Scope },
   ) => Effect.Effect<BrainSchema.Entry[]>
+  /** Repository owner dismissals only, without file sync, personal recall or usage writes. */
+  readonly reviewDismissals: (place: Place) => Effect.Effect<BrainSchema.Entry[]>
   readonly propose: (place: Place, proposal: Proposal) => Effect.Effect<WriteResult>
   /** Owner-click review context only. Ordinary learned proposals cannot write this kind or choose this origin. */
   readonly dismissReview: (
@@ -1407,6 +1409,32 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .filter((row) => ranked.has(row.id) || row.body.toLowerCase().includes(query) || row.id === query)
       .toSorted((a, b) => (ranked.get(a.id) ?? 1e9) - (ranked.get(b.id) ?? 1e9) || byPlace(a, b))
       .map(toEntry)
+  })
+
+  const reviewDismissals = Effect.fn("Brain.reviewDismissals")(function* (place: Place) {
+    if (place.held || !place.repository.trim()) return []
+    // The generic list synchronizes personal and repository mirrors. A review-only read must not visit those files.
+    const rows = yield* db
+      .select()
+      .from(BrainEntryTable)
+      .where(
+        and(
+          eq(BrainEntryTable.repository_id, place.repository),
+          eq(BrainEntryTable.scope, "repository"),
+          eq(BrainEntryTable.kind, "review"),
+          eq(BrainEntryTable.origin, "user"),
+          eq(BrainEntryTable.status, "active"),
+          eq(BrainEntryTable.private, false),
+          eq(BrainEntryTable.stale, false),
+          isNull(BrainEntryTable.hold_reason),
+          isNull(BrainEntryTable.superseded_by),
+        ),
+      )
+      .orderBy(desc(BrainEntryTable.updated_at), asc(BrainEntryTable.id))
+      .limit(LIMIT.repository)
+      .all()
+      .pipe(Effect.orDie)
+    return rows.map(toEntry).filter(BrainPrivate.screened)
   })
 
   // --- Writing ----------------------------------------------------------------------------------------------------
@@ -3001,6 +3029,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     get,
     lines,
     list,
+    reviewDismissals,
     propose,
     dismissReview,
     update,
