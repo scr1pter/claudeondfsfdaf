@@ -64,6 +64,35 @@ test("non-binders, reruns, dispatch and schedule calls hand back without an offe
   }
 })
 
+test("paused GitHub hands verified runs back to Actions and does not admit the same run after resuming", async () => {
+  const f = fixture()
+  let paused = true
+  const handoff = createGithubHandoff({ ...f.deps,
+    config: () => ({ ...f.deps.config(), pausedPlatforms: new Set([paused ? "github" : "linear"] as const) }),
+  })
+  harness.mount({ "/handoff": handoff })
+  expect((await harness.call("POST", "/handoff", { body: f.body })).status).toBe(401)
+  const send = () => harness.call("POST", "/handoff", { body: f.body, token: f.token })
+  expect((await send()).body).toEqual({ handled: false })
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([])
+  expect(f.calls).toEqual([])
+
+  paused = false
+  expect((await send()).body).toEqual({ handled: false })
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([])
+  expect(f.calls).toEqual([])
+  f.ports.offer = async () => {
+    const jid = f.fake.sorted(everywhereKeys.jobs(f.account))[0]!
+    const claim = await claimJob(f.context(), { account: f.account, jid, device: f.computer })
+    if (!claim.ok) throw new Error("Fixture claim failed")
+    await reportJob(f.context(), { account: f.account, device: f.computer, report: { jid, lease: claim.job.lease.id, seq: 0, milestone: "started" } })
+    return "sent"
+  }
+  f.identity.runId++
+  expect((await send()).body).toMatchObject({ handled: true })
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toHaveLength(1)
+})
+
 test("only an accepted started report handles the binder's handoff, and a repeated run makes no second offer", async () => {
   const f = fixture()
   let offers = 0

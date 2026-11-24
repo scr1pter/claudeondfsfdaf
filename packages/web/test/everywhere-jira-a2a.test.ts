@@ -221,6 +221,31 @@ test("CancelTask changes only the signed requester's native task and makes no la
   expect((await f.send(request)).body.error.code).toBe(-32002)
 })
 
+test("paused Jira rejects a new signed request and preserves polling, cancellation and retry receipts", async () => {
+  const f = await ready()
+  const existing = await f.job()
+  const config = () => ({ ...f.config, pausedPlatforms: new Set(["jira"] as const) })
+  harness.mount({ "/a2a": createJiraRoutes({ ...f.deps, config }).a2a })
+  expect((await f.poll(existing.record.id)).body.result.status.state).toBe("TASK_STATE_WORKING")
+
+  const message = native.message()
+  const response = await f.send(message)
+  expect(response.status).toBe(200)
+  const id = response.body.result.task.id
+  await drainAfter()
+  const status = (await f.poll(id)).body.result.status
+  expect(status.state).toBe("TASK_STATE_REJECTED")
+  expect(status.message.parts[0].text).toBe("Vector is paused here.")
+  expect((await f.send(message)).body.result.task.id).toBe(id)
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([existing.view.jid])
+  expect(await readCounts(f.store, { sponsor: f.account, installation: f.installation, userId: native.user }, f.fake.clock.now))
+    .toMatchObject({ sponsorToday: 0, requesterHour: 0, sponsorLive: 1 })
+
+  const cancel = await f.send({ jsonrpc: "2.0", id: randomUUID(), method: "CancelTask", params: { id: existing.record.id } })
+  expect(cancel.body.result.status.state).toBe("TASK_STATE_CANCELED")
+  expect((await readJob(f.store, existing.view.jid))?.state).toBe("cancelled")
+})
+
 test("opaque repository input resumes the original own prompt and changed mappings, aliases and other principals cannot select", async () => {
   for (const mode of ["valid", "mapping", "alias", "other"] as const) {
     const f = await ready({ multiple: true })

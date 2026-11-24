@@ -95,6 +95,8 @@ export function createGithubHandoff(deps: {
         throw new ApiError(400, "HANDOFF_INVALID", "Invalid handoff reference.")
       const ctx = context()
       if (!await useOnce(ctx.store, everywhereKeys.handoff(identity.repositoryId, identity.runId), KEEP_MS.handoff)) return back()
+      // Keep the replay marker if the workflow falls back to Actions during the pause.
+      if (config.pausedPlatforms.has("github")) return back()
       const ports = deps.ports ?? safePorts(config)
       // The token's signed visibility wins over the binding's: only `private` is unshared (EV-31 (e)).
       const repository = { ...binding.repository, shared: identity.repositoryVisibility === undefined ? binding.repository.shared : identity.repositoryVisibility !== "private" }

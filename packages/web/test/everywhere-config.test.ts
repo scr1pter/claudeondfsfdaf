@@ -56,6 +56,7 @@ describe("the feature switch and the data key", () => {
     const config = readConfig({})
     expect(config.enabled).toBe(false)
     expect([...config.platforms]).toEqual([])
+    expect([...config.pausedPlatforms]).toEqual([])
     expect(config.dataKeys).toEqual([])
     expect(config.offer).toBeUndefined()
     expect(config.slack).toBeUndefined()
@@ -138,6 +139,19 @@ describe("the feature switch and the data key", () => {
     expect(Object.isFrozen(config)).toBe(true)
     expect(Object.isFrozen(config.dataKeys)).toBe(true)
   })
+})
+
+test("a pause list uses exact platform names and leaves each configured platform open", () => {
+  const config = readConfig(on({
+    ...slackEnv(),
+    ...linearEnv(),
+    [ENV_NAMES.jiraForgeAppId]: "ari:cloud:ecosystem::app/test",
+    [ENV_NAMES.platforms]: "github,slack,linear,jira",
+    [ENV_NAMES.pausedPlatforms]: " jira,slack,github,jira,,Slack,misspelled-platform ",
+  }))
+  expect([...config.pausedPlatforms]).toEqual(["jira", "slack", "github"])
+  for (const platform of ["github", "slack", "linear", "jira"] as const) expect(platformOn(config, platform)).toBe(true)
+  expect(config.problems).toEqual([ENV_NAMES.pausedPlatforms])
 })
 
 describe("platforms", () => {

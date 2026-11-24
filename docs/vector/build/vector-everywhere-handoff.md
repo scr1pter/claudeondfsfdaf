@@ -315,7 +315,7 @@ Each item below is also in the deviations log.
   Deviations log, "2026-11-20, EV-23", Left open.
 - **The docs and guides' loose ends (EV-24, open).**
   - **Help and listing copy (EV-24).** Slack, Linear and Jira explain how to request a change in a mapped repository. GitHub help names the configured Vector workflow. The Slack manifest describes requesting work and following its progress. The guides keep the execution-route prerequisites.
-  - **No per-platform stop switch:** removing a platform from VECTOR_EVERYWHERE_PLATFORMS leaves its live replies unable to post (runtime.ts `configuredPlatforms`), so the guides give only the full order.
+  - **Per-platform admission pause (EV-24):** deploy with the platform's name in `VECTOR_EVERYWHERE_PAUSED_PLATFORMS` while keeping it in `VECTOR_EVERYWHERE_PLATFORMS`. Existing jobs, replies and controls stay available under the global switch. GitHub hands new runs back to the repository's @Vector Actions workflow.
   - **The docs' set-up steps wait for the desktop write path** (EV-21 (aj)); the copy test fails when the page starts writing.
   - **The lane's path filter** (FIT-4, review-fixes) does not cover packages/web/src/drafts/**. **For review-fixes:** when it repairs the vector-everywhere.yml path filter, include packages/web/src/drafts/**. Until then, dispatch vector-everywhere.yml for any draft-only change.
     *2026-11-21 (EV-33):* closed by EV-33, not by FIT-4, and narrowed: the paths list the three everywhere drafts (drafts/everywhere*, drafts/everywhere/** and drafts/docs/everywhere.astro) instead of drafts/**, because drafts/docs/vector-hands.astro and vectorscope-github.astro are other lanes' drafts and would start this lane for nothing. See EV-23's item above.

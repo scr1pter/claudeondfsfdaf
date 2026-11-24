@@ -136,6 +136,11 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
       return
     }
     for (const ended of await sweepAccount(context(), sponsor, { stop: await ports.switch("everywhere") === "stop" })) await events.ended?.(ended)
+    if (config().pausedPlatforms.has(trigger.platform)) {
+      await adapter.refuse(trigger, "switched-off")
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
+      return
+    }
     const subject = { sponsor, installation: trigger.installation, userId: trigger.actor.userId }
     const counts = await readCounts(store, subject, now())
     const mappingKey = everywhereKeys.repo(trigger.installation, parsed.place)
