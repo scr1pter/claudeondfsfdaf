@@ -2,7 +2,7 @@ import "./init-projectors"
 
 import { NodeHttpServer } from "@vectordevai/core/effect/platform-node"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
-import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
+import { ConfigProvider, Context, Effect, Exit, Layer, Option, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
@@ -16,7 +16,10 @@ import { lazy } from "@/util/lazy"
 import { assertSecurityEnvironment } from "@vectordevai/core/flag/security"
 import { InstallationLocal } from "@vectordevai/core/installation/version"
 import { ServerAuth } from "./auth"
-import { assertListenSecurity, guardedHostname } from "./listen-policy"
+import { assertListenSecurity, guardedHostname, isLoopback } from "./listen-policy"
+import { EverywherePreferences } from "@/config/everywhere-preferences"
+import type { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
+import { AppRuntime } from "@/effect/app-runtime"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -26,6 +29,7 @@ export type Listener = {
   port: number
   url: URL
   stop: (close?: boolean) => Promise<void>
+  everywherePreferences?: (request: unknown) => Promise<EverywherePreferenceWire.Result>
 }
 
 type ServerApp = {
@@ -43,6 +47,8 @@ type ListenOptions = CorsOptions & {
   trustedNetwork?: boolean
   /** Set by listen() when requests must name a loopback host; see guardedHostname. */
   guardedHostname?: string
+  /** Only the built-in, authenticated Desktop sidecar supplies its per-user state file. */
+  everywherePreferencesPath?: string
 }
 type ListenerState = {
   scope: Scope.Scope
@@ -50,7 +56,7 @@ type ListenerState = {
   http: ListenerServer
   websockets: WebSocketTracker.Interface
 }
-type EffectListener = Omit<Listener, "stop"> & {
+type EffectListener = Omit<Listener, "stop" | "everywherePreferences"> & {
   stop: (close?: boolean) => Effect.Effect<void>
 }
 
@@ -88,20 +94,27 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
     ),
   )
   assertListenSecurity(opts, auth)
+  const preferencesPath =
+    isLoopback(opts.hostname) && Option.getOrElse(auth.password, () => "") !== "" ? opts.everywherePreferencesPath : undefined
   const listener = await Effect.runPromise(
     listenEffect({
       ...opts,
       guardedHostname: guardedHostname(opts, auth),
+      everywherePreferencesPath: preferencesPath,
       // A passwordless listener trusts only its own origin among local pages. Running from source keeps every local
       // page trusted, so the app's dev server on another port can still reach a `bun dev serve` backend.
       loopbackOrigins: opts.loopbackOrigins ?? InstallationLocal,
     }),
   )
+  const preferences = preferencesPath ? EverywherePreferences.access(preferencesPath) : undefined
   return {
     hostname: listener.hostname,
     port: listener.port,
     url: listener.url,
     stop: (close?: boolean) => Effect.runPromiseExit(listener.stop(close)).then(() => undefined),
+    everywherePreferences: preferences
+      ? (request) => AppRuntime.runPromise(preferences(request)).catch(() => ({ version: 1, kind: "unavailable" }))
+      : undefined,
   }
 }
 
@@ -123,7 +136,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 )
 
 function listenerLayer(opts: ListenOptions, port: number) {
-  return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
+  return HttpRouter.serve(HttpApiApp.createRoutes(opts, opts.everywherePreferencesPath), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,

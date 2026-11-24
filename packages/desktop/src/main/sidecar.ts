@@ -4,6 +4,8 @@ import { join } from "node:path"
 import { mkdirSync } from "node:fs"
 import { VECTOR_AGENT_RUNTIME_ENV } from "./agent-runtime"
 import { trustCompanyCertificates } from "./local-certificates"
+import { PREFERENCE_MESSAGE, preferenceMessage } from "./everywhere-preference-bridge"
+import type { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
 
 type NodeHttpWithEnvProxy = typeof http & {
   setGlobalProxyFromEnv: () => void
@@ -28,6 +30,7 @@ type SidecarMessage =
   | { type: "ready" }
   | { type: "stopped" }
   | { type: "error"; error: { message: string; stack?: string } }
+  | { type: typeof PREFERENCE_MESSAGE; id: string; result: EverywherePreferenceWire.Result }
 
 type ParentPort = {
   postMessage(message: SidecarMessage): void
@@ -36,12 +39,22 @@ type ParentPort = {
 
 type Listener = {
   stop(close?: boolean): void | Promise<void>
+  everywherePreferences?: (request: unknown) => Promise<EverywherePreferenceWire.Result>
 }
 
 const parentPort = getParentPort()
 let listener: Listener | undefined
 
 parentPort.on("message", (event) => {
+  const preferences = preferenceMessage(event.data)
+  if (preferences) {
+    const answer = listener?.everywherePreferences?.(preferences.request) ??
+      Promise.resolve({ version: 1, kind: listener ? "unsupported" : "unavailable" } as const)
+    void answer.catch(() => ({ version: 1, kind: "unavailable" }) as const).then((result) => {
+      parentPort.postMessage({ type: PREFERENCE_MESSAGE, id: preferences.id, result })
+    })
+    return
+  }
   const command = parseCommand(event.data)
   if (!command) return
   if (command.type === "stop") {
@@ -65,6 +78,7 @@ async function start(command: StartCommand) {
       username: "vector",
       password: command.password,
       cors: ["oc://renderer"],
+      everywherePreferencesPath: join(command.userDataPath, "everywhere-preferences.v1.json"),
     })
     parentPort.postMessage({ type: "ready" })
   } catch (error) {

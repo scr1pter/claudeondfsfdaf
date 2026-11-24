@@ -9,6 +9,7 @@ import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
 import { VECTOR_AGENT_RUNTIME_ENV } from "./agent-runtime"
 import { sidecarEnvironment } from "./sidecar-environment"
+import { preferenceRequester } from "./everywhere-preference-bridge"
 
 export type HealthCheck = { wait: Promise<void> }
 
@@ -17,7 +18,10 @@ type SidecarMessage =
   | { type: "stopped" }
   | { type: "error"; error: { message: string; stack?: string } }
 
-export type SidecarListener = { stop: () => Promise<void> }
+export type SidecarListener = {
+  stop: () => Promise<void>
+  everywherePreferences: ReturnType<typeof preferenceRequester>
+}
 
 const SIDECAR_SERVICE_NAME = "Vector server"
 const SIDECAR_START_STALL_TIMEOUT = 60_000
@@ -210,6 +214,16 @@ export async function spawnLocalServer(
 
   return {
     listener: {
+      everywherePreferences: preferenceRequester({
+        send: (message) => {
+          if (exited) throw new Error("The built-in engine has stopped.")
+          child.postMessage(message)
+        },
+        listen: (callback) => {
+          child.on("message", callback)
+          return () => child.off("message", callback)
+        },
+      }),
       stop: () => {
         if (stopping) return stopping
         if (exited) return Promise.resolve()

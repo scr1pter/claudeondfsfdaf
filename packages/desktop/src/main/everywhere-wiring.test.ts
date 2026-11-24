@@ -383,6 +383,7 @@ function computer(
     /** The engine's other routes (EV-18's probes, the worktree route, the trust route). */
     engine?: Record<string, EngineRoute>
     power?: Parameters<typeof createEverywhereJobs>[0]["power"]
+    preferences?: Parameters<typeof createEverywhereJobs>[0]["preferences"]
     now?: () => number
   } = {},
 ) {
@@ -400,6 +401,7 @@ function computer(
   const memory = memoryLedger()
   const wiring = createEverywhereJobs({
     engine: { url: ENGINE, password: "owner-secret" },
+    preferences: options.preferences,
     token: options.token ?? (async () => TOKEN),
     events: (signal) => events.events(signal),
     ledgerPath: "/fixture/user-data/everywhere/runner.json",
@@ -806,6 +808,32 @@ test("with the setting off, locked, malformed or unreadable, nothing connects, a
       }
     }
   } finally {
+    await folders.cleanup()
+  }
+})
+
+test("the runner uses the supported sidecar settings and only falls back for explicit version skew", async () => {
+  const folders = await folderFixture()
+  type Preference = Awaited<ReturnType<NonNullable<Parameters<typeof createEverywhereJobs>[0]["preferences"]>>>
+  let value: Preference = {
+    version: 1,
+    kind: "ready",
+    snapshot: { revision: 1, everywhere: { enabled: false }, locked: [] },
+  }
+  const env = computer(on(folders.project), { preferences: async () => value })
+  try {
+    env.begin()
+    expect(await env.wiring.refresh()).toBe("off")
+    value = { version: 1, kind: "unavailable" }
+    expect(await env.wiring.refresh()).toBe("off")
+    value = { version: 1, kind: "unsupported" }
+    expect(await env.wiring.refresh()).toBe("needs-remote")
+    value = { version: 1, kind: "ready", snapshot: { revision: 2, everywhere: { enabled: true }, locked: ["everywhere"] } }
+    expect(await env.wiring.refresh()).toBe("off")
+    expect(env.sockets()).toBe(0)
+    expect(env.service.requests).toEqual([])
+  } finally {
+    env.stop()
     await folders.cleanup()
   }
 })

@@ -10,6 +10,7 @@ const PREFERENCES: BackgroundModePreference[] = ["auto", "always", "never"]
 export type BackgroundWorkState = {
   armedTasks: number
   inFlightRuns: number
+  everywhereWaiting?: boolean
   // Epoch milliseconds of the soonest armed task; absent when nothing is armed.
   nextRunAt?: number
 }
@@ -38,6 +39,7 @@ export function decideBackgroundMode(input: BackgroundModeInput) {
       reason: `${plural(input.armedTasks, "scheduled task")} armed${nextRunSuffix(input.nextRunAt, input.now ?? Date.now())}`,
     }
   }
+  if (input.everywhereWaiting) return { keepAlive: true, reason: "Waiting for Vector everywhere jobs" }
   if (input.preference === "always") return { keepAlive: true, reason: "Idle · staying resident" }
   // macOS apps conventionally outlive their last window and Vector always has,
   // so background mode must not turn that into a quit.

@@ -8,7 +8,7 @@ type StatusWindow = {
 /** Remote and Vault state belongs to ordinary renderers, never the restricted Hands overlay. */
 export function broadcastRendererStatus(
   windows: readonly StatusWindow[],
-  channel: "remote-changed" | "vault-changed",
+  channel: "remote-changed" | "vault-changed" | "everywhere-preferences-changed",
   status: unknown,
 ) {
   for (const window of windows)

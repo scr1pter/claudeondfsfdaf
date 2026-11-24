@@ -14,10 +14,18 @@ const decide = (input: {
   preference: BackgroundModePreference
   armedTasks: number
   inFlightRuns: number
+  everywhereWaiting?: boolean
   platform: NodeJS.Platform
   quitRequested?: boolean
   nextRunAt?: number
 }) => decideBackgroundMode({ quitRequested: false, now: NOW, ...input })
+
+test("waiting for Everywhere jobs keeps auto mode resident until the owner quits or disables background mode", () => {
+  const state = { armedTasks: 0, inFlightRuns: 0, everywhereWaiting: true, platform: "linux" } as const
+  expect(decide({ ...state, preference: "auto" })).toEqual({ keepAlive: true, reason: "Waiting for Vector everywhere jobs" })
+  expect(decide({ ...state, preference: "never" }).keepAlive).toBe(false)
+  expect(decide({ ...state, preference: "auto", quitRequested: true }).keepAlive).toBe(false)
+})
 
 // Every combination of preference, armed tasks, in-flight runs and platform,
 // written out rather than derived, so the table is a spec and not a second copy
