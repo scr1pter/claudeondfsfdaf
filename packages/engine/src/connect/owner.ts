@@ -2,8 +2,10 @@ export * as ConnectOwner from "./owner"
 
 import { randomUUID } from "node:crypto"
 import os from "node:os"
+import path from "node:path"
 import { Cause, Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
@@ -86,6 +88,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const hub = yield* ConnectHub.Service
     const directoryRequests = yield* ConnectDirectoryRequest.Service
+    const jobs = yield* BackgroundJobStore.Service
     const brain = yield* Brain.Service
     const brainDatabase = yield* BrainDatabase.Service
     const instruction = yield* Instruction.Service
@@ -388,6 +391,31 @@ const layer = Layer.effect(
           }),
         )
       })
+    const inspectOpen: ConnectDirectoryRequest.InspectOpen = Effect.fnUntraced(function* (binding, receipt) {
+      // A row may already say cancelled while its worker drains. Reclaim an open receipt only when the original
+      // modern lease is positively dead, and the row still names the exact directory binding.
+      const row = yield* jobs.forJob(binding.runID, binding.anchorID)
+      const metadata = row?.metadata
+      return (
+        row !== undefined &&
+        row.id === binding.runID &&
+        row.parentSessionID === binding.anchorID &&
+        row.type === ConnectHub.JOB_TYPE &&
+        row.background &&
+        row.sessionID === undefined &&
+        row.attempt === undefined &&
+        (row.status === "running" || row.status === "interrupted") &&
+        path.normalize(row.directory) === path.normalize(receipt.directory) &&
+        metadata?.directoryReview === true &&
+        metadata.runID === binding.runID &&
+        metadata.member === "vectorscope" &&
+        metadata.action === "review" &&
+        metadata.requestKey === binding.key &&
+        metadata.scopeDigest === binding.scopeDigest &&
+        metadata.inputDigest === binding.inputDigest &&
+        BackgroundJobStore.deadModernLease(row.owner)
+      )
+    })
     const directoryReview: Interface["directoryReview"] = (input, options) =>
       Effect.gen(function* () {
         yield* enabled
@@ -423,8 +451,11 @@ const layer = Layer.effect(
         } = { step: "agent", bind: "none" }
         return yield* Effect.acquireUseRelease(
           directoryRequests
-            .reserve({ projectID: current.project.id, directory: current.directory }, checked, (prepared) =>
-              hub.settleDirectory({ ...prepared.proof, anchorID: prepared.anchorID }),
+            .reserve(
+              { projectID: current.project.id, directory: current.directory },
+              checked,
+              (prepared) => hub.settleDirectory({ ...prepared.proof, anchorID: prepared.anchorID }),
+              inspectOpen,
             )
             .pipe(Effect.mapError(requestError)),
           (attempt) =>
@@ -811,6 +842,7 @@ export const node = LayerNode.make({
   deps: [
     ConnectHub.node,
     ConnectDirectoryRequest.node,
+    BackgroundJobStore.node,
     Brain.node,
     BrainDatabase.node,
     Instruction.node,

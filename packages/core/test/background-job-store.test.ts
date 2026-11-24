@@ -68,6 +68,25 @@ const row = (input: Partial<BackgroundJob.Started> & { owner: BackgroundJobStore
 })
 
 describe("BackgroundJobStore", () => {
+  it.live("modern lease death can read an existing machine identity without creating a missing one", () =>
+    Effect.sync(() => {
+      const owner = foreign(exitedPid())
+      const existing = readFileSync(machineFile, "utf8")
+      const missing = path.join(temporary, "missing-machine-id")
+      try {
+        BackgroundJobStore.useMachineFile(missing)
+        expect(BackgroundJobStore.deadModernLease(owner)).toBe(false)
+        expect(statSync(missing, { throwIfNoEntry: false })).toBeUndefined()
+        BackgroundJobStore.useMachineFile(machineFile)
+        expect(BackgroundJobStore.deadModernLease(owner)).toBe(true)
+        expect(BackgroundJobStore.deadModernLease({ ...owner, boot: owner.boot + 1 })).toBe(false)
+        expect(readFileSync(machineFile, "utf8")).toBe(existing)
+      } finally {
+        BackgroundJobStore.useMachineFile(machineFile)
+      }
+    }),
+  )
+
   it.effect("a timed-out acknowledgement after real SQL commit preserves both accepted metadata snapshots", () =>
     withStore((store) =>
       Effect.gen(function* () {
