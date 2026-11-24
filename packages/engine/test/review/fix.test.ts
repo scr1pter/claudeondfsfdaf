@@ -2067,11 +2067,22 @@ describe.skipIf(!sandboxed)("review fix checks in the sandbox (VS-12b)", () => {
     () =>
       Effect.gen(function* () {
         const token = randomUUID()
-        const home = os.homedir()
+        // The CI network namespace can retain sudo's HOME after dropping privileges.
+        const home = os.userInfo().homedir
+        const hostPathExists = (file: string) =>
+          Effect.promise(() =>
+            fs.lstat(file).then(
+              () => true,
+              (error) => {
+                if (error.code === "ENOENT") return false
+                throw error
+              },
+            ),
+          )
         const targets = [
           path.join(os.tmpdir(), `vector-fix-escape-${token}`),
           path.join(home, `vector-fix-escape-${token}`),
-          ...((yield* exists(path.join(home, ".cache")))
+          ...((yield* hostPathExists(path.join(home, ".cache")))
             ? [path.join(home, ".cache", `vector-fix-escape-${token}`)]
             : []),
           path.join(Global.Path.data, `vector-fix-escape-${token}`),
@@ -2083,6 +2094,10 @@ describe.skipIf(!sandboxed)("review fix checks in the sandbox (VS-12b)", () => {
         const planted = path.join(Global.Path.data, `vector-fix-planted-${token}`)
         yield* write(Global.Path.data, path.basename(planted), "planted\n")
         yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(planted, { force: true })))
+        // A host permission failure would also look like the sandbox blocked the write.
+        yield* Effect.promise(() =>
+          Promise.all(targets.map((target) => fs.access(path.dirname(target), fs.constants.W_OK | fs.constants.X_OK))),
+        )
         const f = yield* steps({
           "test/env.test.ts": [
             'import { test } from "bun:test"',
@@ -2126,8 +2141,8 @@ describe.skipIf(!sandboxed)("review fix checks in the sandbox (VS-12b)", () => {
         expect(output).not.toContain("DATA planted")
         expect(output).not.toContain("WROTE host")
         expect(yield* read(fix.placement.worktree, "out/probe.txt")).toBe("written")
-        for (const target of targets) expect(yield* exists(target)).toBe(false)
-        expect(yield* exists(path.join(os.tmpdir(), `home-${token}`))).toBe(false)
+        for (const target of targets) expect(yield* hostPathExists(target)).toBe(false)
+        expect(yield* hostPathExists(path.join(os.tmpdir(), `home-${token}`))).toBe(false)
         // An ignored output leaves the checkout holding exactly the patch.
         expect(yield* f.fix.state(fix.fixID)).toBe("applied")
         expect(checked).toMatchObject({ passed: true, actor: ACTOR, operation: expect.stringMatching(/^sha256:/) })
