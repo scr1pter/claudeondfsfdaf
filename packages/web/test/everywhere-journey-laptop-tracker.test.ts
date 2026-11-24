@@ -628,7 +628,11 @@ async function linearOfflineJourney(w: LinearWorld) {
   expect(ended[0]!.variables).toEqual({
     id: linear.session,
     input: {
-      plan: linearPlan("pushing", "completed"),
+      plan: [
+        { content: "Read the workspace", status: "canceled" },
+        { content: "Make the changes", status: "canceled" },
+        { content: "Prepare the result", status: "canceled" },
+      ],
       addedExternalUrls: [{ label: "Vector job", url: `https://vectordev.ai/everywhere?job=${waiting.jid}` }],
     },
   })
@@ -764,10 +768,10 @@ async function jiraJourney(w: JiraWorld) {
   expect(JSON.stringify(body)).not.toContain("Edited summary")
   expect(texts).not.toContain("Edited description")
   expect(JSON.stringify(body)).not.toContain(jira.token)
-  // Claimed but not started: the task is not terminal and still says it waits (deviation (h)).
+  // A claim confirms pickup. The task remains submitted until the computer reports that it started.
   expect(taskOf(await w.poll(task))).toEqual({
     state: "TASK_STATE_SUBMITTED",
-    text: "Received your request. Waiting for your computer.",
+    text: "Your computer picked up the request and is preparing to start.",
   })
   expect((await readJiraTask(w.f.store, task))?.record).toMatchObject({ state: "SUBMITTED", jid })
   await w.gates.mapping.entered.promise
