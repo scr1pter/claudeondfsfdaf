@@ -60,11 +60,11 @@ export async function routeFacts<Repo extends Pick<Repository, "id" | "fullName"
     now: input.ctx.now,
   } satisfies RouteInput & { readonly computers: number }
   // Repository proof uses the sponsor's binding only after switch, identity, perk and cap checks pass.
-  const repository = input.resolveRepository && decideRoute(facts).action === "ask-repository"
-    ? await input.resolveRepository()
-    : input.repository
+  const lookup = input.resolveRepository
+  const attempted = lookup !== undefined && decideRoute(facts).action === "ask-repository"
+  const repository = attempted ? await lookup() : input.repository
   // A switch or entitlement can change during a live repository lookup.
-  const current = repository && input.resolveRepository ? await readGates() : gates
+  const current = attempted ? await readGates() : gates
   const [currentEverywhere, currentRemote, currentPlan, currentRemotePerk] = current
   // A platform that is not an enabled run source has no Actions route, so nothing is read for it (R-C8/R-A8).
   const sourceEnabled = input.trigger.platform !== "github" && input.ports.cloudSource?.(input.trigger.platform) === true

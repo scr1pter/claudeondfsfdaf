@@ -153,6 +153,17 @@ test("signed Slack mapping and intake use the same verified repository and prese
     await drainAfter()
   }
 
+  const perk = f.ports.perk
+  const gateReads: string[] = []
+  f.ports.perk = async (account, name) => {
+    gateReads.push(name)
+    return perk(account, name)
+  }
+  await send("Tell me how to map a repository")
+  expect(gateReads).toEqual(["everywhere", "remote"])
+  expect(binding.commands).toEqual([])
+  f.ports.perk = perk
+
   await send(`repo ${fullName.toUpperCase()}`)
   expect(await findMapping(f.store, f.installation, "C123")).toMatchObject({
     setBy: f.account,
@@ -183,11 +194,12 @@ test("signed Slack mapping and intake use the same verified repository and prese
   expect(binding.commands).toHaveLength(beforePause)
   f.ports.switch = async () => "on"
   const lookup = f.ports.repository
-  f.ports.repository = async (input) => {
+  const pauseAfterLookup: typeof lookup = async (input) => {
     const resolved = await lookup(input)
     f.ports.switch = async (name) => name === "everywhere" ? "no-new" : "on"
     return resolved
   }
+  f.ports.repository = pauseAfterLookup
   await send("Do not admit after the switch changed")
   expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual(jobs)
   expect(fixture.state.minted).toHaveLength(3)
@@ -202,6 +214,11 @@ test("signed Slack mapping and intake use the same verified repository and prese
   expect(maybeMapped.ok).toBe(true)
   await send("Do not admit a stale mapping")
   expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual(jobs)
+  f.ports.repository = pauseAfterLookup
+  const beforeRefusal = slack.calls.length
+  await send("Do not ask for a repository after intake was paused")
+  const replies = slack.calls.slice(beforeRefusal).filter((call) => call.method === "chat.postEphemeral")
+  expect(replies.map((call) => call.body.text)).toEqual(["Vector is paused here."])
   expect(fixture.state.minted).toHaveLength(3)
   expect(fixture.tokens.size).toBe(0)
 })
