@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import { docsMoved } from "../src/data/docs-nav"
+import { publishedDesktopVersion, reviewPipelineAvailable, reviewPipelineShipped } from "../src/data/vector-releases"
 
-// The owner asked for a setting that sends each finished task to Vectorscope, after LLM-as-a-judge when that is on,
-// and for its diagram on the site (21 November 2026). The desktop setting, Code review after each task, merged in #58,
-// so the homepage and the docs describe it as it is, in the order it runs: the task, the judge, then the review.
+// Code review after each task merged in #58. The site explains the pipeline and only offers setup instructions as
+// available when the download page offers the stable desktop release.
 const web = path.join(import.meta.dir, "..")
 // Template text wraps across lines, so the copy is compared with its whitespace folded.
 const read = async (file: string) => (await Bun.file(path.join(web, file)).text()).replace(/\s+/g, " ")
@@ -29,6 +29,36 @@ const pointer = vectorscope.slice(
 )
 // What a reader sees, without markup.
 const words = (text: string) => text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")
+
+test("the homepage and both docs surface availability only after the desktop release", () => {
+  for (const page of [lander, verified, vectorscope]) {
+    expect(page).toMatch(/import \{[^}]*\breviewPipelineAvailable\b[^}]*\} from "[^"\s]+\/data\/vector-releases"/)
+  }
+  expect(home).toContain('{reviewPipelineAvailable ? "Code review" : "Coming soon"}')
+  expect(home).toContain('{reviewPipelineAvailable ? "See how it works" : "See how it will work"}')
+  expect(docs).toMatch(/\{!reviewPipelineAvailable && \(\s*<p class="note">Coming soon\./)
+  expect(pointer).toContain("{reviewPipelineAvailable ? (")
+})
+
+test("only a stable desktop download from 2.0.0 qualifies", () => {
+  for (const published of ["2.0.0", "2.0.1", "2.12.0", "3.0.0"]) {
+    expect(reviewPipelineShipped(published)).toBe(true)
+  }
+  for (const published of [
+    "1.99.112",
+    "1.99.120",
+    "1.100.999",
+    "2.0.0-rc.1",
+    "3.0.0-beta",
+    "02.0.0",
+    "2.0",
+    "2.0.0\n",
+    "latest",
+  ]) {
+    expect(reviewPipelineShipped(published)).toBe(false)
+  }
+  expect(reviewPipelineAvailable).toBe(reviewPipelineShipped(publishedDesktopVersion))
+})
 
 test("the diagram shows the task, then the judge, then Vectorscope, with the judge marked optional", () => {
   const titles = Array.from(diagram.matchAll(/<h3 class="rp-title">([^<]*)<\/h3>/g), (match) => match[1])
@@ -67,24 +97,27 @@ test("the diagram is real text labelled by its caption, and its arrows are hidde
   expect(component).toContain("--rp-title: var(--landing-title, var(--d-heading));")
 })
 
-test("the homepage section sits between Privacy and Trust and says where to turn the setting on", () => {
+test("the homepage section sits between Privacy and Trust and explains preview and released use", () => {
   const privacy = lander.indexOf('<section id="privacy"')
   const section = lander.indexOf('<section id="code-review"')
   expect(privacy).toBeGreaterThan(-1)
   expect(section).toBeGreaterThan(lander.indexOf("</section>", privacy))
   expect(lander.indexOf('<section id="trust"')).toBeGreaterThan(section)
   expect(home).toContain('data-chapter="Review"')
-  expect(home).toContain('<p class="story-kicker" data-reveal>Code review</p>')
   expect(home).toContain(
     '<h2 id="code-review-title" class="story-title" data-reveal>Done, judged, then&nbsp;reviewed.</h2>',
   )
   expect(home).toContain(
-    "Turn on Code review after each task in the desktop app's Settings&nbsp;→&nbsp;General, and Vectorscope, Vector's code review agent, reviews each task you run there that changes files. With LLM-as-a-judge on, it waits for the judge's last round.",
+    "With a compatible Linux engine and Vectorscope local reviews on, turn on Code review after each task in the desktop app's Settings&nbsp;→&nbsp;General. Vectorscope, Vector's code review agent, reviews each task you run there that changes files. With LLM-as-a-judge on, it waits for the judge's last round.",
+  )
+  expect(home).toContain(
+    "Soon, turning on code review in the desktop app's settings will send each task you run there that changes files to Vectorscope, Vector's code review agent, once the work is done.",
+  )
+  expect(home).toMatch(
+    /\{reviewPipelineAvailable \? \( <> With a compatible Linux engine and Vectorscope local reviews on,.*?<> Soon, turning on code review/s,
   )
   expect(home).toContain('<ReviewPipeline id="code-review-diagram" tone="landing" />')
-  expect(home).toContain(
-    '<a class="landing-pill" href="/docs/verified-completion#then-code-review">See how it works</a>',
-  )
+  expect(home).toContain('<a class="landing-pill" href="/docs/verified-completion#then-code-review">')
   // Neither the hero nor the self-evolving section carries it.
   expect(lander.slice(lander.indexOf('<section id="ch-start"'), lander.indexOf("<AppShots />"))).not.toContain(
     "ReviewPipeline",
@@ -92,12 +125,12 @@ test("the homepage section sits between Privacy and Trust and says where to turn
 })
 
 test("the docs describe it under Verified completion, with a pointer from Vectorscope", () => {
-  expect(docs).toStartWith(
-    '<h2 id="then-code-review">Then code review</h2> <ReviewPipeline id="then-code-review-diagram" tone="docs" />',
-  )
+  expect(docs).toStartWith('<h2 id="then-code-review">Then code review</h2> {!reviewPipelineAvailable && (')
+  expect(docs).toContain(')} <ReviewPipeline id="then-code-review-diagram" tone="docs" />')
   expect(docs).toContain(
     "Code review after each task is a separate desktop app setting, next to LLM-as-a-judge in Settings → General.",
   )
+  expect(docs).toContain("The review needs a compatible Linux engine.")
   expect(docs).toContain("With the judge on, the review waits until the judge's last round is done")
   // A stopped judge holds back only the work it was checking; later work is reviewed on its own.
   expect(docs).toContain("If you stop the judge, the work it was checking isn't reviewed.")
@@ -113,7 +146,10 @@ test("the docs describe it under Verified completion, with a pointer from Vector
   expect(vectorscope.match(/id="review-pipeline"/g)).toHaveLength(1)
   expect(docsMoved["review-pipeline"]).toBe("vectorscope#review-pipeline")
   expect(pointer).toContain(
-    "Code review after each task, a desktop app setting in Settings → General, sends each finished task's changes to Vectorscope, after LLM-as-a-judge when that is on. It is off by default and appears once Vectorscope local reviews are turned on.",
+    "Code review after each task is a desktop app setting in Settings → General. With a compatible Linux engine and Vectorscope local reviews on, it sends each finished task's changes to Vectorscope, after LLM-as-a-judge when that is on. The setting is off by default.",
+  )
+  expect(pointer).toMatch(
+    /\{reviewPipelineAvailable \? \( <> Code review after each task is.*?<> Coming soon\. A desktop setting will send/s,
   )
   expect(pointer).toContain('<a href="/docs/verified-completion#then-code-review">Verified completion</a>')
   // The diagram's step headings stay out of the page's On this page rail.
@@ -142,13 +178,11 @@ test("the copy says both checks are opt-in, off by default and cost extra model 
   expect(words(docs)).not.toContain("Codium")
 })
 
-test("the copy names the desktop setting and describes it as available, with no Coming soon label", () => {
+test("the copy uses the desktop setting name without embedding a release number", () => {
   expect(setting).toContain('CODE_REVIEW_TITLE = "Code review after each task"')
   for (const text of [home, docs, pointer].map(words)) expect(text).toContain("Code review after each task")
   for (const text of [diagram, home, docs, pointer].map(words)) {
-    expect(text).not.toMatch(/coming soon|\bsoon\b|\bwill\b|being built|not (?:yet )?available/i)
-    // No release is named: the copy says what the setting does, not which download has it.
-    expect(text).not.toMatch(/\b1\.\d+\.\d+\b|\brelease\b/i)
+    expect(text).not.toMatch(/\b\d+\.\d+\.\d+\b/i)
   }
 })
 

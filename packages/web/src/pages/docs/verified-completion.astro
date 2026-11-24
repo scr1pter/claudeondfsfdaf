@@ -1,6 +1,7 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
 import ReviewPipeline from "../../components/marketing/ReviewPipeline.astro"
+import { reviewPipelineAvailable } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -21,14 +22,18 @@ export const prerender = true
           </p>
 
           <h2 id="then-code-review">Then code review</h2>
+          {!reviewPipelineAvailable && (
+            <p class="note">Coming soon. This setting is planned for an upcoming desktop release.</p>
+          )}
           <ReviewPipeline id="then-code-review-diagram" tone="docs" />
           <p>
             Code review after each task is a separate desktop app setting, next to LLM-as-a-judge in Settings → General.
-            It is off by default and appears once Vectorscope local reviews are turned on. When it is on, each task you
-            send from the desktop app that changes files goes to Vectorscope once Vector is done. With the judge off, the
-            review follows the task. With the judge on, the review waits until the judge's last round is done, then
-            reviews the code as that round left it, whatever the verdict. If you stop the judge, the work it was checking
-            isn't reviewed. A task that ends by asking you something is reviewed after you answer.
+            It is off by default and appears once Vectorscope local reviews are turned on. The review needs a compatible
+            Linux engine. When the setting is on, each task you send from the desktop app that changes files goes to
+            Vectorscope once Vector is done. With the judge off, the review follows the task. With the judge on, the
+            review waits until the judge's last round is done, then reviews the code as that round left it, whatever
+            the verdict. If you stop the judge, the work it was checking isn't reviewed. A task that ends by asking you
+            something is reviewed after you answer.
           </p>
           <p>
             The review reports findings and never edits your files. It covers all uncommitted changes in the
