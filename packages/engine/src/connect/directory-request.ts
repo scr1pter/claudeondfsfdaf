@@ -172,6 +172,7 @@ export type Evidence =
   | { readonly kind: "unreleased"; readonly stop?: Effect.Effect<void> }
   | { readonly kind: "unknown" }
 export type Inspect = (prepared: Prepared) => Effect.Effect<Evidence>
+export type InspectOpen = (binding: Bound, receipt: ConnectDirectory.OpenReceipt) => Effect.Effect<boolean>
 
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectDirectoryRequest.Error", {
   code: Schema.Literals(["pending", "mismatch", "unavailable", "consumed"]),
@@ -184,6 +185,7 @@ export interface Interface {
     scope: Scope,
     input: Connect.DirectoryReviewInput,
     inspect?: Inspect,
+    inspectOpen?: InspectOpen,
   ) => Effect.Effect<Start, Error>
   /** Records the anchor right after it is created and before the hub runs. */
   readonly prepare: (token: Token, anchorID: SessionID) => Effect.Effect<void, Error>
@@ -278,6 +280,8 @@ const ordered = (value: unknown): unknown => {
     )
   return value
 }
+const scopeDigestOf = ({ projectID, canonical, identity }: Pick<FrozenScope, "projectID" | "canonical" | "identity">) =>
+  hash(JSON.stringify(ordered({ projectID, canonical, identity })))
 
 /** A bounded regular-file reader. A partial/tampered key is consumed/unavailable, never a new admission. */
 const read = <S extends Schema.Codec<unknown, unknown>>(file: string, schema: S, limit: number) =>
@@ -597,14 +601,17 @@ const make = (input: Partial<Limits>) =>
     })
     // Settled keys a new admission may prune, under both locks. Each scan walks its entries oldest first from just
     // after its cursor and wraps, so keys that can never be pruned are passed over instead of starving the keys
-    // behind them. A candidate in doubt (unreadable, foreign, pending, prepared, live, or a run still open) is
+    // behind them. A candidate in doubt (unreadable, foreign, pending, prepared, live, or an unproven open run) is
     // skipped, and nothing is written until the journal names what goes.
     const prune = Effect.fn("ConnectDirectoryRequest.prune")(function* (
       ledger: GlobalValue,
       home: Place,
       current: IndexValue,
+      inspectOpen?: InspectOpen,
     ) {
       const now = yield* Clock.currentTimeMillis
+      // All optional liveness reads share one window. None may hold the global lock for its own full timeout.
+      const inspectUntil = performance.now() + INSPECT_MS
       const room = Math.min(limits.pruneLimit, PRUNE_LIMIT - (ledger.pruning?.length ?? 0))
       // Journaled keys are already going. One whose folder could not be finished is still named by that folder's
       // index with all its files, so a scan would otherwise pick it again and journal it twice.
@@ -613,11 +620,12 @@ const make = (input: Partial<Limits>) =>
       const seen = new Map<string, { readonly folder: Folder; readonly at: number } | undefined>()
       const folders = new Map<string, IndexValue | undefined>([[folderKey(home.folder), current]])
       const spent = { bytes: 0 }
-      const evaluate = (entry: Entry) =>
+      const evaluate = (entry: Entry, floor: number) =>
         Effect.gen(function* () {
           if (live.has(id(entry.key))) return undefined
           const pointer = yield* read(pointerFile(entry.key), Reservation, MAX_RECORD_BYTES)
           if (!pointer || pointer.digest !== entry.digest) return undefined
+          const createdAt = pointer.value.createdAt
           const local = current.entries.some((item) => item.key === entry.key && item.digest === pointer.digest)
           const folder = pointer.value.folder ?? (local ? home.folder : undefined)
           if (!folder) return undefined
@@ -637,13 +645,28 @@ const make = (input: Partial<Limits>) =>
           const slot = yield* read(leaf(target.slots, entry.key), Reservation, MAX_RECORD_BYTES)
           if (!slot || slot.digest !== known.digest) return undefined
           const found = yield* records(target, pointer.value)
-          const createdAt = pointer.value.createdAt
           if (found.refused) return { folder, at: Math.max(createdAt, found.refused.refusedAt) }
-          if (!found.bound) return undefined
-          const run = yield* ConnectDirectory.settled(folder, found.bound)
+          const binding = found.bound
+          if (!binding) return undefined
+          const run = yield* ConnectDirectory.settled(folder, binding)
           spent.bytes += run.bytes
           if (run.kind === "done") return { folder, at: Math.max(createdAt, run.ended ?? createdAt) }
           if (run.kind === "gone") return { folder, at: createdAt }
+          // A legacy index may omit its age hint. The pointer still gates the open binding's job lookup.
+          if (
+            run.kind === "open" &&
+            inspectOpen &&
+            createdAt <= now - floor &&
+            scopeDigestOf(run.receipt) === binding.scopeDigest
+          ) {
+            const remaining = Math.floor(inspectUntil - performance.now())
+            if (remaining <= 0) return undefined
+            const dead = yield* Effect.interruptible(Effect.suspend(() => inspectOpen(binding, run.receipt))).pipe(
+              Effect.timeoutOrElse({ duration: remaining, orElse: () => Effect.succeed(false) }),
+              Effect.catchCause(() => Effect.succeed(false)),
+            )
+            if (dead) return { folder, at: createdAt }
+          }
           return undefined
         }).pipe(Effect.orElseSucceed(() => undefined))
       const walk = Effect.fnUntraced(function* (
@@ -659,7 +682,7 @@ const make = (input: Partial<Limits>) =>
           if (enough() || scan.inspected >= limits.pruneLimit || spent.bytes >= RECEIPT_BUDGET) break
           if (chosen.has(entry.key) || going.has(entry.key) || (entry.createdAt ?? 0) > now - floor()) continue
           const cached = seen.has(entry.key)
-          const result = cached ? seen.get(entry.key) : yield* evaluate(entry)
+          const result = cached ? seen.get(entry.key) : yield* evaluate(entry, floor())
           if (result === "stop") break
           if (!cached) {
             seen.set(entry.key, result)
@@ -751,7 +774,7 @@ const make = (input: Partial<Limits>) =>
       yield* exclusive(leaf(target.refused, reservation.key), record, MAX_RECORD_BYTES)
       dropped.delete(id(reservation.key))
     })
-    const reserve: Interface["reserve"] = (scope, input, inspect) =>
+    const reserve: Interface["reserve"] = (scope, input, inspect, inspectOpen) =>
       Effect.gen(function* () {
         // Clone before any I/O. The executed input is this owned snapshot, never the caller's later-mutated object.
         const cloned = yield* Effect.try({
@@ -771,7 +794,7 @@ const make = (input: Partial<Limits>) =>
         })
         const identity = yield* ConnectDirectory.capture(scope.directory).pipe(Effect.mapError(unavailable))
         const frozen = Object.freeze({ ...scope, ...identity })
-        const scopeDigest = hash(JSON.stringify(ordered({ projectID: scope.projectID, ...identity })))
+        const scopeDigest = scopeDigestOf(frozen)
         const inputDigest = hash(JSON.stringify(ordered({ scopeDigest, input: payload })))
         const fixedProof = Object.freeze({ key, scopeDigest, inputDigest })
         const target = paths(frozen)
@@ -838,7 +861,7 @@ const make = (input: Partial<Limits>) =>
             }
             if (known || globalKnown || ledger.pruning?.some((mark) => mark.key === key)) return yield* unavailable()
             // Only an admission grows the ledger, so only an admission prunes it; replays never do.
-            const pruned = yield* prune(ledger, target, current)
+            const pruned = yield* prune(ledger, target, current, inspectOpen)
             if (
               pruned.ledger.entries.length >= limits.maxTotalKeys ||
               pruned.current.entries.length >= limits.maxKeys

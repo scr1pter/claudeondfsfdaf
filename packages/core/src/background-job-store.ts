@@ -1,7 +1,19 @@
 export * as BackgroundJobStore from "./background-job-store"
 
 import { randomUUID } from "node:crypto"
-import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm"
@@ -64,6 +76,34 @@ function readMachine(file: string) {
   }
 }
 
+// Retention inspection can read an existing identity. It must not create or replace the file.
+function readMachineProof() {
+  try {
+    const file = machineFile ?? path.join(Global.Path.state, "machine-id")
+    const handle = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const info = fstatSync(handle)
+      const uid = process.getuid?.()
+      if (
+        !info.isFile() ||
+        info.size > 64 ||
+        info.nlink !== 1 ||
+        (uid !== undefined && (info.uid !== uid || info.mode & 0o022))
+      )
+        return undefined
+      const buffer = Buffer.alloc(65)
+      const count = readSync(handle, buffer, 0, buffer.length, 0)
+      if (count !== info.size) return undefined
+      const id = buffer.toString("utf8", 0, count).trim()
+      return UUID.test(id) ? id : undefined
+    } finally {
+      closeSync(handle)
+    }
+  } catch {
+    return undefined
+  }
+}
+
 // Written under a temporary name and linked into place, so engines starting together agree on one id and none reads
 // a half-written file. A damaged file is replaced the same way.
 function createMachine(file: string) {
@@ -118,6 +158,30 @@ export function close(owner: Pick<Owner, "runtime">) {
 export function alive(owner: Owner): Liveness {
   if (owner.runtime.startsWith(`${PROCESS_ID}:`)) return leases.has(owner.runtime) ? "alive" : "dead"
   return host(owner)
+}
+
+/** Positive death proof for a modern lease. A stale heartbeat, foreign boot, or missing machine id proves nothing. */
+export function deadModernLease(owner: Owner): boolean {
+  const parts = owner.runtime.split(":")
+  if (
+    parts.length !== 2 ||
+    !parts.every((part) => UUID.test(part)) ||
+    !UUID.test(owner.machine) ||
+    !Number.isSafeInteger(owner.pid) ||
+    owner.pid <= 0 ||
+    !Number.isSafeInteger(owner.boot) ||
+    owner.boot <= 0
+  )
+    return false
+  if (parts[0] === PROCESS_ID)
+    return (
+      self?.pid === owner.pid &&
+      self.boot === owner.boot &&
+      self.machine === owner.machine &&
+      !leases.has(owner.runtime)
+    )
+  // A pid may have been reused since the general liveness cache last recorded it as dead.
+  return readMachineProof() === owner.machine && (self?.boot ?? boot()) === owner.boot && signal(owner.pid) === "dead"
 }
 
 // Whether the owner's process is alive, whatever became of its instance.
@@ -238,6 +302,8 @@ export interface Interface extends BackgroundJob.Store {
   readonly claim: (row: Pick<Row, "id" | "owner" | "attempt">, at: number) => Effect.Effect<boolean>
   /** Records a legacy helper as interrupted and reported: false when its job already has a row. */
   readonly insertLegacy: (row: Legacy) => Effect.Effect<boolean>
+  /** One exact durable job and owning session, by the job table's primary key. */
+  readonly forJob: (id: string, parentSessionID: string) => Effect.Effect<Row | undefined>
   readonly forParent: (parentSessionID: string) => Effect.Effect<Row[]>
   /**
    * Records on a background command's settled row how it ended (`metadata.ended`), so restart recovery can still tell
@@ -441,6 +507,16 @@ export function make(db: Database.Interface["db"]): Interface {
     return inserted !== undefined
   })
 
+  const forJob = Effect.fn("BackgroundJobStore.forJob")(function* (id: string, parentSessionID: string) {
+    const row = yield* db
+      .select()
+      .from(BackgroundJobTable)
+      .where(and(eq(BackgroundJobTable.id, id), eq(BackgroundJobTable.parent_session_id, parentSessionID)))
+      .get()
+      .pipe(Effect.orDie)
+    return row && decode(row)
+  })
+
   const forParent = Effect.fn("BackgroundJobStore.forParent")(function* (parentSessionID: string) {
     const rows = yield* db
       .select()
@@ -539,6 +615,7 @@ export function make(db: Database.Interface["db"]): Interface {
     candidates,
     claim,
     insertLegacy,
+    forJob,
     forParent,
     ended,
     delivered,
