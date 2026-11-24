@@ -26028,6 +26028,9 @@
                   },
                   "budget": {
                     "$ref": "#/components/schemas/RunBudget"
+                  },
+                  "tightenBudget": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["prompt"],

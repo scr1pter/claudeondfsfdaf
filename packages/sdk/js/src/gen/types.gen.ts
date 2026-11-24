@@ -22902,6 +22902,7 @@ export type V2SessionPromptData = {
     delivery?: "steer" | "queue"
     resume?: boolean
     budget?: RunBudget
+    tightenBudget?: boolean
   }
   path: {
     sessionID: string

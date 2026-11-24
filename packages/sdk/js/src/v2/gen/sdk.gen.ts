@@ -11589,6 +11589,7 @@ export class Session3 extends HeyApiClient {
       delivery?: "steer" | "queue"
       resume?: boolean
       budget?: RunBudget
+      tightenBudget?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -11603,6 +11604,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "delivery" },
             { in: "body", key: "resume" },
             { in: "body", key: "budget" },
+            { in: "body", key: "tightenBudget" },
           ],
         },
       ],
