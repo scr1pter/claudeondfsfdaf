@@ -48,6 +48,8 @@ Left as a follow-up: `LocalReviewPanel` (`local-review-panel.tsx`, also on main)
 
 **Mutation check.** With the prompt route's refusal removed, the zdr case fails (expected 403, received 200; 6 pass, 1 fail); restored, 7 pass.
 
+**Restart follow-up, 24 November.** The engine now records a sticky hold before a V1 review prompt and when it creates a held review pass. Stale session update events preserve that bit. V2 checks the stored hold and existing V1 user review scope before it admits prompts, free-model resumes or compaction. V1 commands on a newly marked review also require a live ZDR policy. The HTTP regression cases use a fake provider and verify no input is queued or sent under global standard after the live policy is gone. Older engine sessions that never stored either privacy marker remain unclassified.
+
 ## 2026-11-23, holdback "secrets" sent instruction files and review rules unredacted
 
 **Bug.** Under the hidden `review.holdback: "secrets"`, the diff and every untrusted block were redacted, but the trusted blocks were not:
@@ -93,7 +95,7 @@ So a token in AGENTS.md or `.vector/review.md` went to the provider in plain tex
 
 **Mutation check.** Without the check, the case fails (4 pass, 1 fail); restored, 5 pass.
 
-Left as a follow-up: the desktop's per-finding Apply and posted GitHub suggestions do not go through `planEdits`, so under holdback they can still offer a suggestion that echoes the placeholder (each shows the text before it is applied).
+**Apply follow-up, 24 November.** The CLI planner checks introduced patch lines and position-aware line replacements when the effective policy is `holdback: "secrets"`. An unchanged literal can stay, and the ordinary planner still accepts an intentional literal. The desktop removes unsafe edits from fresh and retained held findings before sharing them with Apply or GitHub. The finding and any other safe suggestions stay visible. The explicit CLI PR-posting path also drops unsafe committable suggestions under holdback or offline diagnostics while retaining the finding. Tests exercise count-equal placeholder replacement, retained findings, held posting, and unchanged default behavior.
 
 ## 2026-11-23, review pipeline pin and lane documents
 
@@ -102,3 +104,5 @@ Left as a follow-up: the desktop's per-finding Apply and posted GitHub suggestio
 **Stale pins in the docs.** `vectorscope-continuation.md` named `102ac0ede06d9bac` and `vectorscope-remaining.md` named `31a9837d871ec207` as current; both now point at the current pin. The remaining-work note also said the V2 session path was open; it now names the refusal above.
 
 **Absolute local paths.** The lane plan, the lane handoff, the deviations log and addendum B named the earlier container's paths (`/home/user/wt/sf/...`, `/home/user/.tools/vector-serial`, `/tmp/vector-v2/...`). They passed `test/no-personal-paths.test.ts`, since `user` is a generic name, but broke the lane rule against absolute local paths in docs. They are now repo-relative paths, `~/.tools/vector-serial`, `<worktree>` and `<scratch>`. The lane plan's and handoff's recipe for serving a dependency tarball through a local `python3 -m http.server` with `GITHUB_API_URL` pointed at it is removed; the plain `bun install` line stays.
+
+The combined 24 November candidate pins the same 108 pipeline sources at `ec98770af384bbb8`, revision 5. Tests preserve default request bytes. The privacy and edit changes apply to recorded ZDR, opt-in holdback and offline diagnostics.

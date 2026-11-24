@@ -2,7 +2,7 @@
 
 ## Draft integration checkpoint, 2026-11-21
 
-The local review build and its inventory are on scope-finish. The two hosted failures led to a ledger import-boundary repair and restored Connect preflight order. Updated Linux writers now hold the same checkpoint lock during batched coverage and ordinary publication. Earlier status and run references below apply to their named commits. The current candidate uses pipeline revision 5 with source digest `79973b2a9a131847` (2026-11-24, after the takeover review fixes in `v2-p0/scope-finish-takeover.md`, with a fresh digest due after the final main merge). The pull request tracks the remaining GitHub integration and hosted checks. [Integration PR](https://github.com/scr1pter/claudeondfsfdaf/pull/73)
+The local review build and its inventory are on scope-finish. The two hosted failures led to a ledger import-boundary repair and restored Connect preflight order. Updated Linux writers now hold the same checkpoint lock during batched coverage and ordinary publication. Earlier status and run references below apply to their named commits. The current candidate uses pipeline revision 5 with source digest `ec98770af384bbb8` (2026-11-24, after the takeover review fixes in `v2-p0/scope-finish-takeover.md`, with a fresh digest due after the final main merge). The pull request tracks the remaining GitHub integration and hosted checks. [Integration PR](https://github.com/scr1pter/claudeondfsfdaf/pull/73)
 
 ## VectorScope finish checkpoint, 21 November 2026
 
@@ -10,9 +10,9 @@ VectorScope has local software through SF-35 and the local CLI portion of SF-39.
 
 The original SF-20 run failed two Connect cache assertions. The repaired source requires the exact bytes from a prior write under the same review authority. Hosted qualification of the repaired integration remains open. [Original failed job](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/44897145579/job/136828157252)
 
-The current remote checkpoint is `20d47c22ba95`. The table below links successful workflows at the individual commit shown. Native Linux review, Windows and desktop cases must qualify through their actual hosted runs. The local Cloud host's private Git refusal prevented several positive native fixtures from reaching the provider.
+The remote checkpoint on 21 November was `20d47c22ba95`. The table below links successful workflows at the individual commit shown. Native Linux review, Windows and desktop cases must qualify through their actual hosted runs. The local Cloud host's private Git refusal prevented several positive native fixtures from reaching the provider.
 
-The GitHub work in SF-36 through SF-41 is listed in the remaining inventory. The local `--pr` verdict path and the protected GitHub job are separately implemented surfaces. SF-36 requires a compatible published CLI. The shared batch lock allows a resumed writer to overwrite a newer checkpoint after lease recovery. The lease reproduction and lead-owned V2 session privacy limitations remain open before phase acceptance.
+The GitHub work in SF-36 through SF-41 is listed in the remaining inventory. The local `--pr` verdict path and the protected GitHub job are separately implemented surfaces. SF-36 requires a compatible published CLI. The November 21 checkpoint identified a lease recovery race in the batch lock and a privacy limitation in the V2 session API. The current candidate and its verification status are described above and in the takeover notes.
 
 | Package | Commit | Successful workflows at this commit |
 | --- | --- | --- |
