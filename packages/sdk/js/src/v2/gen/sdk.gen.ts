@@ -444,6 +444,20 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  ReviewFixCancelErrors,
+  ReviewFixCancelResponses,
+  ReviewFixControlExecute,
+  ReviewFixControlFixId,
+  ReviewFixControlPrepare,
+  ReviewFixControlRequest,
+  ReviewFixExecuteErrors,
+  ReviewFixExecuteResponses,
+  ReviewFixListErrors,
+  ReviewFixListResponses,
+  ReviewFixPrepareErrors,
+  ReviewFixPrepareResponses,
+  ReviewFixPreviewErrors,
+  ReviewFixPreviewResponses,
   ReviewGetErrors,
   ReviewGetResponses,
   ReviewListErrors,
@@ -8222,6 +8236,195 @@ export class Question extends HeyApiClient {
   }
 }
 
+export class Fix extends HeyApiClient {
+  /**
+   * List the conversation's open fixes
+   *
+   * Owner-only and experimental. The fixes this engine holds for the conversation, for reconnection.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ReviewFixListResponses, ReviewFixListErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Prepare a local fix
+   *
+   * Owner-only and experimental. Places a fix checkout detached at the conversation branch's exact head and re-verifies every file of the client's patch. The engine does not verify the findings the fix names. Nothing is applied, committed or pushed and no command runs.
+   */
+  public prepare<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      reviewFixControlPrepare?: ReviewFixControlPrepare
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewFixControlPrepare", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewFixPrepareResponses, ReviewFixPrepareErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Offer one fix step
+   *
+   * Owner-only and experimental. Builds the exact apply, checks, commit or push operation and a single-use approval offer bound to the owner, the head, the patch digest and the operation, expiring after five minutes. Nothing runs.
+   */
+  public preview<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      fixID: ReviewFixControlFixId
+      directory?: string
+      workspace?: string
+      reviewFixControlRequest?: ReviewFixControlRequest
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "fixID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewFixControlRequest", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewFixPreviewResponses, ReviewFixPreviewErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix/{fixID}/preview",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Approve and run one offered fix step
+   *
+   * Owner-only and experimental. Approves exactly the offered step, spending its offer, and runs it once after the executor re-verifies the head and files.
+   */
+  public execute<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      fixID: ReviewFixControlFixId
+      directory?: string
+      workspace?: string
+      reviewFixControlExecute?: ReviewFixControlExecute
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "fixID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewFixControlExecute", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewFixExecuteResponses, ReviewFixExecuteErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix/{fixID}/execute",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel a local fix
+   *
+   * Owner-only. Stops a running check or push and removes the fix checkout; a commit on its new branch is kept.
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      fixID: ReviewFixControlFixId
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "fixID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewFixCancelResponses, ReviewFixCancelErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix/{fixID}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Review2 extends HeyApiClient {
   /**
    * Read the local review target
@@ -8396,6 +8599,11 @@ export class Review2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _fix?: Fix
+  get fix(): Fix {
+    return (this._fix ??= new Fix({ client: this.client }))
   }
 }
 
@@ -11381,6 +11589,7 @@ export class Session3 extends HeyApiClient {
       delivery?: "steer" | "queue"
       resume?: boolean
       budget?: RunBudget
+      tightenBudget?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -11395,6 +11604,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "delivery" },
             { in: "body", key: "resume" },
             { in: "body", key: "budget" },
+            { in: "body", key: "tightenBudget" },
           ],
         },
       ],

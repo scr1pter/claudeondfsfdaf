@@ -118,6 +118,7 @@ import {
 } from "./lib/everywhere-store"
 import { missingAccountAuthority } from "../../../api/_lib/everywhere/authority"
 import { tombstoneKey } from "../../../api/_lib/codium-tombstone"
+import { safeReturnPath } from "../src/lib/account-client"
 
 // As in account-page.test.ts: this package's tsconfig compiles JSX for Solid, and Astro builds the React islands
 // itself, so the everywhere components are compiled here with React's automatic runtime.
@@ -410,6 +411,37 @@ describe("signed out, the root and the sign-in link", () => {
       expect(signInPath(outside)).toBe("/login?returnTo=%2Feverywhere")
   })
 
+  test("a signed-out job link carries only the selected job through account sign-in", async () => {
+    const job = forgedJob()
+    const focus = focusJob(`?job=${job.jid}&code=C0DE&state=S7A7E`)
+    const b = browser(forgedHistory({ jobs: [job], capped: false, skipped: 0 }), { activity: true })
+    await b.model.setSession(undefined)
+    const login = new URL(hrefs(renderFocused(b.model, focus))[0]!, "https://vectordev.ai")
+    const returned = safeReturnPath(login.searchParams.get("returnTo"))
+    expect(login.pathname).toBe("/login")
+    expect(returned).toBe(`/everywhere?job=${job.jid}`)
+    expect(login.href).not.toContain("C0DE")
+    expect(login.href).not.toContain("S7A7E")
+    expect(b.calls).toEqual([])
+
+    await b.model.setSession(as(alice))
+    const returnedFocus = focusJob(new URL(returned, login).search)
+    expect(renderFocused(b.model, returnedFocus)).toContain(
+      `<li id="job-${job.jid}" class="everywhere-job everywhere-focus" aria-current="true">`,
+    )
+  })
+
+  test("sign-in only carries a valid job on the everywhere account page", () => {
+    const job = forgedJob()
+    expect(signInPath("/everywhere?code=C0DE#state=S7A7E", job.jid)).toBe(
+      `/login?returnTo=%2Feverywhere%3Fjob%3D${job.jid}`,
+    )
+    expect(signInPath("/everywhere/", job.jid)).toBe(`/login?returnTo=%2Feverywhere%2F%3Fjob%3D${job.jid}`)
+    expect(signInPath("/everywhere", "vej_bad&returnTo=//evil.example")).toBe("/login?returnTo=%2Feverywhere")
+    expect(signInPath("/everywhere/link", job.jid)).toBe("/login?returnTo=%2Feverywhere%2Flink")
+    expect(signInPath("//evil.example/everywhere", job.jid)).toBe("/login?returnTo=%2Feverywhere")
+  })
+
   test("a session the server refuses asks to sign in again, ending the browser's session first", async () => {
     const ghost = testAccount("ghost@example.com")
     const b = browser()
@@ -420,9 +452,10 @@ describe("signed out, the root and the sign-in link", () => {
     expect(html).toContain(EVERYWHERE_COPY.expiredButton)
     // A link to /login would bounce straight back while Supabase still holds the refused session.
     expect(html).not.toContain("href=")
-    await b.model.signInAgain("/everywhere?code=C0DE")
+    const job = forgedJob()
+    await b.model.signInAgain("/everywhere?code=C0DE", job.jid)
     expect(b.signOuts).toEqual(["local"])
-    expect(b.navigations).toEqual(["/login?returnTo=%2Feverywhere"])
+    expect(b.navigations).toEqual([`/login?returnTo=%2Feverywhere%3Fjob%3D${job.jid}`])
     // The same account with a token the server accepts recovers without a reload.
     const renewed = accounts.add({ ...ghost, token: `session-${randomBytes(18).toString("base64url")}` })
     await b.model.setSession(as(renewed))

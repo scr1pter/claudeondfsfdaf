@@ -29,6 +29,7 @@ import {
 } from "@vectordevai/protocol/errors"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { isHelperName } from "@vectordevai/core/session/helper"
+import { ReviewSessionAdmission } from "@vectordevai/core/review/session-admission"
 import {
   allowsSession,
   guestWorkspaceDirectory,
@@ -78,6 +79,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         message:
           "This helper belongs to a conversation with isolated work. Continue it through its parent conversation.",
       })
+    })
+
+    // Only the engine's V1 routes hold a review session's model calls to its review's privacy; this runner sends through
+    // @vectordevai/llm, which nothing here holds. So a `vectorscope.*` session is refused while its review policy is
+    // "zdr", or when the host gives no port to read that policy, before anything is stored or sent.
+    const reviewAdmission = yield* Effect.serviceOption(ReviewSessionAdmission.Service)
+    const refuseHeldReview = Effect.fn("SessionHttpApi.refuseHeldReview")(function* (sessionID: SessionV2.ID) {
+      const current = yield* session.get(sessionID).pipe(Effect.option)
+      if (Option.isNone(current) || !ReviewSessionAdmission.isReviewSession(current.value.internal)) return
+      if (Option.isSome(reviewAdmission) && !(yield* reviewAdmission.value.zdr(sessionID))) return
+      return yield* new ForbiddenError({ message: ReviewSessionAdmission.REFUSAL })
     })
 
     // Whether the principal may open a session by its ID; a session that cannot be read is never allowed.
@@ -309,6 +321,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           if (!(yield* RequestOwner.owner))
             yield* refuseTrainingFreeModel({ providerID: ProviderV2.ID.openrouter, id: ctx.payload.modelID })
           yield* requireHomePlacement(ctx.params.sessionID)
+          yield* refuseHeldReview(ctx.params.sessionID)
           yield* session.resumeFreeModels({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -338,6 +351,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           const owner = yield* RequestOwner.owner
           yield* requireHomePlacement(ctx.params.sessionID)
           yield* SessionAudienceHttp.admit(ctx.params.sessionID, owner).pipe(withAudience)
+          yield* refuseHeldReview(ctx.params.sessionID)
           // A guest never accepted the free-model training notice, so the owner's acceptance must not carry a guest's
           // prompt to a model that may train. The prompt runs on the session's model, or the default without one.
           // The model is judged as the runner chooses it, so a session without one is judged by its automatic choice.
@@ -414,6 +428,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
+          yield* refuseHeldReview(ctx.params.sessionID)
           yield* session.compact({ sessionID: ctx.params.sessionID }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
