@@ -1,5 +1,8 @@
 import { ApiError } from "./http.js"
 
+/** Replace one string only if it still equals the expected value, with the new expiry in milliseconds. */
+export const COMPARE_AND_SET_WITH_EXPIRY = `local current = redis.call('GET', KEYS[1]) if not current then current = '' end if current ~= ARGV[1] then return 0 end redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3]) return 1`
+
 /** Protected account operations never fall back to process-local state, including in development. */
 export async function persistentStore(
   command: readonly (string | number)[],

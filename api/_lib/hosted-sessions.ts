@@ -46,7 +46,7 @@ import {
 import { ApiError, type ApiRequest } from "./http.js"
 import { readEntitlement } from "./model-plan-account.js"
 import { stripeMode } from "./model-plan-stripe.js"
-import { persistentStore } from "./persistent-store.js"
+import { COMPARE_AND_SET_WITH_EXPIRY, persistentStore } from "./persistent-store.js"
 import { presignR2, r2Configured } from "./r2-presign.js"
 import { requireUnrevokedAccount } from "./revocation.js"
 import { runTokenRevoked } from "./codium-provisioners.js"
@@ -237,7 +237,7 @@ const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(SessionRec
  * SAVE. Compare-and-set of one record: writes ARGV[2] (lifetime ARGV[3] ms) only while the key still holds ARGV[1]
  * ('' for a key that does not exist yet). 1 when written, 0 when the record moved on.
  */
-const SAVE = `local current = redis.call('GET', KEYS[1]) if not current then current = '' end if current ~= ARGV[1] then return 0 end redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3]) return 1`
+const SAVE = COMPARE_AND_SET_WITH_EXPIRY
 
 /**
  * CLAIM. Computers at once, by lease: the session ARGV[1] takes the lowest of computers ARGV[6]..ARGV[2] (ARGV[6] is 1
