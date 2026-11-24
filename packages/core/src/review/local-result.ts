@@ -5,6 +5,7 @@ import { LABS } from "../model-lab"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { NonNegativeInt, optional, PositiveInt } from "@vectordevai/schema/schema"
 import { hash } from "../util/encode"
+import { OFFLINE_DIAGNOSTIC_RULES, type DiagnosticRule } from "./diagnostic"
 import { BUDGET_REQUEST_CHANGED, strictFindingBody } from "./format"
 import { withAlso } from "./select"
 import { MAX_FINDING_QUOTES, MAX_TRACE_QUOTES } from "./schema"
@@ -77,11 +78,22 @@ const findingFields = {
   severityUnreadable: optional(Schema.Boolean),
   scope: optional(Schema.Literals(FINDING_SCOPES)),
 }
+// A normalized Finding's offline-diagnostic provenance (Finding.diagnostics, set by withDiagnosticEvidence): data only,
+// never a confirmation. Exactly the versioned rules, so an unknown rule or an extra key still refuses the result.
+const diagnostics = optional(
+  many(
+    Schema.Struct({
+      source: Schema.Literal("offline-v1"),
+      rule: Schema.Literals(Object.keys(OFFLINE_DIAGNOSTIC_RULES) as [DiagnosticRule, ...DiagnosticRule[]]),
+    }),
+  ),
+)
 const finding = {
   ...findingFields,
   id: text,
   side,
   source: Schema.Literals(["review", "security"]),
+  diagnostics,
   verified: optional(Schema.Boolean),
   verifiedBy: optional(Schema.Literals(VERIFIED_BY)),
   also: optional(many(text)),
@@ -119,6 +131,7 @@ const Outcome = Schema.Struct({
         ...findingFields,
         id: optional(text),
         source: optional(Schema.Literals(["review", "security"])),
+        diagnostics,
         verified: optional(Schema.Boolean),
         verifiedBy: optional(Schema.Literals(VERIFIED_BY)),
         also: optional(many(text)),
@@ -648,8 +661,16 @@ export async function decodeLocalRun(input: unknown, expected: ExpectedRun): Pro
   if (Option.isNone(json)) return undefined
   const result = decodeLocalResult(json.value, run.request.target)
   if (!result) return undefined
+  // A retained service stop (exit 2 with its error) already carries the canonical non-clean verdict decodeLocalResult
+  // checked against its outcome, and the engine marks every such run failed. Re-deriving it here would add a
+  // model-error cause to a held-back or empty-reviewer stop in which no model ran.
+  const retainedStop =
+    run.status === "failed" &&
+    result.exitCode === 2 &&
+    result.error !== undefined &&
+    result.verdict.verdict !== "clean-complete"
   const verdict =
-    run.status === "completed"
+    run.status === "completed" || retainedStop
       ? result.verdict
       : result.outcome
         ? reviewVerdict({

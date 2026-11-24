@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { hash } from "../../src/util/encode"
+import { diagnosticCitation, OFFLINE_DIAGNOSTIC_RULES, withDiagnosticEvidence } from "../../src/review/diagnostic"
 import { fromGitHubFiles, parseUnifiedDiff } from "../../src/review/diff"
 import { classifyFiles, parseGitAttributes } from "../../src/review/ignore"
 import {
@@ -281,6 +282,32 @@ describe("retained local review result decoding", () => {
       failedResult(value, "Vector could not finish this review: the model returned no report"),
     )
     expect(decoded?.verdict).toEqual({ verdict: "incomplete", causes: ["no-reviewer"], notes: [] })
+  })
+
+  // scope-finish takeover (2026-11-23): the engine marks every retained stop failed (local-run.ts), and decodeLocalRun
+  // used to re-derive its verdict with a "model-error" default, a cause no held-back or empty-reviewer stop has.
+  test("a failed run shows a retained stop's own verdict, never an invented model error", async () => {
+    const held = stoppedOutcome({
+      unreviewed: [],
+      skipped: [{ path: ".env", reason: "held-back" }],
+      held: [{ path: ".env", status: "modified", reason: "env-file" }],
+    })
+    const empty = stoppedOutcome({ unreviewed: [], notes: ["Completed all 2 review batches (1 files)."] })
+    for (const value of [
+      failedResult(held, "Every changed file was held back from the model."),
+      failedResult(empty, "Vector could not finish this review: the model returned no report"),
+    ]) {
+      const stored: LocalResult = JSON.parse(JSON.stringify(value))
+      const decoded = decodeLocalResult(stored, target)
+      expect(decoded).toBeDefined()
+      const run = await decode(await info(stored, "failed"))
+      expect(run?.verdict).toEqual(decoded!.verdict)
+      expect(run?.verdict.causes).not.toContain("model-error")
+      expect(run?.verdict.verdict).toBe("incomplete")
+    }
+    // A run that is still going or was cancelled keeps the lifecycle's own cause.
+    const running = await decode(await info(JSON.parse(JSON.stringify(failedResult(held, "Held."))), "running"))
+    expect(running?.verdict.causes).toContain("timeout")
   })
 
   test("a completed cursor retains genuinely classified generated and vendored skips", async () => {
@@ -686,6 +713,95 @@ describe("retained local review result decoding", () => {
     const missing = { ...value }
     delete missing.strict
     expect(decodeLocalResult(result(missing), target)).toBeUndefined()
+  })
+
+  // scope-finish takeover (2026-11-23): under the hidden `review.diagnostics: "offline"` on Linux, Review.run keeps the
+  // offline-diagnostic provenance withDiagnosticEvidence sets on a finding (Finding.diagnostics) through selection and,
+  // with lenses on, in report.findings. The saved local review must read back, not as a corrupt outcome.
+  test("findings that carry offline-diagnostic provenance round-trip in every selection list and the report", async () => {
+    const anchors = parseUnifiedDiff(
+      "diff --git a/src/file.ts b/src/file.ts\n--- a/src/file.ts\n+++ b/src/file.ts\n@@ -1 +1,2 @@\n-old\n+key()\n+tail()\n",
+    )
+    const shape = {
+      side: "RIGHT" as const,
+      source: "security" as const,
+      category: "security" as const,
+      body: "An added line carries a credential.",
+      confidence: 0.9,
+    }
+    const cited = (finding: Omit<Finding, "evidence">) => ({
+      ...finding,
+      evidence: [`${finding.path}:${finding.line}`, diagnosticCitation("secret-added")],
+    })
+    const modelFindings: Finding[] = [
+      cited({ ...shape, id: "inline_1", path: "src/file.ts", line: 1, severity: "blocking", title: "Hard-coded deploy token" }),
+      cited({ ...shape, id: "nit_1", path: "src/file.ts", line: 2, severity: "nit", title: "Logged request header" }),
+      cited({ ...shape, id: "outside_1", path: "src/other.ts", line: 4, severity: "concern", title: "Fixture key in another file" }),
+    ]
+    const findings = withDiagnosticEvidence(
+      modelFindings,
+      modelFindings.map((finding) => ({
+        source: "offline-v1" as const,
+        rule: "secret-added" as const,
+        path: finding.path,
+        line: finding.line,
+        side: "RIGHT" as const,
+      })),
+    )
+    expect(findings.map((finding) => finding.diagnostics)).toEqual(
+      findings.map(() => [{ source: "offline-v1", rule: "secret-added" }]),
+    )
+    const value = outcome()
+    value.selection = selectFindings({
+      findings,
+      anchors,
+      head,
+      trust: "trusted",
+      mode: "full",
+      config: { ...DEFAULT_REVIEW_CONFIG, nits: true },
+      prior: [],
+      knownPath: () => true,
+    })
+    // The lens path keeps the normalized findings as the report's ModelFinding list.
+    value.report.findings = findings
+    const placed = [
+      ...value.selection.inline,
+      ...value.selection.nits,
+      ...value.selection.outsideDiff,
+      ...value.selection.elsewhere,
+      ...value.selection.overflow,
+    ]
+    expect(placed).toHaveLength(3)
+    expect(placed.every((finding) => finding.diagnostics?.[0]?.rule === "secret-added")).toBe(true)
+    const stored: LocalResult = JSON.parse(JSON.stringify(result(value)))
+    const decoded = decodeLocalResult(stored, target)
+    expect(decoded?.outcome?.selection).toEqual(value.selection)
+    expect(decoded?.outcome?.report.findings).toEqual(findings)
+    for (const status of ["completed", "failed"] as const)
+      expect((await decode(await info(stored, status)))?.result?.outcome?.selection).toEqual(value.selection)
+    // The rules are exactly the versioned offline ones, and an entry takes no other key.
+    expect(Object.keys(OFFLINE_DIAGNOSTIC_RULES).toSorted()).toEqual(
+      ["integrity-removed", "manifest-without-lock", "secret-added"].toSorted(),
+    )
+    for (const rule of Object.keys(OFFLINE_DIAGNOSTIC_RULES)) {
+      const row = { ...value.selection.inline[0], diagnostics: [{ source: "offline-v1", rule }] }
+      const other = { ...value, selection: { ...value.selection, inline: [row] } }
+      expect(decodeLocalResult(JSON.parse(JSON.stringify(result(other as ReviewOutcome))), target)).toBeDefined()
+    }
+    for (const diagnostics of [
+      [{ source: "offline-v1", rule: "unknown-rule" }],
+      [{ source: "offline-v2", rule: "secret-added" }],
+      [{ source: "offline-v1", rule: "secret-added", path: "src/file.ts" }],
+      { source: "offline-v1", rule: "secret-added" },
+    ]) {
+      const inline = [{ ...value.selection.inline[0], diagnostics }]
+      const report = { ...value.report, findings: [{ ...findings[0], diagnostics }] }
+      for (const other of [
+        { ...value, selection: { ...value.selection, inline } },
+        { ...value, report },
+      ])
+        expect(decodeLocalResult(JSON.parse(JSON.stringify({ ...stored, outcome: other })), target)).toBeUndefined()
+    }
   })
 
   test("rejects target/head mismatches, unknown coverage/status fields, malformed selection and contradictory verdicts", async () => {

@@ -26540,3 +26540,7 @@ The focused files passed 61 tests (races 4, pin 37, batch 3, connect-cache 1, st
 ## 2026-11-23 · Merge prep against main `ab4b352d`
 
 Main was already merged, so nothing conflicted. Regenerated the SDK for main's `tightenBudget` prompt field. Typechecks and the at-risk tests passed. Details, including what this machine lacks: `v2-p0/scope-finish.md`.
+
+## 2026-11-23 · Review fixes after the takeover
+
+The v2 run took #73 over and fixes the round-1 review findings on this branch. Each fix, its failing test and its mutation check: `v2-p0/scope-finish-takeover.md`.
