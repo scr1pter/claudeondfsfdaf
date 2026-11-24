@@ -2884,6 +2884,7 @@ describe("the abort scope", () => {
     vectorscopeSettings: false,
     vectorscopeRuns: false,
     vectorscopeReviewMemoryControls: false,
+    vectorscopeLocalFixes: false,
     codeReviewAfterTask: false,
     connections: false,
   })

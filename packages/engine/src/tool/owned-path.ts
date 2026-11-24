@@ -7,7 +7,14 @@ import { TaskClaims } from "@/task/claims"
 import { TaskSize } from "@vectordevai/core/task-size"
 import type { Tool } from "./tool"
 
-type Context = Pick<Tool.Context, "sessionID" | "parentID" | "getOwnedPaths" | "ownedPaths" | "inFamily">
+// The guards key ownership by any string, so a trusted writer without a session, the review fix executor keyed by its
+// fix ID (VS-12a), uses them too. The type is wider; nothing branches on it.
+type Context = Omit<
+  Pick<Tool.Context, "sessionID" | "parentID" | "getOwnedPaths" | "ownedPaths" | "inFamily">,
+  "sessionID"
+> & {
+  sessionID: string
+}
 
 /** Explicit file tools enforce assignments. Shell execution is not a filesystem sandbox. */
 export const assertOwnedPath = Effect.fn("Task.assertOwnedPath")(function* (context: Context, target: string) {

@@ -2,7 +2,7 @@
 // retain their existing Git service; a bound collector never falls back to it.
 
 import path from "node:path"
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Schema, Stream } from "effect"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Git } from "@/git"
@@ -13,7 +13,7 @@ export interface View {
   readonly repository: ReadOnlyGit.Repository
   readonly metadata: ReadOnlyGit.Metadata
   readonly client: Client
-  readonly preflight: () => Effect.Effect<void, Refused>
+  readonly preflight: (signal?: AbortSignal) => Effect.Effect<void, Refused>
 }
 export const Current = Context.Reference<View | undefined>("@vector/ReviewGit.Current", {
   defaultValue: () => undefined,
@@ -29,8 +29,11 @@ const refused = (error: unknown) =>
       error instanceof ReadOnlyGit.Unavailable ? error.message : "The local review's private Git view is unavailable.",
   })
 
-export const metadata = (worktree: string) =>
-  Effect.tryPromise({ try: () => ReadOnlyGit.metadataHead(worktree), catch: refused })
+export const metadata = (worktree: string, signal?: AbortSignal) => {
+  const read = Effect.tryPromise({ try: () => ReadOnlyGit.metadataHead(worktree, { signal }), catch: refused })
+  // The explicit signal can stop these reads even while their descriptor cleanup is being awaited.
+  return signal ? Effect.uninterruptible(read) : read
+}
 
 // readRoot is a permission origin and can name another checkout. Only actual
 // trusted placement, or an exact standalone root, chooses the collection view.
@@ -47,21 +50,264 @@ export const client = Effect.gen(function* () {
   return current?.client ?? (yield* Git.Service)
 })
 
+// Only the impact collector's immutable operations. There is no unbound client, arbitrary pathspec,
+// caller Git environment or Git command fallback. Config describes the verified private snapshot.
+export function impactClient(view: View, directory: string, head: string, base?: string): Pick<Git.Interface, "run"> {
+  const valid = (id: string) => /^[0-9a-f]{40}$/.test(id)
+  const result = (exitCode: number, stdout: Buffer = Buffer.alloc(0), truncated = false): Git.Result => ({
+    exitCode,
+    stdout,
+    truncated,
+    stderr: exitCode > 1 ? Buffer.from("Private impact read unavailable") : Buffer.alloc(0),
+    text: () => stdout.toString("utf8"),
+  })
+  const denied = () => result(128)
+  const read = (operation: ReadOnlyGit.Read) =>
+    Effect.callback<Git.Result>((resume, signal) => {
+      const joined = view.repository.read(operation, signal).then(
+        (value) =>
+          resume(Effect.succeed(value.code === 3 ? result(0, Buffer.alloc(0), true) : result(value.code, value.bytes))),
+        () => resume(Effect.succeed(denied())),
+      )
+      // Effect aborts signal before running this finalizer. A borrowed view stays open, so join
+      // this operation's own child and descriptors here, independent of when its owner closes it.
+      return Effect.promise(() => joined)
+    })
+  const manifests = [
+    ":(top,glob)**/package.json",
+    ":(top,glob)**/tsconfig.json",
+    ":(top,glob)**/jsconfig.json",
+    ":(top,literal)pnpm-workspace.yaml",
+    ":(top,exclude,glob)**/node_modules/**",
+  ]
+  const rows = ["grep", "-n", "-z", "-I", "--no-color", "--no-column", "--full-name"]
+  const imports = ReadOnlyGit.IMPACT_IMPORT_LINE.map((pattern) => "(" + pattern + ")").join("|")
+  return {
+    run: (args, options) =>
+      Effect.gen(function* () {
+        const repo = view.repository
+        const limit = options.maxOutputBytes
+        if (
+          !valid(head) ||
+          (base !== undefined && !valid(base)) ||
+          (repo.head !== head && repo.head !== base) ||
+          view.metadata.head !== repo.head ||
+          !sameBinding(repo, view.metadata) ||
+          !repo.isOpen() ||
+          directory !== repo.directory ||
+          options.cwd !== directory ||
+          args.some((arg) => arg.includes("\0")) ||
+          (options.env && (Object.keys(options.env).length !== 1 || options.env.GIT_NO_LAZY_FETCH !== "1")) ||
+          (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0))
+        )
+          return denied()
+        const same = (expected: string[]) =>
+          expected.length === args.length && expected.every((arg, i) => arg === args[i])
+        const starts = (expected: string[]) => expected.every((arg, i) => arg === args[i])
+        const names = [
+          "grep",
+          "-l",
+          "-z",
+          "-w",
+          "-F",
+          "-I",
+          "--no-color",
+          "--no-column",
+          "--full-name",
+          "-f",
+          "-",
+          head,
+          "--",
+          ":/",
+        ]
+        if (starts(names)) {
+          if (!limit || !options.stdin || typeof options.stdin === "string") return denied()
+          // Bounded stdin is decoded into symbols. The Git port constructs its own fixed input and flags from them.
+          const chunks: Buffer[] = []
+          let size = 0
+          const decoded = yield* Stream.runForEach(options.stdin, (chunk) => {
+            if ((size += chunk.byteLength) > 1024 * 1024 || chunks.length >= 1024) return Effect.fail("input-limit")
+            chunks.push(Buffer.from(chunk))
+            return Effect.void
+          }).pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }))
+          if (!decoded) return denied()
+          const bytes = Buffer.concat(chunks)
+          const text = bytes.toString("utf8")
+          if (!Buffer.from(text).equals(bytes)) return denied()
+          return yield* read({
+            kind: "impact-grep",
+            revision: head,
+            maxBytes: limit,
+            search: { kind: "symbols", names: text.split("\n"), exclude: args.slice(names.length) },
+          })
+        }
+        if (options.stdin !== undefined) return denied()
+        if (same(["version"])) return yield* read({ kind: "impact-version" })
+        // ReadOnlyGit.open verifies reachability with fsck and rejects sparse indices/partial clone extensions.
+        // A private view has no promisor remote. Its complete tree cannot cause a network object lookup.
+        if (
+          same(["config", "--get-regexp", "^(extensions\\.partialclone|remote\\..*\\.promisor|core\\.sparsecheckout)$"])
+        )
+          return result(1)
+        if (!limit) return denied()
+        if (same(["ls-tree", "-r", "-z", "-l", "--full-tree", head]))
+          return yield* read({ kind: "impact-tree", revision: head, maxBytes: limit })
+        if (
+          args.length === 5 &&
+          starts(["ls-tree", "-r", "-z", "--full-tree"]) &&
+          (args[4] === head || args[4] === base)
+        )
+          return yield* read({ kind: "impact-tree", revision: args[4]!, maxBytes: limit, namesAndIdsOnly: true })
+        if (args.length === 3 && starts(["show", "--no-textconv"])) {
+          const object = args[2]!
+          const revision = object.slice(0, 40)
+          if (object[40] !== ":" || (revision !== head && revision !== base) || limit > 1024 * 1024 + 1) return denied()
+          return yield* read({
+            kind: "show",
+            revision,
+            file: object.slice(41),
+            maxBytes: Math.min(limit, 1024 * 1024),
+            distinguishLarge: true,
+          })
+        }
+        const manifest = [...rows, "-e", "", head, "--", ...manifests]
+        if (starts(manifest))
+          return yield* read({
+            kind: "impact-grep",
+            revision: head,
+            maxBytes: limit,
+            search: { kind: "manifests", exclude: args.slice(manifest.length) },
+          })
+        const imported = [...rows, "-E", "-e", imports, head, "--"]
+        if (starts(imported)) {
+          const specs = args.slice(imported.length)
+          if (!specs.every((spec) => spec.startsWith(":(top,literal)"))) return denied()
+          return yield* read({
+            kind: "impact-grep",
+            revision: head,
+            maxBytes: limit,
+            search: { kind: "imports", files: specs.map((spec) => spec.slice(":(top,literal)".length)) },
+          })
+        }
+        return denied()
+      }),
+  }
+}
+
 export const preflight = Effect.gen(function* () {
   const current = yield* Current
   if (current) yield* current.preflight()
 })
 
-export function within<A, E, R>(placement: ReadOnlyGit.Metadata, expectedHead: string, body: Effect.Effect<A, E, R>) {
+// VS-34 item 4: which of a review's changed paths the repository's ignore rules exclude although they are committed,
+// from `git check-ignore --no-index` in the work tree: its .gitignore files and info/exclude, never the user's global
+// excludes (the bound view's are /dev/null, and the fallback's are set to it). A collector asks only under
+// `holdback: "secrets"`, before its last preflight, so the bound view's read is checked like the others. Undefined
+// when it cannot tell, and the review then notes that it could not check: a path the read-only port would refuse
+// (asking would poison the view), an exit other than 0 or 1, truncated output, or an echoed line that is not a path
+// asked about. Git exits 128 for the whole call when one path lies below a work-tree symbolic link or inside a
+// submodule, so one such path leaves every batch's answer unknown; a retry path by path is not made, as it could run
+// a thousand reads against the bound view's execution bound. In the bound view a read the port refuses, or one past
+// its execution bound, does not give undefined quietly: it poisons the view, and the collector's last preflight then
+// refuses the review. Each call takes at most 1024 paths (the view's bound) and about 8,000 characters of them, well
+// under Windows' 32,767-character command line.
+export const ignoredPaths = Effect.fn("ReviewGit.ignoredPaths")(function* (
+  directory: string,
+  paths: readonly string[],
+) {
+  if (!paths.length) return []
+  if (!paths.every(ReadOnlyGit.repositoryPath)) return undefined
+  const current = yield* Current
+  const git = current?.client ?? (yield* Git.Service)
+  const results = yield* Effect.forEach(batches(paths), (batch) =>
+    git.run(
+      [
+        ...(current ? [] : ["-c", "core.excludesFile=/dev/null"]),
+        "check-ignore",
+        "--no-index",
+        "--",
+        ...batch.map((file) => "./" + file),
+      ],
+      { cwd: directory, maxOutputBytes: 1024 * 1024 },
+    ),
+  )
+  if (results.some((result) => (result.exitCode !== 0 && result.exitCode !== 1) || result.truncated)) return undefined
+  const echoed = results.flatMap((result) => (result.exitCode === 0 ? echoedPaths(result.text()) : []))
+  const given = new Set(paths.map((file) => "./" + file))
+  // Git echoes each path as it was given; anything else means this read misparsed it, so nothing is claimed.
+  if (echoed.some((line) => !given.has(line))) return undefined
+  const ignored = new Set(echoed)
+  return paths.filter((file) => ignored.has("./" + file))
+})
+
+function batches(paths: readonly string[]) {
+  const out: { files: string[]; chars: number }[] = []
+  for (const file of paths) {
+    const last = out.at(-1)
+    const chars = file.length + 3
+    if (last && last.files.length < 1024 && last.chars + chars <= 8_000) {
+      last.files.push(file)
+      last.chars += chars
+      continue
+    }
+    out.push({ files: [file], chars })
+  }
+  return out.map((batch) => batch.files)
+}
+
+// check-ignore's answer: one line per ignored path, as it was given, C-quoted when git quotes it. Exported so the
+// bound view's form (the port's default core.quotepath writes a non-ASCII name as octal bytes) is tested on any host;
+// the fallback's core.quotepath=false writes it raw.
+export function echoedPaths(text: string) {
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => unquote(line.replace(/\r$/, "")))
+}
+
+// Git's C-style quoting of a path (quote.c): a name with a double quote, a backslash, a control character or, under
+// core.quotepath, a non-ASCII byte is written in double quotes with backslash escapes and octal bytes.
+const ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 }
+function unquote(line: string) {
+  if (!(line.length >= 2 && line.startsWith('"') && line.endsWith('"'))) return line
+  const bytes: number[] = []
+  // By code point: under core.quotepath=false (the fallback's) a quoted name keeps its non-ASCII characters as text.
+  const chars = Array.from(line.slice(1, -1))
+  for (let index = 0; index < chars.length; index++) {
+    const char = chars[index]
+    if (char !== "\\") {
+      bytes.push(...Buffer.from(char, "utf8"))
+      continue
+    }
+    const octal = /^[0-3][0-7]{2}$/.exec(chars.slice(index + 1, index + 4).join(""))?.[0]
+    if (octal) {
+      bytes.push(parseInt(octal, 8))
+      index += 3
+      continue
+    }
+    const next = chars[index + 1] ?? ""
+    // An escape git never writes reads as itself, so the path cannot match one asked about.
+    bytes.push(ESCAPES[next] ?? 92)
+    if (Object.hasOwn(ESCAPES, next)) index++
+  }
+  return Buffer.from(bytes).toString("utf8")
+}
+
+export function within<A, E, R>(
+  placement: ReadOnlyGit.Metadata,
+  expectedHead: string,
+  body: Effect.Effect<A, E, R>,
+  signal?: AbortSignal,
+) {
   const admitted = { ...placement }
   return Effect.acquireUseRelease(
     Effect.tryPromise({
       try: async () => {
-        const current = await ReadOnlyGit.metadataHead(admitted.directory)
+        const current = await ReadOnlyGit.metadataHead(admitted.directory, { signal })
         if (!sameBinding(current, admitted) || current.head !== expectedHead)
           throw new ReadOnlyGit.Unavailable("the review's Git binding or HEAD changed")
-        const repository = await ReadOnlyGit.open(admitted)
-        if (repository.head !== expectedHead) {
+        const repository = await ReadOnlyGit.open(admitted, { signal })
+        if (signal?.aborted || repository.head !== expectedHead) {
           await repository.close()
           throw new ReadOnlyGit.Unavailable("the review's HEAD changed before collection")
         }
@@ -74,7 +320,7 @@ export function within<A, E, R>(placement: ReadOnlyGit.Metadata, expectedHead: s
   )
 }
 
-function sameBinding(left: ReadOnlyGit.Input, right: ReadOnlyGit.Input) {
+export function sameBinding(left: ReadOnlyGit.Input, right: ReadOnlyGit.Input) {
   return (
     left.directory === right.directory &&
     left.gitDirectory === right.gitDirectory &&
@@ -141,19 +387,21 @@ function adapter(
           return undefined
         }),
     },
-    preflight: () =>
-      Effect.gen(function* () {
+    preflight: (signal) => {
+      const verify = Effect.gen(function* () {
         if (unavailable) return yield* unavailable
         yield* Effect.tryPromise({
           try: async () => {
-            const current = await ReadOnlyGit.metadataHead(repository.directory)
+            const current = await ReadOnlyGit.metadataHead(repository.directory, { signal })
             if (!sameBinding(current, admitted) || current.head !== repository.head)
               throw new ReadOnlyGit.Unavailable("the review's HEAD or Git binding changed before admission")
-            await repository.status()
+            await repository.status(signal)
           },
           catch: refused,
         })
-      }),
+      })
+      return signal ? Effect.uninterruptible(verify) : verify
+    },
   }
 }
 
@@ -223,6 +471,14 @@ function readOperation(args: readonly string[]): ReadOnlyGit.Read | undefined {
   }
   if (args[0] === "rev-list" && args[1] === "--max-parents=0" && args.length === 3)
     return { kind: "roots", revision: args[2]! }
+  // VS-34 item 4 (ignoredPaths): one to 1024 work-tree paths, each written "./<path>". Every other check-ignore form
+  // (--stdin, -z, -v, without --no-index) is refused.
+  if (args[0] === "check-ignore" && args[1] === "--no-index" && args[2] === "--") {
+    const paths = args.slice(3)
+    return paths.length > 0 && paths.length <= 1024 && paths.every((value) => value.startsWith("./"))
+      ? { kind: "check-ignore", files: paths.map((value) => value.slice(2)) }
+      : undefined
+  }
   if (
     args[0] === "log" &&
     args.slice(1, 6).join("\0") === ["-n", "5", "--no-color", "--date=short", "--format=%h %an %ad %s"].join("\0") &&

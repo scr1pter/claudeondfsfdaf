@@ -373,6 +373,58 @@ test("the returned-draft owner read sends only the desktop bearer to vectordev.a
     expect(JSON.stringify(call)).not.toContain(call.host === "https://vectordev.ai" ? "github-only" : "vector-only")
 })
 
+test("main retires a returned Brain owner read across account A-to-B-to-A invalidation", async () => {
+  using f = fixture("codium", true)
+  const input = { cwd: "/fixture", rid: "gh-41-99-1-7", artifactId: "7" }
+  const current = await f.controller.status(input.cwd)
+  expect(current.listed.brain).toBe(true)
+  expect(current.bound).toBe("yours")
+  expect(current.canDispatch).toBe(true)
+  f.state.ownerKey = {
+    key: Buffer.alloc(32, 7).toString("base64url"),
+    keyId: "b".repeat(16),
+    repositoryId: "41",
+    thread: "dispatch-99",
+    rid: input.rid,
+    artifactId: input.artifactId,
+    publicRepository: false,
+  }
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  f.hooks.vector = async (path) => {
+    if (path !== "/api/cloud-agents/owner-artifact-key") return
+    entered.resolve()
+    await release.promise
+  }
+  const delayed = f.controller.previewReturned(input).then(
+    () => undefined,
+    (error: unknown) => error,
+  )
+  await Promise.race([
+    entered.promise,
+    delayed.then((error) => {
+      throw error instanceof Error
+        ? error
+        : new Error("The returned Brain read ended before its owner response was held.")
+    }),
+  ])
+  // Account events call this entry point even when no status or Brain read observes the intermediate account.
+  f.state.vectorToken = "vector-account-b"
+  f.controller.invalidateAuthority()
+  f.state.vectorToken = "vector-only"
+  f.controller.invalidateAuthority()
+  release.resolve()
+  expect(f.state.revision).toBe(0)
+  const error = await delayed
+  expect(error).toBeInstanceOf(Error)
+  expect(f.calls.some((call) => call.path.includes("/actions/artifacts"))).toBe(false)
+  expect(String(error)).toContain("sign-in changed")
+  // Fresh authority still reaches the normal artifact path; the fake transport then refuses the zip destination.
+  f.hooks.vector = undefined
+  await expect(f.controller.previewReturned(input)).rejects.toThrow("The encrypted GitHub run artifact is unavailable.")
+  expect(f.calls.some((call) => call.path.endsWith("/actions/artifacts/7/zip"))).toBe(true)
+})
+
 test("unsettled bind returns pending within its bounded polling window", async () => {
   using f = fixture()
   f.state.bound = false

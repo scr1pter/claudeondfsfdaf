@@ -293,7 +293,7 @@ test("Vector Local and disallowed training models decline with their reason befo
   }
 })
 
-test("Vector Local declines laptop jobs before any claim, whatever it allows, until the GitHub calls are labelled", async () => {
+test("Vector Local declines laptop jobs before any claim until the production GitHub ports are wired", async () => {
   const refusing = [
     LOCAL_ON,
     LocalPolicy.PENDING,
@@ -305,8 +305,8 @@ test("Vector Local declines laptop jobs before any claim, whatever it allows, un
     allowing(JOB_SOURCES, "network"),
     // A company lock that leaves `allow` to nobody drops the user's entries.
     LocalPolicy.resolve({ managed: { enabled: true, lock: true }, global: { allow: entries(JOB_SOURCES) } }),
-    // All three allowed, by the user and by the company: desktop github-api.ts is unlabelled, so the github need
-    // refuses whenever Vector Local is on until EV-21 labels it, and the job is never claimed only to be held.
+    // All three allowed, by the user and by the company: the GitHub ports still need their production authority.
+    // The job is never claimed only to be held.
     allowing(JOB_SOURCES),
     LocalPolicy.resolve({ managed: { enabled: true, allow: entries(JOB_SOURCES) } }),
   ]

@@ -1,7 +1,12 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { expect, mock, beforeEach } from "bun:test"
-import { ListRootsRequestSchema, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js"
+import {
+  ListRootsRequestSchema,
+  PromptListChangedNotificationSchema,
+  ResourceListChangedNotificationSchema,
+  ToolListChangedNotificationSchema,
+} from "@modelcontextprotocol/sdk/types.js"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Cause, Effect, Exit, Fiber } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
@@ -583,6 +588,38 @@ it.instance(
         expect(serverState.listPromptsCalls).toBe(2)
         expect(serverState.listResourcesCalls).toBe(2)
         expect(serverState.listResourceTemplatesCalls).toBe(2)
+      }),
+    ),
+  { trusted: true, config: { mcp: {} } },
+)
+
+it.instance(
+  "snapshot generations are cold-safe and invalidate on resource and prompt changes without discovery",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        const generation = mcp.reviewSnapshotGeneration!
+        const name = "snapshot-handbook"
+        lastCreatedClientName = name
+        const state = getOrCreateClientState(name)
+        state.capabilities = { tools: {}, resources: { listChanged: true }, prompts: { listChanged: true } }
+        expect(yield* generation(name)).toBeUndefined()
+        expect(clientCreateCount).toBe(0)
+        yield* mcp.add(name, { type: "local", command: ["echo", "handbook"] })
+        let token = yield* generation(name)
+        expect(token).toBeDefined()
+        expect(yield* generation(name)).toBe(token)
+        for (const schema of [ResourceListChangedNotificationSchema, PromptListChangedNotificationSchema]) {
+          const changed = state.notificationHandlers.get(schema)
+          expect(changed).toBeDefined()
+          yield* Effect.promise(async () => changed!({}))
+          const next = yield* generation(name)
+          expect(next).toBeDefined()
+          expect(next).not.toBe(token)
+          token = next
+        }
+        expect(state.listResourcesCalls).toBe(0)
+        expect(state.listPromptsCalls).toBe(0)
       }),
     ),
   { trusted: true, config: { mcp: {} } },
