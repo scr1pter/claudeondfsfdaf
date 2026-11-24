@@ -117,6 +117,7 @@ const JOB_FIELDS = new Set([
   "receivedAt",
   "endedAt",
   "prUrl",
+  "threadUrl",
   "summary",
 ])
 const AUDIT_FIELDS = new Set(["id", "at", "event", "platform", "installation", "jid", "code", "userId", "byOther"])
@@ -197,6 +198,7 @@ export const EVERYWHERE_COPY = {
   jobsUnread: "Your jobs could not be read.",
   sharedSummary: "This page does not show summaries of jobs in shared places.",
   pullRequest: "Pull request",
+  githubThread: "GitHub thread",
   focusMissing: "That job is not among your jobs of the last 30 days.",
   received: "Received",
   endedAt: "Ended",
@@ -421,6 +423,7 @@ export type EverywhereJob = {
   readonly receivedAt: number
   readonly endedAt?: number
   readonly prUrl?: string
+  readonly threadUrl?: string
   /** Only for a job in a private place: a summary on a shared job is dropped. */
   readonly summary?: string
 }
@@ -1196,6 +1199,7 @@ function readJob(item: unknown): EverywhereJob | undefined {
     typeof url === "string" &&
     (Everywhere.PR_URL_PATTERN.exec(url)?.[1] ?? "").toLowerCase() === repository.toLowerCase()
   if (!optional(item.prUrl, pullRequest)) return undefined
+  const threadUrl = item.platform === "github" ? readGithubThreadUrl(item.threadUrl, repository) : undefined
   const summary = (text: unknown) =>
     typeof text === "string" && text.length > 0 && text.length <= Everywhere.LIMITS.summaryChars
   if (!optional(item.summary, summary)) return undefined
@@ -1214,9 +1218,18 @@ function readJob(item: unknown): EverywhereJob | undefined {
     receivedAt: item.receivedAt,
     ...(typeof item.endedAt === "number" ? { endedAt: item.endedAt } : {}),
     ...(typeof item.prUrl === "string" ? { prUrl: item.prUrl } : {}),
+    ...(threadUrl !== undefined ? { threadUrl } : {}),
     // A shared place's summary is never shown here, whatever an answer holds.
     ...(typeof item.summary === "string" && !item.shared ? { summary: item.summary } : {}),
   }
+}
+
+function readGithubThreadUrl(value: unknown, repository: string) {
+  if (typeof value !== "string" || value.length > Everywhere.LIMITS.urlChars) return undefined
+  const parts = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/([1-9][0-9]*)$/.exec(value)
+  if (!parts || parts[1]?.toLowerCase() !== repository.toLowerCase()) return undefined
+  const canonical = Everywhere.githubThreadUrl(parts[1], parts[2] === "pull" ? "pr" : "issue", Number(parts[3]))
+  return canonical === value ? canonical : undefined
 }
 
 /** The account's audit log (GET audit): ids and fixed codes only; an entry with any other field is skipped. */
