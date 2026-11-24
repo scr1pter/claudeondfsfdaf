@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createRoot, createSignal, type Accessor } from "solid-js"
+import { createRoot, createSignal } from "solid-js"
 import type { AssistantMessage, Message, Part, Session, ToolPart, VectorClient } from "@vectordevai/sdk/v2/client"
 import type { Task } from "@vectordevai/schema/task"
 import type { retry } from "@vectordevai/core/util/retry"
@@ -222,8 +222,7 @@ function engine() {
 async function open(
   fake: ReturnType<typeof engine>,
   loaded: readonly string[],
-  desktop?: BackgroundTasksInput["desktop"],
-  capabilities?: Accessor<EngineCapabilities>,
+  options: Pick<BackgroundTasksInput, "desktop" | "capabilities" | "local" | "openPath"> = {},
 ) {
   const store = createServerSession(fake.client as unknown as VectorClient, { retry: retryImmediately })
   for (const id of loaded) await store.sync(id)
@@ -259,8 +258,7 @@ async function open(
       pin: () => undefined,
       unpin: () => undefined,
       open: () => undefined,
-      desktop,
-      capabilities,
+      ...options,
     }),
   }))
   return {
@@ -401,7 +399,7 @@ describe("Stop", () => {
       controls: { inspect: true, message: false, stop: true },
     }
     const state = { failed: false, stops: 0 }
-    const page = await open(fake, [ROOT, CHILD], {
+    const desktop: BackgroundTasksInput["desktop"] = {
       sourcePath: () => "/repo",
       api: {
         list: async () => {
@@ -420,7 +418,8 @@ describe("Stop", () => {
         },
         onChange: () => () => undefined,
       },
-    })
+    }
+    const page = await open(fake, [ROOT, CHILD], { desktop })
     await until(() => page.tasks.cards().some((card) => card.agents.some((agent) => agent.task?.id === task.id)))
     state.failed = true
     page.reconnect()
@@ -493,7 +492,7 @@ describe("Background commands", () => {
       },
     ]
     const [capabilities, setCapabilities] = createSignal<EngineCapabilities>(NO_CAPABILITIES)
-    const page = await open(fake, [ROOT, CHILD], undefined, capabilities)
+    const page = await open(fake, [ROOT, CHILD], { capabilities })
     await until(() => fake.boards.length > 0)
     await pause(200)
     expect(fake.boards.every((shells) => shells === "")).toBe(true)
@@ -504,5 +503,47 @@ describe("Background commands", () => {
     expect(fake.boards.at(-1)).toBe("true")
     expect(page.tasks.shells()[0]?.id).toBe("shl_dev")
     page.dispose()
+  })
+
+  test("opening a completed command's output passes the local log folder to the desktop", async () => {
+    const fake = engine()
+    const folder = String.raw`C:\Vector\tool-output`
+    fake.state.shells = [
+      {
+        id: "shl_test",
+        title: "Run tests",
+        command: "bun test",
+        status: "completed",
+        startedAt: 1_000,
+        completedAt: 2_000,
+        exitCode: 0,
+        outputBytes: 48,
+        outputPath: `${folder}\\shell-shl_test.log`,
+      },
+    ]
+    const [local, setLocal] = createSignal(true)
+    const opened: string[] = []
+    const page = await open(fake, [ROOT], {
+      capabilities: () => ({ ...NO_CAPABILITIES, backgroundSubagents: true, backgroundShells: true }),
+      local,
+      openPath: async (path) => {
+        opened.push(path)
+      },
+    })
+    try {
+      await until(() => page.tasks.shells().length === 1)
+      const shell = page.tasks.shells()[0]!
+      expect(shell.status).toBe("completed")
+      expect(page.tasks.canOpenOutput(shell)).toBe(true)
+      page.tasks.openOutput(shell)
+      expect(opened).toEqual([folder])
+
+      setLocal(false)
+      expect(page.tasks.canOpenOutput(shell)).toBe(false)
+      page.tasks.openOutput(shell)
+      expect(opened).toEqual([folder])
+    } finally {
+      page.dispose()
+    }
   })
 })
